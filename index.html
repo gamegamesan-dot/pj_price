@@ -80,6 +80,24 @@ summary::after{content:" \25BE"} details[open] summary::after{content:" \25B4"}
 footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;line-height:1.6}
 #tip{display:none;background:var(--ink);color:#e9e6dc;font-size:12.5px;padding:11px 13px;margin-top:12px;border-radius:3px;line-height:1.6}
 #tip b{color:var(--label)}
+.rowv{margin-bottom:10px}
+.rowv label{display:block;font-size:13.5px;color:var(--ink-2);margin-bottom:4px}
+.rowv input[type=text],.rowv textarea{
+  width:100%;padding:9px;font-size:16px;text-align:left;
+  border:1px solid var(--line);border-radius:2px;background:#fcfbf8;color:var(--ink);
+  font-family:inherit;line-height:1.45;
+}
+.rowv textarea{resize:vertical}
+.btn{padding:9px 14px;font-size:13.5px;font-weight:700;border:1px solid var(--ink);border-radius:2px;
+     background:#fff;color:var(--ink);font-family:inherit}
+.btn.primary{background:var(--ink);color:var(--label);border-color:var(--ink)}
+.btn.done{background:var(--good);color:#fff;border-color:var(--good)}
+.note2{font-size:11.5px;color:var(--mute);margin-top:7px;line-height:1.55}
+.tabs{display:flex;border:1px solid var(--ink);border-radius:2px;overflow:hidden;margin-top:12px}
+.tabs button{flex:1;padding:12px 4px;font-size:14px;font-weight:800;border:0;background:#fff;color:var(--ink);font-family:inherit}
+.tabs button[aria-pressed=true]{background:var(--label);color:var(--ink)}
+td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
+
 </style>
 </head>
 <body>
@@ -113,6 +131,13 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
     </div>
   </section>
 
+  <div class="tabs">
+    <button id="tabA" aria-pressed="true">値付け</button>
+    <button id="tabB" aria-pressed="false">出品文</button>
+  </div>
+
+  <div id="tabPricing">
+
   <div class="seg">
     <button id="mA" aria-pressed="true">売値 → 利益</button>
     <button id="mB" aria-pressed="false">目標利益 → 売値</button>
@@ -143,6 +168,85 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
       <div class="note" id="shipNote"></div>
     </details>
   </section>
+
+  </div>
+
+  <!-- ============ 出品文タブ ============ -->
+  <div id="tabListing" style="display:none">
+
+  <section>
+    <div class="h">商品情報</div>
+    <div class="body">
+      <div class="row"><label>商材タイプ</label>
+        <select id="kind" style="flex:0 0 auto">
+          <option value="prize" selected>プライズフィギュア</option>
+          <option value="figure">一般フィギュア</option>
+          <option value="game">ゲームソフト</option>
+          <option value="parts">ゲームパーツ</option>
+          <option value="other">その他</option>
+        </select>
+      </div>
+      <div class="rowv"><label>ブランド</label><input type="text" id="brand" list="brands" value="Banpresto" placeholder="Banpresto"></div>
+      <datalist id="brands">
+        <option value="Banpresto"><option value="SEGA"><option value="FuRyu"><option value="Taito">
+        <option value="Bandai Spirits"><option value="Good Smile Company"><option value="Kotobukiya"><option value="Konami">
+      </datalist>
+      <div class="rowv"><label>作品名</label><input type="text" id="series" placeholder="Gundam SEED Freedom"></div>
+      <div class="rowv"><label>キャラクター</label><input type="text" id="chara" placeholder="Lacus Clyne"></div>
+      <div class="rowv"><label>版・バリエーション</label><input type="text" id="variant" placeholder="Pilot Suit"></div>
+      <div class="rowv"><label>商品ライン</label><input type="text" id="line" placeholder="Glitter &amp; Glamours"></div>
+      <div class="row"><label>種別</label>
+        <select id="ptype" style="flex:0 0 auto">
+          <option>Figure</option><option>Statue</option><option>Plush</option>
+          <option>Keychain</option><option>Game</option><option>Parts</option>
+        </select>
+      </div>
+      <div class="row"><label>状態</label>
+        <select id="cond" style="flex:0 0 auto">
+          <option value="sealed" selected>新品・未開封</option>
+          <option value="newopen">新品・箱開封済</option>
+          <option value="likenew">中古・美品</option>
+          <option value="used">中古</option>
+        </select>
+      </div>
+      <div class="rowv"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"></div>
+      <div class="rowv"><label>追加説明（任意・英文）</label><textarea id="extra" rows="2" placeholder="Box has a small dent on the top corner."></textarea></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">タイトル</div>
+    <div class="body">
+      <div class="rowv"><textarea id="title" rows="2"></textarea></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:2px">
+        <span class="num" id="titleCount" style="font-size:13px;font-weight:700">0 / 80</span>
+        <button class="btn" id="copyTitle" style="margin-left:auto">タイトルをコピー</button>
+      </div>
+      <div class="note2" id="titleNote"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">説明文</div>
+    <div class="body">
+      <div class="chk"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
+      <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
+      <div class="chk"><input type="checkbox" id="bDDP" checked><label for="bDDP" style="flex:1">関税は前払い済み（米国向け・Zonos）</label></div>
+      <button class="btn primary" id="copyDesc" style="width:100%;margin-top:4px">説明文HTMLをコピー</button>
+      <div class="note2" id="descNote">eBayの説明欄で「コードを表示」に切り替えてから貼り付けてください。</div>
+    </div>
+    <details>
+      <summary>生成された説明文を確認</summary>
+      <div style="padding:0 13px 14px"><div id="descPreview" style="border:1px solid var(--line);padding:10px;border-radius:3px;background:#fcfbf8;font-size:13px;max-height:340px;overflow:auto"></div></div>
+    </details>
+  </section>
+
+  <section>
+    <div class="h">出品前チェック</div>
+    <table id="checkTbl"></table>
+  </section>
+
+  </div>
 
   <section>
     <div class="h">設定</div>
@@ -322,6 +426,198 @@ function load(){
   calc();
 }
 load();
+
+
+/* ================= 出品文タブ ================= */
+var LFIELDS=['kind','brand','series','chara','variant','line','ptype','cond','origin','extra','title'];
+var LCHECKS=['bPrize','bJP','bDDP'];
+var LKEY='pj:listing:v1';
+var titleEdited=false;
+
+$('tabA').onclick=function(){switchTab('A');};
+$('tabB').onclick=function(){switchTab('B');};
+function switchTab(t){
+  $('tabA').setAttribute('aria-pressed',t==='A');
+  $('tabB').setAttribute('aria-pressed',t==='B');
+  $('tabPricing').style.display=t==='A'?'block':'none';
+  $('tabListing').style.display=t==='B'?'block':'none';
+  if(t==='B')buildListing();
+  window.scrollTo(0,0);
+}
+
+var CONDLABEL={
+  sealed:'Brand New \u2014 factory sealed, never opened',
+  newopen:'Brand New \u2014 box opened for inspection, product untouched',
+  likenew:'Used \u2014 excellent condition',
+  used:'Used \u2014 see photos and notes below'
+};
+var CONDNOTE={
+  sealed:'The item is sealed inside its original box exactly as it left the distributor. The box itself has been inspected by hand; any marks are shown in the photos.',
+  newopen:'The box has been opened only to confirm the contents and condition. The product itself is unused and untouched. Everything is shown in the photos.',
+  likenew:'Inspected by hand and found to be in excellent condition with no significant wear. Everything is shown in the photos.',
+  used:'A pre-owned item, inspected by hand. Condition is shown honestly in the photos; please review them before buying.'
+};
+
+function titleParts(){
+  var p={
+    brand:$('brand').value.trim(),
+    series:$('series').value.trim(),
+    chara:$('chara').value.trim(),
+    variant:$('variant').value.trim(),
+    line:$('line').value.trim(),
+    ptype:$('ptype').value.trim()
+  };
+  return p;
+}
+function buildTitle(){
+  var p=titleParts();
+  var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
+  var t=order.filter(Boolean).join(' ');
+  var dropped=[];
+  if(t.length>80&&p.line){ order[4]=''; dropped.push('商品ライン'); t=order.filter(Boolean).join(' '); }
+  if(t.length>80&&p.variant){ order[3]=''; dropped.push('版'); t=order.filter(Boolean).join(' '); }
+  if(t.length>80&&p.brand){ order[0]=''; dropped.push('ブランド'); t=order.filter(Boolean).join(' '); }
+  return {text:t, dropped:dropped};
+}
+
+function descHTML(){
+  var p=titleParts(), c=$('cond').value, kind=$('kind').value;
+  var full=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype].filter(Boolean).join(' ');
+  var extra=$('extra').value.trim();
+  var hd=$('fx')?5:5;
+  var S='<div style="max-width:820px;margin:0 auto;padding:0 4px;font-family:-apple-system,\'Segoe UI\',Helvetica,Arial,sans-serif;color:#1c1c1c;line-height:1.7;font-size:15px;">';
+  S+='<div style="border-bottom:3px solid #b31b1b;padding-bottom:10px;margin-bottom:20px;">';
+  S+='<div style="font-size:12px;letter-spacing:2px;color:#b31b1b;font-weight:bold;">SHIPPED DIRECTLY FROM AKIHABARA, TOKYO</div>';
+  S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;">'+esc(full)+'</h1></div>';
+
+  S+=h2('Condition');
+  S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
+  S+='<p style="margin:0 0 22px;">'+CONDNOTE[c]+(extra?' '+esc(extra):'')+'</p>';
+
+  var body='';
+  if(p.chara&&p.series) body=esc(p.chara)+' from '+esc(p.series)+'. ';
+  else if(p.series) body='From '+esc(p.series)+'. ';
+  if(p.line&&p.brand) body+='Part of the '+esc(p.line)+' line by '+esc(p.brand)+'. ';
+  else if(p.brand) body+='Made by '+esc(p.brand)+'. ';
+  if(kind==='prize') body+='An official prize figure, produced for arcade and crane game distribution in Japan rather than for retail sale.';
+  else if(kind==='game') body+='Japanese release. Please check the region notes below before buying.';
+  S+=h2('Description')+'<p style="margin:0 0 22px;">'+body+'</p>';
+
+  if($('bPrize').checked){
+    S+=h2('About Japanese prize figures');
+    S+='<p style="margin:0 0 22px;">This is an official prize figure, distributed to Japanese arcades and crane game centres rather than sold at retail. The outer box is distribution packaging, not collector packaging, so light scuffs, small dents or storage marks on the box are normal for this category and are not treated as defects. Printed materials and box text are in Japanese.</p>';
+  }
+  if($('bJP').checked){
+    S+=h2('Japanese version \u2014 please read')+'<ul style="margin:0 0 22px;padding-left:22px;">';
+    S+='<li>Packaging, manuals and printed materials are in Japanese.</li>';
+    S+='<li>Video games are region-locked to Japanese systems unless stated otherwise. Nintendo Switch titles are region-free; PlayStation and older consoles are not.</li>';
+    S+='<li>Electronics are built for 100V AC with a Japanese type-A plug. A converter or adapter may be required in your country.</li></ul>';
+  }
+
+  S+=h2('Shipping')+'<ul style="margin:0 0 22px;padding-left:22px;">';
+  S+='<li>Dispatched from Tokyo within 5 business days of cleared payment.</li>';
+  S+='<li>Every parcel ships with tracking and is packed with protective material inside an outer box.</li>';
+  S+='<li>Delivery speed and carrier options are shown in the Shipping and payments section of this listing.</li></ul>';
+
+  S+=h2('Import duties and taxes');
+  if($('bDDP').checked)
+    S+='<p style="margin:0 0 22px;">Import duties and taxes are calculated and collected at checkout, so nothing further is due on delivery. The amount shown at checkout is the final amount you pay.</p>';
+  else
+    S+='<p style="margin:0 0 22px;">Import duties, taxes and customs charges are set by your own country and are not included in the item price or shipping cost. Where these are not collected at checkout, they are paid by the buyer on delivery. Customs declarations are completed accurately as required by law.</p>';
+
+  S+=h2('Returns')+'<p style="margin:0 0 22px;">Returns are accepted under the terms shown in the Shipping and payments section. If anything arrives damaged or not as described, message us through eBay first and it will be put right.</p>';
+
+  S+='<div style="background:#f4f4f2;padding:16px 18px;border-radius:4px;margin-bottom:8px;">';
+  S+='<h2 style="font-size:15px;margin:0 0 8px;">About Play Japan</h2>';
+  S+='<p style="margin:0;">A licensed second-hand dealer registered in Tokyo, sourcing games, figures and hobby goods directly from Akihabara. Thirteen years in the Japanese collectors market, every item inspected by hand before it ships. Questions about an item are welcome through eBay messages.</p></div>';
+  S+='</div>';
+  return S;
+}
+function h2(t){return '<h2 style="font-size:15px;margin:0 0 8px;padding-left:10px;border-left:4px solid #1c1c1c;">'+t+'</h2>';}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function buildListing(){
+  if(!titleEdited){
+    var b=buildTitle();
+    $('title').value=b.text;
+    $('titleNote').textContent = b.dropped.length
+      ? '80文字に収めるため「'+b.dropped.join('」「')+'」を省きました。手で調整もできます。'
+      : '編集するとこの自動生成は止まります。';
+  }
+  var len=$('title').value.length;
+  var tc=$('titleCount');
+  tc.textContent=len+' / 80';
+  tc.style.color = len>80 ? 'var(--bad)' : (len>72 ? '#8a6d00' : 'var(--mute)');
+
+  $('descPreview').innerHTML=descHTML();
+
+  // 出品前チェック
+  var w=+$('weight').value||0, pol=policyFor(w);
+  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100,d=(+$('duty').value||0)/100;
+  var C0=+$('cost').value||0,K=+$('pack').value||0,z=+$('zone').value;
+  var refund=$('taxRefund').checked, C=refund?C0/1.1:C0;
+  var air=airRate(w,z),ems=emsRate(w,z),S=air!==null?air:(ems||0);
+  var fixed=(+$('fixed').value||0)*R, den=R*(1-f-x)-R*d;
+  var be=den>0?(fixed+C+K+S)/den:0;
+  var minP=+$('minProfit').value||0;
+  var floor=den>0?(minP+fixed+C+K+S)/den:0;
+
+  var rows=[
+    ['送料ポリシー', pol?'<span class="pill">'+pol+'</span>':'<span style="color:#c0392b">要作成</span>'],
+    ['ハンドリングタイム','5 business days'],
+    ['Country of Manufacture','<b>'+esc($('origin').value||'—')+'</b>'],
+    ['Brand', esc($('brand').value||'—')],
+    ['Best Offer 自動拒否ライン','<b>'+usd(Math.ceil(floor*100)/100)+'</b>'],
+    ['損益分岐（参考）', usd(Math.ceil(be*100)/100)]
+  ];
+  $('checkTbl').innerHTML=rows.map(function(r){
+    return '<tr><td class="k">'+r[0]+'</td><td class="ok">'+r[1]+'</td></tr>';
+  }).join('');
+}
+
+function copyText(txt, btn, label){
+  function done(){ var o=btn.textContent; btn.textContent='コピーしました'; btn.className+=' done';
+    setTimeout(function(){btn.textContent=label; btn.className=btn.className.replace(' done','');},1600); }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done)['catch'](function(){fallback(txt,done);});
+  }else fallback(txt,done);
+}
+function fallback(txt,cb){
+  var ta=document.createElement('textarea');
+  ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  try{document.execCommand('copy');cb();}catch(e){}
+  document.body.removeChild(ta);
+}
+$('copyTitle').onclick=function(){copyText($('title').value,this,'タイトルをコピー');};
+$('copyDesc').onclick=function(){copyText(descHTML(),this,'説明文HTMLをコピー');};
+
+$('title').addEventListener('input',function(){titleEdited=true;buildListing();lsave();});
+LFIELDS.forEach(function(id){
+  if(id==='title')return;
+  $(id).addEventListener('input',function(){titleEdited=false;buildListing();lsave();});
+  $(id).addEventListener('change',function(){titleEdited=false;buildListing();lsave();});
+});
+LCHECKS.forEach(function(id){$(id).addEventListener('change',function(){buildListing();lsave();});});
+
+function lsave(){
+  try{
+    var o={};
+    LCHECKS.forEach(function(id){o[id]=$(id).checked;});
+    ['kind','brand','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
+    localStorage.setItem(LKEY,JSON.stringify(o));
+  }catch(e){}
+}
+function lload(){
+  try{
+    var s=localStorage.getItem(LKEY);
+    if(s){var o=JSON.parse(s);
+      Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
+        if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
+    }
+  }catch(e){}
+}
+lload();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
