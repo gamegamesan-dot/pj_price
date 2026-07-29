@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>eBay 値付け計算機</title>
+
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#1b1a17">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./favicon-32.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="値付け">
+<meta name="mobile-web-app-capable" content="yes">
+
+<style>
+:root{
+  --ink:#1b1a17; --ink-2:#4a4842; --mute:#7d7a71;
+  --paper:#eceae4; --card:#ffffff;
+  --label:#f5d400; --label-edge:#d4b800;
+  --good:#1f7a4d; --bad:#c0392b; --line:#d6d3ca;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--ink)}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;
+  font-size:15px;line-height:1.5;
+  padding:0 0 calc(48px + env(safe-area-inset-bottom));
+  -webkit-text-size-adjust:100%;
+}
+.num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:520px;margin:0 auto;padding:0 14px}
+header{background:var(--ink);padding:calc(10px + env(safe-area-inset-top)) 0 0}
+.tag{background:var(--label);border-bottom:3px solid var(--label-edge);padding:9px 14px 8px}
+.t1{font-size:11px;letter-spacing:.14em;font-weight:700;color:#6b5c00}
+.t2{font-size:19px;font-weight:800;letter-spacing:-.01em;margin-top:1px}
+.barcode{height:16px;display:flex;gap:1px;margin-top:7px;opacity:.85}
+.barcode i{background:var(--ink);display:block}
+section{background:var(--card);border:1px solid var(--line);border-radius:3px;margin-top:12px;overflow:hidden}
+.h{font-size:11px;letter-spacing:.12em;font-weight:700;color:var(--mute);
+   padding:9px 13px;border-bottom:1px solid var(--line);background:#f7f6f2}
+.body{padding:12px 13px}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.row:last-child{margin-bottom:0}
+.row label{flex:1;font-size:13.5px;color:var(--ink-2)}
+.unit{font-size:12px;color:var(--mute);width:26px}
+input[type=number]{
+  width:106px;padding:9px;font-size:16px;text-align:right;
+  border:1px solid var(--line);border-radius:2px;background:#fcfbf8;color:var(--ink);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+input:focus{outline:2px solid var(--label);outline-offset:-1px;background:#fff}
+select{padding:9px;font-size:15px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8;color:var(--ink)}
+.seg{display:flex;border:1px solid var(--ink);border-radius:2px;overflow:hidden;margin-top:12px}
+.seg button{flex:1;padding:11px 4px;font-size:13px;font-weight:700;border:0;background:#fff;color:var(--ink);font-family:inherit}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--label)}
+.verdict{padding:12px 13px;font-weight:800;font-size:14px;letter-spacing:.04em;color:#fff}
+.verdict.go{background:var(--good)} .verdict.no{background:var(--bad)} .verdict.mid{background:#8a6d00}
+.big{padding:14px 13px 12px;border-bottom:1px solid var(--line)}
+.cap{font-size:11px;letter-spacing:.12em;color:var(--mute);font-weight:700}
+.v{font-size:38px;font-weight:800;letter-spacing:-.02em;line-height:1.05;margin-top:2px}
+.sub{font-size:12.5px;color:var(--mute);margin-top:3px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+td{padding:6px 13px;border-bottom:1px solid #efece5}
+tr:last-child td{border-bottom:0}
+td.k{color:var(--ink-2)} td.v2{text-align:right;white-space:nowrap}
+td.v2.neg{color:var(--bad)}
+tr.total td{font-weight:800;background:#faf9f5;border-top:1px solid var(--line)}
+.pill{display:inline-block;background:var(--ink);color:var(--label);font-size:11px;font-weight:700;padding:2px 7px;border-radius:2px;letter-spacing:.06em}
+.warn{background:#fff4d6;border-top:1px solid var(--label-edge);padding:9px 13px;font-size:12.5px;color:#6b5300}
+details{border-top:1px solid var(--line)}
+summary{padding:11px 13px;font-size:12.5px;font-weight:700;color:var(--mute);list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::after{content:" \25BE"} details[open] summary::after{content:" \25B4"}
+.note{font-size:11.5px;color:var(--mute);padding:0 13px 12px;line-height:1.55}
+.chk{display:flex;align-items:center;gap:9px;margin-bottom:9px;font-size:13.5px;color:var(--ink-2)}
+.chk input{width:auto;transform:scale(1.15);margin:0}
+footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;line-height:1.6}
+#tip{display:none;background:var(--ink);color:#e9e6dc;font-size:12.5px;padding:11px 13px;margin-top:12px;border-radius:3px;line-height:1.6}
+#tip b{color:var(--label)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="tag">
+    <div class="t1">PLAY JAPAN / AKIHABARA</div>
+    <div class="t2">eBay 値付け計算機</div>
+    <div class="barcode" id="bc"></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="tip"></div>
+
+  <section>
+    <div class="h">商品</div>
+    <div class="body">
+      <div class="row"><label>仕入値（税込）</label><input type="number" id="cost" value="500" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>実測重量（梱包込）</label><input type="number" id="weight" value="400" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>梱包資材</label><input type="number" id="pack" value="150" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>仕向地</label>
+        <select id="zone" style="flex:0 0 auto">
+          <option value="4" selected>米国</option>
+          <option value="3">欧州・カナダ・豪</option>
+          <option value="2">アジア</option>
+          <option value="1">中国・韓国・台湾</option>
+          <option value="5">中南米・アフリカ</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <div class="seg">
+    <button id="mA" aria-pressed="true">売値 → 利益</button>
+    <button id="mB" aria-pressed="false">目標利益 → 売値</button>
+  </div>
+
+  <section>
+    <div class="h" id="inHead">想定売値</div>
+    <div class="body">
+      <div class="row" id="rowPrice"><label>eBay Sold 価格</label><input type="number" id="price" value="52" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row" id="rowTarget" style="display:none"><label>目標利益</label><input type="number" id="target" value="3000" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="chk"><input type="checkbox" id="sepShip"><label for="sepShip" style="flex:1">送料を別建てで請求する</label></div>
+      <div class="row" id="rowShip" style="display:none"><label>請求送料</label><input type="number" id="shipCharge" value="0" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="verdict go" id="verdict">&mdash;</div>
+    <div class="big">
+      <div class="cap" id="bigCap">利益</div>
+      <div class="v num" id="bigVal">&mdash;</div>
+      <div class="sub" id="bigSub">&mdash;</div>
+    </div>
+    <table id="tbl"></table>
+    <div class="warn" id="warn" style="display:none"></div>
+    <details>
+      <summary>送料の内訳と適用ポリシー</summary>
+      <table id="shipTbl"></table>
+      <div class="note" id="shipNote"></div>
+    </details>
+  </section>
+
+  <section>
+    <div class="h">設定</div>
+    <div class="body">
+      <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
+      <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>関税（Zonos前払）</label><input type="number" id="duty" value="15" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="chk"><input type="checkbox" id="dutyShip"><label for="dutyShip" style="flex:1">関税の課税ベースに送料を含む</label></div>
+      <div class="chk"><input type="checkbox" id="taxRefund"><label for="taxRefund" style="flex:1">輸出免税で仕入の消費税を控除</label></div>
+      <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
+    </div>
+    <div class="note">
+      為替は実勢より低い値を入れると安全側に出ます。関税率・手数料率は実際の取引明細と突き合わせて調整してください。設定は自動保存されます。
+    </div>
+  </section>
+
+  <footer>
+    日本郵便 2026年7月時点の料金表を内蔵<br>
+    国際エアパケット / EMS・第1〜第5地帯<br>
+    <span id="netstate"></span>
+  </footer>
+</div>
+
+<script>
+const AIR={
+ 1:[720,820,920,1020,1120,1220,1320,1420,1520,1620,1720,1820,1920,2020,2120,2220,2320,2420,2520,2620],
+ 2:[750,870,990,1110,1230,1350,1470,1590,1710,1830,1950,2070,2190,2310,2430,2550,2670,2790,2910,3030],
+ 3:[880,1060,1240,1420,1600,1780,1960,2140,2320,2500,2680,2860,3040,3220,3400,3580,3760,3940,4120,4300],
+ 4:[1200,1410,1620,1830,2040,2250,2460,2670,2880,3090,3300,3510,3720,3930,4140,4350,4560,4770,4980,5190],
+ 5:[920,1180,1440,1700,1960,2220,2480,2740,3000,3260,3520,3780,4040,4300,4560,4820,5080,5340,5600,5860]
+};
+const EMS_W=[500,600,700,800,900,1000,1250,1500,1750,2000,2500,3000,3500,4000,4500,5000];
+const EMS={
+ 1:[1450,1600,1750,1900,2050,2200,2500,2800,3100,3400,3900,4400,4900,5400,5900,6400],
+ 2:[1900,2150,2400,2650,2900,3150,3500,3850,4200,4550,5150,5750,6350,6950,7550,8150],
+ 3:[3150,3400,3650,3900,4150,4400,5000,5550,6150,6700,7750,8800,9850,10900,11950,13000],
+ 4:[3900,4180,4460,4740,5020,5300,5990,6600,7290,7900,9100,10300,11500,12700,13900,15100],
+ 5:[3600,3900,4200,4500,4800,5100,5850,6600,7350,8100,9600,11100,12600,14100,15600,17100]
+};
+const POLICIES=[[200,'W200'],[300,'W300'],[400,'W400'],[600,'W600'],[1000,'W1000']];
+
+const $=id=>document.getElementById(id);
+const yen=n=>(n<0?'\u2212':'')+'\u00A5'+Math.abs(Math.round(n)).toLocaleString();
+const usd=n=>'$'+n.toFixed(2);
+const airRate=(w,z)=>(w<=0||w>2000)?null:AIR[z][Math.ceil(w/100)-1];
+const emsRate=(w,z)=>{for(let i=0;i<EMS_W.length;i++)if(w<=EMS_W[i])return EMS[z][i];return null;};
+const policyFor=w=>{for(const p of POLICIES)if(w<=p[0])return p[1];return null;};
+
+(function(){let h='';for(let i=0;i<78;i++)h+='<i style="width:'+(Math.random()<.3?3:1)+'px"></i>';$('bc').innerHTML=h;})();
+
+let mode='A';
+$('mA').onclick=function(){setMode('A');};
+$('mB').onclick=function(){setMode('B');};
+function setMode(m){
+  mode=m;
+  $('mA').setAttribute('aria-pressed',m==='A');
+  $('mB').setAttribute('aria-pressed',m==='B');
+  $('rowPrice').style.display=m==='A'?'flex':'none';
+  $('rowTarget').style.display=m==='B'?'flex':'none';
+  $('inHead').textContent=m==='A'?'想定売値':'目標';
+  calc();
+}
+$('sepShip').onchange=function(){
+  var on=$('sepShip').checked;
+  $('rowShip').style.display=on?'flex':'none';
+  if(on)suggestShip();
+  calc();save();
+};
+function suggestShip(){
+  var w=+$('weight').value,z=+$('zone').value,R=+$('fx').value;
+  var f=+$('fee').value/100,x=+$('fxc').value/100,s=airRate(w,z);
+  if(s&&R>0&&(1-f-x)>0)$('shipCharge').value=(Math.ceil(s/(R*(1-f-x))*100)/100).toFixed(2);
+}
+
+const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','fee','fixed','fxc','duty','minProfit'];
+const CHECKS=['sepShip','dutyShip','taxRefund'];
+FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
+  if((id==='weight'||id==='zone')&&$('sepShip').checked)suggestShip();
+  calc();save();
+});});
+CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();save();});});
+
+function calc(){
+  var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0,z=+$('zone').value;
+  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100,d=(+$('duty').value||0)/100;
+  var fixed=(+$('fixed').value||0)*R;
+  var sep=$('sepShip').checked,dShip=$('dutyShip').checked,refund=$('taxRefund').checked;
+  var C=refund?C0/1.1:C0;
+
+  var air=airRate(w,z),ems=emsRate(w,z),pol=policyFor(w);
+  var S=air!==null?air:(ems||0);
+  var G=sep?(+$('shipCharge').value||0):0;
+  var a=R*(1-f-x),b=R*d,den=a-b;
+
+  var P,profit;
+  if(mode==='A'){
+    P=+$('price').value||0;
+    profit=P*den+G*a-(dShip?G*b:0)-fixed-C-K-S;
+  }else{
+    var T=+$('target').value||0;
+    P=den>0?(T+fixed+C+K+S-G*a+(dShip?G*b:0))/den:0;
+    profit=T;
+  }
+  var be=den>0?(fixed+C+K+S-G*a+(dShip?G*b:0))/den:0;
+
+  var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
+  var dutyAmt=(P*R+(dShip?G*R:0))*d;
+  var margin=gross>0?profit/gross*100:0;
+  var mult=C0>0?(P*R)/C0:0;
+
+  if(mode==='A'){
+    $('bigCap').textContent='利益';
+    $('bigVal').textContent=yen(profit);
+    $('bigSub').textContent='利益率 '+margin.toFixed(1)+'%\u3000/\u3000仕入の '+mult.toFixed(1)+'倍';
+  }else{
+    $('bigCap').textContent='推奨売値';
+    $('bigVal').textContent=usd(Math.ceil(P*100)/100);
+    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%';
+  }
+
+  var minP=+$('minProfit').value||0,v=$('verdict');
+  if(profit<=0){v.className='verdict no';v.textContent='\u2715 赤字 \u2014 見送り';}
+  else if(profit<minP){v.className='verdict mid';v.textContent='\u25B3 利益 '+yen(profit)+' \u2014 基準未満';}
+  else{v.className='verdict go';v.textContent='\u25CE 買い \u2014 利益 '+yen(profit);}
+
+  var rows=[['売上（商品）',yen(P*R),false]];
+  if(sep)rows.push(['売上（送料）',yen(G*R),false]);
+  rows.push(
+    ['eBay手数料 '+(f*100).toFixed(2)+'%',yen(-feeAmt),true],
+    ['固定手数料',yen(-fixed),true],
+    ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
+    ['関税 '+(d*100).toFixed(1)+'%',yen(-dutyAmt),true],
+    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）',yen(-S),true],
+    ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
+    ['梱包資材',yen(-K),true]
+  );
+  $('tbl').innerHTML=rows.map(function(r){return '<tr><td class="k">'+r[0]+'</td><td class="v2 num'+(r[2]?' neg':'')+'">'+r[1]+'</td></tr>';}).join('')
+    +'<tr class="total"><td class="k">利益</td><td class="v2 num">'+yen(profit)+'</td></tr>'
+    +'<tr><td class="k">Best Offer 自動拒否ライン</td><td class="v2 num">'+usd(Math.ceil(be*100)/100)+'</td></tr>';
+
+  $('shipTbl').innerHTML=
+    '<tr><td class="k">適用ポリシー</td><td class="v2">'+(pol?'<span class="pill">'+pol+'</span>':'<span style="color:#c0392b">該当なし</span>')+'</td></tr>'+
+    '<tr><td class="k">エアパケット（Economy）</td><td class="v2 num">'+(air!==null?yen(air):'不可 2kg超')+'</td></tr>'+
+    '<tr><td class="k">EMS（Standard）</td><td class="v2 num">'+(ems!==null?yen(ems):'\u2014')+'</td></tr>'+
+    '<tr><td class="k">EMS 差額</td><td class="v2 num">'+((air!==null&&ems!==null)?yen(ems-air):'\u2014')+'</td></tr>';
+  $('shipNote').textContent=pol
+    ?'この重量なら eBay 側で '+pol+' を選択します。EMS 差額が Standard 請求額の根拠です。'
+    :'2kg超はエアパケット不可。EMSまたは国際小包になるため新しいポリシーが必要です。';
+
+  var wn=$('warn'),msg=[];
+  if(w<=0)msg.push('重量を入力してください。');
+  if(w>2000)msg.push('エアパケット上限2kg超。EMS前提の計算です。');
+  if(den<=0)msg.push('手数料と関税の合計が100%を超えています。');
+  if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
+  if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
+}
+
+const KEY='pj:pricing:v1';
+function save(){
+  try{
+    var o={};FIELDS.forEach(function(id){o[id]=$(id).value;});CHECKS.forEach(function(id){o[id]=$(id).checked;});
+    delete o.cost;delete o.weight;delete o.price;
+    localStorage.setItem(KEY,JSON.stringify(o));
+  }catch(e){}
+}
+function load(){
+  try{
+    var s=localStorage.getItem(KEY);
+    if(s){var o=JSON.parse(s);
+      Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
+        if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
+      $('rowShip').style.display=$('sepShip').checked?'flex':'none';
+    }
+  }catch(e){}
+  calc();
+}
+load();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
+}
+function net(){$('netstate').textContent=navigator.onLine?'':'\u2691 オフラインで動作中';}
+addEventListener('online',net);addEventListener('offline',net);net();
+
+(function(){
+  var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
+  var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent);
+  var done=false;try{done=!!localStorage.getItem('pj:tipdone');}catch(e){}
+  if(isIOS&&!standalone&&!done){
+    var t=$('tip');
+    t.innerHTML='共有ボタン \u2192 <b>ホーム画面に追加</b> でアプリとして使えます。全画面になり、圏外でも動きます。<br><span style="opacity:.6;font-size:11.5px">（タップで消えます）</span>';
+    t.style.display='block';
+    t.onclick=function(){t.style.display='none';try{localStorage.setItem('pj:tipdone','1');}catch(e){}};
+  }
+})();
+</script>
+</body>
+</html>
