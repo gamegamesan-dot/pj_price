@@ -232,8 +232,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="chk"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
       <div class="chk"><input type="checkbox" id="bDDP" checked><label for="bDDP" style="flex:1">関税は前払い済み（米国向け・Zonos）</label></div>
-      <button class="btn primary" id="copyDesc" style="width:100%;margin-top:4px">説明文HTMLをコピー</button>
-      <div class="note2" id="descNote">eBayの説明欄で「コードを表示」に切り替えてから貼り付けてください。</div>
+      <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
+      <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
     <details>
       <summary>生成された説明文を確認</summary>
@@ -505,7 +505,7 @@ function descHTML(){
 
   if($('bPrize').checked){
     S+=h2('About Japanese prize figures');
-    S+='<p style="margin:0 0 22px;">This is an official prize figure, distributed to Japanese arcades and crane game centres rather than sold at retail. The outer box is distribution packaging, not collector packaging, so light scuffs, small dents or storage marks on the box are normal for this category and are not treated as defects. Printed materials and box text are in Japanese.</p>';
+    S+='<p style="margin:0 0 22px;">'+pick(V_PRIZE)+'</p>';
   }
   if($('bJP').checked){
     S+=h2('Japanese version \u2014 please read')+'<ul style="margin:0 0 22px;padding-left:22px;">';
@@ -516,7 +516,7 @@ function descHTML(){
 
   S+=h2('Shipping')+'<ul style="margin:0 0 22px;padding-left:22px;">';
   S+='<li>Dispatched from Tokyo within 5 business days of cleared payment.</li>';
-  S+='<li>Every parcel ships with tracking and is packed with protective material inside an outer box.</li>';
+  S+='<li>'+pick(V_PACK)+'</li>';
   S+='<li>Delivery speed and carrier options are shown in the Shipping and payments section of this listing.</li></ul>';
 
   S+=h2('Import duties and taxes');
@@ -529,7 +529,7 @@ function descHTML(){
 
   S+='<div style="background:#f4f4f2;padding:16px 18px;border-radius:4px;margin-bottom:8px;">';
   S+='<h2 style="font-size:15px;margin:0 0 8px;">About Play Japan</h2>';
-  S+='<p style="margin:0;">A licensed second-hand dealer registered in Tokyo, sourcing games, figures and hobby goods directly from Akihabara. Thirteen years in the Japanese collectors market, every item inspected by hand before it ships. Questions about an item are welcome through eBay messages.</p></div>';
+  S+='<p style="margin:0;">'+pick(V_ABOUT)+'</p></div>';
   S+='</div>';
   return S;
 }
@@ -618,6 +618,84 @@ function lload(){
   }catch(e){}
 }
 lload();
+
+
+/* ---- 文面バリエーション（出品ごとに自動で振り分け） ---- */
+function seedOf(){
+  var s=[$('brand').value,$('series').value,$('chara').value,$('variant').value].join('|');
+  var h=0; for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0;}
+  return Math.abs(h);
+}
+function pick(arr){ return arr[seedOf()%arr.length]; }
+
+var V_PRIZE=[
+ 'This is an official prize figure, distributed to Japanese arcades and crane game centres rather than sold at retail. The outer box is distribution packaging, not collector packaging, so light scuffs, small dents or storage marks on the box are normal for this category and are not treated as defects. Printed materials and box text are in Japanese.',
+ 'Prize figures like this one are made for Japanese arcade and crane game prizes, never for shop shelves. That means the box is built for distribution rather than display, and minor scuffing or a soft corner is ordinary for the category rather than a fault. All printed text on the packaging is Japanese.',
+ 'An official arcade prize release. Figures in this category are supplied to game centres across Japan instead of going to retail, so the outer box serves as transport packaging. Small marks, light creasing or a slightly knocked corner are usual and not counted as damage. Packaging text is in Japanese throughout.'
+];
+var V_ABOUT=[
+ 'A licensed second-hand dealer registered in Tokyo, sourcing games, figures and hobby goods directly from Akihabara. Thirteen years in the Japanese collectors market, every item inspected by hand before it ships. Questions about an item are welcome through eBay messages.',
+ 'We are a Tokyo-registered second-hand dealer buying directly from the shops and arcades of Akihabara. Thirteen years working in the Japanese collectors market means every piece is checked by hand before it leaves us. Feel free to ask anything through eBay messages.',
+ 'Based in Tokyo and licensed as a second-hand dealer, we source games, figures and hobby goods from Akihabara ourselves rather than through wholesalers. Thirteen years in this market, and every item goes out only after a hand inspection. Questions are always welcome via eBay messages.'
+];
+var V_PACK=[
+ 'Every parcel ships with tracking and is packed with protective material inside an outer box.',
+ 'All parcels are tracked, and the product box travels inside a second outer carton with cushioning around it.',
+ 'Tracking is included on every parcel, and each item is cushioned and boxed inside a separate shipping carton.'
+];
+
+/* ---- プレーンテキスト版 ---- */
+function descPlain(){
+  var p=titleParts(), c=$('cond').value, kind=$('kind').value;
+  var full=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype].filter(Boolean).join(' ');
+  var extra=$('extra').value.trim();
+  var L=[];
+  L.push('SHIPPED DIRECTLY FROM AKIHABARA, TOKYO');
+  L.push(full);
+  L.push('');
+  L.push('\u25A0 CONDITION');
+  L.push(CONDLABEL[c]);
+  L.push(CONDNOTE[c]+(extra?' '+extra:''));
+  L.push('');
+  var body='';
+  if(p.chara&&p.series) body=p.chara+' from '+p.series+'. ';
+  else if(p.series) body='From '+p.series+'. ';
+  if(p.line&&p.brand) body+='Part of the '+p.line+' line by '+p.brand+'. ';
+  else if(p.brand) body+='Made by '+p.brand+'. ';
+  if(kind==='prize') body+='An official prize figure, produced for arcade and crane game distribution in Japan rather than for retail sale.';
+  else if(kind==='game') body+='Japanese release. Please check the region notes below before buying.';
+  L.push('\u25A0 DESCRIPTION');
+  L.push(body);
+  L.push('');
+  if($('bPrize').checked){
+    L.push('\u25A0 ABOUT JAPANESE PRIZE FIGURES');
+    L.push(pick(V_PRIZE)); L.push('');
+  }
+  if($('bJP').checked){
+    L.push('\u25A0 JAPANESE VERSION - PLEASE READ');
+    L.push('- Packaging, manuals and printed materials are in Japanese.');
+    L.push('- Video games are region-locked to Japanese systems unless stated otherwise. Nintendo Switch titles are region-free; PlayStation and older consoles are not.');
+    L.push('- Electronics are built for 100V AC with a Japanese type-A plug. A converter or adapter may be required in your country.');
+    L.push('');
+  }
+  L.push('\u25A0 SHIPPING');
+  L.push('- Dispatched from Tokyo within 5 business days of cleared payment.');
+  L.push('- '+pick(V_PACK));
+  L.push('- Delivery speed and carrier options are shown in the Shipping and payments section of this listing.');
+  L.push('');
+  L.push('\u25A0 IMPORT DUTIES AND TAXES');
+  L.push($('bDDP').checked
+    ? 'Import duties and taxes are calculated and collected at checkout, so nothing further is due on delivery. The amount shown at checkout is the final amount you pay.'
+    : 'Import duties, taxes and customs charges are set by your own country and are not included in the item price or shipping cost. Where these are not collected at checkout, they are paid by the buyer on delivery. Customs declarations are completed accurately as required by law.');
+  L.push('');
+  L.push('\u25A0 RETURNS');
+  L.push('Returns are accepted under the terms shown in the Shipping and payments section. If anything arrives damaged or not as described, message us through eBay first and it will be put right.');
+  L.push('');
+  L.push('\u25A0 ABOUT PLAY JAPAN');
+  L.push(pick(V_ABOUT));
+  return L.join('\n');
+}
+$('copyPlain').onclick=function(){copyText(descPlain(),this,'説明文をコピー（アプリ用・文字だけ）');};
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
