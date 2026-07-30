@@ -132,8 +132,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </section>
 
   <div class="tabs">
-    <button id="tabA" aria-pressed="true">値付け</button>
+    <button id="tabA" aria-pressed="true">eBay</button>
     <button id="tabB" aria-pressed="false">出品文</button>
+    <button id="tabC" aria-pressed="false">Shopee</button>
   </div>
 
   <div id="tabPricing">
@@ -244,6 +245,63 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">出品前チェック</div>
     <table id="checkTbl"></table>
+  </section>
+
+  </div>
+
+  <!-- ============ Shopeeタブ ============ -->
+  <div id="tabShopee" style="display:none">
+
+  <section>
+    <div class="h">市場</div>
+    <div class="body">
+      <div class="row"><label>販売先</label>
+        <select id="spMarket" style="flex:0 0 auto">
+          <option value="SG" selected>シンガポール（SGD）</option>
+          <option value="TW">台湾（TWD）</option>
+          <option value="MY">マレーシア（MYR）</option>
+        </select>
+      </div>
+      <div class="row"><label>モード</label>
+        <select id="spMode" style="flex:0 0 auto">
+          <option value="limit" selected>目標利益率 → 仕入上限</option>
+          <option value="profit">仕入値・売値 → 利益率</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">商品</div>
+    <div class="body">
+      <div class="row" id="spRowSell"><label>現地販売価格</label><input type="number" id="spSell" value="42" step="0.01" inputmode="decimal"><span class="unit" id="spCurUnit">S$</span></div>
+      <div class="row" id="spRowMargin"><label>目標利益率</label><input type="number" id="spMarginTarget" value="15" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row" id="spRowCost" style="display:none"><label>仕入値（税込）</label><input type="number" id="spCost" value="1443" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>SLS送料</label><input type="number" id="spShipSLS" value="900" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>国内集約送料</label><input type="number" id="spShipDom" value="250" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>梱包資材</label><input type="number" id="spPack" value="150" inputmode="numeric"><span class="unit">円</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="verdict go" id="spVerdict">&mdash;</div>
+    <div class="big">
+      <div class="cap" id="spBigCap">仕入上限</div>
+      <div class="v num" id="spBigVal">&mdash;</div>
+      <div class="sub" id="spBigSub">&mdash;</div>
+    </div>
+    <table id="spTbl"></table>
+    <div class="warn" id="spWarn" style="display:none"></div>
+  </section>
+
+  <section>
+    <div class="h">市場別 手数料設定<span style="font-weight:400;color:var(--mute)">（2026年2月改定・要確認）</span></div>
+    <div class="body">
+      <div class="row"><label>為替レート（1通貨あたり）</label><input type="number" id="spFx" value="115" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
+      <div class="row"><label>販売手数料＋決済手数料</label><input type="number" id="spFeePct" value="23" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>固定手数料</label><input type="number" id="spFeeFixed" value="0" step="0.1" inputmode="decimal"><span class="unit" id="spCurUnit2">S$</span></div>
+      <div class="note2">Shopeeは2026年2月に主要国で約2%値上げされています。実際の率はSeller Centre内「各種手数料」ページで市場ごとに確認し、ここで上書きしてください。市場を切り替えても数値は自動で変わらないので、市場ごとに手入力で合わせます。</div>
+    </div>
   </section>
 
   </div>
@@ -436,12 +494,16 @@ var titleEdited=false;
 
 $('tabA').onclick=function(){switchTab('A');};
 $('tabB').onclick=function(){switchTab('B');};
+$('tabC').onclick=function(){switchTab('C');};
 function switchTab(t){
   $('tabA').setAttribute('aria-pressed',t==='A');
   $('tabB').setAttribute('aria-pressed',t==='B');
+  $('tabC').setAttribute('aria-pressed',t==='C');
   $('tabPricing').style.display=t==='A'?'block':'none';
   $('tabListing').style.display=t==='B'?'block':'none';
+  $('tabShopee').style.display=t==='C'?'block':'none';
   if(t==='B')buildListing();
+  if(t==='C')buildShopee();
   window.scrollTo(0,0);
 }
 
@@ -618,6 +680,123 @@ function lload(){
   }catch(e){}
 }
 lload();
+
+/* ================= Shopeeタブ ================= */
+var SP_CUR={SG:'S$',TW:'NT$',MY:'RM'};
+var SP_DEFAULT_FX={SG:115,TW:5.0,MY:35};
+var SP_KEY='pj:shopee:v1';
+
+$('spMarket').addEventListener('change',function(){
+  var m=$('spMarket').value, u=SP_CUR[m];
+  $('spCurUnit').textContent=u; $('spCurUnit2').textContent=u;
+  spsave(); buildShopee();
+});
+$('spMode').addEventListener('change',function(){
+  var mode=$('spMode').value;
+  $('spRowMargin').style.display = mode==='limit' ? 'flex':'none';
+  $('spRowCost').style.display   = mode==='profit'? 'flex':'none';
+  $('spBigCap').textContent = mode==='limit' ? '仕入上限' : '利益';
+  buildShopee(); spsave();
+});
+['spSell','spMarginTarget','spCost','spShipSLS','spShipDom','spPack','spFx','spFeePct','spFeeFixed']
+  .forEach(function(id){$(id).addEventListener('input',function(){buildShopee();spsave();});});
+
+function buildShopee(){
+  var market=$('spMarket').value, mode=$('spMode').value;
+  var R=+$('spFx').value||0, S=+$('spSell').value||0;
+  var feePct=(+$('spFeePct').value||0)/100, feeFixed=+$('spFeeFixed').value||0;
+  var Kslsv=+$('spShipSLS').value||0, Kdom=+$('spShipDom').value||0, Kpack=+$('spPack').value||0;
+  var Kship=Kslsv+Kdom+Kpack;
+  var cur=SP_CUR[market];
+
+  var revenue=S*R;
+  var fees=revenue*feePct + feeFixed*R;
+  var netReceived=revenue-fees;
+
+  var profit,maxCost,marginPct,C;
+
+  if(mode==='limit'){
+    var mt=(+$('spMarginTarget').value||0)/100;
+    maxCost = netReceived - Kship - revenue*mt;
+    C=maxCost; profit=revenue*mt; marginPct=mt*100;
+  }else{
+    C=+$('spCost').value||0;
+    profit = netReceived - Kship - C;
+    marginPct = revenue>0 ? profit/revenue*100 : 0;
+  }
+
+  var v=$('spVerdict');
+  if(mode==='limit'){
+    $('spBigVal').textContent = yen(maxCost);
+    $('spBigSub').textContent = '目標利益率 '+ (+$('spMarginTarget').value).toFixed(1) +'% を残す仕入上限額';
+    if(maxCost<=0){v.className='verdict no';v.textContent='\u2715 この売値では手数料と送料だけで赤字です';}
+    else{v.className='verdict go';v.textContent='\u25CE 仕入上限 '+yen(maxCost);}
+  }else{
+    $('spBigVal').textContent = yen(profit);
+    $('spBigSub').textContent = '利益率 '+marginPct.toFixed(1)+'%（売値ベース）';
+    if(marginPct<5){v.className='verdict no';v.textContent='\u2715 見送る \u2014 利益率5%未満';}
+    else if(marginPct<15){v.className='verdict mid';v.textContent='\u25B3 TEST \u2014 利益率'+marginPct.toFixed(1)+'%';}
+    else{v.className='verdict go';v.textContent='\u25CE GO \u2014 利益率'+marginPct.toFixed(1)+'%';}
+  }
+
+  var rows=[
+    ['販売価格', cur+' '+S.toFixed(2)+'　(\u2248'+yen(revenue)+')'],
+    ['手数料 '+(feePct*100).toFixed(1)+'%'+(feeFixed?'\uff0b固定'+cur+feeFixed.toFixed(2):''), yen(-fees)],
+    ['SLS送料', yen(-Kslsv)],
+    ['国内集約送料', yen(-Kdom)],
+    ['梱包資材', yen(-Kpack)]
+  ];
+  if(mode==='limit'){
+    rows.push(['目標利益（売値の'+(+$('spMarginTarget').value)+'%）', yen(-profit)]);
+    rows.push(['&rarr; 仕入上限', '<b>'+yen(maxCost)+'</b>']);
+  }else{
+    rows.push(['仕入値', yen(-C)]);
+    rows.push(['&rarr; 利益', '<b>'+yen(profit)+'</b>']);
+  }
+  $('spTbl').innerHTML=rows.map(function(r){
+    return '<tr><td class="k">'+r[0]+'</td><td class="v2 num">'+r[1]+'</td></tr>';
+  }).join('');
+
+  var wn=$('spWarn'),msg=[];
+  if(R<=0)msg.push('為替レートを入力してください。');
+  if(S<=0)msg.push('現地販売価格を入力してください。');
+  if(feePct>0.35)msg.push('手数料率が35%を超えています。入力ミスがないか確認してください。');
+  if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
+}
+
+function spsave(){
+  try{
+    var o={};
+    ['spMarket','spMode','spFeePct','spFeeFixed'].forEach(function(id){o[id]=$(id).value;});
+    var fx={}; fx[$('spMarket').value]=$('spFx').value; o._fx=fx;
+    var s=localStorage.getItem(SP_KEY); var prev=s?JSON.parse(s):{};
+    var mergedFx=Object.assign({}, prev._fx||{}, fx);
+    o._fx=mergedFx;
+    localStorage.setItem(SP_KEY,JSON.stringify(o));
+  }catch(e){}
+}
+function spload(){
+  try{
+    var s=localStorage.getItem(SP_KEY);
+    var m=$('spMarket').value;
+    if(s){
+      var o=JSON.parse(s);
+      if(o.spMarket)$('spMarket').value=o.spMarket;
+      if(o.spMode)$('spMode').value=o.spMode;
+      if(o.spFeePct)$('spFeePct').value=o.spFeePct;
+      if(o.spFeeFixed)$('spFeeFixed').value=o.spFeeFixed;
+      m=$('spMarket').value;
+      if(o._fx&&o._fx[m])$('spFx').value=o._fx[m];
+      else $('spFx').value=SP_DEFAULT_FX[m];
+    }else{
+      $('spFx').value=SP_DEFAULT_FX[m];
+    }
+    $('spCurUnit').textContent=SP_CUR[m]; $('spCurUnit2').textContent=SP_CUR[m];
+    $('spRowMargin').style.display = $('spMode').value==='limit' ? 'flex':'none';
+    $('spRowCost').style.display   = $('spMode').value==='profit'? 'flex':'none';
+  }catch(e){}
+}
+spload();
 
 
 /* ---- 文面バリエーション（出品ごとに自動で振り分け） ---- */
