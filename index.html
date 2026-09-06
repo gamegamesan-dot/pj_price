@@ -232,7 +232,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="body">
       <div class="chk"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
-      <div class="chk"><input type="checkbox" id="bDDP" checked><label for="bDDP" style="flex:1">関税は前払い済み（米国向け・Zonos）</label></div>
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
@@ -502,7 +501,7 @@ load();
 
 /* ================= 出品文タブ ================= */
 var LFIELDS=['kind','brand','series','chara','variant','line','ptype','cond','origin','extra','title'];
-var LCHECKS=['bPrize','bJP','bDDP'];
+var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
 var titleEdited=false;
 
@@ -579,6 +578,12 @@ function descHTML(){
   else if(kind==='game') body+='Japanese release. Please check the region notes below before buying.';
   S+=h2('Description')+'<p style="margin:0 0 22px;">'+body+'</p>';
 
+  if(isChinaOrigin()){
+    var bA=p.brand?esc(p.brand)+' ':'';
+    S+=h2('Authenticity');
+    S+='<p style="margin:0 0 22px;">This is an official '+bA+'product, purchased new from a licensed retailer in Japan. Like most '+bA+'figures, it is designed in Japan and manufactured in China &mdash; this is printed on the original box and is normal for this product line.</p>';
+  }
+
   if($('bPrize').checked){
     S+=h2('About Japanese prize figures');
     S+='<p style="margin:0 0 22px;">'+pick(V_PRIZE)+'</p>';
@@ -595,11 +600,9 @@ function descHTML(){
   S+='<li>'+pick(V_PACK)+'</li>';
   S+='<li>Delivery speed and carrier options are shown in the Shipping and payments section of this listing.</li></ul>';
 
-  S+=h2('Import duties and taxes');
-  if($('bDDP').checked)
-    S+='<p style="margin:0 0 22px;">Import duties and taxes are calculated and collected at checkout, so nothing further is due on delivery. The amount shown at checkout is the final amount you pay.</p>';
-  else
-    S+='<p style="margin:0 0 22px;">Import duties, taxes and customs charges are set by your own country and are not included in the item price or shipping cost. Where these are not collected at checkout, they are paid by the buyer on delivery. Customs declarations are completed accurately as required by law.</p>';
+  S+=h2('Import duties');
+  S+='<p style="margin:0 0 12px;">For orders shipped to the United States, import duties are prepaid by us. You will not be asked to pay anything on delivery.</p>';
+  S+='<p style="margin:0 0 22px;">For all other destinations, any import duties or taxes are the responsibility of the buyer and are not included in the item price.</p>';
 
   S+=h2('Returns')+'<p style="margin:0 0 22px;">Returns are accepted under the terms shown in the Shipping and payments section. If anything arrives damaged or not as described, message us through eBay first and it will be put right.</p>';
 
@@ -611,6 +614,8 @@ function descHTML(){
 }
 function h2(t){return '<h2 style="font-size:15px;margin:0 0 8px;padding-left:10px;border-left:4px solid #1c1c1c;">'+t+'</h2>';}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// 原産国が中国のときだけ Authenticity ブロックを出す（Made in China での偽物疑いを先回りで防ぐ）
+function isChinaOrigin(){var o=($('origin').value||'').trim().toLowerCase();return o.indexOf('china')>=0||o.indexOf('中国')>=0;}
 
 function buildListing(){
   if(!titleEdited){
@@ -860,6 +865,12 @@ function descPlain(){
   L.push('\u25A0 DESCRIPTION');
   L.push(body);
   L.push('');
+  if(isChinaOrigin()){
+    var bAp=p.brand?p.brand+' ':'';
+    L.push('\u25A0 AUTHENTICITY');
+    L.push('This is an official '+bAp+'product, purchased new from a licensed retailer in Japan. Like most '+bAp+'figures, it is designed in Japan and manufactured in China \u2014 this is printed on the original box and is normal for this product line.');
+    L.push('');
+  }
   if($('bPrize').checked){
     L.push('\u25A0 ABOUT JAPANESE PRIZE FIGURES');
     L.push(pick(V_PRIZE)); L.push('');
@@ -876,10 +887,9 @@ function descPlain(){
   L.push('- '+pick(V_PACK));
   L.push('- Delivery speed and carrier options are shown in the Shipping and payments section of this listing.');
   L.push('');
-  L.push('\u25A0 IMPORT DUTIES AND TAXES');
-  L.push($('bDDP').checked
-    ? 'Import duties and taxes are calculated and collected at checkout, so nothing further is due on delivery. The amount shown at checkout is the final amount you pay.'
-    : 'Import duties, taxes and customs charges are set by your own country and are not included in the item price or shipping cost. Where these are not collected at checkout, they are paid by the buyer on delivery. Customs declarations are completed accurately as required by law.');
+  L.push('\u25A0 IMPORT DUTIES');
+  L.push('For orders shipped to the United States, import duties are prepaid by us. You will not be asked to pay anything on delivery.');
+  L.push('For all other destinations, any import duties or taxes are the responsibility of the buyer and are not included in the item price.');
   L.push('');
   L.push('\u25A0 RETURNS');
   L.push('Returns are accepted under the terms shown in the Shipping and payments section. If anything arrives damaged or not as described, message us through eBay first and it will be put right.');
