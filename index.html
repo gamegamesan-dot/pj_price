@@ -596,7 +596,6 @@ function descHTML(){
   }
 
   S+=h2('Shipping')+'<ul style="margin:0 0 22px;padding-left:22px;">';
-  S+='<li>Dispatched from Tokyo within 5 business days of cleared payment.</li>';
   S+='<li>'+pick(V_PACK)+'</li>';
   S+='<li>Delivery speed and carrier options are shown in the Shipping and payments section of this listing.</li></ul>';
 
@@ -645,7 +644,7 @@ function buildListing(){
 
   var rows=[
     ['送料ポリシー', pol?'<span class="pill">'+pol+'</span>':'<span style="color:#c0392b">要作成</span>'],
-    ['ハンドリングタイム','5 business days'],
+    ['ハンドリングタイム','3 business days'],
     ['Country of Manufacture','<b>'+esc($('origin').value||'—')+'</b>'],
     ['Brand', esc($('brand').value||'—')],
     ['Best Offer 自動拒否ライン','<b>'+usd(Math.ceil(floor*100)/100)+'</b>'],
@@ -883,7 +882,6 @@ function descPlain(){
     L.push('');
   }
   L.push('\u25A0 SHIPPING');
-  L.push('- Dispatched from Tokyo within 5 business days of cleared payment.');
   L.push('- '+pick(V_PACK));
   L.push('- Delivery speed and carrier options are shown in the Shipping and payments section of this listing.');
   L.push('');
