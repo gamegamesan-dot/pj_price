@@ -50,6 +50,8 @@ const V = 'pj-pricing-v5';
 - 国際エアパケット: https://www.post.japanpost.jp/service/send/oversea/list/delivery/airpacket.html
 - EMS: https://www.post.japanpost.jp/send/oversea/charge/list-ems/all.html
 
+> 同じ日本郵便の料金表を `akiba-ship/rates.js` でも保持しています。値上げ時は両方を更新してください。
+
 ## 計算式
 
 ```
