@@ -313,13 +313,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="row"><label>関税（Zonos前払）</label><input type="number" id="duty" value="15" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>米国関税・通関手数料</label><input type="number" id="duty" value="13.74" step="0.5" inputmode="decimal" readonly><span class="unit">% + ¥562</span></div>
       <div class="chk"><input type="checkbox" id="dutyShip"><label for="dutyShip" style="flex:1">関税の課税ベースに送料を含む</label></div>
       <div class="chk"><input type="checkbox" id="taxRefund"><label for="taxRefund" style="flex:1">輸出免税で仕入の消費税を控除</label></div>
       <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
     </div>
     <div class="note">
-      為替は実勢より低い値を入れると安全側に出ます。関税率・手数料率は実際の取引明細と突き合わせて調整してください。設定は自動保存されます。
+      為替は実勢より低い値を入れると安全側に出ます。手数料率は実際の取引明細と突き合わせて調整してください。米国関税・通関手数料は Zonos 実測（2026-09-05）の固定値で、米国宛のみ加算されます。設定は自動保存されます。
     </div>
   </section>
 
@@ -389,9 +389,20 @@ FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
 });});
 CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();save();});});
 
+// 米国関税・通関手数料（米国宛=zone4 のみ。eBayは2025-10-17〜 $2,500未満でDDP必須＝セラー前払い）
+// 2026-09-05 に Zonos Prepay アプリで実測。制度変更で変わる（デミニミス撤廃/Section 301 等）。
+// 内訳: 関税12.5%（HTS 9503.00.0090 は General Rate 0%、上乗せ12.5%）＋ 通関手数料(固定562円 + 申告額の1.24%)
+//   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
+const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
+const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
+
 function calc(){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0,z=+$('zone').value;
-  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100,d=(+$('duty').value||0)/100;
+  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100;
+  // 関税・通関手数料は米国宛のみ。%欄(id=duty)は表示専用で計算には使わない。
+  var isUS=(z==4);
+  var d=isUS?US_DUTY_RATE:0;                 // 変動分（率）：関税12.5% + 通関手数料1.24%
+  var dutyFixed=isUS?US_DUTY_FIXED_JPY:0;    // 固定分（円）：通関手数料の固定562円
   var fixed=(+$('fixed').value||0)*R;
   var sep=$('sepShip').checked,dShip=$('dutyShip').checked,refund=$('taxRefund').checked;
   var C=refund?C0/1.1:C0;
@@ -400,20 +411,21 @@ function calc(){
   var S=air!==null?air:(ems||0);
   var G=sep?(+$('shipCharge').value||0):0;
   var a=R*(1-f-x),b=R*d,den=a-b;
+  var fixedAll=fixed+dutyFixed;   // 固定手数料 + 米国通関手数料の固定分（ともに円）
 
   var P,profit;
   if(mode==='A'){
     P=+$('price').value||0;
-    profit=P*den+G*a-(dShip?G*b:0)-fixed-C-K-S;
+    profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
   }else{
     var T=+$('target').value||0;
-    P=den>0?(T+fixed+C+K+S-G*a+(dShip?G*b:0))/den:0;
+    P=den>0?(T+fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
     profit=T;
   }
-  var be=den>0?(fixed+C+K+S-G*a+(dShip?G*b:0))/den:0;
+  var be=den>0?(fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
 
   var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
-  var dutyAmt=(P*R+(dShip?G*R:0))*d;
+  var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
   var margin=gross>0?profit/gross*100:0;
   var mult=C0>0?(P*R)/C0:0;
 
@@ -438,7 +450,7 @@ function calc(){
     ['eBay手数料 '+(f*100).toFixed(2)+'%',yen(-feeAmt),true],
     ['固定手数料',yen(-fixed),true],
     ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
-    ['関税 '+(d*100).toFixed(1)+'%',yen(-dutyAmt),true],
+    ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（米国宛のみ）'),yen(-dutyAmt),true],
     ['実送料（'+(air!==null?'エアパケット':'EMS')+'）',yen(-S),true],
     ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
     ['梱包資材',yen(-K),true]
@@ -481,6 +493,8 @@ function load(){
       $('rowShip').style.display=$('sepShip').checked?'flex':'none';
     }
   }catch(e){}
+  // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
+  $('duty').value=(US_DUTY_RATE*100).toFixed(2);
   calc();
 }
 load();
