@@ -1,6 +1,6 @@
 # pj_price 専用 商品名パースプロキシ（Cloudflare Worker）
 # APIキーはここに書かない。デプロイ時に `wrangler secret put ANTHROPIC_API_KEY` で登録する。
-name = "pj-parse"
+name = "pj-price"
 main = "worker.js"
 compatibility_date = "2025-09-01"
 
