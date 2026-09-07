@@ -178,6 +178,11 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">商品情報</div>
     <div class="body">
+      <div class="rowv"><label>商品名を貼り付け</label><textarea id="pasteIn" rows="3" placeholder="商品名やeBayタイトルを貼り付けて「自動で振り分け」。日本語でもOK（英語に直して各欄へ）"></textarea></div>
+      <div style="display:flex;align-items:center;gap:10px;margin:0 0 8px">
+        <button class="btn primary" id="btnParse" style="flex:0 0 auto">自動で振り分け</button>
+        <span class="note2" id="parseStat" style="margin:0;flex:1"></span>
+      </div>
       <div class="row"><label>商材タイプ</label>
         <select id="kind" style="flex:0 0 auto">
           <option value="prize" selected>プライズフィギュア</option>
@@ -504,6 +509,9 @@ var LFIELDS=['kind','brand','series','chara','variant','line','ptype','cond','or
 var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
 var titleEdited=false;
+// 商品名の自動振り分けプロキシ(Cloudflare Worker)のURL。デプロイ後に差し替える。
+// 空のあいだは「自動で振り分け」ボタンを無効化。手入力での出品は通常どおり可能（自動は補助）。
+var PARSE_API=''; // 例: 'https://pj-parse.<account>.workers.dev'
 
 $('tabA').onclick=function(){switchTab('A');};
 $('tabB').onclick=function(){switchTab('B');};
@@ -698,6 +706,46 @@ function lload(){
   }catch(e){}
 }
 lload();
+
+/* ---- 商品名の自動振り分け（Cloudflare Worker 経由・補助機能） ---- */
+(function(){
+  var btn=$('btnParse'), ta=$('pasteIn'), stat=$('parseStat');
+  if(!btn) return;
+  function say(msg,color){ stat.textContent=msg||''; stat.style.color=color||'var(--mute)'; }
+  // PARSE_API 未設定でもアプリは通常動作。ボタンだけ無効化し、手入力を促す。
+  if(!PARSE_API){
+    btn.disabled=true;
+    say('自動振り分けは未設定です（proxyのURLを PARSE_API に設定）。各欄は手入力できます。');
+  }
+  btn.addEventListener('click',function(){
+    var text=(ta.value||'').trim();
+    if(!text){ say('先に商品名を貼り付けてください。','var(--bad)'); return; }
+    if(!PARSE_API){ return; }
+    var label=btn.textContent;
+    btn.disabled=true; btn.textContent='変換中…'; say('変換中…');
+    fetch(PARSE_API,{method:'POST',headers:{'content-type':'application/json'},
+                     body:JSON.stringify({text:text})})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){
+        // 取れた項目だけ反映。空(不明)は上書きしない＝推測で埋めない/手入力を消さない。
+        var filled=[];
+        ['brand','series','chara','variant','line'].forEach(function(k){
+          var v=(d&&typeof d[k]==='string')?d[k].trim():'';
+          if(v){ $(k).value=v; filled.push(k); }
+        });
+        titleEdited=false; buildListing(); lsave();  // タイトル/説明を再生成（計算ロジックは不変）
+        say(filled.length
+              ? '振り分け完了（'+filled.length+'項目）。空欄は手で補ってください。'
+              : '該当項目を判定できませんでした。手入力してください。',
+            filled.length?'#2e7d32':'var(--bad)');
+      })
+      .catch(function(e){
+        // Worker不通・失敗時も手入力で出品を続けられる（自動は補助）。
+        say('自動振り分けに失敗しました（'+e.message+'）。手入力で続けられます。','var(--bad)');
+      })
+      .then(function(){ btn.disabled=false; btn.textContent=label; });
+  });
+})();
 
 /* ================= Shopeeタブ ================= */
 var SP_CUR={SG:'S$',TW:'NT$',MY:'RM'};
