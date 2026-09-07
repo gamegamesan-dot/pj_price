@@ -511,7 +511,7 @@ var LKEY='pj:listing:v1';
 var titleEdited=false;
 // 商品名の自動振り分けプロキシ(Cloudflare Worker)のURL。デプロイ後に差し替える。
 // 空のあいだは「自動で振り分け」ボタンを無効化。手入力での出品は通常どおり可能（自動は補助）。
-var PARSE_API=''; // 例: 'https://pj-parse.<account>.workers.dev'
+var PARSE_API='https://pj-price.gamegamesan.workers.dev'; // デプロイ済みWorker(pj-price)
 
 $('tabA').onclick=function(){switchTab('A');};
 $('tabB').onclick=function(){switchTab('B');};

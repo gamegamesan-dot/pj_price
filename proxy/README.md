@@ -1,4 +1,4 @@
-# pj-parse — 商品名パースプロキシ（pj_price 専用）
+# pj-price — 商品名パースプロキシ（pj_price 専用）
 
 pj_price（eBay 値付け計算機）の「商品名を貼り付け → 5項目に自動振り分け」機能専用の
 Cloudflare Worker です。貼り付けた商品名を Anthropic API に投げ、
@@ -18,6 +18,8 @@ Worker 側でモデル・プロンプト・`max_tokens` を固定しているの
 
 ## エンドポイント
 
+- 公開URL: **https://pj-price.gamegamesan.workers.dev**
+  （Cloudflare 上のプロジェクト名は `pj-price`。`wrangler.toml` の `name` と一致）
 - `POST /`  Body: `{ "text": "<貼り付けた商品名>" }`（最大2KB）
 - 応答: `{ "brand","series","chara","variant","line" }`（英語・不明は空文字）
 - CORS は pj_price の Pages オリジン `https://gamegamesan-dot.github.io` に限定。
@@ -32,11 +34,11 @@ wrangler secret put ANTHROPIC_API_KEY   # 鍵を貼り付け（この値はど�
 wrangler deploy
 ```
 
-デプロイ後に表示される URL（例 `https://pj-parse.<account>.workers.dev`）を、
-`index.html` 冒頭の `PARSE_API` 定数に設定してください（末尾に `/` 不要）。
+デプロイ後に表示される URL を、`index.html` 冒頭の `PARSE_API` 定数に
+設定してください（末尾に `/` 不要）。**設定済み**です。
 
 ```js
-var PARSE_API = 'https://pj-parse.<account>.workers.dev';
+var PARSE_API = 'https://pj-price.gamegamesan.workers.dev';
 ```
 
 `PARSE_API` が空のあいだは、pj_price 側は「自動で振り分け」ボタンを無効化し、
