@@ -324,7 +324,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>米国関税・通関手数料</label><input type="number" id="duty" value="13.74" step="0.5" inputmode="decimal" readonly><span class="unit">% + ¥562</span></div>
       <div class="chk"><input type="checkbox" id="dutyShip"><label for="dutyShip" style="flex:1">関税の課税ベースに送料を含む</label></div>
       <div class="chk"><input type="checkbox" id="taxRefund"><label for="taxRefund" style="flex:1">輸出免税で仕入の消費税を控除</label></div>
-      <div class="chk"><input type="checkbox" id="stampDisc"><label for="stampDisc" style="flex:1">切手10%割引で支払う</label></div>
+      <div class="chk"><input type="checkbox" id="stampDisc"><label for="stampDisc" id="stampDiscLabel" style="flex:1"></label></div>
       <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
     </div>
     <div class="note">
@@ -486,9 +486,14 @@ function updateFigNote(){
 //   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
 const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
 const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
-// 金券ショップ等で切手を額面の90%で買って支払う場合の原価率。
+// 切手を額面より安く買って支払う場合の原価率。
+// 2026-09-11 アクセスチケットの実勢。額面により11〜13%
+//   （500円=87%、300/270/180/140/100円=88%）。主力の構成から12%引きを採用。
 // バイヤーへの請求送料は額面のままで、この割引は自社の原価計算にだけ効く。
-const STAMP_DISCOUNT=0.9;
+// 実効率が変わったらこの定数だけ直せば、チェックボックスのラベルと
+// 明細の表示もここから生成されるので追従する。
+const STAMP_DISCOUNT=0.88;
+const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引率（%）
 
 function calc(){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0,z=+$('zone').value;
@@ -562,7 +567,7 @@ function calc(){
     ['固定手数料',yen(-fixed),true],
     ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
     ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（米国宛のみ）'),yen(-dutyAmt),true],
-    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）'+(stamp?'（切手10%割引適用）':''),yen(-S),true],
+    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）'+(stamp?'（切手'+STAMP_OFF_PCT+'%割引適用）':''),yen(-S),true],
     ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
     ['梱包資材',yen(-K),true]
   );
@@ -615,6 +620,7 @@ function load(){
   }catch(e){}
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
+  $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
   updateFigNote();
   applyTargetUnit();
   calc();
