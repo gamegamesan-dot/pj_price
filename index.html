@@ -324,6 +324,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>米国関税・通関手数料</label><input type="number" id="duty" value="13.74" step="0.5" inputmode="decimal" readonly><span class="unit">% + ¥562</span></div>
       <div class="chk"><input type="checkbox" id="dutyShip"><label for="dutyShip" style="flex:1">関税の課税ベースに送料を含む</label></div>
       <div class="chk"><input type="checkbox" id="taxRefund"><label for="taxRefund" style="flex:1">輸出免税で仕入の消費税を控除</label></div>
+      <div class="chk"><input type="checkbox" id="stampDisc"><label for="stampDisc" style="flex:1">切手10%割引で支払う</label></div>
       <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
     </div>
     <div class="note">
@@ -412,7 +413,7 @@ function suggestShip(){
 }
 
 const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','fee','fixed','fxc','duty','minProfit'];
-const CHECKS=['sepShip','dutyShip','taxRefund'];
+const CHECKS=['sepShip','dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if((id==='weight'||id==='zone')&&$('sepShip').checked)suggestShip();
   calc();save();
@@ -485,6 +486,9 @@ function updateFigNote(){
 //   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
 const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
 const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
+// 金券ショップ等で切手を額面の90%で買って支払う場合の原価率。
+// バイヤーへの請求送料は額面のままで、この割引は自社の原価計算にだけ効く。
+const STAMP_DISCOUNT=0.9;
 
 function calc(){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0,z=+$('zone').value;
@@ -498,7 +502,9 @@ function calc(){
   var C=refund?C0/1.1:C0;
 
   var air=airRate(w,z),ems=emsRate(w,z),pol=policyFor(w);
-  var S=air!==null?air:(ems||0);
+  var Sface=air!==null?air:(ems||0);        // 郵便料金の額面。バイヤーへの請求根拠はこちら。
+  var stamp=$('stampDisc').checked;
+  var S=stamp?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料
   var G=sep?(+$('shipCharge').value||0):0;
   var a=R*(1-f-x),b=R*d,den=a-b;
   var fixedAll=fixed+dutyFixed;   // 固定手数料 + 米国通関手数料の固定分（ともに円）
@@ -556,7 +562,7 @@ function calc(){
     ['固定手数料',yen(-fixed),true],
     ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
     ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（米国宛のみ）'),yen(-dutyAmt),true],
-    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）',yen(-S),true],
+    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）'+(stamp?'（切手10%割引適用）':''),yen(-S),true],
     ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
     ['梱包資材',yen(-K),true]
   );
@@ -748,7 +754,8 @@ function buildListing(){
   var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100,d=(+$('duty').value||0)/100;
   var C0=+$('cost').value||0,K=+$('pack').value||0,z=+$('zone').value;
   var refund=$('taxRefund').checked, C=refund?C0/1.1:C0;
-  var air=airRate(w,z),ems=emsRate(w,z),S=air!==null?air:(ems||0);
+  var air=airRate(w,z),ems=emsRate(w,z),Sface=air!==null?air:(ems||0);
+  var S=$('stampDisc').checked?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料
   var fixed=(+$('fixed').value||0)*R, den=R*(1-f-x)-R*d;
   var be=den>0?(fixed+C+K+S)/den:0;
   var minP=+$('minProfit').value||0;
