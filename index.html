@@ -117,7 +117,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h">商品</div>
     <div class="body">
       <div class="row"><label>仕入値（税込）</label><input type="number" id="cost" value="500" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="rowv"><label>フィギュア製品ライン</label>
+        <select id="figLine" style="width:100%">
+          <option value="">選択しない（重量を手入力）</option>
+        </select>
+      </div>
       <div class="row"><label>実測重量（梱包込）</label><input type="number" id="weight" value="400" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" id="figNote"></div>
       <div class="row"><label>梱包資材</label><input type="number" id="pack" value="150" inputmode="numeric"><span class="unit">円</span></div>
       <div class="row"><label>仕向地</label>
         <select id="zone" style="flex:0 0 auto">
@@ -148,7 +154,14 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h" id="inHead">想定売値</div>
     <div class="body">
       <div class="row" id="rowPrice"><label>eBay Sold 価格</label><input type="number" id="price" value="52" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="row" id="rowTarget" style="display:none"><label>目標利益</label><input type="number" id="target" value="3000" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row" id="rowTarget" style="display:none"><label>目標利益</label>
+        <input type="number" id="target" value="3000" inputmode="numeric">
+        <span style="display:flex;gap:10px;flex:0 0 auto">
+          <label for="tuYen" style="flex:0 0 auto;display:flex;align-items:center;gap:3px"><input type="radio" name="tunit" id="tuYen" checked style="width:auto;margin:0;transform:scale(1.1)">円</label>
+          <label for="tuPct" style="flex:0 0 auto;display:flex;align-items:center;gap:3px"><input type="radio" name="tunit" id="tuPct" style="width:auto;margin:0;transform:scale(1.1)">％</label>
+        </span>
+      </div>
+      <div class="note2" id="targetNote" style="display:none"></div>
       <div class="chk"><input type="checkbox" id="sepShip"><label for="sepShip" style="flex:1">送料を別建てで請求する</label></div>
       <div class="row" id="rowShip" style="display:none"><label>請求送料</label><input type="number" id="shipCharge" value="0" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
     </div>
@@ -182,15 +195,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div style="display:flex;align-items:center;gap:10px;margin:0 0 8px">
         <button class="btn primary" id="btnParse" style="flex:0 0 auto">自動で振り分け</button>
         <span class="note2" id="parseStat" style="margin:0;flex:1"></span>
-      </div>
-      <div class="row"><label>商材タイプ</label>
-        <select id="kind" style="flex:0 0 auto">
-          <option value="prize" selected>プライズフィギュア</option>
-          <option value="figure">一般フィギュア</option>
-          <option value="game">ゲームソフト</option>
-          <option value="parts">ゲームパーツ</option>
-          <option value="other">その他</option>
-        </select>
       </div>
       <div class="rowv"><label>ブランド</label><input type="text" id="brand" list="brands" value="Banpresto" placeholder="Banpresto"></div>
       <datalist id="brands">
@@ -320,6 +324,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>米国関税・通関手数料</label><input type="number" id="duty" value="13.74" step="0.5" inputmode="decimal" readonly><span class="unit">% + ¥562</span></div>
       <div class="chk"><input type="checkbox" id="dutyShip"><label for="dutyShip" style="flex:1">関税の課税ベースに送料を含む</label></div>
       <div class="chk"><input type="checkbox" id="taxRefund"><label for="taxRefund" style="flex:1">輸出免税で仕入の消費税を控除</label></div>
+      <div class="chk"><input type="checkbox" id="stampDisc"><label for="stampDisc" id="stampDiscLabel" style="flex:1"></label></div>
       <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
     </div>
     <div class="note">
@@ -352,6 +357,27 @@ const EMS={
 };
 const POLICIES=[[200,'W200'],[300,'W300'],[400,'W400'],[600,'W600'],[1000,'W1000']];
 
+/* フィギュア製品ラインごとの商品重量（梱包前・1個あたり）。
+   2026-09-11 実測値。品目により前後する。
+   重量の定数はここ1か所だけ。画面の選択肢もこの配列から生成する。 */
+const FIG_WEIGHTS=[
+  ['S.H.Figuarts',300],
+  ['ねんどろいど',400],
+  ['figma',500],
+  ['ロボット魂',500],
+  ['リボルテック',500],
+  ['Mafex',600],
+  ['Grandista',700],
+  ['Glitter & Glamours',700],
+  ['一番くじ',700],
+  ['S.H.Figuarts（大型）',1500],
+  ['ロボット魂（大型）',1500],
+  ['メタルロボット魂',1500]
+];
+// 梱包後重量 = 商品重量×1.3 と 商品重量+200g の大きい方。
+const packedW=w=>Math.max(Math.round(w*1.3),w+200);
+const AIRPACKET_MAX=2000;   // 国際エアパケットの上限（梱包後）
+
 const $=id=>document.getElementById(id);
 const yen=n=>(n<0?'\u2212':'')+'\u00A5'+Math.abs(Math.round(n)).toLocaleString();
 const usd=n=>'$'+n.toFixed(2);
@@ -371,6 +397,7 @@ function setMode(m){
   $('rowPrice').style.display=m==='A'?'flex':'none';
   $('rowTarget').style.display=m==='B'?'flex':'none';
   $('inHead').textContent=m==='A'?'想定売値':'目標';
+  applyTargetUnit();
   calc();
 }
 $('sepShip').onchange=function(){
@@ -386,12 +413,72 @@ function suggestShip(){
 }
 
 const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','fee','fixed','fxc','duty','minProfit'];
-const CHECKS=['sepShip','dutyShip','taxRefund'];
+const CHECKS=['sepShip','dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if((id==='weight'||id==='zone')&&$('sepShip').checked)suggestShip();
   calc();save();
 });});
 CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();save();});});
+
+/* ---- 目標利益の単位（円 / ％）---- */
+// ％は売上（商品代金）に対する割合。円と％では入力値の意味がまったく違うので、
+// 単位ごとに直前の値を覚えておき、切り替えで値が壊れないようにする。
+var targetVals={yen:3000,pct:30};
+function targetIsPct(){ return $('tuPct').checked; }
+function applyTargetUnit(){
+  var pct=targetIsPct();
+  $('target').step=pct?'0.1':'1';
+  $('target').inputMode=pct?'decimal':'numeric';
+  var n=$('targetNote'), show=(mode==='B'&&pct);
+  n.style.display=show?'block':'none';
+  n.textContent=show?'売上（商品代金）に対する割合です。別建てで請求する送料は含みません。':'';
+}
+['tuYen','tuPct'].forEach(function(id){
+  $(id).addEventListener('change',function(){
+    var to=targetIsPct()?'pct':'yen', from=(to==='pct'?'yen':'pct');
+    targetVals[from]=+$('target').value||0;   // 切り替える前の値を覚えておく
+    $('target').value=targetVals[to];
+    applyTargetUnit(); calc(); save();
+  });
+});
+
+/* ---- フィギュア製品ライン → 梱包後重量の自動入力 ---- */
+// 選択肢は FIG_WEIGHTS から生成する（重量の定義を2か所に持たない）。
+(function(){
+  var sel=$('figLine');
+  FIG_WEIGHTS.forEach(function(r){
+    var o=document.createElement('option');
+    o.value=r[0]; o.textContent=r[0]+'（'+r[1]+'g）';
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change',function(){
+    var base=figBase();
+    // 「選択しない」に戻したときは重量欄に触れない（手入力を消さないため）。
+    if(base){
+      $('weight').value=packedW(base);
+      if($('sepShip').checked)suggestShip();
+      calc();
+    }
+    updateFigNote();
+  });
+})();
+function figBase(){
+  var v=$('figLine').value;
+  for(var i=0;i<FIG_WEIGHTS.length;i++) if(FIG_WEIGHTS[i][0]===v) return FIG_WEIGHTS[i][1];
+  return 0;
+}
+function gram(n){ return n.toLocaleString()+'g'; }
+// 選んだ製品ラインが国際エアパケット（梱包後2kg上限）に何個まで収まるか。
+function updateFigNote(){
+  var base=figBase(), el=$('figNote');
+  if(!base){ el.textContent=''; return; }
+  var n=0;
+  while(packedW(base*(n+1))<=AIRPACKET_MAX) n++;
+  el.textContent = n===0
+    ? '1個でも梱包後'+gram(packedW(base))+'となりエアパケット不可。EMSになります。'
+    : n+'個まで（梱包後'+gram(packedW(base*n))+'）／'
+      +(n+1)+'個で'+gram(packedW(base*(n+1)))+'となりEMS';
+}
 
 // 米国関税・通関手数料（米国宛=zone4 のみ。eBayは2025-10-17〜 $2,500未満でDDP必須＝セラー前払い）
 // 2026-09-05 に Zonos Prepay アプリで実測。制度変更で変わる（デミニミス撤廃/Section 301 等）。
@@ -399,6 +486,14 @@ CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();sa
 //   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
 const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
 const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
+// 切手を額面より安く買って支払う場合の原価率。
+// 2026-09-11 アクセスチケットの実勢。額面により11〜13%
+//   （500円=87%、300/270/180/140/100円=88%）。主力の構成から12%引きを採用。
+// バイヤーへの請求送料は額面のままで、この割引は自社の原価計算にだけ効く。
+// 実効率が変わったらこの定数だけ直せば、チェックボックスのラベルと
+// 明細の表示もここから生成されるので追従する。
+const STAMP_DISCOUNT=0.88;
+const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引率（%）
 
 function calc(){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0,z=+$('zone').value;
@@ -412,21 +507,34 @@ function calc(){
   var C=refund?C0/1.1:C0;
 
   var air=airRate(w,z),ems=emsRate(w,z),pol=policyFor(w);
-  var S=air!==null?air:(ems||0);
+  var Sface=air!==null?air:(ems||0);        // 郵便料金の額面。バイヤーへの請求根拠はこちら。
+  var stamp=$('stampDisc').checked;
+  var S=stamp?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料
   var G=sep?(+$('shipCharge').value||0):0;
   var a=R*(1-f-x),b=R*d,den=a-b;
   var fixedAll=fixed+dutyFixed;   // 固定手数料 + 米国通関手数料の固定分（ともに円）
 
-  var P,profit;
+  // 売値が0円のときの持ち出し（円）。目標利益→売値 と 損益分岐 の両方で使う。
+  var rest=fixedAll+C+K+S-G*a+(dShip?G*b:0);
+  var P,profit,pctUnreachable=false;
   if(mode==='A'){
     P=+$('price').value||0;
     profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
+  }else if(targetIsPct()){
+    // ％は売上（商品代金 = P*R）に対する割合。P について解く:
+    //   P*den = q*P*R + rest  →  P = rest/(den - q*R)
+    // den - q*R <= 0 は、手数料と関税を引いた残りを超える利益率を指定した状態で、
+    // どんな売値でも到達できない（売値を上げるほど利益率が下がっていく）。
+    var q=(+$('target').value||0)/100, denP=den-q*R;
+    pctUnreachable=!(denP>0);
+    P=pctUnreachable?0:rest/denP;
+    profit=q*P*R;
   }else{
     var T=+$('target').value||0;
-    P=den>0?(T+fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
+    P=den>0?(T+rest)/den:0;
     profit=T;
   }
-  var be=den>0?(fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
+  var be=den>0?rest/den:0;
 
   var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
   var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
@@ -440,7 +548,11 @@ function calc(){
   }else{
     $('bigCap').textContent='推奨売値';
     $('bigVal').textContent=usd(Math.ceil(P*100)/100);
-    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%';
+    // 既存の「利益率」は送料込みの売上に対する率。％指定＋送料別建てのときは
+    // 指定値と食い違って見えるので、商品代金に対する率を併記する。
+    var pctOfItem=(P*R)>0?profit/(P*R)*100:0;
+    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%'
+      +((sep&&targetIsPct())?'\u3000/\u3000商品代金比 '+pctOfItem.toFixed(1)+'%':'');
   }
 
   var minP=+$('minProfit').value||0,v=$('verdict');
@@ -455,7 +567,7 @@ function calc(){
     ['固定手数料',yen(-fixed),true],
     ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
     ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（米国宛のみ）'),yen(-dutyAmt),true],
-    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）',yen(-S),true],
+    ['実送料（'+(air!==null?'エアパケット':'EMS')+'）'+(stamp?'（切手'+STAMP_OFF_PCT+'%割引適用）':''),yen(-S),true],
     ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
     ['梱包資材',yen(-K),true]
   );
@@ -476,6 +588,8 @@ function calc(){
   if(w<=0)msg.push('重量を入力してください。');
   if(w>2000)msg.push('エアパケット上限2kg超。EMS前提の計算です。');
   if(den<=0)msg.push('手数料と関税の合計が100%を超えています。');
+  if(mode==='B'&&pctUnreachable&&den>0)
+    msg.push('目標利益率が高すぎて売値を決められません。手数料と関税を引いた上限（'+(den/R*100).toFixed(1)+'%）未満にしてください。');
   if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
@@ -485,6 +599,8 @@ function save(){
   try{
     var o={};FIELDS.forEach(function(id){o[id]=$(id).value;});CHECKS.forEach(function(id){o[id]=$(id).checked;});
     delete o.cost;delete o.weight;delete o.price;
+    targetVals[targetIsPct()?'pct':'yen']=+$('target').value||0;
+    o.tUnit=targetIsPct()?'pct':'yen'; o.targetVals=targetVals;
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -495,17 +611,25 @@ function load(){
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
       $('rowShip').style.display=$('sepShip').checked?'flex':'none';
+      if(o.targetVals){
+        if(typeof o.targetVals.yen==='number')targetVals.yen=o.targetVals.yen;
+        if(typeof o.targetVals.pct==='number')targetVals.pct=o.targetVals.pct;
+      }
+      if(o.tUnit==='pct')$('tuPct').checked=true; else $('tuYen').checked=true;
     }
   }catch(e){}
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
+  $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
+  updateFigNote();
+  applyTargetUnit();
   calc();
 }
 load();
 
 
 /* ================= 出品文タブ ================= */
-var LFIELDS=['kind','brand','series','chara','variant','line','ptype','cond','origin','extra','title'];
+var LFIELDS=['brand','series','chara','variant','line','ptype','cond','origin','extra','title'];
 var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
 var titleEdited=false;
@@ -564,27 +688,19 @@ function buildTitle(){
 }
 
 function descHTML(){
-  var p=titleParts(), c=$('cond').value, kind=$('kind').value;
-  var full=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype].filter(Boolean).join(' ');
+  var p=titleParts(), c=$('cond').value;
   var extra=$('extra').value.trim();
   var hd=$('fx')?5:5;
   var S='<div style="max-width:820px;margin:0 auto;padding:0 4px;font-family:-apple-system,\'Segoe UI\',Helvetica,Arial,sans-serif;color:#1c1c1c;line-height:1.7;font-size:15px;">';
   S+='<div style="border-bottom:3px solid #b31b1b;padding-bottom:10px;margin-bottom:20px;">';
-  S+='<div style="font-size:12px;letter-spacing:2px;color:#b31b1b;font-weight:bold;">SHIPPED DIRECTLY FROM AKIHABARA, TOKYO</div>';
-  S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;">'+esc(full)+'</h1></div>';
+  S+='<div style="font-size:12px;letter-spacing:2px;color:#b31b1b;font-weight:bold;">SHIPPED DIRECTLY FROM TOKYO</div>';
+  // 商品名はテンプレートに含めず、eBay側で手書きする。コメントは表示されないので
+  // 消し忘れても顧客には見えない（目印文字列を本文に残さないための書き方）。
+  S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;"><!--TITLE-->Figure<!--/TITLE--></h1></div>';
 
   S+=h2('Condition');
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
   S+='<p style="margin:0 0 22px;">'+CONDNOTE[c]+(extra?' '+esc(extra):'')+'</p>';
-
-  var body='';
-  if(p.chara&&p.series) body=esc(p.chara)+' from '+esc(p.series)+'. ';
-  else if(p.series) body='From '+esc(p.series)+'. ';
-  if(p.line&&p.brand) body+='Part of the '+esc(p.line)+' line by '+esc(p.brand)+'. ';
-  else if(p.brand) body+='Made by '+esc(p.brand)+'. ';
-  if(kind==='prize') body+='An official prize figure, produced for arcade and crane game distribution in Japan rather than for retail sale.';
-  else if(kind==='game') body+='Japanese release. Please check the region notes below before buying.';
-  S+=h2('Description')+'<p style="margin:0 0 22px;">'+body+'</p>';
 
   if(isChinaOrigin()){
     var bA=p.brand?esc(p.brand)+' ':'';
@@ -644,7 +760,8 @@ function buildListing(){
   var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100,d=(+$('duty').value||0)/100;
   var C0=+$('cost').value||0,K=+$('pack').value||0,z=+$('zone').value;
   var refund=$('taxRefund').checked, C=refund?C0/1.1:C0;
-  var air=airRate(w,z),ems=emsRate(w,z),S=air!==null?air:(ems||0);
+  var air=airRate(w,z),ems=emsRate(w,z),Sface=air!==null?air:(ems||0);
+  var S=$('stampDisc').checked?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料
   var fixed=(+$('fixed').value||0)*R, den=R*(1-f-x)-R*d;
   var be=den>0?(fixed+C+K+S)/den:0;
   var minP=+$('minProfit').value||0;
@@ -692,7 +809,7 @@ function lsave(){
   try{
     var o={};
     LCHECKS.forEach(function(id){o[id]=$(id).checked;});
-    ['kind','brand','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
+    ['brand','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
     localStorage.setItem(LKEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -891,26 +1008,17 @@ var V_PACK=[
 
 /* ---- プレーンテキスト版 ---- */
 function descPlain(){
-  var p=titleParts(), c=$('cond').value, kind=$('kind').value;
-  var full=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype].filter(Boolean).join(' ');
+  var p=titleParts(), c=$('cond').value;
   var extra=$('extra').value.trim();
   var L=[];
-  L.push('SHIPPED DIRECTLY FROM AKIHABARA, TOKYO');
-  L.push(full);
+  L.push('SHIPPED DIRECTLY FROM TOKYO');
+  // プレーンテキストにHTMLコメントは書けない（そのまま顧客に見える）ので、
+  // ここは目印なしの1行。貼り付け後にこの行だけ商品名へ書き換える。
+  L.push('Figure');
   L.push('');
   L.push('\u25A0 CONDITION');
   L.push(CONDLABEL[c]);
   L.push(CONDNOTE[c]+(extra?' '+extra:''));
-  L.push('');
-  var body='';
-  if(p.chara&&p.series) body=p.chara+' from '+p.series+'. ';
-  else if(p.series) body='From '+p.series+'. ';
-  if(p.line&&p.brand) body+='Part of the '+p.line+' line by '+p.brand+'. ';
-  else if(p.brand) body+='Made by '+p.brand+'. ';
-  if(kind==='prize') body+='An official prize figure, produced for arcade and crane game distribution in Japan rather than for retail sale.';
-  else if(kind==='game') body+='Japanese release. Please check the region notes below before buying.';
-  L.push('\u25A0 DESCRIPTION');
-  L.push(body);
   L.push('');
   if(isChinaOrigin()){
     var bAp=p.brand?p.brand+' ':'';
