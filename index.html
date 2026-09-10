@@ -154,7 +154,14 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h" id="inHead">想定売値</div>
     <div class="body">
       <div class="row" id="rowPrice"><label>eBay Sold 価格</label><input type="number" id="price" value="52" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="row" id="rowTarget" style="display:none"><label>目標利益</label><input type="number" id="target" value="3000" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row" id="rowTarget" style="display:none"><label>目標利益</label>
+        <input type="number" id="target" value="3000" inputmode="numeric">
+        <span style="display:flex;gap:10px;flex:0 0 auto">
+          <label for="tuYen" style="flex:0 0 auto;display:flex;align-items:center;gap:3px"><input type="radio" name="tunit" id="tuYen" checked style="width:auto;margin:0;transform:scale(1.1)">円</label>
+          <label for="tuPct" style="flex:0 0 auto;display:flex;align-items:center;gap:3px"><input type="radio" name="tunit" id="tuPct" style="width:auto;margin:0;transform:scale(1.1)">％</label>
+        </span>
+      </div>
+      <div class="note2" id="targetNote" style="display:none"></div>
       <div class="chk"><input type="checkbox" id="sepShip"><label for="sepShip" style="flex:1">送料を別建てで請求する</label></div>
       <div class="row" id="rowShip" style="display:none"><label>請求送料</label><input type="number" id="shipCharge" value="0" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
     </div>
@@ -389,6 +396,7 @@ function setMode(m){
   $('rowPrice').style.display=m==='A'?'flex':'none';
   $('rowTarget').style.display=m==='B'?'flex':'none';
   $('inHead').textContent=m==='A'?'想定売値':'目標';
+  applyTargetUnit();
   calc();
 }
 $('sepShip').onchange=function(){
@@ -410,6 +418,28 @@ FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   calc();save();
 });});
 CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();save();});});
+
+/* ---- 目標利益の単位（円 / ％）---- */
+// ％は売上（商品代金）に対する割合。円と％では入力値の意味がまったく違うので、
+// 単位ごとに直前の値を覚えておき、切り替えで値が壊れないようにする。
+var targetVals={yen:3000,pct:30};
+function targetIsPct(){ return $('tuPct').checked; }
+function applyTargetUnit(){
+  var pct=targetIsPct();
+  $('target').step=pct?'0.1':'1';
+  $('target').inputMode=pct?'decimal':'numeric';
+  var n=$('targetNote'), show=(mode==='B'&&pct);
+  n.style.display=show?'block':'none';
+  n.textContent=show?'売上（商品代金）に対する割合です。別建てで請求する送料は含みません。':'';
+}
+['tuYen','tuPct'].forEach(function(id){
+  $(id).addEventListener('change',function(){
+    var to=targetIsPct()?'pct':'yen', from=(to==='pct'?'yen':'pct');
+    targetVals[from]=+$('target').value||0;   // 切り替える前の値を覚えておく
+    $('target').value=targetVals[to];
+    applyTargetUnit(); calc(); save();
+  });
+});
 
 /* ---- フィギュア製品ライン → 梱包後重量の自動入力 ---- */
 // 選択肢は FIG_WEIGHTS から生成する（重量の定義を2か所に持たない）。
@@ -473,16 +503,27 @@ function calc(){
   var a=R*(1-f-x),b=R*d,den=a-b;
   var fixedAll=fixed+dutyFixed;   // 固定手数料 + 米国通関手数料の固定分（ともに円）
 
-  var P,profit;
+  // 売値が0円のときの持ち出し（円）。目標利益→売値 と 損益分岐 の両方で使う。
+  var rest=fixedAll+C+K+S-G*a+(dShip?G*b:0);
+  var P,profit,pctUnreachable=false;
   if(mode==='A'){
     P=+$('price').value||0;
     profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
+  }else if(targetIsPct()){
+    // ％は売上（商品代金 = P*R）に対する割合。P について解く:
+    //   P*den = q*P*R + rest  →  P = rest/(den - q*R)
+    // den - q*R <= 0 は、手数料と関税を引いた残りを超える利益率を指定した状態で、
+    // どんな売値でも到達できない（売値を上げるほど利益率が下がっていく）。
+    var q=(+$('target').value||0)/100, denP=den-q*R;
+    pctUnreachable=!(denP>0);
+    P=pctUnreachable?0:rest/denP;
+    profit=q*P*R;
   }else{
     var T=+$('target').value||0;
-    P=den>0?(T+fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
+    P=den>0?(T+rest)/den:0;
     profit=T;
   }
-  var be=den>0?(fixedAll+C+K+S-G*a+(dShip?G*b:0))/den:0;
+  var be=den>0?rest/den:0;
 
   var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
   var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
@@ -496,7 +537,11 @@ function calc(){
   }else{
     $('bigCap').textContent='推奨売値';
     $('bigVal').textContent=usd(Math.ceil(P*100)/100);
-    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%';
+    // 既存の「利益率」は送料込みの売上に対する率。％指定＋送料別建てのときは
+    // 指定値と食い違って見えるので、商品代金に対する率を併記する。
+    var pctOfItem=(P*R)>0?profit/(P*R)*100:0;
+    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%'
+      +((sep&&targetIsPct())?'\u3000/\u3000商品代金比 '+pctOfItem.toFixed(1)+'%':'');
   }
 
   var minP=+$('minProfit').value||0,v=$('verdict');
@@ -532,6 +577,8 @@ function calc(){
   if(w<=0)msg.push('重量を入力してください。');
   if(w>2000)msg.push('エアパケット上限2kg超。EMS前提の計算です。');
   if(den<=0)msg.push('手数料と関税の合計が100%を超えています。');
+  if(mode==='B'&&pctUnreachable&&den>0)
+    msg.push('目標利益率が高すぎて売値を決められません。手数料と関税を引いた上限（'+(den/R*100).toFixed(1)+'%）未満にしてください。');
   if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
@@ -541,6 +588,8 @@ function save(){
   try{
     var o={};FIELDS.forEach(function(id){o[id]=$(id).value;});CHECKS.forEach(function(id){o[id]=$(id).checked;});
     delete o.cost;delete o.weight;delete o.price;
+    targetVals[targetIsPct()?'pct':'yen']=+$('target').value||0;
+    o.tUnit=targetIsPct()?'pct':'yen'; o.targetVals=targetVals;
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -551,11 +600,17 @@ function load(){
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
       $('rowShip').style.display=$('sepShip').checked?'flex':'none';
+      if(o.targetVals){
+        if(typeof o.targetVals.yen==='number')targetVals.yen=o.targetVals.yen;
+        if(typeof o.targetVals.pct==='number')targetVals.pct=o.targetVals.pct;
+      }
+      if(o.tUnit==='pct')$('tuPct').checked=true; else $('tuYen').checked=true;
     }
   }catch(e){}
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
   updateFigNote();
+  applyTargetUnit();
   calc();
 }
 load();
