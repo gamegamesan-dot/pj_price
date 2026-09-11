@@ -801,10 +801,11 @@ const KEY='pj:pricing:v1';
 function save(){
   try{
     var o={};FIELDS.forEach(function(id){o[id]=$(id).value;});CHECKS.forEach(function(id){o[id]=$(id).checked;});
-    delete o.cost;delete o.weight;delete o.price;
+    // 仕入・重量・売値と同じく、請求送料も1品ごとの値なので保存しない。
+    // 手入力での上書き状態(shipEdited)も持ち越さず、開き直すと既定値から始める。
+    delete o.cost;delete o.weight;delete o.price;delete o.shipCharge;
     targetVals[targetIsPct()?'pct':'yen']=+$('target').value||0;
     o.tUnit=targetIsPct()?'pct':'yen'; o.targetVals=targetVals;
-    o.shipEdited=shipEdited;
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -819,7 +820,9 @@ function load(){
         if(typeof o.targetVals.pct==='number')targetVals.pct=o.targetVals.pct;
       }
       if(o.tUnit==='pct')$('tuPct').checked=true; else $('tuYen').checked=true;
-      shipEdited=!!o.shipEdited;   // 手入力済みなら保存値を尊重する
+      // 以前の版が保存した請求送料と上書き状態は無視する。下の suggestShip() が
+      // shipEdited=false のまま重量に応じた既定値を入れ直す。
+      shipEdited=false;
     }
   }catch(e){}
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
