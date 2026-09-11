@@ -803,9 +803,10 @@ function save(){
     var o={};FIELDS.forEach(function(id){o[id]=$(id).value;});CHECKS.forEach(function(id){o[id]=$(id).checked;});
     // 仕入・重量・売値と同じく、請求送料も1品ごとの値なので保存しない。
     // 手入力での上書き状態(shipEdited)も持ち越さず、開き直すと既定値から始める。
-    delete o.cost;delete o.weight;delete o.price;delete o.shipCharge;
-    targetVals[targetIsPct()?'pct':'yen']=+$('target').value||0;
-    o.tUnit=targetIsPct()?'pct':'yen'; o.targetVals=targetVals;
+    // 目標利益も持ち越さない。target は自動計算（下限利益＋仕入×連動率）の結果で、
+    // 単位(tUnit)と単位ごとの記憶(targetVals)は手動上書きのための一時的な状態。
+    // 開き直したら必ず自動（円）から始める。
+    delete o.cost;delete o.weight;delete o.price;delete o.shipCharge;delete o.target;
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -815,16 +816,14 @@ function load(){
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
-      if(o.targetVals){
-        if(typeof o.targetVals.yen==='number')targetVals.yen=o.targetVals.yen;
-        if(typeof o.targetVals.pct==='number')targetVals.pct=o.targetVals.pct;
-      }
-      if(o.tUnit==='pct')$('tuPct').checked=true; else $('tuYen').checked=true;
-      // 以前の版が保存した請求送料と上書き状態は無視する。下の suggestShip() が
-      // shipEdited=false のまま重量に応じた既定値を入れ直す。
-      shipEdited=false;
     }
   }catch(e){}
+  // ここから下は保存データの有無に関わらず、開いたときの初期状態を作る。
+  // 以前の版が保存した請求送料・目標利益・その単位が残っていても、
+  // 下の suggestShip() と applyAutoTarget() が既定値で入れ直すので無視される。
+  shipEdited=false;
+  targetEdited=false;
+  $('tuPct').checked=false; $('tuYen').checked=true;   // 目標利益は必ず自動（円）から始める
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
   $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
