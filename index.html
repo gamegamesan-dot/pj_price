@@ -646,6 +646,13 @@ function calc(){
   var profitAsia=P*a-restAsia;
   var profitUS=P*denU-restUS;
   var be=den>0?rest/den:0;
+  // Best Offer の下限は「両方の市場で買い基準額に届く売値」。推奨売値と同じ考え方で
+  // それぞれ解いて高い方を採る（片方だけだと、もう一方で基準を割る）。
+  var minP=+$('minProfit').value||0;
+  var floorA=a>0?(minP+restAsia)/a:0, floorU=denU>0?(minP+restUS)/denU:0;
+  var floor=Math.max(floorA,floorU), floorBasis=(floorU>=floorA)?'米国基準':'アジア基準';
+  // 判定は仕向地の選択に関係なく、米国とアジアの利益の低いほうで行う。
+  var judge=Math.min(profitUS,profitAsia), judgeSide=(profitUS<=profitAsia)?'米国':'アジア';
 
   var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
   var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
@@ -677,10 +684,10 @@ function calc(){
     +'（梱包後'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT+' / 超 $'+SHIP_CHARGE_EMS+'・EMS）。'
     +'高額品は手入力で上書きできます。';
 
-  var minP=+$('minProfit').value||0,v=$('verdict');
-  if(profit<=0){v.className='verdict no';v.textContent='\u2715 赤字 \u2014 見送り';}
-  else if(profit<minP){v.className='verdict mid';v.textContent='\u25B3 利益 '+yen(profit)+' \u2014 基準未満';}
-  else{v.className='verdict go';v.textContent='\u25CE 買い \u2014 利益 '+yen(profit);}
+  var v=$('verdict');
+  if(judge<=0){v.className='verdict no';v.textContent='\u2715 赤字 \u2014 見送り（'+judgeSide+' '+yen(judge)+'）';}
+  else if(judge<minP){v.className='verdict mid';v.textContent='\u25B3 利益 '+yen(judge)+'（'+judgeSide+'）\u2014 基準未満';}
+  else{v.className='verdict go';v.textContent='\u25CE 買い \u2014 利益 '+yen(judge)+'（'+judgeSide+'）';}
 
   var rows=[['売上（商品）',yen(P*R),false]];
   if(sep)rows.push(['売上（送料）',yen(G*R),false]);
@@ -695,7 +702,8 @@ function calc(){
   );
   $('tbl').innerHTML=rows.map(function(r){return '<tr><td class="k">'+r[0]+'</td><td class="v2 num'+(r[2]?' neg':'')+'">'+r[1]+'</td></tr>';}).join('')
     +'<tr class="total"><td class="k">利益</td><td class="v2 num">'+yen(profit)+'</td></tr>'
-    +'<tr><td class="k">Best Offer 自動拒否ライン</td><td class="v2 num">'+usd(Math.ceil(be*100)/100)+'</td></tr>';
+    +'<tr><td class="k">Best Offer 自動拒否ライン（'+floorBasis+'）</td><td class="v2 num">'+usd(Math.ceil(floor*100)/100)+'</td></tr>'
+    +'<tr><td class="k">損益分岐（参考・'+(isUS?'米国':'この仕向地')+'）</td><td class="v2 num">'+usd(Math.ceil(be*100)/100)+'</td></tr>';
 
   $('shipTbl').innerHTML=
     '<tr><td class="k">適用ポリシー</td><td class="v2"><span class="pill">'+pol+'</span></td></tr>'+
@@ -738,10 +746,16 @@ function calc(){
   var un=$('usNote');
   if(GusNeed>Gus+0.005){
     un.style.display='block';
-    un.textContent='\u26A0 請求送料 '+usd(Math.ceil(Gus*100)/100)+' では'
-      +(methodA?'関税と送料差':'関税・通関手数料')+'を賄えません。'
-      +usd(Math.ceil(GusNeed*100)/100)+' 必要で、不足分 '+yen((GusNeed-Gus)*gdenU)+' は利益から出ています。'
-      +'請求送料を手入力で引き上げるか、この目減りを見込んでください。';
+    var shortJpy=yen((GusNeed-Gus)*gdenU), needUsd=usd(Math.ceil(GusNeed*100)/100);
+    un.textContent=(mode==='B'&&basis==='米国基準')
+      // 米国基準では、賄えない分だけ推奨売値が持ち上がる。売値はアジアの買い手も払う。
+      ? '\u26A0 関税の不足分 '+shortJpy+' は売値に上乗せされています（アジアの買い手も負担）。'
+        +'請求送料を '+needUsd+' 以上にすると、推奨売値を下げられます。'
+      // 売値が動かない場面では、賄えない分はそのまま利益を削る。
+      : '\u26A0 請求送料 '+usd(Math.ceil(Gus*100)/100)+' では'
+        +(methodA?'関税と送料差':'関税・通関手数料')+'を賄えません。'
+        +needUsd+' 必要で、不足分 '+shortJpy+' は利益から出ています。'
+        +'請求送料を手入力で引き上げるか、この目減りを見込んでください。';
   }else un.style.display='none';
 
   // eBayの配送ポリシーは固定額を1つしか持てないので、設定値を決めるための一覧を出す。
@@ -948,7 +962,7 @@ function buildListing(){
   var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100;
   var C0=+$('cost').value||0,K=+$('pack').value||0;
   // 推奨売値はつねにアジア基準なので、下限も同じアジア基準で出す。
-  var usSplit=true, z=ASIA_ZONE;
+  var z=ASIA_ZONE;
   var refund=$('taxRefund').checked, C=refund?C0/1.1:C0;
   var stamp=$('stampDisc').checked;
   var Sface=faceShip(w,z);
@@ -959,32 +973,29 @@ function buildListing(){
   var rest=fixedAll+C+K+S;
   var be=den>0?rest/den:0;
   var minP=+$('minProfit').value||0;
-  var floor=den>0?(minP+rest)/den:0;
+  var floorA=den>0?(minP+rest)/den:0;              // アジア側で買い基準額に届く売値
+  // 米国では同じ売値に請求送料 Gus を足して売る。関税は商品価格にかかるので
+  //   利益 = P(a−bU) + Gus·a − (課税ベースに送料を含むなら Gus·bU) − 固定 − 562 − 仕入 − 梱包 − 米国送料
+  // これが買い基準額になる P を解く。
+  var usFace=faceShip(w,USA_ZONE);
+  var usS=stamp?usFace*STAMP_DISCOUNT:usFace;
+  var Gus=+$('shipCharge').value||0;
+  var bU=R*US_DUTY_RATE, denU=a-bU;
+  var recov=Gus*a-($('dutyShip').checked?Gus*bU:0);
+  var floorUS=denU>0?(minP+fixed+US_DUTY_FIXED_JPY+C+K+usS-recov)/denU:0;
+  // 自動拒否ラインは両方の市場で基準に届く額。片側だけだともう一方で基準を割る。
+  var floor=Math.max(floorA,floorUS), floorBasis=(floorUS>=floorA)?'米国基準':'アジア基準';
 
   var rows=[
     ['送料ポリシー', '<span class="pill">'+pol+'</span>'],
     ['ハンドリングタイム','3 business days'],
     ['Country of Manufacture','<b>'+esc($('origin').value||'—')+'</b>'],
     ['Brand', esc($('brand').value||'—')],
-    ['Best Offer 自動拒否ライン（アジア基準）','<b>'+usd(Math.ceil(floor*100)/100)+'</b>']
+    ['Best Offer 自動拒否ライン（'+floorBasis+'）','<b>'+usd(Math.ceil(floor*100)/100)+'</b>'],
+    ['　アジア側の下限', usd(Math.ceil(floorA*100)/100)],
+    ['　米国側の下限（請求送料 '+usd(Math.ceil(Gus*100)/100)+' 込み）', usd(Math.ceil(floorUS*100)/100)],
+    ['損益分岐（アジア基準・参考）', usd(Math.ceil(be*100)/100)]
   ];
-  if(usSplit){
-    // 米国向けの下限。別建て送料が関税・通関手数料を（建て方Aなら送料差も）回収し、
-    // 関税の項が Gus×分母 とちょうど打ち消し合うので、下限はこの形になる。
-    //   P =（目標利益 + 固定手数料 + 仕入 + 梱包 + 米国送料 − 送料差）/ R(1−f−x)
-    var usFace=faceShip(w,USA_ZONE);
-    var usS=stamp?usFace*STAMP_DISCOUNT:usFace;
-    // 米国では同じ売値に請求送料 Gus を足して売る。関税は商品価格にかかるので
-    //   利益 = P(a−bU) + Gus·a − (課税ベースに送料を含むなら Gus·bU) − 固定 − 562 − 仕入 − 梱包 − 米国送料
-    // これが目標利益になる P を解く。
-    var Gus=+$('shipCharge').value||0;
-    var bU=R*US_DUTY_RATE, denU=a-bU;
-    var recov=Gus*a-($('dutyShip').checked?Gus*bU:0);
-    var floorUS=denU>0?(minP+fixed+US_DUTY_FIXED_JPY+C+K+usS-recov)/denU:0;
-    rows.push(['米国向けの下限（請求送料 '+usd(Math.ceil(Gus*100)/100)+' 込み）',
-      '<b>'+usd(Math.ceil(floorUS*100)/100)+'</b>']);
-  }
-  rows.push(['損益分岐（アジア基準・参考）', usd(Math.ceil(be*100)/100)]);
   $('checkTbl').innerHTML=rows.map(function(r){
     return '<tr><td class="k">'+r[0]+'</td><td class="ok">'+r[1]+'</td></tr>';
   }).join('');
