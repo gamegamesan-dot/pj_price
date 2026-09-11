@@ -170,6 +170,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <div class="row" id="rowShip" style="display:none"><label>請求送料（米国向け）</label><input type="number" id="shipCharge" value="15" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
       <div class="note2" id="shipChargeNote" style="display:none"></div>
+      <button class="btn" id="resetShip" style="display:none;margin:6px 0 10px">請求送料を既定値に戻す</button>
     </div>
   </section>
 
@@ -455,6 +456,7 @@ FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
 CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();buildListing();save();});});
 // 請求送料を手入力したら、以後は重量が変わっても自動では既定値に戻さない。
 $('shipCharge').addEventListener('input',function(){shipEdited=true;});
+$('resetShip').onclick=function(){ shipEdited=false; suggestShip(); calc(); buildListing(); save(); };
 
 /* ---- 目標利益の単位（円 / ％）---- */
 // ％は売上（商品代金）に対する割合。円と％では入力値の意味がまったく違うので、
@@ -680,9 +682,15 @@ function calc(){
   }
 
   $('shipChargeNote').style.display=isUS?'block':'none';
-  if(isUS)$('shipChargeNote').textContent='既定は配送ポリシー '+POLICY_NAME+' に合わせた固定額'
-    +'（梱包後'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT+' / 超 $'+SHIP_CHARGE_EMS+'・EMS）。'
-    +'高額品は手入力で上書きできます。';
+  // 手入力で上書きすると重量を変えても既定値に戻らない。その状態を見えるようにし、
+  // 戻すボタンも出す（上書きしたことを忘れて既定値と思い込むのを防ぐ）。
+  $('resetShip').style.display=(isUS&&shipEdited)?'inline-block':'none';
+  $('shipChargeNote').textContent=!isUS ? '' : shipEdited
+    ? '手入力で上書き中です。重量を変えても既定値（'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT
+      +' / 超 $'+SHIP_CHARGE_EMS+'・EMS）には戻りません。'
+    : '既定は配送ポリシー '+POLICY_NAME+' に合わせた固定額'
+      +'（梱包後'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT+' / 超 $'+SHIP_CHARGE_EMS+'・EMS）。'
+      +'高額品は手入力で上書きできます。';
 
   var v=$('verdict');
   if(judge<=0){v.className='verdict no';v.textContent='\u2715 赤字 \u2014 見送り（'+judgeSide+' '+yen(judge)+'）';}
