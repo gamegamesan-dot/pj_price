@@ -350,7 +350,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <option value="B">関税のみ</option>
         </select>
       </div>
-      <div class="row"><label>買いと判断する利益</label><input type="number" id="minProfit" value="2000" inputmode="numeric"><span class="unit">円</span></div>
     </div>
     <div class="note">
       為替は実勢より低い値を入れると安全側に出ます。手数料率は実際の取引明細と突き合わせて調整してください。米国関税・通関手数料は Zonos 実測（2026-09-05）の固定値で、米国宛のみ加算されます。設定は自動保存されます。
@@ -445,7 +444,7 @@ function suggestShip(){
   $('shipCharge').value=(w>AIRPACKET_MAX?SHIP_CHARGE_EMS:SHIP_CHARGE_DEFAULT).toFixed(2);
 }
 
-const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','fee','fixed','fxc','duty','minProfit','usMethod'];
+const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','fee','fixed','fxc','duty','usMethod'];
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
@@ -650,8 +649,12 @@ function calc(){
   var be=den>0?rest/den:0;
   // Best Offer の下限は「両方の市場で買い基準額に届く売値」。推奨売値と同じ考え方で
   // それぞれ解いて高い方を採る（片方だけだと、もう一方で基準を割る）。
-  var minP=+$('minProfit').value||0;
-  var floorA=a>0?(minP+restAsia)/a:0, floorU=denU>0?(minP+restUS)/denU:0;
+  // 判定の基準は目標利益の式（下限利益＋仕入×連動率）。固定額を別に持つと、
+  // 推奨売値がその式どおりなのに「基準未満」と出る食い違いが起きる。
+  var judgeTarget=autoTarget();
+  // 自動拒否ラインは、両市場で下限利益だけは確保できる売値。ここは連動分を含めない。
+  var baseP=+$('baseProfit').value||0;
+  var floorA=a>0?(baseP+restAsia)/a:0, floorU=denU>0?(baseP+restUS)/denU:0;
   var floor=Math.max(floorA,floorU), floorBasis=(floorU>=floorA)?'米国基準':'アジア基準';
   // 判定は仕向地の選択に関係なく、米国とアジアの利益の低いほうで行う。
   var judge=Math.min(profitUS,profitAsia), judgeSide=(profitUS<=profitAsia)?'米国':'アジア';
@@ -694,7 +697,7 @@ function calc(){
 
   var v=$('verdict');
   if(judge<=0){v.className='verdict no';v.textContent='\u2715 赤字 \u2014 見送り（'+judgeSide+' '+yen(judge)+'）';}
-  else if(judge<minP){v.className='verdict mid';v.textContent='\u25B3 利益 '+yen(judge)+'（'+judgeSide+'）\u2014 基準未満';}
+  else if(judge<judgeTarget){v.className='verdict mid';v.textContent='\u25B3 利益 '+yen(judge)+'（'+judgeSide+'）\u2014 目標 '+yen(judgeTarget)+' 未満';}
   else{v.className='verdict go';v.textContent='\u25CE 買い \u2014 利益 '+yen(judge)+'（'+judgeSide+'）';}
 
   var rows=[['売上（商品）',yen(P*R),false]];
@@ -982,8 +985,9 @@ function buildListing(){
   var den=a-R*(isUS?US_DUTY_RATE:0), fixedAll=fixed+(isUS?US_DUTY_FIXED_JPY:0);
   var rest=fixedAll+C+K+S;
   var be=den>0?rest/den:0;
-  var minP=+$('minProfit').value||0;
-  var floorA=den>0?(minP+rest)/den:0;              // アジア側で買い基準額に届く売値
+  // 自動拒否ラインは calc() と同じく、両市場で下限利益だけは確保できる売値。
+  var baseP=+$('baseProfit').value||0;
+  var floorA=den>0?(baseP+rest)/den:0;             // アジア側で下限利益に届く売値
   // 米国では同じ売値に請求送料 Gus を足して売る。関税は商品価格にかかるので
   //   利益 = P(a−bU) + Gus·a − (課税ベースに送料を含むなら Gus·bU) − 固定 − 562 − 仕入 − 梱包 − 米国送料
   // これが買い基準額になる P を解く。
@@ -992,7 +996,7 @@ function buildListing(){
   var Gus=+$('shipCharge').value||0;
   var bU=R*US_DUTY_RATE, denU=a-bU;
   var recov=Gus*a-($('dutyShip').checked?Gus*bU:0);
-  var floorUS=denU>0?(minP+fixed+US_DUTY_FIXED_JPY+C+K+usS-recov)/denU:0;
+  var floorUS=denU>0?(baseP+fixed+US_DUTY_FIXED_JPY+C+K+usS-recov)/denU:0;
   // 自動拒否ラインは両方の市場で基準に届く額。片側だけだともう一方で基準を割る。
   var floor=Math.max(floorA,floorUS), floorBasis=(floorUS>=floorA)?'米国基準':'アジア基準';
 
