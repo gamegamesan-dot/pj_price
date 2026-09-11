@@ -611,25 +611,40 @@ function calc(){
   var SfaceAsia=faceShip(w,ASIA_ZONE);
   var Sasia=stamp?SfaceAsia*STAMP_DISCOUNT:SfaceAsia;
   var restAsia=fixed+C+K+Sasia;                   // アジアは別建てなし・関税なし
+
+  // 米国向けの諸元。売値は米国でも目標利益を満たす必要があるのでここで先に用意する。
+  var usFace=faceShip(w,USA_ZONE);                 // 米国の郵便料金（額面・2kg超はEMS）
+  var usS=stamp?usFace*STAMP_DISCOUNT:usFace;      // 米国の原価側送料（切手割引は原価だけに効く）
+  var bU=R*US_DUTY_RATE, denU=a-bU;
+  var Gus=+$('shipCharge').value||0;               // 米国でバイヤーに請求する送料
+  // 請求送料のうち、手数料と（課税ベースに含める設定なら）関税を引いて手元に残る分
+  var recovUS=Gus*a-(dShip?Gus*bU:0);
+  var restUS=fixed+US_DUTY_FIXED_JPY+C+K+usS-recovUS;   // 米国で売値0円のときの持ち出し
+
   // 選んだ仕向地の損益分岐用。売値0円のときの持ち出し（円）。
   var rest=fixedAll+C+K+S-G*a+(dShip?G*b:0);
-  var P,pctUnreachable=false;
+  var P,pctUnreachable=false,basis='';
   if(mode==='A'){
     P=+$('price').value||0;
   }else if(targetIsPct()){
-    // ％は売上（商品代金 = P*R）に対する割合。アジア基準で P について解く:
-    //   P*a = q*P*R + restAsia  →  P = restAsia/(a - q*R)
-    // a - q*R <= 0 は手数料を引いた残りを超える利益率で、どんな売値でも届かない。
-    var q=(+$('target').value||0)/100, denP=a-q*R;
-    pctUnreachable=!(denP>0);
-    P=pctUnreachable?0:restAsia/denP;
+    // ％は売上（商品代金 = P*R）に対する割合。仕向地ごとに P について解く:
+    //   アジア: P*a    = q*P*R + restAsia → P = restAsia/(a    − q*R)
+    //   米国  : P*denU = q*P*R + restUS   → P = restUS  /(denU − q*R)
+    // 分母が0以下なら、手数料（米国は関税も）を引いた残りを超える利益率で届かない。
+    var q=(+$('target').value||0)/100, dnA=a-q*R, dnU=denU-q*R;
+    pctUnreachable=!(dnA>0)||!(dnU>0);
+    var pA=pctUnreachable?0:restAsia/dnA, pU=pctUnreachable?0:restUS/dnU;
+    P=Math.max(pA,pU); basis=(pU>=pA)?'米国基準':'アジア基準';
   }else{
+    // 両方の市場で目標利益に届く売値を出し、高い方を採る（通常は米国が高い）。
     var T=+$('target').value||0;
-    P=a>0?(T+restAsia)/a:0;
+    var pA=a>0?(T+restAsia)/a:0, pU=denU>0?(T+restUS)/denU:0;
+    P=Math.max(pA,pU); basis=(pU>=pA)?'米国基準':'アジア基準';
   }
   // 利益は選んだ仕向地で計上する。手数料は商品と送料の合計にかかる（G*a の a に含む）。
   var profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
-  var profitAsia=P*a-fixed-C-K-Sasia;
+  var profitAsia=P*a-restAsia;
+  var profitUS=P*denU-restUS;
   var be=den>0?rest/den:0;
 
   var gross=(P+G)*R,feeAmt=gross*f,fxAmt=gross*x;
@@ -652,7 +667,8 @@ function calc(){
     // 既存の「利益率」は送料込みの売上に対する率。％指定＋送料別建てのときは
     // 指定値と食い違って見えるので、商品代金に対する率を併記する。
     var pctOfItem=(P*R)>0?profit/(P*R)*100:0;
-    $('bigSub').textContent='利益 '+yen(profit)+'\u3000/\u3000利益率 '+margin.toFixed(1)+'%'
+    // どちらの市場で決まった売値かを示し、もう一方の利益も参考に並べる。
+    $('bigSub').textContent=basis+'\u3000/\u3000米国 '+yen(profitUS)+'\u3000/\u3000アジア '+yen(profitAsia)
       +((sep&&targetIsPct())?'\u3000/\u3000商品代金比 '+pctOfItem.toFixed(1)+'%':'');
   }
 
@@ -693,11 +709,7 @@ function calc(){
   /* ---- 仕向地別の建て方：アジア基準の売値と、同じ売値で米国に売ったときの損益 ---- */
   $('usBox').style.display='block';
   var methodA=($('usMethod').value!=='B');
-  var usFace=faceShip(w,USA_ZONE);                 // 米国の郵便料金（額面・2kg超はEMS）
-  var usS=stamp?usFace*STAMP_DISCOUNT:usFace;      // 米国の原価側送料（切手割引は原価だけに効く）
-  var bU=R*US_DUTY_RATE;
-  var Gus=+$('shipCharge').value||0;               // 米国でバイヤーに請求する送料
-  var profitUS=P*(a-bU)+Gus*a-(dShip?Gus*bU:0)-fixed-US_DUTY_FIXED_JPY-C-K-usS;
+  // usFace / usS / bU / denU / Gus / profitUS は売値を決める段で用意済み。
   // 利益率はアジアと比べられるよう、どちらも商品代金（P*R）に対する率で出す。
   // 売上全体で割るとアジア(送料無料)と米国(別建て)で分母が変わり比較できない。
   var itemRev=P*R;
@@ -756,8 +768,9 @@ function calc(){
   if(w<=0)msg.push('重量を入力してください。');
   if(w>2000)msg.push('エアパケット上限2kg超。EMS前提の計算です。');
   if(den<=0)msg.push('手数料と関税の合計が100%を超えています。');
-  if(mode==='B'&&pctUnreachable&&a>0)
-    msg.push('目標利益率が高すぎて売値を決められません。手数料を引いた上限（'+(a/R*100).toFixed(1)+'%）未満にしてください。');
+  if(mode==='B'&&pctUnreachable&&denU>0)
+    msg.push('目標利益率が高すぎて売値を決められません。米国分の手数料と関税を引いた上限（'+(denU/R*100).toFixed(1)+'%）未満にしてください。');
+  if(denU<=0)msg.push('米国分の手数料と関税の合計が100%を超えています。');
   if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
