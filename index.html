@@ -162,6 +162,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         </span>
       </div>
       <div class="note2" id="targetNote" style="display:none"></div>
+      <div class="row" id="rowAutoBase" style="display:none"><label>下限利益</label><input type="number" id="baseProfit" value="1000" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row" id="rowAutoRate" style="display:none"><label>仕入への連動率</label><input type="number" id="linkRate" value="30" step="1" inputmode="decimal"><span class="unit">%</span></div>
+      <div id="rowAutoBtn" style="display:none;margin-bottom:10px">
+        <button class="btn" id="resetAuto">初期値に戻す</button>
+        <span class="note2" id="autoNote" style="margin:0 0 0 8px"></span>
+      </div>
       <div class="row" id="rowShip" style="display:none"><label>請求送料（米国向け）</label><input type="number" id="shipCharge" value="15" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
       <div class="note2" id="shipChargeNote" style="display:none"></div>
     </div>
@@ -173,6 +179,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="cap" id="bigCap">利益</div>
       <div class="v num" id="bigVal">&mdash;</div>
       <div class="sub" id="bigSub">&mdash;</div>
+      <div class="sub" id="bigNote" style="display:none"></div>
     </div>
     <table id="tbl"></table>
     <div class="warn" id="warn" style="display:none"></div>
@@ -441,6 +448,7 @@ const FIELDS=['cost','weight','pack','zone','price','target','shipCharge','fx','
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
+  if(id==='cost')applyAutoTarget();   // 仕入が変われば目標利益も動く
   calc();buildListing();save();
 });});
 // 設定セクションは全タブ共通なので、価格側を触ったときも出品前チェックを引き直す。
@@ -453,6 +461,32 @@ $('shipCharge').addEventListener('input',function(){shipEdited=true;});
 // 単位ごとに直前の値を覚えておき、切り替えで値が壊れないようにする。
 var targetVals={yen:3000,pct:30};
 function targetIsPct(){ return $('tuPct').checked; }
+
+/* ---- 目標利益の自動計算：下限利益 ＋ 仕入 × 連動率 ---- */
+// この2つは localStorage に保存しない。開き直すと必ず既定値から始まる。
+const BASE_PROFIT_DEFAULT=1000;   // 下限利益（円）
+const LINK_RATE_DEFAULT=30;       // 仕入への連動率（%）
+var targetEdited=false;           // 目標利益を手入力したら自動計算を止める（上書き）
+// 仕入は税込の入力値をそのまま使う。税抜換算は原価側だけの話なのでここでは効かせない。
+function autoTarget(){
+  return (+$('baseProfit').value||0)+(+$('cost').value||0)*((+$('linkRate').value||0)/100);
+}
+function applyAutoTarget(){
+  // ％指定のときは対象外（式が円建てのため）。手入力で上書き済みなら触らない。
+  if(targetEdited||targetIsPct())return;
+  $('target').value=Math.round(autoTarget());
+}
+function targetBreakdown(){
+  return '目標利益 '+yen(autoTarget())+' ＝ '+(+$('baseProfit').value||0).toLocaleString()
+    +' ＋ '+(+$('cost').value||0).toLocaleString()+' × '+(+$('linkRate').value||0)+'%';
+}
+// 既定値から変えているあいだは色を変えて分かるようにする。
+function markChanged(el,def){
+  var on=((+el.value||0)!==def);
+  el.style.background=on?'#fff4d6':'';
+  el.style.borderColor=on?'var(--label-edge)':'';
+  return on;
+}
 function applyTargetUnit(){
   var pct=targetIsPct();
   $('target').step=pct?'0.1':'1';
@@ -460,15 +494,39 @@ function applyTargetUnit(){
   var n=$('targetNote'), show=(mode==='B'&&pct);
   n.style.display=show?'block':'none';
   n.textContent=show?'売上（商品代金）に対する割合です。別建てで請求する送料は含みません。':'';
+  // 自動計算の係数は「目標利益→売値」かつ円指定のときだけ使う。
+  var auto=(mode==='B'&&!pct);
+  $('rowAutoBase').style.display=auto?'flex':'none';
+  $('rowAutoRate').style.display=auto?'flex':'none';
+  $('rowAutoBtn').style.display=auto?'block':'none';
+  var ch1=markChanged($('baseProfit'),BASE_PROFIT_DEFAULT);
+  var ch2=markChanged($('linkRate'),LINK_RATE_DEFAULT);
+  $('autoNote').textContent=targetEdited
+    ? '目標利益を手入力中（自動計算は止まっています）'
+    : ((ch1||ch2)?'既定値（'+BASE_PROFIT_DEFAULT.toLocaleString()+'円 / '+LINK_RATE_DEFAULT+'%）から変更中':'');
 }
 ['tuYen','tuPct'].forEach(function(id){
   $(id).addEventListener('change',function(){
     var to=targetIsPct()?'pct':'yen', from=(to==='pct'?'yen':'pct');
     targetVals[from]=+$('target').value||0;   // 切り替える前の値を覚えておく
     $('target').value=targetVals[to];
+    applyAutoTarget();                        // 円に戻したら自動計算を優先する
     applyTargetUnit(); calc(); save();
   });
 });
+// 目標利益を手入力したら、それを上書きとして扱い自動計算を止める。
+$('target').addEventListener('input',function(){ targetEdited=true; applyTargetUnit(); });
+// 係数を触ったら自動計算に戻す（手入力の上書きは解除）。
+['baseProfit','linkRate'].forEach(function(id){
+  $(id).addEventListener('input',function(){
+    targetEdited=false; applyAutoTarget(); applyTargetUnit(); calc();
+  });
+});
+$('resetAuto').onclick=function(){
+  $('baseProfit').value=BASE_PROFIT_DEFAULT;
+  $('linkRate').value=LINK_RATE_DEFAULT;
+  targetEdited=false; applyAutoTarget(); applyTargetUnit(); calc();
+};
 
 /* ---- フィギュア製品ライン → 梱包後重量の自動入力 ---- */
 // 選択肢は FIG_WEIGHTS から生成する（重量の定義を2か所に持たない）。
@@ -578,6 +636,11 @@ function calc(){
   var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
   var margin=gross>0?profit/gross*100:0;
   var mult=C0>0?(P*R)/C0:0;
+
+  // 目標利益を自動計算しているときは、結果欄に内訳を出す。
+  var autoShown=(mode==='B'&&!targetIsPct()&&!targetEdited);
+  $('bigNote').style.display=autoShown?'block':'none';
+  if(autoShown)$('bigNote').textContent=targetBreakdown();
 
   if(mode==='A'){
     $('bigCap').textContent='利益';
@@ -729,6 +792,7 @@ function load(){
   $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
   suggestShip();
   updateFigNote();
+  applyAutoTarget();
   applyTargetUnit();
   calc();
 }
