@@ -332,7 +332,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">説明文</div>
     <div class="body">
-      <div class="chk"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
+      <div class="chk" id="prizeRow"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
@@ -1047,6 +1047,9 @@ function gamePlatform(){
   var v=$('gPlat').value;
   return (v===''||v==='Other') ? $('gPlatFree').value.trim() : v;
 }
+// プライズ品の注意書きはフィギュア専用。ゲームに切り替えたときの状態を覚えておき、
+// フィギュアに戻したら元に戻す（ゲーム中に false を保存しても戻せるようにする）。
+var prizePrev=null;
 // カテゴリに応じて入力欄を出し分ける。buildListing() の先頭から毎回呼ぶ。
 function applyCat(){
   var g=isGame();
@@ -1055,6 +1058,14 @@ function applyCat(){
   $('pasteBlock').style.display = g?'none':'block';
   var free=($('gPlat').value===''||$('gPlat').value==='Other');
   $('gPlatFreeRow').style.display = free?'block':'none';
+
+  $('prizeRow').style.display = g?'none':'flex';
+  if(g){
+    if(prizePrev===null) prizePrev=$('bPrize').checked;
+    $('bPrize').checked=false;
+  }else if(prizePrev!==null){
+    $('bPrize').checked=prizePrev; prizePrev=null;
+  }
 }
 // 状態はカテゴリごとに別の欄。説明文の文面キーは共通（CONDLABEL / CONDNOTE）。
 function condKey(){ return isGame() ? $('gCond').value : $('cond').value; }
