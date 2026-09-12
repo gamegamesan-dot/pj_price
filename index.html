@@ -207,6 +207,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="big">
       <div class="cap" id="bigCap">利益</div>
       <div class="v num" id="bigVal">&mdash;</div>
+      <div class="sub" id="bigTotal"></div>
       <div class="sub" id="bigSub">&mdash;</div>
       <div class="sub" id="bigNote" style="display:none"></div>
       <div class="sub" id="bigFloor"></div>
@@ -706,15 +707,6 @@ function calc(){
   var M=hasSold?(soldNum-Gus):0;                  // 相場換算売値＝総額 − 請求送料
   var mCeil=Math.ceil(M*100)/100;
   var P=hasSold?M:pRec;                           // 明細表と内訳に使う売値
-  var sb=$('soldBreak');
-  if(soldTooLow){
-    sb.style.color='var(--bad)';
-    sb.textContent='総額（商品代＋送料）を入力してください';
-  }else{
-    sb.style.color='';
-    sb.textContent='商品代 '+(hasSold?usd(mCeil):'$—')+' ＋ 請求送料 '
-      +usd(Math.ceil(Gus*100)/100)+' として計算';
-  }
 
   // 利益は選んだ仕向地で計上する。手数料は商品と送料の合計にかかる（G*a の a に含む）。
   var profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
@@ -734,14 +726,38 @@ function calc(){
   var recItem=pRec*R;
   var recSale=recItem>0?recUS/recItem*100:0, recCost=C0>0?recUS/C0*100:0;
 
+  // 相場欄は総額で入れてもらうので、推奨売値・最低売値にも総額を併記して
+  // 何と何を見比べればよいかを一目で分かるようにする。
+  var gCeil=Math.ceil(Gus*100)/100;
+  var recTotal=Math.round((recCeil+gCeil)*100)/100;
+  var floorTotal=Math.round((floorCeil+gCeil)*100)/100;
+
   $('bigCap').textContent='推奨売値';
   $('bigVal').textContent=usd(recCeil);
+  $('bigTotal').textContent='出品価格 '+usd(recCeil)+' ＋ 請求送料 '+usd(gCeil)
+    +' ＝ 総額 '+usd(recTotal);
   $('bigSub').textContent='推奨売値で\u3000米国 '+yen(recUS)+'\u3000/\u3000アジア '+yen(recAsia)
     +'\u3000/\u3000売上比 '+recSale.toFixed(1)+'%\u3000/\u3000仕入比 '+recCost.toFixed(0)+'%';
   $('bigNote').style.display='block';
   $('bigNote').textContent=basis+'\u3000/\u3000'+targetBreakdown()
     +(rateUnreachable?'（売上比は手数料の上限を超えていて到達できません）':'');
-  $('bigFloor').textContent='最低売値 '+usd(floorCeil);
+  $('bigFloor').textContent='最低売値 '+usd(floorCeil)+'（総額 '+usd(floorTotal)+'）';
+
+  // 相場欄の入力が総額かどうかの確認。推奨総額の半分未満なら、商品代だけを
+  // 入れた可能性が高いので、入れるべき額を添えて知らせる。
+  var soldSuspect=(hasSold&&recTotal>0&&soldNum<recTotal/2);
+  var sb=$('soldBreak');
+  if(soldTooLow){
+    sb.style.color='var(--bad)';
+    sb.textContent='総額（商品代＋送料）を入力してください';
+  }else if(soldSuspect){
+    sb.style.color='var(--bad)';
+    sb.innerHTML='総額（商品代＋送料）を入力してください。推奨売値を試すなら '+usd(recTotal)+' です'
+      +'<br><span style="color:var(--mute)">いまの入力は 商品代 '+usd(mCeil)+' ＋ 請求送料 '+usd(gCeil)+' として計算しています</span>';
+  }else{
+    sb.style.color='';
+    sb.textContent='商品代 '+(hasSold?usd(mCeil):'$\u2014')+' ＋ 請求送料 '+usd(gCeil)+' として計算';
+  }
 
   // 相場（検討中の売値）での損益。
   var mSale=(M*R)>0?profitUS/(M*R)*100:0, mCost=C0>0?profitUS/C0*100:0;
