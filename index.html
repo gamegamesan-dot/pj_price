@@ -1009,6 +1009,11 @@ function titleParts(){
   };
   return p;
 }
+// 説明文の大見出し。入力されたタイトルの全文を使い、未入力なら種別を出す。
+function headingTitle(){
+  var t=$('title').value.trim();
+  return t || $('ptype').value.trim() || 'Figure';
+}
 function buildTitle(){
   var p=titleParts();
   var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
@@ -1027,9 +1032,10 @@ function descHTML(){
   var S='<div style="max-width:820px;margin:0 auto;padding:0 4px;font-family:-apple-system,\'Segoe UI\',Helvetica,Arial,sans-serif;color:#1c1c1c;line-height:1.7;font-size:15px;">';
   S+='<div style="border-bottom:3px solid #b31b1b;padding-bottom:10px;margin-bottom:20px;">';
   S+='<div style="font-size:12px;letter-spacing:2px;color:#b31b1b;font-weight:bold;">SHIPPED DIRECTLY FROM TOKYO</div>';
-  // 商品名はテンプレートに含めず、eBay側で手書きする。コメントは表示されないので
-  // 消し忘れても顧客には見えない（目印文字列を本文に残さないための書き方）。
-  S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;"><!--TITLE-->Figure<!--/TITLE--></h1></div>';
+  // 大見出しは入力されたタイトルの全文。コメントの目印は表示されないので、
+  // eBay側で差し替えたいときの目印として残しておく。
+  S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;"><!--TITLE-->'
+    +esc(headingTitle())+'<!--/TITLE--></h1></div>';
 
   S+=h2('Condition');
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
@@ -1364,8 +1370,8 @@ function descPlain(){
   var L=[];
   L.push('SHIPPED DIRECTLY FROM TOKYO');
   // プレーンテキストにHTMLコメントは書けない（そのまま顧客に見える）ので、
-  // ここは目印なしの1行。貼り付け後にこの行だけ商品名へ書き換える。
-  L.push('Figure');
+  // ここは目印なしの1行。中身はHTML版と同じ大見出し。
+  L.push(headingTitle());
   L.push('');
   L.push('\u25A0 CONDITION');
   L.push(CONDLABEL[c]);
