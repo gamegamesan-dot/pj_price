@@ -154,8 +154,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <button class="btn" id="resetShip" style="display:none;margin:6px 0 10px">請求送料を既定値に戻す</button>
 
       <div id="rowSold">
-        <div class="rowv"><label>相場または検討中の売値（米国宛て総額・税抜き）</label>
+        <div class="rowv"><label>相場または検討中の売値（商品代＋送料の総額・税抜き）</label>
           <input type="number" id="soldPrice" step="0.01" inputmode="decimal" placeholder="任意。Sold実績か、試したい売値を入力">
+          <div class="note2" id="soldBreak"></div>
         </div>
         <div class="row"><label>相場の発送元</label>
           <select id="soldOrigin" style="flex:0 0 auto">
@@ -366,6 +367,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h">設定</div>
     <div class="body">
       <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
+      <div class="note2" id="fxNote"></div>
+      <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
@@ -468,6 +471,53 @@ FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
 });});
 // 設定セクションは全タブ共通なので、価格側を触ったときも出品前チェックを引き直す。
 CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();buildListing();save();});});
+/* ---- 為替の自動取得 ----
+   無料APIから USD/JPY を取り、設定の為替に反映する。
+   ・手入力で上書きしたらそちらを優先し、自動取得では書き換えない
+   ・取得できなければ手入力値のまま計算を続ける（PWAなのでオフラインでも止めない）
+   fetch の失敗はすべて握りつぶし、表示だけ切り替える。 */
+const FX_MIN=50, FX_MAX=500;   // 明らかにおかしい応答を弾く範囲
+var fxEdited=false;
+function setFxNote(t){ $('fxNote').textContent=t; }
+function fxStamp(d){
+  return (d.getMonth()+1)+'/'+d.getDate()+' '
+    +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+}
+function fetchFx(){
+  if(fxEdited){ setFxNote('手入力の値を使用中（自動取得はしません）'); return; }
+  setFxNote('為替を取得中…');
+  var srcs=[
+    { url:'https://open.er-api.com/v6/latest/USD',
+      pick:function(d){ return { rate:d&&d.rates&&d.rates.JPY,
+        when:(d&&d.time_last_update_unix)?new Date(d.time_last_update_unix*1000):new Date() }; } },
+    { url:'https://api.frankfurter.app/latest?from=USD&to=JPY',
+      pick:function(d){ return { rate:d&&d.rates&&d.rates.JPY,
+        when:(d&&d.date)?new Date(d.date+'T00:00:00'):new Date() }; } }
+  ];
+  (function tryNext(i){
+    if(i>=srcs.length){ setFxNote('自動取得に失敗（手入力値を使用）'); return; }
+    fetch(srcs[i].url,{cache:'no-store'})
+      .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){
+        var g=srcs[i].pick(d), rate=+g.rate;
+        if(!isFinite(rate)||rate<FX_MIN||rate>FX_MAX)throw new Error('範囲外');
+        if(fxEdited)return;            // 取得中に手入力されたら上書きしない
+        $('fx').value=(Math.round(rate*100)/100).toFixed(2);
+        setFxNote('1ドル='+(Math.round(rate*100)/100)+'円（'+fxStamp(g.when)+'時点）');
+        calc(); buildListing(); save();
+      })
+      ['catch'](function(){ tryNext(i+1); });
+  })(0);
+}
+$('fx').addEventListener('input',function(){
+  fxEdited=true;
+  setFxNote('手入力の値を使用中（自動取得はしません）');
+  $('resetFx').style.display='inline-block';
+});
+$('resetFx').onclick=function(){
+  fxEdited=false; $('resetFx').style.display='none'; save(); fetchFx();
+};
+
 // 請求送料を手入力したら、以後は重量が変わっても自動では既定値に戻さない。
 $('shipCharge').addEventListener('input',function(){shipEdited=true;});
 $('resetShip').onclick=function(){ shipEdited=false; suggestShip(); calc(); buildListing(); save(); };
@@ -648,10 +698,23 @@ function calc(){
   }
   /* ---- 相場（＝検討中の売値）の読み取り ---- */
   // 相場を入れたときは、明細表もその売値での内訳にする（旧「売値→利益」モードの役割）。
-  var soldRaw=$('soldPrice').value, hasSold=(soldRaw!==''&&!isNaN(+soldRaw)&&+soldRaw>0);
-  var M=hasSold?(+soldRaw-Gus):0;                 // 相場換算売値＝総額 − 請求送料
+  // 相場欄は「商品代＋請求送料」の総額で入れてもらう。商品代が残らない額は誤入力。
+  var soldRaw=$('soldPrice').value, soldNum=+soldRaw;
+  var soldEntered=(soldRaw!==''&&!isNaN(soldNum));
+  var soldTooLow=(soldEntered&&soldNum<=Gus);
+  var hasSold=(soldEntered&&!soldTooLow);
+  var M=hasSold?(soldNum-Gus):0;                  // 相場換算売値＝総額 − 請求送料
   var mCeil=Math.ceil(M*100)/100;
   var P=hasSold?M:pRec;                           // 明細表と内訳に使う売値
+  var sb=$('soldBreak');
+  if(soldTooLow){
+    sb.style.color='var(--bad)';
+    sb.textContent='総額（商品代＋送料）を入力してください';
+  }else{
+    sb.style.color='';
+    sb.textContent='商品代 '+(hasSold?usd(mCeil):'$—')+' ＋ 請求送料 '
+      +usd(Math.ceil(Gus*100)/100)+' として計算';
+  }
 
   // 利益は選んだ仕向地で計上する。手数料は商品と送料の合計にかかる（G*a の a に含む）。
   var profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
@@ -689,7 +752,10 @@ function calc(){
 
   /* ---- 変更3：相場での判定 ---- */
   var v=$('verdict');
-  if(!hasSold){
+  if(soldTooLow){
+    v.className='verdict na';
+    v.textContent='要確認 \u2014 総額（商品代＋送料）を入力してください';
+  }else if(!hasSold){
     v.className='verdict na';
     v.textContent='相場未入力 \u2014 Sold実績がなければ推奨売値 '+usd(recCeil)+' で出品';
   }else if(mCeil>=recCeil){
@@ -830,6 +896,7 @@ function save(){
     // 手入力での上書き状態(shipEdited)も持ち越さず、開き直すと既定値から始める。
     // 目標利益は設定値から毎回計算するので保存しない。
     delete o.cost;delete o.weight;delete o.shipCharge;
+    o.fxEdited=fxEdited;   // 手入力の為替を自動取得で上書きしないため
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -839,12 +906,14 @@ function load(){
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
+      fxEdited=!!o.fxEdited;   // 為替を手入力していたら自動取得しない
     }
   }catch(e){}
   // ここから下は保存データの有無に関わらず、開いたときの初期状態を作る。
   // 以前の版が保存した請求送料・目標利益・その単位が残っていても、要素が無いか
   // 下の suggestShip() が入れ直すので無視される。
   shipEdited=false;
+  $('resetFx').style.display=fxEdited?'inline-block':'none';
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
   $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
@@ -852,6 +921,7 @@ function load(){
   updateFigNote();
   applyTargetUnit();
   calc();
+  fetchFx();   // 非同期。失敗しても計算機は動き続ける。
 }
 load();
 

@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v27';
+const V = 'pj-pricing-v28';
 const ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,9 @@ self.addEventListener('activate', e => {
 // ネットワーク優先・失敗したらキャッシュ（更新を取りこぼさず、圏外でも動く）
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // 外部API（為替の自動取得など）はSWを素通りさせる。キャッシュに載せる意味がなく、
+  // 失敗時にこのSWが index.html を返すとJSONの取得失敗と区別できなくなるため。
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then(r => {
