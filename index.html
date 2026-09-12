@@ -244,34 +244,74 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">商品情報</div>
     <div class="body">
-      <div class="rowv"><label>商品名を貼り付け</label><textarea id="pasteIn" rows="3" placeholder="商品名やeBayタイトルを貼り付けて「自動で振り分け」。日本語でもOK（英語に直して各欄へ）"></textarea></div>
-      <div style="display:flex;align-items:center;gap:10px;margin:0 0 8px">
-        <button class="btn primary" id="btnParse" style="flex:0 0 auto">自動で振り分け</button>
-        <span class="note2" id="parseStat" style="margin:0;flex:1"></span>
-      </div>
-      <div class="rowv"><label>ブランド</label><input type="text" id="brand" list="brands" value="Banpresto" placeholder="Banpresto"></div>
-      <datalist id="brands">
-        <option value="Banpresto"><option value="SEGA"><option value="FuRyu"><option value="Taito">
-        <option value="Bandai Spirits"><option value="Good Smile Company"><option value="Kotobukiya"><option value="Konami">
-      </datalist>
-      <div class="rowv"><label>作品名</label><input type="text" id="series" placeholder="Gundam SEED Freedom"></div>
-      <div class="rowv"><label>キャラクター</label><input type="text" id="chara" placeholder="Lacus Clyne"></div>
-      <div class="rowv"><label>版・バリエーション</label><input type="text" id="variant" placeholder="Pilot Suit"></div>
-      <div class="rowv"><label>商品ライン</label><input type="text" id="line" placeholder="Glitter &amp; Glamours"></div>
-      <div class="row"><label>種別</label>
-        <select id="ptype" style="flex:0 0 auto">
-          <option>Figure</option><option>Statue</option><option>Plush</option>
-          <option>Keychain</option><option>Game</option><option>Parts</option>
+      <div class="row"><label>カテゴリ</label>
+        <select id="cat" style="flex:0 0 auto">
+          <option value="fig" selected>フィギュア</option>
+          <option value="game">ゲーム</option>
         </select>
       </div>
-      <div class="row"><label>状態</label>
-        <select id="cond" style="flex:0 0 auto">
-          <option value="sealed" selected>新品・未開封</option>
-          <option value="newopen">新品・箱開封済</option>
-          <option value="likenew">中古・美品</option>
-          <option value="used">中古</option>
-        </select>
+
+      <!-- 貼り付け→自動振り分けはフィギュアの各欄を埋める機能なので、ゲームでは隠す -->
+      <div id="pasteBlock">
+        <div class="rowv"><label>商品名を貼り付け</label><textarea id="pasteIn" rows="3" placeholder="商品名やeBayタイトルを貼り付けて「自動で振り分け」。日本語でもOK（英語に直して各欄へ）"></textarea></div>
+        <div style="display:flex;align-items:center;gap:10px;margin:0 0 8px">
+          <button class="btn primary" id="btnParse" style="flex:0 0 auto">自動で振り分け</button>
+          <span class="note2" id="parseStat" style="margin:0;flex:1"></span>
+        </div>
       </div>
+
+      <div id="figFields">
+        <div class="rowv"><label>ブランド</label><input type="text" id="brand" list="brands" placeholder="Banpresto"></div>
+        <datalist id="brands">
+          <option value="Banpresto"><option value="SEGA"><option value="FuRyu"><option value="Taito">
+          <option value="Bandai Spirits"><option value="Good Smile Company"><option value="Kotobukiya"><option value="Konami">
+        </datalist>
+        <div class="rowv"><label>作品名</label><input type="text" id="series" placeholder="Gundam SEED Freedom"></div>
+        <div class="rowv"><label>キャラクター</label><input type="text" id="chara" placeholder="Lacus Clyne"></div>
+        <div class="rowv"><label>版・バリエーション</label><input type="text" id="variant" placeholder="Pilot Suit"></div>
+        <div class="rowv"><label>商品ライン</label><input type="text" id="line" placeholder="Glitter &amp; Glamours"></div>
+        <div class="row"><label>種別</label>
+          <select id="ptype" style="flex:0 0 auto">
+            <option>Figure</option><option>Statue</option><option>Plush</option>
+            <option>Keychain</option><option>Game</option><option>Parts</option>
+          </select>
+        </div>
+        <div class="row"><label>状態</label>
+          <select id="cond" style="flex:0 0 auto">
+            <option value="sealed" selected>新品・未開封</option>
+            <option value="newopen">新品・箱開封済</option>
+            <option value="likenew">中古・美品</option>
+            <option value="used">中古</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="gameFields" style="display:none">
+        <div class="row"><label>機種</label>
+          <select id="gPlat" style="flex:0 0 auto">
+            <option value="">（選択）</option>
+            <option>PS5</option><option>PS4</option><option>PS3</option><option>PS2</option><option>PS1</option>
+            <option>PS Vita</option><option>PSP</option>
+            <option>Nintendo Switch 2</option><option>Nintendo Switch</option>
+            <option>Wii U</option><option>Wii</option><option>GameCube</option><option>N64</option>
+            <option>Super Famicom</option><option>Famicom</option>
+            <option>Game Boy</option><option>Game Boy Advance</option>
+            <option>Nintendo DS</option><option>Nintendo 3DS</option>
+            <option>Sega Saturn</option><option>Dreamcast</option><option>Mega Drive</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="rowv" id="gPlatFreeRow"><label>機種（自由入力）</label><input type="text" id="gPlatFree" placeholder="Neo Geo / PC Engine など"></div>
+        <div class="rowv"><label>タイトル（ソフト名）</label><input type="text" id="gTitle" placeholder="Final Fantasy VII Rebirth"></div>
+        <div class="rowv"><label>パブリッシャー</label><input type="text" id="gPub" placeholder="Square Enix"></div>
+        <div class="row"><label>状態</label>
+          <select id="gCond" style="flex:0 0 auto">
+            <option value="sealed" selected>新品・未開封</option>
+            <option value="used">中古</option>
+          </select>
+        </div>
+      </div>
+
       <div class="rowv"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"></div>
       <div class="rowv"><label>追加説明（任意・英文）</label><textarea id="extra" rows="2" placeholder="Box has a small dent on the top corner."></textarea></div>
     </div>
@@ -962,7 +1002,9 @@ load();
 
 
 /* ================= 出品文タブ ================= */
-var LFIELDS=['brand','series','chara','variant','line','ptype','cond','origin','extra','title'];
+var LFIELDS=['cat','brand','series','chara','variant','line','ptype','cond',
+             'gPlat','gPlatFree','gTitle','gPub','gCond',
+             'origin','extra','title'];
 var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
 var titleEdited=false;
@@ -998,9 +1040,28 @@ var CONDNOTE={
   used:'A pre-owned item, inspected by hand. Condition is shown honestly in the photos; please review them before buying.'
 };
 
+// ---- カテゴリ（フィギュア / ゲーム）----
+function isGame(){ return $('cat').value==='game'; }
+// 機種は選択肢＋自由入力。Other または未選択のときだけ自由入力を使う。
+function gamePlatform(){
+  var v=$('gPlat').value;
+  return (v===''||v==='Other') ? $('gPlatFree').value.trim() : v;
+}
+// カテゴリに応じて入力欄を出し分ける。buildListing() の先頭から毎回呼ぶ。
+function applyCat(){
+  var g=isGame();
+  $('figFields').style.display  = g?'none':'block';
+  $('gameFields').style.display = g?'block':'none';
+  $('pasteBlock').style.display = g?'none':'block';
+  var free=($('gPlat').value===''||$('gPlat').value==='Other');
+  $('gPlatFreeRow').style.display = free?'block':'none';
+}
+// 状態はカテゴリごとに別の欄。説明文の文面キーは共通（CONDLABEL / CONDNOTE）。
+function condKey(){ return isGame() ? $('gCond').value : $('cond').value; }
+
 function titleParts(){
   var p={
-    brand:$('brand').value.trim(),
+    brand:(isGame()?$('gPub').value:$('brand').value).trim(),
     series:$('series').value.trim(),
     chara:$('chara').value.trim(),
     variant:$('variant').value.trim(),
@@ -1012,9 +1073,21 @@ function titleParts(){
 // 説明文の大見出し。入力されたタイトルの全文を使い、未入力なら種別を出す。
 function headingTitle(){
   var t=$('title').value.trim();
-  return t || $('ptype').value.trim() || 'Figure';
+  if(t) return t;
+  return isGame() ? (gamePlatform()||'Game') : ($('ptype').value.trim()||'Figure');
+}
+// ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
+// パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
+// Japan Import は最後尾に付けるが、80文字を超えるときだけ省く。
+function buildGameTitle(){
+  var head=[($('gCond').value==='used'?'Used':''), gamePlatform(), $('gTitle').value.trim()]
+             .filter(Boolean).join(' ');
+  if(!head) return {text:'', dropped:[]};
+  var full=head+' Japan Import';
+  return full.length<=80 ? {text:full, dropped:[]} : {text:head, dropped:['Japan Import']};
 }
 function buildTitle(){
+  if(isGame()) return buildGameTitle();
   var p=titleParts();
   var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
   var t=order.filter(Boolean).join(' ');
@@ -1026,7 +1099,7 @@ function buildTitle(){
 }
 
 function descHTML(){
-  var p=titleParts(), c=$('cond').value;
+  var p=titleParts(), c=condKey();
   var extra=$('extra').value.trim();
   var hd=$('fx')?5:5;
   var S='<div style="max-width:820px;margin:0 auto;padding:0 4px;font-family:-apple-system,\'Segoe UI\',Helvetica,Arial,sans-serif;color:#1c1c1c;line-height:1.7;font-size:15px;">';
@@ -1044,7 +1117,7 @@ function descHTML(){
   if(isChinaOrigin()){
     var bA=p.brand?esc(p.brand)+' ':'';
     S+=h2('Authenticity');
-    S+='<p style="margin:0 0 22px;">This is an official '+bA+'product, purchased new from a licensed retailer in Japan. Like most '+bA+'figures, it is designed in Japan and manufactured in China &mdash; this is printed on the original box and is normal for this product line.</p>';
+    S+='<p style="margin:0 0 22px;">This is an official '+bA+'product, purchased new from a licensed retailer in Japan. Like most '+bA+(isGame()?'releases':'figures')+', it is designed in Japan and manufactured in China &mdash; this is printed on the original box and is normal for this product line.</p>';
   }
 
   if($('bPrize').checked){
@@ -1080,6 +1153,7 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function isChinaOrigin(){var o=($('origin').value||'').trim().toLowerCase();return o.indexOf('china')>=0||o.indexOf('中国')>=0;}
 
 function buildListing(){
+  applyCat();
   if(!titleEdited){
     var b=buildTitle();
     $('title').value=b.text;
@@ -1126,7 +1200,7 @@ function buildListing(){
     ['送料ポリシー', '<span class="pill">'+pol+'</span>'],
     ['ハンドリングタイム','3 business days'],
     ['Country of Manufacture','<b>'+esc($('origin').value||'—')+'</b>'],
-    ['Brand', esc($('brand').value||'—')],
+    [isGame()?'Publisher':'Brand', esc(titleParts().brand||'—')],
     ['最低売値 / Best Offer 自動拒否ライン','<b>'+usd(ceil2(floor))+'</b>'],
     ['　アジア側の下限', usd(ceil2(floorA))],
     ['　米国側の下限（請求送料 '+usd(ceil2(Gus))+' 込み）', usd(ceil2(floorUS))],
@@ -1166,7 +1240,8 @@ function lsave(){
   try{
     var o={};
     LCHECKS.forEach(function(id){o[id]=$(id).checked;});
-    ['brand','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
+    // 商品ごとに変わる値は保存しない。ブランドは初期値を消したので保存対象から外す。
+    ['cat','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
     localStorage.setItem(LKEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -1175,9 +1250,11 @@ function lload(){
     var s=localStorage.getItem(LKEY);
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
+        if(k==='brand')return;                 // 旧バージョンが保存した 'Banpresto' を引き継がない
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
     }
   }catch(e){}
+  applyCat();
 }
 lload();
 
@@ -1341,7 +1418,8 @@ spload();
 
 /* ---- 文面バリエーション（出品ごとに自動で振り分け） ---- */
 function seedOf(){
-  var s=[$('brand').value,$('series').value,$('chara').value,$('variant').value].join('|');
+  var s=[$('brand').value,$('series').value,$('chara').value,$('variant').value,
+         $('gPlat').value,$('gPlatFree').value,$('gTitle').value,$('gPub').value].join('|');
   var h=0; for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0;}
   return Math.abs(h);
 }
@@ -1365,7 +1443,7 @@ var V_PACK=[
 
 /* ---- プレーンテキスト版 ---- */
 function descPlain(){
-  var p=titleParts(), c=$('cond').value;
+  var p=titleParts(), c=condKey();
   var extra=$('extra').value.trim();
   var L=[];
   L.push('SHIPPED DIRECTLY FROM TOKYO');
@@ -1380,7 +1458,7 @@ function descPlain(){
   if(isChinaOrigin()){
     var bAp=p.brand?p.brand+' ':'';
     L.push('\u25A0 AUTHENTICITY');
-    L.push('This is an official '+bAp+'product, purchased new from a licensed retailer in Japan. Like most '+bAp+'figures, it is designed in Japan and manufactured in China \u2014 this is printed on the original box and is normal for this product line.');
+    L.push('This is an official '+bAp+'product, purchased new from a licensed retailer in Japan. Like most '+bAp+(isGame()?'releases':'figures')+', it is designed in Japan and manufactured in China \u2014 this is printed on the original box and is normal for this product line.');
     L.push('');
   }
   if($('bPrize').checked){
