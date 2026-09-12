@@ -330,6 +330,22 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </section>
 
   <section>
+    <div class="h">SKU</div>
+    <div class="body">
+      <div class="note2" id="devNote" style="display:none;color:var(--bad)">端末記号を設定してください（設定 → 端末記号）</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="sku" style="flex:1;min-width:0" placeholder="260913-A1437-4500">
+        <button class="btn" id="reSku" style="flex:0 0 auto;white-space:nowrap">発番し直す</button>
+      </div>
+      <button class="btn primary" id="copySku" style="width:100%;margin-top:8px">SKUをコピー</button>
+      <div class="note2" id="skuHist" style="margin-top:6px"></div>
+    </div>
+    <div class="note">
+      YYMMDD-端末記号HHMM-仕入値。出品文タブを開いたときに自動で発番します。手で書き換えても構いません。
+    </div>
+  </section>
+
+  <section>
     <div class="h">説明文</div>
     <div class="body">
       <div class="chk" id="prizeRow"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
@@ -413,6 +429,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
       <div class="note2" id="fxNote"></div>
       <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
+      <div class="row"><label>端末記号</label><input type="text" id="devCode" maxlength="1" placeholder="A" style="flex:0 0 60px;text-align:center"><span class="unit">SKU用・1文字</span></div>
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
@@ -509,7 +526,7 @@ function suggestShip(){
   $('shipCharge').value=(w>AIRPACKET_MAX?SHIP_CHARGE_EMS:SHIP_CHARGE_DEFAULT).toFixed(2);
 }
 
-const FIELDS=['cost','weight','pack','zone','shipCharge','fx','fee','fixed','fxc','duty','usMethod'];
+const FIELDS=['cost','weight','pack','zone','shipCharge','fx','fee','fixed','fxc','duty','usMethod','devCode'];
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
@@ -1163,8 +1180,61 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 // 原産国が中国のときだけ Authenticity ブロックを出す（Made in China での偽物疑いを先回りで防ぐ）
 function isChinaOrigin(){var o=($('origin').value||'').trim().toLowerCase();return o.indexOf('china')>=0||o.indexOf('中国')>=0;}
 
+/* ---- SKU ----
+   形式: YYMMDD-〈端末記号〉HHMM-仕入値（例 260913-A1437-4500）
+   仕入値が未入力のときは末尾を省く。端末記号が未設定なら記号なしで発番し、
+   欄の上に設定を促す注意を出す。 */
+var SKU_KEY='pj:sku:v1';
+var skuEdited=false;
+function pad2(n){return (n<10?'0':'')+n;}
+function makeSku(){
+  var d=new Date();
+  var ymd=pad2(d.getFullYear()%100)+pad2(d.getMonth()+1)+pad2(d.getDate());
+  var hm=pad2(d.getHours())+pad2(d.getMinutes());
+  var code=($('devCode').value||'').trim().slice(0,1);
+  var raw=String($('cost').value||'').trim();
+  var c=Math.round(+raw);
+  // 仕入値が空・数値でない・0以下なら末尾を省く
+  var tail=(raw!==''&&isFinite(c)&&c>0)?('-'+c):'';
+  return ymd+'-'+code+hm+tail;
+}
+function skuHist(){
+  try{ var a=JSON.parse(localStorage.getItem(SKU_KEY)||'[]'); return Array.isArray(a)?a:[]; }
+  catch(e){ return []; }
+}
+function pushSku(v){
+  try{ var a=skuHist(); a.unshift(v); localStorage.setItem(SKU_KEY,JSON.stringify(a.slice(0,5))); }
+  catch(e){}
+}
+function renderSkuHist(){
+  var a=skuHist();
+  if(!a.length){ $('skuHist').textContent='直近の発番：まだありません'; return; }
+  // 同じ分に2回発番すると同じ値になるので、重複はその場で分かるようにする。
+  var seen={}, dup={};
+  a.forEach(function(v){ if(seen[v])dup[v]=true; seen[v]=true; });
+  $('skuHist').innerHTML='直近の発番：'+a.map(function(v){
+    return dup[v] ? '<b style="color:var(--bad)">'+esc(v)+'（重複）</b>' : esc(v);
+  }).join(' / ');
+}
+function issueSku(){
+  $('sku').value=makeSku();
+  skuEdited=false;
+  pushSku($('sku').value);
+  renderSkuHist();
+}
+// buildListing() から毎回呼ぶ。空欄のときだけ自動発番する（入力中に上書きしない）。
+// 発番は出品文タブを開いているときだけ。価格タブを触った時刻で先に採番されると、
+// 実際に出品文を作る時刻とずれてしまうため。
+function updateSku(){
+  $('devNote').style.display = ($('devCode').value||'').trim() ? 'none' : 'block';
+  var open=($('tabListing').style.display!=='none');
+  if(open && !skuEdited && $('sku').value.trim()==='') issueSku();
+  else renderSkuHist();
+}
+
 function buildListing(){
   applyCat();
+  updateSku();
   if(!titleEdited){
     var b=buildTitle();
     $('title').value=b.text;
@@ -1237,6 +1307,10 @@ function fallback(txt,cb){
   document.body.removeChild(ta);
 }
 $('copyTitle').onclick=function(){copyText($('title').value,this,'タイトルをコピー');};
+$('copySku').onclick=function(){copyText($('sku').value,this,'SKUをコピー');};
+$('reSku').onclick=function(){ issueSku(); };
+// SKUは手入力での上書きを許す。以降この出品では自動発番しない。
+$('sku').addEventListener('input',function(){ skuEdited=true; });
 $('copyDesc').onclick=function(){copyText(descHTML(),this,'説明文HTMLをコピー');};
 
 $('title').addEventListener('input',function(){titleEdited=true;buildListing();lsave();});
