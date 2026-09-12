@@ -154,24 +154,26 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h" id="inHead">想定売値</div>
     <div class="body">
-      <div class="row" id="rowPrice"><label>eBay Sold 価格</label><input type="number" id="price" value="52" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row" id="rowPrice"><label>eBay Sold 価格</label><input type="number" id="price" step="0.01" inputmode="decimal" placeholder="例 52"><span class="unit">$</span></div>
       <div class="row" id="rowShip" style="display:none"><label>請求送料（米国向け）</label><input type="number" id="shipCharge" value="15" step="0.01" inputmode="decimal"><span class="unit">$</span></div>
       <div class="note2" id="shipChargeNote" style="display:none"></div>
       <button class="btn" id="resetShip" style="display:none;margin:6px 0 10px">請求送料を既定値に戻す</button>
 
-      <div class="rowv"><label>Sold相場（米国宛て総額・税抜き）</label>
-        <input type="number" id="soldPrice" step="0.01" inputmode="decimal" placeholder="任意。Sold実績があれば入力">
-      </div>
-      <div class="row"><label>相場の発送元</label>
-        <select id="soldOrigin" style="flex:0 0 auto">
-          <option value="jp" selected>日本</option>
-          <option value="asia">日本以外のアジア</option>
-          <option value="us">米国</option>
-          <option value="unknown">不明</option>
-        </select>
+      <div id="rowSold">
+        <div class="rowv"><label>Sold相場（米国宛て総額・税抜き）</label>
+          <input type="number" id="soldPrice" step="0.01" inputmode="decimal" placeholder="任意。Sold実績があれば入力">
+        </div>
+        <div class="row"><label>相場の発送元</label>
+          <select id="soldOrigin" style="flex:0 0 auto">
+            <option value="jp" selected>日本</option>
+            <option value="asia">日本以外のアジア</option>
+            <option value="us">米国</option>
+            <option value="unknown">不明</option>
+          </select>
+        </div>
       </div>
     </div>
-    <details>
+    <details id="soldGuide">
       <summary>相場の調べ方</summary>
       <div class="note">
         <ol style="margin:0;padding-left:20px;line-height:1.7">
@@ -700,27 +702,40 @@ function calc(){
   $('bigFloor').textContent='最低売値 '+usd(floorCeil)
     +(mode==='A'?'\u3000/\u3000推奨売値 '+usd(recCeil):'');
 
-  /* ---- 変更3：Sold相場での判定 ---- */
-  var soldRaw=$('soldPrice').value, hasSold=(soldRaw!==''&&!isNaN(+soldRaw)&&+soldRaw>0);
+  /* ---- 変更3：相場（目標利益→売値）／入力売値（売値→利益）での判定 ---- */
+  // 売値→利益モードでは売値そのものを入れるので、相場の入力欄は出さない（重複回避）。
+  var useSold=(mode==='B');
+  $('rowSold').style.display=useSold?'block':'none';
+  $('soldGuide').style.display=useSold?'block':'none';
+
+  var soldRaw=$('soldPrice').value, hasSold=(useSold&&soldRaw!==''&&!isNaN(+soldRaw)&&+soldRaw>0);
   var M=hasSold?(+soldRaw-Gus):0;                 // 相場換算売値＝総額 − 請求送料
   var mCeil=Math.ceil(M*100)/100;
   var mUS=M*denU-restUS, mAsia=M*aA-restAsia;
   $('bigSold').style.display=hasSold?'block':'none';
   if(hasSold)$('bigSold').textContent='相場 '+usd(mCeil)+' で出品したとき\u3000米国 '+yen(mUS)+'\u3000/\u3000アジア '+yen(mAsia);
 
+  // 判定に使う売値と、その売値での米国利益。
+  var priceRaw=$('price').value, hasPrice=(priceRaw!==''&&!isNaN(+priceRaw)&&+priceRaw>0);
+  var judgeP=useSold?(hasSold?mCeil:null):(hasPrice?Math.ceil(P*100)/100:null);
+  var judgeProfit=useSold?mUS:profitUS;
+  var what=useSold?'相場 ':'売値 ';
+
   var v=$('verdict');
-  if(!hasSold){
+  if(judgeP===null){
     v.className='verdict na';
-    v.textContent='相場未入力 \u2014 Sold実績がなければ推奨売値 '+usd(recCeil)+' で出品';
-  }else if(mCeil>=recCeil){
+    v.textContent=useSold
+      ? '相場未入力 \u2014 Sold実績がなければ推奨売値 '+usd(recCeil)+' で出品'
+      : '売値未入力 \u2014 推奨売値 '+usd(recCeil)+' で出品';
+  }else if(judgeP>=recCeil){
     v.className='verdict go';
-    v.textContent='出品OK \u2014 相場 '+usd(mCeil)+' で出品（利益 '+yen(mUS)+'）';
-  }else if(mCeil>=floorCeil){
+    v.textContent='出品OK \u2014 '+what+usd(judgeP)+' で出品（利益 '+yen(judgeProfit)+'）';
+  }else if(judgeP>=floorCeil){
     v.className='verdict mid';
-    v.textContent='相場 '+usd(mCeil)+' で出品 \u2014 目標未満・回転優先（利益 '+yen(mUS)+'）';
+    v.textContent=what+usd(judgeP)+' で出品 \u2014 目標未満・回転優先（利益 '+yen(judgeProfit)+'）';
   }else{
     v.className='verdict no';
-    v.textContent='見送り \u2014 相場では下限利益を確保できません';
+    v.textContent='見送り \u2014 '+(useSold?'相場では':'この売値では')+'下限利益を確保できません';
   }
   var so=$('soldOrigin').value, vn=$('verdictNote');
   var warnOrigin=hasSold&&(so==='asia'||so==='us');
