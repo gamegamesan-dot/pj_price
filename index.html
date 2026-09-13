@@ -321,7 +321,15 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
 
       <div id="arcadeFields" style="display:none">
-        <div class="rowv"><label>メーカー</label><input type="text" id="aMaker" placeholder="Sanwa Denshi"></div>
+        <div class="row"><label>メーカー</label>
+          <select id="aMaker" style="flex:0 0 auto">
+            <option value="">（選択）</option>
+            <option value="Sanwa Denshi">Sanwa Denshi</option>
+            <option value="Seimitsu">Seimitsu</option>
+            <option value="Others">Others</option>
+          </select>
+        </div>
+        <div class="rowv" id="aMakerFreeRow" style="display:none"><label>メーカー（自由入力）</label><input type="text" id="aMakerFree" placeholder="Hori / Qanba など"></div>
         <div class="rowv"><label>型番</label><input type="text" id="aModel" placeholder="OBSF-30"></div>
         <div class="rowv"><label>種類</label><input type="text" id="aKind" placeholder="Push Button"></div>
         <div class="rowv"><label>色</label><input type="text" id="aColor" placeholder="Black"></div>
@@ -1153,7 +1161,7 @@ load();
 /* ================= 出品文タブ ================= */
 var LFIELDS=['cat','brand','series','chara','variant','line','ptype','cond',
              'gPlat','gPlatFree','gTitle','gPub','gCond',
-             'aMaker','aModel','aKind','aColor','aSize','aQty','aCond','aOrigin',
+             'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aQty','aCond','aOrigin',
              'origin','extra','title'];
 var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
@@ -1193,6 +1201,14 @@ var CONDNOTE={
 // ---- カテゴリ（フィギュア / ゲーム）----
 function isGame(){ return $('cat').value==='game'; }
 function isArcade(){ return $('cat').value==='arcade'; }
+// タイトルと説明文に出すメーカー表記。選択肢の値とは別に、表に出す名前を持つ。
+// Others のときだけ自由入力の値をそのまま使う。
+const MAKER_LABEL={'Sanwa Denshi':'Sanwa','Seimitsu':'Seimitsu'};
+function makerName(){
+  var v=$('aMaker').value;
+  if(v==='Others') return $('aMakerFree').value.trim();
+  return MAKER_LABEL[v]||'';
+}
 // 原産国はアーケードパーツだけ既定が違うので欄を分けている（既定 Japan）。
 function originValue(){ return (isArcade()?$('aOrigin').value:$('origin').value); }
 // 機種は選択肢＋自由入力。Other または未選択のときだけ自由入力を使う。
@@ -1214,6 +1230,8 @@ function applyCat(){
   $('pasteBlock').style.display   = f?'block':'none';
   var free=($('gPlat').value===''||$('gPlat').value==='Other');
   $('gPlatFreeRow').style.display = free?'block':'none';
+  // メーカーは Others のときだけ自由入力を出す。
+  $('aMakerFreeRow').style.display = ($('aMaker').value==='Others')?'block':'none';
 
   applyLineCat();   // 上部の製品ライン／ゲーム機種もカテゴリに合わせる
 
@@ -1235,7 +1253,7 @@ function condKey(){
 
 function titleParts(){
   var p={
-    brand:(isGame()?$('gPub').value:(isArcade()?$('aMaker').value:$('brand').value)).trim(),
+    brand:(isGame()?$('gPub').value.trim():(isArcade()?makerName():$('brand').value.trim())),
     series:$('series').value.trim(),
     chara:$('chara').value.trim(),
     variant:$('variant').value.trim(),
@@ -1249,7 +1267,7 @@ function headingTitle(){
   var t=$('title').value.trim();
   if(t) return t;
   if(isGame()) return gamePlatform()||'Game';
-  if(isArcade()) return $('aKind').value.trim()||$('aMaker').value.trim()||'Arcade Parts';
+  if(isArcade()) return $('aKind').value.trim()||makerName()||'Arcade Parts';
   return $('ptype').value.trim()||'Figure';
 }
 // ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
@@ -1268,7 +1286,7 @@ function buildGameTitle(){
 // 80文字を超えるときは Japan Import → サイズ の順に省く。
 function buildArcadeTitle(){
   var used=($('aCond').value==='used')?'Used':'';
-  var maker=$('aMaker').value.trim(), model=$('aModel').value.trim();
+  var maker=makerName(), model=$('aModel').value.trim();
   var kind=$('aKind').value.trim(), color=$('aColor').value.trim(), size=$('aSize').value.trim();
   var n=Math.round(+$('aQty').value||0), qty=(n>=2)?(n+'pcs Set'):'';
   if(!(maker||model||kind||color||size)) return {text:'', dropped:[]};
@@ -1675,7 +1693,7 @@ spload();
 function seedOf(){
   var s=[$('brand').value,$('series').value,$('chara').value,$('variant').value,
          $('gPlat').value,$('gPlatFree').value,$('gTitle').value,$('gPub').value,
-         $('aMaker').value,$('aModel').value,$('aKind').value].join('|');
+         $('aMaker').value,$('aMakerFree').value,$('aModel').value,$('aKind').value].join('|');
   var h=0; for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0;}
   return Math.abs(h);
 }
