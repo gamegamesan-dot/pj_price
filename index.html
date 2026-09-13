@@ -447,6 +447,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h">市場別 手数料設定<span style="font-weight:400;color:var(--mute)">（2026年2月改定・要確認）</span></div>
     <div class="body">
       <div class="row"><label>為替レート（1通貨あたり）</label><input type="number" id="spFx" value="115" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
+      <div class="note2" id="spFxNote"></div>
+      <button class="btn" id="spResetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
       <div class="row"><label>販売手数料＋決済手数料</label><input type="number" id="spFeePct" value="23" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="spFeeFixed" value="0" step="0.1" inputmode="decimal"><span class="unit" id="spCurUnit2">S$</span></div>
       <div class="note2">Shopeeは2026年2月に主要国で約2%値上げされています。実際の率はSeller Centre内「各種手数料」ページで市場ごとに確認し、ここで上書きしてください。市場を切り替えても数値は自動で変わらないので、市場ごとに手入力で合わせます。</div>
@@ -462,6 +464,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="fxNote"></div>
       <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
       <div class="row"><label>端末記号</label><input type="text" id="devCode" maxlength="1" placeholder="A" style="flex:0 0 60px;text-align:center"><span class="unit">SKU用・1文字</span></div>
+      <!-- ここから eBay 専用。Shopeeタブでは隠す（端末記号はSKU用で共通なので残す）。 -->
+      <div id="ebayOnly">
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
@@ -475,8 +479,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <option value="B">関税のみ</option>
         </select>
       </div>
+      </div><!-- /ebayOnly -->
     </div>
-    <div class="note">
+    <div class="note" id="ebayNote">
       為替は実勢より低い値を入れると安全側に出ます。手数料率は実際の取引明細と突き合わせて調整してください。米国関税・通関手数料は Zonos 実測（2026-09-05）の固定値で、米国宛のみ加算されます。設定は自動保存されます。
     </div>
   </section>
@@ -1180,8 +1185,12 @@ function switchTab(t){
   $('tabPricing').style.display=t==='A'?'block':'none';
   $('tabListing').style.display=t==='B'?'block':'none';
   $('tabShopee').style.display=t==='C'?'block':'none';
+  // 設定セクションは全タブ共通なので、Shopeeを開いている間だけ eBay 専用の項目を隠す。
+  var eb=(t!=='C');
+  $('ebayOnly').style.display=eb?'block':'none';
+  $('ebayNote').style.display=eb?'block':'none';
   if(t==='B')buildListing();
-  if(t==='C')buildShopee();
+  if(t==='C'){ buildShopee(); fetchSpFx(); }
   window.scrollTo(0,0);
 }
 
@@ -1575,11 +1584,83 @@ lload();
 var SP_CUR={SG:'S$',TW:'NT$',MY:'RM'};
 var SP_DEFAULT_FX={SG:115,TW:5.0,MY:35};
 var SP_KEY='pj:shopee:v1';
+// 自動取得用。通貨コードと、明らかにおかしい応答を弾く範囲（1通貨あたりの円）。
+var SP_CODE={SG:'SGD',TW:'TWD',MY:'MYR'};
+var SP_FX_RANGE={SG:[50,300],TW:[1,20],MY:[10,100]};
+var spFxEdited={};        // 市場ごとの手入力フラグ
+var spFxCache=null;       // 取得したレート（USD基準の応答から市場ごとに換算）
+
+function setSpFxNote(t){ $('spFxNote').textContent=t; }
+// 取得済みのレートを、いま選んでいる市場の通貨で欄に入れる。
+function applySpFx(){
+  var m=$('spMarket').value;
+  if(spFxEdited[m]){ setSpFxNote('手入力の値を使用中（自動取得はしません）');
+    $('spResetFx').style.display='inline-block'; return; }
+  $('spResetFx').style.display='none';
+  if(!spFxCache){ return; }                       // 取得中／未着手。注記はそのまま
+  if(!isFinite(spFxCache.rate[m])){               // その通貨だけ取れなかった場合
+    setSpFxNote('自動取得に失敗（手入力値を使用）'); return; }
+  var r=Math.round(spFxCache.rate[m]*100)/100;
+  $('spFx').value=r.toFixed(2);
+  setSpFxNote('1'+SP_CODE[m]+'='+r+'円（'+fxStamp(spFxCache.when)+'時点）');
+  buildShopee(); spsave();
+}
+/* 市場通貨→円のレートを取る。USD基準の応答1回で3市場ぶん換算できるので、
+   市場を切り替えても取り直さない。失敗はすべて握りつぶし、手入力値のまま計算を続ける。 */
+function fetchSpFx(){
+  var m=$('spMarket').value;
+  if(spFxCache){ applySpFx(); return; }
+  // 表示中の市場を手入力していても、他の市場のために取得はしておく。
+  if(spFxEdited[m]){ applySpFx(); } else { setSpFxNote('為替を取得中…'); }
+  var srcs=[
+    { url:'https://open.er-api.com/v6/latest/USD',
+      pick:function(d){ return { rates:d&&d.rates,
+        when:(d&&d.time_last_update_unix)?new Date(d.time_last_update_unix*1000):new Date() }; } },
+    { url:'https://api.frankfurter.app/latest?from=USD&to=JPY,SGD,MYR',
+      pick:function(d){ return { rates:d&&d.rates,
+        when:(d&&d.date)?new Date(d.date+'T00:00:00'):new Date() }; } }
+  ];
+  (function tryNext(i){
+    if(i>=srcs.length){ setSpFxNote('自動取得に失敗（手入力値を使用）'); return; }
+    fetch(srcs[i].url,{cache:'no-store'})
+      .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){
+        var g=srcs[i].pick(d), rs=g.rates||{}, jpy=+rs.JPY, out={}, any=false;
+        if(!isFinite(jpy)||jpy<=0)throw new Error('JPYなし');
+        Object.keys(SP_CODE).forEach(function(k){
+          var per=+rs[SP_CODE[k]];                 // 1USD あたりの現地通貨
+          if(!isFinite(per)||per<=0)return;
+          var v=jpy/per, rg=SP_FX_RANGE[k];        // 1現地通貨あたりの円
+          if(v<rg[0]||v>rg[1])return;
+          out[k]=v; any=true;
+        });
+        if(!any)throw new Error('範囲外');
+        spFxCache={rate:out, when:g.when};
+        applySpFx();
+      })
+      ['catch'](function(){ tryNext(i+1); });
+  })(0);
+}
+$('spFx').addEventListener('input',function(){
+  spFxEdited[$('spMarket').value]=true;
+  setSpFxNote('手入力の値を使用中（自動取得はしません）');
+  $('spResetFx').style.display='inline-block';
+});
+$('spResetFx').onclick=function(){
+  spFxEdited[$('spMarket').value]=false;
+  $('spResetFx').style.display='none';
+  spsave();
+  spFxCache ? applySpFx() : fetchSpFx();
+};
 
 $('spMarket').addEventListener('change',function(){
   var m=$('spMarket').value, u=SP_CUR[m];
   $('spCurUnit').textContent=u; $('spCurUnit2').textContent=u;
+  // 市場ごとに保存した手入力値へ戻し、その上で自動取得の値を当てる。
+  try{ var o=JSON.parse(localStorage.getItem(SP_KEY)||'{}');
+       $('spFx').value=(o._fx&&o._fx[m])?o._fx[m]:SP_DEFAULT_FX[m]; }catch(e){}
   spsave(); buildShopee();
+  spFxCache ? applySpFx() : fetchSpFx();
 });
 $('spMode').addEventListener('change',function(){
   var mode=$('spMode').value;
@@ -1658,6 +1739,7 @@ function spsave(){
   try{
     var o={};
     ['spMarket','spMode','spFeePct','spFeeFixed'].forEach(function(id){o[id]=$(id).value;});
+    o._fxEdited=spFxEdited;   // 市場ごとに、自動取得で上書きしないかどうか
     var fx={}; fx[$('spMarket').value]=$('spFx').value; o._fx=fx;
     var s=localStorage.getItem(SP_KEY); var prev=s?JSON.parse(s):{};
     var mergedFx=Object.assign({}, prev._fx||{}, fx);
@@ -1678,6 +1760,7 @@ function spload(){
       m=$('spMarket').value;
       if(o._fx&&o._fx[m])$('spFx').value=o._fx[m];
       else $('spFx').value=SP_DEFAULT_FX[m];
+      if(o._fxEdited)spFxEdited=o._fxEdited;
     }else{
       $('spFx').value=SP_DEFAULT_FX[m];
     }
@@ -1685,6 +1768,7 @@ function spload(){
     $('spRowMargin').style.display = $('spMode').value==='limit' ? 'flex':'none';
     $('spRowCost').style.display   = $('spMode').value==='profit'? 'flex':'none';
   }catch(e){}
+  $('spResetFx').style.display=spFxEdited[$('spMarket').value]?'inline-block':'none';
 }
 spload();
 
