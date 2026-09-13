@@ -93,6 +93,7 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
      background:#fff;color:var(--ink);font-family:inherit}
 .btn.primary{background:var(--ink);color:var(--label);border-color:var(--ink)}
 .btn.done{background:var(--good);color:#fff;border-color:var(--good)}
+.btn:disabled{background:#f2f1ed;color:var(--mute);border-color:var(--line)}
 .note2{font-size:11.5px;color:var(--mute);margin-top:7px;line-height:1.55}
 .tabs{display:flex;border:1px solid var(--ink);border-radius:2px;overflow:hidden;margin-top:12px}
 .tabs button{flex:1;padding:12px 4px;font-size:14px;font-weight:800;border:0;background:#fff;color:var(--ink);font-family:inherit}
@@ -355,12 +356,15 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 
       <!-- 出品前の重複確認。カテゴリごとに検索語を組み立てる。 -->
       <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
-        <label style="display:block;margin-bottom:4px">自店の出品を検索（重複確認）</label>
-        <input type="text" id="dupKw" placeholder="キャラクター＋商品ライン など">
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn" id="copyKw" style="flex:1 1 auto">検索語をコピー</button>
-          <button class="btn" id="dupLive" style="flex:1 1 auto">出品中を検索</button>
-          <button class="btn" id="dupSold" style="flex:1 1 auto">売り切れを検索</button>
+        <div class="rowv" style="margin-bottom:0">
+          <label for="dupKw">自店の出品を検索（重複確認）</label>
+          <input type="text" id="dupKw" placeholder="手入力もできます（例：Grandista）">
+        </div>
+        <button class="btn" id="copyKw" style="width:100%;margin-top:8px">検索語をコピー</button>
+        <!-- 2つで1行。flex-basis を 0 にして幅を等分し、狭い画面でもはみ出さない。 -->
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn" id="dupLive" style="flex:1 1 0;min-width:0;padding:9px 4px">出品中</button>
+          <button class="btn" id="dupSold" style="flex:1 1 0;min-width:0;padding:9px 4px">売り切れ</button>
         </div>
         <div class="note2" id="dupNote"></div>
       </div>
