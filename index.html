@@ -364,7 +364,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <button class="btn" id="kwFromTitle" style="flex:1 1 0;min-width:0;padding:9px 4px">タイトルから入れる</button>
           <button class="btn" id="kwFromFields" style="flex:1 1 0;min-width:0;padding:9px 4px">各欄から入れる</button>
         </div>
-        <button class="btn" id="copyKw" style="width:100%;margin-top:8px">検索語をコピー</button>
         <!-- 2つで1行。flex-basis を 0 にして幅を等分し、狭い画面でもはみ出さない。 -->
         <div style="display:flex;gap:8px;margin-top:8px">
           <button class="btn" id="dupLive" style="flex:1 1 0;min-width:0;padding:9px 4px">出品中</button>
@@ -1471,7 +1470,6 @@ function updateDup(){
   var kw=$('dupKw').value.trim(), sn=sellerName();
   var ok=!!(kw&&sn);
   $('dupLive').disabled=!ok; $('dupSold').disabled=!ok;
-  $('copyKw').disabled=!kw;
   $('kwFromTitle').disabled=!$('title').value.trim();
   $('kwFromFields').disabled=!dupKeyword();
   $('dupNote').textContent = !sn ? '設定の「eBayセラー名」を入れると検索できます'
@@ -1556,7 +1554,6 @@ function fallback(txt,cb){
 }
 $('copyTitle').onclick=function(){copyText($('title').value,this,'タイトルをコピー');};
 $('copySku').onclick=function(){copyText($('sku').value,this,'SKUをコピー');};
-$('copyKw').onclick=function(){copyText($('dupKw').value,this,'検索語をコピー');};
 // 入れたあとは手で直せる。タイトル由来は各欄の変更で上書きしたくないので編集扱いにする。
 $('kwFromTitle').onclick=function(){ $('dupKw').value=$('title').value.trim(); dupEdited=true; updateDup(); };
 // 各欄由来は自動生成と同じ中身なので、以後も各欄の変更に追従させる。
