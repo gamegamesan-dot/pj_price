@@ -358,6 +358,18 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <button class="btn" id="copyTitle" style="margin-left:auto">タイトルをコピー</button>
       </div>
       <div class="note2" id="titleNote"></div>
+
+      <!-- 出品前の重複確認。カテゴリごとに検索語を組み立てる。 -->
+      <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+        <label style="display:block;margin-bottom:4px">自店の出品を検索（重複確認）</label>
+        <input type="text" id="dupKw" placeholder="キャラクター＋商品ライン など">
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn" id="copyKw" style="flex:1 1 auto">検索語をコピー</button>
+          <button class="btn" id="dupLive" style="flex:1 1 auto">出品中を検索</button>
+          <button class="btn" id="dupSold" style="flex:1 1 auto">売り切れを検索</button>
+        </div>
+        <div class="note2" id="dupNote"></div>
+      </div>
     </div>
   </section>
 
@@ -467,6 +479,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
       <div class="note2" id="fxNote"></div>
       <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
+      <div class="rowv"><label>eBayセラー名</label><input type="text" id="ebaySeller" placeholder="playjapan_store"><div class="note2">自店の出品を検索するときに使います。ストアURL ebay.com/usr/<b>○○</b> の○○の部分。</div></div>
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
@@ -615,7 +628,7 @@ function suggestShip(){
   $('shipCharge').value=(w>AIRPACKET_MAX?SHIP_CHARGE_EMS:SHIP_CHARGE_DEFAULT).toFixed(2);
 }
 
-const FIELDS=['cost','weight','pack','zone','shipCharge','fx','fee','fixed','fxc','duty','usMethod','devCode'];
+const FIELDS=['cost','weight','pack','zone','shipCharge','fx','fee','fixed','fxc','duty','usMethod','devCode','ebaySeller'];
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
@@ -1430,9 +1443,38 @@ function updateSku(){
   else renderSkuHist();
 }
 
+/* ---- 出品前の重複確認 ----
+   カテゴリごとに、自店で同じものを出していないか調べるための検索語を組み立てる。
+   eBay は出品中と売り切れを1画面で出せない（LH_Sold は排他）ので、ボタンを分けている。 */
+var dupEdited=false;
+function dupKeyword(){
+  var a;
+  if(isGame())        a=[gamePlatform(), $('gTitle').value];
+  else if(isArcade()) a=[makerName(), $('aModel').value];
+  else                a=[$('chara').value, $('line').value];
+  return a.map(function(v){return String(v||'').trim();}).filter(Boolean).join(' ');
+}
+function sellerName(){ return ($('ebaySeller').value||'').trim(); }
+function dupUrl(sold){
+  return 'https://www.ebay.com/sch/i.html?_ssn='+encodeURIComponent(sellerName())
+    +'&_nkw='+encodeURIComponent($('dupKw').value.trim())
+    +(sold?'&LH_Sold=1&LH_Complete=1':'');
+}
+function updateDup(){
+  if(!dupEdited) $('dupKw').value=dupKeyword();
+  var kw=$('dupKw').value.trim(), sn=sellerName();
+  var ok=!!(kw&&sn);
+  $('dupLive').disabled=!ok; $('dupSold').disabled=!ok;
+  $('copyKw').disabled=!kw;
+  $('dupNote').textContent = !sn ? '設定の「eBayセラー名」を入れると検索できます'
+    : (!kw ? '上の各欄を埋めると検索語ができます'
+    : '同じものを出していないか、出品中と売り切れの両方を確認してください');
+}
+
 function buildListing(){
   applyCat();
   updateSku();
+  updateDup();
   if(!titleEdited){
     var b=buildTitle();
     $('title').value=b.text;
@@ -1506,6 +1548,11 @@ function fallback(txt,cb){
 }
 $('copyTitle').onclick=function(){copyText($('title').value,this,'タイトルをコピー');};
 $('copySku').onclick=function(){copyText($('sku').value,this,'SKUをコピー');};
+$('copyKw').onclick=function(){copyText($('dupKw').value,this,'検索語をコピー');};
+$('dupLive').onclick=function(){ window.open(dupUrl(false),'_blank','noopener'); };
+$('dupSold').onclick=function(){ window.open(dupUrl(true),'_blank','noopener'); };
+// 検索語は手で直せる。各欄を触れば作り直す（タイトルと同じ扱い）。
+$('dupKw').addEventListener('input',function(){ dupEdited=true; updateDup(); });
 $('reSku').onclick=function(){ issueSku(); };
 // SKUは手入力での上書きを許す。以降この出品では自動発番しない。
 $('sku').addEventListener('input',function(){ skuEdited=true; });
@@ -1514,8 +1561,8 @@ $('copyDesc').onclick=function(){copyText(descHTML(),this,'説明文HTMLをコ�
 $('title').addEventListener('input',function(){titleEdited=true;buildListing();lsave();});
 LFIELDS.forEach(function(id){
   if(id==='title')return;
-  $(id).addEventListener('input',function(){titleEdited=false;buildListing();lsave();});
-  $(id).addEventListener('change',function(){titleEdited=false;buildListing();lsave();});
+  $(id).addEventListener('input',function(){titleEdited=false;dupEdited=false;buildListing();lsave();});
+  $(id).addEventListener('change',function(){titleEdited=false;dupEdited=false;buildListing();lsave();});
 });
 LCHECKS.forEach(function(id){$(id).addEventListener('change',function(){buildListing();lsave();});});
 
