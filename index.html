@@ -118,7 +118,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h">商品</div>
     <div class="body">
       <div class="row"><label>仕入値（税込）</label><input type="number" id="cost" value="500" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="rowv"><label id="figLineLabel">フィギュア製品ライン</label>
+      <div class="rowv" id="figLineRow"><label id="figLineLabel">フィギュア製品ライン</label>
         <select id="figLine" style="width:100%">
           <option value="">選択しない（重量を手入力）</option>
         </select>
@@ -255,6 +255,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <select id="cat" style="flex:0 0 auto">
           <option value="fig" selected>フィギュア</option>
           <option value="game">ゲーム</option>
+          <option value="arcade">アーケードパーツ</option>
         </select>
       </div>
 
@@ -319,7 +320,23 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         </div>
       </div>
 
-      <div class="rowv"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"></div>
+      <div id="arcadeFields" style="display:none">
+        <div class="rowv"><label>メーカー</label><input type="text" id="aMaker" placeholder="Sanwa Denshi"></div>
+        <div class="rowv"><label>型番</label><input type="text" id="aModel" placeholder="OBSF-30"></div>
+        <div class="rowv"><label>種類</label><input type="text" id="aKind" placeholder="Push Button"></div>
+        <div class="rowv"><label>色</label><input type="text" id="aColor" placeholder="Black"></div>
+        <div class="rowv"><label>サイズ</label><input type="text" id="aSize" placeholder="30mm"></div>
+        <div class="row"><label>入数</label><input type="number" id="aQty" value="1" min="1" inputmode="numeric"><span class="unit">個</span></div>
+        <div class="row"><label>状態</label>
+          <select id="aCond" style="flex:0 0 auto">
+            <option value="sealed" selected>新品</option>
+            <option value="used">中古</option>
+          </select>
+        </div>
+        <div class="rowv"><label>原産国</label><input type="text" id="aOrigin" value="Japan" placeholder="Japan"></div>
+      </div>
+
+      <div class="rowv" id="originRow"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"></div>
       <div class="rowv"><label>追加説明（任意・英文）</label><textarea id="extra" rows="2" placeholder="Box has a small dent on the top corner."></textarea></div>
     </div>
   </section>
@@ -703,9 +720,10 @@ $('resetAuto').onclick=function(){
 
 /* ---- 製品ライン / ゲーム機種 → 梱包後重量の自動入力 ---- */
 // 選択肢は FIG_WEIGHTS / GAME_WEIGHTS から生成する（重量の定義を2か所に持たない）。
-function lineTable(){ return isGame()?GAME_WEIGHTS:FIG_WEIGHTS; }
+function lineTable(){ return isArcade()?[]:(isGame()?GAME_WEIGHTS:FIG_WEIGHTS); }
 function buildLineOptions(){
   var sel=$('figLine'), keep=sel.value, tbl=lineTable(), i;
+  if(isArcade()) keep='';
   sel.innerHTML='';
   var o0=document.createElement('option');
   o0.value=''; o0.textContent='選択しない（重量を手入力）';
@@ -751,6 +769,10 @@ var lineCat=null;
 function applyLineCat(){
   var c=$('cat').value;
   if(c!==lineCat){ lineCat=c; buildLineOptions(); }
+  // アーケードパーツは重量帯の表を持たないので、欄ごと隠して手入力にする。
+  var a=isArcade();
+  $('figLineRow').style.display = a?'none':'block';
+  if(a){ $('figLine').value=''; return; }
   syncLineFromPlat();
 }
 (function(){
@@ -1131,6 +1153,7 @@ load();
 /* ================= 出品文タブ ================= */
 var LFIELDS=['cat','brand','series','chara','variant','line','ptype','cond',
              'gPlat','gPlatFree','gTitle','gPub','gCond',
+             'aMaker','aModel','aKind','aColor','aSize','aQty','aCond','aOrigin',
              'origin','extra','title'];
 var LCHECKS=['bPrize','bJP'];
 var LKEY='pj:listing:v1';
@@ -1169,6 +1192,9 @@ var CONDNOTE={
 
 // ---- カテゴリ（フィギュア / ゲーム）----
 function isGame(){ return $('cat').value==='game'; }
+function isArcade(){ return $('cat').value==='arcade'; }
+// 原産国はアーケードパーツだけ既定が違うので欄を分けている（既定 Japan）。
+function originValue(){ return (isArcade()?$('aOrigin').value:$('origin').value); }
 // 機種は選択肢＋自由入力。Other または未選択のときだけ自由入力を使う。
 function gamePlatform(){
   var v=$('gPlat').value;
@@ -1179,17 +1205,21 @@ function gamePlatform(){
 var prizePrev=null;
 // カテゴリに応じて入力欄を出し分ける。buildListing() の先頭から毎回呼ぶ。
 function applyCat(){
-  var g=isGame();
-  $('figFields').style.display  = g?'none':'block';
-  $('gameFields').style.display = g?'block':'none';
-  $('pasteBlock').style.display = g?'none':'block';
+  var g=isGame(), a=isArcade(), f=(!g&&!a);
+  $('figFields').style.display    = f?'block':'none';
+  $('gameFields').style.display   = g?'block':'none';
+  $('arcadeFields').style.display = a?'block':'none';
+  $('originRow').style.display    = a?'none':'block';   // アーケードは専用の原産国欄を使う
+  // 貼り付け→自動振り分けはフィギュアの各欄を埋める機能なので、他カテゴリでは隠す
+  $('pasteBlock').style.display   = f?'block':'none';
   var free=($('gPlat').value===''||$('gPlat').value==='Other');
   $('gPlatFreeRow').style.display = free?'block':'none';
 
   applyLineCat();   // 上部の製品ライン／ゲーム機種もカテゴリに合わせる
 
-  $('prizeRow').style.display = g?'none':'flex';
-  if(g){
+  // プライズ品の注意書きはフィギュア専用。
+  $('prizeRow').style.display = f?'flex':'none';
+  if(!f){
     if(prizePrev===null) prizePrev=$('bPrize').checked;
     $('bPrize').checked=false;
   }else if(prizePrev!==null){
@@ -1197,11 +1227,15 @@ function applyCat(){
   }
 }
 // 状態はカテゴリごとに別の欄。説明文の文面キーは共通（CONDLABEL / CONDNOTE）。
-function condKey(){ return isGame() ? $('gCond').value : $('cond').value; }
+function condKey(){
+  if(isGame())return $('gCond').value;
+  if(isArcade())return $('aCond').value;
+  return $('cond').value;
+}
 
 function titleParts(){
   var p={
-    brand:(isGame()?$('gPub').value:$('brand').value).trim(),
+    brand:(isGame()?$('gPub').value:(isArcade()?$('aMaker').value:$('brand').value)).trim(),
     series:$('series').value.trim(),
     chara:$('chara').value.trim(),
     variant:$('variant').value.trim(),
@@ -1214,7 +1248,9 @@ function titleParts(){
 function headingTitle(){
   var t=$('title').value.trim();
   if(t) return t;
-  return isGame() ? (gamePlatform()||'Game') : ($('ptype').value.trim()||'Figure');
+  if(isGame()) return gamePlatform()||'Game';
+  if(isArcade()) return $('aKind').value.trim()||$('aMaker').value.trim()||'Arcade Parts';
+  return $('ptype').value.trim()||'Figure';
 }
 // ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
 // パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
@@ -1226,8 +1262,26 @@ function buildGameTitle(){
   var full=head+' Japan Import';
   return full.length<=80 ? {text:full, dropped:[]} : {text:head, dropped:['Japan Import']};
 }
+// アーケードパーツのタイトル：
+//   [Used] [メーカー] [型番] [色] [サイズ] [種類] [入数] [Japan Import]
+// 入数は1なら省き、2以上は「8pcs Set」の形。
+// 80文字を超えるときは Japan Import → サイズ の順に省く。
+function buildArcadeTitle(){
+  var used=($('aCond').value==='used')?'Used':'';
+  var maker=$('aMaker').value.trim(), model=$('aModel').value.trim();
+  var kind=$('aKind').value.trim(), color=$('aColor').value.trim(), size=$('aSize').value.trim();
+  var n=Math.round(+$('aQty').value||0), qty=(n>=2)?(n+'pcs Set'):'';
+  if(!(maker||model||kind||color||size)) return {text:'', dropped:[]};
+  function join(sz,jp){ return [used,maker,model,color,sz,kind,qty,jp].filter(Boolean).join(' '); }
+  var t=join(size,'Japan Import');
+  if(t.length<=80) return {text:t, dropped:[]};
+  t=join(size,'');
+  if(t.length<=80) return {text:t, dropped:['Japan Import']};
+  return {text:join('',''), dropped:['Japan Import','サイズ']};
+}
 function buildTitle(){
   if(isGame()) return buildGameTitle();
+  if(isArcade()) return buildArcadeTitle();
   var p=titleParts();
   var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
   var t=order.filter(Boolean).join(' ');
@@ -1254,7 +1308,11 @@ function descHTML(){
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
   S+='<p style="margin:0 0 22px;">'+CONDNOTE[c]+(extra?' '+esc(extra):'')+'</p>';
 
-  if(isChinaOrigin()){
+  // アーケードパーツは正規流通であることが要なので、原産国に関わらず必ず出す。
+  if(isArcade()){
+    S+=h2('Authenticity');
+    S+='<p style="margin:0 0 22px;">This is a genuine '+(p.brand?esc(p.brand)+' ':'')+'product, purchased directly from an authorized distributor in Japan.</p>';
+  }else if(isChinaOrigin()){
     var bA=p.brand?esc(p.brand)+' ':'';
     S+=h2('Authenticity');
     S+='<p style="margin:0 0 22px;">This is an official '+bA+'product, purchased new from a licensed retailer in Japan. Like most '+bA+(isGame()?'releases':'figures')+', it is designed in Japan and manufactured in China &mdash; this is printed on the original box and is normal for this product line.</p>';
@@ -1290,7 +1348,7 @@ function descHTML(){
 function h2(t){return '<h2 style="font-size:15px;margin:0 0 8px;padding-left:10px;border-left:4px solid #1c1c1c;">'+t+'</h2>';}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 // 原産国が中国のときだけ Authenticity ブロックを出す（Made in China での偽物疑いを先回りで防ぐ）
-function isChinaOrigin(){var o=($('origin').value||'').trim().toLowerCase();return o.indexOf('china')>=0||o.indexOf('中国')>=0;}
+function isChinaOrigin(){var o=(originValue()||'').trim().toLowerCase();return o.indexOf('china')>=0||o.indexOf('中国')>=0;}
 
 /* ---- SKU ----
    形式: YYMMDD-〈端末記号〉HHMM-仕入値（例 260913-A1437-4500）
@@ -1392,8 +1450,8 @@ function buildListing(){
   var rows=[
     ['送料ポリシー', '<span class="pill">'+pol+'</span>'],
     ['ハンドリングタイム','3 business days'],
-    ['Country of Manufacture','<b>'+esc($('origin').value||'—')+'</b>'],
-    [isGame()?'Publisher':'Brand', esc(titleParts().brand||'—')],
+    ['Country of Manufacture','<b>'+esc(originValue()||'—')+'</b>'],
+    [isGame()?'Publisher':(isArcade()?'Manufacturer':'Brand'), esc(titleParts().brand||'—')],
     ['最低売値 / Best Offer 自動拒否ライン','<b>'+usd(ceil2(floor))+'</b>'],
     ['　アジア側の下限', usd(ceil2(floorA))],
     ['　米国側の下限（請求送料 '+usd(ceil2(Gus))+' 込み）', usd(ceil2(floorUS))],
@@ -1438,7 +1496,7 @@ function lsave(){
     var o={};
     LCHECKS.forEach(function(id){o[id]=$(id).checked;});
     // 商品ごとに変わる値は保存しない。ブランドは初期値を消したので保存対象から外す。
-    ['cat','ptype','origin'].forEach(function(id){o[id]=$(id).value;});
+    ['cat','ptype','origin','aOrigin'].forEach(function(id){o[id]=$(id).value;});
     localStorage.setItem(LKEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -1616,7 +1674,8 @@ spload();
 /* ---- 文面バリエーション（出品ごとに自動で振り分け） ---- */
 function seedOf(){
   var s=[$('brand').value,$('series').value,$('chara').value,$('variant').value,
-         $('gPlat').value,$('gPlatFree').value,$('gTitle').value,$('gPub').value].join('|');
+         $('gPlat').value,$('gPlatFree').value,$('gTitle').value,$('gPub').value,
+         $('aMaker').value,$('aModel').value,$('aKind').value].join('|');
   var h=0; for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0;}
   return Math.abs(h);
 }
@@ -1652,7 +1711,11 @@ function descPlain(){
   L.push(CONDLABEL[c]);
   L.push(CONDNOTE[c]+(extra?' '+extra:''));
   L.push('');
-  if(isChinaOrigin()){
+  if(isArcade()){
+    L.push('\u25A0 AUTHENTICITY');
+    L.push('This is a genuine '+(p.brand?p.brand+' ':'')+'product, purchased directly from an authorized distributor in Japan.');
+    L.push('');
+  }else if(isChinaOrigin()){
     var bAp=p.brand?p.brand+' ':'';
     L.push('\u25A0 AUTHENTICITY');
     L.push('This is an official '+bAp+'product, purchased new from a licensed retailer in Japan. Like most '+bAp+(isGame()?'releases':'figures')+', it is designed in Japan and manufactured in China \u2014 this is printed on the original box and is normal for this product line.');
