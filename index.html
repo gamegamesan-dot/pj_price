@@ -278,12 +278,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="rowv"><label>キャラクター</label><input type="text" id="chara" placeholder="Lacus Clyne"></div>
         <div class="rowv"><label>版・バリエーション</label><input type="text" id="variant" placeholder="Pilot Suit"></div>
         <div class="rowv"><label>商品ライン</label><input type="text" id="line" placeholder="Glitter &amp; Glamours"></div>
-        <div class="row"><label>種別</label>
-          <select id="ptype" style="flex:0 0 auto">
-            <option>Figure</option><option>Statue</option><option>Plush</option>
-            <option>Keychain</option><option>Game</option><option>Parts</option>
-          </select>
-        </div>
         <div class="row"><label>状態</label>
           <select id="cond" style="flex:0 0 auto">
             <option value="sealed" selected>新品・未開封</option>
@@ -1178,7 +1172,7 @@ load();
 
 
 /* ================= 出品文タブ ================= */
-var LFIELDS=['cat','brand','series','chara','variant','line','ptype','cond',
+var LFIELDS=['cat','brand','series','chara','variant','line','cond',
              'gPlat','gPlatFree','gTitle','gPub','gCond',
              'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aQty','aCond','aOrigin',
              'origin','extra','title'];
@@ -1224,6 +1218,8 @@ var CONDNOTE={
 // ---- カテゴリ（フィギュア / ゲーム）----
 function isGame(){ return $('cat').value==='game'; }
 function isArcade(){ return $('cat').value==='arcade'; }
+// 種別はカテゴリで決まるので入力欄を持たない。フィギュアだけタイトル末尾に付く。
+const FIG_PTYPE='Figure';
 // タイトルと説明文に出すメーカー表記。選択肢の値とは別に、表に出す名前を持つ。
 // Others のときだけ自由入力の値をそのまま使う。
 const MAKER_LABEL={'Sanwa Denshi':'Sanwa','Seimitsu':'Seimitsu'};
@@ -1281,7 +1277,7 @@ function titleParts(){
     chara:$('chara').value.trim(),
     variant:$('variant').value.trim(),
     line:$('line').value.trim(),
-    ptype:$('ptype').value.trim()
+    ptype:(isGame()||isArcade())?'':FIG_PTYPE   // 種別はカテゴリで決まる。フィギュアだけ固定で付く
   };
   return p;
 }
@@ -1291,7 +1287,7 @@ function headingTitle(){
   if(t) return t;
   if(isGame()) return gamePlatform()||'Game';
   if(isArcade()) return $('aKind').value.trim()||makerName()||'Arcade Parts';
-  return $('ptype').value.trim()||'Figure';
+  return FIG_PTYPE;
 }
 // ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
 // パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
@@ -1571,7 +1567,7 @@ function lsave(){
     var o={};
     LCHECKS.forEach(function(id){o[id]=$(id).checked;});
     // 商品ごとに変わる値は保存しない。ブランドは初期値を消したので保存対象から外す。
-    ['cat','ptype','origin','aOrigin'].forEach(function(id){o[id]=$(id).value;});
+    ['cat','origin','aOrigin'].forEach(function(id){o[id]=$(id).value;});
     localStorage.setItem(LKEY,JSON.stringify(o));
   }catch(e){}
 }
@@ -1581,6 +1577,7 @@ function lload(){
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(k==='brand')return;                 // 旧バージョンが保存した 'Banpresto' を引き継がない
+        if(k==='ptype')return;                 // 種別は廃止。保存値が残っていても使わない
         if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
     }
   }catch(e){}
