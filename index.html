@@ -360,6 +360,10 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <label for="dupKw">自店の出品を検索（重複確認）</label>
           <input type="text" id="dupKw" placeholder="手入力もできます（例：Grandista）">
         </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn" id="kwFromTitle" style="flex:1 1 0;min-width:0;padding:9px 4px">タイトルから入れる</button>
+          <button class="btn" id="kwFromFields" style="flex:1 1 0;min-width:0;padding:9px 4px">各欄から入れる</button>
+        </div>
         <button class="btn" id="copyKw" style="width:100%;margin-top:8px">検索語をコピー</button>
         <!-- 2つで1行。flex-basis を 0 にして幅を等分し、狭い画面でもはみ出さない。 -->
         <div style="display:flex;gap:8px;margin-top:8px">
@@ -1324,6 +1328,8 @@ function buildTitle(){
   if(isGame()) return buildGameTitle();
   if(isArcade()) return buildArcadeTitle();
   var p=titleParts();
+  // 何も入れていないうちは空欄。種別だけのタイトルは作らない。
+  if(!(p.brand||p.series||p.chara||p.variant||p.line)) return {text:'', dropped:[]};
   var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
   var t=order.filter(Boolean).join(' ');
   var dropped=[];
@@ -1466,6 +1472,8 @@ function updateDup(){
   var ok=!!(kw&&sn);
   $('dupLive').disabled=!ok; $('dupSold').disabled=!ok;
   $('copyKw').disabled=!kw;
+  $('kwFromTitle').disabled=!$('title').value.trim();
+  $('kwFromFields').disabled=!dupKeyword();
   $('dupNote').textContent = !sn ? '設定の「eBayセラー名」を入れると検索できます'
     : (!kw ? '上の各欄を埋めると検索語ができます'
     : '同じものを出していないか、出品中と売り切れの両方を確認してください');
@@ -1549,6 +1557,10 @@ function fallback(txt,cb){
 $('copyTitle').onclick=function(){copyText($('title').value,this,'タイトルをコピー');};
 $('copySku').onclick=function(){copyText($('sku').value,this,'SKUをコピー');};
 $('copyKw').onclick=function(){copyText($('dupKw').value,this,'検索語をコピー');};
+// 入れたあとは手で直せる。タイトル由来は各欄の変更で上書きしたくないので編集扱いにする。
+$('kwFromTitle').onclick=function(){ $('dupKw').value=$('title').value.trim(); dupEdited=true; updateDup(); };
+// 各欄由来は自動生成と同じ中身なので、以後も各欄の変更に追従させる。
+$('kwFromFields').onclick=function(){ $('dupKw').value=dupKeyword(); dupEdited=false; updateDup(); };
 $('dupLive').onclick=function(){ window.open(dupUrl(false),'_blank','noopener'); };
 $('dupSold').onclick=function(){ window.open(dupUrl(true),'_blank','noopener'); };
 // 検索語は手で直せる。各欄を触れば作り直す（タイトルと同じ扱い）。
