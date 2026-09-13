@@ -460,12 +460,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">設定</div>
     <div class="body">
+      <div class="row"><label>端末記号</label><input type="text" id="devCode" maxlength="1" placeholder="A" style="flex:0 0 60px;text-align:center"><span class="unit">SKU用・1文字</span></div>
+      <!-- ここから eBay 専用。Shopeeタブでは隠す（端末記号はSKU用で共通なので残す）。
+           Shopeeは「市場別 手数料設定」の為替（1通貨あたり）を使うので、USD/JPY もここに含める。 -->
+      <div id="ebayOnly">
       <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
       <div class="note2" id="fxNote"></div>
       <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
-      <div class="row"><label>端末記号</label><input type="text" id="devCode" maxlength="1" placeholder="A" style="flex:0 0 60px;text-align:center"><span class="unit">SKU用・1文字</span></div>
-      <!-- ここから eBay 専用。Shopeeタブでは隠す（端末記号はSKU用で共通なので残す）。 -->
-      <div id="ebayOnly">
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
