@@ -207,32 +207,39 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="verdict go" id="verdict">&mdash;</div>
     <div class="warn" id="verdictNote" style="display:none"></div>
-    <div class="big">
+    <div class="big" id="bigBox">
       <div class="cap" id="bigCap">利益</div>
       <div class="v num" id="bigVal">&mdash;</div>
       <div class="sub" id="bigTotal"></div>
       <div class="sub" id="bigSub">&mdash;</div>
-      <div class="sub" id="bigNote" style="display:none"></div>
-      <div class="sub" id="bigFloor"></div>
       <div class="sub" id="bigSold" style="display:none"></div>
     </div>
-    <table id="tbl"></table>
     <div class="warn" id="warn" style="display:none"></div>
-    <details>
-      <summary>送料の内訳と適用ポリシー</summary>
-      <table id="shipTbl"></table>
-      <div class="note" id="shipNote"></div>
-    </details>
-  </section>
 
-  <section id="usBox" style="display:none">
-    <div class="h">仕向地別の建て方</div>
-    <table id="usTbl"></table>
-    <div class="warn" id="usNote" style="display:none"></div>
-    <details>
-      <summary>eBay配送ポリシー用 固定送料の一覧</summary>
-      <div style="overflow-x:auto;padding:0 13px"><table id="usPolicyTbl" style="font-size:12.5px"></table></div>
-      <div class="note" id="usPolicyNote"></div>
+    <!-- ここから下は既定で畳む。開閉状態は localStorage に持ち越す。 -->
+    <details id="detailBox">
+      <summary>詳細を表示</summary>
+      <div class="big" style="padding-top:2px">
+        <div class="sub" id="bigRatio"></div>
+        <div class="sub" id="bigNote" style="display:none"></div>
+        <div class="sub" id="bigFloor"></div>
+      </div>
+      <table id="tbl"></table>
+      <details>
+        <summary>送料の内訳と適用ポリシー</summary>
+        <table id="shipTbl"></table>
+        <div class="note" id="shipNote"></div>
+      </details>
+      <div id="usBox" style="display:none">
+        <div class="h" style="border-top:1px solid var(--line)">仕向地別の建て方</div>
+        <table id="usTbl"></table>
+        <div class="warn" id="usNote" style="display:none"></div>
+        <details>
+          <summary>eBay配送ポリシー用 固定送料の一覧</summary>
+          <div style="overflow-x:auto;padding:0 13px"><table id="usPolicyTbl" style="font-size:12.5px"></table></div>
+          <div class="note" id="usPolicyNote"></div>
+        </details>
+      </div>
     </details>
   </section>
 
@@ -806,8 +813,8 @@ function calc(){
   $('bigVal').textContent=usd(recCeil);
   $('bigTotal').textContent='出品価格 '+usd(recCeil)+' ＋ 請求送料 '+usd(gCeil)
     +' ＝ 総額 '+usd(recTotal);
-  $('bigSub').textContent='推奨売値で\u3000米国 '+yen(recUS)+'\u3000/\u3000アジア '+yen(recAsia)
-    +'\u3000/\u3000売上比 '+recSale.toFixed(1)+'%\u3000/\u3000仕入比 '+recCost.toFixed(0)+'%';
+  $('bigSub').textContent='推奨売値で\u3000米国 '+yen(recUS)+'\u3000/\u3000アジア '+yen(recAsia);
+  $('bigRatio').textContent='推奨売値で\u3000売上比 '+recSale.toFixed(1)+'%\u3000/\u3000仕入比 '+recCost.toFixed(0)+'%';
   $('bigNote').style.display='block';
   $('bigNote').textContent=basis+'\u3000/\u3000'+targetBreakdown()
     +(rateUnreachable?'（売上比は手数料の上限を超えていて到達できません）':'');
@@ -832,9 +839,11 @@ function calc(){
   // 相場（検討中の売値）での損益。
   var mSale=(M*R)>0?profitUS/(M*R)*100:0, mCost=C0>0?profitUS/C0*100:0;
   $('bigSold').style.display=hasSold?'block':'none';
+  // 常時表示は利益額まで。売上比・仕入比は詳細（bigRatio）にまとめる。
   if(hasSold)$('bigSold').textContent=usd(mCeil)+' で出品すると\u3000米国 '+yen(profitUS)
-    +'\u3000/\u3000アジア '+yen(profitAsia)
-    +'\u3000/\u3000売上比 '+mSale.toFixed(1)+'%\u3000/\u3000仕入比 '+mCost.toFixed(0)+'%';
+    +'\u3000/\u3000アジア '+yen(profitAsia);
+  if(hasSold)$('bigRatio').textContent+='\u3000\u3000'+usd(mCeil)+' では\u3000売上比 '
+    +mSale.toFixed(1)+'%\u3000/\u3000仕入比 '+mCost.toFixed(0)+'%';
 
   /* ---- 変更3：相場での判定 ---- */
   // eBayの出品画面に入れるのは商品代（出品価格）。相場は総額なので、どちらの数字か
@@ -979,6 +988,17 @@ function calc(){
   if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
+
+/* ---- 結果の詳細（折りたたみ）----
+   既定は閉じる。開閉状態だけを持ち越す。 */
+var UI_KEY='pj:ui:v1';
+$('detailBox').addEventListener('toggle',function(){
+  try{ localStorage.setItem(UI_KEY,JSON.stringify({detail:$('detailBox').open})); }catch(e){}
+});
+(function(){
+  try{ var o=JSON.parse(localStorage.getItem(UI_KEY)||'{}'); $('detailBox').open=!!o.detail; }
+  catch(e){}
+})();
 
 const KEY='pj:pricing:v1';
 function save(){
