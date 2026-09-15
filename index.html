@@ -127,13 +127,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>実測重量（梱包込）</label><input type="number" id="weight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" id="figNote"></div>
       <div class="row"><label>梱包資材</label><input type="number" id="pack" value="150" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>広告料率</label><input type="number" id="adRate" value="5.0" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>内訳の表示先</label>
         <select id="zone" style="flex:0 0 auto">
-          <option value="4" selected>米国</option>
-          <option value="3">欧州・カナダ・豪</option>
-          <option value="2">アジア</option>
-          <option value="1">中国・韓国・台湾</option>
-          <option value="5">中南米・アフリカ</option>
+          <option value="4" selected>第4地帯（米国）</option>
+          <option value="3">第3地帯（オセアニア・カナダ・メキシコ・中近東）</option>
+          <option value="2">第2地帯（アジア）</option>
+          <option value="1">第1地帯（中国・韓国・台湾）</option>
         </select>
       </div>
     </div>
@@ -481,7 +481,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="fxNote"></div>
       <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
       <div class="rowv"><label>eBayセラー名</label><input type="text" id="ebaySeller" placeholder="playjapan_store"><div class="note2">自店の出品を検索するときに使います。ストアURL ebay.com/usr/<b>○○</b> の○○の部分。</div></div>
-      <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.25" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.6" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>国際手数料</label><input type="number" id="intlFee" value="1.35" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>手数料への消費税</label><input type="number" id="feeTax" value="10" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>固定手数料</label><input type="number" id="fixed" value="0.40" step="0.05" inputmode="decimal"><span class="unit">$</span></div>
       <div class="row"><label>為替・入金コスト</label><input type="number" id="fxc" value="2" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>米国関税・通関手数料</label><input type="number" id="duty" value="13.74" step="0.5" inputmode="decimal" readonly><span class="unit">% + ¥562</span></div>
@@ -612,6 +614,16 @@ const yen=n=>(n<0?'\u2212':'')+'\u00A5'+Math.abs(Math.round(n)).toLocaleString()
 const usd=n=>'$'+n.toFixed(2);
 // 浮動小数の誤差で 31.34 が 31.35 に切り上がるのを防ぐ（微小桁を先に丸めてから切り上げ）。
 const ceil2=v=>Math.ceil(Math.round(v*1e6)/1e4)/100;
+const round2=v=>Math.round(v*100)/100;
+/* eBayは手数料を行ごとにセント単位で課金し、消費税はその小計にかかる。
+   明細と1セント単位で合わせたいので、ここでも行ごとに丸めてから合計する。
+   手数料ベース＝(商品代＋請求送料)×(1＋現地税率) で、広告料も同じベースにかかる。 */
+function feeBreak(item,ship,tax,ad,fixedUsd,feeRate,intlRate,feeTax){
+  var base=round2((item+ship)*(1+tax));
+  var f1=round2(base*feeRate), f2=round2(base*intlRate), f3=round2(base*ad);
+  var sub=round2(f1+f2+f3+fixedUsd), t=round2(sub*feeTax);
+  return {base:base,fee:f1,intl:f2,ad:f3,fixed:fixedUsd,sub:sub,tax:t,total:round2(sub+t)};
+}
 const airRate=(w,z)=>(w<=0||w>2000)?null:AIR[z][Math.ceil(w/100)-1];
 const emsRate=(w,z)=>{for(let i=0;i<EMS_W.length;i++)if(w<=EMS_W[i])return EMS[z][i];return null;};
 const policyLabel=w=>POLICY_NAME+(w>AIRPACKET_MAX?'（EMS必須）':'');
@@ -629,7 +641,7 @@ function suggestShip(){
   $('shipCharge').value=(w>AIRPACKET_MAX?SHIP_CHARGE_EMS:SHIP_CHARGE_DEFAULT).toFixed(2);
 }
 
-const FIELDS=['cost','weight','pack','zone','shipCharge','fx','fee','fixed','fxc','duty','usMethod','devCode','ebaySeller'];
+const FIELDS=['cost','weight','pack','adRate','zone','shipCharge','fx','fee','intlFee','feeTax','fixed','fxc','duty','usMethod','devCode','ebaySeller'];
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
@@ -832,6 +844,20 @@ function updateFigNote(){
 // 2026-09-05 に Zonos Prepay アプリで実測。制度変更で変わる（デミニミス撤廃/Section 301 等）。
 // 内訳: 関税12.5%（HTS 9503.00.0090 は General Rate 0%、上乗せ12.5%）＋ 通関手数料(固定562円 + 申告額の1.24%)
 //   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
+/* 仕向地は国際エアパケットの地帯区分に合わせる。
+   第5地帯（中南米・アフリカ）とヨーロッパは発送除外のため選択肢に出さない。 */
+const ZONES=[1,2,3,4];
+const ZONE_LABEL={1:'第1地帯（中国・韓国・台湾）',2:'第2地帯（アジア）',
+                  3:'第3地帯（オセアニア・カナダ・メキシコ・中近東）',4:'第4地帯（米国）'};
+const ZONE_SHORT={1:'第1',2:'第2',3:'第3',4:'第4'};
+const SHIP_ZONES={3:true,4:true};   // 請求送料を別建てする地帯（第1・第2は送料無料）
+// 現地税率。第3は豪州GST（2026-09-15 実売で確認）、第4は設定の想定税率を使う。
+const ZONE3_TAX=10;
+// eBay手数料。2026-09-15 豪州向け実売（24-15157-02426）の明細に合わせた実測値。
+const FEE_RATE_DEFAULT=13.6;    // 落札手数料（Toys & Hobbies）
+const INTL_FEE_DEFAULT=1.35;    // 国際手数料（全仕向地）
+const FEE_TAX_DEFAULT=10;       // 手数料合計にかかる日本の消費税
+const AD_RATE_DEFAULT=5.0;      // 広告料率。商品ごとに変更でき、0なら広告なし
 const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
 const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
 // 切手を額面より安く買って支払う場合の原価率。
@@ -843,76 +869,87 @@ const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
 const STAMP_DISCOUNT=0.88;
 const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引率（%）
 
-function calc(){
+/* ---- 価格モデル（calc() と出品前チェックで共有する） ----
+   地帯ごとの前提と、売値Pに対する損益をここだけで決める。式を2か所に持たない。 */
+function priceModel(){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0;
-  // 明細は選んだ仕向地どおりに計上する。アジアは送料無料・関税なし、
-  // 米国は請求送料を売上に立てて関税を計上する。
-  var zSel=+$('zone').value, isUS=(zSel===USA_ZONE);
-  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100;
-  // 関税・通関手数料は米国宛のみ。%欄(id=duty)は表示専用で計算には使わない。
-  var d=isUS?US_DUTY_RATE:0;                 // 変動分（率）：関税12.5% + 通関手数料1.24%
-  var dutyFixed=isUS?US_DUTY_FIXED_JPY:0;    // 固定分（円）：通関手数料の固定562円
-  var fixed=(+$('fixed').value||0)*R;
+  var R=+$('fx').value||1,x=(+$('fxc').value||0)/100;
+  var fRate=(+$('fee').value||0)/100, iRate=(+$('intlFee').value||0)/100;
+  var adRate=(+$('adRate').value||0)/100, fTax=(+$('feeTax').value||0)/100;
+  var F0=+$('fixed').value||0;                     // 固定手数料（ドル）
   var dShip=$('dutyShip').checked,refund=$('taxRefund').checked;
   var C=refund?C0/1.1:C0;
-  // 送料の別建ては米国だけ。アジアは送料無料が基準なので効かせない。
-  var sep=isUS;
-  $('rowShip').style.display=isUS?'flex':'none';
-
-  var air=airRate(w,zSel),ems=emsRate(w,zSel),pol=policyLabel(w);
-  var Sface=air!==null?air:(ems||0);        // 郵便料金の額面。バイヤーへの請求根拠はこちら。
   var stamp=$('stampDisc').checked;
-  var S=stamp?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料
-  var G=sep?(+$('shipCharge').value||0):0;
-  // eBay落札手数料は、米国購入者が払うセールスタックスを含めた総額に課金される。
-  // 米国だけ実効率を f×(1+想定税率) にする。為替・入金2%は税を含まない。
-  var tUS=(+$('usTaxRate').value||0)/100;
-  var aA=R*(1-f-x);            // アジア（補正なし）
-  var aU=R*(1-f*(1+tUS)-x);    // 米国（税込総額ベース）
-  var a=isUS?aU:aA;
-  var b=R*d,den=a-b;
-  var fixedAll=fixed+dutyFixed;   // 固定手数料 + 米国通関手数料の固定分（ともに円）
+  var Gset=+$('shipCharge').value||0;              // 請求送料（別建てする地帯で使う）
 
-  // 推奨売値はつねにアジア基準で決める。米国のほうが送料が高く、両対応の売値に
-  // すると米国基準になってアジア向けで割高になるため。米国では同じ売値に
-  // 請求送料を足して売り、関税はそこから賄う。
-  var SfaceAsia=faceShip(w,ASIA_ZONE);
-  var Sasia=stamp?SfaceAsia*STAMP_DISCOUNT:SfaceAsia;
-  var restAsia=fixed+C+K+Sasia;                   // アジアは別建てなし・関税なし・補正なし
+  function zoneTax(z){ return z===USA_ZONE?((+$('usTaxRate').value||0)/100):(z===3?ZONE3_TAX/100:0); }
+  function zoneShipCharge(z){ return SHIP_ZONES[z]?Gset:0; }
+  function zoneCost(z){ var fc=faceShip(w,z); return stamp?fc*STAMP_DISCOUNT:fc; }
+  // 売値Pに対する係数。profit = P*den − rest（円）。
+  // netUSD = (P+G)*u − (1+消費税)*固定手数料、入金は netUSD*R*(1−為替入金コスト)。
+  function zoneCoef(z){
+    var t=zoneTax(z), u=1-(1+fTax)*(1+t)*(fRate+iRate+adRate);
+    var dr=(z===USA_ZONE)?US_DUTY_RATE:0, dFix=(z===USA_ZONE)?US_DUTY_FIXED_JPY:0;
+    var G=zoneShipCharge(z), net=R*(1-x);
+    return { den: net*u-R*dr,
+             rest: (1+fTax)*F0*net - G*net*u + (dShip?G*R*dr:0) + dFix + C + K + zoneCost(z),
+             u:u, t:t, G:G, dr:dr, dFix:dFix };
+  }
+  // 実際の損益は手数料をセント丸めして出す（eBayの明細と1円単位で合わせるため）。
+  function zoneProfit(P,z){
+    var G=zoneShipCharge(z), t=zoneTax(z);
+    var fb=feeBreak(P,G,t,adRate,F0,fRate,iRate,fTax);
+    var recv=(P+G-fb.total)*R;                    // 正味入金（円）
+    var duty=(z===USA_ZONE)?((P*R+(dShip?G*R:0))*US_DUTY_RATE+US_DUTY_FIXED_JPY):0;
+    return { fb:fb, recv:recv, fx:recv*x, duty:duty, ship:zoneCost(z),
+             profit: recv-recv*x-duty-C-K-zoneCost(z) };
+  }
 
-  // 米国向けの諸元。売値は米国でも目標利益を満たす必要があるのでここで先に用意する。
-  var usFace=faceShip(w,USA_ZONE);                 // 米国の郵便料金（額面・2kg超はEMS）
-  var usS=stamp?usFace*STAMP_DISCOUNT:usFace;      // 米国の原価側送料（切手割引は原価だけに効く）
-  var bU=R*US_DUTY_RATE, denU=aU-bU;
-  var Gus=+$('shipCharge').value||0;               // 米国でバイヤーに請求する送料
-  // 請求送料のうち、手数料と（課税ベースに含める設定なら）関税を引いて手元に残る分
-  var recovUS=Gus*aU-(dShip?Gus*bU:0);
-  var restUS=fixed+US_DUTY_FIXED_JPY+C+K+usS-recovUS;   // 米国で売値0円のときの持ち出し
-
-  // 選んだ仕向地の損益分岐用。売値0円のときの持ち出し（円）。
-  var rest=fixedAll+C+K+S-G*a+(dShip?G*b:0);
-  // 推奨売値は2つの候補の高い方。どちらも「米国利益」で逆算する。
-  //   円式    : 米国利益 = 下限利益 + 仕入 × 連動率     → P = (目標 + restUS)/denU
-  //   売上比  : 米国利益 = 商品代金(円) × 売上比下限     → P = restUS/(denU − q*R)
   var baseP=+$('baseProfit').value||0;
   var tgtMode=$('targetMode').value;
   var Tyen=autoTarget(), q=(+$('saleRate').value||0)/100;
-  var dnRate=denU-q*R;                              // 0以下なら売上比では届かない
-  var pYen=denU>0?(Tyen+restUS)/denU:0;
-  var pRate=dnRate>0?restUS/dnRate:0;
-  // 売上比のみでも、利益が下限利益を下回るときは下限利益を目標にする。
-  var pRateFloor=denU>0?(baseP+restUS)/denU:0;
-  var rateUnreachable=!(dnRate>0);
-  var pRec,basis='';
-  if(tgtMode==='yen'){
-    pRec=pYen; basis='採用：円式';
-  }else if(tgtMode==='rate'){
-    pRec=rateUnreachable?pRateFloor:Math.max(pRate,pRateFloor);
-    basis='採用：売上比'+(+$('saleRate').value||0)+'%';
-  }else{
-    pRec=Math.max(pYen,rateUnreachable?0:pRate);
-    basis=(!rateUnreachable&&pRate>pYen)?('採用：売上比'+(+$('saleRate').value||0)+'%'):'採用：円式';
-  }
+  // 地帯ごとに必要な売値を出し、いちばん高い地帯を基準にする（＝利益がいちばん薄い地帯）。
+  var cand={}, basisZone=ZONES[0], pRec=0, basis='', rateUnreachable=false;
+  ZONES.forEach(function(z){
+    var c=zoneCoef(z), den=c.den, rest=c.rest;
+    var dnRate=den-q*R;
+    var pYen=den>0?(Tyen+rest)/den:0;
+    var pRate=dnRate>0?rest/dnRate:0;
+    var pRateFloor=den>0?(baseP+rest)/den:0;
+    var un=!(dnRate>0), pz, bs;
+    if(tgtMode==='yen'){ pz=pYen; bs='採用：円式'; }
+    else if(tgtMode==='rate'){ pz=un?pRateFloor:Math.max(pRate,pRateFloor);
+      bs='採用：売上比'+(+$('saleRate').value||0)+'%'; }
+    else{ pz=Math.max(pYen,un?0:pRate);
+      bs=(!un&&pRate>pYen)?('採用：売上比'+(+$('saleRate').value||0)+'%'):'採用：円式'; }
+    cand[z]={p:pz,basis:bs,coef:c,unreach:un};
+    if(pz>pRec){ pRec=pz; basisZone=z; basis=bs; rateUnreachable=un; }
+  });
+  if(!basis){ basis=cand[basisZone].basis; rateUnreachable=cand[basisZone].unreach; }
+  var cB=cand[basisZone].coef;
+  return { C0:C0,w:w,K:K,R:R,x:x,fRate:fRate,iRate:iRate,adRate:adRate,fTax:fTax,F0:F0,
+           dShip:dShip,refund:refund,C:C,stamp:stamp,baseP:baseP,
+           zoneTax:zoneTax, zoneShipCharge:zoneShipCharge, zoneCost:zoneCost,
+           zoneCoef:zoneCoef, zoneProfit:zoneProfit,
+           basisZone:basisZone, pRec:pRec, basis:basis, rateUnreachable:rateUnreachable,
+           denB:cB.den, restB:cB.rest,
+           floor: cB.den>0?(baseP+cB.rest)/cB.den:0 };
+}
+
+function calc(){
+  var m=priceModel();
+  var C0=m.C0,w=m.w,K=m.K,R=m.R,x=m.x,C=m.C,F0=m.F0;
+  var fRate=m.fRate,iRate=m.iRate,adRate=m.adRate,fTax=m.fTax;
+  var dShip=m.dShip,refund=m.refund,stamp=m.stamp;
+  var zoneTax=m.zoneTax,zoneShipCharge=m.zoneShipCharge,zoneCost=m.zoneCost;
+  var zoneCoef=m.zoneCoef,zoneProfit=m.zoneProfit;
+  var zSel=+$('zone').value, isUS=(zSel===USA_ZONE);
+  $('rowShip').style.display=SHIP_ZONES[zSel]?'flex':'none';
+  var air=airRate(w,zSel),ems=emsRate(w,zSel),pol=policyLabel(w);
+  var basisZone=m.basisZone, pRec=m.pRec, basis=m.basis, rateUnreachable=m.rateUnreachable;
+  var denB=m.denB, restB=m.restB, baseP=m.baseP;
+  var Gus=zoneShipCharge(basisZone);               // 基準地帯の請求送料（総額の併記に使う）
+
   /* ---- 相場（＝検討中の売値）の読み取り ---- */
   // 相場を入れたときは、明細表もその売値での内訳にする（旧「売値→利益」モードの役割）。
   // 相場欄は「商品代＋請求送料」の総額で入れてもらう。商品代が残らない額は誤入力。
@@ -924,23 +961,23 @@ function calc(){
   var mCeil=ceil2(M);
   var P=hasSold?M:pRec;                           // 明細表と内訳に使う売値
 
-  // 利益は選んだ仕向地で計上する。手数料は商品と送料の合計にかかる（G*a の a に含む）。
-  var profit=P*den+G*a-(dShip?G*b:0)-fixedAll-C-K-S;
-  var profitAsia=P*aA-restAsia;
-  var profitUS=P*denU-restUS;
-  var be=den>0?rest/den:0;
-  // 最低売値＝米国利益が下限利益ちょうどになる売値。Best Offer の自動拒否ラインも同じ値。
-  var floor=denU>0?(baseP+restUS)/denU:0;
+  // 明細は選んだ地帯どおりに計上する。基準地帯の損益はバナーと判定に使う。
+  var selD=zoneProfit(P,zSel), profit=selD.profit;
+  var basD=zoneProfit(P,basisZone), profitBasis=basD.profit;
+  var G=zoneShipCharge(zSel), S=zoneCost(zSel), sep=!!SHIP_ZONES[zSel];
+  var be=zoneCoef(zSel).den>0?zoneCoef(zSel).rest/zoneCoef(zSel).den:0;
+  // 最低売値＝基準地帯の利益が下限利益ちょうどになる売値。自動拒否ラインも同じ値。
+  var floor=denB>0?(baseP+restB)/denB:0;
   var recCeil=ceil2(pRec), floorCeil=ceil2(floor);
 
-  // 米国は税込総額に課金されるので実効率を上げる。為替・入金は税を含まない。
-  var gross=(P+G)*R,feeAmt=gross*f*(isUS?(1+tUS):1),fxAmt=gross*x;
-  var dutyAmt=(P*R+(dShip?G*R:0))*d+dutyFixed;   // 米国関税(率)＋通関手数料(固定)。非US時は0
-
-  // 推奨売値そのものでの損益（変更1の表示要件）。相場を入れても基準は動かさない。
-  var recUS=pRec*denU-restUS, recAsia=pRec*aA-restAsia;
+  // 推奨売値そのものでの損益。相場を入れても基準は動かさない。
+  var recByZone={}; ZONES.forEach(function(z){ recByZone[z]=zoneProfit(pRec,z).profit; });
+  var recBasis=recByZone[basisZone];
   var recItem=pRec*R;
-  var recSale=recItem>0?recUS/recItem*100:0, recCost=C0>0?recUS/C0*100:0;
+  var recSale=recItem>0?recBasis/recItem*100:0, recCost=C0>0?recBasis/C0*100:0;
+  // 表示は基準地帯と、いちばん利益が大きい地帯の2つに絞る（4地帯だと長すぎる）。
+  var bestZone=ZONES[0];
+  ZONES.forEach(function(z){ if(recByZone[z]>recByZone[bestZone])bestZone=z; });
 
   // 相場欄は総額で入れてもらうので、推奨売値・最低売値にも総額を併記して
   // 何と何を見比べればよいかを一目で分かるようにする。
@@ -953,7 +990,9 @@ function calc(){
   $('bigVal').textContent=usd(recCeil);
   $('bigTotal').textContent='出品価格 '+usd(recCeil)+' ＋ 請求送料 '+usd(gCeil)
     +' ＝ 総額 '+usd(recTotal);
-  $('bigSub').textContent='推奨売値で\u3000米国 '+yen(recUS)+'\u3000/\u3000アジア '+yen(recAsia);
+  $('bigSub').textContent='推奨売値で\u3000'+ZONE_SHORT[basisZone]+' '+yen(recBasis)
+    +(bestZone!==basisZone?('\u3000/\u3000'+ZONE_SHORT[bestZone]+' '+yen(recByZone[bestZone])):'')
+    +'\u3000基準：'+ZONE_LABEL[basisZone];
   $('bigRatio').textContent='推奨売値で\u3000売上比 '+recSale.toFixed(1)+'%\u3000/\u3000仕入比 '+recCost.toFixed(0)+'%';
   $('bigNote').style.display='block';
   $('bigNote').textContent=basis+'\u3000/\u3000'+targetBreakdown()
@@ -977,11 +1016,11 @@ function calc(){
   }
 
   // 相場（検討中の売値）での損益。
-  var mSale=(M*R)>0?profitUS/(M*R)*100:0, mCost=C0>0?profitUS/C0*100:0;
+  var mSale=(M*R)>0?profitBasis/(M*R)*100:0, mCost=C0>0?profitBasis/C0*100:0;
   $('bigSold').style.display=hasSold?'block':'none';
   // 常時表示は利益額まで。売上比・仕入比は詳細（bigRatio）にまとめる。
-  if(hasSold)$('bigSold').textContent=usd(mCeil)+' で出品すると\u3000米国 '+yen(profitUS)
-    +'\u3000/\u3000アジア '+yen(profitAsia);
+  if(hasSold)$('bigSold').textContent=usd(mCeil)+' で出品すると\u3000'
+    +ZONES.map(function(z){return ZONE_SHORT[z]+' '+yen(zoneProfit(M,z).profit);}).join('\u3000/\u3000');
   if(hasSold)$('bigRatio').textContent+='\u3000\u3000'+usd(mCeil)+' では\u3000売上比 '
     +mSale.toFixed(1)+'%\u3000/\u3000仕入比 '+mCost.toFixed(0)+'%';
 
@@ -999,51 +1038,56 @@ function calc(){
   }else if(mCeil>=recCeil){
     v.className='verdict go';
     v.textContent='出品OK \u2014 eBayに入力する価格 '+usd(mCeil)
-      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitUS)+'）';
+      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitBasis)+'）';
   }else if(mCeil>=floorCeil){
     v.className='verdict mid';
     v.textContent='目標未満・回転優先 \u2014 eBayに入力する価格 '+usd(mCeil)
-      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitUS)+'）';
+      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitBasis)+'）';
   }else{
     v.className='verdict no';
     v.textContent='見送り \u2014 eBayに入力する価格 '+usd(mCeil)
-      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitUS)+'）では下限利益に届きません';
+      +'（総額 '+usd(soldTotal)+'・利益 '+yen(profitBasis)+'）では下限利益に届きません';
   }
   var so=$('soldOrigin').value, vn=$('verdictNote');
   var warnOrigin=hasSold&&(so==='asia'||so==='us');
   vn.style.display=warnOrigin?'block':'none';
   vn.textContent=warnOrigin?'日本発送より安く出やすい相場です。日本発送のSoldがあればそちらを優先してください':'';
 
-  $('shipChargeNote').style.display=isUS?'block':'none';
+  $('shipChargeNote').style.display=sep?'block':'none';
   // 手入力で上書きすると重量を変えても既定値に戻らない。その状態を見えるようにし、
   // 戻すボタンも出す（上書きしたことを忘れて既定値と思い込むのを防ぐ）。
-  $('resetShip').style.display=(isUS&&shipEdited)?'inline-block':'none';
-  $('shipChargeNote').textContent=!isUS ? '' : shipEdited
+  $('resetShip').style.display=(sep&&shipEdited)?'inline-block':'none';
+  $('shipChargeNote').textContent=!sep ? '' : shipEdited
     ? '手入力で上書き中です。重量を変えても既定値（'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT
       +' / 超 $'+SHIP_CHARGE_EMS+'・EMS）には戻りません。'
     : '既定は配送ポリシー '+POLICY_NAME+' に合わせた固定額'
       +'（梱包後'+AIRPACKET_MAX+'g以下 $'+SHIP_CHARGE_DEFAULT+' / 超 $'+SHIP_CHARGE_EMS+'・EMS）。'
       +'高額品は手入力で上書きできます。';
 
+  var fb=selD.fb, tSel=zoneTax(zSel);
   var rows=[['売上（商品）',yen(P*R),false]];
   if(sep)rows.push(['売上（送料）',yen(G*R),false]);
+  rows.push(['手数料ベース（'+(tSel>0?'現地税'+(tSel*100).toFixed(0)+'%込':'税なし')+'）',usd(fb.base),false]);
+  rows.push(['eBay落札手数料 '+(fRate*100).toFixed(2)+'%',yen(-fb.fee*R),true]);
+  rows.push(['国際手数料 '+(iRate*100).toFixed(2)+'%',yen(-fb.intl*R),true]);
+  if(adRate>0)rows.push(['広告料 '+(adRate*100).toFixed(1)+'%',yen(-fb.ad*R),true]);
   rows.push(
-    ['eBay手数料 '+(f*100).toFixed(2)+'%'+(isUS?'（税込総額・税率'+(+$('usTaxRate').value||0)+'%想定）':''),yen(-feeAmt),true],
-    ['固定手数料',yen(-fixed),true],
-    ['為替・入金 '+(x*100).toFixed(1)+'%',yen(-fxAmt),true],
-    ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（米国宛のみ）'),yen(-dutyAmt),true],
+    ['固定手数料',yen(-F0*R),true],
+    ['手数料への消費税 '+(fTax*100).toFixed(0)+'%',yen(-fb.tax*R),true],
+    ['為替・入金 '+(x*100).toFixed(1)+'%（正味入金に対して）',yen(-selD.fx),true],
+    ['米国関税・通関手数料'+(isUS?' '+(US_DUTY_RATE*100).toFixed(2)+'% + '+yen(US_DUTY_FIXED_JPY):'（第4地帯のみ）'),yen(-selD.duty),true],
     ['実送料（'+(air!==null?'エアパケット':'EMS')+'）'+(stamp?'（切手'+STAMP_OFF_PCT+'%割引適用）':''),yen(-S),true],
     ['仕入'+(refund?'（税抜換算）':''),yen(-C),true],
     ['梱包資材',yen(-K),true]
   );
   // どの売値での内訳かを明示する（相場を入れていればその売値、なければ推奨売値）。
   $('tbl').innerHTML='<tr><td class="k" colspan="2" style="font-size:11px;letter-spacing:.12em;font-weight:700;background:#f7f6f2">'
-      +'eBayに入力する価格 '+usd(ceil2(P))+' での内訳（'+(isUS?'米国':'この仕向地')+'）</td></tr>'
+      +'eBayに入力する価格 '+usd(ceil2(P))+' での内訳（'+ZONE_LABEL[zSel]+'）</td></tr>'
     +rows.map(function(r){return '<tr><td class="k">'+r[0]+'</td><td class="v2 num'+(r[2]?' neg':'')+'">'+r[1]+'</td></tr>';}).join('')
     +'<tr class="total"><td class="k">利益</td><td class="v2 num">'+yen(profit)+'</td></tr>'
-    +'<tr><td class="k">最低売値（米国利益＝下限利益）</td><td class="v2 num">'+usd(floorCeil)+'</td></tr>'
+    +'<tr><td class="k">最低売値（'+ZONE_SHORT[basisZone]+'地帯の利益＝下限利益）</td><td class="v2 num">'+usd(floorCeil)+'</td></tr>'
     +'<tr><td class="k">Best Offer 自動拒否ライン</td><td class="v2 num">'+usd(floorCeil)+'</td></tr>'
-    +'<tr><td class="k">損益分岐（参考・'+(isUS?'米国':'この仕向地')+'）</td><td class="v2 num">'+usd(ceil2(be))+'</td></tr>';
+    +'<tr><td class="k">損益分岐（参考・'+ZONE_SHORT[zSel]+'地帯）</td><td class="v2 num">'+usd(ceil2(be))+'</td></tr>';
 
   $('shipTbl').innerHTML=
     '<tr><td class="k">適用ポリシー</td><td class="v2"><span class="pill">'+pol+'</span></td></tr>'+
@@ -1054,45 +1098,38 @@ function calc(){
     +(w>AIRPACKET_MAX?'この重量はエアパケット不可なので、発送はEMSになります。'
                      :'EMS 差額が Standard 請求額の根拠です。');
 
-  /* ---- 仕向地別の建て方：アジア基準の売値と、同じ売値で米国に売ったときの損益 ---- */
+  /* ---- 仕向地別の建て方：同じ売値を4地帯に出したときの損益 ---- */
   $('usBox').style.display='block';
   var methodA=($('usMethod').value!=='B');
-  // usFace / usS / bU / denU / Gus / profitUS は売値を決める段で用意済み。
-  // 利益率はアジアと比べられるよう、どちらも商品代金（P*R）に対する率で出す。
-  // 売上全体で割るとアジア(送料無料)と米国(別建て)で分母が変わり比較できない。
   var itemRev=P*R;
-  var marginAsia=itemRev>0?profitAsia/itemRev*100:0;
-  var marginUS=itemRev>0?profitUS/itemRev*100:0;
+  var ur=[];
+  ZONES.forEach(function(z){
+    var d0=zoneProfit(P,z), m=itemRev>0?d0.profit/itemRev*100:0;
+    ur.push([ZONE_LABEL[z]+(z===basisZone?'\u3000\u25C0 基準':''),
+      usd(ceil2(P))+(SHIP_ZONES[z]?('\u3000＋送料 '+usd(ceil2(zoneShipCharge(z)))):'\u3000送料無料')
+      +'<br>'+yen(d0.profit)+'\u3000/\u3000商品代金比 '+m.toFixed(1)+'%']);
+  });
   // 参考値：関税（建て方Aなら送料差も）を賄うのに必要な請求送料。
   // 手数料で目減りするぶんを割り戻す。課税ベースに送料を含める設定なら分母から引く。
+  var usFace=faceShip(w,USA_ZONE), SfaceAsia=faceShip(w,ASIA_ZONE);
+  var cUS=zoneCoef(USA_ZONE);
   var dutyU=itemRev*US_DUTY_RATE+US_DUTY_FIXED_JPY;
   var needU=dutyU+(methodA?(usFace-SfaceAsia):0);
-  var gdenU=a-(dShip?bU:0);
+  var gdenU=R*(1-x)*cUS.u-(dShip?R*US_DUTY_RATE:0);
   var GusNeed=gdenU>0?needU/gdenU:0;
-
-  var ur=[
-    ['アジア向け　売値（送料無料）', usd(ceil2(P))],
-    ['アジア向け　利益', yen(profitAsia)+'\u3000/\u3000商品代金比 '+marginAsia.toFixed(1)+'%'],
-    ['米国向け　売値', usd(ceil2(P))],
-    ['米国向け　請求送料', usd(ceil2(Gus))],
-    ['米国向け　利益', yen(profitUS)+'\u3000/\u3000商品代金比 '+marginUS.toFixed(1)+'%'],
-    ['必要な関税上乗せ額（参考）', usd(ceil2(GusNeed))],
-    ['米国とアジアの利益差', yen(profitUS-profitAsia)]
-  ];
+  ur.push(['第4地帯　必要な関税上乗せ額（参考）', usd(ceil2(GusNeed))]);
   $('usTbl').innerHTML=ur.map(function(r,i){
-    return '<tr'+(i>=4?' class="total"':'')+'><td class="k">'+r[0]+'</td><td class="v2 num">'+r[1]+'</td></tr>';
+    return '<tr'+(i===ur.length-1?' class="total"':'')+'><td class="k">'+r[0]+'</td><td class="v2 num">'+r[1]+'</td></tr>';
   }).join('');
 
   var un=$('usNote');
-  if(GusNeed>Gus+0.005){
+  if(GusNeed>zoneShipCharge(USA_ZONE)+0.005){
     un.style.display='block';
-    var shortJpy=yen((GusNeed-Gus)*gdenU), needUsd=usd(ceil2(GusNeed));
+    var shortJpy=yen((GusNeed-zoneShipCharge(USA_ZONE))*gdenU), needUsd=usd(ceil2(GusNeed));
     un.textContent=(basis==='採用：円式')
-      // 米国基準では、賄えない分だけ推奨売値が持ち上がる。売値はアジアの買い手も払う。
-      ? '\u26A0 関税の不足分 '+shortJpy+' は売値に上乗せされています（アジアの買い手も負担）。'
+      ? '\u26A0 第4地帯の関税の不足分 '+shortJpy+' は売値に上乗せされています（他地帯の買い手も負担）。'
         +'請求送料を '+needUsd+' 以上にすると、推奨売値を下げられます。'
-      // 売値が動かない場面では、賄えない分はそのまま利益を削る。
-      : '\u26A0 請求送料 '+usd(ceil2(Gus))+' では'
+      : '\u26A0 請求送料 '+usd(ceil2(zoneShipCharge(USA_ZONE)))+' では'
         +(methodA?'関税と送料差':'関税・通関手数料')+'を賄えません。'
         +needUsd+' 必要で、不足分 '+shortJpy+' は利益から出ています。'
         +'請求送料を手入力で引き上げるか、この目減りを見込んでください。';
@@ -1121,10 +1158,9 @@ function calc(){
   var wn=$('warn'),msg=[];
   if(w<=0)msg.push('重量を入力してください。');
   if(w>2000)msg.push('エアパケット上限2kg超。EMS前提の計算です。');
-  if(den<=0)msg.push('手数料と関税の合計が100%を超えています。');
-  if(rateUnreachable&&denU>0)
-    msg.push('売上比下限が高すぎて売値を決められません。米国の手数料と関税を引いた上限（'+(denU/R*100).toFixed(1)+'%）未満にしてください。円式のみで計算しています。');
-  if(denU<=0)msg.push('米国分の手数料と関税の合計が100%を超えています。');
+  if(denB<=0)msg.push('手数料と関税の合計が100%を超えています。');
+  if(rateUnreachable&&denB>0)
+    msg.push('売上比下限が高すぎて売値を決められません。'+ZONE_SHORT[basisZone]+'地帯の手数料と関税を引いた上限（'+(denB/R*100).toFixed(1)+'%）未満にしてください。円式のみで計算しています。');
   if(!sep&&P>0&&P*R<S*2)msg.push('送料が売値に対して重すぎます。セット組みを検討してください。');
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
@@ -1147,7 +1183,8 @@ function save(){
     // 仕入・重量・売値と同じく、請求送料も1品ごとの値なので保存しない。
     // 手入力での上書き状態(shipEdited)も持ち越さず、開き直すと既定値から始める。
     // 目標利益は設定値から毎回計算するので保存しない。
-    delete o.cost;delete o.weight;delete o.shipCharge;
+    // 広告料率も商品ごとに決める値なので保存しない（開き直すと既定の5%から始める）。
+    delete o.cost;delete o.weight;delete o.shipCharge;delete o.adRate;
     o.fxEdited=fxEdited;   // 手入力の為替を自動取得で上書きしないため
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
@@ -1168,6 +1205,7 @@ function load(){
   $('resetFx').style.display=fxEdited?'inline-block':'none';
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
+  $('adRate').value=AD_RATE_DEFAULT.toFixed(1);
   $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
   suggestShip();
   updateFigNote();
@@ -1495,44 +1533,28 @@ function buildListing(){
 
   $('descPreview').innerHTML=descHTML();
 
-  // 出品前チェック。式は calc() と同じ。
-  // 最低売値＝Best Offer 自動拒否ラインは、米国利益が下限利益ちょうどになる売値。
+  // 出品前チェック。価格モデルは calc() と共有するので式は1か所だけ。
   var w=+$('weight').value||0, pol=policyLabel(w);
-  var R=+$('fx').value||1,f=(+$('fee').value||0)/100,x=(+$('fxc').value||0)/100;
-  var C0=+$('cost').value||0,K=+$('pack').value||0;
-  var refund=$('taxRefund').checked, C=refund?C0/1.1:C0;
-  var stamp=$('stampDisc').checked;
-  var Sface=faceShip(w,ASIA_ZONE);
-  var S=stamp?Sface*STAMP_DISCOUNT:Sface;   // 原価計算に使う郵送料（アジア）
-  var fixed=(+$('fixed').value||0)*R;
-  // 米国だけ手数料が税込総額ベースになる（calc() と同じ補正）。
-  var tUS=(+$('usTaxRate').value||0)/100;
-  var a=R*(1-f-x), aU=R*(1-f*(1+tUS)-x);
-  var rest=fixed+C+K+S;                            // アジアは関税なし・別建てなし
-  var be=a>0?rest/a:0;                             // 損益分岐（アジア・参考）
-  var baseP=+$('baseProfit').value||0;
-  var floorA=a>0?(baseP+rest)/a:0;                 // 参考：アジア側で下限利益に届く売値
-  // 米国では同じ売値に請求送料 Gus を足して売る。関税は商品価格にかかるので
-  //   利益 = P(aU−bU) + Gus·aU − (課税ベースに送料を含むなら Gus·bU) − 固定 − 562 − 仕入 − 梱包 − 米国送料
-  // これが下限利益になる P を解く。
-  var usFace=faceShip(w,USA_ZONE);
-  var usS=stamp?usFace*STAMP_DISCOUNT:usFace;
-  var Gus=+$('shipCharge').value||0;
-  var bU=R*US_DUTY_RATE, denU=aU-bU;
-  var recov=Gus*aU-($('dutyShip').checked?Gus*bU:0);
-  var floorUS=denU>0?(baseP+fixed+US_DUTY_FIXED_JPY+C+K+usS-recov)/denU:0;
-  var floor=floorUS;
+  var m=priceModel();
+  var floor=m.floor;                                   // 基準地帯の下限＝Best Offer 自動拒否ライン
+  var cSel=m.zoneCoef(+$('zone').value||USA_ZONE);
+  var be=cSel.den>0?cSel.rest/cSel.den:0;              // 損益分岐（表示先の地帯）
+  var zRows=ZONES.map(function(z){
+    var c=m.zoneCoef(z);
+    return ['\u3000'+ZONE_SHORT[z]+'地帯の下限'
+      +(SHIP_ZONES[z]?('（請求送料 '+usd(ceil2(m.zoneShipCharge(z)))+' 込み）'):'（送料無料）'),
+      usd(ceil2(c.den>0?(m.baseP+c.rest)/c.den:0))];
+  });
 
   var rows=[
     ['送料ポリシー', '<span class="pill">'+pol+'</span>'],
     ['ハンドリングタイム','3 business days'],
     ['Country of Manufacture','<b>'+esc(originValue()||'—')+'</b>'],
     [isGame()?'Publisher':(isArcade()?'Manufacturer':'Brand'), esc(titleParts().brand||'—')],
-    ['最低売値 / Best Offer 自動拒否ライン','<b>'+usd(ceil2(floor))+'</b>'],
-    ['　アジア側の下限', usd(ceil2(floorA))],
-    ['　米国側の下限（請求送料 '+usd(ceil2(Gus))+' 込み）', usd(ceil2(floorUS))],
-    ['損益分岐（アジア・参考）', usd(ceil2(be))]
-  ];
+    ['最低売値 / Best Offer 自動拒否ライン（基準：'+ZONE_SHORT[m.basisZone]+'地帯）','<b>'+usd(ceil2(floor))+'</b>']
+  ].concat(zRows, [
+    ['損益分岐（参考・'+ZONE_SHORT[+$('zone').value||USA_ZONE]+'地帯）', usd(ceil2(be))]
+  ]);
   $('checkTbl').innerHTML=rows.map(function(r){
     return '<tr><td class="k">'+r[0]+'</td><td class="ok">'+r[1]+'</td></tr>';
   }).join('');
