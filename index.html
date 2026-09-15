@@ -624,8 +624,8 @@ function feeBreak(item,ship,tax,ad,fixedUsd,feeRate,intlRate,feeTax){
   var sub=round2(f1+f2+f3+fixedUsd), t=round2(sub*feeTax);
   return {base:base,fee:f1,intl:f2,ad:f3,fixed:fixedUsd,sub:sub,tax:t,total:round2(sub+t)};
 }
-const airRate=(w,z)=>(w<=0||w>2000)?null:AIR[z][Math.ceil(w/100)-1];
-const emsRate=(w,z)=>{for(let i=0;i<EMS_W.length;i++)if(w<=EMS_W[i])return EMS[z][i];return null;};
+const airRate=(w,z)=>(w<=0||w>2000||!AIR[z])?null:AIR[z][Math.ceil(w/100)-1];
+const emsRate=(w,z)=>{if(!EMS[z])return null;for(let i=0;i<EMS_W.length;i++)if(w<=EMS_W[i])return EMS[z][i];return null;};
 const policyLabel=w=>POLICY_NAME+(w>AIRPACKET_MAX?'（EMS必須）':'');
 // その重量・仕向地の郵便料金（額面）。2kg超はエアパケット不可なのでEMSを見る。
 const faceShip=(w,z)=>{const air=airRate(w,z);return air!==null?air:(emsRate(w,z)||0);};
@@ -643,12 +643,15 @@ function suggestShip(){
 
 const FIELDS=['cost','weight','pack','adRate','zone','shipCharge','fx','fee','intlFee','feeTax','fixed','fxc','duty','usMethod','devCode','ebaySeller'];
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
+// 描画で例外が出ても設定の保存だけは必ず行う。save() まで届かないと、変えた設定が
+// 黙って消えて「初期値に戻る」ように見えるため。
+function redraw(){ try{ calc(); buildListing(); }finally{ save(); } }
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
-  calc();buildListing();save();
+  redraw();
 });});
 // 設定セクションは全タブ共通なので、価格側を触ったときも出品前チェックを引き直す。
-CHECKS.forEach(function(id){$(id).addEventListener('change',function(){calc();buildListing();save();});});
+CHECKS.forEach(function(id){$(id).addEventListener('change',redraw);});
 /* ---- 為替の自動取得 ----
    無料APIから USD/JPY を取り、設定の為替に反映する。
    ・手入力で上書きしたらそちらを優先し、自動取得では書き換えない
@@ -943,7 +946,7 @@ function calc(){
   var dShip=m.dShip,refund=m.refund,stamp=m.stamp;
   var zoneTax=m.zoneTax,zoneShipCharge=m.zoneShipCharge,zoneCost=m.zoneCost;
   var zoneCoef=m.zoneCoef,zoneProfit=m.zoneProfit;
-  var zSel=+$('zone').value, isUS=(zSel===USA_ZONE);
+  var zSel=+$('zone').value||USA_ZONE, isUS=(zSel===USA_ZONE);
   $('rowShip').style.display=SHIP_ZONES[zSel]?'flex':'none';
   var air=airRate(w,zSel),ems=emsRate(w,zSel),pol=policyLabel(w);
   var basisZone=m.basisZone, pRec=m.pRec, basis=m.basis, rateUnreachable=m.rateUnreachable;
@@ -1194,7 +1197,15 @@ function load(){
     var s=localStorage.getItem(KEY);
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
-        if(typeof o[k]==='boolean')el.checked=o[k];else el.value=o[k];});
+        if(typeof o[k]==='boolean'){el.checked=o[k];return;}
+        // 選択肢が変わった項目（旧版の第5地帯など）は、値を入れると select が空になり
+        // 以降の計算が落ちる。無い選択肢は捨てて既定のままにする。
+        if(el.tagName==='SELECT'){
+          var ok=false,i;
+          for(i=0;i<el.options.length;i++) if(el.options[i].value===String(o[k])) ok=true;
+          if(!ok)return;
+        }
+        el.value=o[k];});
       fxEdited=!!o.fxEdited;   // 為替を手入力していたら自動取得しない
     }
   }catch(e){}
@@ -1210,7 +1221,8 @@ function load(){
   suggestShip();
   updateFigNote();
   applyTargetUnit();
-  calc();
+  // ここで落ちても以降の初期化（出品文タブ・Shopeeタブ）を止めない。
+  try{ calc(); }catch(e){}
   fetchFx();   // 非同期。失敗しても計算機は動き続ける。
 }
 load();
