@@ -127,6 +127,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>実測重量（梱包込）</label><input type="number" id="weight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" id="figNote"></div>
       <div class="row"><label>梱包資材</label><input type="number" id="pack" value="150" inputmode="numeric"><span class="unit">円</span></div>
+      <!-- 商品セクションはタブ共通。広告料率と仕向地はeBay専用なのでShopeeでは隠す。 -->
+      <div id="ebayOnlyItem">
       <div class="row"><label>広告料率</label><input type="number" id="adRate" value="5.0" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>内訳の表示先</label>
         <select id="zone" style="flex:0 0 auto">
@@ -136,6 +138,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <option value="1">第1地帯（中国・韓国・台湾）</option>
         </select>
       </div>
+      </div><!-- /ebayOnlyItem -->
     </div>
   </section>
 
@@ -660,7 +663,8 @@ const FIELDS=['cost','weight','pack','adRate','zone','shipCharge','fx','fee','in
 const CHECKS=['dutyShip','taxRefund','stampDisc'];
 // 描画で例外が出ても設定の保存だけは必ず行う。save() まで届かないと、変えた設定が
 // 黙って消えて「初期値に戻る」ように見えるため。
-function redraw(){ try{ calc(); buildListing(); }finally{ save(); } }
+// 商品欄（仕入値・重量・梱包資材）はタブ共通なので、Shopeeタブの表示も一緒に引き直す。
+function redraw(){ try{ calc(); buildListing(); buildShopee(); }finally{ save(); } }
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
   redraw();
@@ -764,8 +768,8 @@ function applyTargetUnit(){
 // 詳細設定と相場入力は触るたびに引き直す。どれも localStorage には保存しない。
 ['baseProfit','linkRate','saleRate','usTaxRate','targetMode','soldPrice','soldOrigin']
   .forEach(function(id){
-    $(id).addEventListener('input',function(){ applyTargetUnit(); calc(); buildListing(); });
-    $(id).addEventListener('change',function(){ applyTargetUnit(); calc(); buildListing(); });
+    $(id).addEventListener('input',function(){ applyTargetUnit(); calc(); buildListing(); buildShopee(); });
+    $(id).addEventListener('change',function(){ applyTargetUnit(); calc(); buildListing(); buildShopee(); });
   });
 $('resetAuto').onclick=function(){
   $('baseProfit').value=BASE_PROFIT_DEFAULT;
@@ -773,7 +777,7 @@ $('resetAuto').onclick=function(){
   $('saleRate').value=SALE_RATE_DEFAULT;
   $('usTaxRate').value=US_TAX_DEFAULT;
   $('targetMode').value=TARGET_MODE_DEFAULT;
-  applyTargetUnit(); calc(); buildListing();
+  applyTargetUnit(); calc(); buildListing(); buildShopee();
 };
 
 /* ---- 製品ライン / ゲーム機種 → 梱包後重量の自動入力 ---- */
@@ -799,7 +803,7 @@ function buildLineOptions(){
 function applyLineWeight(){
   var base=figBase();
   // 「選択しない」に戻したときは重量欄に触れない（手入力を消さないため）。
-  if(base){ $('weight').value=packedW(base); suggestShip(); calc(); }
+  if(base){ $('weight').value=packedW(base); suggestShip(); calc(); buildShopee(); save(); }
   updateFigNote();
 }
 // 出品文タブの機種 → 上部のゲーム機種。Other・自由入力・未選択は「選択しない」。
@@ -1269,6 +1273,7 @@ function switchTab(t){
   var eb=(t!=='C');
   $('ebayOnly').style.display=eb?'block':'none';
   $('ebayNote').style.display=eb?'block':'none';
+  $('ebayOnlyItem').style.display=eb?'block':'none';
   if(t==='B')buildListing();
   if(t==='C'){ buildShopee(); fetchSpFx(); }
   window.scrollTo(0,0);
@@ -1855,9 +1860,9 @@ function spApplyMarket(force){
   if(SP_NEW[mk])msgs.push('新規セラー免除は出店から3ヵ月・月500注文まで。期限が切れると手数料が上がるため、免除なしの価格でも利益が出るか確認してください。');
   else msgs.push('この市場に新規セラーの販売手数料免除はありません。');
   $('spMarketNote').textContent=msgs.join('');
-  $('spSlsNote').textContent='重量 '+(w||0).toLocaleString()+'g の既定値'
-    +(SP_SLS_APPROX[mk]?'（'+SP_CODE[mk]+'の刻みは未確定のため基準点からの概算）':'')
-    +'。手入力で上書きできます。';
+  $('spSlsNote').textContent='重量 '+(w||0).toLocaleString()+'g なら '
+    +spCur(mk,spSls(w,mk))+(SP_SLS_APPROX[mk]?'（'+SP_CODE[mk]+'の刻みは未確定のため基準点からの概算）':'')
+    +'。重量を変えると入り直します。手入力で上書きできます。';
 }
 spFeeIds().forEach(function(id){
   $(id).addEventListener('input',function(){
