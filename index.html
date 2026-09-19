@@ -146,6 +146,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <button id="tabA" aria-pressed="true">eBay</button>
     <button id="tabB" aria-pressed="false">出品文</button>
     <button id="tabC" aria-pressed="false">Shopee</button>
+    <button id="tabD" aria-pressed="false">出品CSV</button>
   </div>
 
   <div id="tabPricing">
@@ -412,6 +413,22 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <table id="checkTbl"></table>
   </section>
 
+  <section>
+    <div class="h">出品CSVリストに追加</div>
+    <div class="body">
+      <div class="row"><label>eBayカテゴリ</label>
+        <select id="addCsvCat" style="flex:0 0 auto">
+          <option value="261055">フィギュア（非可動・261055）</option>
+          <option value="261068">フィギュア（可動・261068）</option>
+          <option value="139973">ゲーム（139973）</option>
+        </select>
+      </div>
+      <div class="rowv"><label>JAN（任意・13桁）</label><input type="text" id="addCsvJan" inputmode="numeric" placeholder="C:MPN に入ります。無ければ空欄"></div>
+      <button class="btn primary" id="addToCsv" style="width:100%">この内容で出品リストに追加</button>
+      <div class="note2">いまのタイトル・説明文・SKU・推奨売値・最低売値をそのまま使います。追加後は「出品CSV」タブで確認・書き出しできます。</div>
+    </div>
+  </section>
+
   </div>
 
   <!-- ============ Shopeeタブ ============ -->
@@ -483,6 +500,83 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="spSlsNote" style="margin-top:0"></div>
       <button class="btn" id="spResetFee" style="margin:8px 0 0;width:100%">この市場の既定値に戻す</button>
       <div class="note2">手数料は2026年3月時点の第三者まとめ（ツールベンダーのブログ）を基準にしています。Shopeeは年に数回改定するため、Seller Centre の各種手数料ページで実際の率を確認し、この画面で上書きしてください。</div>
+    </div>
+  </section>
+
+  </div>
+
+  <!-- ============ 出品CSVタブ（フェーズ1：手動） ============ -->
+  <div id="tabCsv" style="display:none">
+
+  <section>
+    <div class="h">出品リスト</div>
+    <div class="body">
+      <div class="big" style="padding:0 0 10px;border:0">
+        <div class="cap">登録件数</div>
+        <div class="v num" id="csvCount">0</div>
+        <div class="sub" id="csvSummary">&mdash;</div>
+      </div>
+      <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
+        <button class="btn" id="csvClear" style="flex:1 1 0;min-width:0;padding:9px 4px">リストを空にする</button>
+      </div>
+      <div class="note2" id="csvExportNote"></div>
+    </div>
+    <details id="csvListBox">
+      <summary>一覧を表示</summary>
+      <div style="padding:0 13px 12px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <select id="csvSort" style="flex:1 1 0;min-width:0">
+            <option value="add">追加順</option>
+            <option value="ebay">eBay優先を先に</option>
+            <option value="ng">未完成を先に</option>
+          </select>
+          <button class="btn" id="csvPickEbay" style="flex:0 0 auto;white-space:nowrap">eBay優先だけ残す</button>
+        </div>
+        <div id="csvList"></div>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <div class="h">せどりすとCSVを取り込む</div>
+    <div class="body">
+      <input type="file" id="csvFile" accept=".csv,text/csv" style="width:100%">
+      <div class="note2">文字コードCP932（Shift_JIS）として読み込みます。eBay出品用のリストを書き出したファイルを選んでください。</div>
+      <div class="warn" id="csvImportResult" style="display:none;margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">書き出し済みログ</div>
+    <div class="body">
+      <div class="note2" id="csvLogNote" style="margin-top:0"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <input type="number" id="csvLogDays" value="90" inputmode="numeric" style="flex:0 0 90px">
+        <span class="unit" style="width:auto">日より前を</span>
+        <button class="btn" id="csvLogPurge" style="flex:0 0 auto">削除</button>
+      </div>
+    </div>
+    <details>
+      <summary>ログを表示</summary>
+      <div style="padding:0 13px 12px" id="csvLog"></div>
+    </details>
+  </section>
+
+  <section>
+    <div class="h">CSVの設定</div>
+    <div class="body">
+      <div class="row"><label>梱包マージン</label><input type="number" id="csvPackMargin" value="60" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
+      <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
+      <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
+      <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
+      <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
+      <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
     </div>
   </section>
 
@@ -1262,13 +1356,16 @@ var PARSE_API='https://pj-price.gamegamesan.workers.dev'; // デプロイ済みW
 $('tabA').onclick=function(){switchTab('A');};
 $('tabB').onclick=function(){switchTab('B');};
 $('tabC').onclick=function(){switchTab('C');};
+$('tabD').onclick=function(){switchTab('D');};
 function switchTab(t){
   $('tabA').setAttribute('aria-pressed',t==='A');
   $('tabB').setAttribute('aria-pressed',t==='B');
   $('tabC').setAttribute('aria-pressed',t==='C');
+  $('tabD').setAttribute('aria-pressed',t==='D');
   $('tabPricing').style.display=t==='A'?'block':'none';
   $('tabListing').style.display=t==='B'?'block':'none';
   $('tabShopee').style.display=t==='C'?'block':'none';
+  $('tabCsv').style.display=t==='D'?'block':'none';
   // 設定セクションは全タブ共通なので、Shopeeを開いている間だけ eBay 専用の項目を隠す。
   var eb=(t!=='C');
   $('ebayOnly').style.display=eb?'block':'none';
@@ -1276,6 +1373,7 @@ function switchTab(t){
   $('ebayOnlyItem').style.display=eb?'block':'none';
   if(t==='B')buildListing();
   if(t==='C'){ buildShopee(); fetchSpFx(); }
+  if(t==='D')csvRender();
   window.scrollTo(0,0);
 }
 
@@ -2120,6 +2218,512 @@ function descPlain(){
   return L.join('\n');
 }
 $('copyPlain').onclick=function(){copyText(descPlain(),this,'説明文をコピー（アプリ用・文字だけ）');};
+
+/* ================= eBay CSV一括出品（フェーズ1） ================= */
+/* 列ヘッダは templates/ のテンプレート3本の2行目をそのまま定数にしている。
+   列の順序・記号・大文字小文字を変えないこと。1行目のInfo行も同じ文字列を出す。 */
+var CSV_INFO="Info,Version=1.0.0,Template=fx_category_template_EBAY_US";
+var CSV_HEAD={
+  '139973':"*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8),CustomLabel,*Category,StoreCategory,*Title,Subtitle,Relationship,RelationshipDetails,ScheduleTime,*ConditionID,*C:Game Name,*C:Platform,C:Publisher,C:Genre,C:Rating,C:Region Code,C:Release Year,C:MPN,C:Unit Quantity,C:Unit Type,C:Video Game Series,C:Features,C:Country of Origin,C:Sub-Genre,C:California Prop 65 Warning,C:Manufacturer Warranty,PicURL,GalleryType,VideoID,*Description,*Format,*Duration,*StartPrice,BuyItNowPrice,BestOfferEnabled,BestOfferAutoAcceptPrice,MinimumBestOfferPrice,*Quantity,ImmediatePayRequired,*Location,ShippingType,ShippingService-1:Option,ShippingService-1:Cost,ShippingService-2:Option,ShippingService-2:Cost,*DispatchTimeMax,PromotionalShippingDiscount,ShippingDiscountProfileID,*ReturnsAcceptedOption,ReturnsWithinOption,RefundOption,ShippingCostPaidByOption,AdditionalDetails,ShippingProfileName,ReturnProfileName,PaymentProfileName,ProductCompliancePolicyID,Regional ProductCompliancePolicies,Product Safety Pictograms,Product Safety Statements,Product Safety Component,Regulatory Document Ids,Manufacturer Name,Manufacturer AddressLine1,Manufacturer AddressLine2,Manufacturer City,Manufacturer Country,Manufacturer PostalCode,Manufacturer StateOrProvince,Manufacturer Phone,Manufacturer Email,Manufacturer ContactURL,Responsible Person 1,Responsible Person 1 Type,Responsible Person 1 AddressLine1,Responsible Person 1 AddressLine2,Responsible Person 1 City,Responsible Person 1 Country,Responsible Person 1 PostalCode,Responsible Person 1 StateOrProvince,Responsible Person 1 Phone,Responsible Person 1 Email,Responsible Person 1 ContactURL",
+  '261068':"*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8),CustomLabel,*Category,StoreCategory,*Title,Subtitle,Relationship,RelationshipDetails,ScheduleTime,*ConditionID,*C:Type,C:Franchise,C:Character,C:Brand,C:Movie,C:TV Show,C:Featured Person/Artist,C:Scale,C:Material,C:Theme,C:Model,C:Grade,C:Convention/Event,C:Sport,C:Vintage,C:Original/Licensed Reproduction,C:Time Period Manufactured,C:Professional Grader,C:Certification Number,C:MPN,C:Series,C:Year Manufactured,C:Color,C:Animal Species,C:Items Included,C:Features,C:Vehicle Type,C:Animation Studio,C:Country of Origin,C:Item Height,C:Signed,C:Personalize,C:Signed By,C:Age Level,C:Transformer Faction,C:Item Length,C:Item Width,C:Autograph Authentication,C:Autograph Authentication Number,C:Autograph Format,C:California Prop 65 Warning,C:Personalization Instructions,C:Unit Quantity,C:Unit Type,PicURL,GalleryType,VideoID,*Description,*Format,*Duration,*StartPrice,BuyItNowPrice,BestOfferEnabled,BestOfferAutoAcceptPrice,MinimumBestOfferPrice,*Quantity,ImmediatePayRequired,*Location,ShippingType,ShippingService-1:Option,ShippingService-1:Cost,ShippingService-2:Option,ShippingService-2:Cost,*DispatchTimeMax,PromotionalShippingDiscount,ShippingDiscountProfileID,*ReturnsAcceptedOption,ReturnsWithinOption,RefundOption,ShippingCostPaidByOption,AdditionalDetails,ShippingProfileName,ReturnProfileName,PaymentProfileName,ProductCompliancePolicyID,Regional ProductCompliancePolicies,Product Safety Pictograms,Product Safety Statements,Product Safety Component,Regulatory Document Ids,Manufacturer Name,Manufacturer AddressLine1,Manufacturer AddressLine2,Manufacturer City,Manufacturer Country,Manufacturer PostalCode,Manufacturer StateOrProvince,Manufacturer Phone,Manufacturer Email,Manufacturer ContactURL,Responsible Person 1,Responsible Person 1 Type,Responsible Person 1 AddressLine1,Responsible Person 1 AddressLine2,Responsible Person 1 City,Responsible Person 1 Country,Responsible Person 1 PostalCode,Responsible Person 1 StateOrProvince,Responsible Person 1 Phone,Responsible Person 1 Email,Responsible Person 1 ContactURL",
+  '261055':"*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8),CustomLabel,*Category,StoreCategory,*Title,Subtitle,Relationship,RelationshipDetails,ScheduleTime,*ConditionID,*C:Type,C:Franchise,C:Character,C:TV Show,C:Brand,C:Material,C:Scale,C:Theme,C:Vintage,C:Movie,C:Grade,C:Original/Licensed Reproduction,C:Convention/Event,C:Time Period Manufactured,C:Model,C:Professional Grader,C:Certification Number,C:MPN,C:Genre,C:Occasion,C:Year Manufactured,C:Signed,C:Country of Origin,C:Item Length,C:Item Width,C:Animation Studio,C:Features,C:Item Height,C:Series,C:Signed By,C:Item Weight,C:Autograph Authentication,C:Theme Park/Store,C:Autograph Authentication Number,C:Autograph Format,C:California Prop 65 Warning,C:Packaging,C:Box Number,C:Unit Quantity,C:Unit Type,PicURL,GalleryType,VideoID,*Description,*Format,*Duration,*StartPrice,BuyItNowPrice,BestOfferEnabled,BestOfferAutoAcceptPrice,MinimumBestOfferPrice,*Quantity,ImmediatePayRequired,*Location,ShippingType,ShippingService-1:Option,ShippingService-1:Cost,ShippingService-2:Option,ShippingService-2:Cost,*DispatchTimeMax,PromotionalShippingDiscount,ShippingDiscountProfileID,*ReturnsAcceptedOption,ReturnsWithinOption,RefundOption,ShippingCostPaidByOption,AdditionalDetails,ShippingProfileName,ReturnProfileName,PaymentProfileName,ProductCompliancePolicyID,Regional ProductCompliancePolicies,Product Safety Pictograms,Product Safety Statements,Product Safety Component,Regulatory Document Ids,Manufacturer Name,Manufacturer AddressLine1,Manufacturer AddressLine2,Manufacturer City,Manufacturer Country,Manufacturer PostalCode,Manufacturer StateOrProvince,Manufacturer Phone,Manufacturer Email,Manufacturer ContactURL,Responsible Person 1,Responsible Person 1 Type,Responsible Person 1 AddressLine1,Responsible Person 1 AddressLine2,Responsible Person 1 City,Responsible Person 1 Country,Responsible Person 1 PostalCode,Responsible Person 1 StateOrProvince,Responsible Person 1 Phone,Responsible Person 1 Email,Responsible Person 1 ContactURL"
+};
+
+var CSV_CAT={'139973':'ゲーム','261068':'フィギュア（可動）','261055':'フィギュア（非可動）'};
+// せどりすとSKUの接頭辞 → eBayカテゴリ。null は取り込み対象外。
+var CSV_PREFIX={game:'139973',hobby:'261055',toy:'261055',
+                dvd:null,cd:null,book:null,software:null,pc:null,electronics:null,
+                kitchen:null,diy:null,musicInst:null};
+var CSV_FIG_CATS=['261055','261068'];        // hobby / toy の手動振り分け先
+// せどりすとの状態コード → ConditionID。フィギュア2カテゴリは細分化グレードが
+// 無いことが多いので 1000 / 3000 に寄せる（仕様書5章）。
+var CSV_COND={N:1000,UM:2750,UVG:3000,UG:4000,UA:5000,UKN:5000};
+var CSV_COND_FIG={N:1000,UM:3000,UVG:3000,UG:3000,UA:3000,UKN:3000};
+var CSV_COND_NAME={1000:'New',1500:'New other',1750:'New with defects',2750:'Like New',
+  3000:'Used',4000:'Very Good',5000:'Good',6000:'Acceptable',7000:'For parts'};
+// Platform：せどりすとのタイトルに出る表記 → eBayの推奨値（一字一句合わせる）
+var CSV_PLAT=[['Switch 2','Nintendo Switch'],['Switch2','Nintendo Switch'],['スイッチ','Nintendo Switch'],
+  ['Switch','Nintendo Switch'],['PS5','Sony PlayStation 5'],['PS4','Sony PlayStation 4'],
+  ['PS3','Sony PlayStation 3'],['PS2','Sony PlayStation 2'],['PS Vita','Sony PlayStation Vita'],
+  ['PSVita','Sony PlayStation Vita'],['PSP','Sony PSP'],['PS1','Sony PlayStation 1'],
+  ['3DS','Nintendo 3DS'],['DS','Nintendo DS'],['Wii U','Nintendo Wii U'],['WiiU','Nintendo Wii U'],
+  ['Wii','Nintendo Wii'],['ゲームキューブ','Nintendo GameCube'],['GC','Nintendo GameCube'],
+  ['GBA','Nintendo Game Boy Advance'],['GBC','Nintendo Game Boy Color'],['GB','Nintendo Game Boy'],
+  ['N64','Nintendo 64'],['スーパーファミコン','Nintendo Super Famicom'],['SFC','Nintendo Super Famicom'],
+  ['ファミコン','Nintendo NES'],['FC','Nintendo NES'],['サターン','Sega Saturn'],
+  ['ドリームキャスト','Sega Dreamcast'],['メガドライブ','Sega Genesis'],['PS','Sony PlayStation 1']];
+// Brand：和名 → eBayの推奨値
+var CSV_BRAND=[['バンプレスト','BANPRESTO'],['Banpresto','BANPRESTO'],
+  ['グッドスマイル','Good Smile Company'],['Good Smile','Good Smile Company'],
+  ['コトブキヤ','KOTOBUKIYA'],['Kotobukiya','KOTOBUKIYA'],
+  ['魂ネイションズ','Tamashii Nations'],['S.H.フィギュアーツ','S.H.Figuarts'],
+  ['S.H.Figuarts','S.H.Figuarts'],['マックスファクトリー','Max Factory'],['Max Factory','Max Factory'],
+  ['メディコム','MEDICOM'],['バンダイ','Bandai'],['フリュー','FuRyu'],['セガ','SEGA'],
+  ['タイトー','Taito'],['ねんどろいど','Nendoroid'],['Nendoroid','Nendoroid']];
+var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Nintendo','SEGA',
+  'ATLUS','KOEI Corporation','Nippon Ichi Software','Marvelous','Compile Heart','Idea Factory',
+  'Aksys Games','Spike Chunsoft, Inc.','5pb','Arc System Works','Gust','FROM Software'];
+// C:Scale の推奨値（コロン区切り）。1:7 は推奨値リストに無いが投入自体はできる。
+var CSV_SCALE_OK=['1:1 (Life Size)','1:4','1:6','1:8','1:9','1:10','1:12','1:16','1:18','1:20'];
+
+var CSV_LIST_KEY='pj:csvlist:v1';   // 出品リスト
+var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
+var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
+var CSV_CFG_IDS=['csvPackMargin','csvDispatch','csvPriority','csvRankLimit',
+                 'csvShipProfile','csvRetProfile','csvPayProfile','csvLocation'];
+
+var csvList=[], csvLog=[];
+function csvLoad(){
+  try{ var a=JSON.parse(localStorage.getItem(CSV_LIST_KEY)||'[]'); csvList=Array.isArray(a)?a:[]; }catch(e){ csvList=[]; }
+  try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
+  try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
+       CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; }); }catch(e){}
+}
+function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
+function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
+function csvSaveCfg(){
+  try{ var o={}; CSV_CFG_IDS.forEach(function(id){o[id]=$(id).value;});
+       localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
+}
+CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
+
+/* ---- CSVの読み書き ---- */
+// RFC4180風のパーサ。引用符内の , と改行を尊重する。
+function csvParse(text){
+  var rows=[],row=[],f='',q=false,i=0,c;
+  for(;i<text.length;i++){
+    c=text[i];
+    if(q){
+      if(c==='"'){ if(text[i+1]==='"'){f+='"';i++;} else q=false; }
+      else f+=c;
+    }else if(c==='"'){ q=true; }
+    else if(c===','){ row.push(f); f=''; }
+    else if(c==='\r'){ if(text[i+1]==='\n')i++; row.push(f); rows.push(row); row=[]; f=''; }
+    else if(c==='\n'){ row.push(f); rows.push(row); row=[]; f=''; }
+    else f+=c;
+  }
+  if(f!==''||row.length){ row.push(f); rows.push(row); }
+  return rows;
+}
+// 全フィールドをダブルクオートで囲み、値の中の " は "" にする。改行はCRLF。
+function csvQuote(v){ return '"'+String(v===undefined||v===null?'':v).replace(/"/g,'""')+'"'; }
+function csvLine(arr){ return arr.map(csvQuote).join(','); }
+// UTF-8（BOM付き）で保存する。
+function csvDownload(name,text){
+  try{
+    var blob=new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'});
+    var url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download=name; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},4000);
+    return true;
+  }catch(e){ return false; }
+}
+
+/* ---- 取り込み（せどりすとCSV） ---- */
+function csvNum(v){ return +String(v||'').replace(/[, ¥円]/g,'')||0; }
+function csvSkuParts(sku){
+  var a=String(sku||'').split('-');
+  return { prefix:a[0]||'', date:a[1]||'', cond:a[2]||'', asin:a[3]||'', cost:csvNum(a[4]) };
+}
+// タイトルからスケールを拾う（1/8スケール → 1:8）。ノンスケールは空欄。
+function csvScaleFrom(t){
+  var s=String(t||'');
+  if(/ノンスケール|non[- ]?scale/i.test(s))return '';
+  var m=s.match(/1\s*[\/／:：]\s*(\d{1,2})/);
+  return m?('1:'+m[1]):'';
+}
+// タイトルから全高を拾ってインチに丸める。5in未満と未記載は空欄。
+function csvHeightFrom(t){
+  var s=String(t||''), m=s.match(/(?:全高)?[約]?\s*(\d{1,3}(?:\.\d)?)\s*(cm|mm|センチ)/i);
+  if(!m)return '';
+  var v=parseFloat(m[1]); if(/mm/i.test(m[2]))v/=10;
+  var inch=Math.round(v/2.54);
+  return inch>=5&&inch<=50?(inch+' in'):'';
+}
+function csvPlatformFrom(t){
+  var s=String(t||'');
+  for(var i=0;i<CSV_PLAT.length;i++){
+    var k=CSV_PLAT[i][0];
+    if(new RegExp('(^|[\\s\\[\\(【（/])'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'([\\s\\]\\)】）/]|$)','i').test(s))
+      return CSV_PLAT[i][1];
+  }
+  return '';
+}
+function csvBrandFrom(t){
+  var s=String(t||'');
+  for(var i=0;i<CSV_BRAND.length;i++) if(s.indexOf(CSV_BRAND[i][0])>=0)return CSV_BRAND[i][1];
+  return '';
+}
+// 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
+// 商品欄を一時的に差し替えて priceModel() を呼び、必ず元へ戻す。
+function csvPriceFor(cost,weight){
+  var c0=$('cost').value, w0=$('weight').value;
+  try{
+    $('cost').value=cost; $('weight').value=weight;
+    var m=priceModel();
+    return { price:ceil2(m.pRec), floor:ceil2(m.floor), zone:m.basisZone,
+             profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
+  }catch(e){ return {price:0,floor:0,zone:0,profit:0}; }
+  finally{ $('cost').value=c0; $('weight').value=w0; }
+}
+function csvRecalc(r){
+  var p=csvPriceFor(r.cost,r.weight);
+  r.price=p.price; r.floor=p.floor; r.profit=p.profit; r.zone=p.zone;
+  return r;
+}
+// eBay優先の判定（6.5.1）。ランクが悪い行はマージン率を0%に緩める。
+function csvEbayFirst(r){
+  if(!r.gross)return false;
+  var mg=(+$('csvPriority').value||0)/100;
+  var lim=+$('csvRankLimit').value||0;
+  if(lim>0&&r.rank>lim)mg=0;
+  return r.profit > r.gross*(1+mg);
+}
+function csvImport(text){
+  var rows=csvParse(text);
+  if(!rows.length)return {err:'空のファイルです'};
+  var head=rows[0].map(function(h){return String(h).trim();});
+  function col(name){ return head.indexOf(name); }
+  var iSku=col('SKU'), iJan=col('JAN'), iAsin=col('ASIN'), iTitle=col('タイトル'),
+      iCat=col('カテゴリ'), iW=col('重量'), iCost=col('仕入原価'), iQty=col('個数'),
+      iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク');
+  if(iSku<0)return {err:'SKU列が見つかりません。せどりすとの書き出しCSVか確認してください'};
+  var margin=+$('csvPackMargin').value||0;
+  var skipped=0, groups={}, order=[];
+  for(var n=1;n<rows.length;n++){
+    var r=rows[n]; if(!r||!String(r[iSku]||'').trim())continue;
+    var sku=String(r[iSku]).trim(), sp=csvSkuParts(sku);
+    var cat=CSV_PREFIX[sp.prefix];
+    if(cat===undefined||cat===null){ skipped++; continue; }
+    var fig=(cat!=='139973');
+    var condId=(fig?CSV_COND_FIG:CSV_COND)[sp.cond]||(fig?3000:5000);
+    var asin=(iAsin>=0?String(r[iAsin]||'').trim():'')||sp.asin;
+    var key=asin+'|'+condId;
+    var cost=iCost>=0?csvNum(r[iCost]):sp.cost;
+    var qty=iQty>=0?(csvNum(r[iQty])||1):1;
+    var wRaw=iW>=0?csvNum(r[iW]):0;
+    if(groups[key]){
+      var g=groups[key];
+      g.qty+=qty; g.rows++;
+      if(cost>g.cost)g.cost=cost;                     // 高い個体に合わせる
+      if(wRaw>g.wRaw)g.wRaw=wRaw;
+      continue;
+    }
+    var title=iTitle>=0?String(r[iTitle]||'').trim():'';
+    groups[key]={ id:'c'+Date.now().toString(36)+n.toString(36),
+      src:'sedori', sku:sku, jan:iJan>=0?String(r[iJan]||'').trim():'', asin:asin,
+      titleJa:title, titleEn:'', cat:cat, catFixed:(sp.prefix==='game'),
+      condId:condId, descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
+      gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
+      fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'',
+      specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
+              platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
+              gameName:'', publisher:'', franchise:'', character:'', model:'',
+              genre:'', year:'' } };
+    order.push(key);
+  }
+  var added=0, merged=0;
+  order.forEach(function(k){
+    var g=groups[k];
+    g.weight=Math.ceil(g.wRaw+margin);                 // 梱包マージンを足して切り上げ
+    delete g.wRaw;
+    if(g.rows>1)merged+=g.rows;
+    csvRecalc(g);
+    csvList.push(g); added++;
+  });
+  csvSaveList();
+  return { added:added, skipped:skipped, merged:merged, groups:order.length };
+}
+$('csvFile').addEventListener('change',function(){
+  var f=this.files&&this.files[0]; if(!f)return;
+  var box=$('csvImportResult');
+  var fr=new FileReader();
+  fr.onload=function(){
+    var text;
+    try{ text=new TextDecoder('shift_jis').decode(new Uint8Array(fr.result)); }
+    catch(e){ text=new TextDecoder('utf-8').decode(new Uint8Array(fr.result)); }
+    var r=csvImport(text);
+    box.style.display='block';
+    if(r.err){ box.textContent='⚠ '+r.err; return; }
+    box.textContent='✓ '+r.added+'件を追加しました。'
+      +(r.merged?('同一ASIN＋コンディションの'+r.merged+'行をまとめています。'):'')
+      +(r.skipped?(r.skipped+'件を対象外として除外しました。'):'');
+    csvRender();
+  };
+  fr.readAsArrayBuffer(f);
+  this.value='';
+});
+
+/* ---- 出品リストの表示 ---- */
+function csvIssues(r){
+  var a=[];
+  if(!String(r.titleEn||'').trim())a.push('英題なし');
+  else if(r.titleEn.length>80)a.push('英題80字超');
+  if(!String(r.descHtml||'').trim())a.push('説明文なし');
+  if(!r.catFixed&&r.src==='sedori'&&!r.catDone)a.push('カテゴリ未振分');
+  if(r.cat==='139973'){ if(!r.specs.gameName)a.push('Game Name なし');
+                        if(!r.specs.platform)a.push('Platform なし'); }
+  if(r.price&&r.floor&&r.price<r.floor)a.push('売値が最低売値未満');
+  if(r.fba&&r.gross&&r.profit<r.gross)a.push('Amazon粗利を下回る');
+  return a;
+}
+function csvSorted(){
+  var a=csvList.slice(), mode=$('csvSort').value;
+  if(mode==='ebay')a.sort(function(x,y){return (csvEbayFirst(y)?1:0)-(csvEbayFirst(x)?1:0);});
+  if(mode==='ng')a.sort(function(x,y){return csvIssues(y).length-csvIssues(x).length;});
+  return a;
+}
+function csvLogged(r){
+  for(var i=0;i<csvLog.length;i++){
+    var L=csvLog[i];
+    if(r.jan&&L.jan===r.jan)return true;
+    if(r.asin&&L.asin===r.asin)return true;
+  }
+  return false;
+}
+function csvRender(){
+  $('csvCount').textContent=csvList.length;
+  var ng=0,ebayN=0,used=0;
+  csvList.forEach(function(r){ if(csvIssues(r).length)ng++; if(csvEbayFirst(r))ebayN++;
+    if(r.condId!==1000)used++; });
+  $('csvSummary').textContent=csvList.length
+    ? ('未完成 '+ng+'件　/　eBay優先 '+ebayN+'件　/　中古（要撮影）'+used+'件')
+    : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
+  var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
+  $('csvExportNote').textContent=csvList.length
+    ? ('カテゴリごとに別ファイルで書き出します：'
+       +Object.keys(byCat).map(function(k){return CSV_CAT[k]+' '+byCat[k]+'件';}).join('　/　'))
+    : '';
+  var h='';
+  csvSorted().forEach(function(r){
+    var iss=csvIssues(r), badge='';
+    function b(t,c){ return '<span style="display:inline-block;background:'+c
+      +';color:#fff;border-radius:2px;padding:1px 5px;font-size:10.5px;margin:0 3px 3px 0">'+esc(t)+'</span>'; }
+    if(iss.length)badge+=b(iss.join('・'),'var(--bad)');
+    if(!r.jan)badge+=b('JANなし','#8a6d00');
+    if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
+    if(csvEbayFirst(r))badge+=b('eBay優先','var(--good)');
+    if(r.condId!==1000)badge+=b('中古・要撮影','var(--mute)');
+    if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
+    h+='<div style="border-top:1px solid var(--line);padding:8px 0">'
+      +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
+      +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+CSV_CAT[r.cat]
+      +'　/　'+(CSV_COND_NAME[r.condId]||r.condId)+'　/　'+usd(r.price||0)
+      +'　/　数量 '+r.qty+'　/　利益 '+yen(r.profit||0)+'</div>'
+      +'<div style="margin-top:4px">'+badge+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+    if(r.cat!=='139973')
+      h+='<button class="btn" data-fig="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+        +(r.cat==='261068'?'可動→非可動へ':'非可動→可動へ')+'</button>';
+    h+='<button class="btn" data-fba="'+r.id+'" style="padding:5px 8px;font-size:12px">FBA連動 '
+      +(r.fba?'オン':'オフ')+'</button>'
+      +'<button class="btn" data-zero="'+r.id+'" style="padding:5px 8px;font-size:12px">在庫0時：'
+      +({hold:'寝かせる',restock:'再調達',end:'終了'}[r.zeroAct]||'寝かせる')+'</button>'
+      +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
+      +'</div></div>';
+  });
+  $('csvList').innerHTML=h||'<div class="note2">リストは空です。</div>';
+  var days=+$('csvLogDays').value||0;
+  $('csvLogNote').textContent='書き出し済み '+csvLog.length+'件。'
+    +'次回の取り込みで同じJAN・ASINが出てきたら「出品済みの可能性」バッジを出します。';
+  var lh='';
+  csvLog.slice().reverse().forEach(function(L){
+    lh+='<div style="border-top:1px solid var(--line);padding:6px 0;font-size:12px">'
+      +esc(L.title||'(無題)')+'<div class="note2" style="margin-top:2px">'+esc(L.at)+'　/　'
+      +esc(L.sku)+'　/　JAN '+esc(L.jan||'—')+'　/　ASIN '+esc(L.asin||'—')
+      +'　/　'+usd(L.price||0)+(L.itemId?('　/　ItemID '+esc(L.itemId)):'')+'</div></div>';
+  });
+  $('csvLog').innerHTML=lh||'<div class="note2">ログはまだありません。</div>';
+}
+$('csvList').addEventListener('click',function(e){
+  var t=e.target; if(!t||t.tagName!=='BUTTON')return;
+  var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
+        ||t.getAttribute('data-fba')||t.getAttribute('data-zero');
+  if(!id)return;
+  var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
+  if(i<0)return;
+  if(t.hasAttribute('data-del'))csvList.splice(i,1);
+  else if(t.hasAttribute('data-fig')){
+    csvList[i].cat=(csvList[i].cat==='261068')?'261055':'261068';
+    csvList[i].catDone=true;
+  }
+  else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
+  else if(t.hasAttribute('data-zero')){
+    var seq=['hold','restock','end'];
+    csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
+  }
+  csvSaveList(); csvRender();
+});
+$('csvSort').addEventListener('change',csvRender);
+$('csvPickEbay').onclick=function(){
+  var keep=csvList.filter(csvEbayFirst);
+  if(!keep.length){ alert('eBay優先と判定された行がありません。'); return; }
+  if(!confirm('eBay優先の '+keep.length+'件だけ残し、残り '+(csvList.length-keep.length)+'件を削除します。よろしいですか？'))return;
+  csvList=keep; csvSaveList(); csvRender();
+};
+$('csvClear').onclick=function(){
+  if(!csvList.length)return;
+  if(!confirm('出品リストの '+csvList.length+'件をすべて削除します。よろしいですか？'))return;
+  csvList=[]; csvSaveList(); csvRender();
+};
+$('csvLogPurge').onclick=function(){
+  var d=+$('csvLogDays').value||0;
+  if(d<=0){ alert('日数を入れてください。'); return; }
+  var lim=Date.now()-d*86400000;
+  var before=csvLog.length;
+  csvLog=csvLog.filter(function(L){ return (Date.parse(L.at)||Date.now())>=lim; });
+  if(before===csvLog.length){ alert('該当するログはありません。'); return; }
+  if(!confirm((before-csvLog.length)+'件のログを削除します。よろしいですか？')){ csvLoad(); return; }
+  csvSaveLog(); csvRender();
+};
+
+/* ---- CSV書き出し ---- */
+// FBA連動する行は商品に紐づく安定SKU、一点物はせどりすとSKUをそのまま（6.5.2）。
+function csvCustomLabel(r){
+  if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
+  return r.sku;
+}
+function csvRowFor(r){
+  var o={};
+  o['CustomLabel']=csvCustomLabel(r);
+  o['*Category']=r.cat;
+  o['*Title']=r.titleEn;
+  o['*ConditionID']=r.condId;
+  o['*Description']=r.descHtml;
+  o['*Format']='FixedPrice';
+  o['*Duration']='GTC';
+  o['*StartPrice']=(+r.price||0).toFixed(2);
+  o['*Quantity']=r.qty;
+  o['*Location']=$('csvLocation').value;
+  o['*DispatchTimeMax']=$('csvDispatch').value;
+  o['*ReturnsAcceptedOption']='ReturnsAccepted';
+  o['ShippingProfileName']=$('csvShipProfile').value;
+  o['ReturnProfileName']=$('csvRetProfile').value;
+  o['PaymentProfileName']=$('csvPayProfile').value;
+  o['BestOfferEnabled']='1';
+  o['MinimumBestOfferPrice']=(+r.floor||0).toFixed(2);
+  o['ImmediatePayRequired']='1';
+  o['PicURL']='';                                   // 画像はフェーズ3
+  var sp=r.specs||{};
+  if(r.cat==='139973'){
+    o['*C:Game Name']=sp.gameName||r.titleEn;
+    o['*C:Platform']=sp.platform||'';
+    o['C:Publisher']=sp.publisher||'';
+    o['C:Genre']=sp.genre||'';
+    o['C:Region Code']='NTSC-J (Japan)';
+    o['C:Release Year']=sp.year||'';
+    o['C:Country of Origin']='Japan';
+    o['C:MPN']=r.jan||'';
+  }else{
+    o['*C:Type']=(r.cat==='261068')?'Action Figure':'Figure';
+    o['C:Brand']=sp.brand||'';
+    o['C:Franchise']=sp.franchise||'';
+    o['C:Character']=sp.character||'';
+    o['C:Material']='PVC';
+    o['C:Original/Licensed Reproduction']='Original';
+    o['C:Vintage']='No';
+    o['C:Signed']='No';
+    o['C:Country of Origin']=sp.origin||'Japan';
+    o['C:Model']=sp.model||'';
+    o['C:Series']='';                               // 推奨値に日本の商品ラインが無いため空欄
+    o['C:MPN']=r.jan||'';
+    o['C:Scale']=sp.scale||'';
+    o['C:Year Manufactured']='';                    // フェーズ2でSP-APIから
+    o['C:Item Height']=sp.height||'';
+  }
+  return o;
+}
+function csvBuild(cat,rows,action){
+  var head=CSV_HEAD[cat].split(',');
+  var act=head[0];                                  // *Action(...) の列名そのもの
+  var out=[CSV_INFO,csvLine(head)];
+  rows.forEach(function(r){
+    var o=csvRowFor(r); o[act]=action||'Add';
+    out.push(csvLine(head.map(function(h){ return o[h]===undefined?'':o[h]; })));
+  });
+  return out.join('\r\n')+'\r\n';
+}
+function csvStamp(){
+  var d=new Date();
+  return pad2(d.getFullYear()%100)+pad2(d.getMonth()+1)+pad2(d.getDate());
+}
+$('csvExport').onclick=function(){
+  if(!csvList.length){ alert('出品リストが空です。'); return; }
+  var bad=csvList.filter(function(r){ return csvIssues(r).length; });
+  var rows=csvList;
+  if(bad.length){
+    var msg=bad.length+'件に未入力・不備があります。\n\n'
+      +bad.slice(0,5).map(function(r){return '・'+(r.titleJa||r.sku)+'：'+csvIssues(r).join('・');}).join('\n')
+      +(bad.length>5?('\n…ほか'+(bad.length-5)+'件'):'')
+      +'\n\nOK：不備のある行を除いて書き出す\nキャンセル：書き出しを中止する';
+    if(!confirm(msg))return;
+    rows=csvList.filter(function(r){ return !csvIssues(r).length; });
+    if(!rows.length){ alert('書き出せる行がありません。'); return; }
+  }
+  var byCat={}; rows.forEach(function(r){ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
+  var made=[];
+  Object.keys(byCat).forEach(function(cat){
+    var name='ebay_'+cat+'_'+csvStamp()+'.csv';
+    if(csvDownload(name,csvBuild(cat,byCat[cat],'Add')))made.push(name+'（'+byCat[cat].length+'件）');
+  });
+  // 書き出した行をログに残す（次回の取り込みで既出を知らせるため）
+  var at=new Date().toISOString().slice(0,10);
+  rows.forEach(function(r){
+    csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
+      at:at, price:r.price, fba:!!r.fba, zeroAct:r.zeroAct,
+      amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
+  });
+  csvSaveLog(); csvRender();
+  $('csvExportNote').textContent=made.length?('書き出しました：'+made.join('　/　')):'書き出しに失敗しました。';
+};
+// 在庫同期のフェーズ1（手動）。Reviseで数量と価格だけを更新するCSV。
+$('csvRevise').onclick=function(){
+  if(!csvList.length){ alert('出品リストが空です。'); return; }
+  var byCat={}; csvList.forEach(function(r){ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
+  var made=[];
+  Object.keys(byCat).forEach(function(cat){
+    var head=CSV_HEAD[cat].split(','), act=head[0];
+    var keep=['CustomLabel','ItemID','*Quantity','*StartPrice'];
+    var out=[CSV_INFO,csvLine(head)];
+    byCat[cat].forEach(function(r){
+      var o={}; o[act]='Revise';
+      o['CustomLabel']=csvCustomLabel(r);
+      if(r.itemId)o['ItemID']=r.itemId;
+      o['*Quantity']=r.qty;
+      o['*StartPrice']=(+r.price||0).toFixed(2);
+      out.push(csvLine(head.map(function(h){
+        return (h===act||keep.indexOf(h)>=0)?(o[h]===undefined?'':o[h]):''; })));
+    });
+    var name='ebay_revise_'+cat+'_'+csvStamp()+'.csv';
+    if(csvDownload(name,out.join('\r\n')+'\r\n'))made.push(name+'（'+byCat[cat].length+'件）');
+  });
+  $('csvExportNote').textContent=made.length?('数量更新CSVを書き出しました：'+made.join('　/　')):'書き出しに失敗しました。';
+};
+
+/* ---- 出品文タブから1件追加 ---- */
+$('addToCsv').onclick=function(){
+  var cat=$('addCsvCat').value;
+  var m=priceModel();
+  var r={ id:'m'+Date.now().toString(36), src:'manual',
+    sku:$('sku').value||'', jan:$('addCsvJan').value.trim(), asin:'',
+    titleJa:'', titleEn:$('title').value.trim(), cat:cat, catFixed:true, catDone:true,
+    condId:(condKey()==='sealed'||condKey()==='newopen')?1000:(cat==='139973'?3000:3000),
+    descHtml:descHTML(), qty:1, cost:+$('cost').value||0, weight:+$('weight').value||0,
+    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'',
+    specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
+            // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
+            brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),
+            gameName:isGame()?$('gTitle').value.trim():'', publisher:isGame()?$('gPub').value.trim():'',
+            franchise:$('series').value.trim(), character:$('chara').value.trim(),
+            model:$('variant').value.trim(), origin:originValue(), genre:'', year:'' } };
+  csvRecalc(r);
+  csvList.push(r); csvSaveList(); csvRender();
+  var b=$('addToCsv'), o=b.textContent;
+  b.textContent='追加しました（'+csvList.length+'件）';
+  setTimeout(function(){ b.textContent=o; },1600);
+};
+
+csvLoad(); csvRender();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
