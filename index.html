@@ -542,7 +542,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div style="padding:0 13px 12px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <select id="csvSort" style="flex:1 1 0;min-width:0">
-            <option value="ebayng" selected>eBay優先かつ未完成を先に</option>
+            <option value="std" selected>未判定→eBay優先→未完成の順</option>
             <option value="ebay">eBay優先を先に</option>
             <option value="ng">未完成を先に</option>
             <option value="add">追加順</option>
@@ -582,7 +582,10 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">CSVの設定</div>
     <div class="body">
-      <div class="row"><label>梱包マージン</label><input type="number" id="csvPackMargin" value="60" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>梱包マージン（ゲーム）</label><input type="number" id="csvPackGame" value="60" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>梱包マージン（フィギュア）</label><input type="number" id="csvPackFig" value="250" inputmode="numeric"><span class="unit">g</span></div>
+      <button class="btn" id="csvReweigh" style="width:100%;margin:4px 0 10px">取り込み済みの重量を再計算</button>
+      <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
       <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
@@ -1002,7 +1005,9 @@ const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引�
 
 /* ---- 価格モデル（calc() と出品前チェックで共有する） ----
    地帯ごとの前提と、売値Pに対する損益をここだけで決める。式を2か所に持たない。 */
-function priceModel(){
+// targetOverride を渡すと、円式の目標利益だけを差し替えて同じ逆算を行う。
+// 省略時は従来どおり autoTarget()。既存の呼び出しは引数なしなので挙動は変わらない。
+function priceModel(targetOverride){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0;
   var R=+$('fx').value||1,x=(+$('fxc').value||0)/100;
   var fRate=(+$('fee').value||0)/100, iRate=(+$('intlFee').value||0)/100;
@@ -1038,7 +1043,8 @@ function priceModel(){
 
   var baseP=+$('baseProfit').value||0;
   var tgtMode=$('targetMode').value;
-  var Tyen=autoTarget(), q=(+$('saleRate').value||0)/100;
+  var Tyen=(targetOverride===undefined||targetOverride===null)?autoTarget():targetOverride;
+  var q=(+$('saleRate').value||0)/100;
   // 地帯ごとに必要な売値を出し、いちばん高い地帯を基準にする（＝利益がいちばん薄い地帯）。
   var cand={}, basisZone=ZONES[0], pRec=0, basis='', rateUnreachable=false;
   ZONES.forEach(function(z){
@@ -2284,7 +2290,7 @@ var CSV_SCALE_OK=['1:1 (Life Size)','1:4','1:6','1:8','1:9','1:10','1:12','1:16'
 var CSV_LIST_KEY='pj:csvlist:v1';   // 出品リスト
 var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
-var CSV_CFG_IDS=['csvPackMargin','csvDispatch','csvPriority','csvRankLimit',
+var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvRetProfile','csvPayProfile','csvLocation'];
 
 var csvList=[], csvLog=[];
@@ -2371,29 +2377,68 @@ function csvBrandFrom(t){
 }
 // 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
 // 商品欄を一時的に差し替えて priceModel() を呼び、必ず元へ戻す。
-function csvPriceFor(cost,weight){
+function csvWithItem(cost,weight,fn){
   var c0=$('cost').value, w0=$('weight').value;
-  try{
-    $('cost').value=cost; $('weight').value=weight;
+  try{ $('cost').value=cost; $('weight').value=weight; return fn(); }
+  catch(e){ return null; }
+  finally{ $('cost').value=c0; $('weight').value=w0; }
+}
+function csvPriceFor(cost,weight){
+  return csvWithItem(cost,weight,function(){
     var m=priceModel();
     return { price:ceil2(m.pRec), floor:ceil2(m.floor), zone:m.basisZone,
              profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
-  }catch(e){ return {price:0,floor:0,zone:0,profit:0}; }
-  finally{ $('cost').value=c0; $('weight').value=w0; }
+  })||{price:0,floor:0,zone:0,profit:0};
+}
+// 梱包マージンはeBayカテゴリ別。フィギュアは箱があるぶん重い。
+function csvPackMarginFor(cat){
+  return (cat==='139973')?(+$('csvPackGame').value||0):(+$('csvPackFig').value||0);
+}
+function csvWeightFor(r){
+  return Math.ceil((+r.wRaw||0)+csvPackMarginFor(r.cat));
 }
 function csvRecalc(r){
   var p=csvPriceFor(r.cost,r.weight);
   r.price=p.price; r.floor=p.floor; r.profit=p.profit; r.zone=p.zone;
   return r;
 }
-// eBay優先の判定（6.5.1）。ランクが悪い行はマージン率を0%に緩める。
-function csvEbayFirst(r){
-  if(!r.gross)return false;
+/* ---- eBay優先の判定（6.5.1・相場ベース）----
+   しきい値利益 = Amazon粗利 × (1 + 優先マージン率)。ランクが悪い行は緩和して0%。
+   相場が入っていれば「相場で売ったときの利益」と比べ、入っていなければ判定しない。
+   未判定の行には、目標利益にしきい値利益を入れて逆算した推奨売値（総額）を出す。 */
+function csvThreshold(r){
   var mg=(+$('csvPriority').value||0)/100;
   var lim=+$('csvRankLimit').value||0;
-  if(lim>0&&r.rank>lim)mg=0;
-  return r.profit > r.gross*(1+mg);
+  var relaxed=(lim>0&&r.rank>lim);
+  if(relaxed)mg=0;
+  return { v:(+r.gross||0)*(1+mg), relaxed:relaxed, mg:mg };
 }
+// 相場（商品代＋請求送料の総額）で売ったときの利益。基準地帯で計上する。
+function csvSoldProfit(r){
+  var sold=+r.sold||0; if(!(sold>0))return null;
+  return csvWithItem(r.cost,r.weight,function(){
+    var m=priceModel();
+    var G=m.zoneShipCharge(m.basisZone);
+    if(sold<=G)return null;                        // 送料以下は誤入力
+    return m.zoneProfit(sold-G,m.basisZone).profit;
+  });
+}
+// eBay優先ライン＝目標利益にしきい値利益を渡して逆算した推奨売値の総額（USD）。
+// 既存の逆算ロジックをそのまま使う（新しい式は作らない）。
+function csvEbayLine(r){
+  var th=csvThreshold(r).v;
+  return csvWithItem(r.cost,r.weight,function(){
+    var m=priceModel(th);
+    return Math.round((ceil2(m.pRec)+ceil2(m.zoneShipCharge(m.basisZone)))*100)/100;
+  });
+}
+// 'ebay' / 'amazon' / 'none'（未判定）
+function csvVerdict(r){
+  var pr=csvSoldProfit(r);
+  if(pr===null||pr===undefined)return 'none';
+  return (pr>csvThreshold(r).v)?'ebay':'amazon';
+}
+function csvEbayFirst(r){ return csvVerdict(r)==='ebay'; }
 function csvImport(text){
   var rows=csvParse(text);
   if(!rows.length)return {err:'空のファイルです'};
@@ -2403,7 +2448,6 @@ function csvImport(text){
       iCat=col('カテゴリ'), iW=col('重量'), iCost=col('仕入原価'), iQty=col('個数'),
       iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク');
   if(iSku<0)return {err:'SKU列が見つかりません。せどりすとの書き出しCSVか確認してください'};
-  var margin=+$('csvPackMargin').value||0;
   var skipped=0, groups={}, order=[];
   for(var n=1;n<rows.length;n++){
     var r=rows[n]; if(!r||!String(r[iSku]||'').trim())continue;
@@ -2430,7 +2474,7 @@ function csvImport(text){
       titleJa:title, titleEn:'', cat:cat, catFixed:(sp.prefix==='game'),
       condId:condId, descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
-      fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'',
+      fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'', sold:'',
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2440,8 +2484,10 @@ function csvImport(text){
   var added=0, merged=0;
   order.forEach(function(k){
     var g=groups[k];
-    g.weight=Math.ceil(g.wRaw+margin);                 // 梱包マージンを足して切り上げ
-    delete g.wRaw;
+    // 生重量は残す。カテゴリ別マージンでの再計算に使う。
+    // hobby/toy は取り込み時点では振り分け前なので、既定の261055のマージンで仮計算する。
+    g.wManual=false;
+    g.weight=csvWeightFor(g);
     if(g.rows>1)merged+=g.rows;
     csvRecalc(g);
     csvList.push(g); added++;
@@ -2479,18 +2525,27 @@ function csvIssues(r){
   if(r.cat==='139973'){ if(!r.specs.gameName)a.push('Game Name なし');
                         if(!r.specs.platform)a.push('Platform なし'); }
   if(r.price&&r.floor&&r.price<r.floor)a.push('売値が最低売値未満');
-  if(r.fba&&r.gross&&r.profit<r.gross)a.push('Amazon粗利を下回る');
+  var v=csvVerdict(r);
+  if(v==='none')a.push('未判定（相場未入力）');
+  else if(v==='amazon')a.push('Amazon優先');
   return a;
 }
-// 既定は「eBay優先かつ未完成」を先頭に置く。全件は処理しきれないので、
-// 手を入れる価値がある行から順に着手できるようにする。
+/* 並び順（6.5.1）。相場入力が絞り込みの入口なので、未判定を先頭に置き、
+   その中はライン（低いほどeBayで超えやすい）の昇順にする。
+   未判定 → eBay優先かつ未完成 → eBay優先 → 未完成 → それ以外 */
 function csvRank(r){
-  var e=csvEbayFirst(r), ng=csvIssues(r).length>0;
-  return (e&&ng)?0:(e?1:(ng?2:3));
+  var v=csvVerdict(r), ng=csvIssues(r).length>0;
+  if(v==='none')return 0;
+  if(v==='ebay')return ng?1:2;
+  return ng?3:4;
 }
 function csvSorted(){
   var a=csvList.slice(), mode=$('csvSort').value;
-  if(mode==='ebayng')a.sort(function(x,y){return csvRank(x)-csvRank(y);});
+  if(mode==='std')a.sort(function(x,y){
+    var d=csvRank(x)-csvRank(y); if(d)return d;
+    if(csvRank(x)===0)return (csvEbayLine(x)||0)-(csvEbayLine(y)||0);   // ラインの低い順
+    return 0;
+  });
   if(mode==='ebay')a.sort(function(x,y){return (csvEbayFirst(y)?1:0)-(csvEbayFirst(x)?1:0);});
   if(mode==='ng')a.sort(function(x,y){return csvIssues(y).length-csvIssues(x).length;});
   return a;
@@ -2505,11 +2560,15 @@ function csvLogged(r){
 }
 function csvRender(){
   $('csvCount').textContent=csvList.length;
-  var ng=0,ebayN=0,used=0;
-  csvList.forEach(function(r){ if(csvIssues(r).length)ng++; if(csvEbayFirst(r))ebayN++;
+  var ng=0,ebayN=0,amzN=0,noneN=0,used=0;
+  csvList.forEach(function(r){
+    var v=csvVerdict(r);
+    if(v==='ebay')ebayN++; else if(v==='amazon')amzN++; else noneN++;
+    if(csvIssues(r).filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';}).length)ng++;
     if(r.condId!==1000)used++; });
   $('csvSummary').textContent=csvList.length
-    ? ('未完成 '+ng+'件　/　eBay優先 '+ebayN+'件　/　中古（要撮影）'+used+'件')
+    ? ('未判定 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
+       +'　/　英題・説明文の未入力 '+ng+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
   var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
   $('csvExportNote').textContent=csvList.length
@@ -2521,18 +2580,41 @@ function csvRender(){
     var iss=csvIssues(r), badge='';
     function b(t,c){ return '<span style="display:inline-block;background:'+c
       +';color:#fff;border-radius:2px;padding:1px 5px;font-size:10.5px;margin:0 3px 3px 0">'+esc(t)+'</span>'; }
-    if(iss.length)badge+=b(iss.join('・'),'var(--bad)');
+    var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
+    if(v==='ebay')badge+=b('eBay優先','var(--good)');
+    else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
+    else badge+=b('未判定','var(--mute)');
+    if(th.relaxed)badge+=b('緩和','var(--mute)');
+    var rest=iss.filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';});
+    if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
     if(!r.jan)badge+=b('JANなし','#8a6d00');
     if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
-    if(csvEbayFirst(r))badge+=b('eBay優先','var(--good)');
     if(r.condId!==1000)badge+=b('中古・要撮影','var(--mute)');
     if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
+    // 未判定はライン、判定済みはしきい値との差額を出す
+    var judge;
+    if(v==='none'){
+      var ln=csvEbayLine(r);
+      judge='eBay優先ライン '+usd(ln||0)+' 以上で売れれば eBay優先'
+        +'（しきい値利益 '+yen(th.v)+'・ランク '+(r.rank||0).toLocaleString()+'位'
+        +(th.relaxed?'・緩和で0%':'')+'）';
+    }else{
+      var diff=pr-th.v;
+      judge='相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)
+        +'　しきい値 '+yen(th.v)+'　差額 '+(diff>=0?'＋':'')+yen(diff);
+    }
     h+='<div style="border-top:1px solid var(--line);padding:8px 0">'
       +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+CSV_CAT[r.cat]
       +'　/　'+(CSV_COND_NAME[r.condId]||r.condId)+'　/　'+usd(r.price||0)
-      +'　/　数量 '+r.qty+'　/　利益 '+yen(r.profit||0)+'</div>'
+      +'　/　数量 '+r.qty+'　/　'+(r.weight||0).toLocaleString()+'g</div>'
       +'<div style="margin-top:4px">'+badge+'</div>'
+      +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">相場（総額$）</span>'
+      +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
+      +esc(r.sold||'')+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;text-align:right;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
     if(r.cat!=='139973')
       h+='<button class="btn" data-fig="'+r.id+'" style="padding:5px 8px;font-size:12px">'
@@ -2570,6 +2652,8 @@ $('csvList').addEventListener('click',function(e){
   else if(t.hasAttribute('data-fig')){
     csvList[i].cat=(csvList[i].cat==='261068')?'261055':'261068';
     csvList[i].catDone=true;
+    // 261068 と 261055 は同じマージンだが、ゲームへ変えた場合も含めて必ず引き直す
+    if(!csvList[i].wManual){ csvList[i].weight=csvWeightFor(csvList[i]); csvRecalc(csvList[i]); }
   }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
   else if(t.hasAttribute('data-zero')){
@@ -2577,6 +2661,25 @@ $('csvList').addEventListener('click',function(e){
     csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
   }
   csvSaveList(); csvRender();
+});
+// 相場を入れた時点で判定が確定する。入力中は行を作り直さず、判定の行だけ書き換える。
+$('csvList').addEventListener('input',function(e){
+  var id=e.target&&e.target.getAttribute&&e.target.getAttribute('data-sold');
+  if(!id)return;
+  var r=csvRowById(id); if(!r)return;
+  r.sold=e.target.value; csvSaveList();
+  var box=e.target.parentNode.parentNode;
+  var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
+  var judge=(v==='none')
+    ? ('eBay優先ライン '+usd(csvEbayLine(r)||0)+' 以上で売れれば eBay優先（しきい値利益 '+yen(th.v)+'）')
+    : ('相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)+'　しきい値 '+yen(th.v)
+       +'　差額 '+((pr-th.v)>=0?'＋':'')+yen(pr-th.v)+'　→ '+(v==='ebay'?'eBay優先':'Amazon優先'));
+  var notes=box.getElementsByClassName('note2');
+  if(notes.length>=2)notes[1].textContent=judge;
+  $('csvCount').textContent=csvList.length;
+});
+$('csvList').addEventListener('change',function(e){
+  if(e.target&&e.target.getAttribute&&e.target.getAttribute('data-sold'))csvRender();
 });
 $('csvSort').addEventListener('change',csvRender);
 $('csvPickEbay').onclick=function(){
@@ -2589,6 +2692,16 @@ $('csvClear').onclick=function(){
   if(!csvList.length)return;
   if(!confirm('出品リストの '+csvList.length+'件をすべて削除します。よろしいですか？'))return;
   csvList=[]; csvSaveList(); csvRender();
+};
+$('csvReweigh').onclick=function(){
+  var n=0;
+  csvList.forEach(function(r){
+    if(r.wManual||!(+r.wRaw>0))return;
+    var w=csvWeightFor(r);
+    if(w!==r.weight){ r.weight=w; csvRecalc(r); n++; }
+  });
+  csvSaveList(); csvRender();
+  alert(n?(n+'件の重量を再計算しました。'):'再計算が必要な行はありませんでした（手動で直した行と、元の重量が無い行は対象外です）。');
 };
 $('csvLogPurge').onclick=function(){
   var d=+$('csvLogDays').value||0;
@@ -2784,7 +2897,9 @@ function csvEditWrite(){
   r.jan=$('addCsvJan').value.trim();
   r.cat=$('addCsvCat').value; r.catDone=true;
   r.cost=+$('cost').value||r.cost;
-  r.weight=+$('weight').value||r.weight;
+  var wNew=+$('weight').value||r.weight;
+  if(wNew!==r.weight&&wNew!==csvWeightFor(r))r.wManual=true;   // 手で直した行は再計算の対象外
+  r.weight=wNew;
   var sp=r.specs||(r.specs={});
   sp.brand=isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim());
   sp.franchise=$('series').value.trim();
@@ -2832,7 +2947,8 @@ $('addToCsv').onclick=function(){
     titleJa:'', titleEn:$('title').value.trim(), cat:cat, catFixed:true, catDone:true,
     condId:(condKey()==='sealed'||condKey()==='newopen')?1000:(cat==='139973'?3000:3000),
     descHtml:descHTML(), qty:1, cost:+$('cost').value||0, weight:+$('weight').value||0,
-    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'',
+    wRaw:0, wManual:true,                    // 手入力の重量なので再計算の対象外
+    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'', sold:'',
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
             // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
             brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),
