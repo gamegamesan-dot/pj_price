@@ -1,0 +1,20 @@
+# pj_price 専用 英語タイトル補助（Cloudflare Worker）
+# APIキー・トークンはここに書かない。デプロイ時に
+#   wrangler secret put <名前>
+# で登録する（proxy-title/README.md にコマンド一覧）。
+name = "pj-title"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# workers.dev の既定サブドメインで公開（独自ドメインは使わない）。
+workers_dev = true
+
+# 生成結果とアクセストークンのキャッシュ。
+# 事前に `wrangler kv namespace create TITLE_CACHE` で作り、出力された id を入れる。
+[[kv_namespaces]]
+binding = "TITLE_CACHE"
+id = "ここにKV namespace idを入れる"
+
+# account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
+# 秘密情報ではないが、リポジトリに固定しないでおく。
+# account_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

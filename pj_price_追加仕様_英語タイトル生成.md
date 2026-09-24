@@ -5,7 +5,23 @@
 生成結果は人が確認・編集してから、eBay一括出品CSVに書き出す。
 
 対象はゲームソフトとし、機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP とする。
-箱説自体に価値のあるレトロゲームは対象外。
+箱説自体に価値のあるレトロゲームは対象外。**対象外の機種の行は /titles を呼ばない**（2026-09-24 決定）。
+
+> **2026-09-24 の決定**
+> - タイトルの書式は**既存の `buildGameTitle()` に統一する**。/titles は
+>   `english_name` / `status` / `sources` / `candidates` だけを返し、タイトルは作らない。
+>   旧4章の `{english_name} {機種表記} Japan Ver.` 書式は廃止。80文字チェックと
+>   禁止語チェックだけを残す。
+> - 既存の `csvIssues()`（「中古なのに英題にUsedがない」等）は変更しない。
+> - 機種の変換表は1つにまとめ、タイトル用の表記と Item Specifics 用の値の両方を
+>   そこから引く。
+> - 既存の `CSV_PLAT` の不具合（`Switch 2` → `Nintendo Switch`）を
+>   `Nintendo Switch 2` に修正する。
+> - ゲーム行では既存の `btnParse`（フィギュア向けの自動振り分け＝Claude API）を呼ばない。
+> - SP-APIの米国（NA）は「なし」で進める。`SPAPI_REFRESH_TOKEN_NA` があるときだけ
+>   米国照会を行う分岐は残す。
+> - eBayの `gtin` 検索が0件のときは `q={JAN}` のキーワード検索を行う。
+> - `/debug/gtin` は受け入れテスト用。テスト後に削除する。
 
 ## 2. 全体構成
 
@@ -47,6 +63,8 @@ Cloudflare Worker「pj-title」（新規。APIキーはすべてここに置く�
 - CORSは `https://gamegamesan-dot.github.io` のみ許可する。
 - `X-PJ-Key` が一致しない場合は401を返す。
 - 1リクエストあたり最大20件とする。超える場合、pj_price側で分割して送る。
+- ただし1件あたり最大5回ほど外部APIを呼ぶため、Workers無料プランの
+  「1リクエスト50サブリクエスト」に触れる。**pj_price側は既定で10件ずつ送る。**
 
 ### 3.3 エンドポイント
 `POST /titles`
@@ -62,13 +80,16 @@ Cloudflare Worker「pj-title」（新規。APIキーはすべてここに置く�
   "jan": "…",
   "status": "ok | review | not_found | invalid_jan",
   "english_name": "…",
-  "title": "…",
-  "length": 62,
-  "sources": ["ebay", "amazon_us", "amazon_jp", "translation"],
+  "sources": ["ebay", "ebay_keyword", "amazon_us", "amazon_jp", "translation"],
   "candidates": ["…eBay/Amazonで見つかった元タイトル（最大5件）"],
-  "note": "…判断理由を短く"
+  "note": "…判断理由を短く",
+  "log": ["…受け入れテスト用。どのAPIを叩いたか"]
 } ] }
 ```
+
+`title` と `length` は返さない。タイトルの組み立てと80文字の収め方は
+pj_price 側の `buildGameTitle()` が持つ（書式を2か所に置かない）。
+キャッシュから返した行には `"cached": true` が付く。
 
 ### 3.4 処理の流れ（1件ごと。並列数は最大4）
 1. **JAN検証**：13桁（または8桁）の数字であることと、チェックディジットを確認する。NGなら `invalid_jan` を返す。
@@ -76,7 +97,11 @@ Cloudflare Worker「pj-title」（新規。APIキーはすべてここに置く�
 3. **eBay Browse API**
    - トークンはClient Credentials方式（`POST https://api.ebay.com/identity/v1/oauth2/token`、scope `https://api.ebay.com/oauth/api_scope`）で取得し、KVに有効期限の少し手前までキャッシュする。
    - 検索は `GET https://api.ebay.com/buy/browse/v1/item_summary/search?gtin={jan}&limit=20` とし、ヘッダーに `X-EBAY-C-MARKETPLACE-ID: EBAY_US` を付ける。
-   - 返ってきた `title` を候補として集める。0件なら次へ進む。
+   - 返ってきた `title` を候補として集める。
+   - **`gtin` が0件のときは `q={JAN}` でキーワード検索し直す**（日本のゲームは
+     米国出品にGTINが入っていないことが多いため）。こちらで拾った場合は
+     `sources` に `ebay_keyword` を入れ、`status` は `review` にする。
+     どちらも0件なら次へ進む。
 4. **Amazon SP-API（Catalog Items API 2022-04-01 `searchCatalogItems`）**
    - LWAでアクセストークンを取得する（SigV4署名は不要）。
    - 米国：`sellingpartnerapi-na.amazon.com`、marketplace `ATVPDKIKX0DER`、`identifiers={jan}&identifiersType=EAN&includedData=summaries`。**`SPAPI_REFRESH_TOKEN_NA` がない場合はスキップ**する。
@@ -97,27 +122,55 @@ Cloudflare Worker「pj-title」（新規。APIキーはすべてここに置く�
    - `not_found`：候補も日本語名もない。
 8. **キャッシュ保存**：`english_name`・`sources`・`candidates` を90日間保存する（タイトル本体は保存せず、毎回組み立てる）。
 
-## 4. タイトル組み立てルール
-書式：`{english_name} {機種表記} Japan Ver.{状態サフィックス}`
+## 4. タイトルの扱い（2026-09-24 改訂）
 
-- 機種表記：`Switch 2`→`Nintendo Switch 2`、`Switch`→`Nintendo Switch`、`PS5`、`PS4`、`PS3`、`PS2`、`PS Vita`、`PSP`
-- `english_name` の中にすでに機種名が入っている場合は、重複させない。
-- 状態サフィックス：`condition=new` のときのみ ` New Sealed`。それ以外は付けない。
-- 半角英数字と一般的な記号のみとし、全角文字・絵文字は除去する。連続スペースは1つにまとめる。
-- **80文字以内**。超える場合は状態サフィックス → `Ver.` → `english_name` の末尾（単語単位）の順に削り、`status` を `review` にする。
-- 禁止：`English` / `Multi-language` / `Region Free` / `Rare` / `L@@K` / `!` / `*` など。言語対応は手動でのみ追加する。
+タイトルは**既存の `buildGameTitle()` がそのまま組み立てる**。書式は変更しない。
+
+```
+[Used] {機種} {ソフト名} Japan Import
+```
+
+- `{ソフト名}` に /titles が返した `english_name` を入れる（出品文タブの「タイトル（ソフト名）」欄）。
+- `Used` の有無・`Japan Import` の付け外し・80文字に収める処理は、すべて既存の
+  `buildGameTitle()` の動作をそのまま使う。
+- 機種表記は機種の変換表（タイトル用の綴り）から引く。
+
+Worker側に残すのは次の2つだけ。
+
+- **禁止語チェック**：`english_name` から `English` / `Multi-language` / `Region Free` /
+  `Rare` / `L@@K` / `!` / `*` と、機種名・`Japan Import` / `Ver.` / `Used` / `New Sealed`
+  などの定型部分を取り除く。取り除いたときは `status` を `review` にする。
+  言語対応は手動でのみ追加する。
+- **文字種の正規化**：半角英数字と一般的な記号のみにする。全角英数字は半角へ、
+  活字の約物（’ “ ” – …）はASCIIへ置き換え、残った全角文字・絵文字は落とす。
+  連続スペースは1つにまとめる。
+
+**80文字チェック**は pj_price 側で行う（既存のタイトル文字数カウンターと
+`buildGameTitle()` の切り詰めをそのまま使う）。
 
 ## 5. pj_price側（出品リストタブ）
 - 「英語タイトル生成」ボタンを追加する。未生成の行だけを20件ずつ送り、進捗を「12/48」のように表示する。
 - 各行に、編集可能な英語タイトル欄・文字数カウンター（80超は赤）・statusバッジ（ok=緑／review=黄／not_found=灰）を表示する。候補元タイトルは折りたたみで見られるようにする。
 - 手動で編集した行には「編集済み」フラグを立て、再生成で上書きしない。行ごとの「再生成（force）」ボタンは別に用意する。
-- CSV書き出しでは、画面上の（編集後の）タイトルを使う。書き出し形式は数量更新CSVと同じルール（引用符は必要な項目のみ・CRLF・UTF-8 BOMなし）に従う。
+- CSV書き出しでは、画面上の（編集後の）タイトルを使う。書き出し形式は数量更新CSVと同じルール（引用符は必要な項目のみ・CRLF・UTF-8 BOMなし）に従う。**この形式は v60 で対応済み。**
+- 対象外の機種（DS / 3DS / Wii / Xbox など）の行は送らず、画面に「対象外の機種」と表示する。
+- 機種の変換表を1つにまとめ、タイトル用の表記（`Nintendo Switch` / `PS5` …）と
+  Item Specifics 用の値（`Sony PlayStation 5` …）の両方をそこから引く。
+  既存の `CSV_PLAT` の `Switch 2` → `Nintendo Switch` は `Nintendo Switch 2` に直す。
+- ゲーム行では既存の `btnParse`（フィギュア向けの自動振り分け）を呼ばない。
 - WorkerのURLと `PJ_ACCESS_KEY` は設定画面で入力し、localStorageに保存する（リポジトリには書かない）。
 - sw.jsのキャッシュバージョンを上げる。
 
 ## 6. 着手前の確認（Claude Codeが最初に行う）
 1. SP-APIアプリで、米国（NA）マーケットプレイスの認可が取れるかを確認する。**取れない場合は米国照会なしで実装を進め**、その旨を報告する。
 2. eBay Browse APIの `gtin` 検索で、実在するJAN（カジが在庫から10件提供）について結果が返るかを確認する。
+
+### 確認結果（2026-09-24）
+1. **米国（NA）は「なし」で進める**。`SPAPI_REFRESH_TOKEN_NA` が登録されたときだけ
+   米国照会が動く分岐は実装済み。
+2. `gtin` の当たり方は**キー登録後に `/debug/gtin` で実測する**（開発環境から
+   api.ebay.com へ出られないため、事前確認はできなかった）。0件時の `q={JAN}`
+   フォールバックは実装済み。
 
 ## 7. 受け入れテスト
 - カジが提供する実在庫のJAN 10件（機種混在）で実行し、JAN・status・title・sourcesを一覧表示する。
@@ -130,10 +183,25 @@ Cloudflare Worker「pj-title」（新規。APIキーはすべてここに置く�
 - Item Specifics（Platform / Region Code / Genre等）の自動入力 → フェイズ3候補
 - フィギュア・アーケードパーツへの対応
 
-## 9. 既存「自動で振り分け」（出品文タブ）の確認
-- 出品文タブの「自動で振り分け」が、どういう仕組みで英語化しているか（辞書／ルール／外部API）を調べて報告する。なお、リポジトリ内にClaude APIの呼び出しはない。
-- 英語名の抽出（/titles）に流用できる辞書やルールがあれば活用する。
-- 既存機能の動作は変えない。
+## 9. 既存「自動で振り分け」（出品文タブ）の調査結果（2026-09-24）
+
+> ⚠ 旧記述の「リポジトリ内にClaude APIの呼び出しはない」は**誤り**だったため訂正する。
+
+- 仕組み：`#btnParse` が貼り付けテキストを `PARSE_API`
+  （`https://pj-price.gamegamesan.workers.dev`）へ POST し、Worker `proxy/worker.js` が
+  **Claude API**（`api.anthropic.com/v1/messages`・`claude-haiku-4-5`・max_tokens 300）を
+  呼んで `brand/series/chara/variant/line` の5項目JSONを返す。
+  ローカルの日本語→英語辞書やルール変換は**ない**。
+- 流用したもの：`proxy/worker.js` の構造（オリジン限定CORS・Origin検証・モデルと
+  プロンプトのサーバ側固定・入力長上限・JSON抽出の `normalize()`）を `proxy-title/` に流用。
+- 流用できる辞書：`CSV_PLAT`（機種の和名・略称 → eBay値）、`CSV_BRAND`、`CSV_PUB`。
+  日本語→英語の商品名辞書は存在しない。
+- ゲームへの流用は限定的：`applyCat()` が `pasteBlock` をゲーム／アーケードでは
+  非表示にしており、返る5項目はフィギュア欄にしか入らないため、
+  **自動振り分けの結果はゲームの英題に反映されない**。
+  そのうえで、CSVタブから英題が空のゲーム行を開くと `btnParse` が実行され、
+  無駄にClaude APIを呼んでいた。ゲーム行では呼ばないよう止める（5章）。
+- 既存のフィギュア向けの動作そのものは変えない。
 
 ## 10. 作業の進め方
 1. 6章の着手前確認と、9章の調査を先に行い、結果を報告する。
