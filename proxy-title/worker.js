@@ -52,11 +52,74 @@ const PLATFORM_WORDS = [
   "PlayStation Portable", "PSP",
 ];
 
+/* 候補タイトルから機種を読み取るための表。上から順に見るので、
+   Switch 2 → Switch、PS Vita → PS のように長い綴りを先に並べる。
+   pj_price から届く platform の綴りも同じ関数で正規化する。 */
+const PLATFORM_KEYS = [
+  ["switch2", /\b(nintendo\s+)?switch\s*2\b/i],
+  ["switch",  /\b(nintendo\s+)?switch\b/i],
+  ["psvita",  /\b(playstation\s*vita|ps\s*vita|psvita|\bvita)\b/i],
+  ["psp",     /\b(playstation\s*portable|psp)\b/i],
+  ["ps5",     /\b(playstation\s*5|ps\s*5|ps5)\b/i],
+  ["ps4",     /\b(playstation\s*4|ps\s*4|ps4)\b/i],
+  ["ps3",     /\b(playstation\s*3|ps\s*3|ps3)\b/i],
+  ["ps2",     /\b(playstation\s*2|ps\s*2|ps2)\b/i],
+];
+// 対象外の機種も、候補が別物だと見抜くために読めるようにしておく
+const OTHER_PLATFORM_KEYS = [
+  ["3ds",   /\b(nintendo\s*)?3ds\b/i],
+  ["ds",    /\b(nintendo\s*)?ds\b/i],
+  ["wiiu",  /\bwii\s*u\b/i],
+  ["wii",   /\bwii\b/i],
+  ["xbox",  /\bxbox\b/i],
+  ["gba",   /\bgame\s*boy\s*advance|\bgba\b/i],
+  ["ps1",   /\b(playstation\s*1|ps\s*one|psone|ps1)\b/i],
+];
+const ALL_PLATFORM_KEYS = PLATFORM_KEYS.concat(OTHER_PLATFORM_KEYS);
+
+// 文字列に出てくる機種をすべて返す（見つからなければ空配列）
+function platformsIn(text) {
+  const t = String(text || "");
+  const found = [];
+  for (const [key, re] of ALL_PLATFORM_KEYS) {
+    if (re.test(t)) {
+      // switch2 が当たったら switch は数えない（同じ綴りを二重に数えないため）
+      if (key === "switch" && found.includes("switch2")) continue;
+      if (key === "ds" && (found.includes("3ds"))) continue;
+      if (key === "wii" && found.includes("wiiu")) continue;
+      found.push(key);
+    }
+  }
+  return found;
+}
+// pj_price から届く platform を1つのキーにする
+function platformKey(text) {
+  const f = platformsIn(text);
+  return f.length ? f[0] : "";
+}
+
+/* セット・まとめ売りの見分け。ja_title がセットでない限り、
+   セット品の候補は別商品として落とす。 */
+const SET_EN = /(\+|\bset\s+of\b|\bsets?\b|\bbundle[ds]?\b|\bx\s?[2-9]\b|\b[2-9]\s*(games?|titles?|pack)\b|\blot\s*(of)?\b|\bcombo\b|\bdouble\s*pack\b)/i;
+const SET_JA = /(セット|まとめ|同梱|[2-9２-９]\s*本|＋|\+)/;
+
+/* 全角ローマ数字を半角のローマ字に直す（Ⅲ → III）。
+   せどりすとの和名に混ざるため、AIへ渡す前に正規化する。 */
+const ROMAN = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"];
+function normRoman(s) {
+  return String(s || "")
+    .replace(/[\u2160-\u216B]/g, (c) => ROMAN[c.charCodeAt(0) - 0x2160])
+    .replace(/[\u2170-\u217B]/g, (c) => ROMAN[c.charCodeAt(0) - 0x2170]);
+}
+
 /* 禁止語（仕様4章）。english_name に混ざっていたら取り除き、status は review にする。
    言語対応の表記は手動でのみ追加する方針なので、ここでは必ず落とす。 */
 const BANNED = [
-  /\bEnglish(\s+(Supported|Subtitle|Version|Language))?\b/gi,
-  /\bMulti[-\s]?language\b/gi,
+  /\bEnglish(\s+(Supported|Subtitle|Subtitles|Version|Language|Text))?\b/gi,
+  /\bMulti[-\s_]?lingual\b/gi,
+  /\bMulti[-\s_]?language[ds]?\b/gi,
+  /\bMulti[-\s_]?lang\b/gi,
+  /\bEng\s*(Sub|Subs|Supported)\b/gi,
   /\bRegion[-\s]?Free\b/gi,
   /\bRare\b/gi,
   /L@@K/gi,
@@ -138,6 +201,39 @@ function stripExtras(name) {
   // 記号だけが残った端を整える
   t = t.replace(/\s+/g, " ").replace(/^[\s\-–—:|/,]+|[\s\-–—:|/,]+$/g, "").trim();
   return { name: t, stripped: hit };
+}
+
+/* 候補の事前フィルタ（コード側）。
+   商品の特定は ja_title と platform を正とし、eBay候補は英語表記の参考にだけ使う。
+   gtin検索でも別商品が混ざるため、明らかに違うものはAIへ渡す前に落とす。 */
+function filterCandidates(titles, item) {
+  const want = platformKey(item.platform);
+  const jaSet = SET_JA.test(String(item.ja_title || ""));
+  const kept = [], dropped = [];
+  for (const t of titles) {
+    const found = platformsIn(t);
+    // 入力と違う機種しか書かれていない候補は別商品
+    if (want && found.length && !found.includes(want)) {
+      dropped.push([t, "機種違い(" + found.join("/") + ")"]);
+      continue;
+    }
+    // セット・まとめ売りは、元がセットでない限り別商品
+    if (!jaSet && SET_EN.test(t)) {
+      dropped.push([t, "セット品"]);
+      continue;
+    }
+    kept.push(t);
+  }
+  return { kept, dropped };
+}
+
+/* english_name と同じ中身の候補がいくつあるか。
+   記号と大小文字を落として突き合わせる（「2件以上が一致」の判定に使う）。 */
+function looseKey(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function agreeCount(name, titles) {
+  const k = looseKey(name);
+  if (k.length < 4) return 0;
+  return titles.filter((t) => looseKey(t).includes(k)).length;
 }
 
 /* ---- eBay Browse API ---- */
@@ -242,14 +338,25 @@ async function spCatalog(env, region, jan, log) {
 const SYSTEM = [
   "You identify the official English product name of a Japanese video game.",
   "",
+  "The Japanese name and the platform given below ARE the product. Candidate",
+  "titles come from other sellers and may be a DIFFERENT product, a different",
+  "platform, a bundle, or an accessory. Use them only as a reference for how",
+  "the English name is spelled -- never to decide which product this is.",
+  "",
   "Output ONLY a JSON object with exactly these keys:",
-  '  "english_name", "confidence", "basis"',
+  '  "english_name", "confidence", "basis", "same_item"',
   '  confidence: "high" | "medium" | "low"',
   '  basis: "ebay" | "amazon_us" | "translation"',
+  '  same_item: true only if at least one candidate is clearly the SAME game',
+  "             for the SAME platform as the Japanese name given.",
   "",
   "Rules:",
   "- english_name is the GAME NAME ONLY.",
-  "- Prefer the official English release title when it appears in the candidates.",
+  "- Prefer the official English release title when it appears in the candidates",
+  "  AND that candidate is the same product. If the candidates are a different",
+  '  game, ignore them, translate the Japanese name, and set same_item to false.',
+  "- Never merge two products into one name. If a candidate is a set or bundle,",
+  "  do not copy the set wording.",
   "- Remove from it: console/platform names, region or import wording (Japan,",
   "  Japanese, Import, Ver., Version), condition wording (New, Sealed, Used,",
   "  CIB, Complete), seller decoration (Rare, L@@K, Fast Shipping, Free Ship,",
@@ -308,6 +415,7 @@ async function askClaude(env, item, ebayTitles, us, jp, log) {
     english_name: obj.english_name,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
     basis: ["ebay", "amazon_us", "translation"].includes(obj.basis) ? obj.basis : "translation",
+    same_item: obj.same_item === true,
   };
 }
 
@@ -334,13 +442,18 @@ async function handleItem(env, item, force) {
     spCatalog(env, "fe", jan, log),
   ]);
 
-  const jaTitle = String(item.ja_title || "").slice(0, MAX_JA);
-  const candidates = eb.titles.slice(0, MAX_CANDIDATES);
+  // 全角ローマ数字を直してから渡す（雷電Ⅲ → 雷電III）
+  const jaTitle = normRoman(String(item.ja_title || "")).slice(0, MAX_JA);
+  // 機種違い・セット品はAIへ渡す前に落とす
+  const flt = filterCandidates(eb.titles, { ...item, ja_title: jaTitle });
+  const candidates = flt.kept.slice(0, MAX_CANDIDATES);
+  if (flt.dropped.length)
+    log.push("除外 " + flt.dropped.map((d) => `${d[1]}: ${d[0]}`).join(" / "));
   if (!eb.titles.length && !us && !jp && !jaTitle.trim())
     return { jan, status: "not_found", english_name: "", sources: [], candidates: [],
              note: "候補も日本語名もありません", log };
 
-  const ai = await askClaude(env, { ...item, ja_title: jaTitle }, eb.titles, us, jp, log);
+  const ai = await askClaude(env, { ...item, ja_title: jaTitle }, flt.kept, us, jp, log);
   if (!ai)
     return { jan, status: "review", english_name: "", sources: [], candidates,
              note: "英語名を判定できませんでした", log };
@@ -352,18 +465,25 @@ async function handleItem(env, item, force) {
              note: "英語名が空になりました", log };
 
   const sources = [];
-  if (eb.titles.length) sources.push(eb.via === "q" ? "ebay_keyword" : "ebay");
+  if (flt.kept.length) sources.push(eb.via === "q" ? "ebay_keyword" : "ebay");
   if (us && us.title) sources.push("amazon_us");
   if (jp && jp.title) sources.push("amazon_jp");
   if (!sources.length || ai.basis === "translation") sources.push("translation");
 
-  /* status（仕様3.7）。タイトル長の判定は pj_price 側（buildGameTitle）で行う。 */
-  const agree = eb.titles.length >= 2 && eb.via === "gtin";
+  /* status（仕様3.7）。タイトル長の判定は pj_price 側（buildGameTitle）で行う。
+     ok にするのは、AIが「日本語名と同じ商品」と判断し確信度が high で、かつ
+     ・絞り込み後の候補2件以上が同じ英語名で一致している（gtin検索）
+     ・または Amazon US で見つかっている
+     のいずれかを満たすときだけ。セット品は上で落としてあるので、
+     セット同士の一致で ok になることはない。 */
+  const agree = eb.via === "gtin" && agreeCount(english_name, flt.kept) >= 2;
   const notes = [];
   if (st.stripped) notes.push("候補から機種名・禁止語を除去");
+  if (flt.dropped.length) notes.push(`別商品の候補を${flt.dropped.length}件除外`);
   if (eb.via === "q") notes.push("gtin検索が0件のためキーワード検索の結果");
   let status = "review";
-  if (ai.confidence === "high" && (agree || (us && us.title))) status = "ok";
+  if (ai.confidence === "high" && ai.same_item && (agree || (us && us.title))) status = "ok";
+  else if (!ai.same_item && flt.kept.length) notes.push("候補が同じ商品と確認できない");
   else if (ai.basis === "translation") notes.push("候補がなく翻訳で生成");
   else notes.push("候補が少ないか確信度が中以下");
   if (status === "ok" && st.stripped) status = "review";

@@ -91,8 +91,12 @@ npx wrangler deploy
 - `title` と `length` は**返さない**。タイトルは pj_price の `buildGameTitle()` が組み立て、
   80文字の収め方もそちらが持つ。
 - `english_name` からは機種名・状態語・`Japan Import` / `Ver.` などの定型部分、
-  および禁止語（English / Multi-language / Region Free / Rare / L@@K / `!` / `*`）を
-  取り除いてある。
+  および禁止語（English / ENG SUB / Multilingual / Multi-Language / Region Free /
+  Rare / L@@K / `!` / `*`）を取り除いてある。
+- 商品の特定は `ja_title` と `platform` が正。eBay候補は英語表記の参考にしか使わない。
+  AIへ渡す前に、**入力と違う機種の候補**と、**セット品の候補**（`ja_title` が
+  セットでない限り）をコード側で落とす。落とした内訳は `log` に残る。
+- `ja_title` の全角ローマ数字（Ⅲ）は III に直してから渡す。
 - キャッシュは JAN 単位で90日。`force: true` で作り直す。
 
 ### `GET /debug/gtin?jan=…`（受け入れテスト用・**あとで削除する**）

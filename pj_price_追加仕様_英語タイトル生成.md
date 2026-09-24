@@ -106,20 +106,33 @@ pj_price 側の `buildGameTitle()` が持つ（書式を2か所に置かない�
    - LWAでアクセストークンを取得する（SigV4署名は不要）。
    - 米国：`sellingpartnerapi-na.amazon.com`、marketplace `ATVPDKIKX0DER`、`identifiers={jan}&identifiersType=EAN&includedData=summaries`。**`SPAPI_REFRESH_TOKEN_NA` がない場合はスキップ**する。
    - 日本：`sellingpartnerapi-fe.amazon.com`、marketplace `A1VC38T7YXB528`。日本語名・ブランド・機種の補強に使う。
+4.5 **候補の事前フィルタ（コード側・2026-09-24 追加）**
+   - 商品の特定は `ja_title` と `platform` を正とする。eBay候補は**英語表記の参考にだけ**使う。
+   - 入力と違う機種名しか入っていない候補は落とす（PSP / PS Vita / PS4 …）。
+   - セット品（`+` / `set` / `bundle` / `x2` / `lot` / `double pack` など）は、
+     `ja_title` がセット（セット・まとめ・同梱・2本・＋）でない限り落とす。
+   - `ja_title` の全角ローマ数字（Ⅲ 等）は III 等に正規化してから渡す。
+
 5. **英語名の抽出（Claude API）**
    - モデルは `claude-haiku-4-5-20251001` を使う。
    - 入力：日本語名、機種、eBay候補、Amazon US候補、Amazon JPの情報。
-   - 出力はJSONのみとする：`{"english_name": "...", "confidence": "high|medium|low", "basis": "ebay|amazon_us|translation"}`
+   - 出力はJSONのみとする：`{"english_name": "...", "confidence": "high|medium|low", "basis": "ebay|amazon_us|translation", "same_item": true|false}`
+   - `same_item` は「候補の少なくとも1件が、与えた日本語名・機種と同じ商品だと
+     はっきり言えるか」。言えなければ候補を無視して日本語名から翻訳する。
    - プロンプトで守らせること：
      - 公式の英語タイトルが候補にあればそれを優先する。
      - 候補タイトル中の機種名・Japan・Import・状態語・セラー独自の飾り文句は除去する。
      - 候補がなければ日本語名から翻訳する（その場合 `confidence` は `low`）。
      - 言語対応（English等）については一切書かない。
 6. **タイトル組み立て（コード側）**：4章のルールで組み立てる。
-7. **statusの判定**
-   - `ok`：eBay候補が2件以上あって一致している、またはAmazon USで見つかった、かつ `confidence` が `high`。
-   - `review`：それ以外（翻訳のみ、候補が割れている、80文字を超えて切り詰めた、など）。
+7. **statusの判定**（2026-09-24 改訂）
+   - `ok`：`confidence` が `high` **かつ** `same_item` が true で、なおかつ
+     「**絞り込み後**の候補2件以上が、決めた `english_name` と一致している（gtin検索）」
+     または「Amazon US で見つかった」。
+     セット品は事前フィルタで落としてあるので、セット同士の一致で `ok` にはならない。
+   - `review`：それ以外（翻訳のみ、候補が同じ商品と確認できない、禁止語を除去した、など）。
    - `not_found`：候補も日本語名もない。
+   - 80文字の判定は pj_price 側で行う（Worker はタイトルを作らないため）。
 8. **キャッシュ保存**：`english_name`・`sources`・`candidates` を90日間保存する（タイトル本体は保存せず、毎回組み立てる）。
 
 ## 4. タイトルの扱い（2026-09-24 改訂）
@@ -177,6 +190,18 @@ Worker側に残すのは次の2つだけ。
 - `invalid_jan`（桁数違い・チェックディジット違い）が正しく判定される。
 - 2回目の実行ではKVキャッシュが効き、eBay・SP-APIへの呼び出しが発生しない（ログで確認）。
 - 全タイトルが80文字以内で、禁止語を含まない。
+- 言語対応表記（Multilingual / Multi-Language / English / ENG SUB 等）が
+  `english_name` に残らない。
+- 次の6件で期待どおりの `english_name` が出る。
+
+| JAN | 和名 | 機種 | 期待する english_name | 備考 |
+|---|---|---|---|---|
+| 4562252050401 | 雷電Ⅲ×MIKADO MANIAX | Switch | Raiden III x Mikado Maniax | |
+| 4571442047619 | サイキック5 エターナル | Switch | Psychic 5 Eternal | |
+| 4995857095025 | 緋色の欠片 | PS Vita | Hiiro no Kakera | 公式英題なし。`review` でよい |
+| 4544626010365 | AKIBA'S BEAT | PS4 | Akiba's Beat | |
+| 4582350660326 | METAL MAX Xeno | PS4 | Metal Max Xeno | |
+| 4997766201382 | Steins;Gate | PSP | Steins;Gate | |
 
 ## 8. スコープ外（今回はやらない）
 - 言語対応（English Supported等）の自動判定
