@@ -357,7 +357,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="rowv"><label>原産国</label><input type="text" id="aOrigin" value="Japan" placeholder="Japan"></div>
       </div>
 
-      <div class="rowv" id="originRow"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"></div>
+      <div class="rowv" id="originRow"><label>原産国</label><input type="text" id="origin" value="China" placeholder="China"><div class="note2" id="originNote" style="display:none">ゲームは自動でJapan</div></div>
       <div class="rowv"><label>追加説明（任意・英文）</label><textarea id="extra" rows="2" placeholder="Box has a small dent on the top corner."></textarea></div>
     </div>
   </section>
@@ -1437,6 +1437,8 @@ function gamePlatform(){
 // プライズ品の注意書きはフィギュア専用。ゲームに切り替えたときの状態を覚えておき、
 // フィギュアに戻したら元に戻す（ゲーム中に false を保存しても戻せるようにする）。
 var prizePrev=null;
+// ゲームに切り替えたときのフィギュア用の原産国を覚えておく。
+var originPrev=null;
 // カテゴリに応じて入力欄を出し分ける。buildListing() の先頭から毎回呼ぶ。
 function applyCat(){
   var g=isGame(), a=isArcade(), f=(!g&&!a);
@@ -1452,6 +1454,17 @@ function applyCat(){
   $('aMakerFreeRow').style.display = ($('aMaker').value==='Others')?'block':'none';
 
   applyLineCat();   // 上部の製品ライン／ゲーム機種もカテゴリに合わせる
+
+  /* 原産国。ゲームは Japan 固定で読み取り専用にする。
+     フィギュアの値はゲームの 'Japan' で潰さないよう別に覚えておく（prizePrev と同じ方式）。 */
+  $('originNote').style.display = g?'block':'none';
+  $('origin').readOnly = g;
+  if(g){
+    if(originPrev===null) originPrev=$('origin').value;
+    $('origin').value='Japan';
+  }else if(originPrev!==null){
+    $('origin').value=originPrev; originPrev=null;
+  }
 
   // プライズ品の注意書きはフィギュア専用。
   $('prizeRow').style.display = f?'flex':'none';
@@ -2292,6 +2305,8 @@ var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Ninte
 // C:Scale の推奨値（コロン区切り）。1:7 は推奨値リストに無いが投入自体はできる。
 var CSV_SCALE_OK=['1:1 (Life Size)','1:4','1:6','1:8','1:9','1:10','1:12','1:16','1:18','1:20'];
 
+// 和名にこれらを含む行は一点物とみなす（再調達できない）。誤判定はボタンで直せる。
+var CSV_ONEOFF=/特典|付き|付属|ポストカード|チラシ|限定|初回|サイン|非売品|同梱/;
 var CSV_LIST_KEY='pj:csvlist:v1';   // 出品リスト
 var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
@@ -2301,6 +2316,11 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
 var csvList=[], csvLog=[];
 function csvLoad(){
   try{ var a=JSON.parse(localStorage.getItem(CSV_LIST_KEY)||'[]'); csvList=Array.isArray(a)?a:[]; }catch(e){ csvList=[]; }
+  // 後から足した項目は、既存の保存データにも既定値を入れておく。
+  csvList.forEach(function(r){
+    if(r.forceEbay===undefined)r.forceEbay=false;
+    if(r.oneOff===undefined)r.oneOff=false;
+  });
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; });
@@ -2419,7 +2439,10 @@ function csvThreshold(r){
   var lim=+$('csvRankLimit').value||0;
   var relaxed=(lim>0&&r.rank>lim);
   if(relaxed)mg=0;
-  return { v:(+r.gross||0)*(1+mg), relaxed:relaxed, mg:mg };
+  // 粗利 + |粗利| × 優先マージン率。粗利が負のときに基準が下がってしまうのを防ぐ
+  // （粗利 −861・20% なら −689。×(1+率) だと −1,033 になり、かえって甘くなる）。
+  var gr=+r.gross||0;
+  return { v:gr+Math.abs(gr)*mg, relaxed:relaxed, mg:mg };
 }
 // 相場（商品代＋請求送料の総額）で売ったときの利益。基準地帯で計上する。
 function csvSoldProfit(r){
@@ -2491,7 +2514,7 @@ function csvImport(text){
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
-      amzLow:'', amzLowAt:'', itemId:'', sold:'',
+      forceEbay:false, oneOff:CSV_ONEOFF.test(title), amzLow:'', amzLowAt:'', itemId:'', sold:'',
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2549,9 +2572,13 @@ function csvIssues(r){
     if(/^Used\b/i.test(te)&&r.condId===1000)a.push('英題がUsedなのに新品');
     if(!/^Used\b/i.test(te)&&r.condId!==1000&&r.condId!==0)a.push('中古なのに英題にUsedがない');
   }
+  // フィギュアの原産国は補完しないので、空なら指摘する。
+  if(r.cat!=='139973'&&!String((r.specs||{}).origin||'').trim())a.push('原産国なし');
+  // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
+  if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
   var v=csvVerdict(r);
   if(v==='none')a.push('未判定（相場未入力）');
-  else if(v==='amazon')a.push('Amazon優先');
+  else if(v==='amazon'&&!r.forceEbay)a.push('Amazon優先');   // 「出す」にした行は除外しない
   return a;
 }
 /* 並び順（6.5.1）。相場入力が絞り込みの入口なので、未判定を先頭に置き、
@@ -2584,14 +2611,15 @@ function csvLogged(r){
 }
 function csvRender(){
   $('csvCount').textContent=csvList.length;
-  var ng=0,ebayN=0,amzN=0,noneN=0,used=0;
+  var ng=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
   csvList.forEach(function(r){
     var v=csvVerdict(r);
-    if(v==='ebay')ebayN++; else if(v==='amazon')amzN++; else noneN++;
+    if(v==='ebay')ebayN++; else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; } else noneN++;
     if(csvIssues(r).filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';}).length)ng++;
     if(r.condId!==1000)used++; });
   $('csvSummary').textContent=csvList.length
     ? ('未判定 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
+       +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
        +'　/　英題・説明文の未入力 '+ng+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
   var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
@@ -2608,6 +2636,8 @@ function csvRender(){
     if(v==='ebay')badge+=b('eBay優先','var(--good)');
     else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
     else badge+=b('未判定','var(--mute)');
+    if(v==='amazon'&&r.forceEbay)badge+=b('eBayにも出す','#2f6fb0');
+    if(r.oneOff)badge+=b('一点物','#6b4fa0');
     if(th.relaxed)badge+=b('緩和','var(--mute)');
     var rest=iss.filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';});
     if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
@@ -2643,7 +2673,12 @@ function csvRender(){
     if(r.cat!=='139973')
       h+='<button class="btn" data-fig="'+r.id+'" style="padding:5px 8px;font-size:12px">'
         +(r.cat==='261068'?'可動→非可動へ':'非可動→可動へ')+'</button>';
-    h+='<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
+    if(v==='amazon')
+      h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
+        +(r.forceEbay?'オン':'オフ')+'</button>';
+    h+='<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
+      +(r.oneOff?'オン':'オフ')+'</button>'
+      +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
       +'<button class="btn" data-fba="'+r.id+'" style="padding:5px 8px;font-size:12px">FBA連動 '
       +(r.fba?'オン':'オフ')+'</button>'
       +'<button class="btn" data-zero="'+r.id+'" style="padding:5px 8px;font-size:12px">在庫0時：'
@@ -2667,7 +2702,8 @@ function csvRender(){
 $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
-        ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit');
+        ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
+        ||t.getAttribute('data-force')||t.getAttribute('data-one');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
@@ -2680,6 +2716,8 @@ $('csvList').addEventListener('click',function(e){
     if(!csvList[i].wManual){ csvList[i].weight=csvWeightFor(csvList[i]); csvRecalc(csvList[i]); }
   }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
+  else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
+  else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
   else if(t.hasAttribute('data-zero')){
     var seq=['hold','restock','end'];
     csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
@@ -2784,7 +2822,7 @@ function csvRowFor(r){
     o['C:Original/Licensed Reproduction']='Original';
     o['C:Vintage']='No';
     o['C:Signed']='No';
-    o['C:Country of Origin']=sp.origin||'Japan';
+    o['C:Country of Origin']=sp.origin||'';   // 空なら補完せず、csvIssues で指摘する
     o['C:Model']=sp.model||'';
     o['C:Series']='';                               // 推奨値に日本の商品ラインが無いため空欄
     o['C:MPN']=r.jan||'';
@@ -2810,15 +2848,27 @@ function csvStamp(){
 }
 $('csvExport').onclick=function(){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
-  var bad=csvList.filter(function(r){ return csvIssues(r).length; });
-  var rows=csvList;
-  if(bad.length){
-    var msg=bad.length+'件に未入力・不備があります。\n\n'
-      +bad.slice(0,5).map(function(r){return '・'+(r.titleJa||r.sku)+'：'+csvIssues(r).join('・');}).join('\n')
-      +(bad.length>5?('\n…ほか'+(bad.length-5)+'件'):'')
-      +'\n\nOK：不備のある行を除いて書き出す\nキャンセル：書き出しを中止する';
+  // 除外する理由を「不備」と「Amazon優先」に分けて数える。
+  var rows=csvList.filter(function(r){ return !csvIssues(r).length; });
+  var amz=[], bad=[];
+  csvList.forEach(function(r){
+    var iss=csvIssues(r); if(!iss.length)return;
+    var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
+    if(rest.length)bad.push({r:r,why:rest.join('・')});
+    else amz.push({r:r});
+  });
+  if(bad.length||amz.length){
+    function list(a,withWhy){
+      return a.slice(0,5).map(function(x){
+        return ' \u30FB'+(x.r.titleJa||x.r.sku)+(withWhy?('：'+x.why):''); }).join('\n')
+        +(a.length>5?('\n \u2026ほか'+(a.length-5)+'件'):'');
+    }
+    var msg='書き出し対象：'+rows.length+'件\n';
+    if(bad.length)msg+='\n不備のため除外：'+bad.length+'件\n'+list(bad,true)+'\n';
+    if(amz.length)msg+='\nAmazon優先のため除外：'+amz.length+'件\n'+list(amz,false)+'\n'
+      +'（行の「Amazon優先でも出す」をオンにすると書き出せます）\n';
+    msg+='\nOK：上記を除いて書き出す\nキャンセル：中止';
     if(!confirm(msg))return;
-    rows=csvList.filter(function(r){ return !csvIssues(r).length; });
     if(!rows.length){ alert('書き出せる行がありません。'); return; }
   }
   var byCat={}; rows.forEach(function(r){ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
@@ -2831,7 +2881,8 @@ $('csvExport').onclick=function(){
   var at=new Date().toISOString().slice(0,10);
   rows.forEach(function(r){
     csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
-      at:at, price:r.price, fba:!!r.fba, zeroAct:r.zeroAct,
+      at:at, price:r.price, fba:!!r.fba, forceEbay:!!r.forceEbay, oneOff:!!r.oneOff,
+      zeroAct:r.zeroAct,
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
   csvSaveLog(); csvRender();
@@ -3009,7 +3060,8 @@ $('addToCsv').onclick=function(){
     condId:(condKey()==='sealed'||condKey()==='newopen')?1000:(cat==='139973'?3000:3000),
     descHtml:descHTML(), qty:1, cost:+$('cost').value||0, weight:+$('weight').value||0,
     wRaw:0, wManual:true,                    // 手入力の重量なので再計算の対象外
-    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'', sold:'',
+    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', forceEbay:false, oneOff:false,
+    amzLow:'', amzLowAt:'', itemId:'', sold:'',
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
             // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
             brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),
