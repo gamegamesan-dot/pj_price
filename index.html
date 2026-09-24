@@ -601,13 +601,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
-      <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off"></div>
+      <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
       <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
       <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
       <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
       <div class="rowv"><label>画像サーバーURL</label><input type="text" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev"></div>
-      <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
+      <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
       <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
       <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
     </div>
@@ -1444,6 +1444,7 @@ var PLATFORMS=[
   {key:'ps1',    title:'PS1',              spec:'Sony PlayStation 1',pat:['PS1']},
   {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],target:true,lock:'3ds'},
   {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS'],target:true},
+  {key:'xboxone',title:'Xbox One',         spec:'Microsoft Xbox One',pat:['Xbox One','XboxOne'],target:true},
   {key:'wiiu',   title:'Wii U',            spec:'Nintendo Wii U',    pat:['Wii U','WiiU']},
   {key:'wii',    title:'Wii',              spec:'Nintendo Wii',      pat:['Wii']},
   {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC']},
@@ -1459,6 +1460,12 @@ var PLATFORMS=[
   // 最後の保険。上のどれにも当たらなかった "PS" だけ初代とみなす
   {key:'ps1b',   title:'PS1',              spec:'Sony PlayStation 1',pat:['PS'],alias:true}
 ];
+// Worker が返す機種キーから表の1行を引く
+function platByKey(k){
+  var t=String(k||'').trim(); if(!t)return null;
+  for(var i=0;i<PLATFORMS.length;i++) if(PLATFORMS[i].key===t)return PLATFORMS[i];
+  return null;
+}
 function platBy(field,v){
   var t=String(v||'').trim(); if(!t)return null;
   for(var i=0;i<PLATFORMS.length;i++) if(PLATFORMS[i][field]===t && !PLATFORMS[i].alias)return PLATFORMS[i];
@@ -2414,13 +2421,24 @@ function csvLoad(){
 }
 function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
+// 前後の空白を落として保存する欄（貼り付けで混ざりやすいURL・トークン類）
+var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken'];
 function csvSaveCfg(){
-  try{ var o={}; CSV_CFG_IDS.forEach(function(id){o[id]=$(id).value;});
+  try{ var o={}; CSV_CFG_IDS.forEach(function(id){
+         var v=$(id).value;
+         o[id]=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v; });
        o.csvAutoParse=$('csvAutoParse').checked;
        localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
+// 入力が終わった時点で、欄の表示からも前後の空白を消す
+CSV_CFG_TRIM.forEach(function(id){
+  $(id).addEventListener('change',function(){
+    var t=String(this.value).trim();
+    if(t!==this.value){ this.value=t; csvSaveCfg(); }
+  });
+});
 
 /* ---- CSVの読み書き ---- */
 // RFC4180風のパーサ。引用符内の , と改行を尊重する。
@@ -2718,11 +2736,28 @@ function csvLogged(r){
 var CSV_TSTAT={ok:['ok','var(--good)'],review:['要確認','#8a6d00'],
   not_found:['見つからない','var(--mute)'],invalid_jan:['JAN不正','var(--bad)'],
   error:['通信エラー','var(--bad)']};
+// 機種が分からない行に出すプルダウン。選べば英題生成の対象になる。
+function csvPlatSelect(r){
+  var h='<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
+    +'<span class="note2" style="margin:0;flex:0 0 auto">機種</span>'
+    +'<select data-plat="'+r.id+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;'
+    +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+    +'<option value="">商品名から判定できません。選んでください</option>';
+  PLATFORMS.forEach(function(p){
+    if(p.alias)return;
+    h+='<option value="'+esc(p.key)+'">'+esc(p.title)+(p.target?'':'（対象外）')+'</option>';
+  });
+  return h+'</select></div>';
+}
 function csvTitleBox(r){
   var t=csvTitleTarget(r);
   if(!t)return '';                                   // ゲーム以外は出さない
-  if(t!=='ok')
-    return '<div class="note2" style="margin-top:4px">英語タイトル生成：'+esc(t)+'（手入力してください）</div>';
+  if(t==='out')
+    return '<div class="note2" style="margin-top:4px">英語タイトル生成：対象外機種（手入力）</div>';
+  if(t==='unknown')
+    return csvPlatSelect(r)
+      +'<div class="note2" style="margin-top:2px">機種を選ぶか、「英語タイトル生成」でAmazonから補完します。'
+      +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
   var te=String(r.titleEn||''), len=te.length;
   var col=len>80?'var(--bad)':(len>72?'#8a6d00':'var(--mute)');
   var st=CSV_TSTAT[r.titleStatus]||null;
@@ -2927,6 +2962,14 @@ $('csvList').addEventListener('change',function(e){
   // 数量・ItemIDは表示が変わらないうえ、ここで作り直すと
   // 次に触ろうとした欄ごと消えてしまうため、作り直さない。
   var t=e.target; if(!t||!t.getAttribute)return;
+  var pid=t.getAttribute('data-plat');
+  if(pid){
+    var rp=csvRowById(pid); if(!rp)return;
+    var pk=platByKey(t.value);
+    rp.specs=rp.specs||{};
+    rp.specs.platform=pk?pk.spec:'';
+    csvSaveList(); csvRender(); return;      // 表示が入れ替わるので作り直す
+  }
   if(t.getAttribute('data-sold'))csvRender();   // 英題・数量・ItemIDは作り直さない
 });
 $('csvSort').addEventListener('change',csvRender);
@@ -3309,14 +3352,18 @@ $('csvResFile').addEventListener('change',function(){
    （書式は出品文タブと同じ1か所）。対象はゲームで、対象機種の行だけ。 */
 var CSV_TITLE_BATCH=10;   // Workers無料プランのサブリクエスト上限に触れない件数
 function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
-// 生成の対象になり得る行か
+/* 生成の対象になり得る行か。
+   'ok'      … そのまま送れる
+   'unknown' … 機種が分からない。Worker がAmazonから機種を補える可能性があるので送る
+   'out'     … 対象外の機種。送らない
+   ''        … ゲーム以外 */
 function csvTitleTarget(r){
-  if(r.cat!=='139973')return '';                 // ゲーム以外
+  if(r.cat!=='139973')return '';
   var p=csvPlatOf(r);
-  if(!p)return '機種不明';
-  if(!p.target)return '対象外の機種';
-  return 'ok';
+  if(!p)return 'unknown';
+  return p.target?'ok':'out';
 }
+function csvTitleSendable(r){ var t=csvTitleTarget(r); return t==='ok'||t==='unknown'; }
 // english_name からタイトルを組み立てて行へ書き戻す
 function csvApplyName(r,name){
   var p=csvPlatOf(r);
@@ -3327,13 +3374,14 @@ function csvApplyName(r,name){
 function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
 // 1回分（最大 CSV_TITLE_BATCH 件）を送る
 function csvTitleSend(rows,force){
-  var api=String($('csvTitleApi').value||'').replace(/\/+$/,'');
+  var api=String($('csvTitleApi').value||'').trim().replace(/\/+$/,'');
   return fetch(api+'/titles',{
     method:'POST',
-    headers:{'content-type':'application/json','X-PJ-Key':$('csvTitleKey').value},
+    headers:{'content-type':'application/json','X-PJ-Key':String($('csvTitleKey').value||'').trim()},
     body:JSON.stringify({force:!!force, items:rows.map(function(r){
       var p=csvPlatOf(r);
-      return { jan:r.jan, ja_title:r.titleJa||'', platform:p?p.title:'',
+      // ASINも送る。JANが商品と結びついていない行はASINで引いてもらう。
+      return { jan:r.jan, asin:r.asin||'', ja_title:r.titleJa||'', platform:p?p.title:'',
                condition:(r.condId===1000?'new':'used') };
     })})
   }).then(function(res){
@@ -3346,7 +3394,13 @@ function csvTitleSend(rows,force){
       r.titleStatus=x.status||'review';
       r.titleCands=x.candidates||[];
       r.titleNote=x.note||'';
-      if(x.english_name)csvApplyName(r,x.english_name);
+      /* 機種が空だった行に Worker が機種を入れてきたら、表で正規化して
+         Item Specifics の Platform にも反映する。 */
+      if(!csvPlatOf(r)&&x.platform_key){
+        var pk=platByKey(x.platform_key);
+        if(pk){ r.specs=r.specs||{}; r.specs.platform=pk.spec; }
+      }
+      if(x.english_name&&csvTitleTarget(r)==='ok')csvApplyName(r,x.english_name);
     });
     csvSaveList();
   });
@@ -3381,8 +3435,11 @@ $('csvTitleGen').onclick=function(){
     alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
   }
   // 未生成の行だけ。手で直した行（titleManual）は上書きしない。
-  var target=csvList.filter(function(r){ return csvTitleTarget(r)==='ok'; });
-  var todo=target.filter(function(r){ return !r.titleManual&&!String(r.titleEn||'').trim(); });
+  var target=csvList.filter(csvTitleSendable);
+  // 未生成の行と、前回エラーで終わった行を対象にする
+  var todo=target.filter(function(r){
+    return !r.titleManual&&(!String(r.titleEn||'').trim()||r.titleStatus==='error');
+  });
   if(!todo.length){
     alert(target.length
       ? '未生成のゲーム行がありません。作り直すときは行の「再生成」を押してください。'

@@ -5,7 +5,7 @@
 生成結果は人が確認・編集してから、eBay一括出品CSVに書き出す。
 
 対象はゲームソフトとし、機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP /
-3DS / DS とする（3DS・DS は 2026-09-24 に追加）。
+3DS / DS / Xbox One とする（3DS・DS・Xbox One は 2026-09-24 に追加）。
 箱説自体に価値のあるレトロゲームは対象外。**対象外の機種の行は /titles を呼ばない**（2026-09-24 決定）。
 
 > **2026-09-24 の決定**
@@ -112,6 +112,12 @@ pj_price 側の `buildGameTitle()` が持つ（書式を2か所に置かない�
      `sources` に `ebay_keyword` を入れ、`status` は `review` にする。
      どちらも0件なら次へ進む。
 4. **Amazon SP-API（Catalog Items API 2022-04-01 `searchCatalogItems`）**
+   - **ASIN が届いていれば `identifiersType=ASIN` で引く**（JANが商品と結びついて
+     いない行があるため）。無ければ従来どおり EAN。
+   - `includedData=summaries,attributes` とし、商品名から機種を判定できなかった行は
+     属性（platform / hardware_platform など）→ 商品名 → ブラウズ分類の順に見て
+     機種を補う。補えたときは機種キーを `platform_key` で返し、`status` は `review`
+     にする。表記の正規化は pj_price 側の PLATFORMS 表が行う。
    - LWAでアクセストークンを取得する（SigV4署名は不要）。
    - 米国：`sellingpartnerapi-na.amazon.com`、marketplace `ATVPDKIKX0DER`、`identifiers={jan}&identifiersType=EAN&includedData=summaries`。**`SPAPI_REFRESH_TOKEN_NA` がない場合はスキップ**する。
    - 日本：`sellingpartnerapi-fe.amazon.com`、marketplace `A1VC38T7YXB528`。日本語名・ブランド・機種の補強に使う。
@@ -174,6 +180,12 @@ Worker側に残すのは次の2つだけ。
 - 「英語タイトル生成」ボタンを追加する。未生成の行だけを20件ずつ送り、進捗を「12/48」のように表示する。
 - 各行に、編集可能な英語タイトル欄・文字数カウンター（80超は赤）・statusバッジ（ok=緑／review=黄／not_found=灰）を表示する。候補元タイトルは折りたたみで見られるようにする。
 - 手動で編集した行には「編集済み」フラグを立て、再生成で上書きしない。行ごとの「再生成（force）」ボタンは別に用意する。
+- 商品名から機種を判定できない行も送る（Worker がAmazonから機種を補うため）。
+  それでも判定できない行には、行ごとに機種を選ぶプルダウンを出す。選べば生成の対象になる。
+- 対象外の機種の行は「対象外機種（手入力）」と表示する。
+- 通信エラー（401など）で終わった行は、次回の一括生成でも再送の対象にする。
+- トークン欄は `autocapitalize="off" autocorrect="off" spellcheck="false"` を付け、
+  保存時に前後の空白を落とす。
 - CSV書き出しでは、画面上の（編集後の）タイトルを使う。書き出し形式は数量更新CSVと同じルール（引用符は必要な項目のみ・CRLF・UTF-8 BOMなし）に従う。**この形式は v60 で対応済み。**
 - 対象外の機種（DS / 3DS / Wii / Xbox など）の行は送らず、画面に「対象外の機種」と表示する。
 - 機種の変換表を1つにまとめ、タイトル用の表記（`Nintendo Switch` / `PS5` …）と

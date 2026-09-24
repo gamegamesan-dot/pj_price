@@ -50,30 +50,33 @@ const PLATFORM_WORDS = [
   "PlayStation Vita", "PS Vita", "PSVita", "Vita",
   "PlayStation Portable", "PSP",
   "Nintendo 3DS", "3DS", "Nintendo DS", "DS",
+  "Xbox One", "XboxOne",
 ];
 
 /* 候補タイトルから機種を読み取るための表。上から順に見るので、
    Switch 2 → Switch、PS Vita → PS のように長い綴りを先に並べる。
    pj_price から届く platform の綴りも同じ関数で正規化する。 */
 const PLATFORM_KEYS = [
-  ["switch2", /\b(nintendo\s+)?switch\s*2\b/i],
-  ["switch",  /\b(nintendo\s+)?switch\b/i],
-  ["psvita",  /\b(playstation\s*vita|ps\s*vita|psvita|\bvita)\b/i],
-  ["psp",     /\b(playstation\s*portable|psp)\b/i],
-  ["ps5",     /\b(playstation\s*5|ps\s*5|ps5)\b/i],
-  ["ps4",     /\b(playstation\s*4|ps\s*4|ps4)\b/i],
-  ["ps3",     /\b(playstation\s*3|ps\s*3|ps3)\b/i],
-  ["ps2",     /\b(playstation\s*2|ps\s*2|ps2)\b/i],
-  ["3ds",     /\b(nintendo\s*)?3ds\b/i],
-  ["ds",      /\b(nintendo\s*)?ds\b/i],
+  ["switch2", /\b(nintendo\s+)?switch\s*2\b|スイッチ\s*2|ニンテンドー\s*スイッチ\s*2/i],
+  ["switch",  /\b(nintendo\s+)?switch\b|ニンテンドー\s*スイッチ|スイッチ/i],
+  ["psvita",  /\b(playstation\s*vita|ps\s*vita|psvita|vita)\b|プレイステーション\s*[・]?\s*ヴィータ|プレステ\s*ヴィータ/i],
+  ["psp",     /\b(playstation\s*portable|psp)\b|プレイステーション\s*[・]?\s*ポータブル/i],
+  ["ps5",     /\b(playstation\s*5|ps\s*5|ps5)\b|プレイステーション\s*5/i],
+  ["ps4",     /\b(playstation\s*4|ps\s*4|ps4)\b|プレイステーション\s*4/i],
+  ["ps3",     /\b(playstation\s*3|ps\s*3|ps3)\b|プレイステーション\s*3/i],
+  ["ps2",     /\b(playstation\s*2|ps\s*2|ps2)\b|プレイステーション\s*2/i],
+  ["3ds",     /\b(nintendo\s*)?3ds\b|ニンテンドー\s*3ds/i],
+  ["ds",      /\b(nintendo\s*)?ds\b|ニンテンドー\s*ds/i],
+  ["xboxone", /\bxbox\s*one\b|エックスボックス\s*ワン/i],
 ];
 // 対象外の機種も、候補が別物だと見抜くために読めるようにしておく
 const OTHER_PLATFORM_KEYS = [
-  ["wiiu",  /\bwii\s*u\b/i],
-  ["wii",   /\bwii\b/i],
-  ["xbox",  /\bxbox\b/i],
-  ["gba",   /\bgame\s*boy\s*advance|\bgba\b/i],
-  ["ps1",   /\b(playstation\s*1|ps\s*one|psone|ps1)\b/i],
+  ["wiiu",   /\bwii\s*u\b/i],
+  ["wii",    /\bwii\b|ウィー/i],
+  ["xbox360",/\bxbox\s*360\b/i],
+  ["xbox",   /\bxbox\b|エックスボックス/i],
+  ["gba",    /\bgame\s*boy\s*advance\b|\bgba\b/i],
+  ["ps1",    /\b(playstation\s*1|ps\s*one|psone|ps1)\b/i],
 ];
 const ALL_PLATFORM_KEYS = PLATFORM_KEYS.concat(OTHER_PLATFORM_KEYS);
 
@@ -85,8 +88,10 @@ function platformsIn(text) {
     if (re.test(t)) {
       // switch2 が当たったら switch は数えない（同じ綴りを二重に数えないため）
       if (key === "switch" && found.includes("switch2")) continue;
-      if (key === "ds" && (found.includes("3ds"))) continue;
+      if (key === "ds" && found.includes("3ds")) continue;
       if (key === "wii" && found.includes("wiiu")) continue;
+      if (key === "xbox" && (found.includes("xboxone") || found.includes("xbox360"))) continue;
+      if (key === "xbox360" && found.includes("xboxone")) continue;
       found.push(key);
     }
   }
@@ -309,25 +314,48 @@ async function lwaToken(env, refresh, cacheKey) {
 }
 
 // SigV4 署名は不要（LWAのアクセストークンのみ）
-async function spCatalog(env, region, jan, log) {
+/* Catalog Items の中から機種を読み取る。
+   属性 → 商品名 → ブラウズ分類の順に見て、最初に当たったキーを返す。 */
+function spPlatformKey(it) {
+  const texts = [];
+  const at = it.attributes || {};
+  ["platform", "hardware_platform", "video_game_platform", "compatible_devices"].forEach((k) => {
+    (at[k] || []).forEach((x) => { if (x && typeof x.value === "string") texts.push(x.value); });
+  });
+  (it.summaries || []).forEach((sm) => {
+    if (sm.browseClassification && sm.browseClassification.displayName)
+      texts.push(sm.browseClassification.displayName);
+    if (sm.itemName) texts.push(sm.itemName);
+  });
+  for (const t of texts) {
+    const f = platformsIn(t);
+    if (f.length) return f[0];
+  }
+  return "";
+}
+// ASIN が分かっていればそちらで引く（JANが商品と結びついていないことがあるため）
+async function spCatalog(env, region, jan, log, asin) {
   const na = region === "na";
   const refresh = na ? env.SPAPI_REFRESH_TOKEN_NA : env.SPAPI_REFRESH_TOKEN_FE;
   // 米国は SPAPI_REFRESH_TOKEN_NA が登録されているときだけ動く（仕様3.4-4）
   if (!refresh || !env.LWA_CLIENT_ID || !env.LWA_CLIENT_SECRET) return null;
+  const id = String(asin || "").trim() || jan;
+  const idType = String(asin || "").trim() ? "ASIN" : "EAN";
   try {
     const token = await lwaToken(env, refresh, `lwa:${region}`);
     const host = na ? "sellingpartnerapi-na.amazon.com" : "sellingpartnerapi-fe.amazon.com";
     const mp = na ? MP_NA : MP_FE;
-    const url = `https://${host}/catalog/2022-04-01/items?identifiers=${encodeURIComponent(jan)}`
-      + `&identifiersType=EAN&marketplaceIds=${mp}&includedData=summaries`;
+    const url = `https://${host}/catalog/2022-04-01/items?identifiers=${encodeURIComponent(id)}`
+      + `&identifiersType=${idType}&marketplaceIds=${mp}&includedData=summaries,attributes`;
     const resp = await fetch(url, { headers: { "x-amz-access-token": token } });
-    log.push(`spapi_${region} -> ${resp.status}`);
+    log.push(`spapi_${region} ${idType}=${id} -> ${resp.status}`);
     if (!resp.ok) return null;
     const d = await resp.json();
     const it = (d.items || [])[0];
     if (!it) return null;
     const sm = (it.summaries || [])[0] || {};
-    return { title: sm.itemName || "", brand: sm.brand || "", model: sm.modelNumber || "" };
+    return { title: sm.itemName || "", brand: sm.brand || "", model: sm.modelNumber || "",
+             platformKey: spPlatformKey(it) };
   } catch (e) {
     log.push(`spapi_${region}_error ` + e.message);
     return null;
@@ -433,36 +461,46 @@ async function handleItem(env, item, force) {
     if (hit && hit.english_name)
       return { jan, status: hit.status || "ok", english_name: hit.english_name,
                sources: hit.sources || [], candidates: hit.candidates || [],
-               note: "キャッシュ", cached: true };
+               platform_key: hit.platform_key || "", note: "キャッシュ", cached: true };
   }
 
   const eb = await ebayCandidates(env, jan, log);
   const [us, jp] = await Promise.all([
-    spCatalog(env, "na", jan, log),
-    spCatalog(env, "fe", jan, log),
+    spCatalog(env, "na", jan, log, item.asin),
+    spCatalog(env, "fe", jan, log, item.asin),
   ]);
+
+  /* 機種が分からない行は、Amazon（日本）から拾った機種で補う。
+     キーだけ返し、表記の正規化は pj_price 側の PLATFORMS 表に任せる。 */
+  let platKey = platformKey(item.platform);
+  let platFilled = "";
+  if (!platKey) {
+    platKey = (jp && jp.platformKey) || (us && us.platformKey) || "";
+    if (platKey) { platFilled = jp && jp.platformKey ? "amazon_jp" : "amazon_us"; }
+  }
+  const platItem = { ...item, platform: platKey || item.platform };
 
   // 全角ローマ数字を直してから渡す（雷電Ⅲ → 雷電III）
   const jaTitle = normRoman(String(item.ja_title || "")).slice(0, MAX_JA);
   // 機種違い・セット品はAIへ渡す前に落とす
-  const flt = filterCandidates(eb.titles, { ...item, ja_title: jaTitle });
+  const flt = filterCandidates(eb.titles, { ...platItem, ja_title: jaTitle });
   const candidates = flt.kept.slice(0, MAX_CANDIDATES);
   if (flt.dropped.length)
     log.push("除外 " + flt.dropped.map((d) => `${d[1]}: ${d[0]}`).join(" / "));
   if (!eb.titles.length && !us && !jp && !jaTitle.trim())
     return { jan, status: "not_found", english_name: "", sources: [], candidates: [],
-             note: "候補も日本語名もありません", log };
+             platform_key: platKey, note: "候補も日本語名もありません", log };
 
-  const ai = await askClaude(env, { ...item, ja_title: jaTitle }, flt.kept, us, jp, log);
+  const ai = await askClaude(env, { ...platItem, ja_title: jaTitle }, flt.kept, us, jp, log);
   if (!ai)
     return { jan, status: "review", english_name: "", sources: [], candidates,
-             note: "英語名を判定できませんでした", log };
+             platform_key: platKey, note: "英語名を判定できませんでした", log };
 
   const st = stripExtras(cleanName(ai.english_name));
   const english_name = st.name;
   if (!english_name)
     return { jan, status: "review", english_name: "", sources: [], candidates,
-             note: "英語名が空になりました", log };
+             platform_key: platKey, note: "英語名が空になりました", log };
 
   const sources = [];
   if (flt.kept.length) sources.push(eb.via === "q" ? "ebay_keyword" : "ebay");
@@ -483,16 +521,18 @@ async function handleItem(env, item, force) {
   if (eb.via === "q") notes.push("gtin検索が0件のためキーワード検索の結果");
   let status = "review";
   if (ai.confidence === "high" && ai.same_item && (agree || (us && us.title))) status = "ok";
+  // 機種を補完した行は人の目で確かめてもらう
+  if (platFilled) { notes.push("機種をAmazon（" + (platFilled === "amazon_jp" ? "日本" : "米国") + "）から補完"); }
   else if (!ai.same_item && flt.kept.length) notes.push("候補が同じ商品と確認できない");
   else if (ai.basis === "translation") notes.push("候補がなく翻訳で生成");
   else notes.push("候補が少ないか確信度が中以下");
-  if (status === "ok" && st.stripped) status = "review";
+  if (status === "ok" && (st.stripped || platFilled)) status = "review";
 
-  const result = { jan, status, english_name, sources, candidates,
+  const result = { jan, status, english_name, sources, candidates, platform_key: platKey,
                    note: notes.join("／") || "候補と一致", log };
   // タイトル本体は保存しない（仕様3.8）
   await env.TITLE_CACHE.put(key,
-    JSON.stringify({ english_name, sources, candidates, status }),
+    JSON.stringify({ english_name, sources, candidates, status, platform_key: platKey }),
     { expirationTtl: CACHE_TTL });
   return result;
 }
