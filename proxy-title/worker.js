@@ -18,8 +18,7 @@
  *   KV TITLE_CACHE          … 生成結果・アクセストークンのキャッシュ
  *
  * エンドポイント:
- *   POST /titles      … 本体。最大20件
- *   GET  /debug/gtin  … 受け入れテスト用。X-PJ-Key 必須。テスト後に削除する
+ *   POST /titles … 本体。最大20件
  *
  * 悪用対策:
  *   - CORS は pj_price の Pages オリジンに限定し、X-PJ-Key が一致しなければ401
@@ -50,6 +49,7 @@ const PLATFORM_WORDS = [
   "PlayStation 2", "PlayStation2", "PS2",
   "PlayStation Vita", "PS Vita", "PSVita", "Vita",
   "PlayStation Portable", "PSP",
+  "Nintendo 3DS", "3DS", "Nintendo DS", "DS",
 ];
 
 /* 候補タイトルから機種を読み取るための表。上から順に見るので、
@@ -64,11 +64,11 @@ const PLATFORM_KEYS = [
   ["ps4",     /\b(playstation\s*4|ps\s*4|ps4)\b/i],
   ["ps3",     /\b(playstation\s*3|ps\s*3|ps3)\b/i],
   ["ps2",     /\b(playstation\s*2|ps\s*2|ps2)\b/i],
+  ["3ds",     /\b(nintendo\s*)?3ds\b/i],
+  ["ds",      /\b(nintendo\s*)?ds\b/i],
 ];
 // 対象外の機種も、候補が別物だと見抜くために読めるようにしておく
 const OTHER_PLATFORM_KEYS = [
-  ["3ds",   /\b(nintendo\s*)?3ds\b/i],
-  ["ds",    /\b(nintendo\s*)?ds\b/i],
   ["wiiu",  /\bwii\s*u\b/i],
   ["wii",   /\bwii\b/i],
   ["xbox",  /\bxbox\b/i],
@@ -133,7 +133,7 @@ const BANNED = [
 function corsHeaders(origin) {
   // 許可オリジンのみ返す（未知オリジンには ACAO を付けない）
   const h = {
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "content-type, x-pj-key",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
@@ -530,17 +530,6 @@ export default {
       return json({ error: "unauthorized" }, 401, origin);
     if (!env.TITLE_CACHE)
       return json({ error: "server_misconfigured", detail: "TITLE_CACHE" }, 500, origin);
-
-    /* 受け入れテスト用。eBayの生の当たり方だけを見る。
-       7章のテストが済んだら、このブロックごと削除する。 */
-    if (request.method === "GET" && url.pathname === "/debug/gtin") {
-      const jan = (url.searchParams.get("jan") || "").trim();
-      if (!validJan(jan)) return json({ error: "invalid_jan", jan }, 400, origin);
-      const log = [];
-      const eb = await ebayCandidates(env, jan, log);
-      return json({ jan, via: eb.via, count: eb.titles.length,
-                    titles: eb.titles.slice(0, MAX_CANDIDATES), log }, 200, origin);
-    }
 
     if (request.method !== "POST" || url.pathname !== "/titles")
       return json({ error: "not_found" }, 404, origin);

@@ -310,18 +310,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 
       <div id="gameFields" style="display:none">
         <div class="row"><label>機種</label>
-          <select id="gPlat" style="flex:0 0 auto">
-            <option value="">（選択）</option>
-            <option>PS5</option><option>PS4</option><option>PS3</option><option>PS2</option><option>PS1</option>
-            <option>PS Vita</option><option>PSP</option>
-            <option>Nintendo Switch 2</option><option>Nintendo Switch</option>
-            <option>Wii U</option><option>Wii</option><option>GameCube</option><option>N64</option>
-            <option>Super Famicom</option><option>Famicom</option>
-            <option>Game Boy</option><option>Game Boy Advance</option>
-            <option>Nintendo DS</option><option>Nintendo 3DS</option>
-            <option>Sega Saturn</option><option>Dreamcast</option><option>Mega Drive</option>
-            <option value="Other">Other</option>
-          </select>
+          <!-- 選択肢は PLATFORMS（機種の変換表）から作る。ここには書かない -->
+          <select id="gPlat" style="flex:0 0 auto"><option value="">（選択）</option></select>
         </div>
         <div class="rowv" id="gPlatFreeRow"><label>機種（自由入力）</label><input type="text" id="gPlatFree" placeholder="Neo Geo / PC Engine など"></div>
         <div class="rowv"><label>タイトル（ソフト名）</label><input type="text" id="gTitle" placeholder="Final Fantasy VII Rebirth"></div>
@@ -533,6 +523,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="sub" id="csvSummary">&mdash;</div>
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
+      <button class="btn" id="csvTitleGen" style="width:100%;margin-top:8px">英語タイトル生成（未生成の行）</button>
+      <div class="note2" id="csvTitleNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
         <button class="btn" id="csvClear" style="flex:1 1 0;min-width:0;padding:9px 4px">リストを空にする</button>
@@ -608,6 +600,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
+      <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off"></div>
       <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
       <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
       <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
@@ -1432,6 +1426,52 @@ var CONDNOTE={
   used:'A pre-owned item, inspected by hand. Condition is shown honestly in the photos; please review them before buying.'
 };
 
+/* ---- 機種の変換表（ここ1か所に集める）----
+   title … タイトルに出す表記（gPlat の選択肢の値もこれ）
+   spec  … eBay Item Specifics の Platform に入れる値
+   pat   … せどりすとの和名に出てくる綴り。上から順に見るので長いものを先に置く
+   target… 英語タイトル自動生成（/titles）の対象機種か
+   lock  … 出品文にリージョンロックの注記を出す機種 */
+var PLATFORMS=[
+  {key:'switch2',title:'Nintendo Switch 2',spec:'Nintendo Switch 2',pat:['Switch 2','Switch2','スイッチ2'],target:true},
+  {key:'switch', title:'Nintendo Switch',  spec:'Nintendo Switch',  pat:['スイッチ','Switch'],target:true},
+  {key:'ps5',    title:'PS5',              spec:'Sony PlayStation 5',pat:['PS5'],target:true},
+  {key:'ps4',    title:'PS4',              spec:'Sony PlayStation 4',pat:['PS4'],target:true},
+  {key:'ps3',    title:'PS3',              spec:'Sony PlayStation 3',pat:['PS3'],target:true},
+  {key:'ps2',    title:'PS2',              spec:'Sony PlayStation 2',pat:['PS2'],target:true},
+  {key:'psvita', title:'PS Vita',          spec:'Sony PlayStation Vita',pat:['PS Vita','PSVita'],target:true},
+  {key:'psp',    title:'PSP',              spec:'Sony PSP',          pat:['PSP'],target:true},
+  {key:'ps1',    title:'PS1',              spec:'Sony PlayStation 1',pat:['PS1']},
+  {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],target:true,lock:'3ds'},
+  {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS'],target:true},
+  {key:'wiiu',   title:'Wii U',            spec:'Nintendo Wii U',    pat:['Wii U','WiiU']},
+  {key:'wii',    title:'Wii',              spec:'Nintendo Wii',      pat:['Wii']},
+  {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC']},
+  {key:'gba',    title:'Game Boy Advance', spec:'Nintendo Game Boy Advance',pat:['GBA']},
+  {key:'gbc',    title:'Game Boy Color',   spec:'Nintendo Game Boy Color',pat:['GBC']},
+  {key:'gb',     title:'Game Boy',         spec:'Nintendo Game Boy', pat:['GB']},
+  {key:'n64',    title:'N64',              spec:'Nintendo 64',       pat:['N64']},
+  {key:'sfc',    title:'Super Famicom',    spec:'Nintendo Super Famicom',pat:['スーパーファミコン','SFC']},
+  {key:'fc',     title:'Famicom',          spec:'Nintendo NES',      pat:['ファミコン','FC']},
+  {key:'ss',     title:'Sega Saturn',      spec:'Sega Saturn',       pat:['サターン']},
+  {key:'dc',     title:'Dreamcast',        spec:'Sega Dreamcast',    pat:['ドリームキャスト']},
+  {key:'md',     title:'Mega Drive',       spec:'Sega Genesis',      pat:['メガドライブ']},
+  // 最後の保険。上のどれにも当たらなかった "PS" だけ初代とみなす
+  {key:'ps1b',   title:'PS1',              spec:'Sony PlayStation 1',pat:['PS'],alias:true}
+];
+function platBy(field,v){
+  var t=String(v||'').trim(); if(!t)return null;
+  for(var i=0;i<PLATFORMS.length;i++) if(PLATFORMS[i][field]===t && !PLATFORMS[i].alias)return PLATFORMS[i];
+  return null;
+}
+// gPlat の選択肢は表から作る（表記を2か所に持たない）
+(function(){
+  var sel=$('gPlat'); if(!sel)return;
+  var h='<option value="">（選択）</option>';
+  PLATFORMS.forEach(function(p){ if(!p.alias)h+='<option>'+p.title+'</option>'; });
+  sel.innerHTML=h+'<option value="Other">Other</option>';
+})();
+
 // ---- カテゴリ（フィギュア / ゲーム）----
 function isGame(){ return $('cat').value==='game'; }
 function isArcade(){ return $('cat').value==='arcade'; }
@@ -1448,6 +1488,12 @@ function makerName(){
 // 原産国はアーケードパーツだけ既定が違うので欄を分けている（既定 Japan）。
 function originValue(){ return (isArcade()?$('aOrigin').value:$('origin').value); }
 // 機種は選択肢＋自由入力。Other または未選択のときだけ自由入力を使う。
+// 本体側がリージョンロックされている機種か（いまは3DSのみ）
+function platLock(){
+  if(!isGame())return '';
+  var p=platBy('title',gamePlatform());
+  return (p&&p.lock)||'';
+}
 function gamePlatform(){
   var v=$('gPlat').value;
   return (v===''||v==='Other') ? $('gPlatFree').value.trim() : v;
@@ -1522,12 +1568,16 @@ function headingTitle(){
 // ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
 // パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
 // Japan Import は最後尾に付けるが、80文字を超えるときだけ省く。
-function buildGameTitle(){
-  var head=[($('gCond').value==='used'?'Used':''), gamePlatform(), $('gTitle').value.trim()]
+// 書式はここ1か所。出品文タブも出品リストの一括生成も、同じ関数を通す。
+function gameTitleFrom(used, platform, name){
+  var head=[(used?'Used':''), String(platform||'').trim(), String(name||'').trim()]
              .filter(Boolean).join(' ');
   if(!head) return {text:'', dropped:[]};
   var full=head+' Japan Import';
   return full.length<=80 ? {text:full, dropped:[]} : {text:head, dropped:['Japan Import']};
+}
+function buildGameTitle(){
+  return gameTitleFrom($('gCond').value==='used', gamePlatform(), $('gTitle').value);
 }
 // アーケードパーツのタイトル：
 //   [Used] [メーカー] [型番] [色] [サイズ] [種類] [入数] [Japan Import]
@@ -1591,6 +1641,13 @@ function descHTML(){
     S+=h2('About Japanese prize figures');
     S+='<p style="margin:0 0 22px;">'+pick(V_PRIZE)+'</p>';
   }
+  /* 3DSは本体側がリージョンロックされている。買ってから動かない事故を防ぐため、
+     Japanese version のチェックに関わらず必ず出す。 */
+  if(platLock()==='3ds'){
+    S+=h2('Region lock \u2014 Japanese 3DS system required');
+    S+='<p style="margin:0 0 22px;">Nintendo 3DS systems are region-locked. This is a Japanese release, so it will only run on a Japanese 3DS, 3DS LL/XL, 2DS or New 3DS system. It will not run on a North American, European or other region system.</p>';
+  }
+
   if($('bJP').checked){
     S+=h2('Japanese version \u2014 please read')+'<ul style="margin:0 0 22px;padding-left:22px;">';
     S+='<li>Packaging, manuals and printed materials are in Japanese.</li>';
@@ -2250,6 +2307,11 @@ function descPlain(){
     L.push('\u25A0 ABOUT JAPANESE PRIZE FIGURES');
     L.push(pick(V_PRIZE)); L.push('');
   }
+  if(platLock()==='3ds'){
+    L.push('\u25A0 REGION LOCK - JAPANESE 3DS SYSTEM REQUIRED');
+    L.push('Nintendo 3DS systems are region-locked. This is a Japanese release, so it will only run on a Japanese 3DS, 3DS LL/XL, 2DS or New 3DS system. It will not run on a North American, European or other region system.');
+    L.push('');
+  }
   if($('bJP').checked){
     L.push('\u25A0 JAPANESE VERSION - PLEASE READ');
     L.push('- Packaging, manuals and printed materials are in Japanese.');
@@ -2301,16 +2363,18 @@ var CSV_COND_FIG={N:1000,UM:3000,UVG:3000,UG:3000,UA:3000,UKN:3000};
 var CSV_COND_NAME={1000:'New',1500:'New other',1750:'New with defects',2750:'Like New',
   3000:'Used',4000:'Very Good',5000:'Good',6000:'Acceptable',7000:'For parts'};
 // Platform：せどりすとのタイトルに出る表記 → eBayの推奨値（一字一句合わせる）
-var CSV_PLAT=[['Switch 2','Nintendo Switch'],['Switch2','Nintendo Switch'],['スイッチ','Nintendo Switch'],
-  ['Switch','Nintendo Switch'],['PS5','Sony PlayStation 5'],['PS4','Sony PlayStation 4'],
-  ['PS3','Sony PlayStation 3'],['PS2','Sony PlayStation 2'],['PS Vita','Sony PlayStation Vita'],
-  ['PSVita','Sony PlayStation Vita'],['PSP','Sony PSP'],['PS1','Sony PlayStation 1'],
-  ['3DS','Nintendo 3DS'],['DS','Nintendo DS'],['Wii U','Nintendo Wii U'],['WiiU','Nintendo Wii U'],
-  ['Wii','Nintendo Wii'],['ゲームキューブ','Nintendo GameCube'],['GC','Nintendo GameCube'],
-  ['GBA','Nintendo Game Boy Advance'],['GBC','Nintendo Game Boy Color'],['GB','Nintendo Game Boy'],
-  ['N64','Nintendo 64'],['スーパーファミコン','Nintendo Super Famicom'],['SFC','Nintendo Super Famicom'],
-  ['ファミコン','Nintendo NES'],['FC','Nintendo NES'],['サターン','Sega Saturn'],
-  ['ドリームキャスト','Sega Dreamcast'],['メガドライブ','Sega Genesis'],['PS','Sony PlayStation 1']];
+/* 和名・略称 → Item Specifics の値。上の PLATFORMS から作る。
+   title の綴り（gamePlatform() の戻り値）でも引けるようにしておく。 */
+var CSV_PLAT=(function(){
+  var a=[];
+  PLATFORMS.forEach(function(p){
+    var seen={};
+    [p.title].concat(p.pat).forEach(function(k){
+      if(!k||seen[k])return; seen[k]=1; a.push([k,p.spec]);
+    });
+  });
+  return a;
+})();
 // Brand：和名 → eBayの推奨値
 var CSV_BRAND=[['バンプレスト','BANPRESTO'],['Banpresto','BANPRESTO'],
   ['グッドスマイル','Good Smile Company'],['Good Smile','Good Smile Company'],
@@ -2332,7 +2396,7 @@ var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
-                 'csvImgBase','csvImgToken'];
+                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2425,7 +2489,11 @@ function csvPlatformFrom(t){
   var s=String(t||'');
   for(var i=0;i<CSV_PLAT.length;i++){
     var k=CSV_PLAT[i][0];
-    if(new RegExp('(^|[\\s\\[\\(【（/])'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'([\\s\\]\\)】）/]|$)','i').test(s))
+    /* 前後が英数字でなければ拾う。せどりすとの和名は「-Switch」「三国志大戦DS」の
+       ように区切り文字なしで機種名が続くことがあるため、空白や括弧だけでは足りない。
+       長い綴りから順に見ているので、3DS が DS に、Switch 2 が Switch に
+       落ちることはない。 */
+    if(new RegExp('(^|[^0-9A-Za-z])'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'([^0-9A-Za-z]|$)','i').test(s))
       return CSV_PLAT[i][1];
   }
   return '';
@@ -2548,6 +2616,7 @@ function csvImport(text){
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
       forceEbay:false, oneOff:CSV_ONEOFF.test(title), pics:[],
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
+      titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2644,6 +2713,36 @@ function csvLogged(r){
   }
   return false;
 }
+/* 行の英語タイトル欄。ゲームの対象機種の行にだけ出す。
+   ここで直したタイトルはそのままCSVに出る（再生成では上書きしない）。 */
+var CSV_TSTAT={ok:['ok','var(--good)'],review:['要確認','#8a6d00'],
+  not_found:['見つからない','var(--mute)'],invalid_jan:['JAN不正','var(--bad)'],
+  error:['通信エラー','var(--bad)']};
+function csvTitleBox(r){
+  var t=csvTitleTarget(r);
+  if(!t)return '';                                   // ゲーム以外は出さない
+  if(t!=='ok')
+    return '<div class="note2" style="margin-top:4px">英語タイトル生成：'+esc(t)+'（手入力してください）</div>';
+  var te=String(r.titleEn||''), len=te.length;
+  var col=len>80?'var(--bad)':(len>72?'#8a6d00':'var(--mute)');
+  var st=CSV_TSTAT[r.titleStatus]||null;
+  var h='<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
+    +'<span class="note2" style="margin:0;flex:0 0 auto">英題</span>'
+    +'<input type="text" data-ten="'+r.id+'" value="'+esc(te)+'" placeholder="英語タイトル生成で入ります"'
+    +' style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;'
+    +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+    +'<button class="btn" data-regen="'+r.id+'" style="flex:0 0 auto;padding:5px 8px;font-size:12px">再生成</button></div>'
+    +'<div class="note2" style="margin-top:2px">'
+    +'<span style="color:'+col+'">'+len+' / 80</span>'
+    +(st?('　<span style="color:'+st[1]+'">'+esc(st[0])+'</span>'):'')
+    +(r.titleManual?'　<span style="color:#2f6fb0">編集済み</span>':'')
+    +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
+  if((r.titleCands||[]).length)
+    h+='<details style="margin-top:2px"><summary class="note2" style="margin:0">候補にした元タイトル '
+      +r.titleCands.length+'件</summary><div class="note2" style="margin:2px 0 0">'
+      +r.titleCands.map(function(x){return esc(x);}).join('<br>')+'</div></details>';
+  return h;
+}
 function csvRender(){
   $('csvCount').textContent=csvList.length;
   var ng=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
@@ -2705,6 +2804,7 @@ function csvRender(){
       +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
       +esc(r.sold||'')+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;text-align:right;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+      +csvTitleBox(r)
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">数量</span>'
       +'<input type="number" min="0" step="1" inputmode="numeric" data-qty="'+r.id+'" value="'
@@ -2752,10 +2852,18 @@ $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
-        ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics');
+        ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
+        ||t.getAttribute('data-regen');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
+  if(t.hasAttribute('data-regen')){
+    if(!String($('csvTitleApi').value||'').trim()){
+      alert('設定の「英語タイトル生成のURL」を入れてください。'); return; }
+    // 手で直した行でも、再生成ボタンなら作り直す（force で Worker のキャッシュも無視）
+    csvList[i].titleManual=false;
+    csvTitleRun([csvList[i]],true); return;
+  }
   if(t.hasAttribute('data-edit')){ csvEditOpen(id); return; }
   if(t.hasAttribute('data-pics')){
     csvPicTarget=id; csvPicFailed=[]; $('csvPicRetry').style.display='none';
@@ -2788,6 +2896,18 @@ $('csvList').addEventListener('input',function(e){
     else rr.itemId=String(t.value||'').trim();
     csvSaveList(); return;
   }
+  // 英題を手で直した行は「編集済み」にして、以後の再生成で上書きしない
+  var tid=t.getAttribute('data-ten');
+  if(tid){
+    var rt=csvRowById(tid); if(!rt)return;
+    rt.titleEn=t.value; rt.titleManual=true; csvSaveList();
+    var n=t.parentNode.nextSibling;
+    if(n&&n.firstChild){
+      n.firstChild.textContent=t.value.length+' / 80';
+      n.firstChild.style.color=t.value.length>80?'var(--bad)':(t.value.length>72?'#8a6d00':'var(--mute)');
+    }
+    return;
+  }
   var id=t.getAttribute('data-sold');
   if(!id)return;
   var r=csvRowById(id); if(!r)return;
@@ -2807,7 +2927,7 @@ $('csvList').addEventListener('change',function(e){
   // 数量・ItemIDは表示が変わらないうえ、ここで作り直すと
   // 次に触ろうとした欄ごと消えてしまうため、作り直さない。
   var t=e.target; if(!t||!t.getAttribute)return;
-  if(t.getAttribute('data-sold'))csvRender();
+  if(t.getAttribute('data-sold'))csvRender();   // 英題・数量・ItemIDは作り直さない
 });
 $('csvSort').addEventListener('change',csvRender);
 $('csvPickEbay').onclick=function(){
@@ -3184,6 +3304,94 @@ $('csvResFile').addEventListener('change',function(){
   this.value='';
 });
 
+/* ---- 英語タイトルの一括生成（Worker pj-title の /titles）----
+   Worker が返すのは english_name だけ。タイトルは gameTitleFrom() が組み立てる
+   （書式は出品文タブと同じ1か所）。対象はゲームで、対象機種の行だけ。 */
+var CSV_TITLE_BATCH=10;   // Workers無料プランのサブリクエスト上限に触れない件数
+function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
+// 生成の対象になり得る行か
+function csvTitleTarget(r){
+  if(r.cat!=='139973')return '';                 // ゲーム以外
+  var p=csvPlatOf(r);
+  if(!p)return '機種不明';
+  if(!p.target)return '対象外の機種';
+  return 'ok';
+}
+// english_name からタイトルを組み立てて行へ書き戻す
+function csvApplyName(r,name){
+  var p=csvPlatOf(r);
+  r.specs=r.specs||{};
+  r.specs.gameName=name;
+  r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name).text;
+}
+function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
+// 1回分（最大 CSV_TITLE_BATCH 件）を送る
+function csvTitleSend(rows,force){
+  var api=String($('csvTitleApi').value||'').replace(/\/+$/,'');
+  return fetch(api+'/titles',{
+    method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':$('csvTitleKey').value},
+    body:JSON.stringify({force:!!force, items:rows.map(function(r){
+      var p=csvPlatOf(r);
+      return { jan:r.jan, ja_title:r.titleJa||'', platform:p?p.title:'',
+               condition:(r.condId===1000?'new':'used') };
+    })})
+  }).then(function(res){
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    return res.json();
+  }).then(function(d){
+    var out=(d&&d.results)||[];
+    rows.forEach(function(r,i){
+      var x=out[i]||{};
+      r.titleStatus=x.status||'review';
+      r.titleCands=x.candidates||[];
+      r.titleNote=x.note||'';
+      if(x.english_name)csvApplyName(r,x.english_name);
+    });
+    csvSaveList();
+  });
+}
+function csvTitleRun(list,force){
+  var btn=$('csvTitleGen'), label=btn.textContent;
+  btn.disabled=true;
+  var done=0, failed=0;
+  function step(){
+    if(!list.length){
+      btn.disabled=false; btn.textContent=label;
+      csvTitleSay('英語タイトル生成：'+done+'件を処理しました。'
+        +(failed?('　'+failed+'件は失敗したので、もう一度実行してください。'):'')
+        +'　review の行は中身を確かめてください。');
+      csvRender(); return;
+    }
+    var part=list.splice(0,CSV_TITLE_BATCH);
+    btn.textContent='生成中… '+done+'/'+(done+part.length+list.length);
+    csvTitleSay('生成中… '+done+'/'+(done+part.length+list.length));
+    csvTitleSend(part,force)
+      .catch(function(e){
+        failed+=part.length;
+        part.forEach(function(r){ r.titleStatus='error'; r.titleNote=e.message; });
+        csvSaveList();
+      })
+      .then(function(){ done+=part.length; csvRender(); step(); });
+  }
+  step();
+}
+$('csvTitleGen').onclick=function(){
+  if(!String($('csvTitleApi').value||'').trim()){
+    alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
+  }
+  // 未生成の行だけ。手で直した行（titleManual）は上書きしない。
+  var target=csvList.filter(function(r){ return csvTitleTarget(r)==='ok'; });
+  var todo=target.filter(function(r){ return !r.titleManual&&!String(r.titleEn||'').trim(); });
+  if(!todo.length){
+    alert(target.length
+      ? '未生成のゲーム行がありません。作り直すときは行の「再生成」を押してください。'
+      : '対象のゲーム行がありません。');
+    return;
+  }
+  csvTitleRun(todo.slice(),false);
+};
+
 /* 在庫同期のフェーズ1（手動）。
    File Exchange は「列があって値が空」をその項目の削除と解釈することがあるため、
    Revise では Add のヘッダを流用せず、変更する列だけでファイルを作る。
@@ -3284,9 +3492,12 @@ function csvEditOpen(id){
   switchTab('B');
   // 出品文タブの先頭（編集バーの位置）まで送る。以降はバーが上部に貼り付く。
   try{ $('csvEditBar').scrollIntoView(true); }catch(e){ window.scrollTo(0,0); }
-  // 英題が空なら、和名で「自動で振り分け」を実行する（設定でオフにできる）。
-  if(!titleEdited&&$('csvAutoParse').checked&&PARSE_API&&String(r.titleJa||'').trim()
-     &&!$('btnParse').disabled){
+  /* 英題が空なら、和名で「自動で振り分け」を実行する（設定でオフにできる）。
+     ただしゲームは対象外。自動振り分けはフィギュアの各欄を埋める機能で、
+     ゲームの英題（gTitle）には反映されないため、呼ぶだけ無駄になる。
+     ゲームの英語名は出品リストの「英語タイトル生成」（/titles）で入れる。 */
+  if(!isGame()&&!titleEdited&&$('csvAutoParse').checked&&PARSE_API
+     &&String(r.titleJa||'').trim()&&!$('btnParse').disabled){
     $('btnParse').click();
   }
 }
@@ -3294,6 +3505,7 @@ function csvEditOpen(id){
 function csvEditWrite(){
   var r=csvRowById(csvEditId); if(!r)return false;
   r.titleEn=$('title').value.trim();
+  r.titleManual=true;          // 出品文タブで仕上げた行は再生成で上書きしない
   r.descHtml=descHTML();
   r.sku=$('sku').value||r.sku;
   r.jan=$('addCsvJan').value.trim();
@@ -3359,6 +3571,7 @@ $('addToCsv').onclick=function(){
     wRaw:0, wManual:true,                    // 手入力の重量なので再計算の対象外
     rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', forceEbay:false, oneOff:false, pics:[],
     amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
+      titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
             // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
             brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),

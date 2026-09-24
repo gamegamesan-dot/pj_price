@@ -4,7 +4,7 @@ JANコードから **英語の商品名（english_name）だけ** を特定し�
 タイトルの組み立ては pj_price 側の `buildGameTitle()` が行うため、この Worker は
 タイトル文字列を作らない（書式を2か所に持たない）。
 
-対象はゲームソフト。機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP。
+対象はゲームソフト。機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP / 3DS / DS。
 対象外の機種の行は pj_price 側で送信しない。
 
 ## 1. KV を作る
@@ -98,17 +98,6 @@ npx wrangler deploy
   セットでない限り）をコード側で落とす。落とした内訳は `log` に残る。
 - `ja_title` の全角ローマ数字（Ⅲ）は III に直してから渡す。
 - キャッシュは JAN 単位で90日。`force: true` で作り直す。
-
-### `GET /debug/gtin?jan=…`（受け入れテスト用・**あとで削除する**）
-
-ヘッダー `X-PJ-Key` 必須。eBay の当たり方だけを返す。
-
-```json
-{ "jan": "…", "via": "gtin | q | ", "count": 3, "titles": ["…"], "log": ["ebay gtin=… -> 200"] }
-```
-
-仕様7章の受け入れテストが終わったら、`worker.js` の `/debug/gtin` ブロックを
-削除して再デプロイする。
 
 ## 5. 安全側の設計
 

@@ -4,7 +4,8 @@
 出品リストタブ（せどりすとCSV取り込み）の各商品について、JANコードからeBay用の英語タイトルを自動生成する。
 生成結果は人が確認・編集してから、eBay一括出品CSVに書き出す。
 
-対象はゲームソフトとし、機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP とする。
+対象はゲームソフトとし、機種は Switch 2 / Switch / PS5 / PS4 / PS3 / PS2 / PS Vita / PSP /
+3DS / DS とする（3DS・DS は 2026-09-24 に追加）。
 箱説自体に価値のあるレトロゲームは対象外。**対象外の機種の行は /titles を呼ばない**（2026-09-24 決定）。
 
 > **2026-09-24 の決定**
@@ -21,7 +22,15 @@
 > - SP-APIの米国（NA）は「なし」で進める。`SPAPI_REFRESH_TOKEN_NA` があるときだけ
 >   米国照会を行う分岐は残す。
 > - eBayの `gtin` 検索が0件のときは `q={JAN}` のキーワード検索を行う。
-> - `/debug/gtin` は受け入れテスト用。テスト後に削除する。
+> - `/debug/gtin` は受け入れテスト用。**2026-09-24 の受け入れテスト合格をもって削除済み。**
+>
+> **2026-09-24 追記（受け入れテスト後）**
+> - 3DS・DS を対象機種に追加する。
+> - 3DS は本体側がリージョンロックされているため、出品文に
+>   「日本の3DS本体でのみ動作する」旨の節を必ず入れる（Japanese version の
+>   チェックに関係なく出す）。
+> - 緋色の欠片の期待値は Vita 版の正式名に合わせて
+>   `Hiiro no Kakera: Omoi Iro no Kioku` とする。
 
 ## 2. 全体構成
 
@@ -161,7 +170,7 @@ Worker側に残すのは次の2つだけ。
 **80文字チェック**は pj_price 側で行う（既存のタイトル文字数カウンターと
 `buildGameTitle()` の切り詰めをそのまま使う）。
 
-## 5. pj_price側（出品リストタブ）
+## 5. pj_price側（出品リストタブ）※ 2026-09-24 実装済み（sw.js v61）
 - 「英語タイトル生成」ボタンを追加する。未生成の行だけを20件ずつ送り、進捗を「12/48」のように表示する。
 - 各行に、編集可能な英語タイトル欄・文字数カウンター（80超は赤）・statusバッジ（ok=緑／review=黄／not_found=灰）を表示する。候補元タイトルは折りたたみで見られるようにする。
 - 手動で編集した行には「編集済み」フラグを立て、再生成で上書きしない。行ごとの「再生成（force）」ボタンは別に用意する。
@@ -181,9 +190,10 @@ Worker側に残すのは次の2つだけ。
 ### 確認結果（2026-09-24）
 1. **米国（NA）は「なし」で進める**。`SPAPI_REFRESH_TOKEN_NA` が登録されたときだけ
    米国照会が動く分岐は実装済み。
-2. `gtin` の当たり方は**キー登録後に `/debug/gtin` で実測する**（開発環境から
-   api.ebay.com へ出られないため、事前確認はできなかった）。0件時の `q={JAN}`
-   フォールバックは実装済み。
+2. `gtin` の当たり方は、キー登録後に `/debug/gtin` で実測した（開発環境から
+   api.ebay.com へ出られないため、事前確認はできなかった）。
+   **6件とも gtin でヒット**。`gtin` を主、0件時の `q={JAN}` を予備のままとする。
+   `/debug/gtin` は役目を終えたので削除した。
 
 ## 7. 受け入れテスト
 - カジが提供する実在庫のJAN 10件（機種混在）で実行し、JAN・status・title・sourcesを一覧表示する。
@@ -198,10 +208,23 @@ Worker側に残すのは次の2つだけ。
 |---|---|---|---|---|
 | 4562252050401 | 雷電Ⅲ×MIKADO MANIAX | Switch | Raiden III x Mikado Maniax | |
 | 4571442047619 | サイキック5 エターナル | Switch | Psychic 5 Eternal | |
-| 4995857095025 | 緋色の欠片 | PS Vita | Hiiro no Kakera | 公式英題なし。`review` でよい |
+| 4995857095025 | 緋色の欠片 | PS Vita | Hiiro no Kakera: Omoi Iro no Kioku | 公式英題なし。`review` でよい |
 | 4544626010365 | AKIBA'S BEAT | PS4 | Akiba's Beat | |
 | 4582350660326 | METAL MAX Xeno | PS4 | Metal Max Xeno | |
 | 4997766201382 | Steins;Gate | PSP | Steins;Gate | |
+
+### 受け入れテストの結果（2026-09-24・実データ）
+
+| JAN | status | english_name |
+|---|---|---|
+| 4562252050401 | review | Raiden III x MIKADO MANIAX（別商品2件除外／候補少） |
+| 4571442047619 | ok | Psychic 5 Eternal |
+| 4995857095025 | review | Hiiro no Kakera: Omoi Iro no Kioku（別商品1件除外／候補少） |
+| 4544626010365 | ok | Akiba's Beat |
+| 4582350660326 | ok | Metal Max Xeno |
+| 4997766201382 | ok | Steins;Gate（別商品6件除外） |
+
+**合格。** review の規則は現状のままとする。
 
 ## 8. スコープ外（今回はやらない）
 - 言語対応（English Supported等）の自動判定
