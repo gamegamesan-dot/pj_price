@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v52';
+const V = 'pj-pricing-v53';
 const ASSETS = [
   './',
   './index.html',

@@ -2259,6 +2259,8 @@ var CSV_FIG_CATS=['261055','261068'];        // hobby / toy の手動振り分�
 // せどりすとの状態コード → ConditionID。フィギュア2カテゴリは細分化グレードが
 // 無いことが多いので 1000 / 3000 に寄せる（仕様書5章）。
 var CSV_COND={N:1000,UM:2750,UVG:3000,UG:4000,UA:5000,UKN:5000};
+// 「出品コンディション」列の表記 → 状態コード。SKUの状態コードより列を優先する。
+var CSV_COND_COL={'新品':'N','ほぼ新品':'UM','非常に良い':'UVG','良い':'UG','可':'UA'};
 var CSV_COND_FIG={N:1000,UM:3000,UVG:3000,UG:3000,UA:3000,UKN:3000};
 var CSV_COND_NAME={1000:'New',1500:'New other',1750:'New with defects',2750:'Like New',
   3000:'Used',4000:'Very Good',5000:'Good',6000:'Acceptable',7000:'For parts'};
@@ -2446,7 +2448,8 @@ function csvImport(text){
   function col(name){ return head.indexOf(name); }
   var iSku=col('SKU'), iJan=col('JAN'), iAsin=col('ASIN'), iTitle=col('タイトル'),
       iCat=col('カテゴリ'), iW=col('重量'), iCost=col('仕入原価'), iQty=col('個数'),
-      iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク');
+      iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク'),
+      iType=col('出品種別');
   if(iSku<0)return {err:'SKU列が見つかりません。せどりすとの書き出しCSVか確認してください'};
   var skipped=0, groups={}, order=[];
   for(var n=1;n<rows.length;n++){
@@ -2455,7 +2458,13 @@ function csvImport(text){
     var cat=CSV_PREFIX[sp.prefix];
     if(cat===undefined||cat===null){ skipped++; continue; }
     var fig=(cat!=='139973');
-    var condId=(fig?CSV_COND_FIG:CSV_COND)[sp.cond]||(fig?3000:5000);
+    // 状態は「出品コンディション」列が正。列が空か想定外の値のときだけ SKU の状態コードを使う。
+    // SKU と列が食い違ってもエラーにはしない（列を採る）。
+    var condCol=iCond>=0?String(r[iCond]||'').trim():'';
+    var code=CSV_COND_COL[condCol]||'';
+    if(!code&&(fig?CSV_COND_FIG:CSV_COND)[sp.cond])code=sp.cond;
+    var condErr=!code;                                   // どちらでも判定できない
+    var condId=condErr?0:(fig?CSV_COND_FIG:CSV_COND)[code];
     var asin=(iAsin>=0?String(r[iAsin]||'').trim():'')||sp.asin;
     var key=asin+'|'+condId;
     var cost=iCost>=0?csvNum(r[iCost]):sp.cost;
@@ -2472,9 +2481,11 @@ function csvImport(text){
     groups[key]={ id:'c'+Date.now().toString(36)+n.toString(36),
       src:'sedori', sku:sku, jan:iJan>=0?String(r[iJan]||'').trim():'', asin:asin,
       titleJa:title, titleEn:'', cat:cat, catFixed:(sp.prefix==='game'),
-      condId:condId, descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
+      condId:condId, condErr:condErr, condSrc:(condCol||sp.cond||''),
+      descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
-      fba:false, zeroAct:'hold', amzLow:'', amzLowAt:'', itemId:'', sold:'',
+      fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
+      amzLow:'', amzLowAt:'', itemId:'', sold:'',
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2525,6 +2536,13 @@ function csvIssues(r){
   if(r.cat==='139973'){ if(!r.specs.gameName)a.push('Game Name なし');
                         if(!r.specs.platform)a.push('Platform なし'); }
   if(r.price&&r.floor&&r.price<r.floor)a.push('売値が最低売値未満');
+  // 状態まわり。コンディションを取り違えるとeBay側で違反になるため必ず出す。
+  if(r.condErr)a.push('状態を判定できません'+(r.condSrc?('（'+r.condSrc+'）'):''));
+  var te=String(r.titleEn||'');
+  if(te){
+    if(/^Used\b/i.test(te)&&r.condId===1000)a.push('英題がUsedなのに新品');
+    if(!/^Used\b/i.test(te)&&r.condId!==1000&&r.condId!==0)a.push('中古なのに英題にUsedがない');
+  }
   var v=csvVerdict(r);
   if(v==='none')a.push('未判定（相場未入力）');
   else if(v==='amazon')a.push('Amazon優先');
@@ -2606,7 +2624,7 @@ function csvRender(){
     h+='<div style="border-top:1px solid var(--line);padding:8px 0">'
       +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+CSV_CAT[r.cat]
-      +'　/　'+(CSV_COND_NAME[r.condId]||r.condId)+'　/　'+usd(r.price||0)
+      +'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))+'　/　'+usd(r.price||0)
       +'　/　数量 '+r.qty+'　/　'+(r.weight||0).toLocaleString()+'g</div>'
       +'<div style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
@@ -2882,7 +2900,7 @@ function csvEditOpen(id){
   if(r.sku){ $('sku').value=r.sku; skuEdited=true; }
   $('csvEditBar').style.display='block';
   $('csvEditTitle').textContent=(r.titleJa||r.sku||'(無題)')
-    +'　/　'+CSV_CAT[r.cat]+'　/　'+(CSV_COND_NAME[r.condId]||r.condId)
+    +'　/　'+CSV_CAT[r.cat]+'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))
     +'　/　仕入 '+yen(r.cost||0)+'　/　重量 '+(r.weight||0).toLocaleString()+'g';
   $('csvEditNote').textContent='各欄を埋めるとタイトルと説明文が生成されます。「書き戻す」でこの行に反映します。';
   redraw();
@@ -2897,6 +2915,13 @@ function csvEditWrite(){
   r.jan=$('addCsvJan').value.trim();
   r.cat=$('addCsvCat').value; r.catDone=true;
   r.cost=+$('cost').value||r.cost;
+  // 状態は新品／中古の区分が食い違うときだけ入れ替える。同じ区分なら細かい等級を残す。
+  var ck=condKey(), wantNew=(ck==='sealed'||ck==='newopen');
+  var isNew=(r.condId===1000||r.condId===1500||r.condId===1750);
+  if(r.condErr||wantNew!==isNew){
+    r.condId=wantNew?1000:((r.cat==='139973')?5000:3000);
+    r.condErr=false;
+  }
   var wNew=+$('weight').value||r.weight;
   if(wNew!==r.weight&&wNew!==csvWeightFor(r))r.wManual=true;   // 手で直した行は再計算の対象外
   r.weight=wNew;
