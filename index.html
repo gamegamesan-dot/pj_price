@@ -258,6 +258,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="body">
       <div id="csvEditTitle" style="font-size:13px;line-height:1.5;font-weight:700"></div>
       <div class="note2" id="csvEditSub" style="margin-top:2px"></div>
+      <div id="csvEditPics"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn primary" id="csvEditSave" style="flex:1 1 0;min-width:0;padding:9px 4px">書き戻す</button>
         <button class="btn" id="csvEditNext" style="flex:1 1 0;min-width:0;padding:9px 4px">次の未完成行へ</button>
@@ -538,6 +539,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
       <div class="note2" id="csvExportNote"></div>
+      <input type="file" id="csvPicFile" accept="image/*" multiple style="display:none">
+      <div class="note2" id="csvPicNote"></div>
+      <button class="btn" id="csvPicRetry" style="display:none;margin-top:6px">失敗分を送り直す</button>
     </div>
     <details id="csvListBox">
       <summary>一覧を表示</summary>
@@ -597,6 +601,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
       <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
       <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
+      <div class="rowv"><label>画像サーバーURL</label><input type="text" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev"></div>
+      <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
+      <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
       <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
     </div>
   </section>
@@ -2311,7 +2318,8 @@ var CSV_LIST_KEY='pj:csvlist:v1';   // 出品リスト
 var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
-                 'csvShipProfile','csvRetProfile','csvPayProfile','csvLocation'];
+                 'csvShipProfile','csvRetProfile','csvPayProfile','csvLocation',
+                 'csvImgBase','csvImgToken'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2320,6 +2328,7 @@ function csvLoad(){
   csvList.forEach(function(r){
     if(r.forceEbay===undefined)r.forceEbay=false;
     if(r.oneOff===undefined)r.oneOff=false;
+    if(!Array.isArray(r.pics))r.pics=[];
   });
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
@@ -2514,7 +2523,8 @@ function csvImport(text){
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
-      forceEbay:false, oneOff:CSV_ONEOFF.test(title), amzLow:'', amzLowAt:'', itemId:'', sold:'',
+      forceEbay:false, oneOff:CSV_ONEOFF.test(title), pics:[],
+      amzLow:'', amzLowAt:'', itemId:'', sold:'',
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2572,6 +2582,7 @@ function csvIssues(r){
     if(/^Used\b/i.test(te)&&r.condId===1000)a.push('英題がUsedなのに新品');
     if(!/^Used\b/i.test(te)&&r.condId!==1000&&r.condId!==0)a.push('中古なのに英題にUsedがない');
   }
+  if(!(r.pics||[]).length)a.push('写真なし');
   // フィギュアの原産国は補完しないので、空なら指摘する。
   if(r.cat!=='139973'&&!String((r.specs||{}).origin||'').trim())a.push('原産国なし');
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
@@ -2664,6 +2675,7 @@ function csvRender(){
       +'　/　数量 '+r.qty+'　/　'+(r.weight||0).toLocaleString()+'g</div>'
       +'<div style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
+      +csvPicThumbs(r,'l')
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">相場（総額$）</span>'
       +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
@@ -2676,7 +2688,9 @@ function csvRender(){
     if(v==='amazon')
       h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
-    h+='<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
+    h+='<button class="btn" data-pics="'+r.id+'" style="padding:5px 8px;font-size:12px">写真 '
+      +(r.pics||[]).length+'/'+CSV_PIC_MAX+'</button>'
+      +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
       +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
       +'<button class="btn" data-fba="'+r.id+'" style="padding:5px 8px;font-size:12px">FBA連動 '
@@ -2703,11 +2717,15 @@ $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
-        ||t.getAttribute('data-force')||t.getAttribute('data-one');
+        ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
   if(t.hasAttribute('data-edit')){ csvEditOpen(id); return; }
+  if(t.hasAttribute('data-pics')){
+    csvPicTarget=id; csvPicFailed=[]; $('csvPicRetry').style.display='none';
+    csvPicNote(''); $('csvPicFile').click(); return;
+  }
   if(t.hasAttribute('data-del'))csvList.splice(i,1);
   else if(t.hasAttribute('data-fig')){
     csvList[i].cat=(csvList[i].cat==='261068')?'261055':'261068';
@@ -2776,6 +2794,134 @@ $('csvLogPurge').onclick=function(){
   csvSaveLog(); csvRender();
 };
 
+/* ---- 写真（proxy-img の Worker に上げる）----
+   eBayが画像を取りに来るので、公開URLを PicURL に並べる。
+   端末の回線が細いので、送る前にブラウザ側で長辺1600pxまで縮める。 */
+var CSV_PIC_MAX=12;          // eBayは24枚までだが、運用上12枚で止める
+var CSV_PIC_LONG=1600;       // 長辺の上限。これ未満の写真はそのまま
+var CSV_PIC_Q=0.85;          // JPEG品質
+var csvPicTarget=null;       // いま写真を足している行のid
+function csvImgBase(){ return String($('csvImgBase').value||'').trim().replace(/\/+$/,''); }
+function csvImgToken(){ return String($('csvImgToken').value||'').trim(); }
+// 向きを補正して長辺1600pxに縮め、JPEGにする。
+function csvShrink(file){
+  return createImageBitmap(file,{imageOrientation:'from-image'}).then(function(bm){
+    var w=bm.width,h=bm.height,long=Math.max(w,h);
+    if(long>CSV_PIC_LONG){ var k=CSV_PIC_LONG/long; w=Math.round(w*k); h=Math.round(h*k); }
+    var cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+    cv.getContext('2d').drawImage(bm,0,0,w,h);
+    if(bm.close)bm.close();
+    return new Promise(function(res,rej){
+      cv.toBlob(function(b){ b?res(b):rej(new Error('変換に失敗しました')); },'image/jpeg',CSV_PIC_Q);
+    });
+  });
+}
+function csvPicUpload(blob){
+  return fetch(csvImgBase()+'/upload',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+csvImgToken(),'Content-Type':blob.type||'image/jpeg'},
+    body:blob
+  }).then(function(res){
+    return res.json().catch(function(){return {};}).then(function(d){
+      if(!res.ok)throw new Error(d.error||('HTTP '+res.status));
+      if(!d.url)throw new Error('URLが返りませんでした');
+      return d;
+    });
+  });
+}
+function csvPicDelete(key){
+  if(!csvImgBase()||!csvImgToken()||!key)return Promise.resolve();
+  return fetch(csvImgBase()+'/i/'+key,{
+    method:'DELETE', headers:{'Authorization':'Bearer '+csvImgToken()}
+  })['catch'](function(){});
+}
+function csvPicNote(t,bad){
+  $('csvPicNote').textContent=t||'';
+  $('csvPicNote').style.color=bad?'var(--bad)':'var(--mute)';
+}
+// 失敗した写真は残しておき、同じボタンで送り直せるようにする。
+var csvPicFailed=[];
+function csvPicSend(files,rowId){
+  var r=csvRowById(rowId); if(!r)return;
+  if(!csvImgBase()||!csvImgToken()){
+    csvPicNote('CSVの設定に画像サーバーURLとアップロードトークンを入れてください。',true); return;
+  }
+  var room=CSV_PIC_MAX-(r.pics||[]).length;
+  if(room<=0){ csvPicNote('写真は'+CSV_PIC_MAX+'枚までです。',true); return; }
+  var list=files.slice(0,room);
+  var dropped=files.length-list.length;
+  csvPicFailed=[];
+  var n=0, ok=0;
+  (function next(){
+    if(n>=list.length){
+      csvSaveList(); csvRender(); csvEditPics();
+      var msg=ok+'枚を追加しました。';
+      if(csvPicFailed.length)msg+=csvPicFailed.length+'枚が失敗しました（「失敗分を送り直す」で再送できます）。';
+      if(dropped)msg+=CSV_PIC_MAX+'枚を超える'+dropped+'枚は送っていません。';
+      csvPicNote(msg,csvPicFailed.length>0);
+      $('csvPicRetry').style.display=csvPicFailed.length?'inline-block':'none';
+      return;
+    }
+    var f=list[n];
+    csvPicNote((n+1)+'/'+list.length+' を送信中…');
+    csvShrink(f).then(csvPicUpload).then(function(d){
+      r.pics.push({url:d.url,key:d.key}); ok++;
+    })['catch'](function(e){
+      csvPicFailed.push(f);
+      csvPicNote((n+1)+'/'+list.length+' が失敗：'+e.message,true);
+    }).then(function(){ n++; csvSaveList(); next(); });
+  })();
+}
+$('csvPicFile').addEventListener('change',function(){
+  var files=Array.prototype.slice.call(this.files||[]);
+  this.value='';
+  if(files.length&&csvPicTarget)csvPicSend(files,csvPicTarget);
+});
+$('csvPicRetry').onclick=function(){
+  var f=csvPicFailed.slice();
+  if(f.length&&csvPicTarget)csvPicSend(f,csvPicTarget);
+};
+// サムネイルのHTML。1枚目がメイン。
+function csvPicThumbs(r,prefix){
+  if(!(r.pics||[]).length)return '';
+  return '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">'
+    +r.pics.map(function(p,i){
+      return '<span style="position:relative;display:inline-block">'
+        +'<img src="'+esc(p.url)+'" data-pic="'+prefix+':'+r.id+':'+i+'" '
+        +'style="width:52px;height:52px;object-fit:cover;border:1px solid var(--line);'
+        +'border-radius:2px;'+(i===0?'outline:2px solid var(--good);outline-offset:-2px':'')+'">'
+        +(i===0?'<span style="position:absolute;left:0;bottom:0;background:var(--good);color:#fff;'
+          +'font-size:9px;padding:0 3px">メイン</span>':'')
+        +'</span>';
+    }).join('')+'</div>';
+}
+// サムネイルをタップしたときの操作
+function csvPicTap(rowId,idx){
+  var r=csvRowById(rowId); if(!r||!r.pics[idx])return;
+  if(idx!==0&&confirm('この写真をメインにしますか？\n（キャンセルを押すと削除するか選べます）')){
+    var p=r.pics.splice(idx,1)[0]; r.pics.unshift(p);
+    csvSaveList(); csvRender(); csvEditPics(); return;
+  }
+  if(confirm('この写真を削除しますか？')){
+    var q=r.pics.splice(idx,1)[0];
+    csvPicDelete(q&&q.key);
+    csvSaveList(); csvRender(); csvEditPics();
+  }
+}
+function csvPicClick(e){
+  var d=e.target&&e.target.getAttribute&&e.target.getAttribute('data-pic');
+  if(!d)return;
+  var a=d.split(':');
+  csvPicTap(a[1],+a[2]);
+}
+$('csvList').addEventListener('click',csvPicClick);
+$('csvEditPics').addEventListener('click',csvPicClick);
+// 出品文タブの編集バーにも同じサムネイルを出す
+function csvEditPics(){
+  var r=csvEditId?csvRowById(csvEditId):null;
+  $('csvEditPics').innerHTML=r?csvPicThumbs(r,'e'):'';
+}
+
 /* ---- CSV書き出し ---- */
 // FBA連動する行は商品に紐づく安定SKU、一点物はせどりすとSKUをそのまま（6.5.2）。
 function csvCustomLabel(r){
@@ -2802,7 +2948,8 @@ function csvRowFor(r){
   o['BestOfferEnabled']='1';
   o['MinimumBestOfferPrice']=(+r.floor||0).toFixed(2);
   o['ImmediatePayRequired']='1';
-  o['PicURL']='';                                   // 画像はフェーズ3
+  // eBayは画像を取りに来るので、公開URLをパイプ区切りで並べる。1枚目がメイン。
+  o['PicURL']=(r.pics||[]).map(function(x){return x.url;}).join('|');
   var sp=r.specs||{};
   if(r.cat==='139973'){
     o['*C:Game Name']=sp.gameName||r.titleEn;
@@ -2882,6 +3029,7 @@ $('csvExport').onclick=function(){
   rows.forEach(function(r){
     csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
       at:at, price:r.price, fba:!!r.fba, forceEbay:!!r.forceEbay, oneOff:!!r.oneOff,
+      pics:(r.pics||[]).length,
       zeroAct:r.zeroAct,
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
@@ -2983,6 +3131,7 @@ function csvEditOpen(id){
     +'　/　'+CSV_CAT[r.cat]+'　/　仕入 '+yen(r.cost||0)
     +'　/　重量 '+(r.weight||0).toLocaleString()+'g';
   $('csvEditNote').textContent='各欄を埋めるとタイトルと説明文が生成されます。「書き戻す」でこの行に反映します。';
+  csvEditPics();
   redraw();
   switchTab('B');
   // 出品文タブの先頭（編集バーの位置）まで送る。以降はバーが上部に貼り付く。
@@ -3047,7 +3196,7 @@ $('csvEditNext').onclick=function(){
   csvEditOpen(next.id);
 };
 $('csvEditStop').onclick=function(){
-  csvEditId=null; $('csvEditBar').style.display='none';
+  csvEditId=null; $('csvEditBar').style.display='none'; $('csvEditPics').innerHTML='';
 };
 
 /* ---- 出品文タブから1件追加 ---- */
@@ -3060,7 +3209,7 @@ $('addToCsv').onclick=function(){
     condId:(condKey()==='sealed'||condKey()==='newopen')?1000:(cat==='139973'?3000:3000),
     descHtml:descHTML(), qty:1, cost:+$('cost').value||0, weight:+$('weight').value||0,
     wRaw:0, wManual:true,                    // 手入力の重量なので再計算の対象外
-    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', forceEbay:false, oneOff:false,
+    rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', forceEbay:false, oneOff:false, pics:[],
     amzLow:'', amzLowAt:'', itemId:'', sold:'',
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
             // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）

@@ -1,0 +1,19 @@
+# pj_price 専用 画像ホスティング（Cloudflare Worker + R2）
+# アップロードトークンはここに書かない。デプロイ時に
+#   wrangler secret put UPLOAD_TOKEN
+# で登録する。
+name = "pj-img"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# workers.dev の既定サブドメインで公開（独自ドメインは使わない）。
+workers_dev = true
+
+# R2 バケット pj-img を IMG としてバインドする。
+[[r2_buckets]]
+binding = "IMG"
+bucket_name = "pj-img"
+
+# account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
+# 秘密情報ではないが、リポジトリに固定しないでおく。
+# account_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
