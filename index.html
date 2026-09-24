@@ -2376,13 +2376,23 @@ function csvParse(text){
   if(f!==''||row.length){ row.push(f); rows.push(row); }
   return rows;
 }
-// 全フィールドをダブルクオートで囲み、値の中の " は "" にする。改行はCRLF。
-function csvQuote(v){ return '"'+String(v===undefined||v===null?'':v).replace(/"/g,'""')+'"'; }
+/* 囲みが要る項目だけダブルクオートで囲む（RFC 4180）。
+   全項目を一律に囲むと Seller Hub のアップロードが
+   「There was a problem processing the file」で丸ごと弾かれる。
+   囲むのは値にカンマ・ダブルクオート・改行が含まれるときだけで、
+   そのとき値の中の " は "" にする。改行はCRLF。 */
+function csvQuote(v){
+  var t=String(v===undefined||v===null?'':v);
+  if(!/[",\r\n]/.test(t))return t;
+  // 囲みの中の改行もCRLFに揃える（説明文のHTMLでは表示は変わらない）。
+  // LFのまま混ざるとファイル全体の改行が揃わず、取り込み側で弾かれることがある。
+  return '"'+t.replace(/"/g,'""').replace(/\r\n|\r|\n/g,'\r\n')+'"';
+}
 function csvLine(arr){ return arr.map(csvQuote).join(','); }
-// UTF-8（BOM付き）で保存する。
+// UTF-8（BOMなし）で保存する。BOMが付くと1列目の見出しと一致せず弾かれる。
 function csvDownload(name,text){
   try{
-    var blob=new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'});
+    var blob=new Blob([text],{type:'text/csv;charset=utf-8'});
     var url=URL.createObjectURL(blob), a=document.createElement('a');
     a.href=url; a.download=name; document.body.appendChild(a); a.click();
     document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},4000);
