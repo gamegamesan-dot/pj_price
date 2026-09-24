@@ -2733,7 +2733,8 @@ function csvRender(){
       +esc(L.title||'(無題)')+'<div class="note2" style="margin-top:2px">'+esc(L.at)+'　/　'
       +esc(L.sku)+'　/　JAN '+esc(L.jan||'—')+'　/　ASIN '+esc(L.asin||'—')
       +'　/　'+usd(L.price||0)+(L.shipProfile?('　/　'+esc(L.shipProfile)):'')
-      +(L.itemId?('　/　ItemID '+esc(L.itemId)):'')+'</div></div>';
+      +(L.itemId?('　/　ItemID '+esc(L.itemId)):'')
+      +(L.warn?('<br>警告：'+esc(L.warn)):'')+'</div></div>';
   });
   $('csvLog').innerHTML=lh||'<div class="note2">ログはまだありません。</div>';
 }
@@ -3089,7 +3090,8 @@ $('csvExport').onclick=function(){
 };
 /* ---- eBayのアップロード結果ファイルを取り込む ----
    列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
-   Success は ItemID を行と書き出しログへ、Failure はエラー文を行の指摘へ。 */
+   Success・Warning は ItemID を行と書き出しログへ（Warning は警告文もログに残す）。
+   Failure だけエラー文を行の指摘として表示する。 */
 function csvResKey(h){ return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 function csvResImport(text){
   var rows=csvParse(text);
@@ -3104,8 +3106,9 @@ function csvResImport(text){
   function col(){ for(var i=0;i<arguments.length;i++){ var j=head.indexOf(arguments[i]); if(j>=0)return j; } return -1; }
   var iSt=col('status'), iId=col('itemid'), iLb=col('customlabel','sku'),
       iMs=col('errormessage','message','errorandwarningmessage','details'),
+      iWn=col('warningmessage','warning'),
       iCd=col('errorcode','code'), iLn=col('linenumber');
-  var ok=0, ng=0, miss=0, logged=0, notes=[];
+  var ok=0, warnN=0, ng=0, miss=0, logged=0, notes=[];
   for(var m=hi+1;m<rows.length;m++){
     var r=rows[m]; if(!r)continue;
     var st=String((iSt>=0?r[iSt]:'')||'').trim();
@@ -3115,16 +3118,23 @@ function csvResImport(text){
     var line=String((iLn>=0?r[iLn]:'')||'').trim();
     var hit=null;
     if(label)csvList.forEach(function(x){ if(csvCustomLabel(x)===label)hit=x; });
-    if(/^success$/i.test(st)){
+    // Warning も出品自体は通っているので成功として扱う
+    if(/^(success|warning)$/i.test(st)){
+      var isWarn=/^warning$/i.test(st);
       if(!item){ notes.push((line?('行'+line+'：'):'')+'ItemIDが空です'); continue; }
-      ok++;
+      ok++; if(isWarn)warnN++;
       if(hit){ hit.itemId=item; hit.uploadErr=''; }
       else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（ItemID '+item+'）'); }
+      // 警告文はログに残すだけで、行の指摘には出さない（出品は成立しているため）。
+      var wmsg=isWarn
+        ? String(((iWn>=0?r[iWn]:'')||(iMs>=0?r[iMs]:''))||'').trim()
+        : '';
       // 書き出しログにも記録する。同じSKUが複数あれば、ItemIDが空の最新分へ入れる。
       var tgt=null;
       csvLog.forEach(function(L){ if(L.sku===label&&!String(L.itemId||'').trim())tgt=L; });
       if(!tgt)csvLog.forEach(function(L){ if(L.sku===label)tgt=L; });
-      if(tgt){ tgt.itemId=item; logged++; }
+      if(tgt){ tgt.itemId=item; if(isWarn)tgt.warn=wmsg||'（警告文なし）'; logged++; }
+      else if(isWarn&&wmsg)notes.push((line?('行'+line+'：'):'')+'警告（ログ未記録）'+wmsg);
     }else if(/^(failure|error)$/i.test(st)){
       ng++;
       var msg=String((iMs>=0?r[iMs]:'')||'').trim();
@@ -3135,7 +3145,7 @@ function csvResImport(text){
     }
   }
   csvSaveList(); csvSaveLog();
-  return { ok:ok, ng:ng, miss:miss, logged:logged, notes:notes };
+  return { ok:ok, warnN:warnN, ng:ng, miss:miss, logged:logged, notes:notes };
 }
 $('csvResFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
@@ -3152,7 +3162,8 @@ $('csvResFile').addEventListener('change',function(){
     var r=csvResImport(text);
     box.style.display='block';
     if(r.err){ box.textContent='⚠ '+r.err; return; }
-    box.textContent='✓ 成功 '+r.ok+'件（ログ記録 '+r.logged+'件）／失敗 '+r.ng+'件'
+    box.textContent='✓ 成功 '+r.ok+'件'+(r.warnN?('（うち警告 '+r.warnN+'件）'):'')
+      +'（ログ記録 '+r.logged+'件）／失敗 '+r.ng+'件'
       +(r.miss?('　照合できなかった行 '+r.miss+'件'):'')
       +(r.notes.length?('\n'+r.notes.slice(0,10).join('\n')
         +(r.notes.length>10?('\nほか '+(r.notes.length-10)+'件'):'')):'');
