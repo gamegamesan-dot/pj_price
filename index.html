@@ -570,6 +570,15 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </section>
 
   <section>
+    <div class="h">アップロード結果を取り込む</div>
+    <div class="body">
+      <input type="file" id="csvResFile" accept=".csv,text/csv" style="width:100%">
+      <div class="note2">eBayの結果ファイル（Line Number / Action / Status / ItemID / CustomLabel …）を選んでください。Success の行はItemIDを出品リストと書き出しログに記録し、Failure の行はエラー内容を行の指摘として表示します。</div>
+      <div class="warn" id="csvResResult" style="display:none;margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section>
     <div class="h">書き出し済みログ</div>
     <div class="body">
       <div class="note2" id="csvLogNote" style="margin-top:0"></div>
@@ -594,10 +603,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
       <div class="chk"><input type="checkbox" id="csvAutoParse" checked><label for="csvAutoParse" style="flex:1">英題が空の行を開いたら「自動で振り分け」を実行する</label></div>
       <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="note2" style="margin-top:0">ビジネスポリシー（下の3つ）を使うときは、この値と返品条件はCSVに出さずポリシー側の設定が使われます。ポリシー名を空にしたときだけ使われます。</div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
       <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
       <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
       <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
@@ -2320,7 +2331,7 @@ var CSV_LIST_KEY='pj:csvlist:v1';   // 出品リスト
 var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
-                 'csvShipProfile','csvRetProfile','csvPayProfile','csvLocation',
+                 'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken'];
 
 var csvList=[], csvLog=[];
@@ -2526,7 +2537,7 @@ function csvImport(text){
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
       forceEbay:false, oneOff:CSV_ONEOFF.test(title), pics:[],
-      amzLow:'', amzLowAt:'', itemId:'', sold:'',
+      amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -2589,6 +2600,7 @@ function csvIssues(r){
   if(r.cat!=='139973'&&!String((r.specs||{}).origin||'').trim())a.push('原産国なし');
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
+  if(String(r.uploadErr||'').trim())a.push('アップロード失敗：'+r.uploadErr);
   var v=csvVerdict(r);
   if(v==='none')a.push('未判定（相場未入力）');
   else if(v==='amazon'&&!r.forceEbay)a.push('Amazon優先');   // 「出す」にした行は除外しない
@@ -2674,7 +2686,7 @@ function csvRender(){
       +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+CSV_CAT[r.cat]
       +'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))+'　/　'+usd(r.price||0)
-      +'　/　数量 '+r.qty+'　/　'+(r.weight||0).toLocaleString()+'g</div>'
+      +'　/　'+(r.weight||0).toLocaleString()+'g　/　ポリシー '+esc(csvShipProfileFor(r))+'</div>'
       +'<div style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
       +csvPicThumbs(r,'l')
@@ -2683,6 +2695,15 @@ function csvRender(){
       +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
       +esc(r.sold||'')+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;text-align:right;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">数量</span>'
+      +'<input type="number" min="0" step="1" inputmode="numeric" data-qty="'+r.id+'" value="'
+      +esc(r.qty)+'" style="flex:0 0 64px;min-width:0;padding:6px;font-size:14px;text-align:right;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">ItemID</span>'
+      +'<input type="text" inputmode="numeric" data-item="'+r.id+'" value="'
+      +esc(r.itemId||'')+'" placeholder="結果ファイルで自動入力" style="flex:1 1 0;min-width:0;padding:6px;'
+      +'font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
     if(r.cat!=='139973')
       h+='<button class="btn" data-fig="'+r.id+'" style="padding:5px 8px;font-size:12px">'
@@ -2711,7 +2732,8 @@ function csvRender(){
     lh+='<div style="border-top:1px solid var(--line);padding:6px 0;font-size:12px">'
       +esc(L.title||'(無題)')+'<div class="note2" style="margin-top:2px">'+esc(L.at)+'　/　'
       +esc(L.sku)+'　/　JAN '+esc(L.jan||'—')+'　/　ASIN '+esc(L.asin||'—')
-      +'　/　'+usd(L.price||0)+(L.itemId?('　/　ItemID '+esc(L.itemId)):'')+'</div></div>';
+      +'　/　'+usd(L.price||0)+(L.shipProfile?('　/　'+esc(L.shipProfile)):'')
+      +(L.itemId?('　/　ItemID '+esc(L.itemId)):'')+'</div></div>';
   });
   $('csvLog').innerHTML=lh||'<div class="note2">ログはまだありません。</div>';
 }
@@ -2746,7 +2768,16 @@ $('csvList').addEventListener('click',function(e){
 });
 // 相場を入れた時点で判定が確定する。入力中は行を作り直さず、判定の行だけ書き換える。
 $('csvList').addEventListener('input',function(e){
-  var id=e.target&&e.target.getAttribute&&e.target.getAttribute('data-sold');
+  var t=e.target; if(!t||!t.getAttribute)return;
+  // 数量・ItemIDは判定に関係しないので、行は作り直さず値だけ保存する
+  var qid=t.getAttribute('data-qty'), iid=t.getAttribute('data-item');
+  if(qid||iid){
+    var rr=csvRowById(qid||iid); if(!rr)return;
+    if(qid)rr.qty=Math.max(0,Math.floor(+t.value||0));
+    else rr.itemId=String(t.value||'').trim();
+    csvSaveList(); return;
+  }
+  var id=t.getAttribute('data-sold');
   if(!id)return;
   var r=csvRowById(id); if(!r)return;
   r.sold=e.target.value; csvSaveList();
@@ -2761,7 +2792,11 @@ $('csvList').addEventListener('input',function(e){
   $('csvCount').textContent=csvList.length;
 });
 $('csvList').addEventListener('change',function(e){
-  if(e.target&&e.target.getAttribute&&e.target.getAttribute('data-sold'))csvRender();
+  // 相場は判定（バッジ・並び順）が変わるので作り直す。
+  // 数量・ItemIDは表示が変わらないうえ、ここで作り直すと
+  // 次に触ろうとした欄ごと消えてしまうため、作り直さない。
+  var t=e.target; if(!t||!t.getAttribute)return;
+  if(t.getAttribute('data-sold'))csvRender();
 });
 $('csvSort').addEventListener('change',csvRender);
 $('csvPickEbay').onclick=function(){
@@ -2930,6 +2965,12 @@ function csvCustomLabel(r){
   if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
   return r.sku;
 }
+// 再調達モードの行は別の送料ポリシー（既定 W2000）で出す。
+function csvShipProfileFor(r){
+  return (r&&r.zeroAct==='restock')
+    ? ($('csvShipProfileRe').value||$('csvShipProfile').value)
+    : $('csvShipProfile').value;
+}
 function csvRowFor(r){
   var o={};
   o['CustomLabel']=csvCustomLabel(r);
@@ -2942,14 +2983,22 @@ function csvRowFor(r){
   o['*StartPrice']=(+r.price||0).toFixed(2);
   o['*Quantity']=r.qty;
   o['*Location']=$('csvLocation').value;
-  o['*DispatchTimeMax']=$('csvDispatch').value;
-  o['*ReturnsAcceptedOption']='ReturnsAccepted';
-  o['ShippingProfileName']=$('csvShipProfile').value;
+  // 送料ポリシーは行ごと。再調達モードは売れてから仕入れるので、
+  // ハンドリングタイムの長い W2000 側で出す。
+  var ship=csvShipProfileFor(r);
+  o['ShippingProfileName']=ship;
   o['ReturnProfileName']=$('csvRetProfile').value;
   o['PaymentProfileName']=$('csvPayProfile').value;
+  /* ビジネスポリシーを使うときは、旧来の個別項目を空欄にする。
+     値を入れるとポリシー側と食い違い、どちらが効くか分からなくなる。
+     ハンドリングタイムと返品条件はポリシー側の設定を使う。 */
+  var byPolicy=!!(String(ship).trim()&&String($('csvRetProfile').value).trim()
+                  &&String($('csvPayProfile').value).trim());
+  o['*DispatchTimeMax']=byPolicy?'':$('csvDispatch').value;
+  o['*ReturnsAcceptedOption']=byPolicy?'':'ReturnsAccepted';
   o['BestOfferEnabled']='1';
   o['MinimumBestOfferPrice']=(+r.floor||0).toFixed(2);
-  o['ImmediatePayRequired']='1';
+  o['ImmediatePayRequired']='';   // 支払いポリシー側で決まるので常に空欄
   // eBayは画像を取りに来るので、公開URLをパイプ区切りで並べる。1枚目がメイン。
   o['PicURL']=(r.pics||[]).map(function(x){return x.url;}).join('|');
   var sp=r.specs||{};
@@ -3031,26 +3080,102 @@ $('csvExport').onclick=function(){
   rows.forEach(function(r){
     csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
       at:at, price:r.price, fba:!!r.fba, forceEbay:!!r.forceEbay, oneOff:!!r.oneOff,
-      pics:(r.pics||[]).length,
+      pics:(r.pics||[]).length, shipProfile:csvShipProfileFor(r),
       zeroAct:r.zeroAct,
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
   csvSaveLog(); csvRender();
   $('csvExportNote').textContent=made.length?('書き出しました：'+made.join('　/　')):'書き出しに失敗しました。';
 };
+/* ---- eBayのアップロード結果ファイルを取り込む ----
+   列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
+   Success は ItemID を行と書き出しログへ、Failure はエラー文を行の指摘へ。 */
+function csvResKey(h){ return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function csvResImport(text){
+  var rows=csvParse(text);
+  if(!rows.length)return {err:'空のファイルです'};
+  // 先頭に Info 行などが入ることがあるので、見出し行を探す
+  var hi=-1, head=null;
+  for(var n=0;n<rows.length&&n<10;n++){
+    var k=(rows[n]||[]).map(csvResKey);
+    if(k.indexOf('status')>=0&&(k.indexOf('itemid')>=0||k.indexOf('customlabel')>=0)){ hi=n; head=k; break; }
+  }
+  if(hi<0)return {err:'Status列とItemID（またはCustomLabel）列が見つかりません。eBayの結果ファイルか確認してください'};
+  function col(){ for(var i=0;i<arguments.length;i++){ var j=head.indexOf(arguments[i]); if(j>=0)return j; } return -1; }
+  var iSt=col('status'), iId=col('itemid'), iLb=col('customlabel','sku'),
+      iMs=col('errormessage','message','errorandwarningmessage','details'),
+      iCd=col('errorcode','code'), iLn=col('linenumber');
+  var ok=0, ng=0, miss=0, logged=0, notes=[];
+  for(var m=hi+1;m<rows.length;m++){
+    var r=rows[m]; if(!r)continue;
+    var st=String((iSt>=0?r[iSt]:'')||'').trim();
+    if(!st)continue;
+    var label=String((iLb>=0?r[iLb]:'')||'').trim();
+    var item=String((iId>=0?r[iId]:'')||'').trim();
+    var line=String((iLn>=0?r[iLn]:'')||'').trim();
+    var hit=null;
+    if(label)csvList.forEach(function(x){ if(csvCustomLabel(x)===label)hit=x; });
+    if(/^success$/i.test(st)){
+      if(!item){ notes.push((line?('行'+line+'：'):'')+'ItemIDが空です'); continue; }
+      ok++;
+      if(hit){ hit.itemId=item; hit.uploadErr=''; }
+      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（ItemID '+item+'）'); }
+      // 書き出しログにも記録する。同じSKUが複数あれば、ItemIDが空の最新分へ入れる。
+      var tgt=null;
+      csvLog.forEach(function(L){ if(L.sku===label&&!String(L.itemId||'').trim())tgt=L; });
+      if(!tgt)csvLog.forEach(function(L){ if(L.sku===label)tgt=L; });
+      if(tgt){ tgt.itemId=item; logged++; }
+    }else if(/^(failure|error)$/i.test(st)){
+      ng++;
+      var msg=String((iMs>=0?r[iMs]:'')||'').trim();
+      var code=String((iCd>=0?r[iCd]:'')||'').trim();
+      var full=(code?('['+code+'] '):'')+(msg||'内容不明のエラー');
+      if(hit)hit.uploadErr=full;
+      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（'+full+'）'); }
+    }
+  }
+  csvSaveList(); csvSaveLog();
+  return { ok:ok, ng:ng, miss:miss, logged:logged, notes:notes };
+}
+$('csvResFile').addEventListener('change',function(){
+  var f=this.files&&this.files[0]; if(!f)return;
+  var box=$('csvResResult');
+  var fr=new FileReader();
+  fr.onload=function(){
+    var buf=new Uint8Array(fr.result), text;
+    // eBayの結果ファイルはUTF-8。化けたらCP932として読み直す。
+    text=new TextDecoder('utf-8').decode(buf);
+    if(text.indexOf('\uFFFD')>=0){
+      try{ text=new TextDecoder('shift_jis').decode(buf); }catch(e){}
+    }
+    if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+    var r=csvResImport(text);
+    box.style.display='block';
+    if(r.err){ box.textContent='⚠ '+r.err; return; }
+    box.textContent='✓ 成功 '+r.ok+'件（ログ記録 '+r.logged+'件）／失敗 '+r.ng+'件'
+      +(r.miss?('　照合できなかった行 '+r.miss+'件'):'')
+      +(r.notes.length?('\n'+r.notes.slice(0,10).join('\n')
+        +(r.notes.length>10?('\nほか '+(r.notes.length-10)+'件'):'')):'');
+    box.style.whiteSpace='pre-wrap';
+    csvRender();
+  };
+  fr.readAsArrayBuffer(f);
+  this.value='';
+});
+
 /* 在庫同期のフェーズ1（手動）。
    File Exchange は「列があって値が空」をその項目の削除と解釈することがあるため、
    Revise では Add のヘッダを流用せず、変更する列だけでファイルを作る。
-   数量だけなら *Action / 特定キー / *Quantity の3列、売値も変えるなら4列。
-   特定キーは ItemID を第一候補にし、無い行だけ CustomLabel を使う。
-   キーが違う行は同じヘッダに載せられないので、ファイルを分ける。 */
+   数量だけなら *Action / ItemID / *Quantity の3列、売値も変えるなら4列。
+   特定キーは ItemID のみ。SKU（CustomLabel）管理で出品していないため、
+   CustomLabel を渡しても更新先を特定できない。ItemID が空の行は対象外。 */
 var CSV_ACT_COL=CSV_HEAD['139973'].split(',')[0];   // *Action(...) の列名。3本とも同じ
-function csvReviseBuild(rows,keyCol,withPrice){
-  var head=[CSV_ACT_COL,keyCol,'*Quantity'];
+function csvReviseBuild(rows,withPrice){
+  var head=[CSV_ACT_COL,'ItemID','*Quantity'];
   if(withPrice)head.push('*StartPrice');
   var out=[CSV_INFO,csvLine(head)];
   rows.forEach(function(r){
-    var line=['Revise', keyCol==='ItemID'?r.itemId:csvCustomLabel(r), r.qty];
+    var line=['Revise', String(r.itemId||'').trim(), r.qty];
     if(withPrice)line.push((+r.price||0).toFixed(2));
     out.push(csvLine(line));
   });
@@ -3059,17 +3184,17 @@ function csvReviseBuild(rows,keyCol,withPrice){
 $('csvRevise').onclick=function(){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
   var withPrice=$('csvRevisePrice').checked;
-  var byId=csvList.filter(function(r){ return !!String(r.itemId||'').trim(); });
-  var byLabel=csvList.filter(function(r){ return !String(r.itemId||'').trim(); });
-  var made=[], cols=0;
-  [['ItemID',byId,'itemid'],['CustomLabel',byLabel,'customlabel']].forEach(function(g){
-    if(!g[1].length)return;
-    var b=csvReviseBuild(g[1],g[0],withPrice); cols=b.cols;
-    var name='ebay_revise_'+g[2]+'_'+csvStamp()+'.csv';
-    if(csvDownload(name,b.text))made.push(name+'（'+g[1].length+'件・'+b.cols+'列）');
-  });
-  $('csvExportNote').textContent=made.length
-    ? ('数量更新CSVを書き出しました：'+made.join('　/　')
+  var rows=csvList.filter(function(r){ return !!String(r.itemId||'').trim(); });
+  var skip=csvList.length-rows.length;
+  if(!rows.length){
+    alert('ItemIDが入っている行がありません。\n結果ファイルを取り込むか、行のItemID欄に直接入力してください。');
+    return;
+  }
+  var b=csvReviseBuild(rows,withPrice);
+  var name='ebay_revise_itemid_'+csvStamp()+'.csv';
+  $('csvExportNote').textContent=csvDownload(name,b.text)
+    ? ('数量更新CSVを書き出しました：'+name+'（'+rows.length+'件・'+b.cols+'列）'
+       +(skip?('　ItemIDのない '+skip+'件は対象外です。'):'')
        +'　変更しない列は列ごと省いています。')
     : '書き出しに失敗しました。';
 };
@@ -3212,7 +3337,7 @@ $('addToCsv').onclick=function(){
     descHtml:descHTML(), qty:1, cost:+$('cost').value||0, weight:+$('weight').value||0,
     wRaw:0, wManual:true,                    // 手入力の重量なので再計算の対象外
     rows:1, gross:0, rank:0, fba:false, zeroAct:'hold', forceEbay:false, oneOff:false, pics:[],
-    amzLow:'', amzLowAt:'', itemId:'', sold:'',
+    amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
             // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
             brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),
