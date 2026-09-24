@@ -253,6 +253,20 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <!-- ============ 出品文タブ ============ -->
   <div id="tabListing" style="display:none">
 
+  <section id="csvEditBar" style="display:none;position:sticky;top:0;z-index:20;box-shadow:0 2px 6px rgba(0,0,0,.12)">
+    <div class="h">出品リストの行を編集中</div>
+    <div class="body">
+      <div id="csvEditTitle" style="font-size:13px;line-height:1.5;font-weight:700"></div>
+      <div class="note2" id="csvEditSub" style="margin-top:2px"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn primary" id="csvEditSave" style="flex:1 1 0;min-width:0;padding:9px 4px">書き戻す</button>
+        <button class="btn" id="csvEditNext" style="flex:1 1 0;min-width:0;padding:9px 4px">次の未完成行へ</button>
+        <button class="btn" id="csvEditStop" style="flex:0 0 auto;padding:9px 10px">やめる</button>
+      </div>
+      <div class="note2" id="csvEditNote"></div>
+    </div>
+  </section>
+
   <section>
     <div class="h">商品情報</div>
     <div class="body">
@@ -413,18 +427,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <table id="checkTbl"></table>
   </section>
 
-  <section id="csvEditBar" style="display:none">
-    <div class="h">出品リストの行を編集中</div>
-    <div class="body">
-      <div class="note2" id="csvEditTitle" style="margin-top:0"></div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn primary" id="csvEditSave" style="flex:1 1 0;min-width:0;padding:9px 4px">書き戻す</button>
-        <button class="btn" id="csvEditNext" style="flex:1 1 0;min-width:0;padding:9px 4px">次の未完成行へ</button>
-        <button class="btn" id="csvEditStop" style="flex:0 0 auto;padding:9px 10px">やめる</button>
-      </div>
-      <div class="note2" id="csvEditNote"></div>
-    </div>
-  </section>
 
   <section>
     <div class="h">出品CSVリストに追加</div>
@@ -586,6 +588,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>梱包マージン（フィギュア）</label><input type="number" id="csvPackFig" value="250" inputmode="numeric"><span class="unit">g</span></div>
       <button class="btn" id="csvReweigh" style="width:100%;margin:4px 0 10px">取り込み済みの重量を再計算</button>
       <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
+      <div class="chk"><input type="checkbox" id="csvAutoParse" checked><label for="csvAutoParse" style="flex:1">英題が空の行を開いたら「自動で振り分け」を実行する</label></div>
       <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
@@ -2300,15 +2303,18 @@ function csvLoad(){
   try{ var a=JSON.parse(localStorage.getItem(CSV_LIST_KEY)||'[]'); csvList=Array.isArray(a)?a:[]; }catch(e){ csvList=[]; }
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
-       CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; }); }catch(e){}
+       CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; });
+       if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse; }catch(e){}
 }
 function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
 function csvSaveCfg(){
   try{ var o={}; CSV_CFG_IDS.forEach(function(id){o[id]=$(id).value;});
+       o.csvAutoParse=$('csvAutoParse').checked;
        localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
+$('csvAutoParse').addEventListener('change',csvSaveCfg);
 
 /* ---- CSVの読み書き ---- */
 // RFC4180風のパーサ。引用符内の , と改行を尊重する。
@@ -2879,9 +2885,21 @@ function csvCondToSel(id,isGameCat){
   return 'used';
 }
 function csvRowById(id){ for(var i=0;i<csvList.length;i++)if(csvList[i].id===id)return csvList[i]; return null; }
+// 商品ごとに変わる欄。行を読み込む前にここを空にして、前の商品の値が残らないようにする。
+// 送料ポリシー・ハンドリング・原産国などの店共通の設定は対象外。
+var CSV_ITEM_FIELDS=['pasteIn','brand','series','chara','variant','line',
+                     'gPlat','gPlatFree','gTitle','gPub',
+                     'aMaker','aMakerFree','aModel','aKind','aColor','aSize',
+                     'extra','title','dupKw','addCsvJan'];
+function csvClearItemFields(){
+  CSV_ITEM_FIELDS.forEach(function(id){ $(id).value=''; });
+  $('aQty').value=1;
+  titleEdited=false; skuEdited=false; dupEdited=false;
+}
 function csvEditOpen(id){
   var r=csvRowById(id); if(!r)return;
   csvEditId=id;
+  csvClearItemFields();
   // 商品欄（タブ共通）に仕入原価と重量を入れる
   $('cost').value=r.cost||0;
   $('weight').value=r.weight||0;
@@ -2892,19 +2910,37 @@ function csvEditOpen(id){
   else $('cond').value=csvCondToSel(r.condId,false);
   // 和名は貼り付け欄へ。ここから「自動で振り分け」も手入力も使える。
   $('pasteIn').value=r.titleJa||'';
-  // すでに英題があれば戻す。無ければ既存の自動生成に任せる。
+  // 行に保存済みの値があれば各欄へ戻す。
+  var sp=r.specs||{};
+  if(sp.gameName)$('gTitle').value=sp.gameName;
+  if(sp.publisher)$('gPub').value=sp.publisher;
+  if(sp.franchise)$('series').value=sp.franchise;
+  if(sp.character)$('chara').value=sp.character;
+  if(sp.model)$('variant').value=sp.model;
+  if(sp.brand)$('brand').value=sp.brand;
+  // 英題があれば戻す。無ければ既存の自動生成に任せる。
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
   $('addCsvJan').value=r.jan||'';
   $('addCsvCat').value=r.cat;
   if(r.sku){ $('sku').value=r.sku; skuEdited=true; }
+  // どの商品を編集中かが常に見えるように、和名・JAN・SKU・状態を上部に出す。
   $('csvEditBar').style.display='block';
-  $('csvEditTitle').textContent=(r.titleJa||r.sku||'(無題)')
-    +'　/　'+CSV_CAT[r.cat]+'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))
-    +'　/　仕入 '+yen(r.cost||0)+'　/　重量 '+(r.weight||0).toLocaleString()+'g';
+  $('csvEditTitle').textContent=r.titleJa||r.titleEn||r.sku||'(無題)';
+  $('csvEditSub').textContent=(r.jan||'JANなし')+'　/　'+(r.sku||'SKUなし')
+    +'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))
+    +'　/　'+CSV_CAT[r.cat]+'　/　仕入 '+yen(r.cost||0)
+    +'　/　重量 '+(r.weight||0).toLocaleString()+'g';
   $('csvEditNote').textContent='各欄を埋めるとタイトルと説明文が生成されます。「書き戻す」でこの行に反映します。';
   redraw();
   switchTab('B');
+  // 出品文タブの先頭（編集バーの位置）まで送る。以降はバーが上部に貼り付く。
+  try{ $('csvEditBar').scrollIntoView(true); }catch(e){ window.scrollTo(0,0); }
+  // 英題が空なら、和名で「自動で振り分け」を実行する（設定でオフにできる）。
+  if(!titleEdited&&$('csvAutoParse').checked&&PARSE_API&&String(r.titleJa||'').trim()
+     &&!$('btnParse').disabled){
+    $('btnParse').click();
+  }
 }
 // いまの生成結果を行へ書き戻す
 function csvEditWrite(){
