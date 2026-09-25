@@ -630,6 +630,16 @@ File Exchangeの `*Action=Revise` を使う。更新用CSVを書き出して手�
 
 数量だけを変えるなら3列、価格も変えるなら4列。それ以上は出さない。
 
+**ボタンは2つ**（2026-09-25 追加）。
+
+| ボタン | 列 | ファイル名 |
+|---|---|---|
+| 数量更新CSV | `*Action` / `ItemID` / `*Quantity`（＋チェックで `*StartPrice`） | `ebay_revise_itemid_YYMMDD.csv` |
+| 価格更新CSV | `*Action` / `ItemID` / `*StartPrice` | `ebay_price_itemid_YYMMDD.csv` |
+
+価格更新CSVに `*Quantity` は入れない。列を入れると数量まで上書きしてしまうため。
+どちらも ItemID のある行だけが対象で、無い行は件数だけ注記に出す。
+
 **特定キーについて**
 
 Reviseの特定は **ItemIDが基本**。CustomLabelで引くには、eBay側の設定でSKUによる出品特定が有効になっていて、かつSKUが全出品で一意である必要がある。

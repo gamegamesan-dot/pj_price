@@ -527,6 +527,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="csvTitleNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
+        <button class="btn" id="csvPriceCsv" style="flex:1 1 0;min-width:0;padding:9px 4px">価格更新CSV</button>
         <button class="btn" id="csvClear" style="flex:1 1 0;min-width:0;padding:9px 4px">リストを空にする</button>
       </div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
@@ -3464,36 +3465,46 @@ $('csvTitleGen').onclick=function(){
    File Exchange は「列があって値が空」をその項目の削除と解釈することがあるため、
    Revise では Add のヘッダを流用せず、変更する列だけでファイルを作る。
    数量だけなら *Action / ItemID / *Quantity の3列、売値も変えるなら4列。
+   価格だけなら *Action / ItemID / *StartPrice の3列。
    特定キーは ItemID のみ。SKU（CustomLabel）管理で出品していないため、
    CustomLabel を渡しても更新先を特定できない。ItemID が空の行は対象外。 */
 var CSV_ACT_COL=CSV_HEAD['139973'].split(',')[0];   // *Action(...) の列名。3本とも同じ
-function csvReviseBuild(rows,withPrice){
-  var head=[CSV_ACT_COL,'ItemID','*Quantity'];
-  if(withPrice)head.push('*StartPrice');
+function csvReviseBuild(rows,opt){
+  var head=[CSV_ACT_COL,'ItemID'];
+  if(opt.qty)head.push('*Quantity');
+  if(opt.price)head.push('*StartPrice');
   var out=[CSV_INFO,csvLine(head)];
   rows.forEach(function(r){
-    var line=['Revise', String(r.itemId||'').trim(), r.qty];
-    if(withPrice)line.push((+r.price||0).toFixed(2));
+    var line=['Revise', String(r.itemId||'').trim()];
+    if(opt.qty)line.push(r.qty);
+    if(opt.price)line.push((+r.price||0).toFixed(2));
     out.push(csvLine(line));
   });
   return { text:out.join('\r\n')+'\r\n', cols:head.length };
 }
-$('csvRevise').onclick=function(){
+// 数量更新・価格更新で共通。ItemID のある行だけを対象にする。
+function csvReviseRun(opt,label,slug){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
-  var withPrice=$('csvRevisePrice').checked;
   var rows=csvList.filter(function(r){ return !!String(r.itemId||'').trim(); });
   var skip=csvList.length-rows.length;
   if(!rows.length){
     alert('ItemIDが入っている行がありません。\n結果ファイルを取り込むか、行のItemID欄に直接入力してください。');
     return;
   }
-  var b=csvReviseBuild(rows,withPrice);
-  var name='ebay_revise_itemid_'+csvStamp()+'.csv';
+  var b=csvReviseBuild(rows,opt);
+  var name='ebay_'+slug+'_itemid_'+csvStamp()+'.csv';
   $('csvExportNote').textContent=csvDownload(name,b.text)
-    ? ('数量更新CSVを書き出しました：'+name+'（'+rows.length+'件・'+b.cols+'列）'
+    ? (label+'を書き出しました：'+name+'（'+rows.length+'件・'+b.cols+'列）'
        +(skip?('　ItemIDのない '+skip+'件は対象外です。'):'')
        +'　変更しない列は列ごと省いています。')
     : '書き出しに失敗しました。';
+}
+$('csvRevise').onclick=function(){
+  csvReviseRun({qty:true,price:$('csvRevisePrice').checked},'数量更新CSV','revise');
+};
+// 売値だけを直す。数量列は入れない（列があると数量まで上書きしてしまう）。
+$('csvPriceCsv').onclick=function(){
+  csvReviseRun({qty:false,price:true},'価格更新CSV','price');
 };
 
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
