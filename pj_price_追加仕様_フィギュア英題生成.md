@@ -67,7 +67,7 @@ jan と asin は、どちらか一方があればよい（両方なければ `in
 ### 3.3 サブリクエスト数
 1件あたり最大でSP-API 2回、eBay 3回、Claude 1回程度を見込む。10件ずつなら無料プランの上限（50）に収まることを実測で確認し、収まらなければ1回あたりの件数を下げる。
 
-## 4. pj_price側（出品CSVタブ）
+## 4. pj_price側（出品CSVタブ）※ 2026-09-25 実装済み（sw.js v68）
 - 一括の「英語タイトル生成」ボタンで、ゲーム行とフィギュア行の両方を処理する。ゲームは /titles、フィギュアは /figure-titles に送る。進捗表示は合算する。
 - フィギュア行のASINは、行のSKU（例：`…-B0C1ZJPDV4-…`）またはせどりすとCSVのASIN列から取る。JANは、せどりすとCSVにあればそれを使う。
 - Workerが `jan_resolved` を返した場合は、行のJANとして保存する（UPC/EAN欄にも使う）。
@@ -171,7 +171,11 @@ jan と asin は、どちらか一方があればよい（両方なければ `in
 6. **版の表記をそろえる**：`Version B` → `Ver. B`（`fixVersionWord`）。
    プライズ品のカラー違いの A/B は色の別なので `Prize B` にはせず `Ver. B` のままにする。
    `Prize A` は和名に賞のランク（A賞など）があるときだけ使う。
-7. `test-figure.ps1` の件数上限テストで、期待どおりの400を失敗として赤く出さないようにした
+7. **商品ラインの重複を避ける**：`line` の語がすでに `chara` か `series` に入っている
+   ときは英題に出さない（「Chogokin Robo 50 CHOGOKIN Figure」→
+   「Chogokin Robo 50 Figure」）。記号と大文字小文字を落として突き合わせる。
+   タイトルの組み立て側（`figTitleFrom`）で行うので Worker は変更なし。
+8. `test-figure.ps1` の件数上限テストで、期待どおりの400を失敗として赤く出さないようにした
    （`-ExpectStatus`）。あわせて英題だけを出す `-TitlesOnly` を追加。
 
 ## 7. スコープ外

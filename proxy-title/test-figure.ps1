@@ -71,6 +71,13 @@ function Build-FigTitle {
   $st = @{}
   foreach ($k in $keys) { $st[$k] = [string]$F.$k }
   $short = [string]$F.series_short
+  # 商品ラインの語がキャラクター名や作品名に入っていれば二重に出さない
+  if ($st['line']) {
+    $lk = ($st['line'].ToLower() -replace '[^a-z0-9]','')
+    $ck = ($st['chara'].ToLower() -replace '[^a-z0-9]','')
+    $sk = ($st['series'].ToLower() -replace '[^a-z0-9]','')
+    if ($lk -and ($ck.Contains($lk) -or $sk.Contains($lk))) { $st['line'] = '' }
+  }
   $drop = New-Object System.Collections.ArrayList
 
   $join = {

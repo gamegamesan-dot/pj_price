@@ -1617,6 +1617,14 @@ function figTitleFrom(used, p){
   var st={brand:p.brand||'', series:p.series||'', chara:p.chara||'',
           variant:p.variant||'', scale:p.scale||'', line:p.line||''};
   var short=p.seriesShort||p.series_short||'';
+  /* 商品ラインの語がキャラクター名や作品名にもう入っているときは二重に出さない
+     （例「Chogokin Robo 50 CHOGOKIN Figure」→「Chogokin Robo 50 Figure」）。
+     記号と大文字小文字を落として突き合わせる。 */
+  var key=function(x){ return String(x||'').toLowerCase().replace(/[^a-z0-9]/g,''); };
+  if(st.line){
+    var lk=key(st.line);
+    if(lk&&(key(st.chara).indexOf(lk)>=0||key(st.series).indexOf(lk)>=0))st.line='';
+  }
   function join(){
     return [used?'Used':'', st.brand, st.series, st.chara, st.variant, st.scale, st.line, FIG_PTYPE]
              .filter(Boolean).join(' ');
@@ -2819,11 +2827,28 @@ function csvPlatSelect(r){
   });
   return h+'</select></div>';
 }
+// フィギュアの5項目。折りたたみで開いて1つずつ直せる。
+function csvFigFields(r){
+  var sp=r.specs||{};
+  var h='<details style="margin-top:2px"><summary class="note2" style="margin:0">'
+    +'ブランド・作品名・キャラクターを直す</summary><div style="padding:2px 0 0">';
+  CSV_FIG_KEYS.forEach(function(k){
+    h+='<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+      +'<span class="note2" style="margin:0;flex:0 0 74px">'+CSV_FIG_LABEL[k]+'</span>'
+      +'<input type="text" data-figk="'+k+'" data-figid="'+r.id+'" value="'
+      +esc(sp[CSV_FIG_MAP[k]]||'')+'" style="flex:1 1 0;min-width:0;padding:5px;font-size:13px;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>';
+  });
+  if(sp.scale)h+='<div class="note2" style="margin-top:4px">スケール '+esc(sp.scale)+'（和名から自動）</div>';
+  return h+'</div></details>';
+}
 function csvTitleBox(r){
   var t=csvTitleTarget(r);
-  if(!t)return '';                                   // ゲーム以外は出さない
+  if(!t)return '';                                   // ゲーム・フィギュア以外は出さない
   if(t==='out')
     return '<div class="note2" style="margin-top:4px">英語タイトル生成：対象外機種（手入力）</div>';
+  if(t==='noid')
+    return '<div class="note2" style="margin-top:4px">英語タイトル生成：JANもASINも無いので照会できません（手入力）</div>';
   if(t==='unknown')
     return csvPlatSelect(r)
       +'<div class="note2" style="margin-top:2px">機種を選ぶか、「英語タイトル生成」でAmazonから補完します。'
@@ -2842,6 +2867,7 @@ function csvTitleBox(r){
     +(st?('　<span style="color:'+st[1]+'">'+esc(st[0])+'</span>'):'')
     +(r.titleManual?'　<span style="color:#2f6fb0">編集済み</span>':'')
     +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
+  if(csvTitleKind(r)==='fig')h+=csvFigFields(r);
   if((r.titleCands||[]).length)
     h+='<details style="margin-top:2px"><summary class="note2" style="margin:0">候補にした元タイトル '
       +r.titleCands.length+'件</summary><div class="note2" style="margin:2px 0 0">'
@@ -3001,6 +3027,27 @@ $('csvList').addEventListener('input',function(e){
     if(qid)rr.qty=Math.max(0,Math.floor(+t.value||0));
     else rr.itemId=String(t.value||'').trim();
     csvSaveList(); return;
+  }
+  /* フィギュアの5項目を直したら、その場で英題を組み直して「編集済み」にする。
+     英題欄の表示と文字数も入れ替える（行は作り直さない＝いま触っている欄を消さない）。 */
+  var fk=t.getAttribute('data-figk');
+  if(fk){
+    var rf=csvRowById(t.getAttribute('data-figid')); if(!rf)return;
+    rf.specs=rf.specs||{};
+    rf.specs[CSV_FIG_MAP[fk]]=t.value.trim();
+    csvFigRebuild(rf); rf.titleManual=true; csvSaveList();
+    var box=t.closest('div[data-row]')||null;
+    var en=document.querySelector('#csvList input[data-ten="'+rf.id+'"]');
+    if(en){
+      en.value=rf.titleEn;
+      var cnt=en.parentNode.nextSibling;
+      if(cnt&&cnt.firstChild){
+        cnt.firstChild.textContent=rf.titleEn.length+' / 80';
+        cnt.firstChild.style.color=rf.titleEn.length>80?'var(--bad)'
+          :(rf.titleEn.length>72?'#8a6d00':'var(--mute)');
+      }
+    }
+    return;
   }
   // 英題を手で直した行は「編集済み」にして、以後の再生成で上書きしない
   var tid=t.getAttribute('data-ten');
@@ -3457,43 +3504,83 @@ $('csvResFile').addEventListener('change',function(){
   this.value='';
 });
 
-/* ---- 英語タイトルの一括生成（Worker pj-title の /titles）----
-   Worker が返すのは english_name だけ。タイトルは gameTitleFrom() が組み立てる
-   （書式は出品文タブと同じ1か所）。対象はゲームで、対象機種の行だけ。 */
-var CSV_TITLE_BATCH=10;   // Workers無料プランのサブリクエスト上限に触れない件数
+/* ---- 英語タイトルの一括生成（Worker pj-title）----
+   ゲームは /titles（english_name だけ）、フィギュアは /figure-titles（5項目）。
+   タイトルの組み立ては gameTitleFrom() / figTitleFrom() が行う
+   （書式は出品文タブと同じ1か所）。 */
+var CSV_TITLE_BATCH={game:10, fig:8};   // 無料プランのサブリクエスト上限に触れない件数
+var CSV_FIG_KEYS=['brand','series','chara','variant','line'];   // 画面で直せる5項目
+// 行の5項目は specs のどの名前で持っているか
+var CSV_FIG_MAP={brand:'brand',series:'franchise',chara:'character',variant:'model',line:'line'};
+var CSV_FIG_LABEL={brand:'ブランド',series:'作品名',chara:'キャラクター',variant:'版',line:'商品ライン'};
+
 function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
+// ゲームか、フィギュアか
+function csvTitleKind(r){
+  if(r.cat==='139973')return 'game';
+  return (CSV_FIG_CATS.indexOf(r.cat)>=0)?'fig':'';
+}
 /* 生成の対象になり得る行か。
    'ok'      … そのまま送れる
    'unknown' … 機種が分からない。Worker がAmazonから機種を補える可能性があるので送る
    'out'     … 対象外の機種。送らない
-   ''        … ゲーム以外 */
+   'noid'    … JANもASINも無い（フィギュア）。送れない
+   ''        … どちらでもない */
 function csvTitleTarget(r){
-  if(r.cat!=='139973')return '';
+  var k=csvTitleKind(r);
+  if(k==='fig')
+    return (String(r.jan||'').trim()||String(r.asin||'').trim())?'ok':'noid';
+  if(k!=='game')return '';
   var p=csvPlatOf(r);
   if(!p)return 'unknown';
   return p.target?'ok':'out';
 }
 function csvTitleSendable(r){ var t=csvTitleTarget(r); return t==='ok'||t==='unknown'; }
-// english_name からタイトルを組み立てて行へ書き戻す
+
+// english_name からタイトルを組み立てて行へ書き戻す（ゲーム）
 function csvApplyName(r,name){
   var p=csvPlatOf(r);
   r.specs=r.specs||{};
   r.specs.gameName=name;
   r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name).text;
 }
+// 行が持つ5項目を図の並びで取り出す
+function csvFigParts(r){
+  var sp=r.specs||{}, o={};
+  CSV_FIG_KEYS.forEach(function(k){ o[k]=sp[CSV_FIG_MAP[k]]||''; });
+  o.scale=sp.scale||'';
+  o.seriesShort=sp.seriesShort||'';
+  return o;
+}
+// 5項目からタイトルを組み立てて行へ書き戻す（フィギュア）
+function csvFigRebuild(r){
+  r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0, csvFigParts(r)).text;
+}
+function csvApplyFields(r,f){
+  var sp=r.specs=r.specs||{};
+  CSV_FIG_KEYS.forEach(function(k){ if(f[k]!==undefined)sp[CSV_FIG_MAP[k]]=f[k]||''; });
+  if(f.scale!==undefined)sp.scale=f.scale||sp.scale||'';
+  if(f.series_short!==undefined)sp.seriesShort=f.series_short||'';
+  csvFigRebuild(r);
+}
 function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
-// 1回分（最大 CSV_TITLE_BATCH 件）を送る
-function csvTitleSend(rows,force){
+// 1回分を送る。kind で送り先と中身が変わる。
+function csvTitleSend(kind,rows,force){
   var api=String($('csvTitleApi').value||'').trim().replace(/\/+$/,'');
-  return fetch(api+'/titles',{
+  var path=(kind==='fig')?'/figure-titles':'/titles';
+  var items=rows.map(function(r){
+    var cond=(r.condId===1000?'new':'used');
+    if(kind==='fig')
+      return { jan:r.jan||'', asin:r.asin||'', ja_title:r.titleJa||'', condition:cond };
+    var p=csvPlatOf(r);
+    // ASINも送る。JANが商品と結びついていない行はASINで引いてもらう。
+    return { jan:r.jan, asin:r.asin||'', ja_title:r.titleJa||'', platform:p?p.title:'',
+             condition:cond };
+  });
+  return fetch(api+path,{
     method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':String($('csvTitleKey').value||'').trim()},
-    body:JSON.stringify({force:!!force, items:rows.map(function(r){
-      var p=csvPlatOf(r);
-      // ASINも送る。JANが商品と結びついていない行はASINで引いてもらう。
-      return { jan:r.jan, asin:r.asin||'', ja_title:r.titleJa||'', platform:p?p.title:'',
-               condition:(r.condId===1000?'new':'used') };
-    })})
+    body:JSON.stringify({force:!!force, items:items})
   }).then(function(res){
     if(!res.ok)throw new Error('HTTP '+res.status);
     return res.json();
@@ -3504,33 +3591,45 @@ function csvTitleSend(rows,force){
       r.titleStatus=x.status||'review';
       r.titleCands=x.candidates||[];
       r.titleNote=x.note||'';
-      /* 機種が空だった行に Worker が機種を入れてきたら、表で正規化して
-         Item Specifics の Platform にも反映する。 */
-      if(!csvPlatOf(r)&&x.platform_key){
-        var pk=platByKey(x.platform_key);
-        if(pk){ r.specs=r.specs||{}; r.specs.platform=pk.spec; }
+      if(kind==='fig'){
+        // ASINから判明したJANは行に取り込む（Item Specifics の MPN にも使う）
+        if(x.jan_resolved&&!String(r.jan||'').trim())r.jan=x.jan_resolved;
+        if(x.fields)csvApplyFields(r,x.fields);
+      }else{
+        /* 機種が空だった行に Worker が機種を入れてきたら、表で正規化して
+           Item Specifics の Platform にも反映する。 */
+        if(!csvPlatOf(r)&&x.platform_key){
+          var pk=platByKey(x.platform_key);
+          if(pk){ r.specs=r.specs||{}; r.specs.platform=pk.spec; }
+        }
+        if(x.english_name&&csvTitleTarget(r)==='ok')csvApplyName(r,x.english_name);
       }
-      if(x.english_name&&csvTitleTarget(r)==='ok')csvApplyName(r,x.english_name);
     });
     csvSaveList();
   });
 }
+/* ゲームとフィギュアをまとめて処理する。送り先と1回の件数は種類ごとに違うが、
+   進捗は合算して見せる（利用者からは1つの処理に見える）。 */
 function csvTitleRun(list,force){
-  var btn=$('csvTitleGen'), label=btn.textContent;
+  var btn=$('csvTitleGen'), label='英語タイトル生成（未生成の行）';
   btn.disabled=true;
-  var done=0, failed=0;
+  // 種類ごとの待ち行列にする
+  var q={game:list.filter(function(r){return csvTitleKind(r)==='game';}),
+         fig: list.filter(function(r){return csvTitleKind(r)==='fig';})};
+  var total=q.game.length+q.fig.length, done=0, failed=0;
   function step(){
-    if(!list.length){
+    var kind=q.game.length?'game':(q.fig.length?'fig':'');
+    if(!kind){
       btn.disabled=false; btn.textContent=label;
       csvTitleSay('英語タイトル生成：'+done+'件を処理しました。'
         +(failed?('　'+failed+'件は失敗したので、もう一度実行してください。'):'')
         +'　review の行は中身を確かめてください。');
       csvRender(); return;
     }
-    var part=list.splice(0,CSV_TITLE_BATCH);
-    btn.textContent='生成中… '+done+'/'+(done+part.length+list.length);
-    csvTitleSay('生成中… '+done+'/'+(done+part.length+list.length));
-    csvTitleSend(part,force)
+    var part=q[kind].splice(0,CSV_TITLE_BATCH[kind]);
+    btn.textContent='生成中… '+done+'/'+total;
+    csvTitleSay('生成中… '+done+'/'+total+'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）');
+    csvTitleSend(kind,part,force)
       .catch(function(e){
         failed+=part.length;
         part.forEach(function(r){ r.titleStatus='error'; r.titleNote=e.message; });
@@ -3552,8 +3651,8 @@ $('csvTitleGen').onclick=function(){
   });
   if(!todo.length){
     alert(target.length
-      ? '未生成のゲーム行がありません。作り直すときは行の「再生成」を押してください。'
-      : '対象のゲーム行がありません。');
+      ? '未生成の行がありません。作り直すときは行の「再生成」を押してください。'
+      : '対象の行がありません（ゲームは対象機種、フィギュアはJANかASINが要ります）。');
     return;
   }
   csvTitleRun(todo.slice(),false);
