@@ -9,7 +9,9 @@
 #>
 param(
   [Parameter(Mandatory=$true)][string]$Base,
-  [Parameter(Mandatory=$true)][string]$Key
+  [Parameter(Mandatory=$true)][string]$Key,
+  # 英題だけを見たいとき（1章だけ走らせる）
+  [switch]$TitlesOnly
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -35,43 +37,61 @@ $BANNED = @('English','Multi-Language','Multilingual','Multi Language','Region F
             'Rare','L@@K','Japan','Import','Authentic','Free Shipping')
 
 function Invoke-Titles {
-  param([array]$Items, [bool]$Force)
+  # $ExpectStatus に期待するHTTPコードを渡すと、そのコードは失敗として赤く出さない
+  param([array]$Items, [bool]$Force, [int]$ExpectStatus = 0)
   $payload = @{ items = $Items; force = $Force } | ConvertTo-Json -Depth 5 -Compress
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
   try {
     return Invoke-RestMethod -Method Post -Uri "$Base/figure-titles" -Body $bytes `
       -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-PJ-Key' = $Key }
   } catch {
-    $code = $null
+    $code = 0
     if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
-    Write-Host ("  !! 失敗 HTTP {0} : {1}" -f $code, $_.Exception.Message) -ForegroundColor Red
+    if ($ExpectStatus -gt 0 -and $code -eq $ExpectStatus) {
+      Write-Host ("  期待どおり HTTP {0} で弾かれた" -f $code) -ForegroundColor Green
+    } else {
+      Write-Host ("  !! 失敗 HTTP {0} : {1}" -f $code, $_.Exception.Message) -ForegroundColor Red
+    }
     return $null
   }
 }
 
-# pj_price の figTitleFrom() と同じ組み立て（書式の確認用）
+<#
+  pj_price の figTitleFrom() と同じ組み立て（書式の確認用）
+  [Used] brand series chara variant scale line Figure
+  80字を超えたら ブランド → 版とスケール → 作品名を短縮 → 商品ライン の順に落とす
+#>
 function Build-FigTitle {
   param([bool]$Used, $F)
-  $keys = @('brand','series','chara','variant','line')
-  # 5項目がすべて空なら英題は作らない（実装の figTitleFrom と同じ）
+  $keys = @('brand','series','chara','variant','scale','line')
   $any = $false
   foreach ($k in $keys) { if ($F.$k) { $any = $true } }
   if (-not $any) { return [pscustomobject]@{ text = ''; dropped = '' } }
+
+  $st = @{}
+  foreach ($k in $keys) { $st[$k] = [string]$F.$k }
+  $short = [string]$F.series_short
   $drop = New-Object System.Collections.ArrayList
-  function Join-Parts($F, $keys, $drop, $Used) {
+
+  $join = {
     $p = New-Object System.Collections.ArrayList
     if ($Used) { [void]$p.Add('Used') }
-    foreach ($k in $keys) {
-      $v = $F.$k
-      if ($v -and ($drop -notcontains $k)) { [void]$p.Add($v) }
-    }
+    foreach ($k in $keys) { if ($st[$k]) { [void]$p.Add($st[$k]) } }
     [void]$p.Add('Figure')
-    return ($p -join ' ')
+    ($p -join ' ')
   }
-  $t = Join-Parts $F $keys $drop $Used
-  foreach ($d in @('line','variant','brand')) {
-    if ($t.Length -le 80) { break }
-    if ($F.$d) { [void]$drop.Add($d); $t = Join-Parts $F $keys $drop $Used }
+  $t = & $join
+  if ($t.Length -gt 80 -and $st['brand']) {
+    $st['brand'] = ''; [void]$drop.Add('ブランド'); $t = & $join
+  }
+  if ($t.Length -gt 80 -and ($st['variant'] -or $st['scale'])) {
+    $st['variant'] = ''; $st['scale'] = ''; [void]$drop.Add('版・スケール'); $t = & $join
+  }
+  if ($t.Length -gt 80 -and $short -and $short -ne $st['series']) {
+    $st['series'] = $short; [void]$drop.Add('作品名を短縮'); $t = & $join
+  }
+  if ($t.Length -gt 80 -and $st['line']) {
+    $st['line'] = ''; [void]$drop.Add('商品ライン'); $t = & $join
   }
   return [pscustomobject]@{ text = $t; dropped = ($drop -join ',') }
 }
@@ -95,8 +115,10 @@ function Show-Results {
     if ($f) {
       Write-Host ("    brand    : {0}" -f $f.brand)
       Write-Host ("    series   : {0}" -f $f.series)
+      Write-Host ("    series_short : {0}" -f $f.series_short)
       Write-Host ("    chara    : {0}" -f $f.chara)
       Write-Host ("    variant  : {0}" -f $f.variant)
+      Write-Host ("    scale    : {0}" -f $f.scale)
       Write-Host ("    line     : {0}" -f $f.line)
     }
     Write-Host ("    英題     : {0}" -f $bt.text)
@@ -116,17 +138,36 @@ function Show-Results {
 
 Write-Host '==== 1. 本番10件（8件 + 2件に分けて送る・force=true で作り直す）====' -ForegroundColor Cyan
 $all = @()
+$allItems = @()
 $batches = @( ,($items[0..7]) ) + @( ,($items[8..9]) )
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 foreach ($b in $batches) {
   Write-Host ("-- {0}件 送信中…" -f $b.Count)
   $res = Invoke-Titles -Items $b -Force $true
   if ($null -eq $res) { Write-Host '中止します。' -ForegroundColor Red; exit 1 }
-  Show-Results -Results $res.results -Items $b
+  if (-not $TitlesOnly) { Show-Results -Results $res.results -Items $b }
   $all += $res.results
+  $allItems += $b
 }
 $sw.Stop()
 Write-Host ("所要 {0:N1} 秒" -f $sw.Elapsed.TotalSeconds)
+
+if ($TitlesOnly) {
+  Write-Host ''
+  Write-Host '==== 英題だけ ====' -ForegroundColor Cyan
+  $n = 0
+  foreach ($r in $all) {
+    $src = $allItems[$n]; $n++
+    $used = ($src.condition -eq 'used')
+    $bt = Build-FigTitle -Used $used -F $r.fields
+    $mark = if ($bt.text.Length -gt 80) { '!!' } else { '  ' }
+    Write-Host ("{0} {1,2}. [{2,-6}] {3,3}字 {4}" -f $mark, $n, $r.status, $bt.text.Length, $bt.text)
+    if ($bt.dropped) { Write-Host ("        省略: {0}" -f $bt.dropped) -ForegroundColor DarkGray }
+  }
+  Write-Host ''
+  Write-Host 'この出力をそのまま貼って送ってください。' -ForegroundColor Green
+  exit 0
+}
 
 Write-Host ''
 Write-Host '==== 2. 集計 ====' -ForegroundColor Cyan
@@ -180,9 +221,10 @@ try {
   if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
   Write-Host ("  キー違い: HTTP {0}（401 が正しい）" -f $code)
 }
+Write-Host '  21件を送る:' -NoNewline
 $big = @(); 1..21 | ForEach-Object { $big += @{ jan = '4580590128217' } }
-$res5 = Invoke-Titles -Items $big -Force $false
-if ($null -eq $res5) { Write-Host '  21件: 400 で弾かれた（正しい）' }
+$res5 = Invoke-Titles -Items $big -Force $false -ExpectStatus 400
+if ($null -ne $res5) { Write-Host '  21件: 通ってしまった !!' -ForegroundColor Red }
 
 Write-Host ''
 Write-Host '==== 6. 確認してほしい点 ====' -ForegroundColor Cyan

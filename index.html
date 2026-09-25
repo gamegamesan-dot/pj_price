@@ -1605,18 +1605,28 @@ function buildArcadeTitle(){
   return {text:join('',''), dropped:['Japan Import','サイズ']};
 }
 /* フィギュアのタイトル。書式はここ1か所。
-   [Used] ブランド 作品名 キャラクター 版 商品ライン Figure
+   [Used] ブランド 作品名 キャラクター 版 スケール 商品ライン Figure
    中古は先頭に Used を付ける（ゲーム・アーケードと揃える）。
-   80字を超えたら 商品ライン → 版 → ブランド の順に落とす。Used は落とさない。 */
+
+   80字を超えたときは、ブランド → 版とスケール → 作品名を短縮 → 商品ライン
+   の順に落とす。商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
+   買い手が検索に使うので最後まで残す。Used は落とさない。 */
 function figTitleFrom(used, p){
-  if(!(p.brand||p.series||p.chara||p.variant||p.line)) return {text:'', dropped:[]};
-  var head=used?'Used':'';
-  var order=[p.brand||'',p.series||'',p.chara||'',p.variant||'',p.line||'',FIG_PTYPE];
-  function join(){ return [head].concat(order).filter(Boolean).join(' '); }
+  if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale)) return {text:'', dropped:[]};
+  var st={brand:p.brand||'', series:p.series||'', chara:p.chara||'',
+          variant:p.variant||'', scale:p.scale||'', line:p.line||''};
+  var short=p.seriesShort||p.series_short||'';
+  function join(){
+    return [used?'Used':'', st.brand, st.series, st.chara, st.variant, st.scale, st.line, FIG_PTYPE]
+             .filter(Boolean).join(' ');
+  }
   var t=join(), dropped=[];
-  if(t.length>80&&order[4]){ order[4]=''; dropped.push('商品ライン'); t=join(); }
-  if(t.length>80&&order[3]){ order[3]=''; dropped.push('版'); t=join(); }
-  if(t.length>80&&order[0]){ order[0]=''; dropped.push('ブランド'); t=join(); }
+  if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
+  if(t.length>80&&(st.variant||st.scale)){
+    st.variant=''; st.scale=''; dropped.push('版・スケール'); t=join();
+  }
+  if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
+  if(t.length>80&&st.line){ st.line=''; dropped.push('商品ライン'); t=join(); }
   return {text:t, dropped:dropped};
 }
 // 出品文タブの状態欄が中古を指しているか
@@ -2400,7 +2410,12 @@ var CSV_BRAND=[['バンプレスト','Banpresto'],['Banpresto','Banpresto'],
   ['Bandai Spirits','Bandai Spirits'],
   ['グッドスマイル','Good Smile Company'],['Good Smile','Good Smile Company'],
   ['コトブキヤ','Kotobukiya'],['Kotobukiya','Kotobukiya'],
-  ['魂ネイションズ','Tamashii Nations'],
+  /* 魂ネイションズ（TAMASHII NATIONS）はバンダイスピリッツの事業ブランドなので、
+     eBayのBrandとしては Bandai Spirits に寄せる（S.H.Figuarts・超合金も同じ）。 */
+  ['魂ネイションズ','Bandai Spirits'],['TAMASHII NATIONS','Bandai Spirits'],
+  ['オランジュ・ルージュ','Orange Rouge'],['Orange Rouge','Orange Rouge'],
+  ['ワンダフルワークス','Wonderful Works'],['Wonderful Works','Wonderful Works'],
+  ['ウェーブ','Wave'],
   ['マックスファクトリー','Max Factory'],['Max Factory','Max Factory'],
   ['メガハウス','MegaHouse'],['MegaHouse','MegaHouse'],['メガハウス','MegaHouse'],
   ['メディコム','MEDICOM'],['バンダイ','Bandai'],['フリュー','FuRyu'],['セガ','SEGA'],
@@ -2409,8 +2424,15 @@ var CSV_BRAND=[['バンプレスト','Banpresto'],['Banpresto','Banpresto'],
    ブランドが別に見つからなかったときだけ親ブランドを使う。 */
 var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits'],
   ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits'],
+  ['Figuarts ZERO','Figuarts ZERO','Bandai Spirits'],
   ['ねんどろいど','Nendoroid','Good Smile Company'],
-  ['Nendoroid','Nendoroid','Good Smile Company']];
+  ['Nendoroid','Nendoroid','Good Smile Company'],
+  ['figma','figma','Max Factory'],
+  ['POP UP PARADE','POP UP PARADE','Good Smile Company'],
+  ['一番くじ','Ichiban Kuji','Banpresto'],
+  ['PROPLICA','PROPLICA','Bandai Spirits'],
+  ['超合金','CHOGOKIN','Bandai Spirits'],
+  ['CHOGOKIN','CHOGOKIN','Bandai Spirits']];
 var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Nintendo','SEGA',
   'ATLUS','KOEI Corporation','Nippon Ichi Software','Marvelous','Compile Heart','Idea Factory',
   'Aksys Games','Spike Chunsoft, Inc.','5pb','Arc System Works','Gust','FROM Software'];

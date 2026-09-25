@@ -471,7 +471,10 @@ const FIG_BRAND = [
   ["バンダイスピリッツ", "Bandai Spirits"], ["bandai spirits", "Bandai Spirits"],
   ["グッドスマイル", "Good Smile Company"], ["good smile", "Good Smile Company"],
   ["コトブキヤ", "Kotobukiya"], ["kotobukiya", "Kotobukiya"],
-  ["魂ネイションズ", "Tamashii Nations"], ["tamashii nations", "Tamashii Nations"],
+  /* 魂ネイションズ（TAMASHII NATIONS）はバンダイスピリッツの事業ブランドなので、
+     eBayのBrandとしては Bandai Spirits に寄せる（S.H.Figuarts・超合金も同じ）。 */
+  ["魂ネイションズ", "Bandai Spirits"], ["tamashii nations", "Bandai Spirits"],
+  ["オランジュ・ルージュ", "Orange Rouge"], ["orange rouge", "Orange Rouge"],
   ["マックスファクトリー", "Max Factory"], ["max factory", "Max Factory"],
   ["メガハウス", "MegaHouse"], ["megahouse", "MegaHouse"],
   ["メディコム", "MEDICOM"], ["medicom", "MEDICOM"],
@@ -503,6 +506,34 @@ function figBrand(t) {
   for (const [k, v] of FIG_BRAND) if (s.indexOf(k.toLowerCase()) >= 0) return v;
   return "";
 }
+/* 作品名などに付く飾りのハイフンを外す。
+   「Touken Ranbu -ONLINE-」→「Touken Ranbu Online」。
+   外した先が全部大文字なら頭だけ大文字に直す（ONLINE → Online）。
+   語の途中のハイフン（Yu-Gi-Oh の類）は触らない。 */
+function titleish(w) {
+  const t = String(w || "").trim();
+  // 4文字以上の全部大文字だけ直す。DX や ABS のような略語は残す
+  if (/^[A-Z]{4,}$/.test(t)) return t.charAt(0) + t.slice(1).toLowerCase();
+  return t;
+}
+function fixDecorHyphen(t) {
+  let s = String(t || "");
+  s = s.replace(/(^|\s)-\s*([^\s-][^-]*?)\s*-(?=\s|$)/g, (m, a, w) => a + titleish(w));
+  s = s.replace(/(^|\s)-\s*([^\s-][^-]*?)(?=\s|$)/g, (m, a, w) => a + titleish(w));
+  s = s.replace(/(\S)\s*-(?=\s|$)/g, "$1");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/* ja_title からスケールを拾う。1/7スケール → 1/7 Scale。
+   ノンスケールは空にする（タイトルに出さない）。 */
+function scaleFrom(t) {
+  const s = String(t || "");
+  if (/ノンスケール|non[-\s]?scale/i.test(s)) return "";
+  const m = s.match(/(\d{1,2})\s*[\/／]\s*(\d{1,2})\s*(?:スケール|scale)/i);
+  return m ? `${m[1]}/${m[2]} Scale` : "";
+}
+
+// 商品ラインを拾う。見つかれば {line, brand}（brand は親ブランド）を返す。
 function figLine(t) {
   const s = String(t || "").toLowerCase();
   for (const [k, v, b] of FIG_LINE) if (s.indexOf(k) >= 0) return { line: v, brand: b };
@@ -546,7 +577,7 @@ const FIG_SYSTEM = [
   "decide which product this is.",
   "",
   "Output ONLY a JSON object with exactly these keys:",
-  '  "brand","series","chara","variant","line","confidence","same_item"',
+  '  "brand","series","series_short","chara","variant","line","confidence","same_item"',
   '  confidence: "high" | "medium" | "low"',
   '  same_item: true only if at least one candidate is clearly the SAME figure.',
   "",
@@ -556,6 +587,13 @@ const FIG_SYSTEM = [
   "- chara is the character name, series is the work/franchise title. Use the",
   "  official English name when one exists; otherwise the official romanization.",
   "  NEVER invent a name that is not in the Japanese name or the candidates.",
+  "- series_short is the shortest form of series that collectors still recognise.",
+  '  It is used when the title runs too long (series "Atelier Ryza 2: Lost',
+  '  Legends & the Secret Fairy" -> series_short "Atelier Ryza 2"). If series is',
+  "  already short, repeat it in series_short.",
+  "- Write names in normal title case. Do not copy ALL-CAPS wording or decorative",
+  '  hyphens from the source ("Touken Ranbu -ONLINE-" -> "Touken Ranbu Online").',
+  "- Do not put the scale (1/7 etc.) in any field; it is added separately.",
   "- brand is the manufacturer, normalized to its official spelling",
   "  (Banpresto, Bandai Spirits, Good Smile Company, Max Factory, Kotobukiya,",
   "  MegaHouse, Taito, SEGA, FuRyu, Tamashii Nations).",
@@ -569,7 +607,7 @@ const FIG_SYSTEM = [
   "- Do NOT output any text, code fences, or comments outside the JSON object.",
 ].join("\n");
 
-const FIG_FIELDS = ["brand", "series", "chara", "variant", "line"];
+const FIG_FIELDS = ["brand", "series", "series_short", "chara", "variant", "line", "scale"];
 
 async function figAskClaude(env, jaTitle, jp, titles, log) {
   const lines = [
@@ -610,8 +648,10 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
   const fields = {};
   for (const k of FIG_FIELDS) {
     const raw = typeof obj[k] === "string" ? obj[k] : "";
-    fields[k] = stripExtras(cleanName(raw), { keepPlatform: true }).name;
+    fields[k] = fixDecorHyphen(stripExtras(cleanName(raw), { keepPlatform: true }).name);
   }
+  // series_short が空なら series をそのまま使う
+  if (!fields.series_short) fields.series_short = fields.series;
   return {
     fields,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
@@ -663,6 +703,8 @@ async function handleFigure(env, item, force) {
 
   // ブランドと商品ラインはコード側の表でも正規化する（AIの揺れを吸収）
   const f = ai.fields;
+  // スケールは和名から機械的に拾う（AIの推測に任せない）
+  f.scale = scaleFrom(jaTitle) || scaleFrom((jp && jp.title) || "");
   const src = [jaTitle, (jp && jp.title) || "", f.line, f.brand].join(" ");
   const ln = figLine(src);
   if (ln) { if (!f.line) f.line = ln.line; if (!f.brand) f.brand = ln.brand; }
