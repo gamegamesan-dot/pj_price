@@ -18,7 +18,8 @@
  *   KV TITLE_CACHE          … 生成結果・アクセストークンのキャッシュ
  *
  * エンドポイント:
- *   POST /titles … 本体。最大20件
+ *   POST /titles         … ゲーム。english_name だけを返す。最大20件
+ *   POST /figure-titles  … フィギュア。5項目（brand/series/chara/variant/line）を返す
  *
  * 悪用対策:
  *   - CORS は pj_price の Pages オリジンに限定し、X-PJ-Key が一致しなければ401
@@ -132,7 +133,11 @@ const BANNED = [
   /\bJapan(ese)?\s+(Import|Version|Ver\.?)/gi,   // 「Ver.」の点まで消す
   /\bImport\b/gi,
   /\bUsed\b/gi,
-  /[!*]/g,
+  /* セラーの飾りの「!!!」「*」だけ落とす。単語にくっついた「!」は作品名の
+     一部のことがあるので残す（Haikyu!! を Haikyu にしない）。
+     「*」は作品名に使われないので、単語にくっついていても末尾なら落とす。 */
+  /(^|\s)[!*]+(?=\s|$)/g,
+  /\*+$/g,
 ];
 
 function corsHeaders(origin) {
@@ -193,11 +198,16 @@ function cleanName(s) {
 }
 
 // 禁止語と機種名を取り除く。取り除いたものがあれば true を返す（status を review にする）
-function stripExtras(name) {
+function stripExtras(name, opt) {
   let t = String(name || ""), hit = false;
   for (const re of BANNED) {
     if (re.test(t)) { hit = true; t = t.replace(re, " "); }
     re.lastIndex = 0;
+  }
+  // 機種名の除去はゲームだけ。フィギュアの名前から DS や GB を削ると壊れる。
+  if (opt && opt.keepPlatform === true) {
+    t = t.replace(/\s+/g, " ").replace(/^[\s\-–—:|/,]+|[\s\-–—:|/,]+$/g, "").trim();
+    return { name: t, stripped: hit };
   }
   for (const w of PLATFORM_WORDS) {
     const re = new RegExp("(^|[\\s\\[\\(\\-])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|[\\s\\]\\)\\-])", "gi");
@@ -447,6 +457,280 @@ async function askClaude(env, item, ebayTitles, us, jp, log) {
   };
 }
 
+/* =================== フィギュア（POST /figure-titles） ===================
+   返すのは5項目（brand/series/chara/variant/line）だけ。タイトルの組み立ては
+   pj_price 側の figTitleFrom() が行う（書式を2か所に持たない）。 */
+
+// ASIN。10桁の英数字（B0… のほか ISBN-10 もある）
+function validAsin(a) { return /^[A-Z0-9]{10}$/i.test(String(a || "").trim()); }
+
+/* ブランドの正規化。pj_price の CSV_BRAND と同じ表記に揃える。
+   大文字小文字は区別しない。 */
+const FIG_BRAND = [
+  ["バンプレスト", "Banpresto"], ["banpresto", "Banpresto"],
+  ["バンダイスピリッツ", "Bandai Spirits"], ["bandai spirits", "Bandai Spirits"],
+  ["グッドスマイル", "Good Smile Company"], ["good smile", "Good Smile Company"],
+  ["コトブキヤ", "Kotobukiya"], ["kotobukiya", "Kotobukiya"],
+  ["魂ネイションズ", "Tamashii Nations"], ["tamashii nations", "Tamashii Nations"],
+  ["マックスファクトリー", "Max Factory"], ["max factory", "Max Factory"],
+  ["メガハウス", "MegaHouse"], ["megahouse", "MegaHouse"],
+  ["メディコム", "MEDICOM"], ["medicom", "MEDICOM"],
+  ["バンダイ", "Bandai"], ["bandai", "Bandai"],
+  ["フリュー", "FuRyu"], ["furyu", "FuRyu"],
+  ["セガ", "SEGA"], ["sega", "SEGA"],
+  ["タイトー", "Taito"], ["taito", "Taito"],
+  ["ウェーブ", "Wave"], ["wave", "Wave"],
+  ["ワンダフルワークス", "Wonderful Works"], ["wonderful works", "Wonderful Works"],
+];
+/* 商品ライン。見つかれば line に入れ、ブランドが空なら親ブランドで補う。
+   pj_price の CSV_LINE と揃える。 */
+const FIG_LINE = [
+  ["s.h.フィギュアーツ", "S.H.Figuarts", "Bandai Spirits"],
+  ["s.h.figuarts", "S.H.Figuarts", "Bandai Spirits"],
+  ["figuarts zero", "Figuarts ZERO", "Bandai Spirits"],
+  ["ねんどろいど", "Nendoroid", "Good Smile Company"],
+  ["nendoroid", "Nendoroid", "Good Smile Company"],
+  ["figma", "figma", "Max Factory"],
+  ["pop up parade", "POP UP PARADE", "Good Smile Company"],
+  ["一番くじ", "Ichiban Kuji", "Banpresto"],
+  ["ichiban kuji", "Ichiban Kuji", "Banpresto"],
+  ["proplica", "PROPLICA", "Bandai Spirits"],
+  ["超合金", "CHOGOKIN", "Bandai Spirits"],
+  ["chogokin", "CHOGOKIN", "Bandai Spirits"],
+];
+function figBrand(t) {
+  const s = String(t || "").toLowerCase();
+  for (const [k, v] of FIG_BRAND) if (s.indexOf(k.toLowerCase()) >= 0) return v;
+  return "";
+}
+function figLine(t) {
+  const s = String(t || "").toLowerCase();
+  for (const [k, v, b] of FIG_LINE) if (s.indexOf(k) >= 0) return { line: v, brand: b };
+  return null;
+}
+
+/* セット品だけ落とす。別キャラクターの見分けはAIに任せる（仕様3.2-4）。 */
+function figFilterCandidates(titles, jaTitle) {
+  const jaSet = SET_JA.test(String(jaTitle || ""));
+  const kept = [], dropped = [];
+  for (const t of titles) {
+    if (!jaSet && SET_EN.test(t)) { dropped.push([t, "セット品"]); continue; }
+    kept.push(t);
+  }
+  return { kept, dropped };
+}
+
+// Catalog Items から EAN/UPC を拾う（ASINで引いたときにJANを判明させる）
+function spEanFrom(it) {
+  for (const g of (it.identifiers || []))
+    for (const x of (g.identifiers || [])) {
+      const ty = String(x.identifierType || "").toUpperCase();
+      const v = String(x.identifier || "").trim();
+      if ((ty === "EAN" || ty === "GTIN" || ty === "JAN") && validJan(v)) return v;
+      if (ty === "UPC" && validJan("0" + v)) return "0" + v;
+    }
+  return "";
+}
+function spBrandFrom(it) {
+  const at = it.attributes || {}, sm = (it.summaries || [])[0] || {};
+  const first = (k) => (at[k] && at[k][0] && at[k][0].value) || "";
+  return String(sm.brand || first("brand") || sm.manufacturer || first("manufacturer") || "").trim();
+}
+
+const FIG_SYSTEM = [
+  "You extract eBay US Item Specifics for a Japanese collectible figure.",
+  "",
+  "The Japanese product name and the Amazon Japan catalog data ARE the product.",
+  "eBay candidate titles come from other sellers and may be a DIFFERENT figure.",
+  "Use them only as a reference for how names are spelled in English -- never to",
+  "decide which product this is.",
+  "",
+  "Output ONLY a JSON object with exactly these keys:",
+  '  "brand","series","chara","variant","line","confidence","same_item"',
+  '  confidence: "high" | "medium" | "low"',
+  '  same_item: true only if at least one candidate is clearly the SAME figure.',
+  "",
+  "Rules:",
+  "- Fill a field only when it is present or unambiguously identifiable.",
+  '  If it cannot be determined, use "" (empty string). Never guess.',
+  "- chara is the character name, series is the work/franchise title. Use the",
+  "  official English name when one exists; otherwise the official romanization.",
+  "  NEVER invent a name that is not in the Japanese name or the candidates.",
+  "- brand is the manufacturer, normalized to its official spelling",
+  "  (Banpresto, Bandai Spirits, Good Smile Company, Max Factory, Kotobukiya,",
+  "  MegaHouse, Taito, SEGA, FuRyu, Tamashii Nations).",
+  "- line is the product line, ONLY when stated in the name or the catalog",
+  "  (Ichiban Kuji, Nendoroid, figma, POP UP PARADE, Figuarts ZERO, S.H.Figuarts).",
+  "- variant is the version, pose, colour or prize letter",
+  '  (e.g. "Prize A", "Special Color Ver."). Drop a trailing "ver.".',
+  "- Never include language support, condition words, Japan, Import, Authentic,",
+  "  shipping wording or seller decoration.",
+  "- Use only ASCII letters, digits and ordinary punctuation.",
+  "- Do NOT output any text, code fences, or comments outside the JSON object.",
+].join("\n");
+
+const FIG_FIELDS = ["brand", "series", "chara", "variant", "line"];
+
+async function figAskClaude(env, jaTitle, jp, titles, log) {
+  const lines = [
+    `Japanese name: ${jaTitle || "(none)"}`,
+    `Amazon Japan name: ${jp && jp.title ? jp.title : "(none)"}`,
+    `Amazon Japan brand: ${jp && jp.brand ? jp.brand : "(none)"}`,
+    `eBay candidate titles:\n${titles.length ? titles.map((t) => "- " + t).join("\n") : "- (none)"}`,
+  ].join("\n\n");
+  let resp;
+  try {
+    resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 300, system: FIG_SYSTEM,
+        messages: [{ role: "user", content: lines }],
+      }),
+    });
+  } catch (e) { log.push("claude_unreachable"); return null; }
+  log.push("claude -> " + resp.status);
+  if (!resp.ok) return null;
+  let data;
+  try { data = await resp.json(); } catch (e) { return null; }
+  if (data && data.stop_reason === "refusal") return null;
+  let out = "";
+  for (const blk of (data.content || []))
+    if (blk.type === "text" && blk.text) { out = blk.text; break; }
+  let obj = null;
+  try { obj = JSON.parse(out); } catch (e) {
+    const m = out && out.match(/\{[\s\S]*\}/);
+    if (m) { try { obj = JSON.parse(m[0]); } catch (e2) {} }
+  }
+  if (!obj) return null;
+  const fields = {};
+  for (const k of FIG_FIELDS) {
+    const raw = typeof obj[k] === "string" ? obj[k] : "";
+    fields[k] = stripExtras(cleanName(raw), { keepPlatform: true }).name;
+  }
+  return {
+    fields,
+    confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
+    same_item: obj.same_item === true,
+  };
+}
+
+async function handleFigure(env, item, force) {
+  const log = [];
+  const jan = String(item.jan || "").trim();
+  const asin = String(item.asin || "").trim().toUpperCase();
+  const hasJan = validJan(jan), hasAsin = validAsin(asin);
+  const key = hasJan ? ("jan:" + jan) : (hasAsin ? ("asin:" + asin) : "");
+  if (!key)
+    return { key: "", status: "invalid_id", fields: emptyFields(), jan_resolved: "",
+             sources: [], candidates: [], note: "JANもASINも正しくありません" };
+
+  const ck = "fig:v1:" + key;
+  if (!force) {
+    const hit = await env.TITLE_CACHE.get(ck, "json");
+    if (hit && hit.fields)
+      return { key, status: hit.status || "review", fields: hit.fields,
+               jan_resolved: hit.jan_resolved || "", sources: hit.sources || [],
+               candidates: hit.candidates || [], note: "キャッシュ", cached: true };
+  }
+
+  // Amazon（日本）。JANがあればEAN、なければASINで引く
+  const jp = await spCatalogFig(env, hasJan ? jan : asin, hasJan ? "EAN" : "ASIN", log);
+  const janResolved = (!hasJan && jp && jp.ean) ? jp.ean : "";
+  const gtin = hasJan ? jan : janResolved;
+
+  // eBay はJAN（判明したものを含む）があるときだけ
+  let eb = { titles: [], via: "" };
+  if (gtin) eb = await ebayCandidates(env, gtin, log);
+  const jaTitle = normRoman(String(item.ja_title || "")).slice(0, MAX_JA);
+  const flt = figFilterCandidates(eb.titles, jaTitle);
+  if (flt.dropped.length)
+    log.push("除外 " + flt.dropped.map((d) => `${d[1]}: ${d[0]}`).join(" / "));
+  const candidates = flt.kept.slice(0, MAX_CANDIDATES);
+
+  if (!jp && !flt.kept.length && !jaTitle.trim())
+    return { key, status: "not_found", fields: emptyFields(), jan_resolved: janResolved,
+             sources: [], candidates: [], note: "Amazonでも見つからず、日本語名もありません", log };
+
+  const ai = await figAskClaude(env, jaTitle, jp, flt.kept, log);
+  if (!ai)
+    return { key, status: "review", fields: emptyFields(), jan_resolved: janResolved,
+             sources: [], candidates, note: "5項目を判定できませんでした", log };
+
+  // ブランドと商品ラインはコード側の表でも正規化する（AIの揺れを吸収）
+  const f = ai.fields;
+  const src = [jaTitle, (jp && jp.title) || "", f.line, f.brand].join(" ");
+  const ln = figLine(src);
+  if (ln) { if (!f.line) f.line = ln.line; if (!f.brand) f.brand = ln.brand; }
+  const nb = figBrand(f.brand) || figBrand(src);
+  if (nb) f.brand = nb;
+
+  const sources = [];
+  if (flt.kept.length) sources.push(eb.via === "q" ? "ebay_keyword" : "ebay");
+  if (jp) sources.push(hasJan ? "amazon_jp_jan" : "amazon_jp_asin");
+
+  /* status（仕様3.2-6）
+     ok は confidence=high かつ same_item=true で、さらに
+     ・絞り込み後の候補2件以上が chara と series の両方を含む
+     ・または Amazon（日本）のブランドと brand が一致
+     のどちらかを満たすとき。ASINのみで候補がない行は必ず review。 */
+  const notes = [];
+  if (flt.dropped.length) notes.push(`セット品の候補を${flt.dropped.length}件除外`);
+  if (eb.via === "q") notes.push("gtin検索が0件のためキーワード検索の結果");
+  if (janResolved) notes.push("ASINからJAN（" + janResolved + "）が判明");
+  const agree = eb.via === "gtin" && f.chara && f.series
+    && flt.kept.filter((t) => looseKey(t).includes(looseKey(f.chara))
+                           && looseKey(t).includes(looseKey(f.series))).length >= 2;
+  const brandHit = !!(jp && jp.brand && f.brand
+    && figBrand(jp.brand).toLowerCase() === f.brand.toLowerCase());
+  let status = "review";
+  if (ai.confidence === "high" && ai.same_item && (agree || brandHit)) status = "ok";
+  else if (!ai.same_item && flt.kept.length) notes.push("候補が同じ商品と確認できない");
+  else if (!flt.kept.length) notes.push("eBay候補がありません");
+  else notes.push("候補が少ないか確信度が中以下");
+  // 初期運用の安全側：ASINのみでeBay候補がない行は必ず人の目で確かめる
+  if (status === "ok" && (!gtin || !flt.kept.length)) {
+    status = "review";
+    notes.push(gtin ? "eBay候補がないので要確認" : "JANが分からずeBayで照合できていない");
+  }
+  if (!f.chara && !f.series) { status = "review"; notes.push("キャラクター名も作品名も取れていません"); }
+
+  const result = { key, status, fields: f, jan_resolved: janResolved,
+                   sources, candidates, note: notes.join("／") || "候補と一致", log };
+  await env.TITLE_CACHE.put(ck,
+    JSON.stringify({ fields: f, sources, candidates, status, jan_resolved: janResolved }),
+    { expirationTtl: CACHE_TTL });
+  return result;
+}
+function emptyFields() {
+  const o = {}; for (const k of FIG_FIELDS) o[k] = ""; return o;
+}
+// フィギュア用のカタログ照会。JANが分かるように identifiers も取る
+async function spCatalogFig(env, id, idType, log) {
+  if (!env.SPAPI_REFRESH_TOKEN_FE || !env.LWA_CLIENT_ID || !env.LWA_CLIENT_SECRET) return null;
+  try {
+    const token = await lwaToken(env, env.SPAPI_REFRESH_TOKEN_FE, "lwa:fe");
+    const url = "https://sellingpartnerapi-fe.amazon.com/catalog/2022-04-01/items"
+      + `?identifiers=${encodeURIComponent(id)}&identifiersType=${idType}`
+      + `&marketplaceIds=${MP_FE}&includedData=summaries,attributes,identifiers`;
+    const resp = await fetch(url, { headers: { "x-amz-access-token": token } });
+    log.push(`spapi_fe ${idType}=${id} -> ${resp.status}`);
+    if (!resp.ok) return null;
+    const d = await resp.json();
+    const it = (d.items || [])[0];
+    if (!it) return null;
+    const sm = (it.summaries || [])[0] || {};
+    return { title: sm.itemName || "", brand: spBrandFrom(it), ean: spEanFrom(it) };
+  } catch (e) {
+    log.push("spapi_fe_error " + e.message);
+    return null;
+  }
+}
+
 /* ---- 1件の処理（仕様3.4） ---- */
 async function handleItem(env, item, force) {
   const log = [];
@@ -546,8 +830,10 @@ async function runPool(items, worker) {
       const i = next++;
       if (i >= items.length) return;
       try { out[i] = await worker(items[i]); }
-      catch (e) { out[i] = { jan: String(items[i] && items[i].jan || ""), status: "review",
-                             english_name: "", sources: [], candidates: [],
+      catch (e) { out[i] = { jan: String(items[i] && items[i].jan || ""),
+                             key: String(items[i] && items[i].jan || items[i] && items[i].asin || ""),
+                             status: "review", english_name: "", fields: emptyFields(),
+                             sources: [], candidates: [],
                              note: "処理中にエラー: " + e.message }; }
     }
   }
@@ -571,7 +857,8 @@ export default {
     if (!env.TITLE_CACHE)
       return json({ error: "server_misconfigured", detail: "TITLE_CACHE" }, 500, origin);
 
-    if (request.method !== "POST" || url.pathname !== "/titles")
+    const isFig = (url.pathname === "/figure-titles");
+    if (request.method !== "POST" || (url.pathname !== "/titles" && !isFig))
       return json({ error: "not_found" }, 404, origin);
     if (!env.ANTHROPIC_API_KEY)
       return json({ error: "server_misconfigured", detail: "ANTHROPIC_API_KEY" }, 500, origin);
@@ -584,7 +871,9 @@ export default {
     if (items.length > MAX_ITEMS)
       return json({ error: "too_many_items", max: MAX_ITEMS }, 400, origin);
 
-    const results = await runPool(items, (it) => handleItem(env, it, !!(body && body.force)));
+    const force = !!(body && body.force);
+    const results = await runPool(items, (it) =>
+      isFig ? handleFigure(env, it, force) : handleItem(env, it, force));
     return json({ results }, 200, origin);
   },
 };

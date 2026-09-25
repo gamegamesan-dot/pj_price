@@ -101,6 +101,23 @@ jan と asin は、どちらか一方があればよい（両方なければ `in
    連続ダイアログは廃止。**ItemIDが入っている行では R2 の実体を消さず、行から外すだけ**にし、
    確認文でその旨を伝える。
 
+### 5-2 の内訳（2026-09-25・sedolist_7.csv を取り込んで実測）
+
+| | 件数 |
+|---|---|
+| フィギュア行（hobby / toy） | **24件** |
+| └ JANあり | 18件 |
+| └ **JANなし（ASINのみ）** | **6件** |
+| └ ASINなし | 0件 |
+| ゲーム行 | 2件 |
+
+- ASINは全行にあり、`ASIN` 列と SKU の4番目が一致していた。JANの桁数・
+  チェックディジットの不正は0件。
+- ブランド・ラインの自動割り当て：Good Smile Company / Nendoroid 10件、
+  Bandai Spirits / S.H.Figuarts 2件、Banpresto 2件、**未割り当て12件**。
+  未割り当ての主なものは `figma` 3件と `POP UP PARADE` 3件で、いずれも商品ラインなので
+  Worker 側の `FIG_LINE` に追加した（figma→Max Factory、POP UP PARADE→Good Smile Company）。
+
 ## 6. 受け入れテスト
 - カジが提供する実在庫のフィギュア10件（**JANなし3件以上を含む**。プライズ・一番くじ・スケール／ねんどろいど系を混ぜる）で実行し、key・status・5項目・英題・sources・jan_resolved を一覧表示する。
 - JANなしの行で、ASINからJANが判明したものは eBay 候補が使われている（sources に ebay が入る）。

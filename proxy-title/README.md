@@ -99,6 +99,43 @@ npx wrangler deploy
 - `ja_title` の全角ローマ数字（Ⅲ）は III に直してから渡す。
 - キャッシュは JAN 単位で90日。`force: true` で作り直す。
 
+### `POST /figure-titles`
+
+フィギュア用。ヘッダー `X-PJ-Key` 必須。1リクエスト最大20件。
+返すのは5項目だけで、**タイトルは組み立てない**（pj_price の `figTitleFrom()` が行う）。
+
+```json
+{ "items": [ { "jan": "4580590128217", "asin": "B09TPBVJ5F",
+               "ja_title": "ねんどろいど ハイキュー!! 黒尾鉄朗", "condition": "new" } ], "force": false }
+```
+
+`jan` と `asin` はどちらか一方あればよい（両方なければ `invalid_id`）。
+
+```json
+{ "results": [ {
+  "key": "jan:4580590128217",
+  "status": "ok | review | not_found | invalid_id",
+  "fields": { "brand": "Good Smile Company", "series": "Haikyu!!",
+              "chara": "Tetsuro Kuroo", "variant": "Second Uniform", "line": "Nendoroid" },
+  "jan_resolved": "ASINから判明したJAN（あれば）",
+  "sources": ["ebay", "amazon_jp_jan"],
+  "candidates": ["…最大5件"],
+  "note": "…"
+} ] }
+```
+
+- JANがあれば `identifiersType=EAN`、無ければ `ASIN` で Amazon（日本）を引く。
+  ASINで引いたとき、カタログの identifiers に EAN があれば `jan_resolved` として返し、
+  eBay検索にも使う。
+- eBay候補はセット品（`set` / `bundle` / `x2` など）を、`ja_title` がセットでない限り落とす。
+  別キャラクターの見分けはAIに任せる。
+- `ok` は `confidence=high` かつ `same_item=true` で、さらに「候補2件以上が chara と
+  series の両方を含む」か「Amazonのブランドと brand が一致」のどちらかを満たすとき。
+  **JANが分からずeBayで照合できていない行は必ず `review`。**
+- ブランドと商品ラインは Worker 側の表でも正規化する（pj_price の `CSV_BRAND` /
+  `CSV_LINE` と同じ表記）。
+- キャッシュは `fig:v1:jan:…` / `fig:v1:asin:…` で90日。
+
 ## 5. 安全側の設計
 
 - CORS は `https://gamegamesan-dot.github.io` のみ。`X-PJ-Key` 不一致は 401。
@@ -112,3 +149,6 @@ npx wrangler deploy
 Claude 1回）。トークンはKVに載るので2件目以降は減るが、**20件だと80〜100回**になる。
 Workers の無料プランは**1リクエストあたり50サブリクエスト**までなので、
 pj_price 側は既定で**10件ずつ**送る。有料プラン（1,000まで）なら20件でも足りる。
+
+`/figure-titles` は10件で**実測35回**。すべてJANなし＋キーワード検索まで行く
+最悪ケースでも48回で、上限50にかなり近い。件数を増やすなら有料プランが要る。
