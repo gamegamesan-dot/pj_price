@@ -540,7 +540,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div style="padding:0 13px 12px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <select id="csvSort" style="flex:1 1 0;min-width:0">
-            <option value="std" selected>未判定→eBay優先→未完成の順</option>
+            <option value="std" selected>相場未確認→eBay優先→未完成の順</option>
             <option value="ebay">eBay優先を先に</option>
             <option value="ng">未完成を先に</option>
             <option value="add">追加順</option>
@@ -2698,9 +2698,16 @@ function csvIssues(r){
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
   if(String(r.uploadErr||'').trim())a.push('アップロード失敗：'+r.uploadErr);
-  var v=csvVerdict(r);
-  if(v==='none')a.push('未判定（相場未入力）');
-  else if(v==='amazon'&&!r.forceEbay)a.push('Amazon優先');   // 「出す」にした行は除外しない
+  /* 相場未入力は書き出しを止める理由にしない（2026-09-25）。
+     売値は相場に関係なく原価と重量から決まるので、確かめずに出す判断は
+     こちらでできる。注意としてだけ出し、csvNotes() で扱う。 */
+  if(csvVerdict(r)==='amazon'&&!r.forceEbay)a.push('Amazon優先');   // 「出す」にした行は除外しない
+  return a;
+}
+/* 書き出しは止めないが、知らせておきたいこと（黄色の注意）。 */
+function csvNotes(r){
+  var a=[];
+  if(csvVerdict(r)==='none')a.push('相場未確認');
   return a;
 }
 /* 並び順（6.5.1）。相場入力が絞り込みの入口なので、未判定を先頭に置き、
@@ -2784,10 +2791,10 @@ function csvRender(){
   csvList.forEach(function(r){
     var v=csvVerdict(r);
     if(v==='ebay')ebayN++; else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; } else noneN++;
-    if(csvIssues(r).filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';}).length)ng++;
+    if(csvIssues(r).filter(function(x){return x!=='Amazon優先';}).length)ng++;
     if(r.condId!==1000)used++; });
   $('csvSummary').textContent=csvList.length
-    ? ('未判定 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
+    ? ('相場未確認 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
        +'　/　英題・説明文の未入力 '+ng+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
@@ -2804,11 +2811,11 @@ function csvRender(){
     var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
     if(v==='ebay')badge+=b('eBay優先','var(--good)');
     else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
-    else badge+=b('未判定','var(--mute)');
+    else badge+=b('相場未確認','#8a6d00');   // 書き出しは止めない。確かめずに出す判断はできる
     if(v==='amazon'&&r.forceEbay)badge+=b('eBayにも出す','#2f6fb0');
     if(r.oneOff)badge+=b('一点物','#6b4fa0');
     if(th.relaxed)badge+=b('緩和','var(--mute)');
-    var rest=iss.filter(function(x){return x!=='未判定（相場未入力）'&&x!=='Amazon優先';});
+    var rest=iss.filter(function(x){return x!=='Amazon優先';});
     if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
     if(!r.jan)badge+=b('JANなし','#8a6d00');
     if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
@@ -2818,7 +2825,8 @@ function csvRender(){
     var judge;
     if(v==='none'){
       var ln=csvEbayLine(r);
-      judge='eBay優先ライン '+usd(ln||0)+' 以上で売れれば eBay優先'
+      judge='相場未入力のまま書き出せます（売値 '+usd(r.price||0)+'）。'
+        +'eBay優先ライン '+usd(ln||0)+' 以上で売れれば eBay優先'
         +'（しきい値利益 '+yen(th.v)+'・ランク '+(r.rank||0).toLocaleString()+'位'
         +(th.relaxed?'・緩和で0%':'')+'）';
     }else{
@@ -3222,14 +3230,16 @@ $('csvExport').onclick=function(){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
   // 除外する理由を「不備」と「Amazon優先」に分けて数える。
   var rows=csvList.filter(function(r){ return !csvIssues(r).length; });
-  var amz=[], bad=[];
+  var amz=[], bad=[], warn=[];
   csvList.forEach(function(r){
-    var iss=csvIssues(r); if(!iss.length)return;
+    var iss=csvIssues(r);
+    // 注意は書き出す行にだけ出す（除外される行の注意は言っても仕方がない）
+    if(!iss.length){ var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')}); return; }
     var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
     if(rest.length)bad.push({r:r,why:rest.join('・')});
     else amz.push({r:r});
   });
-  if(bad.length||amz.length){
+  if(bad.length||amz.length||warn.length){
     function list(a,withWhy){
       return a.slice(0,5).map(function(x){
         return ' \u30FB'+(x.r.titleJa||x.r.sku)+(withWhy?('：'+x.why):''); }).join('\n')
@@ -3239,6 +3249,7 @@ $('csvExport').onclick=function(){
     if(bad.length)msg+='\n不備のため除外：'+bad.length+'件\n'+list(bad,true)+'\n';
     if(amz.length)msg+='\nAmazon優先のため除外：'+amz.length+'件\n'+list(amz,false)+'\n'
       +'（行の「Amazon優先でも出す」をオンにすると書き出せます）\n';
+    if(warn.length)msg+='\n注意（このまま書き出します）：'+warn.length+'件\n'+list(warn,true)+'\n';
     msg+='\nOK：上記を除いて書き出す\nキャンセル：中止';
     if(!confirm(msg))return;
     if(!rows.length){ alert('書き出せる行がありません。'); return; }
@@ -3524,6 +3535,13 @@ function csvEditOpen(id){
   $('pasteIn').value=r.titleJa||'';
   // 行に保存済みの値があれば各欄へ戻す。
   var sp=r.specs||{};
+  /* 機種は Item Specifics の値で持っているので、表を引いて
+     プルダウンの表記に直してから入れる。表にない値のときだけ空のままにし、
+     手で選んでもらう。 */
+  if(g&&sp.platform){
+    var pf=platBy('spec',sp.platform);
+    if(pf)$('gPlat').value=pf.title;
+  }
   if(sp.gameName)$('gTitle').value=sp.gameName;
   if(sp.publisher)$('gPub').value=sp.publisher;
   if(sp.franchise)$('series').value=sp.franchise;
