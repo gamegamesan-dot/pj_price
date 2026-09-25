@@ -119,6 +119,32 @@ jan と asin は、どちらか一方があればよい（両方なければ `in
   Worker 側の `FIG_LINE` に追加した（figma→Max Factory、POP UP PARADE→Good Smile Company）。
 
 ## 6. 受け入れテスト
+
+実行スクリプトは `proxy-title/test-figure.ps1`（PowerShell・UTF-8 BOM付き）。
+
+```
+.\test-figure.ps1 -Base "https://pj-title.xxxx.workers.dev" -Key "<PJ_ACCESS_KEY>"
+```
+
+対象の10件（`sedolist_7.csv` から選定。JANなし5件・中古2件・プライズ2件を含む）:
+
+| # | JAN | ASIN | 状態 | 商品 | 系統 |
+|---|---|---|---|---|---|
+| 1 | なし | B0CH8QT1LX | 新品 | Banpresto Umamusume Air Groove | プライズ |
+| 2 | なし | B0BZZL3BNS | 新品 | バンプレスト うる星やつら GLITTER&GLAMOURS LUM B | プライズ（variant に B が入るか） |
+| 3 | なし | B092VH4SBJ | 新品 | figma 鬼滅の刃 我妻善逸 DXエディション | figma |
+| 4 | なし | B01CCIH11S | 新品 | ねんどろいど 刀剣乱舞 蛍丸 | Nendoroid |
+| 5 | なし | B0FPX7HNXN | 新品 | ねんどろいど 鬼滅の刃 冨岡義勇 | Nendoroid |
+| 6 | 4580590128217 | B09TPBVJ5F | **中古** | ねんどろいど ハイキュー!! 黒尾鉄朗 | Nendoroid（`Haikyu!!` の `!!`） |
+| 7 | 4573102687647 | B0FB8F42GQ | 新品 | TAMASHII NATIONS S.H.フィギュアーツ 新サイクロン号 | S.H.Figuarts |
+| 8 | 4580416947480 | B0C3D1STPH | 新品 | POP UP PARADE ナデシコ ホシノ・ルリ | POP UP PARADE |
+| 9 | 4573102665973 | B0G6LRMPS5 | 新品 | 超合金 CHOGOKIN ROBO 50 | CHOGOKIN |
+| 10 | 4580522750165 | B0BHHJW4KR | **中古** | ワンダフルワークス ライザのアトリエ2 クラウディア | 1/7スケール |
+
+一番くじは今回の在庫に該当がないため対象外。
+
+### 確認項目
+
 - カジが提供する実在庫のフィギュア10件（**JANなし3件以上を含む**。プライズ・一番くじ・スケール／ねんどろいど系を混ぜる）で実行し、key・status・5項目・英題・sources・jan_resolved を一覧表示する。
 - JANなしの行で、ASINからJANが判明したものは eBay 候補が使われている（sources に ebay が入る）。
 - JANもASINもない行は `invalid_id` になり、ほかの行の処理は止まらない。
