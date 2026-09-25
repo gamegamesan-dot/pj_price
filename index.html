@@ -1608,8 +1608,9 @@ function buildArcadeTitle(){
    [Used] ブランド 作品名 キャラクター 版 スケール 商品ライン Figure
    中古は先頭に Used を付ける（ゲーム・アーケードと揃える）。
 
-   80字を超えたときは、ブランド → 版とスケール → 作品名を短縮 → 商品ライン
-   の順に落とす。商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
+   80字を超えたときは、作品名を短縮 → ブランド → 版とスケール → 商品ライン
+   の順に落とす。先に作品名を縮めると、版やスケールを残したまま収まることが多い。
+   商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
    買い手が検索に使うので最後まで残す。Used は落とさない。 */
 function figTitleFrom(used, p){
   if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale)) return {text:'', dropped:[]};
@@ -1621,11 +1622,11 @@ function figTitleFrom(used, p){
              .filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
+  if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
   if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
   if(t.length>80&&(st.variant||st.scale)){
     st.variant=''; st.scale=''; dropped.push('版・スケール'); t=join();
   }
-  if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
   if(t.length>80&&st.line){ st.line=''; dropped.push('商品ライン'); t=join(); }
   return {text:t, dropped:dropped};
 }

@@ -524,6 +524,16 @@ function fixDecorHyphen(t) {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/* 版の表記をそろえる。「Version B」→「Ver. B」。
+   すでに「Ver.」なら触らない。「Ver」だけなら点を足す。 */
+function fixVersionWord(t) {
+  return String(t || "")
+    .replace(/\bVersions?\b\.?/gi, "Ver.")
+    .replace(/\bVer\b(?!\.)/g, "Ver.")
+    .replace(/Ver\.\s*\./g, "Ver.")
+    .replace(/\s+/g, " ").trim();
+}
+
 /* ja_title からスケールを拾う。1/7スケール → 1/7 Scale。
    ノンスケールは空にする（タイトルに出さない）。 */
 function scaleFrom(t) {
@@ -599,8 +609,11 @@ const FIG_SYSTEM = [
   "  MegaHouse, Taito, SEGA, FuRyu, Tamashii Nations).",
   "- line is the product line, ONLY when stated in the name or the catalog",
   "  (Ichiban Kuji, Nendoroid, figma, POP UP PARADE, Figuarts ZERO, S.H.Figuarts).",
-  "- variant is the version, pose, colour or prize letter",
-  '  (e.g. "Prize A", "Special Color Ver."). Drop a trailing "ver.".',
+  "- variant is the version, pose or colour difference.",
+  '  Write a version as "Ver. X", never "Version X" (e.g. "Ver. B").',
+  '  Use "Prize A" ONLY when the Japanese name says the prize rank (A賞 etc.).',
+  "  A bare A/B/C on a prize figure line is a colour difference, so keep it as",
+  '  "Ver. B", not "Prize B".',
   "- Never include language support, condition words, Japan, Import, Authentic,",
   "  shipping wording or seller decoration.",
   "- Use only ASCII letters, digits and ordinary punctuation.",
@@ -652,6 +665,7 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
   }
   // series_short が空なら series をそのまま使う
   if (!fields.series_short) fields.series_short = fields.series;
+  fields.variant = fixVersionWord(fields.variant);
   return {
     fields,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",

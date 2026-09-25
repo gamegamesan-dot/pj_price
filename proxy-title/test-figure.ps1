@@ -59,7 +59,7 @@ function Invoke-Titles {
 <#
   pj_price の figTitleFrom() と同じ組み立て（書式の確認用）
   [Used] brand series chara variant scale line Figure
-  80字を超えたら ブランド → 版とスケール → 作品名を短縮 → 商品ライン の順に落とす
+  80字を超えたら 作品名を短縮 → ブランド → 版とスケール → 商品ライン の順に落とす
 #>
 function Build-FigTitle {
   param([bool]$Used, $F)
@@ -81,14 +81,14 @@ function Build-FigTitle {
     ($p -join ' ')
   }
   $t = & $join
+  if ($t.Length -gt 80 -and $short -and $short -ne $st['series']) {
+    $st['series'] = $short; [void]$drop.Add('作品名を短縮'); $t = & $join
+  }
   if ($t.Length -gt 80 -and $st['brand']) {
     $st['brand'] = ''; [void]$drop.Add('ブランド'); $t = & $join
   }
   if ($t.Length -gt 80 -and ($st['variant'] -or $st['scale'])) {
     $st['variant'] = ''; $st['scale'] = ''; [void]$drop.Add('版・スケール'); $t = & $join
-  }
-  if ($t.Length -gt 80 -and $short -and $short -ne $st['series']) {
-    $st['series'] = $short; [void]$drop.Add('作品名を短縮'); $t = & $join
   }
   if ($t.Length -gt 80 -and $st['line']) {
     $st['line'] = ''; [void]$drop.Add('商品ライン'); $t = & $join
