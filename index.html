@@ -1604,19 +1604,27 @@ function buildArcadeTitle(){
   if(t.length<=80) return {text:t, dropped:['Japan Import']};
   return {text:join('',''), dropped:['Japan Import','サイズ']};
 }
+/* フィギュアのタイトル。書式はここ1か所。
+   [Used] ブランド 作品名 キャラクター 版 商品ライン Figure
+   中古は先頭に Used を付ける（ゲーム・アーケードと揃える）。
+   80字を超えたら 商品ライン → 版 → ブランド の順に落とす。Used は落とさない。 */
+function figTitleFrom(used, p){
+  if(!(p.brand||p.series||p.chara||p.variant||p.line)) return {text:'', dropped:[]};
+  var head=used?'Used':'';
+  var order=[p.brand||'',p.series||'',p.chara||'',p.variant||'',p.line||'',FIG_PTYPE];
+  function join(){ return [head].concat(order).filter(Boolean).join(' '); }
+  var t=join(), dropped=[];
+  if(t.length>80&&order[4]){ order[4]=''; dropped.push('商品ライン'); t=join(); }
+  if(t.length>80&&order[3]){ order[3]=''; dropped.push('版'); t=join(); }
+  if(t.length>80&&order[0]){ order[0]=''; dropped.push('ブランド'); t=join(); }
+  return {text:t, dropped:dropped};
+}
+// 出品文タブの状態欄が中古を指しているか
+function condIsUsed(){ var c=condKey(); return c==='likenew'||c==='used'; }
 function buildTitle(){
   if(isGame()) return buildGameTitle();
   if(isArcade()) return buildArcadeTitle();
-  var p=titleParts();
-  // 何も入れていないうちは空欄。種別だけのタイトルは作らない。
-  if(!(p.brand||p.series||p.chara||p.variant||p.line)) return {text:'', dropped:[]};
-  var order=[p.brand,p.series,p.chara,p.variant,p.line,p.ptype];
-  var t=order.filter(Boolean).join(' ');
-  var dropped=[];
-  if(t.length>80&&p.line){ order[4]=''; dropped.push('商品ライン'); t=order.filter(Boolean).join(' '); }
-  if(t.length>80&&p.variant){ order[3]=''; dropped.push('版'); t=order.filter(Boolean).join(' '); }
-  if(t.length>80&&p.brand){ order[0]=''; dropped.push('ブランド'); t=order.filter(Boolean).join(' '); }
-  return {text:t, dropped:dropped};
+  return figTitleFrom(condIsUsed(), titleParts());
 }
 
 function descHTML(){
@@ -2384,13 +2392,25 @@ var CSV_PLAT=(function(){
   return a;
 })();
 // Brand：和名 → eBayの推奨値
-var CSV_BRAND=[['バンプレスト','BANPRESTO'],['Banpresto','BANPRESTO'],
+/* Brand：和名 → eBayの推奨値。正式な社名の表記に揃える（2026-09-25 改訂）。
+   商品ライン（S.H.Figuarts / ねんどろいど など）はブランドではないので
+   ここには置かず、下の CSV_LINE で扱う。 */
+var CSV_BRAND=[['バンプレスト','Banpresto'],['Banpresto','Banpresto'],
+  ['バンダイスピリッツ','Bandai Spirits'],['BANDAI SPIRITS','Bandai Spirits'],
+  ['Bandai Spirits','Bandai Spirits'],
   ['グッドスマイル','Good Smile Company'],['Good Smile','Good Smile Company'],
-  ['コトブキヤ','KOTOBUKIYA'],['Kotobukiya','KOTOBUKIYA'],
-  ['魂ネイションズ','Tamashii Nations'],['S.H.フィギュアーツ','S.H.Figuarts'],
-  ['S.H.Figuarts','S.H.Figuarts'],['マックスファクトリー','Max Factory'],['Max Factory','Max Factory'],
+  ['コトブキヤ','Kotobukiya'],['Kotobukiya','Kotobukiya'],
+  ['魂ネイションズ','Tamashii Nations'],
+  ['マックスファクトリー','Max Factory'],['Max Factory','Max Factory'],
+  ['メガハウス','MegaHouse'],['MegaHouse','MegaHouse'],['メガハウス','MegaHouse'],
   ['メディコム','MEDICOM'],['バンダイ','Bandai'],['フリュー','FuRyu'],['セガ','SEGA'],
-  ['タイトー','Taito'],['ねんどろいど','Nendoroid'],['Nendoroid','Nendoroid']];
+  ['タイトー','Taito']];
+/* 商品ライン（line）。和名・英名 → 表記と、その親ブランド。
+   ブランドが別に見つからなかったときだけ親ブランドを使う。 */
+var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits'],
+  ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits'],
+  ['ねんどろいど','Nendoroid','Good Smile Company'],
+  ['Nendoroid','Nendoroid','Good Smile Company']];
 var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Nintendo','SEGA',
   'ATLUS','KOEI Corporation','Nippon Ichi Software','Marvelous','Compile Heart','Idea Factory',
   'Aksys Games','Spike Chunsoft, Inc.','5pb','Arc System Works','Gust','FROM Software'];
@@ -2414,6 +2434,13 @@ function csvLoad(){
     if(r.forceEbay===undefined)r.forceEbay=false;
     if(r.oneOff===undefined)r.oneOff=false;
     if(!Array.isArray(r.pics))r.pics=[];
+    /* 2026-09-25 のブランド表記の見直しを、保存済みの行にも反映する。
+       BANPRESTO → Banpresto などの綴り直しと、商品ライン（S.H.Figuarts /
+       Nendoroid）を Brand から line へ移す分。 */
+    var sp=r.specs; if(!sp)return;
+    var ln=csvLineFrom(sp.brand);
+    if(ln){ if(!sp.line)sp.line=ln.line; sp.brand=ln.brand; }
+    else if(sp.brand){ var nb=csvBrandFrom(sp.brand); if(nb)sp.brand=nb; }
   });
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
@@ -2517,10 +2544,20 @@ function csvPlatformFrom(t){
   }
   return '';
 }
+/* 大文字小文字は区別しない。せどりすとの商品名は BANPRESTO のように
+   全大文字で入ることがあり、古い保存データもその表記で残っているため。 */
 function csvBrandFrom(t){
-  var s=String(t||'');
-  for(var i=0;i<CSV_BRAND.length;i++) if(s.indexOf(CSV_BRAND[i][0])>=0)return CSV_BRAND[i][1];
+  var s=String(t||'').toLowerCase();
+  for(var i=0;i<CSV_BRAND.length;i++)
+    if(s.indexOf(CSV_BRAND[i][0].toLowerCase())>=0)return CSV_BRAND[i][1];
   return '';
+}
+// 商品ラインを拾う。見つかれば {line, brand}（brand は親ブランド）を返す。
+function csvLineFrom(t){
+  var s=String(t||'').toLowerCase();
+  for(var i=0;i<CSV_LINE.length;i++)
+    if(s.indexOf(CSV_LINE[i][0].toLowerCase())>=0)return {line:CSV_LINE[i][1], brand:CSV_LINE[i][2]};
+  return null;
 }
 // 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
 // 商品欄を一時的に差し替えて priceModel() を呼び、必ず元へ戻す。
@@ -2637,7 +2674,9 @@ function csvImport(text){
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
-              platform:fig?'':csvPlatformFrom(title), brand:fig?csvBrandFrom(title):'',
+              platform:fig?'':csvPlatformFrom(title),
+              brand:fig?(csvBrandFrom(title)||((csvLineFrom(title)||{}).brand||'')):'',
+              line:fig?((csvLineFrom(title)||{}).line||''):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
               genre:'', year:'' } };
     order.push(key);
@@ -3115,18 +3154,54 @@ function csvPicThumbs(r,prefix){
         +'</span>';
     }).join('')+'</div>';
 }
-// サムネイルをタップしたときの操作
+/* サムネイルをタップしたときのメニュー。
+   「メイン確認をキャンセル → 削除確認」という連続ダイアログはやめて、
+   その場で3択を出す（誤操作で削除に進んでしまうのを防ぐ）。 */
+function csvPicMenu(opts){
+  var bg=document.createElement('div');
+  bg.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;'
+    +'display:flex;align-items:flex-end;justify-content:center';
+  var box=document.createElement('div');
+  box.style.cssText='background:var(--bg,#fff);width:100%;max-width:420px;border-radius:8px 8px 0 0;'
+    +'padding:12px;box-sizing:border-box';
+  var h='';
+  opts.items.forEach(function(it,i){
+    h+='<button type="button" data-i="'+i+'" style="display:block;width:100%;padding:13px;'
+      +'margin-bottom:8px;font-size:15px;border:1px solid var(--line);border-radius:4px;'
+      +'background:#fcfbf8;color:'+(it.danger?'var(--bad)':'inherit')+'">'+esc(it.label)+'</button>';
+  });
+  box.innerHTML='<div class="note2" style="margin:0 0 8px">'+esc(opts.title||'')+'</div>'+h;
+  bg.appendChild(box); document.body.appendChild(bg);
+  function close(){ if(bg.parentNode)document.body.removeChild(bg); }
+  bg.addEventListener('click',function(e){
+    if(e.target===bg){ close(); return; }                 // 外側をタップ＝キャンセル
+    var b=e.target.closest&&e.target.closest('button[data-i]');
+    if(!b)return;
+    close();
+    var it=opts.items[+b.getAttribute('data-i')];
+    if(it&&it.run)it.run();
+  });
+}
 function csvPicTap(rowId,idx){
   var r=csvRowById(rowId); if(!r||!r.pics[idx])return;
-  if(idx!==0&&confirm('この写真をメインにしますか？\n（キャンセルを押すと削除するか選べます）')){
+  var listed=!!String(r.itemId||'').trim();
+  var items=[];
+  if(idx!==0)items.push({label:'メインにする',run:function(){
     var p=r.pics.splice(idx,1)[0]; r.pics.unshift(p);
-    csvSaveList(); csvRender(); csvEditPics(); return;
-  }
-  if(confirm('この写真を削除しますか？')){
-    var q=r.pics.splice(idx,1)[0];
-    csvPicDelete(q&&q.key);
     csvSaveList(); csvRender(); csvEditPics();
-  }
+  }});
+  items.push({label:'削除する',danger:true,run:function(){
+    /* 出品済み（ItemIDがある）行は、eBayがこのURLを参照しているので
+       R2の実体は消さない。行から外すだけにする。 */
+    if(!confirm(listed
+      ? 'この写真を行から外します。\nすでにeBayに出品済みの行なので、画像そのものは残します。\nよろしいですか？'
+      : 'この写真を削除します。\nすでにeBayに出品済みの場合、出品中の画像が消えます。\nよろしいですか？'))return;
+    var q=r.pics.splice(idx,1)[0];
+    if(!listed)csvPicDelete(q&&q.key);
+    csvSaveList(); csvRender(); csvEditPics();
+  }});
+  items.push({label:'キャンセル'});
+  csvPicMenu({title:(idx===0?'メインの写真':'写真 '+(idx+1)+'枚目'),items:items});
 }
 function csvPicClick(e){
   var d=e.target&&e.target.getAttribute&&e.target.getAttribute('data-pic');
@@ -3559,6 +3634,7 @@ function csvEditOpen(id){
   if(sp.character)$('chara').value=sp.character;
   if(sp.model)$('variant').value=sp.model;
   if(sp.brand)$('brand').value=sp.brand;
+  if(sp.line)$('line').value=sp.line;
   // 英題があれば戻す。無ければ既存の自動生成に任せる。
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
@@ -3611,6 +3687,7 @@ function csvEditWrite(){
   sp.brand=isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim());
   sp.franchise=$('series').value.trim();
   sp.character=$('chara').value.trim();
+  if(!isGame()&&!isArcade())sp.line=$('line').value.trim();
   sp.model=$('variant').value.trim();
   sp.origin=originValue();
   if(r.cat==='139973'){
@@ -3659,8 +3736,9 @@ $('addToCsv').onclick=function(){
     amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
     specs:{ scale:'', height:'', platform:isGame()?csvPlatformFrom(gamePlatform()):'',
-            // Brandは推奨値の表記に寄せる（Banpresto → BANPRESTO）
+            // Brandは正式な社名の表記に寄せる
             brand:isArcade()?makerName():(csvBrandFrom($('brand').value)||$('brand').value.trim()),
+            line:(isGame()||isArcade())?'':$('line').value.trim(),
             gameName:isGame()?$('gTitle').value.trim():'', publisher:isGame()?$('gPub').value.trim():'',
             franchise:$('series').value.trim(), character:$('chara').value.trim(),
             model:$('variant').value.trim(), origin:originValue(), genre:'', year:'' } };
