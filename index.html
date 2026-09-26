@@ -550,6 +550,14 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           </select>
           <button class="btn" id="csvPickEbay" style="flex:0 0 auto;white-space:nowrap">eBay優先だけ残す</button>
         </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <select id="csvFilter" style="flex:1 1 0;min-width:0">
+            <option value="all" selected>すべての行を表示</option>
+            <option value="origin">原産国：既定値の行だけ</option>
+            <option value="review">要確認（review）の行だけ</option>
+            <option value="ng">不備がある行だけ</option>
+          </select>
+        </div>
         <div id="csvList"></div>
       </div>
     </details>
@@ -2814,6 +2822,15 @@ function csvRank(r){
   if(v==='ebay')return ng?1:2;
   return ng?3:4;
 }
+/* 一覧の絞り込み。並び順（csvSorted）とは分けてあるので、
+   「次の未完成へ」などの巡回は絞り込みに影響されない。 */
+function csvMatchFilter(r){
+  var m=$('csvFilter')?$('csvFilter').value:'all';
+  if(m==='origin')return !!(r.specs||{}).originDefault;
+  if(m==='review')return r.titleStatus==='review';
+  if(m==='ng')return csvIssues(r).length>0;
+  return true;
+}
 function csvSorted(){
   var a=csvList.slice(), mode=$('csvSort').value;
   if(mode==='std')a.sort(function(x,y){
@@ -2911,13 +2928,17 @@ function csvRender(){
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
        +'　/　英題・説明文の未入力 '+ng+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
+  var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
+  if(odef)$('csvSummary').textContent+='　/　原産国が既定値 '+odef+'件';
   var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
   $('csvExportNote').textContent=csvList.length
     ? ('カテゴリごとに別ファイルで書き出します：'
        +Object.keys(byCat).map(function(k){return CSV_CAT[k]+' '+byCat[k]+'件';}).join('　/　'))
     : '';
-  var h='';
+  var h='', shown=0, hidden=0;
   csvSorted().forEach(function(r){
+    if(!csvMatchFilter(r)){ hidden++; return; }
+    shown++;
     var iss=csvIssues(r), badge='';
     function b(t,c){ return '<span style="display:inline-block;background:'+c
       +';color:#fff;border-radius:2px;padding:1px 5px;font-size:10.5px;margin:0 3px 3px 0">'+esc(t)+'</span>'; }
@@ -2932,6 +2953,7 @@ function csvRender(){
     if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
     if(!r.jan)badge+=b('JANなし','#8a6d00');
     if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
+    if((r.specs||{}).originDefault)badge+=b('原産国：既定値','#8a6d00');
     if(r.condId!==1000)badge+=b('中古・要撮影','var(--mute)');
     if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
     // 未判定はライン、判定済みはしきい値との差額を出す
@@ -2989,7 +3011,10 @@ function csvRender(){
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div></div>';
   });
-  $('csvList').innerHTML=h||'<div class="note2">リストは空です。</div>';
+  if(hidden)h='<div class="note2" style="margin:0 0 6px">絞り込み中：'+shown+'件を表示（'
+    +hidden+'件は非表示）</div>'+h;
+  $('csvList').innerHTML=h||'<div class="note2">'
+    +(hidden?('絞り込みに当てはまる行がありません（'+hidden+'件は非表示）'):'リストは空です。')+'</div>';
   var days=+$('csvLogDays').value||0;
   $('csvLogNote').textContent='書き出し済み '+csvLog.length+'件。'
     +'次回の取り込みで同じJAN・ASINが出てきたら「出品済みの可能性」バッジを出します。';
@@ -3115,6 +3140,7 @@ $('csvList').addEventListener('change',function(e){
   if(t.getAttribute('data-sold'))csvRender();   // 英題・数量・ItemIDは作り直さない
 });
 $('csvSort').addEventListener('change',csvRender);
+$('csvFilter').addEventListener('change',csvRender);
 $('csvPickEbay').onclick=function(){
   var keep=csvList.filter(csvEbayFirst);
   if(!keep.length){ alert('eBay優先と判定された行がありません。'); return; }
@@ -3599,9 +3625,12 @@ function csvApplyFields(r,f){
   /* 原産国。Amazonから取れていればそれを使い、取れなければ設定の既定値を入れる。
      既定値を使った行は人の目で確かめてもらう（Worker側でも review に落ちる）。 */
   if(f.origin!==undefined){
-    if(f.origin)sp.origin=f.origin;
-    else if(!String(sp.origin||'').trim())
-      sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
+    if(f.origin){ sp.origin=f.origin; sp.originDefault=false; }
+    else{
+      if(!String(sp.origin||'').trim())
+        sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
+      sp.originDefault=true;      // 一覧に「原産国：既定値」のバッジを出す目印
+    }
   }
   // 商品ラインとスケールからカテゴリを決める。決まらない行は未振分のまま残す。
   if(!r.catFixed&&!r.catDone){

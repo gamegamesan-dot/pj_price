@@ -806,8 +806,11 @@ async function handleFigure(env, item, force) {
     notes.push(gtin ? "eBay候補がないので要確認" : "JANが分からずeBayで照合できていない");
   }
   if (!f.chara && !f.series) { status = "review"; notes.push("キャラクター名も作品名も取れていません"); }
-  // 原産国が取れない行、フィギュア以外の行は人の目で確かめてもらう
-  if (!f.origin || f.item_type !== "figure") status = "review";
+  /* status は英題の信頼度だけで決める。原産国が取れなかったことは status に混ぜない
+     （pj_price 側が既定値を入れ、別のバッジで知らせる）。
+     item_type は英題の形（末尾の Figure と商品名の位置）を変えるので、
+     figure 以外は英題の確認が要るものとして review に落とす。 */
+  if (f.item_type !== "figure") status = "review";
 
   const result = { key, status, fields: f, jan_resolved: janResolved,
                    sources, candidates, note: notes.join("／") || "候補と一致", log };
