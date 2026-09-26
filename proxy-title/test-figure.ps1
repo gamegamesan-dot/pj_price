@@ -58,12 +58,14 @@ function Invoke-Titles {
 
 <#
   pj_price の figTitleFrom() と同じ組み立て（書式の確認用）
-  [Used] brand series chara variant scale line Figure
+  [Used] brand series chara [item_name] variant scale line [Figure]
+  フィギュア以外（item_type が figure 以外）は末尾の Figure を付けない
   80字を超えたら 作品名を短縮 → ブランド → 版とスケール → 商品ライン の順に落とす
 #>
 function Build-FigTitle {
   param([bool]$Used, $F)
-  $keys = @('brand','series','chara','variant','scale','line')
+  $keys = @('brand','series','chara','item_name','variant','scale','line')
+  $tail = if ([string]$F.item_type -and [string]$F.item_type -ne 'figure') { '' } else { 'Figure' }
   $any = $false
   foreach ($k in $keys) { if ($F.$k) { $any = $true } }
   if (-not $any) { return [pscustomobject]@{ text = ''; dropped = '' } }
@@ -84,7 +86,7 @@ function Build-FigTitle {
     $p = New-Object System.Collections.ArrayList
     if ($Used) { [void]$p.Add('Used') }
     foreach ($k in $keys) { if ($st[$k]) { [void]$p.Add($st[$k]) } }
-    [void]$p.Add('Figure')
+    if ($tail) { [void]$p.Add($tail) }
     ($p -join ' ')
   }
   $t = & $join
@@ -124,6 +126,9 @@ function Show-Results {
       Write-Host ("    series   : {0}" -f $f.series)
       Write-Host ("    series_short : {0}" -f $f.series_short)
       Write-Host ("    chara    : {0}" -f $f.chara)
+      Write-Host ("    item_name: {0}" -f $f.item_name)
+      Write-Host ("    item_type: {0}" -f $f.item_type)
+      Write-Host ("    origin   : {0}" -f $f.origin)
       Write-Host ("    variant  : {0}" -f $f.variant)
       Write-Host ("    scale    : {0}" -f $f.scale)
       Write-Host ("    line     : {0}" -f $f.line)

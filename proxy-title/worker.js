@@ -572,6 +572,38 @@ function spEanFrom(it) {
     }
   return "";
 }
+/* 原産国。Amazonの country_of_origin は "JP" / "CN" / "中国" など表記がまちまちなので、
+   eBay の Country of Manufacture の値に寄せる。読めなければ空を返す。 */
+const ORIGIN_MAP = [
+  [/^(jp|jpn|japan|日本)$/i, "Japan"],
+  [/^(cn|chn|china|中国|中華人民共和国)$/i, "China"],
+  [/^(vn|vnm|viet\s?nam|ベトナム)$/i, "Vietnam"],
+  [/^(th|tha|thailand|タイ)$/i, "Thailand"],
+  [/^(kr|kor|korea|south\s?korea|韓国|大韓民国)$/i, "South Korea"],
+  [/^(tw|twn|taiwan|台湾)$/i, "Taiwan"],
+  [/^(my|mys|malaysia|マレーシア)$/i, "Malaysia"],
+  [/^(id|idn|indonesia|インドネシア)$/i, "Indonesia"],
+  [/^(ph|phl|philippines|フィリピン)$/i, "Philippines"],
+  [/^(us|usa|united\s?states|アメリカ|米国)$/i, "United States"],
+];
+function normOrigin(v) {
+  // 「Made in Japan」のような書き方も拾う
+  const t = String(v || "").trim().replace(/^made\s+in\s+/i, "");
+  if (!t) return "";
+  for (const [re, name] of ORIGIN_MAP) if (re.test(t)) return name;
+  // 表記が読めないときは、そのまま返さず空にする（誤った値を入れない）
+  return "";
+}
+function spOriginFrom(it) {
+  const at = it.attributes || {};
+  for (const k of ["country_of_origin", "country_as_labeled", "item_origin"]) {
+    for (const x of (at[k] || [])) {
+      const v = normOrigin(x && x.value);
+      if (v) return v;
+    }
+  }
+  return "";
+}
 function spBrandFrom(it) {
   const at = it.attributes || {}, sm = (it.summaries || [])[0] || {};
   const first = (k) => (at[k] && at[k][0] && at[k][0].value) || "";
@@ -587,7 +619,9 @@ const FIG_SYSTEM = [
   "decide which product this is.",
   "",
   "Output ONLY a JSON object with exactly these keys:",
-  '  "brand","series","series_short","chara","variant","line","confidence","same_item"',
+  '  "brand","series","series_short","chara","item_name","variant","line",',
+  '  "item_type","confidence","same_item"',
+  '  item_type: "figure" | "prop_replica" | "other"',
   '  confidence: "high" | "medium" | "low"',
   '  same_item: true only if at least one candidate is clearly the SAME figure.',
   "",
@@ -604,6 +638,12 @@ const FIG_SYSTEM = [
   "- Write names in normal title case. Do not copy ALL-CAPS wording or decorative",
   '  hyphens from the source ("Touken Ranbu -ONLINE-" -> "Touken Ranbu Online").',
   "- Do not put the scale (1/7 etc.) in any field; it is added separately.",
+  "- item_type says what the product is. Most items are a figure. Use",
+  '  "prop_replica" for a wearable or hand-held replica of an item from the work',
+  '  (PROPLICA, DX henshin toys, badges, rings, bangles), and "other" for',
+  "  anything that is neither a figure nor a replica.",
+  "- item_name is the product noun, and ONLY for a non-figure",
+  '  (e.g. "Storage Bangle", "Henshin Belt"). Leave it empty for a figure.',
   "- brand is the manufacturer, normalized to its official spelling",
   "  (Banpresto, Bandai Spirits, Good Smile Company, Max Factory, Kotobukiya,",
   "  MegaHouse, Taito, SEGA, FuRyu, Tamashii Nations).",
@@ -620,7 +660,8 @@ const FIG_SYSTEM = [
   "- Do NOT output any text, code fences, or comments outside the JSON object.",
 ].join("\n");
 
-const FIG_FIELDS = ["brand", "series", "series_short", "chara", "variant", "line", "scale"];
+const FIG_FIELDS = ["brand", "series", "series_short", "chara", "item_name",
+                    "variant", "line", "scale", "origin"];
 
 async function figAskClaude(env, jaTitle, jp, titles, log) {
   const lines = [
@@ -666,6 +707,12 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
   // series_short が空なら series をそのまま使う
   if (!fields.series_short) fields.series_short = fields.series;
   fields.variant = fixVersionWord(fields.variant);
+  // 「Ver.」だけ残った版は意味がないので空にする
+  if (/^Ver\.?$/i.test(fields.variant)) fields.variant = "";
+  const ty = String(obj.item_type || "").toLowerCase();
+  fields.item_type = ["figure", "prop_replica", "other"].includes(ty) ? ty : "figure";
+  // フィギュアに商品名は付けない
+  if (fields.item_type === "figure") fields.item_name = "";
   return {
     fields,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
@@ -719,6 +766,9 @@ async function handleFigure(env, item, force) {
   const f = ai.fields;
   // スケールは和名から機械的に拾う（AIの推測に任せない）
   f.scale = scaleFrom(jaTitle) || scaleFrom((jp && jp.title) || "");
+  /* 原産国はAmazon（日本）のカタログ属性から取る。AIには推測させない。
+     取れなかったときは空で返し、pj_price 側が設定の既定値を入れる。 */
+  f.origin = (jp && jp.origin) || "";
   const src = [jaTitle, (jp && jp.title) || "", f.line, f.brand].join(" ");
   const ln = figLine(src);
   if (ln) { if (!f.line) f.line = ln.line; if (!f.brand) f.brand = ln.brand; }
@@ -736,6 +786,8 @@ async function handleFigure(env, item, force) {
      のどちらかを満たすとき。ASINのみで候補がない行は必ず review。 */
   const notes = [];
   if (flt.dropped.length) notes.push(`セット品の候補を${flt.dropped.length}件除外`);
+  if (!f.origin) notes.push("原産国が取れないので既定値を使う");
+  if (f.item_type !== "figure") notes.push("フィギュア以外（" + f.item_type + "）");
   if (eb.via === "q") notes.push("gtin検索が0件のためキーワード検索の結果");
   if (janResolved) notes.push("ASINからJAN（" + janResolved + "）が判明");
   const agree = eb.via === "gtin" && f.chara && f.series
@@ -754,6 +806,8 @@ async function handleFigure(env, item, force) {
     notes.push(gtin ? "eBay候補がないので要確認" : "JANが分からずeBayで照合できていない");
   }
   if (!f.chara && !f.series) { status = "review"; notes.push("キャラクター名も作品名も取れていません"); }
+  // 原産国が取れない行、フィギュア以外の行は人の目で確かめてもらう
+  if (!f.origin || f.item_type !== "figure") status = "review";
 
   const result = { key, status, fields: f, jan_resolved: janResolved,
                    sources, candidates, note: notes.join("／") || "候補と一致", log };
@@ -780,7 +834,8 @@ async function spCatalogFig(env, id, idType, log) {
     const it = (d.items || [])[0];
     if (!it) return null;
     const sm = (it.summaries || [])[0] || {};
-    return { title: sm.itemName || "", brand: spBrandFrom(it), ean: spEanFrom(it) };
+    return { title: sm.itemName || "", brand: spBrandFrom(it), ean: spEanFrom(it),
+             origin: spOriginFrom(it) };
   } catch (e) {
     log.push("spapi_fe_error " + e.message);
     return null;

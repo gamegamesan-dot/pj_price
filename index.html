@@ -525,6 +525,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvTitleGen" style="width:100%;margin-top:8px">英語タイトル生成（未生成の行）</button>
       <div class="note2" id="csvTitleNote"></div>
+      <button class="btn" id="csvDescGen" style="width:100%;margin-top:8px">出品文を一括作成（英題がある行）</button>
+      <div class="note2" id="csvDescNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
         <button class="btn" id="csvPriceCsv" style="flex:1 1 0;min-width:0;padding:9px 4px">価格更新CSV</button>
@@ -601,6 +603,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="row"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China" style="flex:1 1 0;min-width:0"><div class="note2" style="flex:0 0 100%;margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアに入れます。入れた行は要確認（review）にします。</div></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
@@ -1605,18 +1608,26 @@ function buildArcadeTitle(){
   return {text:join('',''), dropped:['Japan Import','サイズ']};
 }
 /* フィギュアのタイトル。書式はここ1か所。
-   [Used] ブランド 作品名 キャラクター 版 スケール 商品ライン Figure
+   [Used] ブランド 作品名 キャラクター [商品名] 版 スケール 商品ライン Figure
    中古は先頭に Used を付ける（ゲーム・アーケードと揃える）。
+   フィギュア以外（PROPLICA・なりきり玩具など itemType が figure 以外）は
+   末尾の Figure を付けず、代わりに商品名（Storage Bangle など）を入れる。
 
    80字を超えたときは、作品名を短縮 → ブランド → 版とスケール → 商品ライン
    の順に落とす。先に作品名を縮めると、版やスケールを残したまま収まることが多い。
    商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
    買い手が検索に使うので最後まで残す。Used は落とさない。 */
 function figTitleFrom(used, p){
-  if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale)) return {text:'', dropped:[]};
+  if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale||p.itemName||p.item_name))
+    return {text:'', dropped:[]};
   var st={brand:p.brand||'', series:p.series||'', chara:p.chara||'',
+          itemName:p.itemName||p.item_name||'',
           variant:p.variant||'', scale:p.scale||'', line:p.line||''};
   var short=p.seriesShort||p.series_short||'';
+  // フィギュア以外は末尾の Figure を付けない
+  var ty=p.itemType||p.item_type||'figure';
+  var tail=(ty==='figure')?FIG_PTYPE:'';
+  if(ty==='figure')st.itemName='';        // フィギュアに商品名は入れない
   /* 商品ラインの語がキャラクター名や作品名にもう入っているときは二重に出さない
      （例「Chogokin Robo 50 CHOGOKIN Figure」→「Chogokin Robo 50 Figure」）。
      記号と大文字小文字を落として突き合わせる。 */
@@ -1626,8 +1637,8 @@ function figTitleFrom(used, p){
     if(lk&&(key(st.chara).indexOf(lk)>=0||key(st.series).indexOf(lk)>=0))st.line='';
   }
   function join(){
-    return [used?'Used':'', st.brand, st.series, st.chara, st.variant, st.scale, st.line, FIG_PTYPE]
-             .filter(Boolean).join(' ');
+    return [used?'Used':'', st.brand, st.series, st.chara, st.itemName,
+            st.variant, st.scale, st.line, tail].filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
   if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
@@ -2431,17 +2442,19 @@ var CSV_BRAND=[['バンプレスト','Banpresto'],['Banpresto','Banpresto'],
   ['タイトー','Taito']];
 /* 商品ライン（line）。和名・英名 → 表記と、その親ブランド。
    ブランドが別に見つからなかったときだけ親ブランドを使う。 */
-var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits'],
-  ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits'],
-  ['Figuarts ZERO','Figuarts ZERO','Bandai Spirits'],
-  ['ねんどろいど','Nendoroid','Good Smile Company'],
-  ['Nendoroid','Nendoroid','Good Smile Company'],
-  ['figma','figma','Max Factory'],
-  ['POP UP PARADE','POP UP PARADE','Good Smile Company'],
-  ['一番くじ','Ichiban Kuji','Banpresto'],
-  ['PROPLICA','PROPLICA','Bandai Spirits'],
-  ['超合金','CHOGOKIN','Bandai Spirits'],
-  ['CHOGOKIN','CHOGOKIN','Bandai Spirits']];
+/* 4列目はeBayのカテゴリ。'act'=可動（261068 Action Figure）、'fig'=非可動（261055）。
+   空はカテゴリを決めない（「カテゴリ未振分」のまま人に判断してもらう）。 */
+var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits','act'],
+  ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits','act'],
+  ['Figuarts ZERO','Figuarts ZERO','Bandai Spirits','fig'],
+  ['ねんどろいど','Nendoroid','Good Smile Company','act'],
+  ['Nendoroid','Nendoroid','Good Smile Company','act'],
+  ['figma','figma','Max Factory','act'],
+  ['POP UP PARADE','POP UP PARADE','Good Smile Company','fig'],
+  ['一番くじ','Ichiban Kuji','Banpresto','fig'],
+  ['PROPLICA','PROPLICA','Bandai Spirits',''],
+  ['超合金','CHOGOKIN','Bandai Spirits',''],
+  ['CHOGOKIN','CHOGOKIN','Bandai Spirits','']];
 var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Nintendo','SEGA',
   'ATLUS','KOEI Corporation','Nippon Ichi Software','Marvelous','Compile Heart','Idea Factory',
   'Aksys Games','Spike Chunsoft, Inc.','5pb','Arc System Works','Gust','FROM Software'];
@@ -2455,7 +2468,7 @@ var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
-                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey'];
+                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2587,8 +2600,19 @@ function csvBrandFrom(t){
 function csvLineFrom(t){
   var s=String(t||'').toLowerCase();
   for(var i=0;i<CSV_LINE.length;i++)
-    if(s.indexOf(CSV_LINE[i][0].toLowerCase())>=0)return {line:CSV_LINE[i][1], brand:CSV_LINE[i][2]};
+    if(s.indexOf(CSV_LINE[i][0].toLowerCase())>=0)
+      return {line:CSV_LINE[i][1], brand:CSV_LINE[i][2], cat:CSV_LINE[i][3]||''};
   return null;
+}
+/* 商品ラインとスケールからカテゴリを決める。
+   figma / S.H.Figuarts / ねんどろいど は可動、POP UP PARADE / 一番くじ /
+   スケールものは非可動。どちらとも言えない行は '' を返し、「カテゴリ未振分」のまま残す。 */
+function csvCatFromLine(r){
+  var sp=r.specs||{};
+  var ln=csvLineFrom([sp.line,r.titleJa].filter(Boolean).join(' '));
+  if(ln&&ln.cat)return (ln.cat==='act')?'261068':'261055';
+  if(String(sp.scale||'').trim())return '261055';       // スケールものは非可動
+  return '';
 }
 // 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
 // 商品欄を一時的に差し替えて priceModel() を呼び、必ず元へ戻す。
@@ -3509,10 +3533,13 @@ $('csvResFile').addEventListener('change',function(){
    タイトルの組み立ては gameTitleFrom() / figTitleFrom() が行う
    （書式は出品文タブと同じ1か所）。 */
 var CSV_TITLE_BATCH={game:10, fig:8};   // 無料プランのサブリクエスト上限に触れない件数
-var CSV_FIG_KEYS=['brand','series','chara','variant','line'];   // 画面で直せる5項目
-// 行の5項目は specs のどの名前で持っているか
-var CSV_FIG_MAP={brand:'brand',series:'franchise',chara:'character',variant:'model',line:'line'};
-var CSV_FIG_LABEL={brand:'ブランド',series:'作品名',chara:'キャラクター',variant:'版',line:'商品ライン'};
+// 画面で直せる項目。商品名はフィギュア以外（PROPLICA など）で使う
+var CSV_FIG_KEYS=['brand','series','chara','itemName','variant','line'];
+// 行の各項目は specs のどの名前で持っているか
+var CSV_FIG_MAP={brand:'brand',series:'franchise',chara:'character',
+                 itemName:'itemName',variant:'model',line:'line'};
+var CSV_FIG_LABEL={brand:'ブランド',series:'作品名',chara:'キャラクター',
+                   itemName:'商品名',variant:'版',line:'商品ライン'};
 
 function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
 // ゲームか、フィギュアか
@@ -3550,6 +3577,7 @@ function csvFigParts(r){
   CSV_FIG_KEYS.forEach(function(k){ o[k]=sp[CSV_FIG_MAP[k]]||''; });
   o.scale=sp.scale||'';
   o.seriesShort=sp.seriesShort||'';
+  o.itemType=sp.itemType||'figure';
   return o;
 }
 // 5項目からタイトルを組み立てて行へ書き戻す（フィギュア）
@@ -3558,9 +3586,29 @@ function csvFigRebuild(r){
 }
 function csvApplyFields(r,f){
   var sp=r.specs=r.specs||{};
-  CSV_FIG_KEYS.forEach(function(k){ if(f[k]!==undefined)sp[CSV_FIG_MAP[k]]=f[k]||''; });
+  // brand / series / chara / line はそのまま、item_name と variant は名前が違う
+  ['brand','series','chara','variant','line'].forEach(function(k){
+    if(f[k]!==undefined)sp[CSV_FIG_MAP[k]]=f[k]||'';
+  });
+  if(f.item_name!==undefined)sp.itemName=f.item_name||'';
+  // 「Ver.」だけの版は意味がないので空にする（Worker側でも落としている）
+  if(/^Ver\.?$/i.test(String(sp.model||'').trim()))sp.model='';
   if(f.scale!==undefined)sp.scale=f.scale||sp.scale||'';
   if(f.series_short!==undefined)sp.seriesShort=f.series_short||'';
+  if(f.item_type!==undefined)sp.itemType=f.item_type||'figure';
+  /* 原産国。Amazonから取れていればそれを使い、取れなければ設定の既定値を入れる。
+     既定値を使った行は人の目で確かめてもらう（Worker側でも review に落ちる）。 */
+  if(f.origin!==undefined){
+    if(f.origin)sp.origin=f.origin;
+    else if(!String(sp.origin||'').trim())
+      sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
+  }
+  // 商品ラインとスケールからカテゴリを決める。決まらない行は未振分のまま残す。
+  if(!r.catFixed&&!r.catDone){
+    var c=csvCatFromLine(r);
+    if(c){ r.cat=c; r.catDone=true;
+           if(!r.wManual){ r.weight=csvWeightFor(r); csvRecalc(r); } }
+  }
   csvFigRebuild(r);
 }
 function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
@@ -3702,6 +3750,71 @@ $('csvRevise').onclick=function(){
 // 売値だけを直す。数量列は入れない（列があると数量まで上書きしてしまう）。
 $('csvPriceCsv').onclick=function(){
   csvReviseRun({qty:false,price:true},'価格更新CSV','price');
+};
+
+/* ---- 出品文の一括作成 ----
+   出品文タブを開かずに説明文を作る。中身を1か所に保つため、生成そのものは
+   出品文タブと同じ descHTML() に任せ、各欄を行の値で一時的に差し替えて呼ぶ。
+   呼び終わったら必ず元の値へ戻す（利用者が編集中の内容を壊さない）。 */
+// descHTML() が読む欄。ここに挙げたものを退避・復元する。
+var CSV_DESC_FIELDS=['cat','brand','series','chara','variant','line','cond','origin','aOrigin',
+                     'gPlat','gPlatFree','gTitle','gPub','gCond',
+                     'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aCond',
+                     'extra','title'];
+var CSV_DESC_CHECKS=['bPrize','bJP'];
+function csvDescFor(r){
+  var save={}, savec={};
+  CSV_DESC_FIELDS.forEach(function(id){ save[id]=$(id).value; });
+  CSV_DESC_CHECKS.forEach(function(id){ savec[id]=$(id).checked; });
+  try{
+    var g=(r.cat==='139973'), sp=r.specs||{};
+    CSV_DESC_FIELDS.forEach(function(id){ if(id!=='cat')$(id).value=''; });
+    $('cat').value=g?'game':'fig';
+    if(g)$('gCond').value=csvCondToSel(r.condId,true);
+    else $('cond').value=csvCondToSel(r.condId,false);
+    if(g){
+      $('gTitle').value=sp.gameName||'';
+      $('gPub').value=sp.publisher||'';
+      var pf=platBy('spec',sp.platform);
+      if(pf)$('gPlat').value=pf.title;
+    }else{
+      $('brand').value=sp.brand||'';
+      $('series').value=sp.franchise||'';
+      $('chara').value=sp.character||'';
+      $('variant').value=sp.model||'';
+      $('line').value=sp.line||'';
+      $('origin').value=sp.origin||'';
+    }
+    // 大見出しは英題をそのまま使う
+    $('title').value=r.titleEn||'';
+    // プライズ品・日本版の注意書きは、いまのチェック状態をそのまま使う
+    applyCat();
+    return descHTML();
+  }finally{
+    CSV_DESC_FIELDS.forEach(function(id){ $(id).value=save[id]; });
+    CSV_DESC_CHECKS.forEach(function(id){ $(id).checked=savec[id]; });
+    applyCat();
+  }
+}
+$('csvDescGen').onclick=function(){
+  // 英題がある行だけ。すでに説明文がある行は作り直さない。
+  var todo=csvList.filter(function(r){
+    return String(r.titleEn||'').trim()&&!String(r.descHtml||'').trim();
+  });
+  if(!todo.length){
+    var has=csvList.filter(function(r){ return String(r.titleEn||'').trim(); }).length;
+    alert(has? '説明文が未作成の行がありません。作り直すときは行の「出品文を作る」から書き戻してください。'
+             : '英題が入っている行がありません。先に「英語タイトル生成」を実行してください。');
+    return;
+  }
+  var ng=0;
+  todo.forEach(function(r){
+    try{ r.descHtml=csvDescFor(r); }catch(e){ ng++; }
+  });
+  csvSaveList(); csvRender();
+  $('csvDescNote').textContent='出品文を作成しました：'+(todo.length-ng)+'件'
+    +(ng?('　'+ng+'件は失敗しました。'):'')
+    +'　中身は出品文タブで作るものと同じです。行の「出品文を作る」で確認できます。';
 };
 
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
