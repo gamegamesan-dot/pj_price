@@ -730,10 +730,15 @@ async function handleFigure(env, item, force) {
     return { key: "", status: "invalid_id", fields: emptyFields(), jan_resolved: "",
              sources: [], candidates: [], note: "JANもASINも正しくありません" };
 
-  const ck = "fig:v1:" + key;
+  /* キャッシュの版。返す項目を増やしたら上げる。
+     v1 … 5項目のみ。v2 … origin / item_type / item_name / series_short を含む。
+     古い版のキャッシュを読むと原産国が空のまま返ってしまうので、キーごと変える。 */
+  const ck = "fig:v2:" + key;
   if (!force) {
     const hit = await env.TITLE_CACHE.get(ck, "json");
-    if (hit && hit.fields)
+    // 項目が足りない古い形のときは、キャッシュ無しとして扱い作り直す
+    if (hit && hit.fields && hit.fields.origin !== undefined
+        && hit.fields.item_type !== undefined)
       return { key, status: hit.status || "review", fields: hit.fields,
                jan_resolved: hit.jan_resolved || "", sources: hit.sources || [],
                candidates: hit.candidates || [], note: "キャッシュ", cached: true };

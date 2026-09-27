@@ -2615,11 +2615,20 @@ function csvLineFrom(t){
 /* 商品ラインとスケールからカテゴリを決める。
    figma / S.H.Figuarts / ねんどろいど は可動、POP UP PARADE / 一番くじ /
    スケールものは非可動。どちらとも言えない行は '' を返し、「カテゴリ未振分」のまま残す。 */
+/* 商品ラインが空のとき、非可動に寄せるブランド。
+   プライズ・景品を主に出しているところで、可動品はほとんど無い。 */
+var CSV_BRAND_FIG=['Banpresto','Taito','SEGA','FuRyu'];
 function csvCatFromLine(r){
   var sp=r.specs||{};
   var ln=csvLineFrom([sp.line,r.titleJa].filter(Boolean).join(' '));
   if(ln&&ln.cat)return (ln.cat==='act')?'261068':'261055';
   if(String(sp.scale||'').trim())return '261055';       // スケールものは非可動
+  // 商品ラインが無いプライズ系ブランドは非可動
+  if(!String(sp.line||'').trim()){
+    var bk=String(sp.brand||'').toLowerCase();
+    for(var i=0;i<CSV_BRAND_FIG.length;i++)
+      if(bk===CSV_BRAND_FIG[i].toLowerCase())return '261055';
+  }
   return '';
 }
 // 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
@@ -3610,6 +3619,15 @@ function csvFigParts(r){
 function csvFigRebuild(r){
   r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0, csvFigParts(r)).text;
 }
+/* 行の原産国が空なら設定の既定値で埋め、目印を立てる。
+   一括生成・出品文の一括作成の両方から呼ぶ。埋めたら true を返す。 */
+function csvOriginFill(r){
+  var sp=r.specs=r.specs||{};
+  if(String(sp.origin||'').trim())return false;
+  sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
+  sp.originDefault=true;
+  return true;
+}
 function csvApplyFields(r,f){
   var sp=r.specs=r.specs||{};
   // brand / series / chara / line はそのまま、item_name と variant は名前が違う
@@ -3624,14 +3642,11 @@ function csvApplyFields(r,f){
   if(f.item_type!==undefined)sp.itemType=f.item_type||'figure';
   /* 原産国。Amazonから取れていればそれを使い、取れなければ設定の既定値を入れる。
      既定値を使った行は人の目で確かめてもらう（Worker側でも review に落ちる）。 */
-  if(f.origin!==undefined){
-    if(f.origin){ sp.origin=f.origin; sp.originDefault=false; }
-    else{
-      if(!String(sp.origin||'').trim())
-        sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
-      sp.originDefault=true;      // 一覧に「原産国：既定値」のバッジを出す目印
-    }
-  }
+  /* 原産国。Amazonから取れていればそれを使う。
+     取れていない（古いキャッシュで origin が返らない場合も含む）ときは
+     既定値で埋め、「原産国：既定値」のバッジを出す。 */
+  if(f.origin){ sp.origin=f.origin; sp.originDefault=false; }
+  else csvOriginFill(r);
   // 商品ラインとスケールからカテゴリを決める。決まらない行は未振分のまま残す。
   if(!r.catFixed&&!r.catDone){
     var c=csvCatFromLine(r);
@@ -3836,13 +3851,16 @@ $('csvDescGen').onclick=function(){
              : '英題が入っている行がありません。先に「英語タイトル生成」を実行してください。');
     return;
   }
-  var ng=0;
+  var ng=0, filled=0;
   todo.forEach(function(r){
+    // 原産国が空のままだと説明文にも出ないので、ここでも既定値で埋める
+    if(r.cat!=='139973'&&csvOriginFill(r))filled++;
     try{ r.descHtml=csvDescFor(r); }catch(e){ ng++; }
   });
   csvSaveList(); csvRender();
   $('csvDescNote').textContent='出品文を作成しました：'+(todo.length-ng)+'件'
     +(ng?('　'+ng+'件は失敗しました。'):'')
+    +(filled?('　'+filled+'件は原産国を既定値で埋めました。'):'')
     +'　中身は出品文タブで作るものと同じです。行の「出品文を作る」で確認できます。';
 };
 
@@ -3899,6 +3917,11 @@ function csvEditOpen(id){
   if(sp.model)$('variant').value=sp.model;
   if(sp.brand)$('brand').value=sp.brand;
   if(sp.line)$('line').value=sp.line;
+  /* 原産国は必ず行の値にする。ここで入れないと、前回の出品で入力した値
+     （localStorage から復元されたもの）が残り、そのまま書き戻されてしまう。
+     ゲームは applyCat() が Japan 固定にするので触らない。
+     originPrev を空けておくのは、applyCat() が前回値で上書きするのを防ぐため。 */
+  if(!g){ originPrev=null; $('origin').value=sp.origin||''; }
   // 英題があれば戻す。無ければ既存の自動生成に任せる。
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
