@@ -527,6 +527,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="csvTitleNote"></div>
       <button class="btn" id="csvDescGen" style="width:100%;margin-top:8px">出品文を一括作成（英題がある行）</button>
       <div class="note2" id="csvDescNote"></div>
+      <button class="btn" id="csvOriginRefresh" style="width:100%;margin-top:8px">原産国を取り直す（フィギュア・未出品）</button>
+      <div class="note2" id="csvOriginNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
         <button class="btn" id="csvPriceCsv" style="flex:1 1 0;min-width:0;padding:9px 4px">価格更新CSV</button>
@@ -3657,7 +3659,7 @@ function csvApplyFields(r,f){
 }
 function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
 // 1回分を送る。kind で送り先と中身が変わる。
-function csvTitleSend(kind,rows,force){
+function csvTitleSend(kind,rows,force,mode){
   var api=String($('csvTitleApi').value||'').trim().replace(/\/+$/,'');
   var path=(kind==='fig')?'/figure-titles':'/titles';
   var items=rows.map(function(r){
@@ -3680,6 +3682,15 @@ function csvTitleSend(kind,rows,force){
     var out=(d&&d.results)||[];
     rows.forEach(function(r,i){
       var x=out[i]||{};
+      /* 原産国の取り直しでは原産国以外に触らない。
+         手で直した英題や5項目、statusや候補をそのまま残す。 */
+      if(mode==='origin'){
+        var sp=r.specs=r.specs||{};
+        var v=(x.fields&&x.fields.origin)||'';
+        if(v){ sp.origin=v; sp.originDefault=false; }
+        else{ sp.origin=''; csvOriginFill(r); }
+        return;
+      }
       r.titleStatus=x.status||'review';
       r.titleCands=x.candidates||[];
       r.titleNote=x.note||'';
@@ -3702,7 +3713,7 @@ function csvTitleSend(kind,rows,force){
 }
 /* ゲームとフィギュアをまとめて処理する。送り先と1回の件数は種類ごとに違うが、
    進捗は合算して見せる（利用者からは1つの処理に見える）。 */
-function csvTitleRun(list,force){
+function csvTitleRun(list,force,mode){
   var btn=$('csvTitleGen'), label='英語タイトル生成（未生成の行）';
   btn.disabled=true;
   // 種類ごとの待ち行列にする
@@ -3721,7 +3732,7 @@ function csvTitleRun(list,force){
     var part=q[kind].splice(0,CSV_TITLE_BATCH[kind]);
     btn.textContent='生成中… '+done+'/'+total;
     csvTitleSay('生成中… '+done+'/'+total+'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）');
-    csvTitleSend(kind,part,force)
+    csvTitleSend(kind,part,force,mode)
       .catch(function(e){
         failed+=part.length;
         part.forEach(function(r){ r.titleStatus='error'; r.titleNote=e.message; });
@@ -3862,6 +3873,71 @@ $('csvDescGen').onclick=function(){
     +(ng?('　'+ng+'件は失敗しました。'):'')
     +(filled?('　'+filled+'件は原産国を既定値で埋めました。'):'')
     +'　中身は出品文タブで作るものと同じです。行の「出品文を作る」で確認できます。';
+};
+
+/* ---- 原産国の取り直し ----
+   古いキャッシュや前回値のせいで原産国が入っていない／誤っている行を作り直す。
+   原産国以外は一切触らないので、手で直した英題や5項目は残る。
+   出品済み（ItemIDがある）行は、すでにeBayに出ている内容を勝手に変えないため対象外。 */
+function csvOriginRun(list){
+  var btn=$('csvOriginRefresh'), label='原産国を取り直す（フィギュア・未出品）';
+  btn.disabled=true;
+  var total=list.length, done=0, failed=0;
+  function say(m){ $('csvOriginNote').textContent=m||''; }
+  function step(){
+    if(!list.length){
+      btn.disabled=false; btn.textContent=label;
+      var def=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
+      // JAN・ASINが無い行は問い合わせようがないので、そのまま残っていることを伝える
+      var noid=csvList.filter(function(r){
+        return csvTitleKind(r)==='fig'&&csvTitleTarget(r)!=='ok'
+               &&!String((r.specs||{}).origin||'').trim(); }).length;
+      say('原産国を取り直しました：'+done+'件'
+        +(failed?('　'+failed+'件は失敗したので、もう一度実行してください。'):'')
+        +'　いま既定値の行は '+def+'件です（一覧の絞り込みで見られます）。'
+        +(noid?('　JAN・ASINが無く照会できない '+noid+'件は空のままです。'):''));
+      csvRender(); return;
+    }
+    var part=list.splice(0,CSV_TITLE_BATCH.fig);
+    btn.textContent='取り直し中… '+done+'/'+total;
+    say('取り直し中… '+done+'/'+total);
+    csvTitleSend('fig',part,true,'origin')
+      .catch(function(e){
+        failed+=part.length;
+        // 照会できなかった行も、空のままにせず既定値で埋めておく
+        part.forEach(function(r){ csvOriginFill(r); });
+        csvSaveList();
+      })
+      .then(function(){ done+=part.length; csvRender(); step(); });
+  }
+  step();
+}
+$('csvOriginRefresh').onclick=function(){
+  if(!String($('csvTitleApi').value||'').trim()){
+    alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
+  }
+  var fig=csvList.filter(function(r){ return csvTitleKind(r)==='fig'; });
+  var listed=fig.filter(function(r){ return !!String(r.itemId||'').trim(); }).length;
+  var noid=fig.filter(function(r){ return csvTitleTarget(r)!=='ok'; }).length;
+  var todo=fig.filter(function(r){
+    return csvTitleTarget(r)==='ok'&&!String(r.itemId||'').trim();
+  });
+  if(!todo.length){
+    alert('取り直せるフィギュア行がありません。'
+      +(listed?('\n出品済み（ItemIDあり）'+listed+'件は対象外です。'):'')
+      +(noid?('\nJANもASINも無い '+noid+'件は照会できません。'):''));
+    return;
+  }
+  if(!confirm(todo.length+'件の原産国を取り直します。\n'
+    +'いまの原産国を消してからAmazonに問い合わせ、取れなければ既定値（'
+    +(String($('csvOriginDefault').value||'').trim()||'China')+'）を入れます。\n'
+    +'英題と5項目は変えません。\n'
+    +(listed?('出品済み（ItemIDあり）'+listed+'件は対象外です。\n'):'')
+    +'よろしいですか？'))return;
+  // いまの値を消してから問い合わせる（誤った値を残さない）
+  todo.forEach(function(r){ var sp=r.specs=r.specs||{}; sp.origin=''; sp.originDefault=false; });
+  csvSaveList(); csvRender();
+  csvOriginRun(todo.slice());
 };
 
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
