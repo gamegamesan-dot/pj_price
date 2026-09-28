@@ -345,6 +345,50 @@ function spPlatformKey(it) {
   }
   return "";
 }
+/* SP-API は呼び出し頻度の上限が厳しく、QuotaExceeded（429）が返る。
+   ・呼び出しの間隔を最低 SP_MIN_GAP ミリ秒あける（同じ isolate 内で直列化）
+   ・429 と QuotaExceeded は指数バックオフで最大 SP_RETRY 回まで待って再試行
+   それでも駄目な行は通信エラーとして返し、pj_price 側の再送に任せる。 */
+const SP_MIN_GAP = 350;        // 呼び出しの最短間隔
+const SP_RETRY = 3;            // 再試行の回数
+const SP_BACKOFF = [700, 1500, 3000];
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+let spChain = Promise.resolve(), spLast = 0;
+function spSlot() {
+  spChain = spChain.then(async () => {
+    const wait = spLast + SP_MIN_GAP - Date.now();
+    if (wait > 0) await sleep(wait);
+    spLast = Date.now();
+  }).catch(() => {});
+  return spChain;
+}
+function isQuota(status, body) {
+  return status === 429 || /QuotaExceeded|TooManyRequests/i.test(String(body || ""));
+}
+// 戻りは { ok, status, body, quota }。quota は再試行しても上限だったとき true。
+async function spFetch(url, headers, log, label) {
+  for (let i = 0; i <= SP_RETRY; i++) {
+    await spSlot();
+    let resp, body = "";
+    try {
+      resp = await fetch(url, { headers: headers });
+      body = await resp.text();
+    } catch (e) {
+      log.push(`${label}_error ${e.message}`);
+      return { ok: false, status: 0, body: "", quota: false };
+    }
+    if (resp.ok) return { ok: true, status: resp.status, body: body, quota: false };
+    if (isQuota(resp.status, body) && i < SP_RETRY) {
+      log.push(`${label} -> ${resp.status} 上限。${SP_BACKOFF[i]}ms 待って再試行 ${i + 1}/${SP_RETRY}`);
+      await sleep(SP_BACKOFF[i]);
+      continue;
+    }
+    log.push(`${label} -> ${resp.status}`);
+    return { ok: false, status: resp.status, body: body, quota: isQuota(resp.status, body) };
+  }
+  return { ok: false, status: 429, body: "", quota: true };
+}
+
 // ASIN が分かっていればそちらで引く（JANが商品と結びついていないことがあるため）
 async function spCatalog(env, region, jan, log, asin) {
   const na = region === "na";
@@ -359,10 +403,11 @@ async function spCatalog(env, region, jan, log, asin) {
     const mp = na ? MP_NA : MP_FE;
     const url = `https://${host}/catalog/2022-04-01/items?identifiers=${encodeURIComponent(id)}`
       + `&identifiersType=${idType}&marketplaceIds=${mp}&includedData=summaries,attributes`;
-    const resp = await fetch(url, { headers: { "x-amz-access-token": token } });
-    log.push(`spapi_${region} ${idType}=${id} -> ${resp.status}`);
-    if (!resp.ok) return null;
-    const d = await resp.json();
+    const r = await spFetch(url, { "x-amz-access-token": token }, log,
+                            `spapi_${region} ${idType}=${id}`);
+    if (!r.ok) return r.quota ? { quota: true } : null;
+    let d = {};
+    try { d = JSON.parse(r.body); } catch (e) { return null; }
     const it = (d.items || [])[0];
     if (!it) return null;
     const sm = (it.summaries || [])[0] || {};
@@ -751,7 +796,14 @@ async function handleFigure(env, item, force) {
   }
 
   // Amazon（日本）。JANがあればEAN、なければASINで引く
-  const jp = await spCatalogFig(env, hasJan ? jan : asin, hasJan ? "EAN" : "ASIN", log);
+  let jp = await spCatalogFig(env, hasJan ? jan : asin, hasJan ? "EAN" : "ASIN", log);
+  /* 再試行しても呼び出し上限だった行は、AIに渡さず通信エラーとして返す。
+     Amazonの情報なしで作った英題を「生成済み」にしてしまうと、
+     pj_price 側の再送対象から外れてしまうため。 */
+  if (jp && jp.quota)
+    return { key, status: "error", fields: emptyFields(), jan_resolved: "",
+             sources: [], candidates: [],
+             note: "Amazonの呼び出し上限（QuotaExceeded）。あとでもう一度実行してください", log };
   const janResolved = (!hasJan && jp && jp.ean) ? jp.ean : "";
   const gtin = hasJan ? jan : janResolved;
 
@@ -841,10 +893,11 @@ async function spCatalogFig(env, id, idType, log) {
     const url = "https://sellingpartnerapi-fe.amazon.com/catalog/2022-04-01/items"
       + `?identifiers=${encodeURIComponent(id)}&identifiersType=${idType}`
       + `&marketplaceIds=${MP_FE}&includedData=summaries,attributes,identifiers`;
-    const resp = await fetch(url, { headers: { "x-amz-access-token": token } });
-    log.push(`spapi_fe ${idType}=${id} -> ${resp.status}`);
-    if (!resp.ok) return null;
-    const d = await resp.json();
+    const r = await spFetch(url, { "x-amz-access-token": token }, log,
+                            `spapi_fe ${idType}=${id}`);
+    if (!r.ok) return r.quota ? { quota: true } : null;
+    let d = {};
+    try { d = JSON.parse(r.body); } catch (e) { return null; }
     const it = (d.items || [])[0];
     if (!it) return null;
     const sm = (it.summaries || [])[0] || {};
@@ -874,10 +927,13 @@ async function handleItem(env, item, force) {
   }
 
   const eb = await ebayCandidates(env, jan, log);
-  const [us, jp] = await Promise.all([
+  let [us, jp] = await Promise.all([
     spCatalog(env, "na", jan, log, item.asin),
     spCatalog(env, "fe", jan, log, item.asin),
   ]);
+  // 呼び出し上限だった分は「取れなかった」として扱う（ゲームは機種の補完だけなので止めない）
+  if (us && us.quota) us = null;
+  if (jp && jp.quota) { jp = null; log.push("spapi_fe 上限のため機種の補完なし"); }
 
   /* 機種が分からない行は、Amazon（日本）から拾った機種で補う。
      キーだけ返し、表記の正規化は pj_price 側の PLATFORMS 表に任せる。 */
@@ -1012,8 +1068,9 @@ export default {
         const at = it.attributes || {};
         // 原産国に関係ありそうな属性だけ中身を出す。ほかは名前だけ。
         const want = {};
+        const wantNames = [];
         for (const k of Object.keys(at))
-          if (/country|origin|made/i.test(k)) want[k] = at[k];
+          if (/country|origin|made/i.test(k)) { want[k] = at[k]; wantNames.push(k); }
         const sm = (it.summaries || [])[0] || {};
         return json({
           found: true, idType, id,
@@ -1021,6 +1078,8 @@ export default {
           attribute_names: Object.keys(at).sort(),
           attribute_count: Object.keys(at).length,
           origin_like: want,
+          origin_like_names: wantNames,      // 数え間違いを防ぐため、件数と名前も返す
+          origin_like_count: wantNames.length,
           parsed_origin: spOriginFrom(it),     // いまの実装が何を返すか
           parsed_brand: spBrandFrom(it),
           parsed_ean: spEanFrom(it),

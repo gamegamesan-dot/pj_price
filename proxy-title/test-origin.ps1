@@ -46,10 +46,15 @@ foreach ($it in $items) {
   if (-not $r.found) { Write-Host '  カタログに見つからない' -ForegroundColor Yellow; continue }
   Write-Host ("  商品名   : {0}" -f $r.item_name)
   Write-Host ("  属性の数 : {0}" -f $r.attribute_count)
-  $names = @($r.origin_like.PSObject.Properties.Name)
-  if ($names.Count -gt 0) {
+  <# 件数は Worker が返す origin_like_count を使う。
+     PSObject.Properties から数えると、空のオブジェクトでも版によって
+     組み込みメンバーが並んで 0 にならず、数え間違いになる。 #>
+  $names = @($r.origin_like_names | Where-Object { $_ })
+  $cnt = 0
+  if ($null -ne $r.origin_like_count) { $cnt = [int]$r.origin_like_count } else { $cnt = $names.Count }
+  if ($cnt -gt 0) {
     $hit++
-    Write-Host '  原産国に関係する属性:' -ForegroundColor Green
+    Write-Host ("  原産国に関係する属性: {0}個" -f $cnt) -ForegroundColor Green
     foreach ($n in $names) {
       Write-Host ("    {0} = {1}" -f $n, ($r.origin_like.$n | ConvertTo-Json -Compress -Depth 4))
     }

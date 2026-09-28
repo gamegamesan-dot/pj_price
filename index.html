@@ -2904,6 +2904,27 @@ function csvFigFields(r){
   if(sp.scale)h+='<div class="note2" style="margin-top:4px">スケール '+esc(sp.scale)+'（和名から自動）</div>';
   return h+'</div></details>';
 }
+/* 原産国のワンタップ。撮影のときに箱の表記を見て押す。
+   押すと行の原産国が確定し、「原産国：既定値」のバッジが消える。
+   フィギュア・アーケードだけ（ゲームは Japan 固定）。 */
+var CSV_ORIGINS=['China','Japan','Vietnam'];
+function csvOriginBtns(r){
+  if(r.cat==='139973')return '';
+  var sp=r.specs||{}, cur=String(sp.origin||'').trim();
+  var h='';
+  CSV_ORIGINS.forEach(function(v){
+    var on=(cur===v&&!sp.originDefault);
+    h+='<button class="btn" data-orig="'+r.id+'" data-origv="'+esc(v)+'"'
+      +' style="padding:5px 8px;font-size:12px'
+      +(on?';background:var(--good);color:#fff;border-color:var(--good)':'')+'">'+esc(v)+'</button>';
+  });
+  var other=(cur&&CSV_ORIGINS.indexOf(cur)<0&&!sp.originDefault);
+  h+='<button class="btn" data-orig="'+r.id+'" data-origv="*"'
+    +' style="padding:5px 8px;font-size:12px'
+    +(other?';background:var(--good);color:#fff;border-color:var(--good)':'')+'">'
+    +(other?esc(cur):'その他')+'</button>';
+  return h;
+}
 function csvTitleBox(r){
   var t=csvTitleTarget(r);
   if(!t)return '';                                   // ゲーム・フィギュア以外は出さない
@@ -3022,6 +3043,7 @@ function csvRender(){
         +(r.forceEbay?'オン':'オフ')+'</button>';
     h+='<button class="btn" data-pics="'+r.id+'" style="padding:5px 8px;font-size:12px">写真 '
       +(r.pics||[]).length+'/'+CSV_PIC_MAX+'</button>'
+      +csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
       +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
@@ -3055,10 +3077,23 @@ $('csvList').addEventListener('click',function(e){
   var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
-        ||t.getAttribute('data-regen');
+        ||t.getAttribute('data-regen')||t.getAttribute('data-orig');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
+  if(t.hasAttribute('data-orig')){
+    var ov=t.getAttribute('data-origv');
+    if(ov==='*'){
+      var cur=String((csvList[i].specs||{}).origin||'');
+      var v=prompt('原産国を入力してください（eBayに出る表記）', CSV_ORIGINS.indexOf(cur)<0?cur:'');
+      if(v===null)return;
+      v=String(v).trim(); if(!v)return;
+      ov=v;
+    }
+    var sp=csvList[i].specs=csvList[i].specs||{};
+    sp.origin=ov; sp.originDefault=false;   // 手で確定したので既定値ではない
+    csvSaveList(); csvRender(); return;
+  }
   if(t.hasAttribute('data-regen')){
     if(!String($('csvTitleApi').value||'').trim()){
       alert('設定の「英語タイトル生成のURL」を入れてください。'); return; }
