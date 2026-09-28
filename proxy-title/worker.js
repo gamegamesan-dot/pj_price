@@ -690,8 +690,10 @@ const FIG_SYSTEM = [
   '  "prop_replica" for a wearable or hand-held replica of an item from the work',
   '  (PROPLICA, DX henshin toys, badges, rings, bangles), and "other" for',
   "  anything that is neither a figure nor a replica.",
-  "- item_name is the product noun, and ONLY for a non-figure",
-  '  (e.g. "Storage Bangle", "Henshin Belt"). Leave it empty for a figure.',
+  "- item_name is the product noun, for a non-figure",
+  '  (e.g. "Storage Bangle", "Henshin Belt"). Leave it empty for a figure,',
+  "  EXCEPT when neither chara nor series can be determined: then put the",
+  '  product\'s own name there (e.g. "Chogokin Robo 50") so the title is not empty.',
   "- brand is the manufacturer, normalized to its official spelling",
   "  (Banpresto, Bandai Spirits, Good Smile Company, Max Factory, Kotobukiya,",
   "  MegaHouse, Taito, SEGA, FuRyu, Tamashii Nations).",
@@ -760,8 +762,11 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
   if (/^Ver\.?$/i.test(fields.variant)) fields.variant = "";
   const ty = String(obj.item_type || "").toLowerCase();
   fields.item_type = ["figure", "prop_replica", "other"].includes(ty) ? ty : "figure";
-  // フィギュアに商品名は付けない
-  if (fields.item_type === "figure") fields.item_name = "";
+  /* フィギュアに商品名は付けない。
+     ただしキャラクター名も作品名も取れなかったときは、商品名が唯一の手がかりに
+     なるので残す（例「超合金 CHOGOKIN ROBO 50」→ Chogokin Robo 50）。 */
+  if (fields.item_type === "figure" && (fields.chara || fields.series))
+    fields.item_name = "";
   return {
     fields,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",

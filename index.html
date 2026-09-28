@@ -1640,14 +1640,24 @@ function figTitleFrom(used, p){
   // フィギュア以外は末尾の Figure を付けない
   var ty=p.itemType||p.item_type||'figure';
   var tail=(ty==='figure')?FIG_PTYPE:'', tail0=tail;
-  if(ty==='figure')st.itemName='';        // フィギュアに商品名は入れない
+  /* フィギュアに商品名は入れない。ただしキャラクター名も作品名も無いときは
+     商品名が唯一の手がかりなので残す（超合金 CHOGOKIN ROBO 50 など）。 */
+  if(ty==='figure'&&(st.chara||st.series))st.itemName='';
   /* 商品ラインの語がキャラクター名や作品名にもう入っているときは二重に出さない
      （例「Chogokin Robo 50 CHOGOKIN Figure」→「Chogokin Robo 50 Figure」）。
      記号と大文字小文字を落として突き合わせる。 */
   var key=function(x){ return String(x||'').toLowerCase().replace(/[^a-z0-9]/g,''); };
   if(st.line){
     var lk=key(st.line);
-    if(lk&&(key(st.chara).indexOf(lk)>=0||key(st.series).indexOf(lk)>=0))st.line='';
+    if(lk&&(key(st.chara).indexOf(lk)>=0||key(st.series).indexOf(lk)>=0
+            ||key(st.itemName).indexOf(lk)>=0))st.line='';
+  }
+  /* ブランドが作品名か商品名にもう入っているときも二重に出さない
+     （例「Snail Shell Snail Shell Kazune …」→「Snail Shell Kazune …」）。 */
+  if(st.brand){
+    var bk=key(st.brand);
+    if(bk&&(key(st.series).indexOf(bk)>=0||key(st.itemName).indexOf(bk)>=0
+            ||key(st.chara).indexOf(bk)>=0))st.brand='';
   }
   function join(){
     return [used?'Used':'', st.brand, st.series, st.chara, st.itemName,
@@ -2628,10 +2638,15 @@ function csvLineFrom(t){
 /* 商品ラインが空のとき、非可動に寄せるブランド。
    プライズ・景品を主に出しているところで、可動品はほとんど無い。 */
 var CSV_BRAND_FIG=['Banpresto','Taito','SEGA','FuRyu'];
+/* 和名に出てくる可動品の手がかり。
+   「塗装済み可動フィギュア」「完成品アクションフィギュア」のような書き方を拾う。 */
+var CSV_ACT_WORDS=/アクションフィギュア|可動/;
 function csvCatFromLine(r){
   var sp=r.specs||{};
   var ln=csvLineFrom([sp.line,r.titleJa].filter(Boolean).join(' '));
   if(ln&&ln.cat)return (ln.cat==='act')?'261068':'261055';
+  // 和名に可動の手がかりがあれば可動。スケールものでもこちらを優先する
+  if(CSV_ACT_WORDS.test(String(r.titleJa||'')))return '261068';
   if(String(sp.scale||'').trim())return '261055';       // スケールものは非可動
   // 商品ラインが無いプライズ系ブランドは非可動
   if(!String(sp.line||'').trim()){
@@ -2923,6 +2938,19 @@ function csvOriginBtns(r){
     +(other?esc(cur):'その他')+'</button>';
   return h;
 }
+// テキストエリアの高さを中身に合わせる（最低の高さは min-height が決める）
+function csvTaFit(el){
+  if(!el)return;
+  el.style.height='auto';
+  /* box-sizing が border-box なので、scrollHeight（枠を含まない）だけを入れると
+     枠の分だけ足りずに2pxはみ出す。差分を足しておく。 */
+  var frame=el.offsetHeight-el.clientHeight;
+  el.style.height=(el.scrollHeight+(frame>0?frame:0))+'px';
+}
+function csvTaFitAll(){
+  var a=$('csvList').querySelectorAll('textarea[data-ten]');
+  for(var i=0;i<a.length;i++)csvTaFit(a[i]);
+}
 function csvTitleBox(r){
   var t=csvTitleTarget(r);
   if(!t)return '';                                   // ゲーム・フィギュア以外は出さない
@@ -2937,11 +2965,16 @@ function csvTitleBox(r){
   var te=String(r.titleEn||''), len=te.length;
   var col=len>80?'var(--bad)':(len>72?'#8a6d00':'var(--mute)');
   var st=CSV_TSTAT[r.titleStatus]||null;
-  var h='<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
-    +'<span class="note2" style="margin:0;flex:0 0 auto">英題</span>'
-    +'<input type="text" data-ten="'+r.id+'" value="'+esc(te)+'" placeholder="英語タイトル生成で入ります"'
-    +' style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;'
+  /* 英題はテキストエリアにする。最低2行分の高さを確保し、入りきらなければ
+     中身に合わせて伸ばす（携帯の幅では80文字が2行に収まらないため）。
+     改行は入れさせない（タイトルに改行は入らない）。 */
+  var h='<div style="display:flex;gap:6px;align-items:flex-start;margin-top:5px">'
+    +'<span class="note2" style="margin:3px 0 0;flex:0 0 auto">英題</span>'
+    +'<textarea data-ten="'+r.id+'" rows="2" placeholder="英語タイトル生成で入ります"'
+    +' style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;line-height:1.35;'
+    +'box-sizing:border-box;min-height:52px;overflow:hidden;resize:vertical;'
     +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+    +esc(te)+'</textarea>'
     +'<button class="btn" data-regen="'+r.id+'" style="flex:0 0 auto;padding:5px 8px;font-size:12px">再生成</button></div>'
     +'<div class="note2" style="margin-top:2px">'
     +'<span style="color:'+col+'">'+len+' / 80</span>'
@@ -3056,6 +3089,7 @@ function csvRender(){
     +hidden+'件は非表示）</div>'+h;
   $('csvList').innerHTML=h||'<div class="note2">'
     +(hidden?('絞り込みに当てはまる行がありません（'+hidden+'件は非表示）'):'リストは空です。')+'</div>';
+  csvTaFitAll();   // 英題が長い行は欄を伸ばす
   var days=+$('csvLogDays').value||0;
   $('csvLogNote').textContent='書き出し済み '+csvLog.length+'件。'
     +'次回の取り込みで同じJAN・ASINが出てきたら「出品済みの可能性」バッジを出します。';
@@ -3141,9 +3175,9 @@ $('csvList').addEventListener('input',function(e){
     rf.specs[CSV_FIG_MAP[fk]]=t.value.trim();
     csvFigRebuild(rf); rf.titleManual=true; csvSaveList();
     var box=t.closest('div[data-row]')||null;
-    var en=document.querySelector('#csvList input[data-ten="'+rf.id+'"]');
+    var en=document.querySelector('#csvList textarea[data-ten="'+rf.id+'"]');
     if(en){
-      en.value=rf.titleEn;
+      en.value=rf.titleEn; csvTaFit(en);
       var cnt=en.parentNode.nextSibling;
       if(cnt&&cnt.firstChild){
         cnt.firstChild.textContent=rf.titleEn.length+' / 80';
@@ -3157,7 +3191,11 @@ $('csvList').addEventListener('input',function(e){
   var tid=t.getAttribute('data-ten');
   if(tid){
     var rt=csvRowById(tid); if(!rt)return;
-    rt.titleEn=t.value; rt.titleManual=true; csvSaveList();
+    // 貼り付けで改行が入ることがあるので、空白1つに畳んでおく
+    var clean=String(t.value).replace(/[\r\n]+/g,' ');
+    if(clean!==t.value)t.value=clean;
+    rt.titleEn=clean; rt.titleManual=true; csvSaveList();
+    csvTaFit(t);
     var n=t.parentNode.nextSibling;
     if(n&&n.firstChild){
       n.firstChild.textContent=t.value.length+' / 80';
@@ -3178,6 +3216,11 @@ $('csvList').addEventListener('input',function(e){
   var notes=box.getElementsByClassName('note2');
   if(notes.length>=2)notes[1].textContent=judge;
   $('csvCount').textContent=csvList.length;
+});
+// テキストエリアで Enter を押しても改行にしない（タイトルは1行）
+$('csvList').addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&e.target&&e.target.getAttribute&&e.target.getAttribute('data-ten'))
+    e.preventDefault();
 });
 $('csvList').addEventListener('change',function(e){
   // 相場は判定（バッジ・並び順）が変わるので作り直す。

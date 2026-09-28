@@ -76,12 +76,26 @@ function Build-FigTitle {
   foreach ($k in $keys) { $st[$k] = [string]$F.$k }
   $short = [string]$F.series_short
   $cshort = [string]$F.chara_short
-  # 商品ラインの語がキャラクター名や作品名に入っていれば二重に出さない
+  # フィギュアに商品名は入れない。ただしキャラクター名も作品名も無いときは残す
+  if ((-not [string]$F.item_type -or [string]$F.item_type -eq 'figure') -and ($st['chara'] -or $st['series'])) {
+    $st['item_name'] = ''
+  }
+  # 商品ラインの語がキャラクター名・作品名・商品名に入っていれば二重に出さない
+  $norm = { param($x) ([string]$x).ToLower() -replace '[^a-z0-9]','' }
   if ($st['line']) {
-    $lk = ($st['line'].ToLower() -replace '[^a-z0-9]','')
-    $ck = ($st['chara'].ToLower() -replace '[^a-z0-9]','')
-    $sk = ($st['series'].ToLower() -replace '[^a-z0-9]','')
-    if ($lk -and ($ck.Contains($lk) -or $sk.Contains($lk))) { $st['line'] = '' }
+    $lk = & $norm $st['line']
+    $ck = & $norm $st['chara']
+    $sk = & $norm $st['series']
+    $ik = & $norm $st['item_name']
+    if ($lk -and ($ck.Contains($lk) -or $sk.Contains($lk) -or $ik.Contains($lk))) { $st['line'] = '' }
+  }
+  # ブランドが作品名・商品名・キャラクター名にも入っているときも二重に出さない
+  if ($st['brand']) {
+    $bk = & $norm $st['brand']
+    $sk2 = & $norm $st['series']
+    $ik2 = & $norm $st['item_name']
+    $ck2 = & $norm $st['chara']
+    if ($bk -and ($sk2.Contains($bk) -or $ik2.Contains($bk) -or $ck2.Contains($bk))) { $st['brand'] = '' }
   }
   $drop = New-Object System.Collections.ArrayList
 

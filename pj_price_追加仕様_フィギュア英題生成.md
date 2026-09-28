@@ -320,6 +320,56 @@ eBayの他セラーの値は信頼性が低いので取得しない。**既定�
 変わっていなければ既定値かどうかの印をそのまま残す（確認していない値を
 「確定した」ことにしないため）。
 
+### 英題の重複除去と商品名の扱い（2026-09-28・sw.js v76）
+
+#### 1) キャラクター名も作品名も無い商品は商品名を英題に入れる
+
+`item_name`（商品名）はフィギュアでは英題に入れないのが原則だが、
+**`chara` も `series` も取れなかったとき**は商品名が唯一の手がかりになるので残す。
+`item_type` は問わない（`figure` でも残す）。
+
+- AIへの指示（Worker）も同じ条件を明記する。
+- Worker 側の後処理も
+  `if (item_type === "figure" && (chara || series)) item_name = ""` に変更した。
+
+**不具合の原因（ASIN B0G6LRMPS5「超合金 CHOGOKIN ROBO 50」が
+`Used Bandai Spirits Chogokin Figure` になっていた件）**
+
+| 疑い | 判定 |
+|---|---|
+| 古い KV キャッシュ | ✗ `fig:v2` は `origin`/`item_type`/`chara_short` が揃っていない項目を再照会する。ブランドも新しい正規化後の `Bandai Spirits` になっていた |
+| `line` の重複除去が `chara` まで消していた | ✗ この処理は `line` しか空にしない |
+| **Worker の `item_type === "figure"` で `item_name` を無条件に消していた** | ✓ 原因。AIは `chara`・`series` が取れず商品名を `item_name` に入れていたが、Worker がそれを捨てていたため、ブランド＋商品ライン＋`Figure` だけが残っていた |
+
+#### 2) 同じ語を二度出さない
+
+記号と大文字小文字を落として突き合わせ、含まれていれば落とす。
+
+| 落とすもの | 比較先 | 例 |
+|---|---|---|
+| `brand` | `series` / `item_name` / `chara` | `Snail Shell Snail Shell Kazune …` → `Snail Shell Kazune …` |
+| `line` | `chara` / `series` / `item_name` | `Chogokin Robo 50 … CHOGOKIN Figure` → `Chogokin Robo 50 … Figure` |
+
+`line` の比較先に `item_name` を加えたのは、1) で商品名が英題に残るようになり、
+商品ラインと重複しうるようになったため。
+
+#### 3) 和名のキーワードでも可動を判定する
+
+`ja_title` に「アクションフィギュア」または「可動」があれば、
+商品ラインの表から決まらなくても可動フィギュア（`261068`）に振り分ける。
+判定の順番は、商品ラインの表 → 和名のキーワード → スケール表記（非可動 `261055`）
+→ ブランド（Banpresto / Taito / SEGA / FuRyu で商品ラインが空なら非可動）。
+
+#### 4) 行の英題欄は2行のテキストエリア
+
+80字の全体をスクロールなしで見られるように `rows="2"` のテキストエリアにし、
+内容に合わせて高さを自動で伸ばす（`box-sizing: border-box` のため
+`scrollHeight` に枠の分 `offsetHeight - clientHeight` を足す）。
+改行は入力させない（Enterを無効化し、貼り付けた改行は空白に畳む）。
+文字数カウンターは今までどおり。
+
+幅 320 / 360 / 390 / 414 / 768px で80字が収まることを実機幅で確認した。
+
 ## 7. スコープ外
 - アーケードパーツ、中古レンズ、イヤホン・ヘッドフォン
 - フィギュアの状態（箱ダメージ等）の自動記載
