@@ -524,6 +524,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvTitleGen" style="width:100%;margin-top:8px">英語タイトル生成（未生成の行）</button>
+      <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:6px">英題を作り直す（手で編集していない未出品の行）</button>
       <div class="note2" id="csvTitleNote"></div>
       <button class="btn" id="csvDescGen" style="width:100%;margin-top:8px">出品文を一括作成（英題がある行）</button>
       <div class="note2" id="csvDescNote"></div>
@@ -3752,6 +3753,15 @@ function csvApplyFields(r,f){
   csvFigRebuild(r);
 }
 function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
+/* 英題を作る2つのボタンの表記。進捗表示と終わりの文言をここにまとめる。
+   行の「再生成」からは csvTitleGen 側の表記を使う。 */
+var CSV_TITLE_BTN={
+  csvTitleGen:{ label:'英語タイトル生成（未生成の行）', run:'生成中',
+                done:'英語タイトル生成' },
+  csvTitleRedo:{ label:'英題を作り直す（手で編集していない未出品の行）',
+                 run:'作り直し中', done:'英題の作り直し' }
+};
+var CSV_TITLE_BTN_IDS=Object.keys(CSV_TITLE_BTN);
 // 1回分を送る。kind で送り先と中身が変わる。
 function csvTitleSend(kind,rows,force){
   var api=String($('csvTitleApi').value||'').trim().replace(/\/+$/,'');
@@ -3798,9 +3808,11 @@ function csvTitleSend(kind,rows,force){
 }
 /* ゲームとフィギュアをまとめて処理する。送り先と1回の件数は種類ごとに違うが、
    進捗は合算して見せる（利用者からは1つの処理に見える）。 */
-function csvTitleRun(list,force){
-  var btn=$('csvTitleGen'), label='英語タイトル生成（未生成の行）';
-  btn.disabled=true;
+function csvTitleRun(list,force,btnId){
+  var id=(btnId&&CSV_TITLE_BTN[btnId])?btnId:'csvTitleGen';
+  var btn=$(id);
+  // どちらのボタンからでも、走っている間は両方押せないようにする
+  CSV_TITLE_BTN_IDS.forEach(function(k){ $(k).disabled=true; });
   // 種類ごとの待ち行列にする
   var q={game:list.filter(function(r){return csvTitleKind(r)==='game';}),
          fig: list.filter(function(r){return csvTitleKind(r)==='fig';})};
@@ -3808,15 +3820,17 @@ function csvTitleRun(list,force){
   function step(){
     var kind=q.game.length?'game':(q.fig.length?'fig':'');
     if(!kind){
-      btn.disabled=false; btn.textContent=label;
-      csvTitleSay('英語タイトル生成：'+done+'件を処理しました。'
+      CSV_TITLE_BTN_IDS.forEach(function(k){
+        $(k).disabled=false; $(k).textContent=CSV_TITLE_BTN[k].label; });
+      csvTitleSay(CSV_TITLE_BTN[id].done+'：'+done+'件を処理しました。'
         +(failed?('　'+failed+'件は失敗したので、もう一度実行してください。'):'')
         +'　review の行は中身を確かめてください。');
       csvRender(); return;
     }
     var part=q[kind].splice(0,CSV_TITLE_BATCH[kind]);
-    btn.textContent='生成中… '+done+'/'+total;
-    csvTitleSay('生成中… '+done+'/'+total+'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）');
+    btn.textContent=CSV_TITLE_BTN[id].run+'… '+done+'/'+total;
+    csvTitleSay(CSV_TITLE_BTN[id].run+'… '+done+'/'+total
+      +'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）');
     csvTitleSend(kind,part,force)
       .catch(function(e){
         failed+=part.length;
@@ -3844,6 +3858,38 @@ $('csvTitleGen').onclick=function(){
     return;
   }
   csvTitleRun(todo.slice(),false);
+};
+
+/* ---- 英題の作り直し ----
+   Worker の直しや規則の変更を、すでに英題が入っている行へ反映するための一括処理。
+   force で問い合わせ直すのでキャッシュも作り直される。
+   - 手で編集した行（titleManual）は対象外。英題も5項目も人の手のものを残す。
+   - 出品済み（ItemIDがある）行は対象外。すでにeBayに出ている内容を勝手に変えない。
+   - 手で確定した原産国（originManual）は csvApplyFields が守るのでそのまま残る。 */
+$('csvTitleRedo').onclick=function(){
+  if(!String($('csvTitleApi').value||'').trim()){
+    alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
+  }
+  var target=csvList.filter(csvTitleSendable);
+  var manual=target.filter(function(r){ return !!r.titleManual; }).length;
+  var listed=target.filter(function(r){ return !!String(r.itemId||'').trim(); }).length;
+  var todo=target.filter(function(r){
+    return !r.titleManual&&!String(r.itemId||'').trim()&&String(r.titleEn||'').trim();
+  });
+  if(!todo.length){
+    alert('作り直せる行がありません。'
+      +(manual?('\n手で編集した '+manual+'件は対象外です。'):'')
+      +(listed?('\n出品済み（ItemIDあり）'+listed+'件は対象外です。'):'')
+      +'\n英題が空の行は「英語タイトル生成（未生成の行）」で作れます。');
+    return;
+  }
+  if(!confirm(todo.length+'件の英題を作り直します。\n'
+    +'AIへ問い合わせ直すので、いまの英題と5項目は新しい内容に置き換わります。\n'
+    +'手で確定した原産国はそのまま残します。\n'
+    +(manual?('手で編集した '+manual+'件は対象外です。\n'):'')
+    +(listed?('出品済み（ItemIDあり）'+listed+'件は対象外です。\n'):'')
+    +'よろしいですか？'))return;
+  csvTitleRun(todo.slice(),true,'csvTitleRedo');
 };
 
 /* 在庫同期のフェーズ1（手動）。
