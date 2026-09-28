@@ -115,7 +115,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 <div class="wrap">
   <div id="tip"></div>
 
-  <section>
+  <section id="itemBox">
     <div class="h">商品</div>
     <div class="body">
       <div class="row"><label>仕入値（税込）</label><input type="number" id="cost" value="500" inputmode="numeric"><span class="unit">円</span></div>
@@ -523,16 +523,15 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="sub" id="csvSummary">&mdash;</div>
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
-      <button class="btn" id="csvTitleGen" style="width:100%;margin-top:8px">英語タイトル生成（未生成の行）</button>
-      <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:6px">英題を作り直す（手で編集していない未出品の行）</button>
+      <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
       <div class="note2" id="csvTitleNote"></div>
-      <button class="btn" id="csvDescGen" style="width:100%;margin-top:8px">出品文を一括作成（英題がある行）</button>
-      <div class="note2" id="csvDescNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
         <button class="btn" id="csvPriceCsv" style="flex:1 1 0;min-width:0;padding:9px 4px">価格更新CSV</button>
         <button class="btn" id="csvClear" style="flex:1 1 0;min-width:0;padding:9px 4px">リストを空にする</button>
       </div>
+      <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:8px">英題を作り直す（手で編集していない未出品の行）</button>
+      <div class="note2" id="csvRedoNote"></div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
       <div class="note2" id="csvExportNote"></div>
       <input type="file" id="csvPicFile" accept="image/*" multiple style="display:none">
@@ -613,7 +612,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
       <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と出品文タブの「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
-      <div class="row"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China" style="flex:1 1 0;min-width:0"><div class="note2" style="flex:0 0 100%;margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアに入れます。入れた行は要確認（review）にします。</div></div>
+      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや出品文タブで確定した値は上書きしません。</div></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
@@ -1416,6 +1415,9 @@ function switchTab(t){
   $('tabListing').style.display=t==='B'?'block':'none';
   $('tabShopee').style.display=t==='C'?'block':'none';
   $('tabCsv').style.display=t==='D'?'block':'none';
+  /* 出品CSVタブでは計算機の「商品」欄を使わない（行ごとの値で計算する）。
+     タブより上が長いと一覧が見づらいので、このタブのあいだだけ隠す。 */
+  $('itemBox').style.display=(t==='D')?'none':'block';
   // 設定セクションは全タブ共通なので、Shopeeを開いている間だけ eBay 専用の項目を隠す。
   var eb=(t!=='C');
   $('ebayOnly').style.display=eb?'block':'none';
@@ -3066,16 +3068,17 @@ function csvCatSelect(r){
 }
 function csvRender(){
   $('csvCount').textContent=csvList.length;
-  var ng=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
+  var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
   csvList.forEach(function(r){
     var v=csvVerdict(r);
     if(v==='ebay')ebayN++; else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; } else noneN++;
-    if(csvIssues(r).filter(function(x){return x!=='Amazon優先';}).length)ng++;
+    if(!String(r.titleEn||'').trim())noEn++;
+    if(!String(r.descHtml||'').trim())noDesc++;
     if(r.condId!==1000)used++; });
   $('csvSummary').textContent=csvList.length
     ? ('相場未確認 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
-       +'　/　英題・説明文の未入力 '+ng+'件　/　中古（要撮影）'+used+'件')
+       +'　/　英題なし '+noEn+'件　/　説明文なし '+noDesc+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
   var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
   if(odef)$('csvSummary').textContent+='　/　原産国が既定値 '+odef+'件';
@@ -3830,16 +3833,24 @@ function csvApplyFields(r,f){
   }
   csvFigRebuild(r);
 }
-function csvTitleSay(msg){ $('csvTitleNote').textContent=msg||''; }
-/* 英題を作る2つのボタンの表記。進捗表示と終わりの文言をここにまとめる。
-   行の「再生成」からは csvTitleGen 側の表記を使う。 */
+/* 一括処理の2つのボタンの表記と進捗欄。行の「再生成」は csvGenAll 側を使う。 */
 var CSV_TITLE_BTN={
-  csvTitleGen:{ label:'英語タイトル生成（未生成の行）', run:'生成中',
-                done:'英語タイトル生成' },
+  csvGenAll:{ label:'英題と出品文を一括作成', run:'作成中',
+              done:'英題と出品文の作成', note:'csvTitleNote' },
   csvTitleRedo:{ label:'英題を作り直す（手で編集していない未出品の行）',
-                 run:'作り直し中', done:'英題の作り直し' }
+                 run:'作り直し中', done:'英題の作り直し', note:'csvRedoNote' }
 };
 var CSV_TITLE_BTN_IDS=Object.keys(CSV_TITLE_BTN);
+function csvTitleSay(msg,id){
+  $(CSV_TITLE_BTN[id||'csvGenAll'].note).textContent=msg||'';
+}
+// 走っているあいだは一括処理のボタンをどちらも押せないようにする
+function csvBtnLock(on){
+  CSV_TITLE_BTN_IDS.forEach(function(k){
+    $(k).disabled=!!on;
+    if(!on)$(k).textContent=CSV_TITLE_BTN[k].label;
+  });
+}
 // 1回分を送る。kind で送り先と中身が変わる。
 function csvTitleSend(kind,rows,force){
   var api=String($('csvTitleApi').value||'').trim().replace(/\/+$/,'');
@@ -3886,11 +3897,14 @@ function csvTitleSend(kind,rows,force){
 }
 /* ゲームとフィギュアをまとめて処理する。送り先と1回の件数は種類ごとに違うが、
    進捗は合算して見せる（利用者からは1つの処理に見える）。 */
-function csvTitleRun(list,force,btnId){
-  var id=(btnId&&CSV_TITLE_BTN[btnId])?btnId:'csvTitleGen';
-  var btn=$(id);
-  // どちらのボタンからでも、走っている間は両方押せないようにする
-  CSV_TITLE_BTN_IDS.forEach(function(k){ $(k).disabled=true; });
+/* opt.then … 英題が終わった時点で呼ぶ。渡したときは締めの表示もボタンの復帰も
+              呼び出し側に任せる（出品文の作成へ続けるため）。
+   opt.pre  … 進捗の前置き（「英題 10/10 → 」など）。 */
+function csvTitleRun(list,force,btnId,opt){
+  opt=opt||{};
+  var id=(btnId&&CSV_TITLE_BTN[btnId])?btnId:'csvGenAll';
+  var btn=$(id), pre=opt.pre||'';
+  csvBtnLock(true);
   // 種類ごとの待ち行列にする
   var q={game:list.filter(function(r){return csvTitleKind(r)==='game';}),
          fig: list.filter(function(r){return csvTitleKind(r)==='fig';})};
@@ -3898,17 +3912,17 @@ function csvTitleRun(list,force,btnId){
   function step(){
     var kind=q.game.length?'game':(q.fig.length?'fig':'');
     if(!kind){
-      CSV_TITLE_BTN_IDS.forEach(function(k){
-        $(k).disabled=false; $(k).textContent=CSV_TITLE_BTN[k].label; });
+      if(opt.then){ opt.then({total:total,done:done,failed:failed}); return; }
+      csvBtnLock(false);
       csvTitleSay(CSV_TITLE_BTN[id].done+'：'+done+'件を処理しました。'
         +(failed?('　'+failed+'件は失敗したので、もう一度実行してください。'):'')
-        +'　review の行は中身を確かめてください。');
+        +'　review の行は中身を確かめてください。',id);
       csvRender(); return;
     }
     var part=q[kind].splice(0,CSV_TITLE_BATCH[kind]);
     btn.textContent=CSV_TITLE_BTN[id].run+'… '+done+'/'+total;
-    csvTitleSay(CSV_TITLE_BTN[id].run+'… '+done+'/'+total
-      +'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）');
+    csvTitleSay(pre+'英題 '+done+'/'+total
+      +'（'+(kind==='fig'?'フィギュア':'ゲーム')+'）',id);
     csvTitleSend(kind,part,force)
       .catch(function(e){
         failed+=part.length;
@@ -3919,23 +3933,61 @@ function csvTitleRun(list,force,btnId){
   }
   step();
 }
-$('csvTitleGen').onclick=function(){
-  if(!String($('csvTitleApi').value||'').trim()){
-    alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
-  }
+/* ---- 英題と出品文の一括作成 ----
+   1) 英題が無い行（前回エラーの行も）の英題を作る
+   2) 英題があって説明文が空の行の説明文を作る
+   英題の生成に失敗した行は英題が空のままなので、2) の対象から自然に外れる。
+   次に押したときに英題からやり直す。進捗は1つの欄にまとめて出す。 */
+function csvDescTodo(){
+  return csvList.filter(function(r){
+    return String(r.titleEn||'').trim()&&!String(r.descHtml||'').trim();
+  });
+}
+// 説明文を作る。pre は「英題 10/26 → 」のような前置き。
+function csvDescPhase(pre,tfail){
+  var todo=csvDescTodo(), ng=0, filled=0;
+  todo.forEach(function(r){
+    // 原産国が空のままだと説明文にも出ないので、ここでも既定値で埋める
+    if(r.cat!=='139973'&&csvOriginFill(r))filled++;
+    try{ r.descHtml=csvDescFor(r); }catch(e){ ng++; }
+  });
+  csvSaveList();
+  csvBtnLock(false);
+  csvTitleSay(pre+'出品文 '+(todo.length-ng)+'/'+todo.length
+    +(ng?('　'+ng+'件は説明文の作成に失敗しました。'):'')
+    +(tfail?('　英題に失敗した '+tfail
+             +'件は説明文も作っていません（もう一度押すと両方やり直します）。'):'')
+    +(filled?('　'+filled+'件は原産国を既定値で埋めました。'):'')
+    +'　review の行は中身を確かめてください。');
+  csvRender();
+}
+$('csvGenAll').onclick=function(){
   // 未生成の行だけ。手で直した行（titleManual）は上書きしない。
   var target=csvList.filter(csvTitleSendable);
   // 未生成の行と、前回エラーで終わった行を対象にする
   var todo=target.filter(function(r){
     return !r.titleManual&&(!String(r.titleEn||'').trim()||r.titleStatus==='error');
   });
-  if(!todo.length){
-    alert(target.length
-      ? '未生成の行がありません。作り直すときは行の「再生成」を押してください。'
-      : '対象の行がありません（ゲームは対象機種、フィギュアはJANかASINが要ります）。');
+  var desc=csvDescTodo().length;
+  if(todo.length&&!String($('csvTitleApi').value||'').trim()){
+    alert('設定の「英語タイトル生成のURL」を入れてください。'); return;
+  }
+  if(!todo.length&&!desc){
+    alert(csvList.length
+      ? '作るものがありません。英題も説明文も入っています。\n'
+        +'作り直すときは行の「再生成」、英題をまとめて作り直すときは'
+        +'「英題を作り直す」を押してください。'
+      : '出品リストが空です。');
     return;
   }
-  csvTitleRun(todo.slice(),false);
+  // 英題を作る行が無ければ説明文だけ作る
+  if(!todo.length){ csvBtnLock(true); csvDescPhase('',0); return; }
+  csvTitleRun(todo.slice(),false,'csvGenAll',{ then:function(res){
+    /* 通信の失敗だけでなく、Workerが status:"error" を返した行も英題が入らない。
+       出品文へ進めない行はどちらも同じなので、英題が空のままの行を数える。 */
+    var ng=todo.filter(function(r){ return !String(r.titleEn||'').trim(); }).length;
+    csvDescPhase('英題 '+(res.total-ng)+'/'+res.total+' → ',ng);
+  }});
 };
 
 /* ---- 英題の作り直し ----
@@ -3958,7 +4010,7 @@ $('csvTitleRedo').onclick=function(){
     alert('作り直せる行がありません。'
       +(manual?('\n手で編集した '+manual+'件は対象外です。'):'')
       +(listed?('\n出品済み（ItemIDあり）'+listed+'件は対象外です。'):'')
-      +'\n英題が空の行は「英語タイトル生成（未生成の行）」で作れます。');
+      +'\n英題が空の行は「英題と出品文を一括作成」で作れます。');
     return;
   }
   if(!confirm(todo.length+'件の英題を作り直します。\n'
@@ -4060,30 +4112,6 @@ function csvDescFor(r){
     applyCat();
   }
 }
-$('csvDescGen').onclick=function(){
-  // 英題がある行だけ。すでに説明文がある行は作り直さない。
-  var todo=csvList.filter(function(r){
-    return String(r.titleEn||'').trim()&&!String(r.descHtml||'').trim();
-  });
-  if(!todo.length){
-    var has=csvList.filter(function(r){ return String(r.titleEn||'').trim(); }).length;
-    alert(has? '説明文が未作成の行がありません。作り直すときは行の「出品文を作る」から書き戻してください。'
-             : '英題が入っている行がありません。先に「英語タイトル生成」を実行してください。');
-    return;
-  }
-  var ng=0, filled=0;
-  todo.forEach(function(r){
-    // 原産国が空のままだと説明文にも出ないので、ここでも既定値で埋める
-    if(r.cat!=='139973'&&csvOriginFill(r))filled++;
-    try{ r.descHtml=csvDescFor(r); }catch(e){ ng++; }
-  });
-  csvSaveList(); csvRender();
-  $('csvDescNote').textContent='出品文を作成しました：'+(todo.length-ng)+'件'
-    +(ng?('　'+ng+'件は失敗しました。'):'')
-    +(filled?('　'+filled+'件は原産国を既定値で埋めました。'):'')
-    +'　中身は出品文タブで作るものと同じです。行の「出品文を作る」で確認できます。';
-};
-
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
    出品文タブの既存ロジック（タイトル生成・説明文生成・SKU発番）はそのまま使う。
    ここでやるのは、行の値を各欄へ流し込むことと、生成結果を行へ書き戻すことだけ。 */
