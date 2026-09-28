@@ -250,6 +250,37 @@ jan と asin は、どちらか一方があればよい（両方なければ `in
 - 通信エラーで終わった行も空のままにせず既定値で埋め、失敗件数を注記に出す。
 - JAN・ASINが無くて照会できない行は空のままで、その件数も注記に出す。
 
+### 2026-09-28 の改善
+
+**80字超の削り方**（`figTitleFrom`）:
+
+```
+作品名を短縮 → キャラクター名を短縮 → ブランド → 版とスケール
+  → 末尾の Figure（商品ラインがあるときだけ） → 商品ライン
+```
+
+- 縮めるほうが落とすより情報が残るので、短縮を先に試す。
+- 商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は、それ自体で
+  フィギュアと分かるので、**末尾の `Figure` より優先して残す**。
+- 最後の手段で商品ラインを落とすときは、品目が分からなくならないよう `Figure` を戻す。
+- AIの出力に **`chara_short`** を追加（`Captain America (John F. Walker)` →
+  `Captain America John Walker`。括弧の注記とミドルネームのイニシャルを外す）。
+  空なら `chara` をそのまま使う。
+
+確認（指定例・中古）:
+
+```
+Used The Falcon and the Winter Soldier Captain America John Walker S.H.Figuarts  (79字)
+省略: キャラクター名を短縮・ブランド・末尾のFigure
+→ S.H.Figuarts が残る
+```
+
+**原産国の調査**：`GET /debug/catalog?asin=…`（`X-PJ-Key` 必須）を一時的に追加した。
+Amazonのカタログの属性名の一覧と、原産国に関係する属性（名前に country / origin /
+made を含むもの）の中身、いまの実装が何を解釈するかを返す。
+実行は `proxy-title/test-origin.ps1`。調査が済んだら Worker のこのブロックと
+スクリプトを削除する。
+
 ## 7. スコープ外
 - アーケードパーツ、中古レンズ、イヤホン・ヘッドフォン
 - フィギュアの状態（箱ダメージ等）の自動記載

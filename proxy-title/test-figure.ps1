@@ -60,12 +60,14 @@ function Invoke-Titles {
   pj_price の figTitleFrom() と同じ組み立て（書式の確認用）
   [Used] brand series chara [item_name] variant scale line [Figure]
   フィギュア以外（item_type が figure 以外）は末尾の Figure を付けない
-  80字を超えたら 作品名を短縮 → ブランド → 版とスケール → 商品ライン の順に落とす
+  80字を超えたら 作品名を短縮 → キャラクター名を短縮 → ブランド → 版とスケール
+  → 末尾のFigure（商品ラインがあるときだけ）→ 商品ライン の順に削る
 #>
 function Build-FigTitle {
   param([bool]$Used, $F)
   $keys = @('brand','series','chara','item_name','variant','scale','line')
   $tail = if ([string]$F.item_type -and [string]$F.item_type -ne 'figure') { '' } else { 'Figure' }
+  $tail0 = $tail
   $any = $false
   foreach ($k in $keys) { if ($F.$k) { $any = $true } }
   if (-not $any) { return [pscustomobject]@{ text = ''; dropped = '' } }
@@ -73,6 +75,7 @@ function Build-FigTitle {
   $st = @{}
   foreach ($k in $keys) { $st[$k] = [string]$F.$k }
   $short = [string]$F.series_short
+  $cshort = [string]$F.chara_short
   # 商品ラインの語がキャラクター名や作品名に入っていれば二重に出さない
   if ($st['line']) {
     $lk = ($st['line'].ToLower() -replace '[^a-z0-9]','')
@@ -93,14 +96,20 @@ function Build-FigTitle {
   if ($t.Length -gt 80 -and $short -and $short -ne $st['series']) {
     $st['series'] = $short; [void]$drop.Add('作品名を短縮'); $t = & $join
   }
+  if ($t.Length -gt 80 -and $cshort -and $cshort -ne $st['chara']) {
+    $st['chara'] = $cshort; [void]$drop.Add('キャラクター名を短縮'); $t = & $join
+  }
   if ($t.Length -gt 80 -and $st['brand']) {
     $st['brand'] = ''; [void]$drop.Add('ブランド'); $t = & $join
   }
   if ($t.Length -gt 80 -and ($st['variant'] -or $st['scale'])) {
     $st['variant'] = ''; $st['scale'] = ''; [void]$drop.Add('版・スケール'); $t = & $join
   }
+  if ($t.Length -gt 80 -and $tail -and $st['line']) {
+    $tail = ''; [void]$drop.Add('末尾のFigure'); $t = & $join
+  }
   if ($t.Length -gt 80 -and $st['line']) {
-    $st['line'] = ''; [void]$drop.Add('商品ライン'); $t = & $join
+    $st['line'] = ''; $tail = $tail0; [void]$drop.Add('商品ライン'); $t = & $join
   }
   return [pscustomobject]@{ text = $t; dropped = ($drop -join ',') }
 }
@@ -126,6 +135,7 @@ function Show-Results {
       Write-Host ("    series   : {0}" -f $f.series)
       Write-Host ("    series_short : {0}" -f $f.series_short)
       Write-Host ("    chara    : {0}" -f $f.chara)
+      Write-Host ("    chara_short : {0}" -f $f.chara_short)
       Write-Host ("    item_name: {0}" -f $f.item_name)
       Write-Host ("    item_type: {0}" -f $f.item_type)
       Write-Host ("    origin   : {0}" -f $f.origin)

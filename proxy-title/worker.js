@@ -20,6 +20,8 @@
  * エンドポイント:
  *   POST /titles         … ゲーム。english_name だけを返す。最大20件
  *   POST /figure-titles  … フィギュア。5項目（brand/series/chara/variant/line）を返す
+ *   GET  /debug/catalog  … 原産国の調査用。Amazonのカタログ属性の中身を見る。
+ *                          調査が済んだら削除する
  *
  * 悪用対策:
  *   - CORS は pj_price の Pages オリジンに限定し、X-PJ-Key が一致しなければ401
@@ -143,7 +145,7 @@ const BANNED = [
 function corsHeaders(origin) {
   // 許可オリジンのみ返す（未知オリジンには ACAO を付けない）
   const h = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
     "Access-Control-Allow-Headers": "content-type, x-pj-key",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
@@ -619,7 +621,7 @@ const FIG_SYSTEM = [
   "decide which product this is.",
   "",
   "Output ONLY a JSON object with exactly these keys:",
-  '  "brand","series","series_short","chara","item_name","variant","line",',
+  '  "brand","series","series_short","chara","chara_short","item_name","variant","line",',
   '  "item_type","confidence","same_item"',
   '  item_type: "figure" | "prop_replica" | "other"',
   '  confidence: "high" | "medium" | "low"',
@@ -631,6 +633,9 @@ const FIG_SYSTEM = [
   "- chara is the character name, series is the work/franchise title. Use the",
   "  official English name when one exists; otherwise the official romanization.",
   "  NEVER invent a name that is not in the Japanese name or the candidates.",
+  "- chara_short is the same character name with parenthetical notes and middle",
+  '  initials removed (e.g. "Captain America (John F. Walker)" -> "Captain',
+  '  America John Walker"). If chara is already short, repeat it.',
   "- series_short is the shortest form of series that collectors still recognise.",
   '  It is used when the title runs too long (series "Atelier Ryza 2: Lost',
   '  Legends & the Secret Fairy" -> series_short "Atelier Ryza 2"). If series is',
@@ -660,8 +665,8 @@ const FIG_SYSTEM = [
   "- Do NOT output any text, code fences, or comments outside the JSON object.",
 ].join("\n");
 
-const FIG_FIELDS = ["brand", "series", "series_short", "chara", "item_name",
-                    "variant", "line", "scale", "origin"];
+const FIG_FIELDS = ["brand", "series", "series_short", "chara", "chara_short",
+                    "item_name", "variant", "line", "scale", "origin"];
 
 async function figAskClaude(env, jaTitle, jp, titles, log) {
   const lines = [
@@ -704,8 +709,9 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
     const raw = typeof obj[k] === "string" ? obj[k] : "";
     fields[k] = fixDecorHyphen(stripExtras(cleanName(raw), { keepPlatform: true }).name);
   }
-  // series_short が空なら series をそのまま使う
+  // 短縮形が空なら元をそのまま使う
   if (!fields.series_short) fields.series_short = fields.series;
+  if (!fields.chara_short) fields.chara_short = fields.chara;
   fields.variant = fixVersionWord(fields.variant);
   // 「Ver.」だけ残った版は意味がないので空にする
   if (/^Ver\.?$/i.test(fields.variant)) fields.variant = "";
@@ -738,7 +744,7 @@ async function handleFigure(env, item, force) {
     const hit = await env.TITLE_CACHE.get(ck, "json");
     // 項目が足りない古い形のときは、キャッシュ無しとして扱い作り直す
     if (hit && hit.fields && hit.fields.origin !== undefined
-        && hit.fields.item_type !== undefined)
+        && hit.fields.item_type !== undefined && hit.fields.chara_short !== undefined)
       return { key, status: hit.status || "review", fields: hit.fields,
                jan_resolved: hit.jan_resolved || "", sources: hit.sources || [],
                candidates: hit.candidates || [], note: "キャッシュ", cached: true };
@@ -975,6 +981,55 @@ export default {
       return json({ error: "unauthorized" }, 401, origin);
     if (!env.TITLE_CACHE)
       return json({ error: "server_misconfigured", detail: "TITLE_CACHE" }, 500, origin);
+
+    /* 原産国が取れているかを調べるための一時的な窓口。
+       attributes に何が入っているのかは実データを見ないと分からないため。
+       X-PJ-Key は上でチェック済み。調査が済んだらこのブロックごと削除する。 */
+    if (request.method === "GET" && url.pathname === "/debug/catalog") {
+      const asin = (url.searchParams.get("asin") || "").trim().toUpperCase();
+      const jan = (url.searchParams.get("jan") || "").trim();
+      if (!validAsin(asin) && !validJan(jan))
+        return json({ error: "need_asin_or_jan" }, 400, origin);
+      if (!env.SPAPI_REFRESH_TOKEN_FE || !env.LWA_CLIENT_ID || !env.LWA_CLIENT_SECRET)
+        return json({ error: "spapi_not_configured" }, 500, origin);
+      const log = [];
+      const id = validAsin(asin) ? asin : jan;
+      const idType = validAsin(asin) ? "ASIN" : "EAN";
+      try {
+        const token = await lwaToken(env, env.SPAPI_REFRESH_TOKEN_FE, "lwa:fe");
+        const u = "https://sellingpartnerapi-fe.amazon.com/catalog/2022-04-01/items"
+          + `?identifiers=${encodeURIComponent(id)}&identifiersType=${idType}`
+          + `&marketplaceIds=${MP_FE}&includedData=summaries,attributes,identifiers`;
+        const resp = await fetch(u, { headers: { "x-amz-access-token": token } });
+        log.push(`spapi_fe ${idType}=${id} -> ${resp.status}`);
+        const body = await resp.text();
+        if (!resp.ok)
+          return json({ error: "spapi_error", status: resp.status, body: body.slice(0, 500), log }, 200, origin);
+        let d = {};
+        try { d = JSON.parse(body); } catch (e) {}
+        const it = (d.items || [])[0];
+        if (!it) return json({ found: false, log, raw_keys: Object.keys(d) }, 200, origin);
+        const at = it.attributes || {};
+        // 原産国に関係ありそうな属性だけ中身を出す。ほかは名前だけ。
+        const want = {};
+        for (const k of Object.keys(at))
+          if (/country|origin|made/i.test(k)) want[k] = at[k];
+        const sm = (it.summaries || [])[0] || {};
+        return json({
+          found: true, idType, id,
+          item_name: sm.itemName || "",
+          attribute_names: Object.keys(at).sort(),
+          attribute_count: Object.keys(at).length,
+          origin_like: want,
+          parsed_origin: spOriginFrom(it),     // いまの実装が何を返すか
+          parsed_brand: spBrandFrom(it),
+          parsed_ean: spEanFrom(it),
+          log
+        }, 200, origin);
+      } catch (e) {
+        return json({ error: "exception", message: e.message, log }, 200, origin);
+      }
+    }
 
     const isFig = (url.pathname === "/figure-titles");
     if (request.method !== "POST" || (url.pathname !== "/titles" && !isFig))

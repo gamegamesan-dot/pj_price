@@ -1623,10 +1623,14 @@ function buildArcadeTitle(){
    フィギュア以外（PROPLICA・なりきり玩具など itemType が figure 以外）は
    末尾の Figure を付けず、代わりに商品名（Storage Bangle など）を入れる。
 
-   80字を超えたときは、作品名を短縮 → ブランド → 版とスケール → 商品ライン
-   の順に落とす。先に作品名を縮めると、版やスケールを残したまま収まることが多い。
+   80字を超えたときは
+     作品名を短縮 → キャラクター名を短縮 → ブランド → 版とスケール
+       → 末尾の Figure（商品ラインがあるときだけ） → 商品ライン
+   の順に削る。縮めるほうが落とすより情報が残るので、短縮を先に試す。
    商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
-   買い手が検索に使うので最後まで残す。Used は落とさない。 */
+   それ自体でフィギュアと分かるので、末尾の Figure より優先して残す。
+   最後の手段で商品ラインを落とすときは、品目が分からなくならないよう Figure を戻す。
+   Used は落とさない。 */
 function figTitleFrom(used, p){
   if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale||p.itemName||p.item_name))
     return {text:'', dropped:[]};
@@ -1634,9 +1638,10 @@ function figTitleFrom(used, p){
           itemName:p.itemName||p.item_name||'',
           variant:p.variant||'', scale:p.scale||'', line:p.line||''};
   var short=p.seriesShort||p.series_short||'';
+  var cshort=p.charaShort||p.chara_short||'';
   // フィギュア以外は末尾の Figure を付けない
   var ty=p.itemType||p.item_type||'figure';
-  var tail=(ty==='figure')?FIG_PTYPE:'';
+  var tail=(ty==='figure')?FIG_PTYPE:'', tail0=tail;
   if(ty==='figure')st.itemName='';        // フィギュアに商品名は入れない
   /* 商品ラインの語がキャラクター名や作品名にもう入っているときは二重に出さない
      （例「Chogokin Robo 50 CHOGOKIN Figure」→「Chogokin Robo 50 Figure」）。
@@ -1652,11 +1657,16 @@ function figTitleFrom(used, p){
   }
   var t=join(), dropped=[];
   if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
+  if(t.length>80&&cshort&&cshort!==st.chara){ st.chara=cshort; dropped.push('キャラクター名を短縮'); t=join(); }
   if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
   if(t.length>80&&(st.variant||st.scale)){
     st.variant=''; st.scale=''; dropped.push('版・スケール'); t=join();
   }
-  if(t.length>80&&st.line){ st.line=''; dropped.push('商品ライン'); t=join(); }
+  // 商品ラインがあるなら、末尾の Figure はそちらより先に落とす
+  if(t.length>80&&tail&&st.line){ tail=''; dropped.push('末尾のFigure'); t=join(); }
+  if(t.length>80&&st.line){
+    st.line=''; tail=tail0; dropped.push('商品ライン'); t=join();   // 品目が消えないよう Figure を戻す
+  }
   return {text:t, dropped:dropped};
 }
 // 出品文タブの状態欄が中古を指しているか
@@ -3614,6 +3624,7 @@ function csvFigParts(r){
   CSV_FIG_KEYS.forEach(function(k){ o[k]=sp[CSV_FIG_MAP[k]]||''; });
   o.scale=sp.scale||'';
   o.seriesShort=sp.seriesShort||'';
+  o.charaShort=sp.charaShort||'';
   o.itemType=sp.itemType||'figure';
   return o;
 }
@@ -3641,6 +3652,7 @@ function csvApplyFields(r,f){
   if(/^Ver\.?$/i.test(String(sp.model||'').trim()))sp.model='';
   if(f.scale!==undefined)sp.scale=f.scale||sp.scale||'';
   if(f.series_short!==undefined)sp.seriesShort=f.series_short||'';
+  if(f.chara_short!==undefined)sp.charaShort=f.chara_short||'';
   if(f.item_type!==undefined)sp.itemType=f.item_type||'figure';
   /* 原産国。Amazonから取れていればそれを使い、取れなければ設定の既定値を入れる。
      既定値を使った行は人の目で確かめてもらう（Worker側でも review に落ちる）。 */
