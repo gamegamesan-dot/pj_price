@@ -612,6 +612,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と出品文タブの「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
       <div class="row"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China" style="flex:1 1 0;min-width:0"><div class="note2" style="flex:0 0 100%;margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアに入れます。入れた行は要確認（review）にします。</div></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
@@ -2429,6 +2430,54 @@ var CSV_PREFIX={game:'139973',hobby:'261055',toy:'261055',
                 dvd:null,cd:null,book:null,software:null,pc:null,electronics:null,
                 kitchen:null,diy:null,musicInst:null};
 var CSV_FIG_CATS=['261055','261068'];        // hobby / toy の手動振り分け先
+/* 設定で登録した任意のeBayカテゴリ。1行に「カテゴリID,表示名,act|fig」。
+   列ヘッダとItem Specifics はテンプレート3本しか手元に無いので、登録カテゴリでは
+   フィギュア2本のどちらかを流用する（3列目でどちらかを指定する）。
+   ゲームのテンプレートは選べない。ゲームは機種・出品文の作り方が別のため。 */
+function csvCustomCats(){
+  var el=$('csvCatCustom'); if(!el)return [];
+  var out=[], seen={};
+  String(el.value||'').split(/\r?\n/).forEach(function(ln){
+    var a=ln.replace(/[\u3001\uff0c\t\uff1a:]/g,',').split(',');
+    var id=String(a[0]||'').replace(/[^0-9]/g,'');
+    if(!id||CSV_CAT[id]||seen[id])return;      // 既定の3つと重複するIDは無視する
+    seen[id]=1;
+    var tp=String(a[2]||'').trim().toLowerCase();
+    out.push({ id:id, name:String(a[1]||'').trim()||('カテゴリ '+id),
+               tpl:(tp==='act'||tp==='\u53ef\u52d5')?'261068':'261055' });
+  });
+  return out;
+}
+function csvCatOf(cat){
+  var a=csvCustomCats(), c=String(cat);
+  for(var i=0;i<a.length;i++)if(a[i].id===c)return a[i];
+  return null;
+}
+// 列ヘッダと Item Specifics に使うテンプレートのカテゴリID
+function csvCatTpl(cat){
+  if(CSV_HEAD[cat])return String(cat);
+  var c=csvCatOf(cat);
+  return c?c.tpl:'261055';
+}
+// 画面に出す名前。登録が消えたIDでも「カテゴリ 〜」と出して行を見失わせない。
+function csvCatName(cat){
+  if(CSV_CAT[cat])return CSV_CAT[cat];
+  var c=csvCatOf(cat);
+  return c?(c.name+'（'+c.id+'）'):('カテゴリ '+cat);
+}
+/* 出品文タブの「eBayカテゴリ」の選択肢も、登録したカテゴリを含めて作り直す。
+   いま選んでいる値は選び直さない（登録から消えた値だけは先頭に戻る）。 */
+function csvAddCatOpts(){
+  var sel=$('addCsvCat'); if(!sel)return;
+  var cur=sel.value, h='';
+  function add(v,t){ h+='<option value="'+v+'">'+esc(t)+'</option>'; }
+  add('261055',CSV_CAT['261055']+'（261055）');
+  add('261068',CSV_CAT['261068']+'（261068）');
+  csvCustomCats().forEach(function(c){ add(c.id,c.name+'（'+c.id+'）'); });
+  add('139973',CSV_CAT['139973']+'（139973）');
+  sel.innerHTML=h;
+  if(cur)sel.value=cur;
+}
 // せどりすとの状態コード → ConditionID。フィギュア2カテゴリは細分化グレードが
 // 無いことが多いので 1000 / 3000 に寄せる（仕様書5章）。
 var CSV_COND={N:1000,UM:2750,UVG:3000,UG:4000,UA:5000,UKN:5000};
@@ -2497,7 +2546,8 @@ var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
-                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault'];
+                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault',
+                 'csvCatCustom'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2533,6 +2583,8 @@ function csvSaveCfg(){
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
+// 登録カテゴリを書き換えたら、出品文タブの選択肢も作り直す
+$('csvCatCustom').addEventListener('input',csvAddCatOpts);
 // 入力が終わった時点で、欄の表示からも前後の空白を消す
 CSV_CFG_TRIM.forEach(function(id){
   $(id).addEventListener('change',function(){
@@ -2644,6 +2696,10 @@ var CSV_BRAND_FIG=['Banpresto','Taito','SEGA','FuRyu'];
 var CSV_ACT_WORDS=/アクションフィギュア|可動/;
 function csvCatFromLine(r){
   var sp=r.specs||{};
+  /* PROPLICA・なりきり玩具など、フィギュアでない商品は可動・非可動のどちらでもない。
+     自動では振り分けず「カテゴリ未振分」のまま人に選んでもらう。 */
+  var ty=String(sp.itemType||'figure');
+  if(ty!=='figure')return '';
   var ln=csvLineFrom([sp.line,r.titleJa].filter(Boolean).join(' '));
   if(ln&&ln.cat)return (ln.cat==='act')?'261068':'261055';
   // 和名に可動の手がかりがあれば可動。スケールものでもこちらを優先する
@@ -2989,6 +3045,25 @@ function csvTitleBox(r){
       +r.titleCands.map(function(x){return esc(x);}).join('<br>')+'</div></details>';
   return h;
 }
+/* 行のカテゴリ選択。可動・非可動に加えて、設定で登録したカテゴリも選べる。
+   まだ振り分けていない取り込み行では「カテゴリ未振分」に戻せるようにする。
+   登録から消えたIDが入っている行は、その値も選択肢に残す（黙って別のカテゴリに
+   変わってしまわないようにする）。 */
+function csvCatSelect(r){
+  var un=(!r.catFixed&&!r.catDone);
+  var cur=un?'':String(r.cat), vals=['261055','261068'], h='';
+  function add(v,t){
+    h+='<option value="'+v+'"'+(cur===v?' selected':'')+'>'+esc(t)+'</option>'; }
+  if(!r.catFixed)
+    h+='<option value=""'+(un?' selected':'')+'>カテゴリ未振分</option>';
+  add('261055',CSV_CAT['261055']+'（261055）');
+  add('261068',CSV_CAT['261068']+'（261068）');
+  csvCustomCats().forEach(function(c){ vals.push(c.id); add(c.id,c.name+'（'+c.id+'）'); });
+  if(cur&&vals.indexOf(cur)<0)add(cur,csvCatName(cur)+'（登録なし）');
+  return '<select data-cat="'+r.id+'" style="flex:0 0 auto;max-width:100%;padding:5px;'
+    +'font-size:12px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+    +h+'</select>';
+}
 function csvRender(){
   $('csvCount').textContent=csvList.length;
   var ng=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
@@ -3007,7 +3082,7 @@ function csvRender(){
   var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
   $('csvExportNote').textContent=csvList.length
     ? ('カテゴリごとに別ファイルで書き出します：'
-       +Object.keys(byCat).map(function(k){return CSV_CAT[k]+' '+byCat[k]+'件';}).join('　/　'))
+       +Object.keys(byCat).map(function(k){return csvCatName(k)+' '+byCat[k]+'件';}).join('　/　'))
     : '';
   var h='', shown=0, hidden=0;
   csvSorted().forEach(function(r){
@@ -3045,7 +3120,7 @@ function csvRender(){
     }
     h+='<div style="border-top:1px solid var(--line);padding:8px 0">'
       +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
-      +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+CSV_CAT[r.cat]
+      +'<div class="note2" style="margin-top:2px">'+esc(r.sku)+'　/　'+esc(csvCatName(r.cat))
       +'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))+'　/　'+usd(r.price||0)
       +'　/　'+(r.weight||0).toLocaleString()+'g　/　ポリシー '+esc(csvShipProfileFor(r))+'</div>'
       +'<div style="margin-top:4px">'+badge+'</div>'
@@ -3067,9 +3142,7 @@ function csvRender(){
       +esc(r.itemId||'')+'" placeholder="結果ファイルで自動入力" style="flex:1 1 0;min-width:0;padding:6px;'
       +'font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
-    if(r.cat!=='139973')
-      h+='<button class="btn" data-fig="'+r.id+'" style="padding:5px 8px;font-size:12px">'
-        +(r.cat==='261068'?'可動→非可動へ':'非可動→可動へ')+'</button>';
+    if(r.cat!=='139973')h+=csvCatSelect(r);
     if(v==='amazon')
       h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -3107,7 +3180,7 @@ function csvRender(){
 }
 $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
-  var id=t.getAttribute('data-del')||t.getAttribute('data-fig')
+  var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
         ||t.getAttribute('data-regen')||t.getAttribute('data-orig');
@@ -3141,12 +3214,6 @@ $('csvList').addEventListener('click',function(e){
     csvPicNote(''); $('csvPicFile').click(); return;
   }
   if(t.hasAttribute('data-del'))csvList.splice(i,1);
-  else if(t.hasAttribute('data-fig')){
-    csvList[i].cat=(csvList[i].cat==='261068')?'261055':'261068';
-    csvList[i].catDone=true;
-    // 261068 と 261055 は同じマージンだが、ゲームへ変えた場合も含めて必ず引き直す
-    if(!csvList[i].wManual){ csvList[i].weight=csvWeightFor(csvList[i]); csvRecalc(csvList[i]); }
-  }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
   else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
   else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
@@ -3235,6 +3302,16 @@ $('csvList').addEventListener('change',function(e){
     rp.specs=rp.specs||{};
     rp.specs.platform=pk?pk.spec:'';
     csvSaveList(); csvRender(); return;      // 表示が入れ替わるので作り直す
+  }
+  var cid=t.getAttribute('data-cat');
+  if(cid){
+    var rc=csvRowById(cid); if(!rc)return;
+    if(t.value){ rc.cat=t.value; rc.catDone=true; }
+    // 空は「カテゴリ未振分」。取り込み時と同じ既定（非可動）に戻して指摘を出し直す
+    else { rc.cat='261055'; rc.catDone=false; }
+    // カテゴリで梱包マージンが変わるので重量と利益を引き直す
+    if(!rc.wManual){ rc.weight=csvWeightFor(rc); csvRecalc(rc); }
+    csvSaveList(); csvRender(); return;
   }
   if(t.getAttribute('data-sold'))csvRender();   // 英題・数量・ItemIDは作り直さない
 });
@@ -3489,7 +3566,7 @@ function csvRowFor(r){
     o['C:Country of Origin']='Japan';
     o['C:MPN']=r.jan||'';
   }else{
-    o['*C:Type']=(r.cat==='261068')?'Action Figure':'Figure';
+    o['*C:Type']=(csvCatTpl(r.cat)==='261068')?'Action Figure':'Figure';
     o['C:Brand']=sp.brand||'';
     o['C:Franchise']=sp.franchise||'';
     o['C:Character']=sp.character||'';
@@ -3508,7 +3585,7 @@ function csvRowFor(r){
   return o;
 }
 function csvBuild(cat,rows,action){
-  var head=CSV_HEAD[cat].split(',');
+  var head=CSV_HEAD[csvCatTpl(cat)].split(',');
   var act=head[0];                                  // *Action(...) の列名そのもの
   var out=[CSV_INFO,csvLine(head)];
   rows.forEach(function(r){
@@ -3670,7 +3747,8 @@ function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
 // ゲームか、フィギュアか
 function csvTitleKind(r){
   if(r.cat==='139973')return 'game';
-  return (CSV_FIG_CATS.indexOf(r.cat)>=0)?'fig':'';
+  // 登録した任意カテゴリもフィギュアとして扱う（英題も出品文も作り方は同じ）
+  return (CSV_FIG_CATS.indexOf(r.cat)>=0||csvCatOf(r.cat))?'fig':'';
 }
 /* 生成の対象になり得る行か。
    'ok'      … そのまま送れる
@@ -4075,7 +4153,7 @@ function csvEditOpen(id){
   $('csvEditTitle').textContent=r.titleJa||r.titleEn||r.sku||'(無題)';
   $('csvEditSub').textContent=(r.jan||'JANなし')+'　/　'+(r.sku||'SKUなし')
     +'　/　'+(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))
-    +'　/　'+CSV_CAT[r.cat]+'　/　仕入 '+yen(r.cost||0)
+    +'　/　'+csvCatName(r.cat)+'　/　仕入 '+yen(r.cost||0)
     +'　/　重量 '+(r.weight||0).toLocaleString()+'g';
   $('csvEditNote').textContent='各欄を埋めるとタイトルと説明文が生成されます。「書き戻す」でこの行に反映します。';
   csvEditPics();
@@ -4185,7 +4263,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvRender();
+csvLoad(); csvAddCatOpts(); csvRender();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
