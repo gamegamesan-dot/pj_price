@@ -1,0 +1,36 @@
+# pj_price 販売連携フェイズA（Cloudflare Worker「pj-sync」）
+# APIキー・トークンはここに書かない。デプロイ時に
+#   npx wrangler secret put <名前>
+# で登録する（proxy-sync/README.md にコマンド一覧）。
+name = "pj-sync"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# workers.dev の既定サブドメインで公開（独自ドメインは使わない）。
+workers_dev = true
+
+# CPU時間は Worker の中から測れない（計算中に時計が進まない）。
+# Cloudflare 側が記録する invocation ごとの CPU時間をログで見るために有効にする。
+[observability]
+enabled = true
+
+# 定期実行。15分ごと＝注文、毎時07分＝在庫と出品中リスト。
+# 毎時のうち UTC 18時台（JST 3時台）の回で、日次の名寄せ確認と最安値取得も行う。
+[triggers]
+crons = ["*/15 * * * *", "7 * * * *"]
+
+# D1。事前に `npx wrangler d1 create pj-sync` で作り、出力された database_id を入れる。
+[[d1_databases]]
+binding = "DB"
+database_name = "pj-sync"
+database_id = "ここにD1のdatabase_idを入れる"
+
+# アクセストークンの置き場（LWA・eBay）。生の応答は入れない。
+# 事前に `npx wrangler kv namespace create SYNC_CACHE` で作り、id を入れる。
+[[kv_namespaces]]
+binding = "SYNC_CACHE"
+id = "ここにKV namespace idを入れる"
+
+# account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
+# 秘密情報ではないが、リポジトリに固定しないでおく。
+# account_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

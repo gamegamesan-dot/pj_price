@@ -219,13 +219,61 @@ I/Oを挟むまで同じ値。タイミング攻撃対策）、CPU時間を Work
 中身は `GET /status` の一覧（絞り込み「未対応付けのみ」）で見る。
 `scope` が `out` / `unknown` の行は件数にも含めない。
 
-### 未決（カジの判断待ち）
+### 判断の結果（2026-09-29・カジ）
 
-1. SP-API に `Amazon Fulfillment` ロールを追加申請するか（＋リフレッシュトークン取り直し）
-2. eBay `sell.inventory`（書き込み兼用）を許可するか、Shopping API 案にするか
-3. Workers 有料プラン（$5/月）に切り替えるか、無料で始めて実測するか
-4. 主キーを「ASIN＋新品/中古」、D1を `items`＋`skus` に分ける方針でよいか
-5. eBay `getOrders` が返す住所・氏名を保存しない方針でよいか
+1. SP-API に **`Amazon Fulfillment` ロールを追加申請する**（フェイズCのMCFでも必要）。
+   リフレッシュトークンの取り直し後、**pj-title・pj-sync・keepa-hunter（`.env`）の3か所**を
+   入れ替える（手順は `proxy-sync/README.md` 2章）。
+2. eBay は **`sell.inventory` を許可し、`GetMyeBaySelling` で進める**。Shopping API 案は
+   採らない（フェイズBで書き込みが必要／pj_price を通さず出した既存出品も見たい／
+   Shopping API は縮小方向）。フェイズAで書き込みをしないことは**コードで担保**する
+   （`worker.js` の `ALLOWED` を通らない通信は実行時に例外）。
+3. Workers は **有料プラン（$5/月）** で進める。
+4. 主キーは **「ASIN＋新品/中古」**、D1 は **items ＋ skus** の2テーブル。
+5. eBay の注文は **注文ID・SKU・数量・金額・日時・状態だけ**保存する。生の応答は D1 にも
+   Workers Logs にも残さない。
+
+### 実装（2026-09-29・`proxy-sync/`）
+
+| ファイル | 中身 |
+|---|---|
+| `proxy-sync/worker.js` | pj-sync 本体（約1,100行） |
+| `proxy-sync/schema.sql` | D1のスキーマ（items / skus / orders / events / sync_state / sync_runs） |
+| `proxy-sync/wrangler.toml` | name=pj-sync、cron 2本、D1・KVのバインド、`[observability] enabled = true` |
+| `proxy-sync/README.md` | 手順（有料プラン・ロール追加・eBayトークン取得・D1作成・シークレット・デプロイ・トークン入れ替え3か所・手動実行・CPU時間の見かた） |
+
+**読み取り専用の担保**：外向きの通信はすべて `net()` を通り、許可表 `ALLOWED`
+（URL・メソッド・Trading の呼び出し名）に無ければ例外になる。
+許可しているのは LWAトークン取得、Amazon の `getOrders`/`getOrderItems`/
+`getInventorySummaries`（GET）、`getItemOffersBatch`（読み取りだがPOSTしか無い）、
+eBay のトークン取得と `getOrders`（GET）、Trading の `GetMyeBaySelling` のみ、
+そして Discord Webhook。書き込みAPIを足すにはこの表を変えるしかない。
+
+**エンドポイント**：`GET /status`、`GET /runs`、`POST /listings`、`POST /sync`
+（kind: orders / inventory / rollcall / sweep / pricing / notify）。
+
+**定期実行**：15分ごと＝注文（即時通知は `EBAY_SOLD` と `OVERSELL_RISK`）、
+毎時07分＝在庫差分＋eBay出品中リスト（まとめて通知）、
+毎時のうちUTC18時台＝名簿の名指し確認＋最安値＋未対応付けの件数。全件スイープは手動。
+
+**検証（実APIには未接続。`node:sqlite` をD1に見立てたテストとモックで確認）**
+
+```
+認証・CORS        キー不一致401 / 別オリジン403 / 未知パス404
+読み取り専用ガード Listings PUT・PATCH、MCF注文作成、eBay出品公開・在庫更新、
+                  Trading の Revise系、呼び出し名なし、未知の宛先 … すべて遮断
+                  許可しているGET/POSTは通る（15ケース）
+名簿登録          3件登録・1件解析不可、dvd- は scope=out
+在庫              UG1＋UVG2 を合算して used=3、E-<ASIN>-U と結びつく、
+                  在庫0の過去SKUは active=0
+イベント          売り越しの恐れ／納品待ちで出品中／数量の食い違い／FBA_SOLD／EBAY_SOLD
+                  を検出。EBAY_SOLDは即時、他はまとめて通知。二重通知なし
+個人情報          orders表に氏名・住所・購入者IDの列も値も無い
+最安値            本体9000＋送料500 → 9500 を採用
+/status           既定で out / unknown を出さない、warn=1 で警告のみ、CPU時間は記録しない
+実データ          sedolist_7.csv 26件すべてが
+                  SKU → キー → CustomLabel → キー で往復できる（ASIN一致26/26）
+```
 
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
