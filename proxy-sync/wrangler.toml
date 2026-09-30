@@ -23,13 +23,13 @@ crons = ["*/15 * * * *", "7 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "pj-sync"
-database_id = "ここにD1のdatabase_idを入れる"
+database_id = "b12c9007-181f-48a1-8ade-c5aa37ea6f45"
 
 # アクセストークンの置き場（LWA・eBay）。生の応答は入れない。
 # 事前に `npx wrangler kv namespace create SYNC_CACHE` で作り、id を入れる。
 [[kv_namespaces]]
 binding = "SYNC_CACHE"
-id = "ここにKV namespace idを入れる"
+id = "cd472c88ad494ad6ade19d0863dd6523"
 
 # account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
 # 秘密情報ではないが、リポジトリに固定しないでおく。
