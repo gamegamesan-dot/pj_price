@@ -402,6 +402,45 @@ UNMATCHED の通知にも件数にも含めず、一覧では既定で非表示�
 **D1の既存の表に列を足したので `migrate-0002-sales-channel.sql` の適用が必要。
 Worker の再デプロイも必要。**
 
+### 受け入れテスト：注文件数 → 合格（2026-09-30）
+
+| | Seller Central | pj-sync | |
+|---|---|---|---|
+| Amazon.co.jp の注文 | 68件 | `in_window` 76件 − Canceled 8件 = **68件** | ✅ 一致 |
+| 取り消し済み | 9件 | 9件 | ✅ 一致 |
+| Non-Amazon | 3件 | **0件（取れていない）** | 下記の「後で対応」 |
+| eBayの注文 | 6件 | 6件 | ✅ 一致 |
+
+### 後で対応：返送とMCFは Fulfillment Outbound API で読む
+
+Seller Central の Non-Amazon 3件は「返送/所有権の放棄」（注文元：有効な出品情報が
+ない在庫の自動返送/廃棄システム、配送先は自宅）だった。
+**Orders API（`marketplaceIds` 指定）ではこれらは返ってこない**
+（実測：`by_sales_channel` は `Amazon.co.jp` のみ）。
+
+- 返送（長期保管在庫の自動返送・販売不可在庫の返送・所有権の放棄）と、
+  フェイズCで自分が作るMCF注文は、**Fulfillment Outbound API**
+  （`listAllFulfillmentOrders` ほか）で読む必要がある。
+- これには **`Amazon Fulfillment` ロールの承認**が要る。承認後に対応する。
+- **`FBA_REMOVAL` イベントは、その時点で Fulfillment Outbound API から作る形に見直す。**
+  いま入っている「Orders API の `SalesChannel` が Non-Amazon なら removal」という
+  判定は、取れないので発火しない。誤検知の防止として残しておく。
+- 自分のMCF注文を `PJ-` で始める方針（`kind='mcf'`）はそのまま使う。
+  Fulfillment Outbound API では `sellerFulfillmentOrderId` がこの値になる。
+- 読み取り専用の許可表（`ALLOWED`）には、そのとき
+  `GET /fba/outbound/2020-07-01/fulfillmentOrders` を足す（`POST` は足さない）。
+
+### 受け入れテスト用の通知（2026-09-30 追加）
+
+`POST /sync {"kind":"test-notify"}`（任意で `"tag":"2"`）。
+テストイベントを1件入れて通知する。**同じ印（`tag`、既定は当日の日付）の2回目は
+届かない**ので、通知の重複防止が効いていることをそのまま確かめられる。
+印を変えれば別の1通が届く。書き込みは自分のD1とDiscordだけ。
+
+`Amazon Fulfillment` ロールの承認待ちのあいだは `getInventorySummaries` が 403 になるが、
+**eBay側の取り込みは同じ実行内で進む**（実測：403 が `note` に残り、
+`items` には ItemID・数量・売値が入る。FBA列は空のままで、一覧では「未対応付け」と出る）。
+
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
 - テスト用に Discord 通知が届く（同じイベントが二重に届かない）。

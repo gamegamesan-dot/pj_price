@@ -616,6 +616,7 @@ const EV_TEXT = {
   QTY_MISMATCH: (d) => "数量の食い違い：" + d.title + "（FBA " + d.fba_available
     + " / eBay " + d.ebay_qty + "）",
   INBOUND_LISTED: (d) => "納品待ちの商品がeBayに出ています：" + d.title,
+  TEST: (d) => "通知テスト（" + d.tag + "）。同じ印のテストは二度届きません",
   FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
     + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
   UNMATCHED: (d) => "未対応付け：新規 " + d.added + "件（合計 " + d.total
@@ -1068,6 +1069,19 @@ async function jobSweep(env) {
   catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   return saveRun(env, run);
 }
+/* 受け入れテスト用。同じ印（tag）のテストイベントは dedup_key が同じなので
+   2回目は届かない（通知の重複防止がそのまま効いていることの確認になる）。
+   印を変えれば別の1通が届く。書き込みは自分のD1とDiscordだけ。 */
+async function jobTestNotify(env, tag) {
+  const run = newRun("notify");
+  const t = String(tag || dayKey()).slice(0, 40);
+  try {
+    await runBatch(env, run, [evStmt(env, "TEST", "TEST|" + t, null, { tag: t })]);
+    const n = await flushEvents(env, run, false);
+    run.notes.push("通知テスト tag=" + t + " → " + n + "件を送信");
+  } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+  return saveRun(env, run);
+}
 async function jobNotify(env) {
   const run = newRun("notify");
   try { await flushEvents(env, run, false); }
@@ -1270,6 +1284,8 @@ export default {
         if (kind === "rollcall")  return json(await jobDaily(env), 200, origin);
         if (kind === "sweep")     return json(await jobSweep(env), 200, origin);
         if (kind === "notify")    return json(await jobNotify(env), 200, origin);
+        if (kind === "test-notify")
+          return json(await jobTestNotify(env, body.tag), 200, origin);
         if (kind === "pricing") {
           const run = newRun("pricing");
           try { await syncPricing(env, run); }

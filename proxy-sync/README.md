@@ -134,7 +134,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
-| POST | `/sync` | 手動実行。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
+| POST | `/sync` | 手動実行（`kind=test-notify` は通知テスト）。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
 
 `kind=orders` の `max` は、その回で明細（`getOrderItems`）を取る注文の数（既定25・最大120）。
 
@@ -161,6 +161,10 @@ Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"sweep"
 
 # 注文の内訳（Seller Central の件数と突き合わせる）
 Invoke-RestMethod -Uri "$U/orders/summary?days=7" -Headers $H | ConvertTo-Json -Depth 3
+
+# 通知テスト（同じ tag の2回目は届かない）
+Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"test-notify"}'
+Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"test-notify","tag":"2"}'
 
 # 一覧と実行ログ
 Invoke-RestMethod -Uri "$U/status?warn=1" -Headers $H | ConvertTo-Json -Depth 4
