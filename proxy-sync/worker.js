@@ -1436,6 +1436,12 @@ async function ordersSummary(env, url) {
 }
 
 /* ---- POST /listings（pj_price からの名簿登録） ---- */
+/* 送られてこなかった項目は変えない（null を渡して COALESCE で残す）。
+   手元在庫の入/切だけを送る呼び出し（ASIN＋新品/中古のみ）でも、
+   モード・一点物・FBA連動を0に戻してしまわないようにするため。 */
+function flagOf(x, key) {
+  return Object.prototype.hasOwnProperty.call(x, key) ? (x[key] ? 1 : 0) : null;
+}
 async function putListings(env, body) {
   const run = newRun("listings");
   const list = Array.isArray(body && body.items) ? body.items.slice(0, 500) : [];
@@ -1445,7 +1451,14 @@ async function putListings(env, body) {
     const sku = String(x.sku || "").trim();
     const label = String(x.custom_label || "").trim();
     const p = sku ? parseSku(sku) : null;
-    const k = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : parseLabel(label);
+    /* キーの決め方は3通り。SKU → CustomLabel → ASIN＋新品/中古 を直接指定。
+       3つめは、出品リストに無い（以前に出した）商品の印を付け替えるために使う。 */
+    let k = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : parseLabel(label);
+    if ((!k || !k.asin) && /^B[0-9A-Z]{9}$/.test(String(x.asin || "").trim())) {
+      k = { asin: String(x.asin).trim(),
+            cond: (String(x.cond || "") === "used") ? "used" : "new",
+            scope: "" };     // scope は既存の値を尊重する（itemSeed が上書きしない）
+    }
     if (!k || !k.asin) { bad++; continue; }
     if (sku) {
       stmts.push(env.DB.prepare(
@@ -1460,17 +1473,19 @@ async function putListings(env, body) {
              (p && p.purchasedOn) || "", (p && p.cost) || null, label,
              String(x.title || ""), nowIso()));
     }
-    stmts.push(itemSeed(env, k.asin, k.cond, k.scope, String(x.title || "")));
+    stmts.push(itemSeed(env, k.asin, k.cond, k.scope || "unknown", String(x.title || "")));
     stmts.push(env.DB.prepare(
-      `UPDATE items SET mode=COALESCE(?3, mode), one_off=?4, fba_link=?5,
+      `UPDATE items SET mode=COALESCE(?3, mode),
+         one_off=COALESCE(?4, one_off), fba_link=COALESCE(?5, fba_link),
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
-         on_hand=CASE WHEN ${SQL_IN_STOCK} THEN 0 ELSE ?9 END,
+         on_hand=CASE WHEN ${SQL_IN_STOCK} THEN 0 ELSE COALESCE(?9, on_hand) END,
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
-    ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null, x.one_off ? 1 : 0, x.fba_link ? 1 : 0,
-           String(x.item_id || ""), label, nowIso(), x.on_hand ? 1 : 0));
+    ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null,
+           flagOf(x, "one_off"), flagOf(x, "fba_link"),
+           String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

@@ -318,6 +318,23 @@ pj_price の「販売連携」タブができたら `POST /listings` で
 pj_price 側は **ASIN＋新品/中古**で突き合わせて印を決める（ItemIDやCustomLabelには
 頼らない。FBAにあってeBay未出品の行は CustomLabel が無いため）。
 
+### `POST /listings` のキーと、送らなかった項目
+
+キーは3通りで決まる。上から順に見る。
+
+1. `sku`（せどりすとSKU）
+2. `custom_label`（`E-<ASIN>[-U]` またはせどりすとSKU）
+3. **`asin` ＋ `cond`（`new`/`used`）を直接指定** … 出品リストに無い（以前に出した）
+   商品の印を付け替えるために使う。`skus`（個体）は作らず `items` だけを更新する
+
+**送らなかった項目は変えない。** `mode` / `one_off` / `fba_link` / `on_hand` は
+リクエストに無ければ現在の値が残る。だから手元在庫の入/切だけを送る呼び出しで
+モードや一点物の印が消えることはない。
+
+```json
+{"items":[{"asin":"B09TPBVJ5F","cond":"used","on_hand":true}]}
+```
+
 ## 4.5 販売経路（売上と返送の区別）
 
 Amazonの注文一覧には、実際の売上以外も入る。`SalesChannel` で分ける。
