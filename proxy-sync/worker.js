@@ -435,9 +435,25 @@ async function fbaInventory(env, run, mode, arg, maxPages, startToken) {
   return { rows, next: token, ok: true, fallback, restarted };
 }
 
-/* Amazon最安値（参考表示用）。読み取りだがPOSTしか無いAPI。 */
+/* Amazon最安値（参考表示用）。読み取りだがPOSTしか無いAPI。
+   **新品の出品には新品の最安値、中古の出品には中古の最安値**を使う。
+   条件は要求にも付けるが、**結果の振り分けは返ってきた要求（res.request）を正とする**。
+   応答に条件が入っていないときに新品扱いで書くと、中古の値段を新品の行に入れて
+   しまうので、振り分けられない結果は捨てる。
+   あわせて、最安値と同じ値段の出品者数と、見えている出品件数も返す。 */
+function landed(o) {
+  return Number((o.ListingPrice && o.ListingPrice.Amount) || 0)
+       + Number((o.Shipping && o.Shipping.Amount) || 0);
+}
+function condOf(v) {
+  const t = String(v || "").trim();
+  if (!t) return "";
+  // New 以外（Used / Collectible / Refurbished …）は中古側として扱う
+  return /^new$/i.test(t) ? "new" : "used";
+}
 async function amazonLowest(env, run, keys) {
   const out = {};
+  let skipped = 0;
   for (let i = 0; i < keys.length && i / PRICING_BATCH < PRICING_MAX_CALLS; i += PRICING_BATCH) {
     const part = keys.slice(i, i + PRICING_BATCH);
     const body = JSON.stringify({
@@ -453,20 +469,32 @@ async function amazonLowest(env, run, keys) {
                            { method: "POST", body, label: "getItemOffersBatch" });
     if (!r.ok) continue;
     for (const res of (r.data && r.data.responses) || []) {
-      const b = res.body || {};
-      const p = b.payload || {};
-      const asin = String(p.ASIN || (p.Identifier && p.Identifier.ASIN) || "");
-      const cond = /used/i.test(String(p.ItemCondition || (p.Identifier && p.Identifier.ItemCondition) || ""))
-        ? "used" : "new";
-      let low = null;
+      const req = res.request || {};
+      const p = (res.body && res.body.payload) || {};
+      // ASINは返ってきた要求のURIから読む（応答に入っていないことがある）
+      const m = /\/items\/([A-Z0-9]{10})\/offers/.exec(String(req.uri || ""));
+      const asin = m ? m[1] : String(p.ASIN || (p.Identifier && p.Identifier.ASIN) || "");
+      const cond = condOf(req.ItemCondition) || condOf(p.ItemCondition)
+                || condOf(p.Identifier && p.Identifier.ItemCondition);
+      if (!asin || !cond) { skipped++; continue; }
+      const vals = [];
       for (const o of p.Offers || []) {
-        const v = Number((o.ListingPrice && o.ListingPrice.Amount) || 0)
-                + Number((o.Shipping && o.Shipping.Amount) || 0);
-        if (v > 0 && (low === null || v < low)) low = v;
+        /* 出品ごとに状態が分かるときは、要求した条件と違うものを混ぜない。
+           分からなければ要求で絞れているものとして扱う。 */
+        const oc = condOf(o.SubCondition);
+        if (oc && oc !== cond) continue;
+        const v = landed(o);
+        if (v > 0) vals.push(v);
       }
-      if (asin && low !== null) out[asin + "|" + cond] = low;
+      if (!vals.length) continue;
+      const low = Math.min.apply(null, vals);
+      const lowN = vals.filter(function (v) { return v <= low + 0.01; }).length;
+      const total = Math.max(vals.length,
+        Number((p.Summary && p.Summary.TotalOfferCount) || 0));
+      out[asin + "|" + cond] = { low: low, lowN: lowN, total: total };
     }
   }
+  if (skipped) run.notes.push("最安値：条件が分からない結果 " + skipped + "件は使わなかった");
   return out;
 }
 
@@ -751,7 +779,8 @@ function stateEvents(env, rows) {
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
-  mode, one_off, fba_link, on_hand, amazon_lowest, amazon_lowest_at, updated_at`;
+  mode, one_off, one_off_known, fba_link, on_hand,
+  amazon_lowest, amazon_lowest_n, amazon_offers, amazon_lowest_at, updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -1124,10 +1153,11 @@ async function syncPricing(env, run) {
   const stmts = [];
   for (const k of keys) {
     const v = low[k.asin + "|" + k.cond];
-    if (v === undefined) continue;
+    if (!v) continue;
     stmts.push(env.DB.prepare(
-      `UPDATE items SET amazon_lowest=?3, amazon_lowest_at=?4, updated_at=?4
-       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v, at));
+      `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
+         amazon_lowest_at=?6, updated_at=?6
+       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at));
   }
   await runBatch(env, run, stmts);
   run.notes.push("最安値 " + stmts.length + "件");
@@ -1274,6 +1304,14 @@ function stateOf(r) {
    予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
    手元在庫あり（on_hand）の行は、FBAが0でも売り越し・納品待ちの警告を出さない
    （仕入れてすぐeBayに出し、FBA納品はその後になる運用のため）。 */
+/* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
+   一点物でない行。一点物かどうかが分からない行（one_off_known=0）も候補に入れる。 */
+function isRestock(r) {
+  return Number(r.ebay_qty || 0) >= 1
+      && r.fba_available !== null && r.fba_available !== undefined
+      && Number(r.fba_available) === 0
+      && !Number(r.one_off || 0);
+}
 function warnOf(r) {
   const w = [];
   if (r.scope !== "ebay") return w;
@@ -1307,6 +1345,8 @@ async function statusBody(env, url) {
   if (p.get("state") === "listed_no_fba") where.push("(fba_seen_at IS NULL AND on_hand=0)");
   if (p.get("state") === "fba_not_listed")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
+  if (p.get("state") === "restock")
+    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0)");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1322,10 +1362,13 @@ async function statusBody(env, url) {
   bind.push(soldSince);
   const q = await env.DB.prepare(sql).bind(...bind).all();
   let items = ((q && q.results) || []).map((r) =>
-    Object.assign({}, r, { state: stateOf(r), warnings: warnOf(r) }));
+    Object.assign({}, r, { state: stateOf(r), restock: isRestock(r) ? 1 : 0,
+                           warnings: warnOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
   const st = p.get("state");
-  if (st) items = items.filter((x) => x.state === st);
+  // restock は state の値ではなく別の条件なので、行に付けた印で絞る
+  if (st === "restock") items = items.filter((x) => x.restock);
+  else if (st) items = items.filter((x) => x.state === st);
 
   const soldH = Math.min(24 * 14, Math.max(1, Number(p.get("sold") || 24)));
   const since = new Date(Date.now() - soldH * 3600 * 1000).toISOString();
@@ -1357,6 +1400,9 @@ async function statusBody(env, url) {
           AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT ${SQL_IN_STOCK})
          AS past_zero,
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND on_hand=1) AS on_hand,
+       -- 再調達の候補：eBay出品中・FBAの販売可能が0・一点物でない
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
+          AND fba_available=0 AND one_off=0) AS restock,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1476,7 +1522,10 @@ async function putListings(env, body) {
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope || "unknown", String(x.title || "")));
     stmts.push(env.DB.prepare(
       `UPDATE items SET mode=COALESCE(?3, mode),
-         one_off=COALESCE(?4, one_off), fba_link=COALESCE(?5, fba_link),
+         one_off=COALESCE(?4, one_off),
+         -- 一点物の指定が来たら「人が決めた」印も立てる
+         one_off_known=CASE WHEN ?4 IS NULL THEN one_off_known ELSE 1 END,
+         fba_link=COALESCE(?5, fba_link),
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない

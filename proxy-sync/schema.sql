@@ -24,11 +24,15 @@ CREATE TABLE IF NOT EXISTS items (
   fba_seen_at      TEXT,
   mode             TEXT,                       -- 'hold' / 'restock' / 'end'（pj_priceの在庫0時の動作）
   one_off          INTEGER NOT NULL DEFAULT 0,
+  -- 一点物かどうかを人が決めたか。0 は「分からない」（出品リストに無い過去の出品）
+  one_off_known    INTEGER NOT NULL DEFAULT 0,
   fba_link         INTEGER NOT NULL DEFAULT 0,
   -- 手元在庫あり（仕入れてすぐeBayに出し、FBA納品はその後）。
   -- 立っている行は FBA 0 でも売り越し扱いにしない。pj_price から POST /listings で送る。
   on_hand          INTEGER NOT NULL DEFAULT 0,
   amazon_lowest    REAL,
+  amazon_lowest_n  INTEGER,                    -- 最安値と同じ値段の出品者数（1なら注意）
+  amazon_offers    INTEGER,                    -- 見えている出品件数
   amazon_lowest_at TEXT,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)

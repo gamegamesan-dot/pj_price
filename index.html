@@ -657,6 +657,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <span class="note2" style="margin:0;flex:0 0 auto">絞り込み</span>
         <select id="syncFilter" style="flex:1 1 0;min-width:0">
           <option value="warn">警告ありだけ</option>
+        <option value="restock">再調達の候補（出品中・FBA販売可能0・一点物でない）</option>
           <option value="all" selected>eBay出品ありか在庫あり</option>
           <option value="listed">eBayに出ている行</option>
           <option value="listed_no_fba">eBay出品あり・FBA在庫なし</option>
@@ -4235,12 +4236,30 @@ function syncMatch(r){
   if(f==='warn')return (r.warnings||[]).length>0;
   if(f==='listed')return r.ebay_qty!==null&&r.ebay_qty!==undefined;
   if(f==='on_hand')return !!Number(r.on_hand||0);
+  /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
+     一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
+  if(f==='restock')return syncIsRestock(r);
   // 手元在庫のうち、eBayで売れていない行＝FBAに送る候補
   if(f==='to_fba')return !!Number(r.on_hand||0)&&!Number(r.ebay_sold||0);
   // 手元在庫のうち、eBayで売れた行＝FBAに送らない
   if(f==='sold_on_ebay')return !!Number(r.on_hand||0)&&Number(r.ebay_sold||0)>0;
   if(f==='listed_no_fba'||f==='fba_not_listed')return r.state===f;
   return true;
+}
+/* 最安値の出品者数。1人だけなら、その人が売り切れると相場が変わるので注意を出す。 */
+function syncOfferNote(r){
+  var n=Number(r.amazon_lowest_n||0), t=Number(r.amazon_offers||0);
+  if(!n)return '';
+  var s='最安値の出品者 '+n+'人'+(t>n?('（全'+t+'件）'):'');
+  if(n<=1)s='<span style="color:var(--bad);font-weight:700">'+s+'・1人だけ注意</span>';
+  return s;
+}
+function syncIsRestock(r){
+  return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
+      && r.fba_available!==null && !Number(r.one_off||0);
+}
+function syncRestockN(){
+  return ((syncData&&syncData.items)||[]).filter(syncIsRestock).length;
 }
 /* 行の手元在庫ボタン。FBAに在庫（販売可能・入庫中・予約済みのいずれか）がある行は
    オンにできない（Worker側でも弾く）ので、押せない形で理由を出す。
@@ -4257,6 +4276,13 @@ function syncOnHandBtn(r,key){
     +(on?';background:#2f6fb0;color:#fff;border-color:#2f6fb0':'')+'">手元在庫 '
     +(on?'オン':'オフ')+'</button>';
 }
+/* 行の一点物ボタン。手元在庫と同じ形。まだ決めていない行は「一点物 不明」と出す。 */
+function syncOneOffBtn(r,key){
+  var on=!!Number(r.one_off||0), known=!!Number(r.one_off_known||0);
+  return '<button class="btn" data-soneoff="'+esc(key)+'" style="padding:5px 8px;font-size:12px'
+    +(on?';background:#7a3fb0;color:#fff;border-color:#7a3fb0':'')+'">一点物 '
+    +(on?'オン':(known?'オフ':'不明'))+'</button>';
+}
 // FBA納品の候補（手元在庫でeBay未販売）の件数
 function syncToFba(){
   return ((syncData&&syncData.items)||[]).filter(function(x){
@@ -4268,6 +4294,7 @@ function syncRender(){
   $('syncSummary').textContent=syncData
     ? ('eBayに出ている '+(c.listed||0)+'件　/　FBA在庫なし '+(c.listed_no_fba||0)+'件'
        +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
+       +'　/　再調達の候補 '+syncRestockN()+'件'
        +'　/　手元在庫 '+(c.on_hand||0)+'件（FBA納品の候補 '+syncToFba()+'件）'
        +'　/　過去SKU '+(c.past_zero||0)+'件'
        +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
@@ -4294,6 +4321,16 @@ function syncRender(){
         : ('<span style="display:inline-block;background:#8a6d00;color:#fff;border-radius:2px;'
            +'padding:1px 5px;font-size:11px;margin-right:4px">FBA納品の候補</span>');
     }
+    if(syncIsRestock(r)){
+      badge+='<span style="display:inline-block;background:#b35c00;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">再調達の候補</span>';
+      if(!Number(r.one_off_known||0))
+        badge+='<span style="display:inline-block;background:#666;color:#fff;border-radius:2px;'
+          +'padding:1px 5px;font-size:11px;margin-right:4px">一点物不明</span>';
+    }
+    if(Number(r.one_off||0))
+      badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
     var days=syncDays(r);
     var low=+r.amazon_lowest||0;
     h+='<div style="border-top:1px solid var(--line);padding:9px 0">'
@@ -4312,15 +4349,18 @@ function syncRender(){
       +'　売値 '+(r.ebay_price?usd(+r.ebay_price):'—')
       +(days===null?'':('　出品 '+days+'日目'))
       +(sold?('　eBay販売 '+sold+'点（180日）'):'')+'</div>'
-      +'<div class="note2" style="margin-top:3px">Amazon最安値 '
-      +(low?(yen(low)+'（'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))+'）'):'未取得')
+      +'<div class="note2" style="margin-top:3px">Amazon最安値'
+      +'（'+(r.cond==='new'?'新品':'中古')+'）'
+      +(low?(' '+yen(low)+'　'+syncOfferNote(r)
+             +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):' 未取得')
       +'</div>'
       +'<div class="note2" style="margin-top:2px">'
       +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>　最低 '+usd(rec.floor)+'　利益 '+yen(rec.profit)
              +'　（重量 '+rec.weight+'g'+(rec.weightDefault?'・既定':'')+'）')
            :'推奨売値 —（Amazon最安値が未取得）')
       +'</div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'+syncOnHandBtn(r,key)+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
+      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+'</div>'
       +'</div></div></div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
@@ -4340,35 +4380,46 @@ function syncPickNote(){
 $('syncFilter').addEventListener('change',syncRender);
 /* 行の手元在庫を入れ替える。送るのは ASIN＋新品/中古 と on_hand だけ。
    ほかの項目（モード・一点物・FBA連動）は Worker 側でそのまま残る。 */
-$('syncList').addEventListener('click',function(e){
-  var t=e.target; if(!t||t.tagName!=='BUTTON')return;
-  var key=t.getAttribute('data-sonhand'); if(!key)return;
+/* 行の印（手元在庫・一点物）を入れ替える。送るのは ASIN＋新品/中古 と、
+   その印だけ。ほかの項目は Worker 側でそのまま残る。 */
+function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
-  if(!u){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
-  var rows=(syncData&&syncData.items)||[];
-  var r=null;
-  rows.forEach(function(x){ if(x.asin+'|'+x.cond===key)r=x; });
-  if(!r)return;
-  if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
-  var want=!Number(r.on_hand||0);
+  var body={asin:r.asin, cond:r.cond, title:r.title||''};
+  body[field]=want;
+  var back=t.textContent;
   t.disabled=true; t.textContent='送信中…';
   fetch(u+'/listings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-    body:JSON.stringify({items:[{asin:r.asin, cond:r.cond, on_hand:want,
-                                 title:r.title||''}]})})
+    body:JSON.stringify({items:[body]})})
     .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
     .then(function(d){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
-      r.on_hand=want?1:0;
+      r[field]=want?1:0;
+      if(field==='one_off')r.one_off_known=1;
       syncSaveCache();
-      $('syncFixNote').textContent='手元在庫を'+(want?'オン':'オフ')+'にしました：'
-        +(r.title||r.asin)+'　（'+esc(r.asin)+'）';
+      $('syncFixNote').textContent=label+'を'+(want?'オン':'オフ')+'にしました：'
+        +(r.title||r.asin)+'　（'+r.asin+'）';
       syncRender();
     })
     .catch(function(e){
-      t.disabled=false; t.textContent='手元在庫 '+(Number(r.on_hand||0)?'オン':'オフ');
+      t.disabled=false; t.textContent=back;
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
     });
+}
+$('syncList').addEventListener('click',function(e){
+  var t=e.target; if(!t||t.tagName!=='BUTTON')return;
+  var kh=t.getAttribute('data-sonhand'), ko=t.getAttribute('data-soneoff');
+  var key=kh||ko; if(!key)return;
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  var r=null;
+  ((syncData&&syncData.items)||[]).forEach(function(x){ if(x.asin+'|'+x.cond===key)r=x; });
+  if(!r)return;
+  if(kh){
+    if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
+    syncFlagSend(t,r,'on_hand',!Number(r.on_hand||0),'手元在庫');
+  }else{
+    syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
+  }
 });
 $('syncList').addEventListener('change',function(e){
   var t=e.target; if(!t||!t.getAttribute)return;

@@ -69,6 +69,7 @@ npx wrangler d1 execute pj-sync --remote --file=./schema.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0002-sales-channel.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0003-on-hand.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0004-ebay-start.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0005-restock.sql
 ```
 
 ### 1-5. シークレットを登録する
@@ -330,10 +331,33 @@ pj_price 側は **ASIN＋新品/中古**で突き合わせて印を決める（I
 **送らなかった項目は変えない。** `mode` / `one_off` / `fba_link` / `on_hand` は
 リクエストに無ければ現在の値が残る。だから手元在庫の入/切だけを送る呼び出しで
 モードや一点物の印が消えることはない。
+`one_off` を送ると `one_off_known=1` も立つ（＝人が決めた）。
+`one_off_known=0` の行は「一点物かどうか分からない」（出品リストに無い過去の出品）。
 
 ```json
 {"items":[{"asin":"B09TPBVJ5F","cond":"used","on_hand":true}]}
 ```
+
+## 4.47 Amazon最安値と再調達の候補
+
+**新品の出品には新品の最安値、中古の出品には中古の最安値**を使う。
+`getItemOffersBatch` の要求に `ItemCondition` を付け、**結果の振り分けは
+返ってきた要求（`res.request`）を正とする**。応答に条件が入っていないときに
+新品扱いで書くと中古の値段を新品の行に入れてしまうので、
+**振り分けられない結果は捨てる**（`note` に件数を残す）。
+
+最安値は **本体＋送料**。あわせて次を持つ。
+
+| 列 | 中身 |
+|---|---|
+| `amazon_lowest` | 最安値（本体＋送料・円） |
+| `amazon_lowest_n` | **最安値と同じ値段の出品者数**（1ならその人が売り切れると相場が変わる） |
+| `amazon_offers` | 見えている出品件数（`Summary.TotalOfferCount` と取得分の大きいほう） |
+
+`/status` の各行に `restock`（0/1）が付く。**再調達の候補**は
+「eBayに出ている（`ebay_qty>=1`）・FBAの販売可能が0・一点物でない」行。
+`?state=restock` で絞り込め、`counts.restock` に件数が出る。
+一点物かどうかが分からない行（`one_off_known=0`）も候補に入れる。
 
 ## 4.5 販売経路（売上と返送の区別）
 
