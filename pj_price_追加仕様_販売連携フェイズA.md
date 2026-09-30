@@ -547,6 +547,63 @@ rollcall（名簿の名指し確認）
 通知の重複防止・個人情報の非保存）も全て通過 ✅
 ```
 
+### 名簿（roster）と未対応付けの見直し（2026-09-30）
+
+`/sync inventory` errors=0・在庫差分12件・eBay出品32件・解析不可17件、
+`rollcall` errors=0・名簿10件、`counts` は ebay 86 / out 22 / unmatched 86 /
+roster 10 / ebay_unparsed 17。**上位10件がすべてFBA列が空**だった。
+
+#### 名簿が10件しかない理由（にわとりと卵）
+
+`skus` 表が名簿で、入るきっかけは
+**①FBA在庫の取り込みで見えたSKU ②`POST /listings`** の2つだけ。
+差分（`startDateTime`）は**動きのあったSKUしか返さない**ので12件、うち在庫が
+あるものが10件。日次の名指し確認（`rollcall`）は**名簿のSKUしか照会しない**ため、
+名簿が小さいままでは在庫が埋まらない。
+
+→ **導入時に一度だけ全件スイープを回して名簿を作る。**
+`POST /sync {"kind":"sweep"}` を `sweep_done` が `true` になるまで繰り返す
+（`nextToken` と起点をD1に保存して数ページずつ進む）。以後は差分と日次の
+名指し確認だけで追いつく。
+
+pj_price の「販売連携」タブができたら `POST /listings` で出品側からも名簿が
+埋まる（11章の4）。それまではスイープと差分だけで運用できる。
+
+スイープの戻りに `sweep_done` と `sweep_rows` を足し、繰り返しの判断ができるようにした。
+起点は既定540日前（Amazonが18か月より前の `startDateTime` を受けないため。
+`{"kind":"sweep","days":N}` で変えられる）。**この期間に一度も動きがないSKUは
+取れない**点は割り切る。
+
+#### 未対応付けを2種類に分ける
+
+| `state` | 意味 | 扱い |
+|---|---|---|
+| `listed_no_fba` | **eBayに出ているのにFBA在庫の記録が無い** | 警告「FBA在庫なし」。`UNMATCHED` 通知の対象（件数だけ） |
+| `fba_not_listed` | FBA在庫はあるがeBayに出していない | **通常の状態。警告にしない。**件数だけ出す |
+| `ok` | 両方ある | 売り越し・数量の食い違いを見る |
+
+- `/status` の各行に `state` を付け、`?state=listed_no_fba` で絞り込める
+- `counts` に `listed_no_fba` / `fba_not_listed` を足した（`unmatched` は合計として残す）
+- `UNMATCHED` の通知文を
+  「eBayに出ているのにFBA在庫が無い：新規 n件（合計 m件）」に変えた。
+  **`fba_not_listed` は件数にも通知にも含めない**
+
+#### 検証（FBA在庫130SKU・うち5件がeBayにも出ている条件）
+
+```
+差分だけの状態      名簿1件・listed_no_fba 5件（いまの状況と同じ形）
+全件スイープ        3ページを1回で読み切り sweep_done=true / skus 130件
+                    名簿 111件（130 − 在庫0の19件）
+eBay出品との結合    FBAにもある5件が結びつく（state=ok、FBA数量が入る）
+                    在庫0の1件は「売り越しの恐れ」になる
+未対応付けの2分割   listed_no_fba 2件（警告あり）/ fba_not_listed 125件（警告なし）
+                    warn=1 に fba_not_listed は出ない / state で絞り込める
+通知                「eBayに出ているのにFBA在庫が無い：新規 2件（合計 2件）」
+                    fba_not_listed の125件は含まない
+既存のテスト（ガード16ケース・注文の待ち行列・nextToken・D1バインド上限・
+販売経路・通知の重複防止・個人情報の非保存）も全て通過
+```
+
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
 - テスト用に Discord 通知が届く（同じイベントが二重に届かない）。

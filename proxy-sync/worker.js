@@ -699,8 +699,8 @@ const EV_TEXT = {
   TEST: (d) => "通知テスト（" + d.tag + "）。同じ印のテストは二度届きません",
   FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
     + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
-  UNMATCHED: (d) => "未対応付け：新規 " + d.added + "件（合計 " + d.total
-    + "件）。一覧で確認してください",
+  UNMATCHED: (d) => "eBayに出ているのにFBA在庫が無い：新規 " + d.added
+    + "件（合計 " + d.total + "件）。一覧の絞り込み state=listed_no_fba で確認してください",
 };
 function evStmt(env, type, key, item, detail) {
   return env.DB.prepare(
@@ -1030,22 +1030,25 @@ async function syncRollcall(env, run) {
 /* 手動。全件スイープ。nextToken をD1に置いて数ページずつ進める。
    nextToken は1ページ目と同じ絞り込みと対でないと使えないので、
    そのときの startDateTime も一緒に保存して使い回す。 */
-async function syncSweep(env, run) {
+async function syncSweep(env, run, days) {
   const token = await stateGet(env, "sweep.token");
   let since = await stateGet(env, "sweep.since");
   if (!token || !since) {
-    // 18か月より前は指定できないので、余裕をみて540日前から
-    since = isoSec(Date.now() - 540 * 24 * 60 * 60 * 1000);
+    /* Amazonは18か月より前の startDateTime を受けないので、既定は540日前。
+       「この期間に一度も動きがないSKU」は取れない点は割り切る。 */
+    const d = Math.min(540, Math.max(1, Number(days) || 540));
+    since = isoSec(Date.now() - d * 24 * 60 * 60 * 1000);
     await stateSet(env, "sweep.since", since).run();
+    run.notes.push("起点 " + since);
   }
   const r = await fbaInventory(env, run, "since", since, SWEEP_PAGES, token);
   const keys = await writeInventory(env, run, r.rows);
   await stateSet(env, "sweep.token", r.next || "").run();
   await stateSet(env, "sweep.at", nowIso()).run();
   if (r.restarted) run.notes.push("保存していたトークンが無効だったので最初から読み直した");
-  run.notes.push(r.next ? "続きあり（次回に継続）" : "全件スイープ完了");
+  run.notes.push(r.next ? "続きあり（もう一度実行する）" : "全件スイープ完了");
   if (!r.next) await stateSet(env, "sweep.since", "").run();   // 次回は新しい起点から
-  return keys;
+  return { keys, done: !r.next, rows: r.rows.length };
 }
 
 /* 1時間ごと。eBayの出品中リスト。ActiveList に無くなった行は数量0にする。 */
@@ -1109,12 +1112,16 @@ async function syncPricing(env, run) {
 
 /* 日次。未対応付けの件数だけ通知する（中身は一覧で見る）。
    scope が out / unknown の行は数にも入れない。 */
+/* 通知するのは「eBayに出ているのにFBA在庫の記録が無い」行だけ。
+   FBA在庫はあるがeBay未出品の行は、出していないだけなので件数だけ数える。 */
 async function syncUnmatched(env, run) {
   const r = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM items WHERE scope='ebay' AND fba_seen_at IS NULL`).first();
+  const other = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM items
-     WHERE scope='ebay' AND (ebay_qty IS NULL OR fba_seen_at IS NULL)`
-  ).first();
+     WHERE scope='ebay' AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL`).first();
   const total = Number((r && r.n) || 0);
+  const notListed = Number((other && other.n) || 0);
   const prev = Number((await stateGet(env, "unmatched.total")) || 0);
   const added = Math.max(0, total - prev);
   await stateSet(env, "unmatched.total", String(total)).run();
@@ -1122,8 +1129,9 @@ async function syncUnmatched(env, run) {
     await runBatch(env, run, [evStmt(env, "UNMATCHED", "UNMATCHED|" + dayKey(), null,
       { added, total })]);
   }
-  run.notes.push("未対応付け 合計" + total + "件（新規" + added + "件）");
-  return { total, added };
+  run.notes.push("eBay出品ありFBA在庫なし " + total + "件（新規" + added + "件）"
+    + " / FBA在庫ありeBay未出品 " + notListed + "件");
+  return { total, added, fba_not_listed: notListed };
 }
 
 /* ---- 仕事の組み合わせ ---- */
@@ -1162,11 +1170,18 @@ async function jobDaily(env) {
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   return saveRun(env, run);
 }
-async function jobSweep(env) {
+async function jobSweep(env, days) {
   const run = newRun("sweep");
-  try { await syncSweep(env, run); }
-  catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
-  return saveRun(env, run);
+  let res = { done: false, rows: 0 };
+  try {
+    res = await syncSweep(env, run, days);
+    // スイープで名簿が増えるので、そのぶんの食い違いも見ておく
+    const items = await itemsByKeys(env, res.keys || []);
+    await runBatch(env, run, stateEvents(env, items));
+  } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+  const info = await saveRun(env, run);
+  // sweep_done が false のあいだは、もう一度同じコマンドを実行する
+  return Object.assign(info, { sweep_done: !!res.done, sweep_rows: res.rows || 0 });
 }
 /* 受け入れテスト用。同じ印（tag）のテストイベントは dedup_key が同じなので
    2回目は届かない（通知の重複防止がそのまま効いていることの確認になる）。
@@ -1189,16 +1204,28 @@ async function jobNotify(env) {
 }
 
 /* ---- GET /status ---- */
+/* 行の状態。未対応付けは2種類あり、意味がまったく違う。
+   'listed_no_fba' … eBayに出ているのにFBA在庫の記録が無い（要注意）
+   'fba_not_listed' … FBA在庫はあるがeBayに出していない（通常の状態。警告にしない）
+   'ok'             … 両方ある */
+function stateOf(r) {
+  const noFba = (r.fba_seen_at === null || r.fba_seen_at === undefined);
+  const noEbay = (r.ebay_qty === null || r.ebay_qty === undefined);
+  if (noFba && noEbay) return "listed_no_fba";   // どちらも無い行は出品側の取りこぼし扱い
+  if (noFba) return "listed_no_fba";
+  if (noEbay) return "fba_not_listed";
+  return "ok";
+}
 function warnOf(r) {
   const w = [];
-  const q = r.ebay_qty, av = r.fba_available;
-  if (r.scope === "ebay") {
-    if (q === null || r.fba_seen_at === null) w.push("未対応付け");
-    else {
-      if (av === 0 && q >= 1) w.push(Number(r.fba_inbound || 0) > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
-      else if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
-    }
-  }
+  if (r.scope !== "ebay") return w;
+  const st = stateOf(r);
+  // FBA在庫はあるがeBay未出品は、出していないだけなので警告にしない（件数だけ数える）
+  if (st === "fba_not_listed") return w;
+  if (st === "listed_no_fba") { w.push("FBA在庫なし"); return w; }
+  const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
+  if (av === 0 && q >= 1) w.push(Number(r.fba_inbound || 0) > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
+  else if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
   return w;
 }
 async function statusBody(env, url) {
@@ -1208,12 +1235,17 @@ async function statusBody(env, url) {
   const where = [], bind = [];
   if (scope !== "all") { where.push("scope=?" + (bind.length + 1)); bind.push(scope); }
   if (p.get("unmatched") === "1") where.push("(ebay_qty IS NULL OR fba_seen_at IS NULL)");
+  if (p.get("state") === "listed_no_fba") where.push("fba_seen_at IS NULL");
+  if (p.get("state") === "fba_not_listed") where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL)");
   const sql = `SELECT ${ITEM_COLS} FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;
   const q = await env.DB.prepare(sql).bind(...bind).all();
-  let items = ((q && q.results) || []).map((r) => Object.assign({}, r, { warnings: warnOf(r) }));
+  let items = ((q && q.results) || []).map((r) =>
+    Object.assign({}, r, { state: stateOf(r), warnings: warnOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
+  const st = p.get("state");
+  if (st) items = items.filter((x) => x.state === st);
 
   const soldH = Math.min(24 * 14, Math.max(1, Number(p.get("sold") || 24)));
   const since = new Date(Date.now() - soldH * 3600 * 1000).toISOString();
@@ -1228,6 +1260,11 @@ async function statusBody(env, url) {
        (SELECT COUNT(*) FROM items WHERE scope='unknown') AS unknown,
        (SELECT COUNT(*) FROM items WHERE scope='ebay'
           AND (ebay_qty IS NULL OR fba_seen_at IS NULL)) AS unmatched,
+       -- eBayに出ているのにFBA在庫の記録が無い（要注意）
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND fba_seen_at IS NULL) AS listed_no_fba,
+       -- FBA在庫はあるがeBayに出していない（通常の状態。警告にしない）
+       (SELECT COUNT(*) FROM items WHERE scope='ebay'
+          AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL) AS fba_not_listed,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1383,7 +1420,8 @@ export default {
           return json(await jobOrders(env, days, Number(body.max || 0)), 200, origin);
         if (kind === "inventory") return json(await jobHourly(env), 200, origin);
         if (kind === "rollcall")  return json(await jobDaily(env), 200, origin);
-        if (kind === "sweep")     return json(await jobSweep(env), 200, origin);
+        if (kind === "sweep")
+          return json(await jobSweep(env, Number(body.days || 0)), 200, origin);
         if (kind === "notify")    return json(await jobNotify(env), 200, origin);
         if (kind === "test-notify")
           return json(await jobTestNotify(env, body.tag), 200, origin);

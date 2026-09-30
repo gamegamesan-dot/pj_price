@@ -130,7 +130,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`unmatched=1`、`sold=24`、`limit=500` |
+| GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|ok`、`sold=24`、`limit=500` |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
@@ -156,8 +156,11 @@ Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"invent
 # 名簿の名指し確認＋最安値＋未対応付けの件数
 Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"rollcall"}'
 
-# 全件スイープ（続きがあるときは何度か繰り返す）
-Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"sweep"}'
+# 全件スイープ（初回の名簿づくり。sweep_done が true になるまで繰り返す）
+do {
+  $r = Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"sweep"}'
+  "{0}件 / pages {1} / done {2} / {3}" -f $r.sweep_rows, $r.pages, $r.sweep_done, $r.note
+} while (-not $r.sweep_done)
 
 # 注文の内訳（Seller Central の件数と突き合わせる）
 Invoke-RestMethod -Uri "$U/orders/summary?days=7" -Headers $H | ConvertTo-Json -Depth 3
@@ -231,6 +234,40 @@ Amazonの上限はAPIごとに違うので、`SP_GAP` で別々に待つ。
 **`startDateTime` は入庫中の数量変化を検出しない**（Amazonの仕様）。そのぶんを日次の
 名指し確認で補っている。名簿は pj_price から `POST /listings` で送ったSKU（`active=1`）で、
 在庫0になったSKUは `active=0` になり照会対象から外れる。
+
+## 4.4 名簿（roster）の育て方
+
+`skus` 表が名簿で、`/status` の `counts.roster` はそのうち
+**在庫があって（`active=1`）eBay対象（`scope='ebay'`）のSKU数**。
+名簿に入るきっかけは2つしかない。
+
+1. **FBA在庫の取り込みで見えたSKU**（差分・名指し・全件スイープ）
+2. **`POST /listings`**（pj_price から送る）
+
+差分（`startDateTime`）は**動きのあったSKUしか返さない**ので、
+導入直後は名簿がごく小さくなる。日次の名指し確認（`rollcall`）は名簿のSKUしか
+照会しないため、**名簿が小さいままだと在庫が埋まらない**（にわとりと卵）。
+
+→ **導入時に一度だけ全件スイープを回して名簿を作る。**
+スイープは `nextToken` をD1に保存して数ページずつ進むので、
+`sweep_done` が `true` になるまで同じコマンドを繰り返す（上のPowerShell）。
+以後は差分と日次の名指し確認だけで追いつく。
+
+pj_price の「販売連携」タブができたら `POST /listings` で
+「出品したSKU」を送るようになり、名簿は**出品側からも**埋まる。
+それまではスイープと差分だけで運用できる。
+
+## 4.45 未対応付けは2種類ある
+
+| `state` | 意味 | 扱い |
+|---|---|---|
+| `listed_no_fba` | **eBayに出ているのにFBA在庫の記録が無い** | 警告「FBA在庫なし」。`UNMATCHED` 通知の対象（件数だけ） |
+| `fba_not_listed` | FBA在庫はあるがeBayに出していない | **通常の状態。警告にしない。**件数だけ `counts.fba_not_listed` に出す |
+| `ok` | 両方ある | 数量の食い違いなどを見る |
+
+`/status?state=listed_no_fba` で前者だけを一覧できる。
+**全件スイープ前は eBay出品のほとんどが `listed_no_fba` になる**（FBA側を読めて
+いないだけ）。スイープ後に減ることを確認する。
 
 ## 4.5 販売経路（売上と返送の区別）
 
