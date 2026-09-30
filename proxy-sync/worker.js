@@ -33,7 +33,16 @@ const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
 const SP_HOST = "https://sellingpartnerapi-fe.amazon.com";
 const EBAY_API = "https://api.ebay.com";
 
-const SP_MIN_GAP = 350;            // SP-APIの呼び出し間隔（ms）
+/* SP-APIの呼び出し間隔。Amazonの上限はAPIごとに違うので別々に持つ。
+   getOrderItems は 0.5回/秒（＝2秒に1回）なので 2.1秒あける。
+   getItemOffersBatch は 0.1回/秒なので 10.5秒。getOrders は回数が少ないので1秒。 */
+const SP_GAP = {
+  getOrders: 1000,
+  getOrderItems: 2100,
+  getInventorySummaries: 600,
+  getItemOffersBatch: 10500,
+};
+const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
 const SP_BACKOFF = [700, 1500, 3000];
 
@@ -44,10 +53,14 @@ const ROLLCALL_BATCH = 50;         // getInventorySummaries の sellerSkus は1�
 const ROLLCALL_MAX_CALLS = 40;     // 1回の実行で名指し照会する上限（50×40＝2000SKU）
 const SWEEP_PAGES = 20;            // 全件スイープで1回に進めるページ数
 const PRICING_BATCH = 20;          // getItemOffersBatch は1回20件まで
-const PRICING_MAX_CALLS = 10;
+const PRICING_MAX_CALLS = 6;       // 0.1回/秒なので1回の実行では6回（120件）まで
 const EBAY_PAGE = 200;             // GetMyeBaySelling の1ページ件数
 const EBAY_MAX_PAGES = 30;
 const DAILY_UTC_HOUR = 18;         // JST 3時台に日次処理を回す
+const ITEMS_PER_RUN = 25;          // 1回の実行で明細を取る注文の数（2.1秒×25＝約53秒）
+const ITEMS_PER_RUN_MAX = 120;     // 手動実行で増やせる上限
+const ITEMS_DEADLINE_MS = 240000;  // 明細取得に使う時間の上限（これを越えたら次回へ回す）
+const D1_MAX_KEYS = 40;            // 1命令のバインド変数上限（100）に収まる件数（40件＝80個）
 const NOTIFY_MAX = 1800;           // Discord の1通の文字数上限に対する余裕
 
 /* pj_price の CSV_PREFIX と同じ表。eBayに出すカテゴリだけ 'ebay'。 */
@@ -179,15 +192,17 @@ function parseLabel(label) {
 }
 
 /* ---- Amazon SP-API ---- */
-let spChain = Promise.resolve(), spLast = 0;
-// 呼び出し間隔を SP_MIN_GAP 以上に保つ（同じ isolate 内で直列化）
-function spSlot() {
-  spChain = spChain.then(async () => {
-    const wait = spLast + SP_MIN_GAP - Date.now();
+/* APIごとに待ち行列を持つ。ある API を待っている間に別の API を止めない。 */
+const spLanes = {};
+function spSlot(label) {
+  const gap = SP_GAP[label] || SP_GAP_DEFAULT;
+  const lane = spLanes[label] || (spLanes[label] = { chain: Promise.resolve(), last: 0 });
+  lane.chain = lane.chain.then(async () => {
+    const wait = lane.last + gap - Date.now();
     if (wait > 0) await sleep(wait);
-    spLast = Date.now();
+    lane.last = Date.now();
   }).catch(() => {});
-  return spChain;
+  return lane.chain;
 }
 const isQuota = (status, body) =>
   status === 429 || /QuotaExceeded|TooManyRequests/i.test(String(body || ""));
@@ -223,7 +238,7 @@ async function spCall(env, run, path, opt) {
   const headers = { "x-amz-access-token": token, "accept": "application/json" };
   if (o.body) headers["content-type"] = "application/json";
   for (let i = 0; i <= SP_RETRY; i++) {
-    await spSlot();
+    await spSlot(o.label);
     let resp, text = "";
     try {
       resp = await net(run, url, { method: o.method || "GET", headers, body: o.body });
@@ -273,7 +288,9 @@ async function amazonOrders(env, run, sinceIso) {
   }
   return { orders: out, ok: true };
 }
-// 注文明細。SKU・数量・金額だけ取る。
+/* 注文明細。SKU・数量・金額だけ取る。
+   呼び出し上限（0.5回/秒）に当たりやすいので、失敗は ok:false で返し、
+   呼び出し側が待ち行列に残して次回やり直す。 */
 async function amazonOrderItems(env, run, orderId) {
   const lines = [];
   let token = "";
@@ -283,7 +300,7 @@ async function amazonOrderItems(env, run, orderId) {
     const path = "/orders/v0/orders/" + encodeURIComponent(orderId) + "/orderItems"
       + (q.toString() ? "?" + q.toString() : "?");
     const r = await spCall(env, run, path, { label: "getOrderItems" });
-    if (!r.ok) return lines;
+    if (!r.ok) return { lines, ok: false };
     const p = (r.data && r.data.payload) || {};
     for (const it of p.OrderItems || []) {
       lines.push({
@@ -298,7 +315,7 @@ async function amazonOrderItems(env, run, orderId) {
     token = p.NextToken || "";
     if (!token) break;
   }
-  return lines;
+  return { lines, ok: true };
 }
 
 /* FBA在庫。mode によって引数を変える。
@@ -617,13 +634,29 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   ebay_currency, ebay_seen_at, fba_available, fba_inbound, fba_reserved, fba_seen_at,
   mode, one_off, fba_link, amazon_lowest, amazon_lowest_at, updated_at`;
 
+/* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
+   重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
+   （まとめて引くと「too many SQL variables」で中断する）。 */
 async function itemsByKeys(env, keys) {
-  if (!keys.length) return [];
-  const where = keys.map(() => "(asin=? AND cond=?)").join(" OR ");
-  const bind = [];
-  for (const k of keys) bind.push(k.asin, k.cond);
-  const r = await env.DB.prepare(`SELECT ${ITEM_COLS} FROM items WHERE ${where}`).bind(...bind).all();
-  return (r && r.results) || [];
+  const uniq = [], seen = {};
+  for (const k of keys || []) {
+    if (!k || !k.asin) continue;
+    const id = k.asin + "|" + k.cond;
+    if (seen[id]) continue;
+    seen[id] = 1;
+    uniq.push(k);
+  }
+  const out = [];
+  for (let i = 0; i < uniq.length; i += D1_MAX_KEYS) {
+    const part = uniq.slice(i, i + D1_MAX_KEYS);
+    const where = part.map(() => "(asin=? AND cond=?)").join(" OR ");
+    const bind = [];
+    for (const k of part) bind.push(k.asin, k.cond);
+    const r = await env.DB.prepare(`SELECT ${ITEM_COLS} FROM items WHERE ${where}`)
+      .bind(...bind).all();
+    for (const x of (r && r.results) || []) out.push(x);
+  }
+  return out;
 }
 
 /* 溜まっているイベントを通知する。即時のものは種類で判断し、
@@ -654,8 +687,16 @@ async function flushEvents(env, run, onlyImmediate) {
 /* ---- 取り込みの本体 ---- */
 
 /* 注文（Amazon AFN と eBay）。15分ごと。
-   保存するのは注文ID・SKU・数量・金額・日時・状態だけ。 */
-async function syncOrders(env, run, days) {
+   保存するのは注文ID・SKU・数量・金額・日時・状態だけ。
+
+   getOrderItems は 0.5回/秒しか呼べないため、注文一覧で見つけた注文は
+   いったん order_queue に入れ、1回の実行では上限件数（と時間）まで明細を取る。
+   取り終えた注文は done_at が入り、二度と取り直さない。
+   失敗した注文は done_at が空のまま残り、次回の実行でやり直す。
+   eBay の取り込みは明細の追加取得が要らないので、Amazonの明細より先に済ませる
+   （明細が長引いても eBay が取り残されないようにする）。 */
+async function syncOrders(env, run, days, maxItems) {
+  const cap = Math.min(ITEMS_PER_RUN_MAX, Math.max(1, Number(maxItems) || ITEMS_PER_RUN));
   const back = days ? Math.min(days, ORDERS_FIRST_DAYS) * 24 * 60 * 60 * 1000 : 0;
   const nowMs = Date.now();
   const sinceA = back ? new Date(nowMs - back).toISOString()
@@ -663,12 +704,67 @@ async function syncOrders(env, run, days) {
   const sinceE = back ? new Date(nowMs - back).toISOString()
     : (await stateGet(env, "orders.ebay.since")) || new Date(nowMs - ORDERS_LOOKBACK_MS).toISOString();
 
-  const stmts = [], keys = [], soldA = [], soldE = [];
-  // Amazon
+  /* 1) Amazonの注文一覧 → 待ち行列に積む。
+     すでに明細を取り終えた注文は done_at を残したまま状態だけ更新する。 */
   const a = await amazonOrders(env, run, sinceA);
+  const qs = [];
   for (const o of a.orders) {
-    const lines = await amazonOrderItems(env, run, o.orderId);
-    for (const li of lines) {
+    qs.push(env.DB.prepare(
+      `INSERT INTO order_queue (order_id, status, ordered_at, tries, updated_at)
+       VALUES (?1,?2,?3,0,?4)
+       ON CONFLICT(order_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`
+    ).bind(o.orderId, o.status, o.at, nowIso()));
+    // 明細を取り直さずに状態だけ反映する（数量・金額は変わらない）
+    qs.push(env.DB.prepare(
+      `UPDATE orders SET status=?2 WHERE channel='amazon' AND order_id=?1`
+    ).bind(o.orderId, o.status));
+  }
+  await runBatch(env, run, qs);
+
+  /* 2) eBayの注文 */
+  const keys = [], soldE = [];
+  const estmts = [];
+  const e = await ebayOrders(env, run, sinceE);
+  for (const o of e.orders) {
+    for (const li of o.lines) {
+      const k = parseLabel(li.sku);
+      estmts.push(env.DB.prepare(
+        `INSERT INTO orders (channel,order_id,line_id,sku,asin,cond,qty,amount,currency,
+           ordered_at,status,created_at) VALUES ('ebay',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+         ON CONFLICT(channel,order_id,line_id) DO UPDATE SET
+           qty=excluded.qty, amount=excluded.amount, status=excluded.status`
+      ).bind(o.orderId, li.lineId, li.sku, k.asin || null, k.cond || null, li.qty, li.amount,
+             li.currency, o.at, o.status, nowIso()));
+      if (k.ok) {
+        estmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
+        keys.push({ asin: k.asin, cond: k.cond });
+        soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId });
+      }
+    }
+  }
+  await runBatch(env, run, estmts);
+
+  /* 3) Amazonの明細を待ち行列から取る。上限件数と時間で打ち切り、残りは次回。 */
+  const pend = await env.DB.prepare(
+    `SELECT order_id, status, ordered_at FROM order_queue
+     WHERE done_at IS NULL ORDER BY ordered_at LIMIT ?1`
+  ).bind(cap).all();
+  const queue = (pend && pend.results) || [];
+  const t0 = Date.now();
+  const soldA = [];
+  let got = 0, failed = 0, stopped = false;
+  for (const row of queue) {
+    if (Date.now() - t0 > ITEMS_DEADLINE_MS) { stopped = true; break; }
+    const r = await amazonOrderItems(env, run, row.order_id);
+    if (!r.ok) {
+      failed++;
+      await env.DB.prepare(
+        `UPDATE order_queue SET tries=tries+1, updated_at=?2 WHERE order_id=?1`
+      ).bind(row.order_id, nowIso()).run();
+      continue;
+    }
+    const stmts = [];
+    for (const li of r.lines) {
       const p = parseSku(li.sku);
       const asin = p.ok ? p.asin : li.asin;
       const cond = p.ok ? p.cond : "new";
@@ -677,59 +773,54 @@ async function syncOrders(env, run, days) {
            ordered_at,status,created_at) VALUES ('amazon',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
          ON CONFLICT(channel,order_id,line_id) DO UPDATE SET
            qty=excluded.qty, amount=excluded.amount, status=excluded.status`
-      ).bind(o.orderId, li.lineId, li.sku, asin, cond, li.qty, li.amount, li.currency,
-             o.at, o.status, nowIso()));
+      ).bind(row.order_id, li.lineId, li.sku, asin, cond, li.qty, li.amount, li.currency,
+             row.ordered_at, row.status, nowIso()));
       if (asin) {
         stmts.push(itemSeed(env, asin, cond, p.scope, ""));
         keys.push({ asin, cond });
-        soldA.push({ asin, cond, orderId: o.orderId, sku: li.sku });
+        soldA.push({ asin, cond, orderId: row.order_id, sku: li.sku });
       }
     }
+    stmts.push(env.DB.prepare(
+      `UPDATE order_queue SET done_at=?2, lines=?3, updated_at=?2 WHERE order_id=?1`
+    ).bind(row.order_id, nowIso(), r.lines.length));
+    await runBatch(env, run, stmts);
+    got++;
   }
-  // eBay
-  const e = await ebayOrders(env, run, sinceE);
-  for (const o of e.orders) {
-    for (const li of o.lines) {
-      const k = parseLabel(li.sku);
-      stmts.push(env.DB.prepare(
-        `INSERT INTO orders (channel,order_id,line_id,sku,asin,cond,qty,amount,currency,
-           ordered_at,status,created_at) VALUES ('ebay',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
-         ON CONFLICT(channel,order_id,line_id) DO UPDATE SET
-           qty=excluded.qty, amount=excluded.amount, status=excluded.status`
-      ).bind(o.orderId, li.lineId, li.sku, k.asin || null, k.cond || null, li.qty, li.amount,
-             li.currency, o.at, o.status, nowIso()));
-      if (k.ok) {
-        stmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
-        keys.push({ asin: k.asin, cond: k.cond });
-        soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId });
-      }
-    }
-  }
-  await runBatch(env, run, stmts);
+  const left = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM order_queue WHERE done_at IS NULL`).first();
+  const leftN = Number((left && left.n) || 0);
 
-  // 売れた行の状態を見てイベントを作る
+  /* 4) 売れた行の状態を見てイベントを作る */
   const items = await itemsByKeys(env, keys);
   const map = {};
   for (const it of items) map[it.asin + "|" + it.cond] = it;
   const ev = [];
-  for (const s of soldA) {
-    const it = map[s.asin + "|" + s.cond];
+  for (const s2 of soldA) {
+    const it = map[s2.asin + "|" + s2.cond];
     if (!it || it.scope !== "ebay") continue;
     if (Number(it.ebay_qty || 0) >= 1)
-      ev.push(evStmt(env, "FBA_SOLD", "FBA_SOLD|" + s.orderId + "|" + s.sku, it,
-        { title: it.title || s.sku, ebay_qty: it.ebay_qty, fba_available: it.fba_available }));
+      ev.push(evStmt(env, "FBA_SOLD", "FBA_SOLD|" + s2.orderId + "|" + s2.sku, it,
+        { title: it.title || s2.sku, ebay_qty: it.ebay_qty, fba_available: it.fba_available }));
   }
-  for (const s of soldE) {
-    const it = map[s.asin + "|" + s.cond] || { asin: s.asin, cond: s.cond, scope: "ebay" };
-    ev.push(evStmt(env, "EBAY_SOLD", "EBAY_SOLD|" + s.orderId + "|" + s.line, it,
-      { title: it.title || s.asin, fba_available: it.fba_available || 0,
+  for (const s2 of soldE) {
+    const it = map[s2.asin + "|" + s2.cond] || { asin: s2.asin, cond: s2.cond, scope: "ebay" };
+    ev.push(evStmt(env, "EBAY_SOLD", "EBAY_SOLD|" + s2.orderId + "|" + s2.line, it,
+      { title: it.title || s2.asin, fba_available: it.fba_available || 0,
         ebay_qty: it.ebay_qty || 0 }));
   }
   await runBatch(env, run, ev);
+
+  /* 5) 差分の基準時刻を進める。明細が残っていても待ち行列で追いかけるので進めてよい。 */
   if (a.ok) await stateSet(env, "orders.amazon.since", new Date(nowMs - 60 * 1000).toISOString()).run();
   if (e.ok) await stateSet(env, "orders.ebay.since", new Date(nowMs - 60 * 1000).toISOString()).run();
-  run.notes.push("Amazon注文 " + a.orders.length + "件 / eBay注文 " + e.orders.length + "件");
-  return { amazon: a.orders.length, ebay: e.orders.length };
+  run.notes.push("Amazon注文 " + a.orders.length + "件 / eBay注文 " + e.orders.length + "件"
+    + " / 明細 取得" + got + "件"
+    + (failed ? ("・失敗" + failed + "件（次回やり直す）") : "")
+    + (stopped ? "・時間の上限で打ち切り" : "")
+    + (leftN ? ("・残り" + leftN + "件") : ""));
+  return { amazon: a.orders.length, ebay: e.orders.length, items_fetched: got,
+           items_failed: failed, items_pending: leftN };
 }
 
 /* FBA在庫の行をD1へ書く。skus（個体）を更新し、items（商品）は合算で作り直す。
@@ -889,13 +980,16 @@ async function syncUnmatched(env, run) {
 }
 
 /* ---- 仕事の組み合わせ ---- */
-async function jobOrders(env, days) {
+async function jobOrders(env, days, maxItems) {
   const run = newRun("orders");
+  let res = {};
   try {
-    await syncOrders(env, run, days);
+    res = await syncOrders(env, run, days, maxItems);
+    run.notes.push("待ち行列の残り " + res.items_pending + "件");
     await flushEvents(env, run, true);      // 即時ぶんだけ（EBAY_SOLD / OVERSELL_RISK）
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
-  return saveRun(env, run);
+  // 明細の残り件数も返す（0になるまで押せばよいと分かるように）
+  return Object.assign(await saveRun(env, run), res);
 }
 async function jobHourly(env) {
   const run = newRun("inventory");
@@ -1064,7 +1158,8 @@ export default {
         let body = {}; try { body = await request.json(); } catch (e) { body = {}; }
         const kind = String(body.kind || "orders");
         const days = Number(body.days || 0);
-        if (kind === "orders")    return json(await jobOrders(env, days), 200, origin);
+        if (kind === "orders")
+          return json(await jobOrders(env, days, Number(body.max || 0)), 200, origin);
         if (kind === "inventory") return json(await jobHourly(env), 200, origin);
         if (kind === "rollcall")  return json(await jobDaily(env), 200, origin);
         if (kind === "sweep")     return json(await jobSweep(env), 200, origin);

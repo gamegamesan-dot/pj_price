@@ -59,6 +59,9 @@ npx wrangler kv namespace create SYNC_CACHE  # 出力された id を wrangler.t
 npx wrangler d1 execute pj-sync --remote --file=./schema.sql
 ```
 
+`schema.sql` はすべて `CREATE ... IF NOT EXISTS` なので、**表を足したときは同じコマンドを
+もう一度実行すればよい**（既存のデータは消えない）。`order_queue` を足した回もこれで足りる。
+
 ### 1-5. シークレットを登録する
 
 ```powershell
@@ -123,7 +126,9 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`unmatched=1`、`sold=24`、`limit=500` |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
-| POST | `/sync` | 手動実行。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7}` |
+| POST | `/sync` | 手動実行。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
+
+`kind=orders` の `max` は、その回で明細（`getOrderItems`）を取る注文の数（既定25・最大120）。
 
 手動実行の例：
 
@@ -131,8 +136,11 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 $H = @{ 'X-PJ-Key' = '<PJ_ACCESS_KEY>'; 'content-type' = 'application/json' }
 $U = 'https://pj-sync.<サブドメイン>.workers.dev'
 
-# 受け入れテスト：過去7日分の注文を読む
+# 受け入れテスト：過去7日分の注文を読む（明細は1回25件まで。残りは次回以降）
 Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"orders","days":7}'
+
+# 明細の残りを続けて取る（note の「残りN件」が0になるまで繰り返す）
+Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"orders","max":60}'
 
 # 在庫（差分）＋eBay出品中リスト
 Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"inventory"}'
@@ -156,6 +164,26 @@ Invoke-RestMethod -Uri "$U/runs?limit=10" -Headers $H | Format-Table
 | 毎時07分 | FBA在庫を `startDateTime` で差分取り込み＋eBayの出品中リスト → 食い違いを検出し、まとめて通知 |
 | 毎時のうち UTC18時台（JST3時台） | 名簿のSKUを `sellerSkus`（50件/回）で名指し確認＋Amazon最安値＋未対応付けの件数 |
 | 手動のみ | 全件スイープ（`nextToken` をD1に保存して数ページずつ進める） |
+
+### 呼び出し間隔と注文明細の待ち行列
+
+Amazonの上限はAPIごとに違うので、`SP_GAP` で別々に待つ。
+
+| API | 上限（ドキュメント） | あける間隔 |
+|---|---|---|
+| `getOrders` | 0.0167回/秒（バースト20） | 1.0秒 |
+| `getOrderItems` | **0.5回/秒** | **2.1秒** |
+| `getInventorySummaries` | 2回/秒（バースト2） | 0.6秒 |
+| `getItemOffersBatch` | 0.1回/秒 | 10.5秒（1回の実行で6回＝120件まで） |
+
+`getOrderItems` が遅いので、注文一覧で見つけた注文は `order_queue` に積み、
+**1回の実行では既定25件（`max` で最大120件）まで**明細を取る。
+
+- 取り終えた注文は `done_at` が入り、**二度と明細を取り直さない**（状態の変化は
+  注文一覧の値で `orders.status` だけ更新する）
+- 失敗した注文は `done_at` が空のまま残り、`tries` が増えて**次回の実行でやり直す**
+- eBayの取り込みは明細より**先**に行うので、明細が長引いても取り残されない
+- 残り件数は `note` と `/sync` の戻り（`items_pending`）に出る
 
 **`startDateTime` は入庫中の数量変化を検出しない**（Amazonの仕様）。そのぶんを日次の
 名指し確認で補っている。名簿は pj_price から `POST /listings` で送ったSKU（`active=1`）で、

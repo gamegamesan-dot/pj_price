@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_at  ON orders(ordered_at);
 CREATE INDEX IF NOT EXISTS idx_orders_key ON orders(asin, cond);
 
+-- Amazonの注文明細（getOrderItems）の待ち行列。
+-- getOrderItems は 0.5回/秒しか呼べないので、1回の実行では上限件数まで取り、
+-- 残りは次回に回す。done_at が入っている注文は二度と明細を取り直さない。
+CREATE TABLE IF NOT EXISTS order_queue (
+  order_id   TEXT PRIMARY KEY,
+  status     TEXT,
+  ordered_at TEXT,
+  lines      INTEGER,
+  tries      INTEGER NOT NULL DEFAULT 0,
+  done_at    TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_queue_pending ON order_queue(done_at, ordered_at);
+
 -- 検出したイベント。dedup_key が同じものは二重に入らない（通知の重複防止）。
 CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
