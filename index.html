@@ -147,6 +147,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <button id="tabB" aria-pressed="false">出品文</button>
     <button id="tabC" aria-pressed="false">Shopee</button>
     <button id="tabD" aria-pressed="false">出品CSV</button>
+    <button id="tabE" aria-pressed="false">販売連携</button>
   </div>
 
   <div id="tabPricing">
@@ -623,6 +624,57 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
       <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
       <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
+    </div>
+  </section>
+
+  </div>
+
+  <div id="tabSync" style="display:none">
+
+  <section>
+    <div class="h">販売連携（FBA × eBay）</div>
+    <div class="body">
+      <div class="big" style="padding:0 0 10px;border:0">
+        <div class="cap">FBA在庫（1点以上）</div>
+        <div class="v num" id="syncCount">0</div>
+        <div class="sub" id="syncSummary">&mdash;</div>
+      </div>
+      <button class="btn primary" id="syncLoad" style="width:100%">状況を取り込む</button>
+      <div class="note2" id="syncNote"></div>
+      <button class="btn" id="syncPush" style="width:100%;margin-top:8px">出品リストの名簿を送る（手元在庫の印つき）</button>
+      <div class="note2" id="syncPushNote"></div>
+      <button class="btn" id="syncRestock" style="width:100%;margin-top:8px">再調達で出し直すCSVを書き出す（選んだ行）</button>
+      <div class="note2" id="syncRestockNote"></div>
+    </div>
+  </section>
+
+  <details id="syncListBox" open>
+    <summary style="padding:11px 13px;font-size:13px;font-weight:700;cursor:pointer">一覧</summary>
+    <div class="body" style="padding-top:0">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+        <span class="note2" style="margin:0;flex:0 0 auto">絞り込み</span>
+        <select id="syncFilter" style="flex:1 1 0;min-width:0">
+          <option value="warn">警告ありだけ</option>
+          <option value="all" selected>eBay出品ありか在庫あり</option>
+          <option value="listed">eBayに出ている行</option>
+          <option value="listed_no_fba">eBay出品あり・FBA在庫なし</option>
+          <option value="fba_not_listed">FBA在庫あり・eBay未出品</option>
+          <option value="on_hand">手元在庫ありの行</option>
+        </select>
+      </div>
+      <div id="syncList"></div>
+    </div>
+  </details>
+
+  <section>
+    <div class="h">設定（販売連携）</div>
+    <div class="body">
+      <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
+      <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <div class="row"><label>推奨売値の既定重量</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行は、この重量で推奨売値を出します（表では「既定」と出ます）。</div>
+      <div class="chk" style="margin-top:8px"><input type="checkbox" id="syncOnHand" checked><label for="syncOnHand" style="flex:1">名簿を送るとき、FBA在庫が未確認の行に「手元在庫あり」を付ける</label></div>
+      <div class="note2" style="margin-top:0">仕入れてすぐeBayに出し、FBA納品はその後になる運用のためです。印が付いた行はFBAが0でも売り越しの警告を出しません。</div>
     </div>
   </section>
 
@@ -1406,18 +1458,21 @@ $('tabA').onclick=function(){switchTab('A');};
 $('tabB').onclick=function(){switchTab('B');};
 $('tabC').onclick=function(){switchTab('C');};
 $('tabD').onclick=function(){switchTab('D');};
+$('tabE').onclick=function(){switchTab('E');};
 function switchTab(t){
   $('tabA').setAttribute('aria-pressed',t==='A');
   $('tabB').setAttribute('aria-pressed',t==='B');
   $('tabC').setAttribute('aria-pressed',t==='C');
   $('tabD').setAttribute('aria-pressed',t==='D');
+  $('tabE').setAttribute('aria-pressed',t==='E');
   $('tabPricing').style.display=t==='A'?'block':'none';
   $('tabListing').style.display=t==='B'?'block':'none';
   $('tabShopee').style.display=t==='C'?'block':'none';
   $('tabCsv').style.display=t==='D'?'block':'none';
-  /* 出品CSVタブでは計算機の「商品」欄を使わない（行ごとの値で計算する）。
-     タブより上が長いと一覧が見づらいので、このタブのあいだだけ隠す。 */
-  $('itemBox').style.display=(t==='D')?'none':'block';
+  $('tabSync').style.display=t==='E'?'block':'none';
+  /* 出品CSVタブと販売連携タブでは計算機の「商品」欄を使わない
+     （どちらも行ごとの値で計算する）。タブより上が長いと一覧が見づらいので隠す。 */
+  $('itemBox').style.display=(t==='D'||t==='E')?'none':'block';
   // 設定セクションは全タブ共通なので、Shopeeを開いている間だけ eBay 専用の項目を隠す。
   var eb=(t!=='C');
   $('ebayOnly').style.display=eb?'block':'none';
@@ -1426,6 +1481,7 @@ function switchTab(t){
   if(t==='B')buildListing();
   if(t==='C'){ buildShopee(); fetchSpFx(); }
   if(t==='D')csvRender();
+  if(t==='E')syncRender();
   window.scrollTo(0,0);
 }
 
@@ -2549,7 +2605,7 @@ var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault',
-                 'csvCatCustom'];
+                 'csvCatCustom','syncApi','syncKey','syncWeight'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2570,21 +2626,24 @@ function csvLoad(){
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; });
-       if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse; }catch(e){}
+       if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
+       if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand; }catch(e){}
 }
 function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
 // 前後の空白を落として保存する欄（貼り付けで混ざりやすいURL・トークン類）
-var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken'];
+var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken','syncApi','syncKey'];
 function csvSaveCfg(){
   try{ var o={}; CSV_CFG_IDS.forEach(function(id){
          var v=$(id).value;
          o[id]=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v; });
        o.csvAutoParse=$('csvAutoParse').checked;
+       o.syncOnHand=$('syncOnHand').checked;
        localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
+$('syncOnHand').addEventListener('change',csvSaveCfg);
 // 登録カテゴリを書き換えたら、出品文タブの選択肢も作り直す
 $('csvCatCustom').addEventListener('input',csvAddCatOpts);
 // 入力が終わった時点で、欄の表示からも前後の空白を消す
@@ -4112,6 +4171,242 @@ function csvDescFor(r){
     applyCat();
   }
 }
+/* ================= 販売連携タブ（フェイズA・見える化 ＋ フェイズBの手作業版） =================
+   pj-sync（Worker）から状況を読んで一覧にする。ここから書き込み操作はしない。
+   - GET /status  … FBA在庫・eBay出品・Amazon最安値・警告
+   - POST /listings … 出品リストの名簿（SKU・ItemID・モード・手元在庫）を送る
+   - 再調達CSV     … eBayのReviseで数量・売値・配送ポリシーを入れ替える（手作業版のフェイズB）
+   Amazon最安値を仕入値とみなした推奨売値は、計算機と同じ csvPriceFor() で出す。 */
+var SYNC_KEY='pj:sync:v1';
+var syncData=null, syncPick={};
+function syncLoadCache(){
+  try{ var o=JSON.parse(localStorage.getItem(SYNC_KEY)||'null');
+       if(o&&o.items)syncData=o; }catch(e){}
+}
+function syncSaveCache(){
+  try{ localStorage.setItem(SYNC_KEY,JSON.stringify(syncData)); }catch(e){}
+}
+function syncUrl(){ return String($('syncApi').value||'').trim().replace(/\/+$/,''); }
+function syncApiKey(){
+  return String($('syncKey').value||'').trim()||String($('csvTitleKey').value||'').trim();
+}
+function syncSay(msg){ $('syncNote').textContent=msg||''; }
+// pj-sync の行と出品リストの行を結びつける（ItemID優先、無ければCustomLabel）
+function syncCsvRowFor(r){
+  var id=String(r.ebay_item_id||'').trim(), sku=String(r.ebay_sku||'').trim();
+  var hit=null;
+  csvList.forEach(function(x){
+    if(hit)return;
+    if(id&&String(x.itemId||'').trim()===id)hit=x;
+    else if(sku&&csvCustomLabel(x)===sku)hit=x;
+  });
+  return hit;
+}
+/* Amazon最安値（円）を仕入値とみなした推奨売値。
+   重量は出品リストの同じ商品から取り、無ければ設定の既定重量を使う。 */
+function syncRecommend(r){
+  var low=+r.amazon_lowest||0;
+  if(!low)return null;
+  var row=syncCsvRowFor(r);
+  var w=row?(+row.weight||0):0, def=false;
+  if(!w){ w=+$('syncWeight').value||400; def=true; }
+  var p=csvPriceFor(low, w);
+  return { price:p.price, floor:p.floor, profit:p.profit, weight:w, weightDefault:def };
+}
+function syncMatch(r){
+  var f=$('syncFilter').value;
+  if(f==='warn')return (r.warnings||[]).length>0;
+  if(f==='listed')return r.ebay_qty!==null&&r.ebay_qty!==undefined;
+  if(f==='on_hand')return !!Number(r.on_hand||0);
+  if(f==='listed_no_fba'||f==='fba_not_listed')return r.state===f;
+  return true;
+}
+function syncRender(){
+  var c=(syncData&&syncData.counts)||{};
+  $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
+  $('syncSummary').textContent=syncData
+    ? ('eBayに出ている '+(c.listed||0)+'件　/　FBA在庫なし '+(c.listed_no_fba||0)+'件'
+       +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
+       +'　/　手元在庫 '+(c.on_hand||0)+'件　/　過去SKU '+(c.past_zero||0)+'件'
+       +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
+    : '「状況を取り込む」を押してください';
+  var rows=(syncData&&syncData.items)||[], h='', shown=0;
+  rows.forEach(function(r){
+    if(!syncMatch(r))return;
+    shown++;
+    var key=r.asin+'|'+r.cond;
+    var rec=syncRecommend(r);
+    var warn=(r.warnings||[]);
+    var badge=warn.map(function(w){
+      var col=(w.indexOf('予約済み')===0)?'#b00020':(w==='FBA在庫なし'?'#8a6d00':'#b35c00');
+      return '<span style="display:inline-block;background:'+col+';color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">'+esc(w)+'</span>';
+    }).join('');
+    if(Number(r.on_hand||0))badge+='<span style="display:inline-block;background:#2f6fb0;color:#fff;'
+      +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">手元在庫</span>';
+    var low=+r.amazon_lowest||0;
+    h+='<div style="border-top:1px solid var(--line);padding:9px 0">'
+      +'<div style="display:flex;gap:6px;align-items:flex-start">'
+      +'<input type="checkbox" data-spick="'+esc(key)+'"'+(syncPick[key]?' checked':'')
+      +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:2px">'
+      +'<div style="flex:1 1 0;min-width:0">'
+      +'<div style="font-size:13px;line-height:1.45;word-break:break-word">'+esc(r.title||r.asin)+'</div>'
+      +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
+      +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
+      +'　/　'+esc(r.asin)+'（'+(r.cond==='new'?'新品':'中古')+'）</div>'
+      +'<div class="note2" style="margin-top:3px">FBA 販売可能 '+(r.fba_available===null?'—':r.fba_available)
+      +'／入庫 '+(r.fba_inbound===null?'—':r.fba_inbound)
+      +'／予約 '+(r.fba_reserved===null?'—':r.fba_reserved)
+      +'　eBay 数量 '+(r.ebay_qty===null?'—':r.ebay_qty)
+      +'　売値 '+(r.ebay_price?usd(+r.ebay_price):'—')+'</div>'
+      +'<div class="note2" style="margin-top:3px">Amazon最安値 '
+      +(low?(yen(low)+'（'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))+'）'):'未取得')
+      +'</div>'
+      +'<div class="note2" style="margin-top:2px">'
+      +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>　最低 '+usd(rec.floor)+'　利益 '+yen(rec.profit)
+             +'　（重量 '+rec.weight+'g'+(rec.weightDefault?'・既定':'')+'）')
+           :'推奨売値 —（Amazon最安値が未取得）')
+      +'</div></div></div></div>';
+  });
+  $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
+  syncShown=shown;
+  syncPickNote();
+}
+var syncShown=0;
+// 選択の件数だけ書き替える。一覧は作り直さない（触っている欄が消えないように）
+function syncPickNote(){
+  var pick=Object.keys(syncPick).filter(function(k){return syncPick[k];}).length;
+  var rows=(syncData&&syncData.items)||[];
+  $('syncRestockNote').textContent=rows.length
+    ? (syncShown+'件を表示中。選択 '+pick+'件。'
+       +'書き出すと 数量・売値（推奨売値）・配送ポリシー（再調達用）を Revise します。')
+    : '';
+}
+$('syncFilter').addEventListener('change',syncRender);
+$('syncList').addEventListener('change',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var k=t.getAttribute('data-spick');
+  if(!k)return;
+  syncPick[k]=t.checked;
+  syncPickNote();          // 一覧は作り直さない
+});
+/* 状況を取り込む（読み取りだけ） */
+$('syncLoad').onclick=function(){
+  var u=syncUrl();
+  if(!u){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncApiKey()){ alert('設定の「pj-sync のキー」を入れてください。'); return; }
+  var btn=$('syncLoad'); btn.disabled=true; btn.textContent='取り込み中…';
+  syncSay('取り込み中…');
+  fetch(u+'/status?limit=1000',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      syncData={ at:new Date().toISOString(), counts:d.counts||{}, items:d.items||[],
+                 last_runs:d.last_runs||[], sold:d.sold_recent||[] };
+      syncSaveCache();
+      var run=(syncData.last_runs||[])[0]||{};
+      syncSay('取り込みました：'+syncData.items.length+'件'
+        +(run.started_at?('　最終実行 '+String(run.started_at).slice(0,16).replace('T',' ')
+          +'（'+esc(run.kind||'')+'）'):'')
+        +(d.errors_recent?'　直近の実行にエラーがあります（/runs を確認）':''));
+      syncRender();
+    })
+    .catch(function(e){ syncSay('取り込みに失敗しました：'+e.message); })
+    .then(function(){ btn.disabled=false; btn.textContent='状況を取り込む'; });
+};
+/* 出品リストの名簿を送る。手元在庫の印は「FBA在庫が未確認の行」に付ける。 */
+$('syncPush').onclick=function(){
+  var u=syncUrl();
+  if(!u){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!csvList.length){ alert('出品リストが空です。'); return; }
+  var onHandOn=$('syncOnHand').checked;
+  /* pj-sync 側でFBA在庫が確認できている行は印を付けない。
+     取り込んでいないときは、出品済み（ItemIDあり）の行だけ印を付ける。 */
+  var seen={};
+  ((syncData&&syncData.items)||[]).forEach(function(x){
+    if(x.fba_seen_at)seen[String(x.ebay_sku||'')]=1;
+  });
+  var items=csvList.map(function(r){
+    var label=csvCustomLabel(r);
+    return { sku:r.sku, custom_label:label, item_id:r.itemId||'', title:r.titleJa||r.titleEn||'',
+             mode:r.zeroAct||'hold', one_off:!!r.oneOff, fba_link:!!r.fba,
+             on_hand:!!(onHandOn&&!seen[label]) };
+  });
+  var btn=$('syncPush'); btn.disabled=true; btn.textContent='送信中…';
+  var sent=0, failed=0;
+  function step(i){
+    if(i>=items.length){
+      btn.disabled=false; btn.textContent='出品リストの名簿を送る（手元在庫の印つき）';
+      $('syncPushNote').textContent='名簿を送りました：'+sent+'件'
+        +(failed?('　'+failed+'件は失敗しました。'):'')
+        +'　手元在庫の印 '+items.filter(function(x){return x.on_hand;}).length+'件。'
+        +'　「状況を取り込む」で反映を確認できます。';
+      /* 出品リストと結びついた行は重量が分かるので、推奨売値を出し直す
+         （表示と書き出しの売値を必ず一致させる）。 */
+      syncRender();
+      return;
+    }
+    var part=items.slice(i,i+200);
+    fetch(u+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:part})})
+      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(function(d){ sent+=(d.accepted||0); failed+=(d.rejected||0); })
+      .catch(function(e){ failed+=part.length; $('syncPushNote').textContent='送信に失敗：'+e.message; })
+      .then(function(){ step(i+200); });
+  }
+  $('syncPushNote').textContent='送信中…';
+  step(0);
+};
+/* ---- 再調達で出し直すCSV（フェイズBの手作業版）----
+   Revise で 数量・売値・配送ポリシー名を入れ替える。
+   ビジネスポリシーは3つ揃えて送る（配送だけ送ると組み合わせが崩れる報告があるため）。
+   特定キーは ItemID のみ。 */
+function syncRestockBuild(rows){
+  var head=[CSV_ACT_COL,'ItemID','*Quantity','*StartPrice',
+            'ShippingProfileName','ReturnProfileName','PaymentProfileName'];
+  var out=[CSV_INFO,csvLine(head)];
+  var ship=String($('csvShipProfileRe').value||$('csvShipProfile').value||'').trim();
+  var ret=String($('csvRetProfile').value||'').trim();
+  var pay=String($('csvPayProfile').value||'').trim();
+  rows.forEach(function(x){
+    out.push(csvLine(['Revise', x.itemId, x.qty, x.price.toFixed(2), ship, ret, pay]));
+  });
+  return { text:out.join('\r\n')+'\r\n', cols:head.length, ship:ship };
+}
+$('syncRestock').onclick=function(){
+  var rows=(syncData&&syncData.items)||[];
+  var pick=rows.filter(function(r){
+    return syncPick[r.asin+'|'+r.cond]&&String(r.ebay_item_id||'').trim();
+  });
+  if(!pick.length){
+    alert('行を選んでください（ItemIDがある行だけ選べます）。'); return;
+  }
+  var noLow=pick.filter(function(r){ return !(+r.amazon_lowest); });
+  if(noLow.length){
+    alert(noLow.length+'件はAmazon最安値が未取得のため売値を出せません。\n'
+      +'先に pj-sync で最安値を取得してください（rollcall）。');
+    return;
+  }
+  if(!String($('csvShipProfileRe').value||'').trim()){
+    alert('出品CSVタブの設定「再調達用ポリシー名」を入れてください。'); return;
+  }
+  var list=pick.map(function(r){
+    var rec=syncRecommend(r);
+    return { itemId:String(r.ebay_item_id).trim(),
+             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:rec.price, title:r.title||r.asin };
+  });
+  var b=syncRestockBuild(list);
+  if(!confirm(list.length+'件を再調達で出し直します。\n'
+    +'数量・売値（Amazon最安値から計算した推奨売値）・配送ポリシー（'+b.ship+'）を Revise します。\n'
+    +'書き出したファイルを Seller Hub にアップロードしてください。\n'
+    +'よろしいですか？'))return;
+  var name='ebay_restock_itemid_'+csvStamp()+'.csv';
+  $('syncRestockNote').textContent=csvDownload(name,b.text)
+    ? ('再調達CSVを書き出しました：'+name+'（'+list.length+'件・'+b.cols+'列）'
+       +'　配送ポリシー '+b.ship+'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。')
+    : '書き出しに失敗しました。';
+};
+
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
    出品文タブの既存ロジック（タイトル生成・説明文生成・SKU発番）はそのまま使う。
    ここでやるのは、行の値を各欄へ流し込むことと、生成結果を行へ書き戻すことだけ。 */
@@ -4291,7 +4586,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvAddCatOpts(); csvRender();
+csvLoad(); csvAddCatOpts(); csvRender(); syncLoadCache();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});

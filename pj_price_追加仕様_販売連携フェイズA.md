@@ -681,6 +681,85 @@ FBA在庫4件（販売可能あり／在庫0／予約済みのみ／入庫中の
 - **Worker のコードに、Amazon・eBay への書き込み系API呼び出しが含まれていない**ことをレビューで確認する。
 - D1 に購入者の個人情報が保存されていない。
 
+## 7.5 pj_price「販売連携」タブ（2026-09-30・sw.js v80）
+
+10章の受け入れテストは全て合格（FBA在庫の抜き取り4件も一致）。
+`counts` は ebay_in_stock 691 / listed 15 / listed_no_fba 1 / fba_not_listed 682 /
+past_zero 3144 / on_hand 0。これを受けてタブを作った。
+
+### 画面
+
+| ところ | 中身 |
+|---|---|
+| 見出し | FBA在庫（1点以上）の件数と、eBay出品・FBA在庫なし・在庫ありeBay未出品・手元在庫・過去SKU・解析不可の件数 |
+| 「状況を取り込む」 | `GET /status?limit=1000`。最終実行の時刻と種類、直近のエラー有無も出す |
+| 「出品リストの名簿を送る」 | `POST /listings`（200件ずつ）。SKU・CustomLabel・ItemID・モード・一点物・FBA連動・**手元在庫** |
+| 「再調達で出し直すCSVを書き出す」 | 選んだ行の Revise ファイル |
+| 絞り込み | 警告あり／eBay出品ありか在庫あり（既定）／eBayに出ている／FBA在庫なし／在庫ありeBay未出品／手元在庫あり |
+| 行 | 商品名・警告バッジ・CustomLabel・ItemID・ASIN・新品中古／FBA（販売可能・入庫・予約）・eBay（数量・売値）／**Amazon最安値（円・取得日時）**／**推奨売値・最低売値・利益・使った重量** |
+
+- このタブでも計算機の「商品」欄は隠す（行ごとの値で計算するため）
+- 取り込んだ内容は localStorage に持つので、開き直しても前回の状態が出る
+- **書き込み操作のボタンは置かない**（`POST /listings` は pj-sync へ名簿を送るだけ。
+  Amazon・eBayへは書き込まない）
+
+### 推奨売値（フェイズBの手作業版）
+
+**Amazon最安値（送料込み・円）を仕入値とみなして、計算機と同じ `csvPriceFor()` で出す。**
+値付けの式を2か所に持たない。
+
+重量は出品リストの同じ商品（ItemID一致 → CustomLabel一致）から取り、無ければ
+設定「推奨売値の既定重量」（初期値400g）を使い、表に「既定」と出す。
+名簿を送ったあとは出品リストと結びつくので、送信後に推奨売値を出し直して
+**表示と書き出しの売値が必ず一致する**ようにしている。
+
+### 手元在庫の印の付け方
+
+「名簿を送るとき、FBA在庫が未確認の行に『手元在庫あり』を付ける」（既定オン）。
+取り込み済みの `/status` で `fba_seen_at` がある行には**付けない**ので、
+FBA在庫が確認できた行は自動で印が下がる。
+
+### 再調達で出し直すCSV
+
+`ebay_restock_itemid_YYMMDD.csv`。列は7つ。
+
+```
+*Action(SiteID=US|Country=JP|Currency=USD|Version=1193|CC=UTF-8),ItemID,*Quantity,
+*StartPrice,ShippingProfileName,ReturnProfileName,PaymentProfileName
+Revise,110111,1,193.31,W2000,Returns 30d Buyer Paid,Managed Payments Immediate
+```
+
+- 特定キーは **ItemID のみ**（ItemIDが無い行は選べない）
+- 数量はいまのeBay数量（0なら1）、売値は**推奨売値**
+- 配送ポリシーは出品CSVタブの設定「再調達用ポリシー名」（既定 `W2000`）
+
+**File Exchange の Revise で配送ポリシー名を変えられるか：**
+テンプレート3本すべてに `ShippingProfileName` / `ReturnProfileName` /
+`PaymentProfileName` の列があるので、**列としては指定できる**。
+ただし Revise で実際に差し替わるかは**このコンテナからeBayに出られないため未検証**。
+ビジネスポリシーは3つ揃えて送るのが確実なので3列とも入れてある。
+**1件だけアップロードして結果ファイル（Status / ErrorMessage）で確かめてから
+本番で使うこと。** 反映されない場合は、Seller Hub の一括編集か
+Trading API の `ReviseFixedPriceItem`（＝フェイズBで書き込みを入れるとき）に切り替える。
+
+### 検証（実ブラウザ・pj-sync はモック）
+
+```
+タブ5本になり、販売連携タブで「商品」欄が隠れる ✅
+取り込み 4件・見出し691・件数の内訳が出る ✅
+行の表示  予約済みのみ／売り越しの恐れ／FBA在庫なし／手元在庫のバッジ ✅
+          Amazon最安値 ¥12,800（2026-09-30 18:06）✅
+          推奨売値 $189.00（計算機の csvPriceFor と同値）・最低・利益・重量400g既定 ✅
+          最安値が無い行は「推奨売値 —」 ✅
+絞り込み  warn 3 / listed 3 / listed_no_fba 1 / fba_not_listed 1 / on_hand 1 / all 4 ✅
+名簿送信  2件。FBA在庫が確認できている行は on_hand=false、未確認の行は true ✅
+          モード・FBA連動も送る ✅ 送信後に推奨売値を出し直す（重量550gで $193.31）✅
+再調達CSV 選択なしなら案内のみ／2件選択で7列・CRLF・BOMなし・W2000 ✅
+再読み込み localStorage から一覧が戻る ✅  pageerror なし ✅
+回帰13本（v12・v13・revtest・condtest2・v58・step5・step6・pricecsv・v76・v78・
+redo・cat・tafit）すべて ❌なし ✅
+```
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。
