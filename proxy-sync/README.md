@@ -194,6 +194,9 @@ Invoke-RestMethod -Uri "$U/runs?limit=10" -Headers $H | Format-Table
   **一度だけ指定なしで取り直す**ので、間違った指定で出品が消えることはない
 - 数量は `QuantityAvailable` が返らないことがあるので、無ければ
   **出品数量 − 売れた数量**で出す（0固定になるのを防ぐ）
+- pj_price を通さず出した出品は CustomLabel が空か別形式で、ASIN＋新品/中古の
+  キーが作れない。**一覧にも通知にも出さず、件数だけ**を `note` と
+  `/status` の `counts.ebay_unparsed` に出す
 
 ### 呼び出し間隔と注文明細の待ち行列
 
@@ -214,6 +217,16 @@ Amazonの上限はAPIごとに違うので、`SP_GAP` で別々に待つ。
 - 失敗した注文は `done_at` が空のまま残り、`tries` が増えて**次回の実行でやり直す**
 - eBayの取り込みは明細より**先**に行うので、明細が長引いても取り残されない
 - 残り件数は `note` と `/sync` の戻り（`items_pending`）に出る
+
+### nextToken の扱い
+
+**続きを読むときも1ページ目と同じ絞り込み（`startDateTime` など）を必ず付ける。**
+付けないと 400 `Invalid nextToken for the request, add startDateTime and try again`
+になり、2ページ目以降が読めない（2026-09-30 の受け入れテストで判明）。
+
+- 全件スイープは `nextToken` とその**起点の `startDateTime` を対でD1に保存**する
+  （`sweep.token` / `sweep.since`）
+- 保存していたトークンが古くて無効なときは、**破棄して1ページ目から読み直す**（1回だけ）
 
 **`startDateTime` は入庫中の数量変化を検出しない**（Amazonの仕様）。そのぶんを日次の
 名指し確認で補っている。名簿は pj_price から `POST /listings` で送ったSKU（`active=1`）で、

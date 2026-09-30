@@ -492,6 +492,61 @@ Seller Central の Non-Amazon 3件は「返送/所有権の放棄」（注文元
 通知の重複防止・個人情報の非保存）も全て通過 ✅
 ```
 
+### 受け入れテスト：出品中リストは取得成功、在庫のページ送りを修正（2026-09-30）
+
+`/sync {"kind":"inventory"}` で **eBay出品32件を取り込み**、`/status` に10件表示
+（`E-<ASIN>` 形式）。OutputSelector を外した修正は効いた。残った errors=1 を修正した。
+
+#### FBA在庫に `Amazon Fulfillment` ロールは要らなかった
+
+`getInventorySummaries` の**1ページ目は通っている**（在庫差分2件）。
+ロールが足りないなら 403 `Unauthorized` になるので、**現在の権限
+（Pricing / Inventory and Order Tracking / Product Listing）で
+FBA Inventory API は読める**と判断する。
+
+- したがって在庫の取り込みは**ロール承認を待たずに進められる**。
+- ただし **返送（Fulfillment Outbound）とフェイズCのMCFには `Amazon Fulfillment`
+  ロールが必要**。Non-Amazon 3件が Orders API で取れなかった件はこちらなので、
+  申請はそのまま進める価値がある。
+- 万一 403 に変わった場合は `note` に本文が残るので、そこで判断できる。
+
+#### `nextToken` は1ページ目と同じ絞り込みと対で使う
+
+400 `Invalid nextToken for the request, add startDateTime and try again`。
+**続きを読むときも1ページ目と同じ絞り込み（`startDateTime` など）を付ける**
+必要があった。1ページ目の引数を作っておき、以降は `nextToken` だけ差し替える形にした。
+
+- 全件スイープは `nextToken` と**起点の `startDateTime` を対でD1に保存**する
+  （`sweep.token` / `sweep.since`）。完走したら起点も消して次回は新しい起点にする。
+- 保存していたトークンが古くて無効なら、**破棄して1ページ目から読み直す**（1回だけ）。
+
+#### CustomLabel が解析できない既存出品は件数だけ
+
+CustomLabel が空欄のものと `260918-2023-7000` のような別形式が計17件
+（pj_price を通さず出した出品）。ASIN＋新品/中古のキーが作れないので
+**`items` に入れず、一覧にも通知にも出さない**。
+`note` には1件ずつ並べず **「CustomLabel解析不可 n件」**とだけ出し、
+`/status` の `counts.ebay_unparsed` でも見られるようにした。
+
+#### 検証（修正前後を並べて）
+
+```
+在庫が2ページある条件
+  修正前 errors=1 / 呼び出し [tok:なし+startDateTime, tok:P2+startDateTimeなし]
+         → 2ページ目が400。skus 1件しか入らない
+         note に解析不可のSKUが1件ずつ並ぶ
+  修正後 errors=0 / 呼び出し [tok:なし+startDateTime, tok:P2+startDateTimeあり]
+         → skus 2件。note は「CustomLabel解析不可 3件（…対象外）」だけ
+保存していた古いトークン（STALE）
+  400を1回記録 → 「nextToken が無効なので1ページ目から読み直す」→ 最初から読み直して完走 ✅
+rollcall（名簿の名指し確認）
+  errors=0。sellerSkus はカンマ区切りで1回に渡す ✅
+/status
+  counts.ebay_unparsed = 3、一覧は解析できた行だけ ✅
+既存のテスト（ガード16ケース・注文明細の待ち行列・D1バインド上限・販売経路・
+通知の重複防止・個人情報の非保存）も全て通過 ✅
+```
+
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
 - テスト用に Discord 通知が届く（同じイベントが二重に届かない）。

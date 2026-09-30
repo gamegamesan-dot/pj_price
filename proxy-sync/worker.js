@@ -275,7 +275,7 @@ async function spCall(env, run, path, opt) {
       text = await resp.text();
     } catch (e) {
       run.errors++; run.notes.push(o.label + "_error " + e.message);
-      return { ok: false, status: 0, data: null, quota: false };
+      return { ok: false, status: 0, data: null, quota: false, err: e.message };
     }
     if (resp.ok) {
       let data = null;
@@ -287,11 +287,13 @@ async function spCall(env, run, path, opt) {
       await sleep(SP_BACKOFF[i]);
       continue;
     }
+    const emsg = spErr(text);
     run.errors++;
-    run.notes.push(o.label + " -> " + resp.status + " " + spErr(text));
-    return { ok: false, status: resp.status, data: null, quota: isQuota(resp.status, text) };
+    run.notes.push(o.label + " -> " + resp.status + " " + emsg);
+    return { ok: false, status: resp.status, data: null,
+             quota: isQuota(resp.status, text), err: emsg };
   }
-  return { ok: false, status: 429, data: null, quota: true };
+  return { ok: false, status: 429, data: null, quota: true, err: "quota" };
 }
 
 /* FBAの注文（AFN）。LastUpdatedAfter 以降の差分。購入者情報は要求しない
@@ -385,27 +387,44 @@ function invRow(s) {
     reserved: Number((d.reservedQuantity && d.reservedQuantity.totalReservedQuantity) || 0),
   };
 }
-async function fbaInventory(env, run, mode, arg, maxPages) {
+const BAD_TOKEN = /nextToken/i;
+/* mode … 'since'（startDateTime の差分）/ 'skus'（名指し）/ 'all'（絞り込みなし）
+   startToken … 続きから読むときの nextToken（D1に保存したもの）
+
+   nextToken で続きを読むときも、**1ページ目と同じ絞り込みを必ず付ける**。
+   付けないと 400「Invalid nextToken for the request, add startDateTime and try again」
+   になる（2026-09-30 の受け入れテストで判明）。
+   保存しておいたトークンが古くて無効なときは、破棄して1ページ目から読み直す。 */
+async function fbaInventory(env, run, mode, arg, maxPages, startToken) {
+  const base = invQuery(mode, arg);          // 1ページ目の絞り込み。以降も同じものを使う
   const rows = [];
-  let token = mode === "token" ? arg : "";
-  let first = true, fallback = false;
+  let token = String(startToken || "");
+  let fallback = false, restarted = false, tries = 0;
   for (let page = 0; page < (maxPages || 1); page++) {
-    const q = (first && mode !== "token") ? invQuery(mode, arg) : invQuery("token", token);
-    const wasFirst = first;
-    first = false;
+    const q = new URLSearchParams(base);
+    if (token) q.set("nextToken", token);
     let r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q.toString(),
                          { label: "getInventorySummaries" });
-    /* 400（引数の誤り）のときは、startDateTime を外して1ページだけ試す。
-       これで通れば原因は startDateTime だと分かる。取りこぼさないよう、
-       この回は差分の基準時刻を進めない（呼び出し側が fallback を見る）。 */
-    if (!r.ok && r.status === 400 && wasFirst && mode === "since") {
-      const q2 = invQuery("all", null);
-      run.notes.push("startDateTime を外して再試行");
+    /* 無効なトークンだったら捨てて1ページ目から読み直す（1回だけ） */
+    if (!r.ok && r.status === 400 && token && BAD_TOKEN.test(String(r.err || "")) && !restarted) {
+      restarted = true;
+      token = "";
+      run.notes.push("nextToken が無効なので1ページ目から読み直す");
+      const q2 = new URLSearchParams(base);
       r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q2.toString(),
+                       { label: "getInventorySummaries" });
+    }
+    /* それでも400なら、startDateTime を外して1ページだけ試して原因を切り分ける。
+       この回は1ページしか見ていないので差分の基準時刻は進めない。 */
+    if (!r.ok && r.status === 400 && !token && mode === "since" && tries === 0) {
+      tries++;
+      const q3 = invQuery("all", null);
+      run.notes.push("startDateTime を外して再試行");
+      r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q3.toString(),
                        { label: "getInventorySummaries" });
       if (r.ok) { fallback = true; run.notes.push("→ 通った（原因は startDateTime）"); }
     }
-    if (!r.ok) return { rows, next: token, ok: false, fallback };
+    if (!r.ok) return { rows, next: "", ok: false, fallback, restarted };
     run.pages++;
     const p = (r.data && r.data.payload) || {};
     for (const s of p.inventorySummaries || []) rows.push(invRow(s));
@@ -413,7 +432,7 @@ async function fbaInventory(env, run, mode, arg, maxPages) {
     if (!token || fallback) break;
   }
   run.skus += rows.length;
-  return { rows, next: token, ok: true, fallback };
+  return { rows, next: token, ok: true, fallback, restarted };
 }
 
 /* Amazon最安値（参考表示用）。読み取りだがPOSTしか無いAPI。 */
@@ -1008,16 +1027,24 @@ async function syncRollcall(env, run) {
   return keys;
 }
 
-/* 手動。全件スイープ。nextToken をD1に置いて数ページずつ進める。 */
+/* 手動。全件スイープ。nextToken をD1に置いて数ページずつ進める。
+   nextToken は1ページ目と同じ絞り込みと対でないと使えないので、
+   そのときの startDateTime も一緒に保存して使い回す。 */
 async function syncSweep(env, run) {
   const token = await stateGet(env, "sweep.token");
-  const r = token
-    ? await fbaInventory(env, run, "token", token, SWEEP_PAGES)
-    : await fbaInventory(env, run, "since", new Date(Date.now() - 540 * 24 * 60 * 60 * 1000).toISOString(), SWEEP_PAGES);
+  let since = await stateGet(env, "sweep.since");
+  if (!token || !since) {
+    // 18か月より前は指定できないので、余裕をみて540日前から
+    since = isoSec(Date.now() - 540 * 24 * 60 * 60 * 1000);
+    await stateSet(env, "sweep.since", since).run();
+  }
+  const r = await fbaInventory(env, run, "since", since, SWEEP_PAGES, token);
   const keys = await writeInventory(env, run, r.rows);
   await stateSet(env, "sweep.token", r.next || "").run();
   await stateSet(env, "sweep.at", nowIso()).run();
+  if (r.restarted) run.notes.push("保存していたトークンが無効だったので最初から読み直した");
   run.notes.push(r.next ? "続きあり（次回に継続）" : "全件スイープ完了");
+  if (!r.next) await stateSet(env, "sweep.since", "").run();   // 次回は新しい起点から
   return keys;
 }
 
@@ -1026,9 +1053,12 @@ async function syncEbayActive(env, run) {
   const runAt = nowIso();
   const r = await ebayActive(env, run);
   const stmts = [], keys = [];
+  /* pj_price を通さず出した既存出品は CustomLabel が空か別形式で、
+     ASIN＋新品/中古のキーが作れない。一覧・通知の対象にせず、件数だけ出す。 */
+  let unparsed = 0;
   for (const it of r.rows) {
     const k = parseLabel(it.sku);
-    if (!k.ok) { run.notes.push("CustomLabel解析不可 " + it.sku); continue; }
+    if (!k.ok) { unparsed++; continue; }
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope, it.title));
     stmts.push(env.DB.prepare(
       `UPDATE items SET ebay_item_id=?3, ebay_sku=?4, ebay_qty=?5, ebay_price=?6,
@@ -1038,6 +1068,12 @@ async function syncEbayActive(env, run) {
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
+  if (unparsed) {
+    run.notes.push("CustomLabel解析不可 " + unparsed + "件（pj_priceを通さず出した出品。対象外）");
+    await stateSet(env, "ebay.unparsed", String(unparsed)).run();
+  } else {
+    await stateSet(env, "ebay.unparsed", "0").run();
+  }
   // 全ページ読めたときだけ、消えた出品を数量0にする（途中で切れた回では触らない）
   if (r.ok) {
     await env.DB.prepare(
@@ -1192,7 +1228,9 @@ async function statusBody(env, url) {
        (SELECT COUNT(*) FROM items WHERE scope='unknown') AS unknown,
        (SELECT COUNT(*) FROM items WHERE scope='ebay'
           AND (ebay_qty IS NULL OR fba_seen_at IS NULL)) AS unmatched,
-       (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster`).first();
+       (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
+       (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
+         AS ebay_unparsed`).first();
 
   const runs = await env.DB.prepare(
     `SELECT kind, started_at, elapsed_ms, subrequests, pages, skus, rows_written, events, errors, note
