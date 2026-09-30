@@ -54,7 +54,9 @@ const ROLLCALL_MAX_CALLS = 40;     // 1回の実行で名指し照会する上�
 const SWEEP_PAGES = 20;            // 全件スイープで1回に進めるページ数
 const PRICING_BATCH = 20;          // getItemOffersBatch は1回20件まで
 const PRICING_MAX_CALLS = 6;       // 0.1回/秒なので1回の実行では6回（120件）まで
-const EBAY_PAGE = 200;             // GetMyeBaySelling の1ページ件数
+/* GetMyeBaySelling の1ページ件数。OutputSelector を外して全項目を受けるので、
+   1回の応答が大きくなりすぎないよう200→100にしてある（解析のCPUも半分になる）。 */
+const EBAY_PAGE = 100;
 const EBAY_MAX_PAGES = 30;
 const DAILY_UTC_HOUR = 18;         // JST 3時台に日次処理を回す
 const ITEMS_PER_RUN = 25;          // 1回の実行で明細を取る注文の数（2.1秒×25＝約53秒）
@@ -222,6 +224,18 @@ function spSlot(label) {
 }
 const isQuota = (status, body) =>
   status === 429 || /QuotaExceeded|TooManyRequests/i.test(String(body || ""));
+/* SP-APIのエラー本文を読めるようにする。原因が分からないと直せないため、
+   errors[].code / message / details を note に出す（購入者情報は含まれない）。 */
+function spErr(text) {
+  try {
+    const d = JSON.parse(text || "{}");
+    const e = (d && d.errors) || [];
+    if (e.length)
+      return e.map((x) => [x.code, x.message, x.details].filter(Boolean).join(": "))
+              .join(" | ").slice(0, 400);
+  } catch (err) { /* JSONでなければ生の文字列を少しだけ出す */ }
+  return String(text || "").replace(/\s+/g, " ").slice(0, 200);
+}
 
 async function lwaToken(env, run) {
   const key = "lwa:fe";
@@ -274,7 +288,7 @@ async function spCall(env, run, path, opt) {
       continue;
     }
     run.errors++;
-    run.notes.push(o.label + " -> " + resp.status);
+    run.notes.push(o.label + " -> " + resp.status + " " + spErr(text));
     return { ok: false, status: resp.status, data: null, quota: isQuota(resp.status, text) };
   }
   return { ok: false, status: 429, data: null, quota: true };
@@ -343,13 +357,20 @@ async function amazonOrderItems(env, run, orderId) {
    'since'   … startDateTime で差分だけ（入庫中の数量変化は検出されない点に注意）
    'skus'    … sellerSkus で名指し（1回50件まで）
    'sweep'   … 全件。nextToken を返し、呼び出し側がD1に保存して続きから進める */
+/* ISO8601。ミリ秒を含めない形にする（SP-APIが受ける形を揃える）。 */
+function isoSec(v) {
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? "" : d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 function invQuery(mode, arg) {
   const q = new URLSearchParams({
     details: "true", granularityType: "Marketplace", granularityId: MP_FE, marketplaceIds: MP_FE,
   });
-  if (mode === "since") q.set("startDateTime", arg);
-  else if (mode === "skus") for (const s of arg) q.append("sellerSkus", s);
+  if (mode === "since") q.set("startDateTime", isoSec(arg));
+  // リスト引数はカンマ区切りで渡す（同じ名前を繰り返すと 400 になる）
+  else if (mode === "skus") q.set("sellerSkus", arg.join(","));
   else if (mode === "token" && arg) q.set("nextToken", arg);
+  // mode === "all" は絞り込みなし（1ページ目だけ取る切り分け用）
   return q;
 }
 function invRow(s) {
@@ -367,21 +388,32 @@ function invRow(s) {
 async function fbaInventory(env, run, mode, arg, maxPages) {
   const rows = [];
   let token = mode === "token" ? arg : "";
-  let first = true;
+  let first = true, fallback = false;
   for (let page = 0; page < (maxPages || 1); page++) {
     const q = (first && mode !== "token") ? invQuery(mode, arg) : invQuery("token", token);
+    const wasFirst = first;
     first = false;
-    const r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q.toString(),
-                           { label: "getInventorySummaries" });
-    if (!r.ok) return { rows, next: token, ok: false };
+    let r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q.toString(),
+                         { label: "getInventorySummaries" });
+    /* 400（引数の誤り）のときは、startDateTime を外して1ページだけ試す。
+       これで通れば原因は startDateTime だと分かる。取りこぼさないよう、
+       この回は差分の基準時刻を進めない（呼び出し側が fallback を見る）。 */
+    if (!r.ok && r.status === 400 && wasFirst && mode === "since") {
+      const q2 = invQuery("all", null);
+      run.notes.push("startDateTime を外して再試行");
+      r = await spCall(env, run, "/fba/inventory/v1/summaries?" + q2.toString(),
+                       { label: "getInventorySummaries" });
+      if (r.ok) { fallback = true; run.notes.push("→ 通った（原因は startDateTime）"); }
+    }
+    if (!r.ok) return { rows, next: token, ok: false, fallback };
     run.pages++;
     const p = (r.data && r.data.payload) || {};
     for (const s of p.inventorySummaries || []) rows.push(invRow(s));
     token = (r.data && r.data.pagination && r.data.pagination.nextToken) || "";
-    if (!token) break;
+    if (!token || fallback) break;
   }
   run.skus += rows.length;
-  return { rows, next: token, ok: true };
+  return { rows, next: token, ok: true, fallback };
 }
 
 /* Amazon最安値（参考表示用）。読み取りだがPOSTしか無いAPI。 */
@@ -493,23 +525,28 @@ async function ebayOrders(env, run, sinceIso) {
 }
 
 /* 出品中リスト（Trading GetMyeBaySelling）。
-   OutputSelector で必要な項目だけに絞る。XMLの解析はWorkersに DOMParser が無いので
-   Item ブロックを切り出してタグを拾う（CPUを使う処理なので項目を最小にしてある）。 */
-function tradingBody(page) {
+   XMLの解析はWorkersに DOMParser が無いので、Item ブロックを切り出してタグを拾う。
+
+   OutputSelector は**既定で付けない**。
+   2026-09-30 の受け入れテストで
+   `ActiveList.ItemArray.Item.ItemID` / `.SKU` / `.Title` /
+   `.QuantityAvailable` / `.SellingStatus.CurrentPrice` /
+   `ActiveList.PaginationResult` / `Ack` / `Errors` の組み合わせが
+   「One or more of the output selectors is incorrect.」で Failure になり、
+   出品中リストが1件も取れなかった。応答量は増えるが、まず確実に取れる形にする。
+   どの指定が通るか分かったら EBAY_SELECTORS に入れれば絞れる（空なら付けない）。
+   指定して失敗したときは、一度だけ指定なしで取り直す。 */
+const EBAY_SELECTORS = [];
+function tradingBody(page, selectors) {
   return '<?xml version="1.0" encoding="utf-8"?>'
     + '<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
     + "<ActiveList><Include>true</Include>"
     + "<Pagination><EntriesPerPage>" + EBAY_PAGE + "</EntriesPerPage>"
     + "<PageNumber>" + page + "</PageNumber></Pagination></ActiveList>"
-    + "<OutputSelector>ActiveList.ItemArray.Item.ItemID</OutputSelector>"
-    + "<OutputSelector>ActiveList.ItemArray.Item.SKU</OutputSelector>"
-    + "<OutputSelector>ActiveList.ItemArray.Item.Title</OutputSelector>"
-    + "<OutputSelector>ActiveList.ItemArray.Item.QuantityAvailable</OutputSelector>"
-    + "<OutputSelector>ActiveList.ItemArray.Item.SellingStatus.CurrentPrice</OutputSelector>"
-    + "<OutputSelector>ActiveList.PaginationResult</OutputSelector>"
-    + "<OutputSelector>Ack</OutputSelector><OutputSelector>Errors</OutputSelector>"
+    + (selectors || []).map((x) => "<OutputSelector>" + x + "</OutputSelector>").join("")
     + "</GetMyeBaySellingRequest>";
 }
+const SELECTOR_ERR = /output selector/i;
 const xmlTag = (s, tag) => {
   const m = new RegExp("<" + tag + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + tag + ">").exec(s);
   return m ? m[1] : "";
@@ -518,29 +555,46 @@ const xmlAttr = (s, tag, attr) => {
   const m = new RegExp("<" + tag + "[^>]*\\b" + attr + '="([^"]*)"').exec(s);
   return m ? m[1] : "";
 };
+async function tradingGet(env, run, token, page, selectors) {
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,     // OAuthトークンはこのヘッダーで渡す
+      "content-type": "text/xml",
+    },
+    body: tradingBody(page, selectors),
+  });
+  const xml = await resp.text();
+  const failed = !resp.ok || /<Ack>Failure<\/Ack>/.test(xml);
+  return { xml, status: resp.status, failed };
+}
 async function ebayActive(env, run) {
   const token = await ebayToken(env, run);
   const rows = [];
-  let pages = 1;
+  let pages = 1, selectors = EBAY_SELECTORS;
   for (let page = 1; page <= Math.min(pages, EBAY_MAX_PAGES); page++) {
-    const resp = await net(run, EBAY_API + "/ws/api.dll", {
-      method: "POST",
-      headers: {
-        "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
-        "X-EBAY-API-SITEID": "0",
-        "X-EBAY-API-IAF-TOKEN": token,     // OAuthトークンはこのヘッダーで渡す
-        "content-type": "text/xml",
-      },
-      body: tradingBody(page),
-    });
-    const xml = await resp.text();
-    if (!resp.ok || /<Ack>Failure<\/Ack>/.test(xml)) {
+    let r = await tradingGet(env, run, token, page, selectors);
+    // OutputSelector が原因のときは、指定を外して取り直す
+    if (r.failed && selectors.length && SELECTOR_ERR.test(r.xml)) {
+      run.notes.push("OutputSelector が通らないので指定なしで取り直す");
+      selectors = [];
+      r = await tradingGet(env, run, token, page, selectors);
+    }
+    const xml = r.xml;
+    if (r.failed) {
       run.errors++;
-      run.notes.push("GetMyeBaySelling -> " + resp.status + " "
-        + (xmlTag(xml, "ShortMessage") || "").slice(0, 120));
+      run.notes.push("GetMyeBaySelling -> " + r.status + " "
+        + [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"), xmlTag(xml, "LongMessage")]
+            .filter(Boolean).join(" / ").slice(0, 300));
       return { rows, ok: false };
     }
+    // Ack が Warning でも中身は返る（警告だけ記録して続ける）
+    if (/<Ack>Warning<\/Ack>/.test(xml))
+      run.notes.push("GetMyeBaySelling 警告 "
+        + (xmlTag(xml, "ShortMessage") || "").slice(0, 120));
     run.pages++;
     const active = xmlTag(xml, "ActiveList");
     const pr = xmlTag(active, "PaginationResult");
@@ -550,11 +604,18 @@ async function ebayActive(env, run) {
     while ((m = re.exec(active))) {
       const b = m[1];
       const price = xmlTag(b, "CurrentPrice");
+      /* QuantityAvailable は GetMyeBaySelling では返らないことがある。
+         その場合は 出品数量 − 売れた数量 で出す（0固定になるのを防ぐ）。 */
+      const avail = xmlTag(b, "QuantityAvailable");
+      const qty = avail !== ""
+        ? Number(avail)
+        : Math.max(0, Number(xmlTag(b, "Quantity") || 0)
+                      - Number(xmlTag(b, "QuantitySold") || 0));
       rows.push({
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
         title: xmlTag(b, "Title"),
-        qty: Number(xmlTag(b, "QuantityAvailable") || 0),
+        qty: qty,
         price: Number(price || 0),
         currency: xmlAttr(b, "CurrentPrice", "currencyID") || "USD",
       });
@@ -921,7 +982,9 @@ async function syncInventoryDiff(env, run) {
   const nowMs = Date.now();
   const r = await fbaInventory(env, run, "since", since, 20);
   const keys = await writeInventory(env, run, r.rows);
-  if (r.ok) await stateSet(env, "inventory.since", new Date(nowMs - 60 * 1000).toISOString()).run();
+  // startDateTime を外して取った回は1ページしか見ていないので基準時刻を進めない
+  if (r.ok && !r.fallback)
+    await stateSet(env, "inventory.since", new Date(nowMs - 60 * 1000).toISOString()).run();
   run.notes.push("在庫差分 " + r.rows.length + "件");
   return keys;
 }

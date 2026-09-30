@@ -441,6 +441,57 @@ Seller Central の Non-Amazon 3件は「返送/所有権の放棄」（注文元
 **eBay側の取り込みは同じ実行内で進む**（実測：403 が `note` に残り、
 `items` には ItemID・数量・売値が入る。FBA列は空のままで、一覧では「未対応付け」と出る）。
 
+### 受け入れテスト：通知 → 合格 / 在庫と出品中リストの不具合（2026-09-30）
+
+**A. Discord通知：合格。** `test-notify` を 印そのまま→印そのまま→印を変える の順で
+実行し、`events` が 1 → 0 → 1。同じイベントが二重に届かないことを確認した。
+
+**B. `/sync {"kind":"inventory"}` で errors=2。** 2件とも修正した。
+
+#### B-1. `GetMyeBaySelling` の OutputSelector が誤りで出品が1件も取れていなかった
+
+`One or more of the output selectors is incorrect.`（ErrorCode 37）で Failure。
+**`OutputSelector` は既定で付けない**ことにした（`EBAY_SELECTORS = []`）。
+応答が大きくなるので1ページ200→100件にした。通る指定が分かったら
+`EBAY_SELECTORS` に入れれば絞れる。指定して失敗した回は**一度だけ指定なしで
+取り直す**ので、間違った指定で出品が消えることはない。
+
+あわせて**数量の取り方も直した**。`QuantityAvailable` は `GetMyeBaySelling` では
+返らないことがあり、そのままだと**全出品の数量が0**になってしまう
+（`OVERSELL_RISK` も `QTY_MISMATCH` も出なくなる）。無い場合は
+**出品数量 − 売れた数量**で出す。
+
+#### B-2. `getInventorySummaries` が 400（403ではない）
+
+ロール不足なら403なので引数の誤りと判断した。次のようにした。
+
+- **エラー本文を `note` に出す**（`errors[].code` / `message` / `details`）。
+  原因が分からないと直せないため。購入者情報は含まれない。
+- `startDateTime` を **ミリ秒なしのISO8601**（`2026-09-30T01:23:45Z`）にした。
+- リスト引数（`sellerSkus`）を**カンマ区切り**にした。同じ名前を繰り返す形
+  （`sellerSkus=a&sellerSkus=b`）は400になるため。日次の名指し確認で効く。
+- **400のときは `startDateTime` を外して1ページだけ試す**。通れば
+  `→ 通った（原因は startDateTime）` と `note` に出る。この回は1ページしか
+  見ていないので**差分の基準時刻を進めない**（取りこぼし防止）。
+
+これで次の実行の `note` に本当の原因が出る。ロール承認前でも、403なら403と
+本文が残る。
+
+#### 検証（修正前後を並べて）
+
+```
+修正前 errors=2 / note: getInventorySummaries -> 400 / GetMyeBaySelling -> 200 Input data is invalid.
+       items 0件（出品が1件も入らない）
+修正後 note: getInventorySummaries -> 400 InvalidInput: startDateTime is not a valid ISO 8601 date
+             / startDateTime を外して再試行 / → 通った（原因は startDateTime）
+             / 在庫差分 1件 / eBay出品 2件
+       items 2件・ItemID・売値が入る／数量＝出品3−売れた1＝2 ✅
+       400の本文がnoteに出る ✅ 切り分けが動く ✅ 原因を名指しする ✅
+       切り分けの回は基準時刻を進めない ✅ 400解消後は errors=0 で基準時刻も進む ✅
+既存のテスト（ガード16ケース・待ち行列・D1のバインド変数上限・販売経路・
+通知の重複防止・個人情報の非保存）も全て通過 ✅
+```
+
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
 - テスト用に Discord 通知が届く（同じイベントが二重に届かない）。

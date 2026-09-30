@@ -180,6 +180,21 @@ Invoke-RestMethod -Uri "$U/runs?limit=10" -Headers $H | Format-Table
 | 毎時のうち UTC18時台（JST3時台） | 名簿のSKUを `sellerSkus`（50件/回）で名指し確認＋Amazon最安値＋未対応付けの件数 |
 | 手動のみ | 全件スイープ（`nextToken` をD1に保存して数ページずつ進める） |
 
+### eBayの出品中リスト（OutputSelector）
+
+`GetMyeBaySelling` に **`OutputSelector` は既定で付けていない**（`EBAY_SELECTORS = []`）。
+2026-09-30 の受け入れテストで
+`ActiveList.ItemArray.Item.ItemID` / `.SKU` / `.Title` / `.QuantityAvailable` /
+`.SellingStatus.CurrentPrice` / `ActiveList.PaginationResult` / `Ack` / `Errors` の
+組み合わせが「One or more of the output selectors is incorrect.」で Failure になり、
+出品が1件も取れなかったため。
+
+- 応答は大きくなるので1ページ100件にしている（`EBAY_PAGE`）
+- 通る指定が分かったら `EBAY_SELECTORS` に入れれば絞れる。指定して失敗した回は
+  **一度だけ指定なしで取り直す**ので、間違った指定で出品が消えることはない
+- 数量は `QuantityAvailable` が返らないことがあるので、無ければ
+  **出品数量 − 売れた数量**で出す（0固定になるのを防ぐ）
+
 ### 呼び出し間隔と注文明細の待ち行列
 
 Amazonの上限はAPIごとに違うので、`SP_GAP` で別々に待つ。
