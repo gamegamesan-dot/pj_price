@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS items (
   ebay_price       REAL,
   ebay_currency    TEXT,
   ebay_seen_at     TEXT,                       -- eBayから取り込んだ時刻
+  ebay_start       TEXT,                       -- 出品開始日時（ListingDetails.StartTime）
   fba_available    INTEGER,
   fba_inbound      INTEGER,
   fba_reserved     INTEGER,

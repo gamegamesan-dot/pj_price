@@ -625,6 +625,8 @@ async function ebayActive(env, run) {
       const price = xmlTag(b, "CurrentPrice");
       /* QuantityAvailable は GetMyeBaySelling では返らないことがある。
          その場合は 出品数量 − 売れた数量 で出す（0固定になるのを防ぐ）。 */
+      const det = xmlTag(b, "ListingDetails");
+      const start = xmlTag(det, "StartTime");
       const avail = xmlTag(b, "QuantityAvailable");
       const qty = avail !== ""
         ? Number(avail)
@@ -634,6 +636,7 @@ async function ebayActive(env, run) {
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
         title: xmlTag(b, "Title"),
+        start: start,
         qty: qty,
         price: Number(price || 0),
         currency: xmlAttr(b, "CurrentPrice", "currencyID") || "USD",
@@ -747,7 +750,7 @@ function stateEvents(env, rows) {
 }
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
-  ebay_currency, ebay_seen_at, fba_available, fba_inbound, fba_reserved, fba_seen_at,
+  ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
   mode, one_off, fba_link, on_hand, amazon_lowest, amazon_lowest_at, updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
@@ -990,6 +993,12 @@ async function writeInventory(env, run, rows) {
     keys[asin + "|" + cond] = { asin, cond };
   }
   await runBatch(env, run, stmts);
+  /* FBAに在庫（販売可能・入庫中・予約済みのいずれか）が付いた行は、もう手元在庫ではない。
+     納品プランを作って入庫中の数が出た時点で印が外れる。 */
+  const unflag = Object.values(keys).map((k) => env.DB.prepare(
+    `UPDATE items SET on_hand=0, updated_at=?3
+     WHERE asin=?1 AND cond=?2 AND on_hand=1 AND ${SQL_IN_STOCK}`
+  ).bind(k.asin, k.cond, nowIso()));
   // items の在庫を skus から作り直す
   const recalc = Object.values(keys).map((k) => env.DB.prepare(
     `UPDATE items SET
@@ -1003,6 +1012,7 @@ async function writeInventory(env, run, rows) {
      WHERE asin=?1 AND cond=?2`
   ).bind(k.asin, k.cond, nowIso()));
   await runBatch(env, run, recalc);
+  await runBatch(env, run, unflag);      // 在庫を入れ直したあとに判定する
   return Object.values(keys);
 }
 
@@ -1077,9 +1087,11 @@ async function syncEbayActive(env, run) {
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope, it.title));
     stmts.push(env.DB.prepare(
       `UPDATE items SET ebay_item_id=?3, ebay_sku=?4, ebay_qty=?5, ebay_price=?6,
-         ebay_currency=?7, ebay_seen_at=?8, title=COALESCE(NULLIF(title,''),?9), updated_at=?8
+         ebay_currency=?7, ebay_seen_at=?8, title=COALESCE(NULLIF(title,''),?9),
+         ebay_start=COALESCE(NULLIF(?10,''), ebay_start), updated_at=?8
        WHERE asin=?1 AND cond=?2`
-    ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title));
+    ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
+           it.start || ""));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -1128,7 +1140,8 @@ async function syncPricing(env, run) {
    FBA在庫はあるがeBay未出品の行は、出していないだけなので件数だけ数える。 */
 async function syncUnmatched(env, run) {
   const r = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM items WHERE scope='ebay' AND fba_seen_at IS NULL`).first();
+    `SELECT COUNT(*) AS n FROM items
+     WHERE scope='ebay' AND fba_seen_at IS NULL AND on_hand=0`).first();
   const other = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM items
      WHERE scope='ebay' AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL
@@ -1209,6 +1222,26 @@ async function jobTestNotify(env, tag) {
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   return saveRun(env, run);
 }
+/* 誤って付いた手元在庫の印を、在庫がある行からまとめて外す。
+   名簿を送り直しても直るが、その場で直したいとき用。 */
+async function jobOnHandClean(env) {
+  const run = newRun("onhand-clean");
+  let cleared = 0, left = 0;
+  try {
+    const before = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE on_hand=1 AND ${SQL_IN_STOCK}`).first();
+    cleared = Number((before && before.n) || 0);
+    await env.DB.prepare(
+      `UPDATE items SET on_hand=0, updated_at=?1 WHERE on_hand=1 AND ${SQL_IN_STOCK}`
+    ).bind(nowIso()).run();
+    const after = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE on_hand=1`).first();
+    left = Number((after && after.n) || 0);
+    run.rows += cleared;
+    run.notes.push("在庫がある行の手元在庫を " + cleared + "件外した（残り " + left + "件）");
+  } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+  return Object.assign(await saveRun(env, run), { cleared, on_hand_left: left });
+}
 async function jobNotify(env) {
   const run = newRun("notify");
   try { await flushEvents(env, run, false); }
@@ -1246,10 +1279,12 @@ function warnOf(r) {
   if (r.scope !== "ebay") return w;
   const st = stateOf(r);
   if (st === "fba_not_listed" || st === "past") return w;   // 出していないだけ／過去SKU
-  if (st === "listed_no_fba") { w.push("FBA在庫なし"); return w; }
+  const onHand = !!Number(r.on_hand || 0);
+  /* 手元在庫の行は、FBAに記録が無いのが正常（納品前にeBayへ出す運用）。
+     7〜10日の納品待ちのあいだ警告を出し続けない。 */
+  if (st === "listed_no_fba") { if (!onHand) w.push("FBA在庫なし"); return w; }
   const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
   const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
-  const onHand = !!Number(r.on_hand || 0);
   if (av === 0 && rv > 0 && q >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
   if (av === 0 && q >= 1) {
     if (onHand) return w;                     // 手元にあるので売り越しではない
@@ -1269,14 +1304,22 @@ async function statusBody(env, url) {
      在庫0の過去SKU（何千件もある）は ?all=1 のときだけ出す。 */
   if (p.get("all") !== "1") where.push("(ebay_qty IS NOT NULL OR " + SQL_IN_STOCK + ")");
   if (p.get("unmatched") === "1") where.push("(ebay_qty IS NULL OR fba_seen_at IS NULL)");
-  if (p.get("state") === "listed_no_fba") where.push("fba_seen_at IS NULL");
+  if (p.get("state") === "listed_no_fba") where.push("(fba_seen_at IS NULL AND on_hand=0)");
   if (p.get("state") === "fba_not_listed")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
-  const sql = `SELECT ${ITEM_COLS} FROM items`
+  /* eBayでの販売実績（直近180日）。手元在庫の行を
+     「eBayで売れた（FBAに送らない）」と「未販売（FBAに送る候補）」に分けるために使う。 */
+  const soldSince = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const sql = `SELECT ${ITEM_COLS},
+      (SELECT COALESCE(SUM(qty),0) FROM orders o
+        WHERE o.channel='ebay' AND o.asin=items.asin AND o.cond=items.cond
+          AND o.ordered_at>=?${bind.length + 1}) AS ebay_sold
+    FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;
+  bind.push(soldSince);
   const q = await env.DB.prepare(sql).bind(...bind).all();
   let items = ((q && q.results) || []).map((r) =>
     Object.assign({}, r, { state: stateOf(r), warnings: warnOf(r) }));
@@ -1304,7 +1347,9 @@ async function statusBody(env, url) {
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty IS NOT NULL) AS listed,
        (SELECT COUNT(*) FROM items WHERE scope='out') AS out_of_scope,
        (SELECT COUNT(*) FROM items WHERE scope='unknown') AS unknown,
-       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND fba_seen_at IS NULL) AS listed_no_fba,
+       -- 手元在庫の行は納品前が正常なので数えない
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND fba_seen_at IS NULL AND on_hand=0)
+         AS listed_no_fba,
        (SELECT COUNT(*) FROM items WHERE scope='ebay'
           AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND ${SQL_IN_STOCK})
          AS fba_not_listed,
@@ -1419,7 +1464,10 @@ async function putListings(env, body) {
     stmts.push(env.DB.prepare(
       `UPDATE items SET mode=COALESCE(?3, mode), one_off=?4, fba_link=?5,
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
-         ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku), on_hand=?9, updated_at=?8
+         ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
+         -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
+         on_hand=CASE WHEN ${SQL_IN_STOCK} THEN 0 ELSE ?9 END,
+         updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null, x.one_off ? 1 : 0, x.fba_link ? 1 : 0,
            String(x.item_id || ""), label, nowIso(), x.on_hand ? 1 : 0));
@@ -1470,6 +1518,7 @@ export default {
         if (kind === "sweep")
           return json(await jobSweep(env, Number(body.days || 0)), 200, origin);
         if (kind === "notify")    return json(await jobNotify(env), 200, origin);
+        if (kind === "onhand-clean") return json(await jobOnHandClean(env), 200, origin);
         if (kind === "test-notify")
           return json(await jobTestNotify(env, body.tag), 200, origin);
         if (kind === "pricing") {

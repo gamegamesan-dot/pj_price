@@ -68,6 +68,7 @@ npx wrangler d1 execute pj-sync --remote --file=./schema.sql
 ```powershell
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0002-sales-channel.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0003-on-hand.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0004-ebay-start.sql
 ```
 
 ### 1-5. シークレットを登録する
@@ -131,7 +132,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
+| GET | `/status` | 各行に `ebay_start`（出品開始日時）と `ebay_sold`（直近180日のeBay販売点数）も付く。一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
@@ -298,9 +299,24 @@ pj_price の「販売連携」タブができたら `POST /listings` で
 | FBA販売可能0・eBay出品中 | 「売り越しの恐れ」（`OVERSELL_RISK`・即時通知） |
 | 上の2つで **`on_hand`（手元在庫あり）が立っている** | **警告も通知も出さない** |
 
-仕入れてすぐeBayに出し、FBA納品はその後になる運用があるため、
+仕入れた商品は **FBAに送る前にまずeBayに出す**（手元在庫）。納品までの7〜10日で
+売れたものは手元から発送し、売れ残ったものだけFBAへ送る。この運用のため、
 `POST /listings` に `on_hand: true` を付けて送った行は FBA 0 でも売り越し扱いにしない。
+**`listed_no_fba`（FBA在庫なし）の警告と件数からも外す**（納品前が正常なので）。
 `RESERVED_ONLY` は Amazon 側で在庫が消える話なので `on_hand` でも抑えない。
+
+### 手元在庫の印が外れる条件
+
+**FBAに在庫（販売可能・入庫中・予約済みのいずれか）が1点でも付いたら自動で外れる。**
+納品プランを作って入庫中の数が出た時点で外れる。3か所で守っている。
+
+1. 在庫の取り込み（差分・名指し・スイープ）のたびに、在庫が付いた行の印を外す
+2. `POST /listings` で `on_hand: true` が来ても、在庫がある行には付けない
+3. `POST /sync {"kind":"onhand-clean"}` … 在庫がある行の印をまとめて外す
+   （誤って付いたものをその場で直したいとき。戻りは `cleared` と `on_hand_left`）
+
+pj_price 側は **ASIN＋新品/中古**で突き合わせて印を決める（ItemIDやCustomLabelには
+頼らない。FBAにあってeBay未出品の行は CustomLabel が無いため）。
 
 ## 4.5 販売経路（売上と返送の区別）
 
