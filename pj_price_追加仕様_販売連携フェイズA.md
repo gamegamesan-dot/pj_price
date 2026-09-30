@@ -328,6 +328,80 @@ D1の**1命令あたりのバインド変数上限（100個）**を超えてい�
 （すべて `CREATE ... IF NOT EXISTS` なので既存データは消えない）。
 **Worker の再デプロイが必要。**
 
+### 受け入れテスト1回目：注文件数の食い違い（2026-09-30）
+
+Seller Central の FBA「すべての注文」は過去7日（注文日基準）で **71件**、
+pj-sync は Amazon **93件**。原因は2つで、どちらも仕様の作りの問題だった。
+
+#### 販売経路（SalesChannel）を見ていなかった
+
+Amazonの注文一覧には、実際の売上以外も入る。画面で「販売経路：Non-Amazon」に
+なっていた注文は、他販路の販売ではなく **Amazonが作る返送**
+（長期保管在庫の自動返送、販売不可在庫の返送）だった。
+
+`orders` と `order_queue` に `sales_channel` / `kind` / `seller_order_id` を持たせ、
+次のように分ける。
+
+| `kind` | 条件 | 扱い |
+|---|---|---|
+| `sale` | `SalesChannel` が `Amazon.co.jp` | 売上。`FBA_SOLD` の対象。ただし `Canceled` / `Unfulfillable` は売れていないので対象外にする |
+| `removal` | `Non-Amazon` かつ出品者注文IDが `PJ-` で始まらない | 返送。売上として扱わず **`FBA_REMOVAL`**（返送で手元に戻る在庫）にする |
+| `mcf` | `Non-Amazon` かつ出品者注文IDが **`PJ-`** で始まる | 自分のMCF注文。フェイズAでは作らないので通常0件。イベントも作らない |
+
+**フェイズCでMCF注文を作るときは、出品者注文ID（`SellerOrderId`）を `PJ-` で始める。**
+これが自分の取り寄せとAmazonの返送を区別する唯一の手がかりになる。今のうちに
+区別の仕組みだけ入れておく。
+
+`FBA_REMOVAL` の通知文：
+`返送で手元に戻ります：{title}（{qty}点）。売上ではありません（長期保管在庫・販売不可在庫の返送）`
+
+#### 期間の基準が違う
+
+注文一覧は `LastUpdatedAfter` で引いているので、**注文日が7日より前でも期間内に
+更新があった注文は入る**。画面の「過去7日間」は注文日基準なので、その分が増える。
+これは差分取得の仕組み上そうなるのが正しく、件数の突き合わせは
+**注文日で絞った数**（`sale_in_window`）で行う。
+
+#### 内訳を見るための読み取り専用エンドポイント
+
+`GET /orders/summary?days=7` を追加した。返すもの：
+
+- `total_orders` … 取り込み済みのAmazon注文（`order_id` の重複を除く）
+- `by_purchase_window.in_window` / `.older_but_updated` … 注文日が期間内か、期間より前か
+- `by_status` … Shipped / Pending / Canceled などの件数
+- `by_sales_channel` … `Amazon.co.jp` / `Non-Amazon` の件数
+- `by_kind` … `sale` / `removal` / `mcf` の件数
+- `sale_in_window` … **Seller Central の71件と突き合わせる数**
+- `sale_in_window_live` … そこから Canceled / Unfulfillable を除いた数
+- `queue_pending` … 明細の残り
+
+販売経路を持たせる前に取り込んだ行は `sales_channel` が空になる。
+`/sync {"kind":"orders","days":7}` をもう一度実行すれば、**明細を取り直さずに**
+注文一覧の値だけで埋まる（`getOrderItems` は呼ばれない）。
+
+#### せどりすと形式でない古いSKU
+
+`20210120-75010-1267` のようなSKUは `parseSku()` が解析できず **`scope='unknown'`**
+になる。`skus` にも `items`（ASINで行は作る）にも `unknown` で入り、
+UNMATCHED の通知にも件数にも含めず、一覧では既定で非表示。
+`parseLabel()` でも解析されないので、eBay側と誤って結びつくことはない。
+
+#### 検証（`node:sqlite` をD1に見立てて）
+
+```
+販売経路   Amazon.co.jp → sale / Non-Amazon → removal / Non-Amazon＋PJ- → mcf ✅
+イベント   売上のみ FBA_SOLD、返送は FBA_REMOVAL、MCFはイベントを作らない ✅
+           Canceled の注文は FBA_SOLD にしない（sale_in_window 2件のうち live は1件）✅
+古いSKU    20210120-75010-1267 は skus・items ともに scope=unknown、
+           CustomLabel としても解析不可 ✅
+内訳       注文日が期間内4件・期間外だが更新あり1件、状態別・販売経路別・区分別に集計 ✅
+既存のテスト（ガード16ケース、待ち行列、D1のバインド変数上限、在庫の合算、
+二重通知の防止、個人情報の非保存）も全て通過 ✅
+```
+
+**D1の既存の表に列を足したので `migrate-0002-sales-channel.sql` の適用が必要。
+Worker の再デプロイも必要。**
+
 ## 10. 受け入れテスト
 - 初回の取り込みで過去7日分を読み込み、注文件数が Seller Central・Seller Hub の表示と一致する。
 - テスト用に Discord 通知が届く（同じイベントが二重に届かない）。

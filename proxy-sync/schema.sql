@@ -68,9 +68,14 @@ CREATE TABLE IF NOT EXISTS orders (
   ordered_at TEXT,
   status     TEXT,
   created_at TEXT NOT NULL,
+  -- 販売経路。Amazon.co.jp は売上、Non-Amazon は Amazon が作る返送か自分のMCF。
+  sales_channel   TEXT,
+  kind            TEXT,    -- 'sale' / 'removal' / 'mcf'（出品者注文IDが PJ- で始まる）
+  seller_order_id TEXT,
   PRIMARY KEY (channel, order_id, line_id)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_at  ON orders(ordered_at);
+CREATE INDEX IF NOT EXISTS idx_orders_kind ON orders(kind, ordered_at);
 CREATE INDEX IF NOT EXISTS idx_orders_key ON orders(asin, cond);
 
 -- Amazonの注文明細（getOrderItems）の待ち行列。
@@ -80,6 +85,9 @@ CREATE TABLE IF NOT EXISTS order_queue (
   order_id   TEXT PRIMARY KEY,
   status     TEXT,
   ordered_at TEXT,
+  sales_channel   TEXT,
+  kind            TEXT,
+  seller_order_id TEXT,
   lines      INTEGER,
   tries      INTEGER NOT NULL DEFAULT 0,
   done_at    TEXT,

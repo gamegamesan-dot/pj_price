@@ -62,6 +62,13 @@ npx wrangler d1 execute pj-sync --remote --file=./schema.sql
 `schema.sql` はすべて `CREATE ... IF NOT EXISTS` なので、**表を足したときは同じコマンドを
 もう一度実行すればよい**（既存のデータは消えない）。`order_queue` を足した回もこれで足りる。
 
+**既存の表に列を足したときは `ALTER TABLE` が必要**で、こちらは何度も実行できない。
+その回だけ次を実行する（新しくD1を作る場合は `schema.sql` に同じ列が入っているので不要）。
+
+```powershell
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0002-sales-channel.sql
+```
+
 ### 1-5. シークレットを登録する
 
 ```powershell
@@ -124,6 +131,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | メソッド | パス | 用途 |
 |---|---|---|
 | GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`unmatched=1`、`sold=24`、`limit=500` |
+| GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
 | POST | `/sync` | 手動実行。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
@@ -150,6 +158,9 @@ Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"rollca
 
 # 全件スイープ（続きがあるときは何度か繰り返す）
 Invoke-RestMethod -Method Post -Uri "$U/sync" -Headers $H -Body '{"kind":"sweep"}'
+
+# 注文の内訳（Seller Central の件数と突き合わせる）
+Invoke-RestMethod -Uri "$U/orders/summary?days=7" -Headers $H | ConvertTo-Json -Depth 3
 
 # 一覧と実行ログ
 Invoke-RestMethod -Uri "$U/status?warn=1" -Headers $H | ConvertTo-Json -Depth 4
@@ -188,6 +199,19 @@ Amazonの上限はAPIごとに違うので、`SP_GAP` で別々に待つ。
 **`startDateTime` は入庫中の数量変化を検出しない**（Amazonの仕様）。そのぶんを日次の
 名指し確認で補っている。名簿は pj_price から `POST /listings` で送ったSKU（`active=1`）で、
 在庫0になったSKUは `active=0` になり照会対象から外れる。
+
+## 4.5 販売経路（売上と返送の区別）
+
+Amazonの注文一覧には、実際の売上以外も入る。`SalesChannel` で分ける。
+
+| `kind` | 条件 | 扱い |
+|---|---|---|
+| `sale` | `SalesChannel` が `Amazon.co.jp` | 売上。`FBA_SOLD` の対象（ただし `Canceled` / `Unfulfillable` は除く） |
+| `removal` | `SalesChannel` が `Non-Amazon` で、出品者注文IDが `PJ-` で始まらない | **Amazonが作る返送**（長期保管在庫の自動返送、販売不可在庫の返送）。売上として扱わず `FBA_REMOVAL` イベントにする |
+| `mcf` | `SalesChannel` が `Non-Amazon` で、出品者注文IDが **`PJ-`** で始まる | **自分のMCF注文**。フェイズAでは作らないので通常は0件。フェイズCで自分が作るときは出品者注文IDを `PJ-` で始める |
+
+**フェイズCでMCF注文を作るときは、出品者注文ID（`SellerOrderId`）を必ず `PJ-` で
+始めること。** これが自分の取り寄せとAmazonの返送を区別する唯一の手がかり。
 
 ## 5. CPU時間の見かた
 

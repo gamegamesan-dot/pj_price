@@ -69,6 +69,22 @@ const PREFIX_SCOPE = {
   dvd: "out", cd: "out", book: "out", software: "out", pc: "out",
   electronics: "out", kitchen: "out", diy: "out", musicInst: "out",
 };
+/* 販売経路（SalesChannel）の区分。
+   Amazon.co.jp … 実際の売上。FBA_SOLD の対象。
+   Non-Amazon   … Amazon側が作る返送・取り寄せ（長期保管在庫の自動返送、
+                  販売不可在庫の返送）と、自分が作るMCF注文が混ざる。
+                  自分のMCFは出品者注文IDを "PJ-" で始める方針にして区別する
+                  （フェイズCで使う。フェイズAでは作らない）。 */
+const SALES_CH_AMAZON = "Amazon.co.jp";
+const MCF_PREFIX = "PJ-";
+/* 売れていない状態。FBA_SOLD にしない（eBayの数量を触る話につながるため）。 */
+const DEAD_STATUS = /^(Canceled|Unfulfillable)$/i;
+function orderKind(salesChannel, sellerOrderId) {
+  const ch = String(salesChannel || "");
+  if (!ch || ch === SALES_CH_AMAZON) return "sale";
+  return String(sellerOrderId || "").indexOf(MCF_PREFIX) === 0 ? "mcf" : "removal";
+}
+
 /* せどりすとの状態コード。N だけが新品。 */
 const COND_CODES = { N: "new", UM: "used", UVG: "used", UG: "used", UA: "used", UKN: "used" };
 
@@ -277,10 +293,15 @@ async function amazonOrders(env, run, sinceIso) {
     run.pages++;
     const p = (r.data && r.data.payload) || {};
     for (const o of p.Orders || []) {
+      const ch = String(o.SalesChannel || "");
+      const soid = String(o.SellerOrderId || "");
       out.push({
         orderId: String(o.AmazonOrderId || ""),
         status: String(o.OrderStatus || ""),
         at: String(o.PurchaseDate || ""),
+        channel: ch,
+        sellerOrderId: soid,
+        kind: orderKind(ch, soid),
       });
     }
     token = p.NextToken || "";
@@ -595,6 +616,8 @@ const EV_TEXT = {
   QTY_MISMATCH: (d) => "数量の食い違い：" + d.title + "（FBA " + d.fba_available
     + " / eBay " + d.ebay_qty + "）",
   INBOUND_LISTED: (d) => "納品待ちの商品がeBayに出ています：" + d.title,
+  FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
+    + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
   UNMATCHED: (d) => "未対応付け：新規 " + d.added + "件（合計 " + d.total
     + "件）。一覧で確認してください",
 };
@@ -710,14 +733,18 @@ async function syncOrders(env, run, days, maxItems) {
   const qs = [];
   for (const o of a.orders) {
     qs.push(env.DB.prepare(
-      `INSERT INTO order_queue (order_id, status, ordered_at, tries, updated_at)
-       VALUES (?1,?2,?3,0,?4)
-       ON CONFLICT(order_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`
-    ).bind(o.orderId, o.status, o.at, nowIso()));
-    // 明細を取り直さずに状態だけ反映する（数量・金額は変わらない）
+      `INSERT INTO order_queue (order_id, status, ordered_at, sales_channel, kind,
+         seller_order_id, tries, updated_at) VALUES (?1,?2,?3,?4,?5,?6,0,?7)
+       ON CONFLICT(order_id) DO UPDATE SET status=excluded.status,
+         sales_channel=excluded.sales_channel, kind=excluded.kind,
+         seller_order_id=excluded.seller_order_id, updated_at=excluded.updated_at`
+    ).bind(o.orderId, o.status, o.at, o.channel, o.kind, o.sellerOrderId, nowIso()));
+    /* 明細を取り直さずに、注文一覧から分かる項目だけ反映する（数量・金額は変わらない）。
+       販売経路を後から足したので、既存の行もこの更新で埋まる。 */
     qs.push(env.DB.prepare(
-      `UPDATE orders SET status=?2 WHERE channel='amazon' AND order_id=?1`
-    ).bind(o.orderId, o.status));
+      `UPDATE orders SET status=?2, sales_channel=?3, kind=?4, seller_order_id=?5
+       WHERE channel='amazon' AND order_id=?1`
+    ).bind(o.orderId, o.status, o.channel, o.kind, o.sellerOrderId));
   }
   await runBatch(env, run, qs);
 
@@ -746,12 +773,12 @@ async function syncOrders(env, run, days, maxItems) {
 
   /* 3) Amazonの明細を待ち行列から取る。上限件数と時間で打ち切り、残りは次回。 */
   const pend = await env.DB.prepare(
-    `SELECT order_id, status, ordered_at FROM order_queue
-     WHERE done_at IS NULL ORDER BY ordered_at LIMIT ?1`
+    `SELECT order_id, status, ordered_at, sales_channel, kind, seller_order_id
+     FROM order_queue WHERE done_at IS NULL ORDER BY ordered_at LIMIT ?1`
   ).bind(cap).all();
   const queue = (pend && pend.results) || [];
   const t0 = Date.now();
-  const soldA = [];
+  const soldA = [], removalA = [];
   let got = 0, failed = 0, stopped = false;
   for (const row of queue) {
     if (Date.now() - t0 > ITEMS_DEADLINE_MS) { stopped = true; break; }
@@ -770,15 +797,27 @@ async function syncOrders(env, run, days, maxItems) {
       const cond = p.ok ? p.cond : "new";
       stmts.push(env.DB.prepare(
         `INSERT INTO orders (channel,order_id,line_id,sku,asin,cond,qty,amount,currency,
-           ordered_at,status,created_at) VALUES ('amazon',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+           ordered_at,status,created_at,sales_channel,kind,seller_order_id)
+         VALUES ('amazon',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
          ON CONFLICT(channel,order_id,line_id) DO UPDATE SET
-           qty=excluded.qty, amount=excluded.amount, status=excluded.status`
+           qty=excluded.qty, amount=excluded.amount, status=excluded.status,
+           sales_channel=excluded.sales_channel, kind=excluded.kind,
+           seller_order_id=excluded.seller_order_id`
       ).bind(row.order_id, li.lineId, li.sku, asin, cond, li.qty, li.amount, li.currency,
-             row.ordered_at, row.status, nowIso()));
+             row.ordered_at, row.status, nowIso(), row.sales_channel || "",
+             row.kind || "sale", row.seller_order_id || ""));
       if (asin) {
         stmts.push(itemSeed(env, asin, cond, p.scope, ""));
         keys.push({ asin, cond });
-        soldA.push({ asin, cond, orderId: row.order_id, sku: li.sku });
+        /* 売上（Amazon.co.jp）と、Amazonが作る返送（Non-Amazon）を分ける。
+           返送は売れたわけではないので FBA_SOLD にしない。 */
+        const rec = { asin, cond, orderId: row.order_id, sku: li.sku, qty: li.qty };
+        if ((row.kind || "sale") === "sale") {
+          // キャンセル・販売不可は売れていないので FBA_SOLD にしない
+          if (!DEAD_STATUS.test(String(row.status || ""))) soldA.push(rec);
+        }
+        else if (row.kind === "removal") removalA.push(rec);
+        // kind==='mcf'（自分のMCF。"PJ-" で始まる）はフェイズCで扱う
       }
     }
     stmts.push(env.DB.prepare(
@@ -803,6 +842,11 @@ async function syncOrders(env, run, days, maxItems) {
       ev.push(evStmt(env, "FBA_SOLD", "FBA_SOLD|" + s2.orderId + "|" + s2.sku, it,
         { title: it.title || s2.sku, ebay_qty: it.ebay_qty, fba_available: it.fba_available }));
   }
+  for (const s2 of removalA) {
+    const it = map[s2.asin + "|" + s2.cond] || { asin: s2.asin, cond: s2.cond, scope: "unknown" };
+    ev.push(evStmt(env, "FBA_REMOVAL", "FBA_REMOVAL|" + s2.orderId + "|" + s2.sku, it,
+      { title: it.title || s2.sku, qty: s2.qty, ebay_qty: it.ebay_qty || 0 }));
+  }
   for (const s2 of soldE) {
     const it = map[s2.asin + "|" + s2.cond] || { asin: s2.asin, cond: s2.cond, scope: "ebay" };
     ev.push(evStmt(env, "EBAY_SOLD", "EBAY_SOLD|" + s2.orderId + "|" + s2.line, it,
@@ -814,7 +858,10 @@ async function syncOrders(env, run, days, maxItems) {
   /* 5) 差分の基準時刻を進める。明細が残っていても待ち行列で追いかけるので進めてよい。 */
   if (a.ok) await stateSet(env, "orders.amazon.since", new Date(nowMs - 60 * 1000).toISOString()).run();
   if (e.ok) await stateSet(env, "orders.ebay.since", new Date(nowMs - 60 * 1000).toISOString()).run();
-  run.notes.push("Amazon注文 " + a.orders.length + "件 / eBay注文 " + e.orders.length + "件"
+  const chN = { sale: 0, removal: 0, mcf: 0 };
+  for (const o of a.orders) chN[o.kind] = (chN[o.kind] || 0) + 1;
+  run.notes.push("Amazon注文 " + a.orders.length + "件（売上" + chN.sale
+    + "・返送" + chN.removal + "・MCF" + chN.mcf + "）/ eBay注文 " + e.orders.length + "件"
     + " / 明細 取得" + got + "件"
     + (failed ? ("・失敗" + failed + "件（次回やり直す）") : "")
     + (stopped ? "・時間の上限で打ち切り" : "")
@@ -1088,6 +1135,62 @@ async function statusBody(env, url) {
   };
 }
 
+/* ---- GET /orders/summary ----
+   受け入れテストで Seller Central の件数と突き合わせるための内訳。
+   注文一覧は LastUpdatedAfter で引いているので、期間内に「更新」があった注文が
+   すべて入る。注文日が期間より前のものは in_window に入らない。 */
+async function ordersSummary(env, url) {
+  const days = Math.min(30, Math.max(1, Number(url.searchParams.get("days") || 7)));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const one = async (sql, ...bind) => {
+    const r = await env.DB.prepare(sql).bind(...bind).all();
+    const o = {};
+    for (const x of (r && r.results) || []) o[x.k === null ? "(なし)" : String(x.k)] = x.n;
+    return o;
+  };
+  const total = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT order_id) AS n FROM orders WHERE channel='amazon'`).first();
+  const win = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT order_id) AS n FROM orders
+     WHERE channel='amazon' AND ordered_at>=?1`).bind(since).first();
+  const older = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT order_id) AS n FROM orders
+     WHERE channel='amazon' AND (ordered_at<?1 OR ordered_at IS NULL)`).bind(since).first();
+  const saleWin = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT order_id) AS n FROM orders
+     WHERE channel='amazon' AND ordered_at>=?1 AND (kind='sale' OR kind IS NULL)`
+  ).bind(since).first();
+  // キャンセル・販売不可を除いた数（FBA_SOLD の対象になる注文）
+  const saleWinLive = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT order_id) AS n FROM orders
+     WHERE channel='amazon' AND ordered_at>=?1 AND (kind='sale' OR kind IS NULL)
+       AND status NOT IN ('Canceled','Unfulfillable')`).bind(since).first();
+  return {
+    since, days,
+    total_orders: Number((total && total.n) || 0),
+    by_purchase_window: {
+      in_window: Number((win && win.n) || 0),
+      older_but_updated: Number((older && older.n) || 0),
+    },
+    by_status: await one(
+      `SELECT status AS k, COUNT(DISTINCT order_id) AS n FROM orders
+       WHERE channel='amazon' GROUP BY status ORDER BY n DESC`),
+    by_sales_channel: await one(
+      `SELECT sales_channel AS k, COUNT(DISTINCT order_id) AS n FROM orders
+       WHERE channel='amazon' GROUP BY sales_channel ORDER BY n DESC`),
+    by_kind: await one(
+      `SELECT kind AS k, COUNT(DISTINCT order_id) AS n FROM orders
+       WHERE channel='amazon' GROUP BY kind ORDER BY n DESC`),
+    sale_in_window: Number((saleWin && saleWin.n) || 0),
+    sale_in_window_live: Number((saleWinLive && saleWinLive.n) || 0),
+    queue_pending: Number(((await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM order_queue WHERE done_at IS NULL`).first()) || {}).n || 0),
+    note: "sales_channel が (なし) の行は、販売経路を持たせる前に取り込んだもの。"
+        + " /sync {\"kind\":\"orders\",\"days\":7} をもう一度実行すると"
+        + "（明細は取り直さずに）埋まる。",
+  };
+}
+
 /* ---- POST /listings（pj_price からの名簿登録） ---- */
 async function putListings(env, body) {
   const run = newRun("listings");
@@ -1142,6 +1245,9 @@ export default {
     try {
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
+
+      if (request.method === "GET" && url.pathname === "/orders/summary")
+        return json(await ordersSummary(env, url), 200, origin);
 
       if (request.method === "GET" && url.pathname === "/runs") {
         const r = await env.DB.prepare(
