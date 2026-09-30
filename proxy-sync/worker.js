@@ -686,7 +686,7 @@ function itemSeed(env, asin, cond, scope, title) {
 }
 
 /* ---- イベントの検出と通知 ---- */
-const EV_IMMEDIATE = { EBAY_SOLD: 1, OVERSELL_RISK: 1 };
+const EV_IMMEDIATE = { EBAY_SOLD: 1, OVERSELL_RISK: 1, RESERVED_ONLY: 1 };
 const EV_TEXT = {
   FBA_SOLD: (d) => "FBAで売れた：" + d.title + " / eBay残数 " + d.ebay_qty
     + "。フェイズBではここでeBayを更新します",
@@ -696,6 +696,8 @@ const EV_TEXT = {
   QTY_MISMATCH: (d) => "数量の食い違い：" + d.title + "（FBA " + d.fba_available
     + " / eBay " + d.ebay_qty + "）",
   INBOUND_LISTED: (d) => "納品待ちの商品がeBayに出ています：" + d.title,
+  RESERVED_ONLY: (d) => "最優先：" + d.title + " はFBAの販売可能が0で予約済み "
+    + d.fba_reserved + "点のみ（Amazonで注文済み・出荷待ち）。eBay残数 " + d.ebay_qty,
   TEST: (d) => "通知テスト（" + d.tag + "）。同じ印のテストは二度届きません",
   FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
     + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
@@ -721,14 +723,24 @@ function stateEvents(env, rows) {
     const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
     const inb = Number(r.fba_inbound || 0);
     if (r.ebay_qty === null || r.fba_seen_at == null) continue;  // 片側しか無い行は UNMATCHED 側で扱う
+    const rv = Number(r.fba_reserved || 0);
+    const onHand = !!Number(r.on_hand || 0);
     const d = { title: r.title || r.ebay_sku || r.asin, ebay_qty: q,
-                fba_available: av, fba_inbound: inb, mode: r.mode || "" };
+                fba_available: av, fba_inbound: inb, fba_reserved: rv,
+                on_hand: onHand ? 1 : 0, mode: r.mode || "" };
     const base = "|" + r.asin + "|" + r.cond + "|" + dayKey();
-    if (av === 0 && q >= 1 && (r.mode === "hold" || r.mode === "end" || !r.mode))
+    /* 予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
+       手元在庫があってもAmazon側で在庫が消える話なので、こちらは抑えない。 */
+    if (av === 0 && rv > 0 && q >= 1) {
+      out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
+      continue;
+    }
+    // 手元在庫あり（on_hand）は、FBAが0でも売り越しではない
+    if (!onHand && av === 0 && q >= 1 && (r.mode === "hold" || r.mode === "end" || !r.mode))
       out.push(evStmt(env, "OVERSELL_RISK", "OVERSELL_RISK" + base, r, d));
     if (av > 0 && q > 0 && av < q)
       out.push(evStmt(env, "QTY_MISMATCH", "QTY_MISMATCH" + base, r, d));
-    if (av === 0 && inb > 0 && q >= 1)
+    if (!onHand && av === 0 && inb > 0 && q >= 1)
       out.push(evStmt(env, "INBOUND_LISTED", "INBOUND_LISTED" + base, r, d));
   }
   return out;
@@ -736,7 +748,7 @@ function stateEvents(env, rows) {
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, fba_available, fba_inbound, fba_reserved, fba_seen_at,
-  mode, one_off, fba_link, amazon_lowest, amazon_lowest_at, updated_at`;
+  mode, one_off, fba_link, on_hand, amazon_lowest, amazon_lowest_at, updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -1119,7 +1131,8 @@ async function syncUnmatched(env, run) {
     `SELECT COUNT(*) AS n FROM items WHERE scope='ebay' AND fba_seen_at IS NULL`).first();
   const other = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM items
-     WHERE scope='ebay' AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL`).first();
+     WHERE scope='ebay' AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL
+       AND ${SQL_IN_STOCK}`).first();
   const total = Number((r && r.n) || 0);
   const notListed = Number((other && other.n) || 0);
   const prev = Number((await stateGet(env, "unmatched.total")) || 0);
@@ -1204,6 +1217,15 @@ async function jobNotify(env) {
 }
 
 /* ---- GET /status ---- */
+/* FBA在庫が1点以上あるか（販売可能・入庫中・予約済みのいずれか）。
+   在庫0の過去SKUを数から外すために使う。SQLとJSで同じ条件にしてある。 */
+const SQL_IN_STOCK =
+  "(COALESCE(fba_available,0)+COALESCE(fba_inbound,0)+COALESCE(fba_reserved,0))>0";
+function inStock(r) {
+  return (Number(r.fba_available || 0) + Number(r.fba_inbound || 0)
+          + Number(r.fba_reserved || 0)) > 0;
+}
+
 /* 行の状態。未対応付けは2種類あり、意味がまったく違う。
    'listed_no_fba' … eBayに出ているのにFBA在庫の記録が無い（要注意）
    'fba_not_listed' … FBA在庫はあるがeBayに出していない（通常の状態。警告にしない）
@@ -1211,21 +1233,30 @@ async function jobNotify(env) {
 function stateOf(r) {
   const noFba = (r.fba_seen_at === null || r.fba_seen_at === undefined);
   const noEbay = (r.ebay_qty === null || r.ebay_qty === undefined);
-  if (noFba && noEbay) return "listed_no_fba";   // どちらも無い行は出品側の取りこぼし扱い
-  if (noFba) return "listed_no_fba";
-  if (noEbay) return "fba_not_listed";
+  if (noFba) return "listed_no_fba";               // FBAの記録が無い
+  if (noEbay) return inStock(r) ? "fba_not_listed" : "past";  // past は在庫0の過去SKU
   return "ok";
 }
+/* 警告。強い順に見る。
+   予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
+   手元在庫あり（on_hand）の行は、FBAが0でも売り越し・納品待ちの警告を出さない
+   （仕入れてすぐeBayに出し、FBA納品はその後になる運用のため）。 */
 function warnOf(r) {
   const w = [];
   if (r.scope !== "ebay") return w;
   const st = stateOf(r);
-  // FBA在庫はあるがeBay未出品は、出していないだけなので警告にしない（件数だけ数える）
-  if (st === "fba_not_listed") return w;
+  if (st === "fba_not_listed" || st === "past") return w;   // 出していないだけ／過去SKU
   if (st === "listed_no_fba") { w.push("FBA在庫なし"); return w; }
   const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
-  if (av === 0 && q >= 1) w.push(Number(r.fba_inbound || 0) > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
-  else if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
+  const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
+  const onHand = !!Number(r.on_hand || 0);
+  if (av === 0 && rv > 0 && q >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
+  if (av === 0 && q >= 1) {
+    if (onHand) return w;                     // 手元にあるので売り越しではない
+    w.push(inb > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
+    return w;
+  }
+  if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
   return w;
 }
 async function statusBody(env, url) {
@@ -1234,9 +1265,15 @@ async function statusBody(env, url) {
   const limit = Math.min(1000, Math.max(1, Number(p.get("limit") || 500)));
   const where = [], bind = [];
   if (scope !== "all") { where.push("scope=?" + (bind.length + 1)); bind.push(scope); }
+  /* 既定では「eBayに出ている」か「FBA在庫が1点以上ある」行だけ。
+     在庫0の過去SKU（何千件もある）は ?all=1 のときだけ出す。 */
+  if (p.get("all") !== "1") where.push("(ebay_qty IS NOT NULL OR " + SQL_IN_STOCK + ")");
   if (p.get("unmatched") === "1") where.push("(ebay_qty IS NULL OR fba_seen_at IS NULL)");
   if (p.get("state") === "listed_no_fba") where.push("fba_seen_at IS NULL");
-  if (p.get("state") === "fba_not_listed") where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL)");
+  if (p.get("state") === "fba_not_listed")
+    where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
+  if (p.get("state") === "past")
+    where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   const sql = `SELECT ${ITEM_COLS} FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;
@@ -1253,18 +1290,28 @@ async function statusBody(env, url) {
     `SELECT channel, order_id, sku, asin, cond, qty, amount, currency, ordered_at, status
      FROM orders WHERE ordered_at>=?1 ORDER BY ordered_at DESC LIMIT 200`).bind(since).all();
 
+  /* 数え方（どれも items の行数。items は ASIN＋新品/中古で1行）
+       ebay              … eBay対象カテゴリの行すべて（在庫0の過去SKUも含む）
+       ebay_in_stock     … そのうちFBA在庫が1点以上ある行
+       listed            … eBayに出ている行（数量0の終了分も含む）
+       listed_no_fba     … eBayに出ているのにFBAの記録が無い行（要注意）
+       fba_not_listed    … FBA在庫が1点以上あってeBayに出していない行（通常）
+       past_zero         … FBAの記録はあるが在庫0で、eBayにも出していない行 */
   const counts = await env.DB.prepare(
     `SELECT
        (SELECT COUNT(*) FROM items WHERE scope='ebay') AS ebay,
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ${SQL_IN_STOCK}) AS ebay_in_stock,
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty IS NOT NULL) AS listed,
        (SELECT COUNT(*) FROM items WHERE scope='out') AS out_of_scope,
        (SELECT COUNT(*) FROM items WHERE scope='unknown') AS unknown,
-       (SELECT COUNT(*) FROM items WHERE scope='ebay'
-          AND (ebay_qty IS NULL OR fba_seen_at IS NULL)) AS unmatched,
-       -- eBayに出ているのにFBA在庫の記録が無い（要注意）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND fba_seen_at IS NULL) AS listed_no_fba,
-       -- FBA在庫はあるがeBayに出していない（通常の状態。警告にしない）
        (SELECT COUNT(*) FROM items WHERE scope='ebay'
-          AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL) AS fba_not_listed,
+          AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND ${SQL_IN_STOCK})
+         AS fba_not_listed,
+       (SELECT COUNT(*) FROM items WHERE scope='ebay'
+          AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT ${SQL_IN_STOCK})
+         AS past_zero,
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND on_hand=1) AS on_hand,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1372,10 +1419,10 @@ async function putListings(env, body) {
     stmts.push(env.DB.prepare(
       `UPDATE items SET mode=COALESCE(?3, mode), one_off=?4, fba_link=?5,
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
-         ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku), updated_at=?8
+         ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku), on_hand=?9, updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null, x.one_off ? 1 : 0, x.fba_link ? 1 : 0,
-           String(x.item_id || ""), label, nowIso()));
+           String(x.item_id || ""), label, nowIso(), x.on_hand ? 1 : 0));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

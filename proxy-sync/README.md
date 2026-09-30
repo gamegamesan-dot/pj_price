@@ -67,6 +67,7 @@ npx wrangler d1 execute pj-sync --remote --file=./schema.sql
 
 ```powershell
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0002-sales-channel.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0003-on-hand.sql
 ```
 
 ### 1-5. シークレットを登録する
@@ -130,7 +131,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|ok`、`sold=24`、`limit=500` |
+| GET | `/status` | 一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
@@ -257,17 +258,49 @@ pj_price の「販売連携」タブができたら `POST /listings` で
 「出品したSKU」を送るようになり、名簿は**出品側からも**埋まる。
 それまではスイープと差分だけで運用できる。
 
-## 4.45 未対応付けは2種類ある
+## 4.45 行の状態と件数の数え方
+
+`items` は **ASIN＋新品/中古で1行**。`state` は次の4つ。
 
 | `state` | 意味 | 扱い |
 |---|---|---|
 | `listed_no_fba` | **eBayに出ているのにFBA在庫の記録が無い** | 警告「FBA在庫なし」。`UNMATCHED` 通知の対象（件数だけ） |
-| `fba_not_listed` | FBA在庫はあるがeBayに出していない | **通常の状態。警告にしない。**件数だけ `counts.fba_not_listed` に出す |
-| `ok` | 両方ある | 数量の食い違いなどを見る |
+| `ok` | 両方ある | 予約済みのみ／売り越し／納品待ち／数量の食い違いを見る |
+| `fba_not_listed` | **FBA在庫が1点以上あって**eBayに出していない | 通常の状態。警告にしない。件数だけ |
+| `past` | FBAの記録はあるが在庫0で、eBayにも出していない（過去SKU） | 一覧の既定では出さない。件数だけ |
 
-`/status?state=listed_no_fba` で前者だけを一覧できる。
-**全件スイープ前は eBay出品のほとんどが `listed_no_fba` になる**（FBA側を読めて
-いないだけ）。スイープ後に減ることを確認する。
+**在庫が1点以上** ＝ 販売可能・入庫中・予約済みのどれかが1以上。
+
+`counts` の意味：
+
+| キー | 数えているもの |
+|---|---|
+| `ebay` | eBay対象カテゴリ（`game`/`hobby`/`toy`）の行すべて。**在庫0の過去SKUも含む** |
+| `ebay_in_stock` | そのうち在庫が1点以上ある行 ＝ **いまの持ち物に近い数** |
+| `listed` | eBayに出ている行（数量0の終了分も含む） |
+| `listed_no_fba` | eBayに出ているのにFBAの記録が無い行（要注意） |
+| `fba_not_listed` | 在庫が1点以上あってeBay未出品の行（通常） |
+| `past_zero` | FBAの記録はあるが在庫0・eBay未出品の行（過去SKU） |
+| `on_hand` | 手元在庫ありの印が付いている行 |
+| `out_of_scope` / `unknown` | `dvd` などeBay対象外 / SKUの形が違うもの |
+| `roster` | 名簿（`skus` のうち在庫があってeBay対象のSKU数）。**個体単位なので items より多いことがある** |
+| `ebay_unparsed` | CustomLabel が解析できないeBay出品の数（対象外） |
+
+一覧は既定で **「eBayに出ている」か「在庫が1点以上ある」行だけ**を返す。
+在庫0の過去SKU（何千件もある）を見たいときは `?all=1`。
+
+## 4.46 手元在庫と予約済みのみ
+
+| 状況 | 出るもの |
+|---|---|
+| FBA販売可能0・**予約済み1以上**・eBay出品中 | **最優先の警告**「予約済みのみ（Amazonで注文済み）」＋即時通知（`RESERVED_ONLY`） |
+| FBA販売可能0・入庫中1以上・eBay出品中 | 「納品待ちで出品中」（`INBOUND_LISTED`） |
+| FBA販売可能0・eBay出品中 | 「売り越しの恐れ」（`OVERSELL_RISK`・即時通知） |
+| 上の2つで **`on_hand`（手元在庫あり）が立っている** | **警告も通知も出さない** |
+
+仕入れてすぐeBayに出し、FBA納品はその後になる運用があるため、
+`POST /listings` に `on_hand: true` を付けて送った行は FBA 0 でも売り越し扱いにしない。
+`RESERVED_ONLY` は Amazon 側で在庫が消える話なので `on_hand` でも抑えない。
 
 ## 4.5 販売経路（売上と返送の区別）
 

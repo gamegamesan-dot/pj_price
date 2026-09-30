@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS items (
   mode             TEXT,                       -- 'hold' / 'restock' / 'end'（pj_priceの在庫0時の動作）
   one_off          INTEGER NOT NULL DEFAULT 0,
   fba_link         INTEGER NOT NULL DEFAULT 0,
+  -- 手元在庫あり（仕入れてすぐeBayに出し、FBA納品はその後）。
+  -- 立っている行は FBA 0 でも売り越し扱いにしない。pj_price から POST /listings で送る。
+  on_hand          INTEGER NOT NULL DEFAULT 0,
   amazon_lowest    REAL,
   amazon_lowest_at TEXT,
   updated_at       TEXT NOT NULL,
