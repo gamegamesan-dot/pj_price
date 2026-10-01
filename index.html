@@ -2636,7 +2636,8 @@ function csvLoad(){
   });
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
-       CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; });
+       CSV_CFG_IDS.forEach(function(id){
+         if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
        if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand;
        if(typeof o.syncSkipAcc==='boolean')$('syncSkipAcc').checked=o.syncSkipAcc; }catch(e){}
@@ -2645,16 +2646,58 @@ function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(cs
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
 // 前後の空白を落として保存する欄（貼り付けで混ざりやすいURL・トークン類）
 var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken','syncApi','syncKey'];
-function csvSaveCfg(){
-  try{ var o={}; CSV_CFG_IDS.forEach(function(id){
-         var v=$(id).value;
-         o[id]=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v; });
-       o.csvAutoParse=$('csvAutoParse').checked;
-       o.syncOnHand=$('syncOnHand').checked;
-       o.syncSkipAcc=$('syncSkipAcc').checked;
-       localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
+/* ---- キー・トークンの欄の保護 ----
+   iPhoneのホーム画面アプリでCSVを書き出すと、いったん画面を離れるため、
+   戻ったときに type="password" の欄がブラウザ側で空にされることがある。
+   そのまま csvSaveCfg() が走ると localStorage のキーまで空で上書きされ、
+   入れ直しても書き出すたびに消える（2026-10-01 の不具合報告）。
+   ・保存時：欄が空なら、保存済みのキーを消さずに残す
+   ・消すのは、その欄を自分で触って空にしたときだけ
+   ・画面に戻ったとき：欄が空なら保存済みのキーを入れ直す */
+var CSV_CFG_SECRET=['syncKey','csvTitleKey','csvImgToken'];
+var csvSecret={};
+function csvSecretKeep(id,v){ if(CSV_CFG_SECRET.indexOf(id)>=0)csvSecret[id]=String(v||''); }
+// 欄が空で、保存済みのキーがあれば入れ直す。入れ直した件数を返す。
+function csvSecretFill(){
+  var n=0;
+  CSV_CFG_SECRET.forEach(function(id){
+    var el=$(id); if(!el)return;
+    if(!String(el.value||'').trim()&&csvSecret[id]){ el.value=csvSecret[id]; n++; }
+  });
+  return n;
 }
-CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
+function csvSaveCfg(){
+  try{
+    /* 丸ごと置き換えずに、保存済みの内容へ上書きする。
+       何かの理由で欄が読めなくても、ほかの設定を落とさないため。 */
+    var o={};
+    try{ var old=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
+         if(old&&typeof old==='object')o=old; }catch(e){}
+    CSV_CFG_IDS.forEach(function(id){
+      var v=$(id).value;
+      v=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v;
+      if(CSV_CFG_SECRET.indexOf(id)>=0&&v===''){
+        o[id]=csvSecret[id]||'';          // 空では消さない（勝手に消えた欄を守る）
+        return;
+      }
+      o[id]=v; csvSecretKeep(id,v);
+    });
+    o.csvAutoParse=$('csvAutoParse').checked;
+    o.syncOnHand=$('syncOnHand').checked;
+    o.syncSkipAcc=$('syncSkipAcc').checked;
+    localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o));
+  }catch(e){}
+}
+CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(e){
+  /* キーの欄を空にできるのは、その欄を触っている本人だけ。
+     画面に戻った直後にブラウザが空にしたときは消さない。 */
+  if(CSV_CFG_SECRET.indexOf(id)>=0&&e&&e.isTrusted&&document.activeElement===this)
+    csvSecretKeep(id,String(this.value||'').trim());
+  csvSaveCfg(); csvRender(); }); });
+/* 書き出しや別アプリから戻ったときに、空になったキーの欄を入れ直す。 */
+document.addEventListener('visibilitychange',function(){ if(!document.hidden)csvSecretFill(); });
+window.addEventListener('pageshow',csvSecretFill);
+window.addEventListener('focus',csvSecretFill);
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('syncOnHand').addEventListener('change',csvSaveCfg);
 $('syncSkipAcc').addEventListener('change',function(){ csvSaveCfg(); syncRender(); });
@@ -3438,7 +3481,10 @@ var CSV_PIC_LONG=1600;       // 長辺の上限。これ未満の写真はその
 var CSV_PIC_Q=0.85;          // JPEG品質
 var csvPicTarget=null;       // いま写真を足している行のid
 function csvImgBase(){ return String($('csvImgBase').value||'').trim().replace(/\/+$/,''); }
-function csvImgToken(){ return String($('csvImgToken').value||'').trim(); }
+/* 画像アップロードのトークン・英題生成のキー。
+   欄が空になっていたら保存済みの値を入れ直してから読む（上のキー保護と同じ理由）。 */
+function csvImgToken(){ csvSecretFill(); return String($('csvImgToken').value||'').trim(); }
+function csvTitleKeyVal(){ csvSecretFill(); return String($('csvTitleKey').value||'').trim(); }
 // 向きを補正して長辺1600pxに縮め、JPEGにする。
 function csvShrink(file){
   return createImageBitmap(file,{imageOrientation:'from-image'}).then(function(bm){
@@ -3944,7 +3990,7 @@ function csvTitleSend(kind,rows,force){
   });
   return fetch(api+path,{
     method:'POST',
-    headers:{'content-type':'application/json','X-PJ-Key':String($('csvTitleKey').value||'').trim()},
+    headers:{'content-type':'application/json','X-PJ-Key':csvTitleKeyVal()},
     body:JSON.stringify({force:!!force, items:items})
   }).then(function(res){
     if(!res.ok)throw new Error('HTTP '+res.status);
@@ -4208,6 +4254,15 @@ function syncSaveCache(){
 function syncUrl(){ return String($('syncApi').value||'').trim().replace(/\/+$/,''); }
 function syncApiKey(){
   return String($('syncKey').value||'').trim()||String($('csvTitleKey').value||'').trim();
+}
+/* 送信の直前に呼ぶ。欄が空になっていたら保存済みのキーを入れ直し、
+   それでも空ならその場で知らせて送らない（空のキーで送ると必ず失敗する）。 */
+function syncKeyReady(noteId){
+  csvSecretFill();
+  var k=syncApiKey();
+  if(!k&&noteId)$(noteId).textContent='設定の「pj-sync のキー」が空です。'
+    +'（入れたはずなのに空のときは、設定画面で入れ直してください）';
+  return k;
 }
 function syncSay(msg){ $('syncNote').textContent=msg||''; }
 // pj-sync の行と出品リストの行を結びつける（ItemID優先、無ければCustomLabel）
@@ -4555,6 +4610,7 @@ $('syncFilter').addEventListener('change',syncRender);
    その印だけ。ほかの項目は Worker 側でそのまま残る。 */
 function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
+  if(!syncKeyReady('syncFixNote'))return;
   var body={asin:r.asin, cond:r.cond, title:r.title||''};
   body[field]=want;
   var back=t.textContent;
@@ -4581,6 +4637,7 @@ function syncFlagSend(t,r,field,want,label){
 /* 行の「再調達中」の印を入れ替える。送るのは ASIN＋新品/中古 と restocking だけ。
    出品リストの mode（在庫0のときの動作）には触らない。 */
 function syncRestockingSend(t,r,on,label){
+  if(!syncKeyReady('syncFixNote'))return;
   var back=t.textContent;
   var body={asin:r.asin, cond:r.cond, title:r.title||'', restocking:on};
   if(on){
@@ -4661,7 +4718,7 @@ $('syncLoad').onclick=function(){
   if(!syncApiKey()){ alert('設定の「pj-sync のキー」を入れてください。'); return; }
   var btn=$('syncLoad'); btn.disabled=true; btn.textContent='取り込み中…';
   syncSay('取り込み中…');
-  fetch(u+'/status?limit=1000',{headers:{'X-PJ-Key':syncApiKey()}})
+  fetch(u+'/status?limit=1000',{headers:{'X-PJ-Key':syncKeyReady()}})
     .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
     .then(function(d){
       syncData={ at:new Date().toISOString(), counts:d.counts||{}, items:d.items||[],
@@ -4729,6 +4786,7 @@ $('syncPush').onclick=function(){
 $('syncOnHandFix').onclick=function(){
   var u=syncUrl();
   if(!u){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncKeyReady('syncFixNote'))return;
   var btn=$('syncOnHandFix'); btn.disabled=true;
   $('syncFixNote').textContent='付け直しています…';
   fetch(u+'/sync',{method:'POST',
@@ -4788,25 +4846,37 @@ $('syncRestock').onclick=function(){
     +'書き出したファイルを Seller Hub にアップロードしてください。\n'
     +'よろしいですか？'))return;
   var name='ebay_restock_itemid_'+csvStamp()+'.csv';
-  if(!csvDownload(name,b.text)){
-    $('syncRestockNote').textContent='書き出しに失敗しました。'; return;
-  }
-  $('syncRestockNote').textContent='再調達CSVを書き出しました：'+name
-    +'（'+list.length+'件・'+b.cols+'列）　配送ポリシー '+b.ship
-    +'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。';
-  syncRestockMark(list);
+  /* 先に pj-sync へ「再調達中」を登録し、そのあとでCSVを書き出す。
+     iPhoneのホーム画面アプリでは、書き出しでいったん画面を離れるため、
+     送信中だった通信が切られて「Load failed」になっていた（2026-10-01の不具合報告）。
+     登録が失敗しても、CSVは必ず書き出す。 */
+  syncRestockMark(list,function(){
+    $('syncRestockNote').textContent=csvDownload(name,b.text)
+      ? ('再調達CSVを書き出しました：'+name
+         +'（'+list.length+'件・'+b.cols+'列）　配送ポリシー '+b.ship
+         +'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。')
+      : '書き出しに失敗しました。';
+  });
 };
 /* 書き出した行を pj-sync で「再調達中」にする（mode=restock）。
    あわせて、その売値で損益分岐に収まる仕入値の上限（円）も送る。
    Worker はこの上限と最安値を比べるだけで、赤字になったら通知（RESTOCK_LOSS）を出せる。 */
-function syncRestockMark(list){
+function syncRestockMark(list,done){
+  var fin=function(){ if(done)done(); };
+  /* 欄が空になっていたら保存済みのキーを入れ直す。空のまま送ると失敗するので送らない。 */
+  csvSecretFill();
+  if(!syncApiKey()){
+    $('syncFixNote').textContent='設定の「pj-sync のキー」が空のため、「再調達中」の登録を飛ばしました。'
+      +'キーを入れてから、行の「再調達中にする」で印を付けてください。';
+    fin(); return;
+  }
   var items=list.map(function(x){
     return { asin:x.row.asin, cond:x.row.cond, title:x.row.title||'', restocking:true,
              restock_price:x.price,
              restock_max_cost:syncMaxCost(x.price,x.weight),
              restock_skip_acc:($('syncSkipAcc').checked&&x.row.cond!=='new')?1:0 };
   });
-  fetch(syncUrl()+'/listings',{method:'POST',
+  fetch(syncUrl()+'/listings',{method:'POST', keepalive:true,
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:items})})
     .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
@@ -4825,8 +4895,9 @@ function syncRestockMark(list){
     })
     .catch(function(e){
       $('syncFixNote').textContent='「再調達中」の登録に失敗しました：'+e.message
-        +'（CSVは書き出せています。もう一度選んで書き出すか、取り込み直してください）';
-    });
+        +'（CSVはこのあと書き出します。行の「再調達中にする」で印を付け直せます）';
+    })
+    .then(fin);     // 成功・失敗どちらでもCSVの書き出しに進む
 }
 
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
