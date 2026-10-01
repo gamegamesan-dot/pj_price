@@ -676,8 +676,11 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="body">
       <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
       <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-      <div class="row"><label>推奨売値の既定重量</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行は、この重量で推奨売値を出します（表では「既定」と出ます）。</div>
+      <div class="row"><label>既定重量（ゲーム）</label><input type="number" id="syncWeightGame" value="150" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
+      <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">「最安値＋この額」までの出品を最安グループとして数えます。この範囲に1人しかいないときだけ「1人だけ注意」を出します。</div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="syncOnHand" checked><label for="syncOnHand" style="flex:1">名簿を送るとき、FBA在庫が未確認の行に「手元在庫あり」を付ける</label></div>
       <div class="note2" style="margin-top:0">仕入れてすぐeBayに出し、FBA納品はその後になる運用のためです。印が付いた行はFBAが0でも売り越しの警告を出しません。</div>
     </div>
@@ -2610,7 +2613,7 @@ var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault',
-                 'csvCatCustom','syncApi','syncKey','syncWeight'];
+                 'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2787,12 +2790,17 @@ function csvWithItem(cost,weight,fn){
   catch(e){ return null; }
   finally{ $('cost').value=c0; $('weight').value=w0; }
 }
+/* price … 推奨売値
+   floor … 基準地帯の利益が「下限利益」（設定・既定1,000円）ちょうどになる売値
+            ＝最低利益ライン。Best Offer の自動拒否ラインにも使っている
+   be    … 基準地帯の利益が0になる売値 ＝ 損益分岐 */
 function csvPriceFor(cost,weight){
   return csvWithItem(cost,weight,function(){
     var m=priceModel();
-    return { price:ceil2(m.pRec), floor:ceil2(m.floor), zone:m.basisZone,
+    return { price:ceil2(m.pRec), floor:ceil2(m.floor),
+             be:ceil2(m.denB>0?(m.restB/m.denB):0), zone:m.basisZone,
              profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
-  })||{price:0,floor:0,zone:0,profit:0};
+  })||{price:0,floor:0,be:0,zone:0,profit:0};
 }
 // 梱包マージンはeBayカテゴリ別。フィギュアは箱があるぶん重い。
 function csvPackMarginFor(cat){
@@ -4209,14 +4217,22 @@ function syncCsvRowFor(r){
 }
 /* Amazon最安値（円）を仕入値とみなした推奨売値。
    重量は出品リストの同じ商品から取り、無ければ設定の既定重量を使う。 */
+/* 出品リストに同じ商品が無い行の既定重量。SKUの接頭辞で振り分ける。
+   接頭辞が分からない行はホビー側（重いほう）を使う＝安全側。 */
+function syncDefWeight(r){
+  var pf=String(r.prefix||'').toLowerCase();
+  if(pf==='game')return +$('syncWeightGame').value||150;
+  return +$('syncWeight').value||400;
+}
 function syncRecommend(r){
   var low=+r.amazon_lowest||0;
   if(!low)return null;
   var row=syncCsvRowFor(r);
   var w=row?(+row.weight||0):0, def=false;
-  if(!w){ w=+$('syncWeight').value||400; def=true; }
+  if(!w){ w=syncDefWeight(r); def=true; }
   var p=csvPriceFor(low, w);
-  return { price:p.price, floor:p.floor, profit:p.profit, weight:w, weightDefault:def };
+  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
+           weight:w, weightDefault:def };
 }
 /* 出品リストの行の突き合わせキー。pj-sync 側と同じ「ASIN＋新品/中古」。
    状態コードは N だけが新品（csvCustomLabel の -U の付け方と揃えてある）。 */
@@ -4246,12 +4262,49 @@ function syncMatch(r){
   if(f==='listed_no_fba'||f==='fba_not_listed')return r.state===f;
   return true;
 }
-/* 最安値の出品者数。1人だけなら、その人が売り切れると相場が変わるので注意を出す。 */
+/* 最安値の出品者数と、中古のコンディション。
+   「最安値＋許容差額（設定・既定200円）」までを最安グループとして数える。
+   この範囲に1人しかいないときだけ「1人だけ注意」を出す
+   （その人が売り切れると相場が変わるため）。
+   中古は出品の状態（SubCondition）が分かれば出し、最安グループが「可」だけなら注意する。 */
+var SYNC_SUBCOND={New:'新品', Mint:'新品同様', VeryGood:'非常に良い', Good:'良い',
+                  Acceptable:'可', Refurbished:'再生品', Club:'クラブ', OEM:'OEM'};
+function syncOffers(r){
+  try{
+    var a=JSON.parse(r.amazon_offers_json||'[]');
+    return Array.isArray(a)?a:[];
+  }catch(e){ return []; }
+}
 function syncOfferNote(r){
-  var n=Number(r.amazon_lowest_n||0), t=Number(r.amazon_offers||0);
-  if(!n)return '';
-  var s='最安値の出品者 '+n+'人'+(t>n?('（全'+t+'件）'):'');
+  var low=+r.amazon_lowest||0;
+  var list=syncOffers(r);
+  var t=Number(r.amazon_offers||0);
+  if(!list.length){
+    // 出品明細を持っていない古い行は、最安ちょうどの人数だけ出す
+    var n0=Number(r.amazon_lowest_n||0);
+    if(!n0)return '';
+    var s0='最安値の出品者 '+n0+'人'+(t>n0?('（全'+t+'件）'):'');
+    if(n0<=1)s0='<span style="color:var(--bad);font-weight:700">'+s0+'・1人だけ注意</span>';
+    return s0;
+  }
+  var tol=+$('syncTol').value; if(isNaN(tol)||tol<0)tol=200;
+  var base=low||(+list[0].p||0);
+  var near=list.filter(function(o){ return (+o.p||0)<=base+tol; });
+  var n=near.length||1;
+  var s='最安グループ '+n+'人（＋'+yen(tol)+'以内'+(t>list.length?('・全'+t+'件'):'')+'）';
   if(n<=1)s='<span style="color:var(--bad);font-weight:700">'+s+'・1人だけ注意</span>';
+  // 中古は状態を出す。最安グループの状態を安い順に並べる（分かるものだけ）
+  if(r.cond!=='new'){
+    var cs=[];
+    near.forEach(function(o){
+      var nm=SYNC_SUBCOND[String(o.c||'')]||'';
+      if(nm&&cs.indexOf(nm)<0)cs.push(nm);
+    });
+    if(cs.length)s+='　状態 '+cs.join('・');
+    var known=near.filter(function(o){ return !!SYNC_SUBCOND[String(o.c||'')]; });
+    if(known.length&&known.every(function(o){ return String(o.c)==='Acceptable'; }))
+      s+='<span style="color:var(--bad);font-weight:700">　最安は「可」だけ注意</span>';
+  }
   return s;
 }
 function syncIsRestock(r){
@@ -4355,8 +4408,10 @@ function syncRender(){
              +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):' 未取得')
       +'</div>'
       +'<div class="note2" style="margin-top:2px">'
-      +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>　最低 '+usd(rec.floor)+'　利益 '+yen(rec.profit)
-             +'　（重量 '+rec.weight+'g'+(rec.weightDefault?'・既定':'')+'）')
+      +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>（利益 '+yen(rec.profit)+'）'
+             +'　最低利益ライン '+usd(rec.floor)+'（利益 '+yen(+$('baseProfit').value||0)+'）'
+             +'　損益分岐 '+usd(rec.be)
+             +'　重量 '+rec.weight+'g'+(rec.weightDefault?'・既定':''))
            :'推奨売値 —（Amazon最安値が未取得）')
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'

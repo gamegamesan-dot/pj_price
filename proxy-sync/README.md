@@ -70,6 +70,7 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0002-sales-channel.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0003-on-hand.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0004-ebay-start.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0005-restock.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0006-offers.sql
 ```
 
 ### 1-5. シークレットを登録する
@@ -353,6 +354,12 @@ pj_price 側は **ASIN＋新品/中古**で突き合わせて印を決める（I
 | `amazon_lowest` | 最安値（本体＋送料・円） |
 | `amazon_lowest_n` | **最安値と同じ値段の出品者数**（1ならその人が売り切れると相場が変わる） |
 | `amazon_offers` | 見えている出品件数（`Summary.TotalOfferCount` と取得分の大きいほう） |
+| `amazon_offers_json` | 安い順に最大10件の `[{p:値段, c:状態}]`。`p` は本体＋送料、`c` は `SubCondition`（`VeryGood` / `Good` / `Acceptable` …） |
+
+**許容差額の中に何人いるか、「可」だけかどうかの判定は pj_price 側で行う。**
+しきい値が設定で変わるものを Worker に焼き付けない（Workerは事実だけ持つ）。
+`/status` の各行には `prefix`（せどりすとSKUの接頭辞。`skus` から引く）も付くので、
+pj_price はカテゴリ別の既定重量を選べる。
 
 `/status` の各行に `restock`（0/1）が付く。**再調達の候補**は
 「eBayに出ている（`ebay_qty>=1`）・FBAの販売可能が0・一点物でない」行。

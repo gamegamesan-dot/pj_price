@@ -477,21 +477,28 @@ async function amazonLowest(env, run, keys) {
       const cond = condOf(req.ItemCondition) || condOf(p.ItemCondition)
                 || condOf(p.Identifier && p.Identifier.ItemCondition);
       if (!asin || !cond) { skipped++; continue; }
-      const vals = [];
+      /* 出品の「値段（本体＋送料）」と「状態」をそのまま持ち帰る。
+         許容差額の中に何人いるか、「可」だけかどうかの判定は pj_price 側で行う
+         （しきい値が設定で変わるものを Worker に焼き付けない）。 */
+      const offers = [];
       for (const o of p.Offers || []) {
         /* 出品ごとに状態が分かるときは、要求した条件と違うものを混ぜない。
            分からなければ要求で絞れているものとして扱う。 */
-        const oc = condOf(o.SubCondition);
+        const sub = String(o.SubCondition || "");
+        const oc = condOf(sub);
         if (oc && oc !== cond) continue;
         const v = landed(o);
-        if (v > 0) vals.push(v);
+        if (v > 0) offers.push({ p: Math.round(v), c: sub });
       }
-      if (!vals.length) continue;
-      const low = Math.min.apply(null, vals);
+      if (!offers.length) continue;
+      offers.sort(function (a, b) { return a.p - b.p; });
+      const vals = offers.map(function (o) { return o.p; });
+      const low = vals[0];
       const lowN = vals.filter(function (v) { return v <= low + 0.01; }).length;
       const total = Math.max(vals.length,
         Number((p.Summary && p.Summary.TotalOfferCount) || 0));
-      out[asin + "|" + cond] = { low: low, lowN: lowN, total: total };
+      out[asin + "|" + cond] = { low: low, lowN: lowN, total: total,
+                                 offers: offers.slice(0, 10) };
     }
   }
   if (skipped) run.notes.push("最安値：条件が分からない結果 " + skipped + "件は使わなかった");
@@ -780,7 +787,8 @@ function stateEvents(env, rows) {
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand,
-  amazon_lowest, amazon_lowest_n, amazon_offers, amazon_lowest_at, updated_at`;
+  amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
+  amazon_lowest_at, updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -1156,8 +1164,9 @@ async function syncPricing(env, run) {
     if (!v) continue;
     stmts.push(env.DB.prepare(
       `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
-         amazon_lowest_at=?6, updated_at=?6
-       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at));
+         amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
+       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at,
+         JSON.stringify(v.offers || [])));
   }
   await runBatch(env, run, stmts);
   run.notes.push("最安値 " + stmts.length + "件");
@@ -1355,7 +1364,10 @@ async function statusBody(env, url) {
   const sql = `SELECT ${ITEM_COLS},
       (SELECT COALESCE(SUM(qty),0) FROM orders o
         WHERE o.channel='ebay' AND o.asin=items.asin AND o.cond=items.cond
-          AND o.ordered_at>=?${bind.length + 1}) AS ebay_sold
+          AND o.ordered_at>=?${bind.length + 1}) AS ebay_sold,
+      -- せどりすとSKUの接頭辞（game / hobby / toy …）。既定重量の振り分けに使う
+      (SELECT s.prefix FROM skus s
+        WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix
     FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;

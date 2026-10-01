@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS items (
   amazon_lowest    REAL,
   amazon_lowest_n  INTEGER,                    -- 最安値と同じ値段の出品者数（1なら注意）
   amazon_offers    INTEGER,                    -- 見えている出品件数
+  -- 安い順に最大10件の [{p:値段(本体+送料), c:状態(SubCondition)}]。
+  -- 許容差額の中に何人いるか、「可」だけかどうかは pj_price 側で判定する。
+  amazon_offers_json TEXT,
   amazon_lowest_at TEXT,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
