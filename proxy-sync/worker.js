@@ -581,6 +581,9 @@ async function ebayOrders(env, run, sinceIso) {
         lines.push({
           lineId: String(li.lineItemId || ""),
           sku: String(li.sku || ""),
+          /* 出品のタイトル（商品名）。SKUが無い出品の通知に使う。
+             購入者の情報（氏名・住所・連絡先）は読まない・持たない。 */
+          title: String(li.title || "").slice(0, 120),
           qty: Number(li.quantity || 0),
           amount: Number((li.total && li.total.value) || 0),
           currency: String((li.total && li.total.currency) || "USD"),
@@ -746,12 +749,18 @@ function itemSeed(env, asin, cond, scope, title) {
 }
 
 /* ---- イベントの検出と通知 ---- */
-const EV_IMMEDIATE = { EBAY_SOLD: 1, OVERSELL_RISK: 1, RESERVED_ONLY: 1, RESTOCK_LOSS: 1 };
+const EV_IMMEDIATE = { EBAY_SOLD: 1, EBAY_SOLD_UNMATCHED: 1, OVERSELL_RISK: 1,
+                       RESERVED_ONLY: 1, RESTOCK_LOSS: 1 };
 const EV_TEXT = {
   FBA_SOLD: (d) => "FBAで売れた：" + d.title + " / eBay残数 " + d.ebay_qty
     + "。フェイズBではここでeBayを更新します",
   EBAY_SOLD: (d) => "eBayで売れた：" + d.title + " / FBA販売可能 " + d.fba_available
     + "。MCFでの取り寄せが必要です",
+  EBAY_SOLD_UNMATCHED: (d) => "eBayで売れた（対応付けなし・自己発送）："
+    + d.title + " / 数量 " + d.qty + " / " + (d.currency === "USD" ? "$" : "")
+    + d.amount + (d.currency === "USD" ? "" : " " + d.currency)
+    + (d.sku ? (" / SKU " + d.sku) : " / SKUなし")
+    + "。注文 " + d.order_id + "。FBAに無い商品なので手元から発送してください",
   OVERSELL_RISK: (d) => "売り越しの恐れ：" + d.title + "（FBA 0 / eBay " + d.ebay_qty + "）",
   QTY_MISMATCH: (d) => "数量の食い違い：" + d.title + "（FBA " + d.fba_available
     + " / eBay " + d.ebay_qty + "）",
@@ -932,7 +941,7 @@ async function syncOrders(env, run, days, maxItems) {
   await runBatch(env, run, qs);
 
   /* 2) eBayの注文 */
-  const keys = [], soldE = [];
+  const keys = [], soldE = [], soldU = [];
   const estmts = [];
   const e = await ebayOrders(env, run, sinceE);
   for (const o of e.orders) {
@@ -949,6 +958,12 @@ async function syncOrders(env, run, days, maxItems) {
         estmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
         keys.push({ asin: k.asin, cond: k.cond });
         soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId });
+      } else {
+        /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
+           商品を特定できないので items には足さないが、売れたことは必ず知らせる。 */
+        soldU.push({ orderId: o.orderId, line: li.lineId, sku: li.sku,
+                     title: li.title, qty: li.qty, amount: li.amount,
+                     currency: li.currency, at: o.at });
       }
     }
   }
@@ -1036,6 +1051,17 @@ async function syncOrders(env, run, days, maxItems) {
       { title: it.title || s2.asin, fba_available: it.fba_available || 0,
         ebay_qty: it.ebay_qty || 0 }));
   }
+  /* 対応付けできない出品も通知する（自己発送）。
+     注文IDと明細IDで重複を防ぐので、同じ注文を二度通知しない。
+     入れるのは商品名・数量・金額だけ（購入者の情報は入れない）。 */
+  for (const s2 of soldU) {
+    ev.push(evStmt(env, "EBAY_SOLD_UNMATCHED",
+      "EBAY_SOLD_UNMATCHED|" + s2.orderId + "|" + s2.line,
+      { ebay_sku: s2.sku || "" },
+      { title: s2.title || s2.sku || "（商品名なし）", qty: s2.qty,
+        amount: Number(s2.amount || 0).toFixed(2), currency: s2.currency || "USD",
+        sku: s2.sku || "", order_id: s2.orderId }));
+  }
   await runBatch(env, run, ev);
 
   /* 5) 差分の基準時刻を進める。明細が残っていても待ち行列で追いかけるので進めてよい。 */
@@ -1045,6 +1071,7 @@ async function syncOrders(env, run, days, maxItems) {
   for (const o of a.orders) chN[o.kind] = (chN[o.kind] || 0) + 1;
   run.notes.push("Amazon注文 " + a.orders.length + "件（売上" + chN.sale
     + "・返送" + chN.removal + "・MCF" + chN.mcf + "）/ eBay注文 " + e.orders.length + "件"
+    + (soldU.length ? ("（対応付けなし " + soldU.length + "件）") : "")
     + " / 明細 取得" + got + "件"
     + (failed ? ("・失敗" + failed + "件（次回やり直す）") : "")
     + (stopped ? "・時間の上限で打ち切り" : "")

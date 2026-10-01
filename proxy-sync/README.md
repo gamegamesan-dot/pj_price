@@ -182,7 +182,7 @@ Invoke-RestMethod -Uri "$U/runs?limit=10" -Headers $H | Format-Table
 
 | いつ | 何をするか |
 |---|---|
-| 15分ごと | Amazon（AFN）と eBay の注文を差分で取り込む → `EBAY_SOLD` / `OVERSELL_RISK` を即時通知 |
+| 15分ごと | Amazon（AFN）と eBay の注文を差分で取り込む → `EBAY_SOLD` / `EBAY_SOLD_UNMATCHED` / `OVERSELL_RISK` を即時通知 |
 | 毎時07分 | FBA在庫を `startDateTime` で差分取り込み＋eBayの出品中リスト → 食い違いを検出し、まとめて通知 |
 | 毎時のうち UTC18時台（JST3時台） | 名簿のSKUを `sellerSkus`（50件/回）で名指し確認＋Amazon最安値＋未対応付けの件数 |
 | 手動のみ | 全件スイープ（`nextToken` をD1に保存して数ページずつ進める） |
@@ -434,6 +434,28 @@ Amazonの注文一覧には、実際の売上以外も入る。`SalesChannel` �
 **フェイズCでMCF注文を作るときは、出品者注文ID（`SellerOrderId`）を必ず `PJ-` で
 始めること。** これが自分の取り寄せとAmazonの返送を区別する唯一の手がかり。
 
+## 4.6 eBayの注文はすべて通知する
+
+eBayに出しているのは、FBAの商品（CustomLabel が `E-<ASIN>[-U]`）だけではない。
+**SKUを設定していない出品**（Amazonに無いセット品など）や、
+**古い形のSKU**（`260918-2023-7000` のような、せどりすと形式でないもの）もある。
+対応付けできない明細は通知の対象外だったため、売れても気づけなかった。
+**いまは、対応付けできるかどうかに関係なく、eBayの明細はすべて通知する。**
+
+| | 対応付けできた明細 | 対応付けできない明細（SKUなし・解析不可） |
+|---|---|---|
+| イベント | `EBAY_SOLD` | `EBAY_SOLD_UNMATCHED` |
+| 通知の中身 | 商品名・FBA販売可能数（MCFの取り寄せが必要） | **商品名・数量・金額・SKU（あれば）・注文ID**（手元から発送） |
+| `items` への登録 | する（ASIN＋新品/中古） | しない（商品を特定できない） |
+| 重複防止 | `EBAY_SOLD|<注文ID>|<明細ID>` | `EBAY_SOLD_UNMATCHED|<注文ID>|<明細ID>` |
+
+どちらも**即時通知**（`EV_IMMEDIATE`）。`dedup_key` が注文ID＋明細IDなので、
+差分取得（`lastmodifieddate`）で同じ注文が何度返ってきても**通知は1回だけ**。
+
+商品名は eBay の明細の `lineItems[].title`（出品のタイトル）で、購入者の情報ではない。
+`events.detail` にだけ持ち、`orders` 表に列は足していない（**D1の変更なし**）。
+`run.note` に「対応付けなし n件」を出す。
+
 ## 5. CPU時間の見かた
 
 Workers では計算中に時計が進まないため、**CPU時間は Worker の中から測れない**。
@@ -451,5 +473,6 @@ Cloudflare ダッシュボード → Workers → pj-sync → Logs / Metrics で�
 
 - Amazon：PIIロールを申請していないので、購入者の氏名・住所はそもそも返ってこない
 - eBay：`getOrders` の応答には氏名・住所が含まれるが、`ebayOrders()` が取り出すのは
-  注文ID・SKU・数量・金額・日時・状態だけ。生の応答は D1 にも Workers Logs にも出さない
+  注文ID・SKU・**商品名（出品のタイトル）**・数量・金額・日時・状態だけ。
+  生の応答は D1 にも Workers Logs にも出さない
 - `orders` 表に氏名・住所・メールの列は無い（`schema.sql` を参照）
