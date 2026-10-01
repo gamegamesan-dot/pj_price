@@ -655,17 +655,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="body" style="padding-top:0">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
         <span class="note2" style="margin:0;flex:0 0 auto">絞り込み</span>
+        <!-- 選択肢は件数つきで syncFilterOpts() が作り直す -->
         <select id="syncFilter" style="flex:1 1 0;min-width:0">
-          <option value="warn">警告ありだけ</option>
-        <option value="restock">再調達の候補（出品中・FBA販売可能0・一点物でない）</option>
-        <option value="restocking">再調達中（再調達CSVで出し直した行）</option>
-          <option value="all" selected>eBay出品ありか在庫あり</option>
-          <option value="listed">eBayに出ている行</option>
-          <option value="listed_no_fba">eBay出品あり・FBA在庫なし</option>
-          <option value="fba_not_listed">FBA在庫あり・eBay未出品</option>
-          <option value="on_hand">手元在庫ありの行</option>
-        <option value="to_fba">FBA納品の候補（手元在庫・eBay未販売）</option>
-        <option value="sold_on_ebay">eBayで売れた（FBAに送らない）</option>
+          <option value="all" selected>すべて</option>
         </select>
       </div>
       <div id="syncList"></div>
@@ -4309,22 +4301,45 @@ function syncDays(r){
   if(!t)return null;
   return Math.max(0,Math.floor((Date.now()-t)/86400000));
 }
-function syncMatch(r){
-  var f=$('syncFilter').value;
-  if(f==='warn')return (r.warnings||[]).length>0;
-  if(f==='listed')return r.ebay_qty!==null&&r.ebay_qty!==undefined;
-  if(f==='on_hand')return !!Number(r.on_hand||0);
+/* ---- 一覧の絞り込み（作業の流れの順）----
+   1 すべて／2 対応が必要／3 再調達の候補／4 再調達中／
+   5 FBA納品の判断（手元在庫。送る候補と送らない行はバッジで見分ける）／
+   6 eBay出品の候補（FBA在庫あり・eBay未出品）
+   それぞれの件数を選択肢に出す（例「対応が必要（3）」）。 */
+var SYNC_FILTERS=[
+  { v:'all',            label:'すべて',
+    f:function(r){ return true; } },
+  { v:'warn',           label:'対応が必要（警告あり）',
+    f:function(r){ return (r.warnings||[]).length>0; } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
-  if(f==='restock')return syncIsRestock(r);
-  // 再調達中：再調達CSVで出し直して、まだeBayに出ている行
-  if(f==='restocking')return syncIsRestocking(r);
-  // 手元在庫のうち、eBayで売れていない行＝FBAに送る候補
-  if(f==='to_fba')return !!Number(r.on_hand||0)&&!Number(r.ebay_sold||0);
-  // 手元在庫のうち、eBayで売れた行＝FBAに送らない
-  if(f==='sold_on_ebay')return !!Number(r.on_hand||0)&&Number(r.ebay_sold||0)>0;
-  if(f==='listed_no_fba'||f==='fba_not_listed')return r.state===f;
-  return true;
+  { v:'restock',        label:'再調達の候補',
+    f:function(r){ return syncIsRestock(r); } },
+  { v:'restocking',     label:'再調達中',
+    f:function(r){ return syncIsRestocking(r); } },
+  /* 手元在庫の行。eBayで売れていなければFBAに送る候補、売れていれば送らない。
+     どちらも一緒に出して、行のバッジで見分ける。 */
+  { v:'on_hand',        label:'FBA納品の判断',
+    f:function(r){ return !!Number(r.on_hand||0); } },
+  { v:'fba_not_listed', label:'eBay出品の候補',
+    f:function(r){ return r.state==='fba_not_listed'; } }
+];
+function syncFilterBy(v){
+  for(var i=0;i<SYNC_FILTERS.length;i++)if(SYNC_FILTERS[i].v===v)return SYNC_FILTERS[i];
+  return SYNC_FILTERS[0];
+}
+function syncMatch(r){ return syncFilterBy($('syncFilter').value).f(r); }
+// 選択肢を件数つきで作り直す。いま選んでいる項目は保つ。
+function syncFilterOpts(){
+  var sel=$('syncFilter'), now=sel.value||'all', rows=(syncData&&syncData.items)||[], h='';
+  SYNC_FILTERS.forEach(function(x){
+    var n=0;
+    rows.forEach(function(r){ if(x.f(r))n++; });
+    h+='<option value="'+x.v+'">'+esc(x.label)+'（'+n+'）</option>';
+  });
+  sel.innerHTML=h;
+  sel.value=now;
+  if(sel.value!==now)sel.value='all';
 }
 /* ---- Amazonの出品の状態（SubCondition） ----
    実データは**小文字**で返る（例 "acceptable"。2026-10-01 に /debug/offers で確認）。
@@ -4488,6 +4503,7 @@ function syncToFba(){
     return Number(x.on_hand||0)&&!Number(x.ebay_sold||0); }).length;
 }
 function syncRender(){
+  syncFilterOpts();                 // 絞り込みの件数を先に作り直す
   var c=(syncData&&syncData.counts)||{};
   $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
   $('syncSummary').textContent=syncData
