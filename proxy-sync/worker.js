@@ -746,7 +746,7 @@ function itemSeed(env, asin, cond, scope, title) {
 }
 
 /* ---- イベントの検出と通知 ---- */
-const EV_IMMEDIATE = { EBAY_SOLD: 1, OVERSELL_RISK: 1, RESERVED_ONLY: 1 };
+const EV_IMMEDIATE = { EBAY_SOLD: 1, OVERSELL_RISK: 1, RESERVED_ONLY: 1, RESTOCK_LOSS: 1 };
 const EV_TEXT = {
   FBA_SOLD: (d) => "FBAで売れた：" + d.title + " / eBay残数 " + d.ebay_qty
     + "。フェイズBではここでeBayを更新します",
@@ -761,6 +761,12 @@ const EV_TEXT = {
   TEST: (d) => "通知テスト（" + d.tag + "）。同じ印のテストは二度届きません",
   FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
     + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
+  RESTOCK_LOSS: (d) => (d.reason === "no_offer"
+    ? ("再調達の仕入先なし：" + d.title + " はAmazonの出品が無くなりました（買い直せません）。"
+       + "eBay売値 $" + d.ebay_price + "・数量 " + d.ebay_qty + "。出品を止めるか見直してください")
+    : ("再調達で赤字：" + d.title + " はAmazon最安値 ¥" + d.low
+       + "（出し直したときの上限 ¥" + d.max + "）。eBay売値 $" + d.ebay_price
+       + " では損益分岐を下回ります。値上げか出品の取り下げが必要です")),
   UNMATCHED: (d) => "eBayに出ているのにFBA在庫が無い：新規 " + d.added
     + "件（合計 " + d.total + "件）。一覧の絞り込み state=listed_no_fba で確認してください",
 };
@@ -782,6 +788,27 @@ function stateEvents(env, rows) {
     if (r.scope !== "ebay") continue;                 // eBay対象外・不明は通知しない
     const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
     const inb = Number(r.fba_inbound || 0);
+    /* 再調達中の行（restocking=1）は、FBAに在庫が無いまま出しているのが正常。
+       売り越し・予約済みのみは出さず、仕入値の異変だけを通知する。
+       FBAの記録が無い行（過去の出品）も見るので、下の guard より前に置く。 */
+    if (isRestocking(r)) {
+      if (av > 0 && q > 0 && av < q)
+        out.push(evStmt(env, "QTY_MISMATCH",
+          "QTY_MISMATCH|" + r.asin + "|" + r.cond + "|" + dayKey(), r,
+          { title: r.title || r.ebay_sku || r.asin, ebay_qty: q,
+            fba_available: av, fba_inbound: inb, fba_reserved: Number(r.fba_reserved || 0),
+            on_hand: Number(r.on_hand || 0) ? 1 : 0, mode: r.mode || "" }));
+      const tr = restockTrouble(r);
+      if (tr) {
+        out.push(evStmt(env, "RESTOCK_LOSS",
+          "RESTOCK_LOSS|" + tr + "|" + r.asin + "|" + r.cond + "|" + dayKey(), r,
+          { title: r.title || r.ebay_sku || r.asin, reason: tr,
+            low: Math.round(restockLowest(r)), max: Math.round(Number(r.restock_max_cost || 0)),
+            ebay_price: Number(r.ebay_price || 0).toFixed(2), ebay_qty: q,
+            offers: Number(r.amazon_offers || 0) }));
+      }
+      continue;
+    }
     if (r.ebay_qty === null || r.fba_seen_at == null) continue;  // 片側しか無い行は UNMATCHED 側で扱う
     const rv = Number(r.fba_reserved || 0);
     const onHand = !!Number(r.on_hand || 0);
@@ -808,9 +835,10 @@ function stateEvents(env, rows) {
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
-  mode, one_off, one_off_known, fba_link, on_hand,
+  mode, one_off, one_off_known, fba_link, on_hand, restocking,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
-  amazon_lowest_at, updated_at`;
+  amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
+  updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -1173,7 +1201,10 @@ async function syncEbayActive(env, run) {
 /* 日次。Amazon最安値（参考表示用）。eBayに出ている行だけ。 */
 async function syncPricing(env, run) {
   const q = await env.DB.prepare(
-    `SELECT asin, cond FROM items WHERE scope='ebay' AND ebay_qty>0 ORDER BY amazon_lowest_at IS NOT NULL,
+    /* 再調達中の行を先に見る。この行だけは最安値が上がると赤字になるので、
+       古い値のまま放置しない。あとは最安値が古い順。 */
+    `SELECT asin, cond FROM items WHERE scope='ebay' AND ebay_qty>0
+       ORDER BY restocking DESC, amazon_lowest_at IS NOT NULL,
        amazon_lowest_at LIMIT ?1`
   ).bind(PRICING_BATCH * PRICING_MAX_CALLS).all();
   const keys = (q && q.results) || [];
@@ -1221,6 +1252,21 @@ async function syncUnmatched(env, run) {
   return { total, added, fba_not_listed: notListed };
 }
 
+/* 再調達中の行を全部見て、赤字・仕入先なしを拾う。
+   名簿（skus）に無い過去の出品も再調達中になり得るので、
+   その回に触ったキーだけでなく、再調達中の行はいつも全部見る。
+   D1を1回読むだけで、外への呼び出しは増えない。 */
+async function restockWatch(env, run) {
+  const q = await env.DB.prepare(
+    `SELECT ${ITEM_COLS} FROM items
+      WHERE scope='ebay' AND restocking=1 AND ebay_qty>=1`).all();
+  const rows = (q && q.results) || [];
+  const stmts = stateEvents(env, rows);     // 再調達中の行では RESTOCK_LOSS だけを作る
+  await runBatch(env, run, stmts);
+  run.notes.push("再調達中 " + rows.length + "件（異変 " + stmts.length + "件）");
+  return rows.length;
+}
+
 /* ---- 仕事の組み合わせ ---- */
 async function jobOrders(env, days, maxItems) {
   const run = newRun("orders");
@@ -1241,6 +1287,7 @@ async function jobHourly(env) {
     const keys = a.concat(b);
     const items = await itemsByKeys(env, keys);
     await runBatch(env, run, stateEvents(env, items));
+    await restockWatch(env, run);
     await flushEvents(env, run, false);     // まとめて通知
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   return saveRun(env, run);
@@ -1252,6 +1299,7 @@ async function jobDaily(env) {
     const items = await itemsByKeys(env, keys);
     await runBatch(env, run, stateEvents(env, items));
     await syncPricing(env, run);
+    await restockWatch(env, run);           // 新しい最安値で赤字を見る
     await syncUnmatched(env, run);
     await flushEvents(env, run, false);
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
@@ -1335,15 +1383,55 @@ function stateOf(r) {
    予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
    手元在庫あり（on_hand）の行は、FBAが0でも売り越し・納品待ちの警告を出さない
    （仕入れてすぐeBayに出し、FBA納品はその後になる運用のため）。 */
+/* 再調達中：pj_price の再調達CSVで出し直した行（restocking=1）で、まだeBayに出ている。
+   この行は「FBAに在庫が無いまま出している」のが正常なので、売り越し系の警告を出さない。
+   mode='restock'（出品リストで決める「在庫0のときの動作」）とは別物なので混ぜない。 */
+function isRestocking(r) {
+  return !!Number(r.restocking || 0) && Number(r.ebay_qty || 0) >= 1;
+}
 /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
-   一点物でない行。一点物かどうかが分からない行（one_off_known=0）も候補に入れる。 */
+   一点物でない行。一点物かどうかが分からない行（one_off_known=0）も候補に入れる。
+   すでに再調達で出し直した行（restocking=1）は候補から外す（切り替え済み）。 */
 function isRestock(r) {
   return Number(r.ebay_qty || 0) >= 1
       && r.fba_available !== null && r.fba_available !== undefined
       && Number(r.fba_available) === 0
       && !Number(r.one_off || 0)
       // 手元にある商品は手元から発送できるので、再調達の必要がない
-      && !Number(r.on_hand || 0);
+      && !Number(r.on_hand || 0)
+      && !isRestocking(r);
+}
+/* 再調達の仕入値として見る最安値（円）。
+   行が `restock_skip_acc=1` を持つときは「可」の出品を外す（pj_price と同じ決まり）。
+   「可」しか無い・状態がまったく分からないときは外さない。 */
+const ACC_RE = /^acceptable$/i;
+const COND_NAME_RE =
+  /^(new|mint|verygood|good|acceptable|refurbished|collectible|club|oem|used)$/i;
+const condNorm = (c) => String(c || "").toLowerCase().replace(/[^a-z]/g, "");
+function restockLowest(r) {
+  let list = [];
+  try {
+    const a = JSON.parse(r.amazon_offers_json || "[]");
+    if (Array.isArray(a)) list = a;
+  } catch (e) { /* 壊れていれば amazon_lowest を使う */ }
+  if (Number(r.restock_skip_acc || 0) && r.cond !== "new" && list.length) {
+    const keep = list.filter((o) => !ACC_RE.test(condNorm(o.c)));
+    const known = list.filter((o) => COND_NAME_RE.test(condNorm(o.c)));
+    if (keep.length && known.length) list = keep;
+  }
+  if (list.length) return Number(list[0].p || 0) || 0;
+  return Number(r.amazon_lowest || 0) || 0;
+}
+/* 再調達中の行の異変。'loss' は仕入値が上限を超えた（出し直した売値では赤字）、
+   'no_offer' は仕入先の出品が消えた（買い直せない）。問題なければ空文字。 */
+function restockTrouble(r) {
+  if (!isRestocking(r)) return "";
+  if (r.amazon_lowest_at == null) return "";        // 最安値をまだ一度も取っていない
+  const low = restockLowest(r);
+  if (!low || Number(r.amazon_offers || 0) === 0) return "no_offer";
+  const max = Number(r.restock_max_cost || 0);
+  if (max > 0 && low > max) return "loss";
+  return "";
 }
 function warnOf(r) {
   const w = [];
@@ -1356,6 +1444,16 @@ function warnOf(r) {
   if (st === "listed_no_fba") { if (!onHand) w.push("FBA在庫なし"); return w; }
   const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
   const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
+  /* 再調達中の行は、FBAに在庫が無いまま出しているのが正常。
+     売り越し・予約済みのみ・納品待ちは出さず、代わりに値段の異変だけを見る。 */
+  if (isRestocking(r)) {
+    const tr = restockTrouble(r);
+    if (tr === "loss") w.push("再調達で赤字");
+    else if (tr === "no_offer") w.push("再調達の仕入先なし");
+    // FBAに在庫が残っていて、それより多くeBayに出している食い違いは従来どおり出す
+    if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
+    return w;
+  }
   if (av === 0 && rv > 0 && q >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
   if (av === 0 && q >= 1) {
     if (onHand) return w;                     // 手元にあるので売り越しではない
@@ -1378,6 +1476,8 @@ async function statusBody(env, url) {
   if (p.get("state") === "listed_no_fba") where.push("(fba_seen_at IS NULL AND on_hand=0)");
   if (p.get("state") === "fba_not_listed")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
+  if (p.get("state") === "restocking")
+    where.push("(restocking=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
     where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0)");
   if (p.get("state") === "past")
@@ -1399,11 +1499,14 @@ async function statusBody(env, url) {
   const q = await env.DB.prepare(sql).bind(...bind).all();
   let items = ((q && q.results) || []).map((r) =>
     Object.assign({}, r, { state: stateOf(r), restock: isRestock(r) ? 1 : 0,
+                           restocking: isRestocking(r) ? 1 : 0,
+                           restock_trouble: restockTrouble(r),
                            warnings: warnOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
   const st = p.get("state");
-  // restock は state の値ではなく別の条件なので、行に付けた印で絞る
+  // restock / restocking は state の値ではなく別の条件なので、行に付けた印で絞る
   if (st === "restock") items = items.filter((x) => x.restock);
+  else if (st === "restocking") items = items.filter((x) => x.restocking);
   else if (st) items = items.filter((x) => x.state === st);
 
   const soldH = Math.min(24 * 14, Math.max(1, Number(p.get("sold") || 24)));
@@ -1437,8 +1540,13 @@ async function statusBody(env, url) {
          AS past_zero,
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND on_hand=1) AS on_hand,
        -- 再調達の候補：eBay出品中・FBAの販売可能が0・一点物でない・手元在庫でない
+       -- （すでに再調達で出し直した行は切り替え済みなので候補から外す）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
-          AND fba_available=0 AND one_off=0 AND on_hand=0) AS restock,
+          AND fba_available=0 AND one_off=0 AND on_hand=0
+          AND restocking=0) AS restock,
+       -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
+          AND restocking=1) AS restocking,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1524,6 +1632,12 @@ async function ordersSummary(env, url) {
 function flagOf(x, key) {
   return Object.prototype.hasOwnProperty.call(x, key) ? (x[key] ? 1 : 0) : null;
 }
+/* 数字の項目。送られてこなければ null（既存の値をそのまま残す）。 */
+function numOf(x, key) {
+  if (!Object.prototype.hasOwnProperty.call(x, key)) return null;
+  const n = Number(x[key]);
+  return isFinite(n) && n > 0 ? n : null;
+}
 async function putListings(env, body) {
   const run = newRun("listings");
   const list = Array.isArray(body && body.items) ? body.items.slice(0, 500) : [];
@@ -1566,11 +1680,21 @@ async function putListings(env, body) {
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
          on_hand=CASE WHEN ${SQL_IN_STOCK} THEN 0 ELSE COALESCE(?9, on_hand) END,
+         /* 再調達中の印と、その監視用の数字。印を下ろしたらまとめて消す。
+            送られてこなければ（?13 IS NULL）いまの値をそのまま残す。 */
+         restocking=COALESCE(?13, restocking),
+         restock_at=CASE WHEN ?13=1 THEN ?8 WHEN ?13=0 THEN NULL ELSE restock_at END,
+         -- 印を下ろすときだけ消す。それ以外は送られてきた項目だけを書き替える。
+         restock_price=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?10, restock_price) END,
+         restock_max_cost=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?11, restock_max_cost) END,
+         restock_skip_acc=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?12, restock_skip_acc) END,
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null,
            flagOf(x, "one_off"), flagOf(x, "fba_link"),
-           String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand")));
+           String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand"),
+           numOf(x, "restock_price"), numOf(x, "restock_max_cost"),
+           flagOf(x, "restock_skip_acc"), flagOf(x, "restocking")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

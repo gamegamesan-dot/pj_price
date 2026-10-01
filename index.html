@@ -658,6 +658,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <select id="syncFilter" style="flex:1 1 0;min-width:0">
           <option value="warn">警告ありだけ</option>
         <option value="restock">再調達の候補（出品中・FBA販売可能0・一点物でない）</option>
+        <option value="restocking">再調達中（再調達CSVで出し直した行）</option>
           <option value="all" selected>eBay出品ありか在庫あり</option>
           <option value="listed">eBayに出ている行</option>
           <option value="listed_no_fba">eBay出品あり・FBA在庫なし</option>
@@ -4261,6 +4262,8 @@ function syncMatch(r){
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
   if(f==='restock')return syncIsRestock(r);
+  // 再調達中：再調達CSVで出し直して、まだeBayに出ている行
+  if(f==='restocking')return syncIsRestocking(r);
   // 手元在庫のうち、eBayで売れていない行＝FBAに送る候補
   if(f==='to_fba')return !!Number(r.on_hand||0)&&!Number(r.ebay_sold||0);
   // 手元在庫のうち、eBayで売れた行＝FBAに送らない
@@ -4343,9 +4346,47 @@ function syncOfferNote(r){
   }
   return s;
 }
+/* 再調達中：再調達CSVで出し直した行（restocking=1）で、まだeBayに出ている。
+   FBAに在庫が無いまま出しているのが正常なので、売り越しの恐れ・再調達の候補は出さない。
+   出品リストの mode（在庫0のときの動作 hold/restock/end）とは別物なので混ぜない。 */
+function syncIsRestocking(r){
+  return !!Number(r.restocking||0) && Number(r.ebay_qty||0)>=1;
+}
 function syncIsRestock(r){
   return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
-      && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0);
+      && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0)
+      && !syncIsRestocking(r);     // すでに出し直した行は候補から外す
+}
+function syncRestockingN(){
+  return ((syncData&&syncData.items)||[]).filter(syncIsRestocking).length;
+}
+/* 再調達中の行の異変。いまの設定で計算し直して見る（Worker側でも同じ判定をして通知する）。
+   'no_offer' … Amazonの出品が無くなった（買い直せない）
+   'loss'     … いまの最安値（中古は「可」を除く）から出した損益分岐が、eBayの売値を超えた */
+function syncRestockTrouble(r){
+  if(!syncIsRestocking(r))return '';
+  if(!r.amazon_lowest_at)return '';                 // 最安値をまだ一度も取っていない
+  /* 比べるのは「出し直したときに入れた売値」。Reviseを上げる前は eBay 側がまだ
+     古い売値のままなので、持っていればそちらを使う（Worker側の判定と同じ基準）。 */
+  var b=syncBasis(r), px=+r.restock_price||+r.ebay_price||0;
+  if(!b.low||Number(r.amazon_offers||0)===0||!b.near.length)return 'no_offer';
+  if(!px)return '';
+  var rec=syncRecommend(r);
+  return (rec&&rec.be>px)?'loss':'';
+}
+/* その売値で損益分岐に収まる仕入値の上限（円）。
+   計算式（為替・手数料・重量）は設定で変わるので、Workerには数字だけを送る。
+   損益分岐は仕入値が上がるほど上がるので、上限を二分法で探す。 */
+function syncMaxCost(price,weight){
+  var px=+price||0; if(!px)return 0;
+  if(csvPriceFor(1,weight).be>px)return 0;          // 1円でも赤字（設定が合っていない）
+  var lo=1, hi=2;
+  while(hi<5000000&&csvPriceFor(hi,weight).be<=px)hi*=2;
+  for(var i=0;i<40&&hi-lo>1;i++){
+    var mid=Math.floor((lo+hi)/2);
+    if(csvPriceFor(mid,weight).be<=px)lo=mid; else hi=mid;
+  }
+  return lo;
 }
 function syncRestockN(){
   return ((syncData&&syncData.items)||[]).filter(syncIsRestock).length;
@@ -4364,6 +4405,20 @@ function syncOnHandBtn(r,key){
   return '<button class="btn" data-sonhand="'+esc(key)+'" style="padding:5px 8px;font-size:12px'
     +(on?';background:#2f6fb0;color:#fff;border-color:#2f6fb0':'')+'">手元在庫 '
     +(on?'オン':'オフ')+'</button>';
+}
+/* 再調達中の入れ/切りボタン。
+   再調達中の行 … 「再調達中 解除」（mode を 'hold' に戻し、監視用の数字も消す）。
+     数量を0にした・通常の出品に戻した行で押す。
+   再調達の候補 … 「再調達中にする」。以前に手で出し直した行（CSVを書き出す前に
+     eBay側を直してしまった行）に印を付けるために使う。いまのeBay売値を基準にする。 */
+function syncRestockingBtn(r,key){
+  if(syncIsRestocking(r))
+    return '<button class="btn" data-srestock="'+esc(key)+'" style="padding:5px 8px;'
+      +'font-size:12px;background:#1f7a4d;color:#fff;border-color:#1f7a4d">再調達中 解除</button>';
+  if(syncIsRestock(r)&&(+r.ebay_price||0))
+    return '<button class="btn" data-srestock="'+esc(key)+'" '
+      +'style="padding:5px 8px;font-size:12px">再調達中にする</button>';
+  return '';
 }
 /* 行の一点物ボタン。手元在庫と同じ形。まだ決めていない行は「一点物 不明」と出す。 */
 function syncOneOffBtn(r,key){
@@ -4384,6 +4439,7 @@ function syncRender(){
     ? ('eBayに出ている '+(c.listed||0)+'件　/　FBA在庫なし '+(c.listed_no_fba||0)+'件'
        +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
        +'　/　再調達の候補 '+syncRestockN()+'件'
+       +'（再調達中 '+syncRestockingN()+'件）'
        +'　/　手元在庫 '+(c.on_hand||0)+'件（FBA納品の候補 '+syncToFba()+'件）'
        +'　/　過去SKU '+(c.past_zero||0)+'件'
        +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
@@ -4417,6 +4473,17 @@ function syncRender(){
         badge+='<span style="display:inline-block;background:#666;color:#fff;border-radius:2px;'
           +'padding:1px 5px;font-size:11px;margin-right:4px">一点物不明</span>';
     }
+    /* 再調達中の行は「売り越しの恐れ」「再調達の候補」を出さず、代わりにこの印を出す。
+       仕入値が上がって赤字になったとき・仕入先が消えたときだけ赤い印を足す。 */
+    if(syncIsRestocking(r)){
+      badge+='<span style="display:inline-block;background:#1f7a4d;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">再調達中</span>';
+      var tb=syncRestockTrouble(r);
+      if(tb)
+        badge+='<span style="display:inline-block;background:#b00020;color:#fff;border-radius:2px;'
+          +'padding:1px 5px;font-size:11px;margin-right:4px">'
+          +(tb==='loss'?'再調達で赤字':'再調達の仕入先なし')+'</span>';
+    }
     if(Number(r.one_off||0))
       badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
@@ -4449,8 +4516,22 @@ function syncRender(){
              +'　重量 '+rec.weight+'g'+(rec.weightDefault?'・既定':''))
            :'推奨売値 —（Amazon最安値が未取得）')
       +'</div>'
+      /* 再調達中の行は、出し直したときの売値と、赤字にならない仕入値の上限を出す。
+         いまの最安値がこの上限を超えたら「再調達で赤字」。 */
+      +(syncIsRestocking(r)
+        ? ('<div class="note2" style="margin-top:2px">再調達中：出し直した売値 '
+           +(r.restock_price?usd(+r.restock_price):'—')
+           +'　仕入値の上限 '+(r.restock_max_cost?yen(+r.restock_max_cost):'—')
+           +(syncRestockTrouble(r)==='loss'
+             ? ('<span style="color:var(--bad);font-weight:700">　いまの最安値 '
+                +yen(syncBasis(r).low)+' は上限を超えています</span>')
+             :(syncRestockTrouble(r)==='no_offer'
+               ? '<span style="color:var(--bad);font-weight:700">　Amazonの出品が無くなりました</span>'
+               :''))
+           +'</div>')
+        : '')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
-      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+'</div>'
+      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncRestockingBtn(r,key)+'</div>'
       +'</div></div></div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
@@ -4496,10 +4577,51 @@ function syncFlagSend(t,r,field,want,label){
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
     });
 }
+/* Worker 側は印を下ろすと、監視用の数字（上限・売値）もまとめて消す。 */
+/* 行の「再調達中」の印を入れ替える。送るのは ASIN＋新品/中古 と restocking だけ。
+   出品リストの mode（在庫0のときの動作）には触らない。 */
+function syncRestockingSend(t,r,on,label){
+  var back=t.textContent;
+  var body={asin:r.asin, cond:r.cond, title:r.title||'', restocking:on};
+  if(on){
+    var rec=syncRecommend(r);
+    var w=(rec&&rec.weight)||syncDefWeight(r);
+    body.restock_price=+r.ebay_price||0;
+    body.restock_max_cost=syncMaxCost(body.restock_price,w);
+    body.restock_skip_acc=($('syncSkipAcc').checked&&r.cond!=='new')?1:0;
+  }
+  t.disabled=true; t.textContent='送信中…';
+  fetch(syncUrl()+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:[body]})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
+      r.restocking=on?1:0;
+      if(on){
+        r.restock_price=body.restock_price; r.restock_max_cost=body.restock_max_cost;
+        r.restock_skip_acc=body.restock_skip_acc; r.restock_at=new Date().toISOString();
+        // 売り越し系の警告は、次の取り込みを待たずにその場で消す
+        // 売り越し系だけ消す（「数量の食い違い」は再調達中でも出し続ける）
+        r.warnings=(r.warnings||[]).filter(function(w){
+          return w!=='売り越しの恐れ'&&w!=='納品待ちで出品中'&&w.indexOf('予約済み')!==0; });
+      }else{
+        r.restock_max_cost=null; r.restock_price=null; r.restock_at=null;
+      }
+      syncSaveCache();
+      $('syncFixNote').textContent=label+'：'+(r.title||r.asin)+'　（'+r.asin+'）';
+      syncRender();
+    })
+    .catch(function(e){
+      t.disabled=false; t.textContent=back;
+      $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
+    });
+}
 $('syncList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var kh=t.getAttribute('data-sonhand'), ko=t.getAttribute('data-soneoff');
-  var key=kh||ko; if(!key)return;
+  var kr=t.getAttribute('data-srestock');
+  var key=kh||ko||kr; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=null;
   ((syncData&&syncData.items)||[]).forEach(function(x){ if(x.asin+'|'+x.cond===key)r=x; });
@@ -4507,6 +4629,20 @@ $('syncList').addEventListener('click',function(e){
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
     syncFlagSend(t,r,'on_hand',!Number(r.on_hand||0),'手元在庫');
+  }else if(kr){
+    if(syncIsRestocking(r)){
+      if(!confirm('再調達中を解除します（通常の出品に戻します）。\n'
+        +'「売り越しの恐れ」などの警告が再び出るようになります。よろしいですか？'))return;
+      syncRestockingSend(t,r,false,'再調達中を解除しました');
+    }else{
+      var w0=(syncRecommend(r)&&syncRecommend(r).weight)||syncDefWeight(r);
+      var mx=syncMaxCost(+r.ebay_price||0,w0);
+      if(!confirm('この行を「再調達中」にします（eBay側は変えません）。\n'
+        +'いまのeBay売値 '+usd(+r.ebay_price||0)+' を基準に、仕入値の上限を '+yen(mx)+' として'
+        +'見張ります。\nAmazonの最安値がこれを超えたら「再調達で赤字」の通知が出ます。\n'
+        +'よろしいですか？'))return;
+      syncRestockingSend(t,r,true,'再調達中にしました');
+    }
   }else{
     syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
   }
@@ -4643,7 +4779,8 @@ $('syncRestock').onclick=function(){
   var list=pick.map(function(r){
     var rec=syncRecommend(r);
     return { itemId:String(r.ebay_item_id).trim(),
-             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:rec.price, title:r.title||r.asin };
+             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:rec.price, title:r.title||r.asin,
+             row:r, weight:rec.weight };
   });
   var b=syncRestockBuild(list);
   if(!confirm(list.length+'件を再調達で出し直します。\n'
@@ -4651,11 +4788,46 @@ $('syncRestock').onclick=function(){
     +'書き出したファイルを Seller Hub にアップロードしてください。\n'
     +'よろしいですか？'))return;
   var name='ebay_restock_itemid_'+csvStamp()+'.csv';
-  $('syncRestockNote').textContent=csvDownload(name,b.text)
-    ? ('再調達CSVを書き出しました：'+name+'（'+list.length+'件・'+b.cols+'列）'
-       +'　配送ポリシー '+b.ship+'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。')
-    : '書き出しに失敗しました。';
+  if(!csvDownload(name,b.text)){
+    $('syncRestockNote').textContent='書き出しに失敗しました。'; return;
+  }
+  $('syncRestockNote').textContent='再調達CSVを書き出しました：'+name
+    +'（'+list.length+'件・'+b.cols+'列）　配送ポリシー '+b.ship
+    +'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。';
+  syncRestockMark(list);
 };
+/* 書き出した行を pj-sync で「再調達中」にする（mode=restock）。
+   あわせて、その売値で損益分岐に収まる仕入値の上限（円）も送る。
+   Worker はこの上限と最安値を比べるだけで、赤字になったら通知（RESTOCK_LOSS）を出せる。 */
+function syncRestockMark(list){
+  var items=list.map(function(x){
+    return { asin:x.row.asin, cond:x.row.cond, title:x.row.title||'', restocking:true,
+             restock_price:x.price,
+             restock_max_cost:syncMaxCost(x.price,x.weight),
+             restock_skip_acc:($('syncSkipAcc').checked&&x.row.cond!=='new')?1:0 };
+  });
+  fetch(syncUrl()+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:items})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      items.forEach(function(it,i){
+        var r=list[i].row;
+        r.restocking=1; r.restock_price=it.restock_price;
+        r.restock_max_cost=it.restock_max_cost; r.restock_skip_acc=it.restock_skip_acc;
+        r.warnings=(r.warnings||[]).filter(function(w){
+          return w!=='売り越しの恐れ'&&w!=='納品待ちで出品中'&&w.indexOf('予約済み')!==0; });
+      });
+      syncSaveCache(); syncRender();
+      $('syncFixNote').textContent=(d.accepted||0)+'件を「再調達中」にしました'
+        +'（仕入値の上限：'+items.map(function(it){ return yen(it.restock_max_cost); }).join('・')
+        +'）。この上限を超えたら「再調達で赤字」の通知が出ます。';
+    })
+    .catch(function(e){
+      $('syncFixNote').textContent='「再調達中」の登録に失敗しました：'+e.message
+        +'（CSVは書き出せています。もう一度選んで書き出すか、取り込み直してください）';
+    });
+}
 
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
    出品文タブの既存ロジック（タイトル生成・説明文生成・SKU発番）はそのまま使う。

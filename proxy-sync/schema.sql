@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS items (
   -- 許容差額の中に何人いるか、「可」だけかどうかは pj_price 側で判定する。
   amazon_offers_json TEXT,
   amazon_lowest_at TEXT,
+  /* 再調達で出し直した「いまの状態」。pj_price が再調達CSVの書き出しのときに送る。
+     mode（在庫0のときの動作）とは別物：mode='restock' は出品リストで決める方針で、
+     こちらは「いま、FBA在庫なしのままAmazon最安値基準で出し続けている」行の印。 */
+  restocking       INTEGER NOT NULL DEFAULT 0,
+  restock_at       TEXT,                       -- 再調達に切り替えた時刻
+  restock_price    REAL,                       -- そのときeBayに入れた売値（USD）
+  -- その売値で損益分岐に収まる仕入値の上限（円）。Amazonの最安値がこれを超えたら赤字。
+  -- 計算式（為替・手数料・重量）は pj_price 側の設定で変わるので、Workerは数字だけ持つ。
+  restock_max_cost INTEGER,
+  restock_skip_acc INTEGER,                    -- その上限を「可」を除いて出したか（0/1）
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );

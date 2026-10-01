@@ -134,7 +134,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/status` | 各行に `ebay_start`（出品開始日時）と `ebay_sold`（直近180日のeBay販売点数）も付く。一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
+| GET | `/status` | 各行に `ebay_start`（出品開始日時）と `ebay_sold`（直近180日のeBay販売点数）も付く。一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok\|restock\|restocking`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
@@ -376,6 +376,50 @@ pj_price はカテゴリ別の既定重量を選べる。
 「eBayに出ている（`ebay_qty>=1`）・FBAの販売可能が0・一点物でない」行。
 `?state=restock` で絞り込め、`counts.restock` に件数が出る。
 一点物かどうかが分からない行（`one_off_known=0`）も候補に入れる。
+
+## 4.48 再調達中（mode='restock'）の見張り
+
+pj_price が**再調達CSVを書き出した行**は、`POST /listings` の
+`restocking:true` で「再調達中」になる（ASIN＋新品/中古のキーで送る）。
+
+> **`mode` とは別物。** `mode`（`'hold'`/`'restock'`/`'end'`）は出品リストで決める
+> 「FBA在庫が0になったときの動作」という**方針**で、ずっと前から入っている。
+> `restocking` は「いま、FBA在庫なしのまま最安値基準で出し続けている」という**状態**。
+> 混ぜると、方針が `restock` の行すべてが再調達中になってしまう。
+
+あわせて次を受け取る。
+
+| 項目 | 中身 |
+|---|---|
+| `restock_price` | 出し直したときにeBayに入れた売値（USD） |
+| `restock_max_cost` | **その売値で損益分岐に収まる仕入値の上限（円）**。pj_price が計算式を逆算して出す |
+| `restock_skip_acc` | その上限を「可」を除いた最安値で出したか（0/1） |
+
+`restocking:false` を送ると、この3つと `restock_at` は**まとめて消える**
+（pj_price の「再調達中 解除」ボタン）。`restocking` を送らずに数字だけ送れば、
+その項目だけを書き替える。
+
+**再調達中の行は、FBAに在庫が無いまま出しているのが正常。**
+`warnings` に「売り越しの恐れ」「納品待ちで出品中」「予約済みのみ」を出さず、
+`OVERSELL_RISK` / `RESERVED_ONLY` / `INBOUND_LISTED` も作らない。
+「数量の食い違い」（FBA在庫＜eBay数量）は在庫が残っている話なので従来どおり出す。
+`restock`（候補）からも外れ、行の `restocking=1` と `counts.restocking` が立つ
+（`?state=restocking` で絞り込める）。代わりに次の2つだけを見る。
+
+| `restock_trouble` | 条件 | `warnings` | 通知 |
+|---|---|---|---|
+| `loss` | 最安値（`restock_skip_acc=1` なら「可」を除く）が `restock_max_cost` を超えた | 再調達で赤字 | `RESTOCK_LOSS` |
+| `no_offer` | Amazonの出品が無くなった（`amazon_offers=0`／最安値なし） | 再調達の仕入先なし | `RESTOCK_LOSS` |
+
+最安値を**一度も取っていない行**（`amazon_lowest_at IS NULL`）では判定しない。
+
+見張りは `restockWatch()` が毎回（毎時・日次）**再調達中の行を全部**読む。
+名簿（`skus`）に無い過去の出品も再調達中になり得るため、その回に触ったキーだけでは足りない。
+D1を1回読むだけで、外への呼び出しは増えない。
+値付け（`syncPricing`）は**再調達中の行を先に**見る（`ORDER BY restocking DESC`。
+最安値が古いままだと赤字に気づけない）。
+
+`RESTOCK_LOSS` は即時通知（`EV_IMMEDIATE`）。同じ日・同じ理由は1回だけ。
 
 ## 4.5 販売経路（売上と返送の区別）
 
