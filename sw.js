@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v89';
+const V = 'pj-pricing-v90';
 const ASSETS = [
   './',
   './index.html',
@@ -19,6 +19,16 @@ self.addEventListener('activate', e => {
       .then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+/* 画面の一番下に出すバージョンの問い合わせ。
+   いま動いているSW自身が答えるので、表示と実際の版がずれない。 */
+self.addEventListener('message', e => {
+  if (e.data && e.data.ask === 'version') {
+    const v = (/pj-pricing-(v\d+)/.exec(V) || [])[1] || V;
+    if (e.ports && e.ports[0]) e.ports[0].postMessage({ version: v });
+    else if (e.source && e.source.postMessage) e.source.postMessage({ version: v });
+  }
 });
 
 // ネットワーク優先・失敗したらキャッシュ（更新を取りこぼさず、圏外でも動く）

@@ -95,7 +95,11 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
 .btn.done{background:var(--good);color:#fff;border-color:var(--good)}
 .btn:disabled{background:#f2f1ed;color:var(--mute);border-color:var(--line)}
 .note2{font-size:11.5px;color:var(--mute);margin-top:7px;line-height:1.55}
+/* タブ帯はヘッダーの下に固定（position:sticky）。スクロールしても残る。 */
+.tabbar{position:sticky;top:0;z-index:30;background:var(--paper);padding:8px 0;
+        box-shadow:0 2px 4px rgba(26,26,26,.10)}
 .tabs{display:flex;border:1px solid var(--ink);border-radius:2px;overflow:hidden;margin-top:12px}
+.tabbar .tabs{margin-top:0}
 .tabs button{flex:1;padding:12px 4px;font-size:14px;font-weight:800;border:0;background:#fff;color:var(--ink);font-family:inherit}
 .tabs button[aria-pressed=true]{background:var(--label);color:var(--ink)}
 td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
@@ -112,9 +116,23 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </div>
 </header>
 
+<!-- タブはどのタブを選んでいてもヘッダーのすぐ下。スクロールしても画面上部に残す。 -->
+<div class="tabbar">
+  <div class="wrap">
+    <div class="tabs">
+      <button id="tabA" aria-pressed="true">eBay</button>
+      <button id="tabB" aria-pressed="false">出品文</button>
+      <button id="tabC" aria-pressed="false">Shopee</button>
+      <button id="tabD" aria-pressed="false">出品CSV</button>
+      <button id="tabE" aria-pressed="false">販売連携</button>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
   <div id="tip"></div>
 
+  <!-- 計算機の「商品」欄はタブの下。出品CSV・販売連携では switchTab() が隠す。 -->
   <section id="itemBox">
     <div class="h">商品</div>
     <div class="body">
@@ -141,14 +159,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div><!-- /ebayOnlyItem -->
     </div>
   </section>
-
-  <div class="tabs">
-    <button id="tabA" aria-pressed="true">eBay</button>
-    <button id="tabB" aria-pressed="false">出品文</button>
-    <button id="tabC" aria-pressed="false">Shopee</button>
-    <button id="tabD" aria-pressed="false">出品CSV</button>
-    <button id="tabE" aria-pressed="false">販売連携</button>
-  </div>
 
   <div id="tabPricing">
 
@@ -719,7 +729,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <footer>
     日本郵便 2026-08-07 時点の料金表を内蔵<br>
     国際エアパケット / EMS・第1〜第5地帯<br>
-    <span id="netstate"></span>
+    <span id="netstate"></span><br>
+    <span id="appVer"></span>
   </footer>
 </div>
 
@@ -5102,6 +5113,53 @@ if('serviceWorker' in navigator){
 }
 function net(){$('netstate').textContent=navigator.onLine?'':'\u2691 オフラインで動作中';}
 addEventListener('online',net);addEventListener('offline',net);net();
+
+/* ---- いま動いているバージョンの表示 ----
+   sw.js の `const V = 'pj-pricing-vNN'` と同じ値を出す（更新のたびに自動で変わる）。
+   1) Service Worker のキャッシュ名（pj-pricing-vNN）から拾う＝いま動いている版
+   2) まだ登録されていない・取れないときは sw.js を読んで拾う */
+function appVerPick(names){
+  var best=0;
+  (names||[]).forEach(function(n){
+    var m=/^pj-pricing-v(\d+)$/.exec(String(n));
+    if(m&&+m[1]>best)best=+m[1];
+  });
+  return best?('v'+best):'';
+}
+function appVerFromSw(){
+  return fetch('./sw.js',{cache:'no-store'})
+    .then(function(r){ return r.ok?r.text():''; })
+    .then(function(t){ var m=/pj-pricing-(v\d+)/.exec(t||''); return m?m[1]:''; })
+    ['catch'](function(){ return ''; });
+}
+function appVerShow(v){ $('appVer').textContent=v?('バージョン '+v):''; }
+/* いま動いているSWに直接聞く（これが本当に動いている版）。
+   返事が無ければ空を返して、キャッシュ名 → sw.js の順に回す。 */
+function appVerAskSw(){
+  return new Promise(function(done){
+    var sw=navigator.serviceWorker&&navigator.serviceWorker.controller;
+    if(!sw||typeof MessageChannel==='undefined'){ done(''); return; }
+    var ch=new MessageChannel(), t=setTimeout(function(){ done(''); },1500);
+    ch.port1.onmessage=function(e){
+      clearTimeout(t); done((e.data&&e.data.version)||'');
+    };
+    try{ sw.postMessage({ask:'version'},[ch.port2]); }catch(e){ clearTimeout(t); done(''); }
+  });
+}
+function appVerInit(){
+  var fromCache=function(){
+    if(!(window.caches&&caches.keys))return Promise.resolve('');
+    return caches.keys().then(appVerPick)['catch'](function(){ return ''; });
+  };
+  appVerAskSw()
+    .then(function(v){ return v||fromCache(); })
+    .then(function(v){ return v||appVerFromSw(); })
+    .then(appVerShow);
+}
+appVerInit();
+// 新しい版がキャッシュを作ったら表示も追いつく
+if('serviceWorker' in navigator&&navigator.serviceWorker.addEventListener)
+  navigator.serviceWorker.addEventListener('controllerchange',appVerInit);
 
 (function(){
   var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
