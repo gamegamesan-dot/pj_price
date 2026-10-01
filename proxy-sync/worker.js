@@ -445,6 +445,26 @@ function landed(o) {
   return Number((o.ListingPrice && o.ListingPrice.Amount) || 0)
        + Number((o.Shipping && o.Shipping.Amount) || 0);
 }
+/* 出品1件の状態（非常に良い／良い／可 など）を取り出す。
+   SP-APIの綴りが SubCondition / subCondition のどちらで返るか実データで確定できて
+   いないので、**状態を表しそうなキーを総当たりで探す**。
+   ConditionNotes（自由記述）は拾わない。 */
+const COND_KEY = /^(sub[_-]?condition|condition)$/i;
+const COND_VAL = /^(new|mint|verygood|very[_ -]?good|good|acceptable|refurbished|club|oem|used|collectible)$/i;
+function subCondOf(o) {
+  if (!o || typeof o !== "object") return "";
+  for (const k of Object.keys(o)) {
+    if (!COND_KEY.test(k)) continue;
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  // キー名が想定外でも、値が状態の語そのものなら拾う
+  for (const k of Object.keys(o)) {
+    const v = o[k];
+    if (typeof v === "string" && COND_VAL.test(v.trim())) return v.trim();
+  }
+  return "";
+}
 function condOf(v) {
   const t = String(v || "").trim();
   if (!t) return "";
@@ -453,7 +473,7 @@ function condOf(v) {
 }
 async function amazonLowest(env, run, keys) {
   const out = {};
-  let skipped = 0;
+  let skipped = 0, noCond = 0;
   for (let i = 0; i < keys.length && i / PRICING_BATCH < PRICING_MAX_CALLS; i += PRICING_BATCH) {
     const part = keys.slice(i, i + PRICING_BATCH);
     const body = JSON.stringify({
@@ -484,13 +504,14 @@ async function amazonLowest(env, run, keys) {
       for (const o of p.Offers || []) {
         /* 出品ごとに状態が分かるときは、要求した条件と違うものを混ぜない。
            分からなければ要求で絞れているものとして扱う。 */
-        const sub = String(o.SubCondition || "");
+        const sub = subCondOf(o);
         const oc = condOf(sub);
         if (oc && oc !== cond) continue;
         const v = landed(o);
         if (v > 0) offers.push({ p: Math.round(v), c: sub });
       }
       if (!offers.length) continue;
+      if (!offers.some(function (o) { return o.c; })) noCond++;
       offers.sort(function (a, b) { return a.p - b.p; });
       const vals = offers.map(function (o) { return o.p; });
       const low = vals[0];
@@ -502,6 +523,8 @@ async function amazonLowest(env, run, keys) {
     }
   }
   if (skipped) run.notes.push("最安値：条件が分からない結果 " + skipped + "件は使わなかった");
+  if (noCond) run.notes.push("最安値：出品の状態が取れない商品 " + noCond
+    + "件（応答のキー名を GET /debug/offers で確認する）");
   return out;
 }
 
@@ -1319,7 +1342,9 @@ function isRestock(r) {
   return Number(r.ebay_qty || 0) >= 1
       && r.fba_available !== null && r.fba_available !== undefined
       && Number(r.fba_available) === 0
-      && !Number(r.one_off || 0);
+      && !Number(r.one_off || 0)
+      // 手元にある商品は手元から発送できるので、再調達の必要がない
+      && !Number(r.on_hand || 0);
 }
 function warnOf(r) {
   const w = [];
@@ -1355,7 +1380,7 @@ async function statusBody(env, url) {
   if (p.get("state") === "fba_not_listed")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
   if (p.get("state") === "restock")
-    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0)");
+    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0)");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1412,9 +1437,9 @@ async function statusBody(env, url) {
           AND ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT ${SQL_IN_STOCK})
          AS past_zero,
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND on_hand=1) AS on_hand,
-       -- 再調達の候補：eBay出品中・FBAの販売可能が0・一点物でない
+       -- 再調達の候補：eBay出品中・FBAの販売可能が0・一点物でない・手元在庫でない
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
-          AND fba_available=0 AND one_off=0) AS restock,
+          AND fba_available=0 AND one_off=0 AND on_hand=0) AS restock,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1493,6 +1518,46 @@ async function ordersSummary(env, url) {
   };
 }
 
+/* ---- GET /debug/offers?asin=…&cond=used ----
+   出品の状態（非常に良い／良い／可）がどのキーで返るか分からないときに使う。
+   **キー名と、状態らしい値・値段だけ**を返す。出品者ID等は返さない。
+   原因が分かったら消す（/debug/gtin・/debug/catalog と同じ扱い）。 */
+async function debugOffers(env, url) {
+  const run = newRun("debug");
+  const asin = String(url.searchParams.get("asin") || "").trim().toUpperCase();
+  const cond = (url.searchParams.get("cond") === "used") ? "used" : "new";
+  if (!/^B[0-9A-Z]{9}$/.test(asin)) return { error: "bad_asin" };
+  const body = JSON.stringify({
+    requests: [{
+      uri: "/products/pricing/v0/items/" + asin + "/offers",
+      method: "GET", MarketplaceId: MP_FE,
+      ItemCondition: cond === "new" ? "New" : "Used", CustomerType: "Consumer",
+    }],
+  });
+  const r = await spCall(env, run, "/batches/products/pricing/v0/itemOffers",
+                         { method: "POST", body, label: "getItemOffersBatch" });
+  const out = { asin, cond, ok: r.ok, status: r.status, note: run.notes.join(" / ") };
+  if (!r.ok) return out;
+  const res = ((r.data && r.data.responses) || [])[0] || {};
+  const p = (res.body && res.body.payload) || {};
+  out.response_keys = Object.keys(res);
+  out.payload_keys = Object.keys(p);
+  out.summary_keys = Object.keys(p.Summary || {});
+  out.offer_count = (p.Offers || []).length;
+  out.offers = (p.Offers || []).slice(0, 3).map((o) => {
+    const picked = {};
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      // 状態らしいキー・値だけ拾う（出品者IDや住所は返さない）
+      if (COND_KEY.test(k) || (typeof v === "string" && COND_VAL.test(v.trim())))
+        picked[k] = v;
+    }
+    return { keys: Object.keys(o), cond_like: picked, found: subCondOf(o),
+             price: landed(o) };
+  });
+  return out;
+}
+
 /* ---- POST /listings（pj_price からの名簿登録） ---- */
 /* 送られてこなかった項目は変えない（null を渡して COALESCE で残す）。
    手元在庫の入/切だけを送る呼び出し（ASIN＋新品/中古のみ）でも、
@@ -1568,6 +1633,9 @@ export default {
     try {
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
+
+      if (request.method === "GET" && url.pathname === "/debug/offers")
+        return json(await debugOffers(env, url), 200, origin);
 
       if (request.method === "GET" && url.pathname === "/orders/summary")
         return json(await ordersSummary(env, url), 200, origin);

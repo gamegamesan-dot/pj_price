@@ -1019,6 +1019,57 @@ synctab/v78/cat/v76/redo/v13/pricecsv）すべて ❌なし・pageerror なし �
 **D1に列を1つ足したので `migrate-0006-offers.sql` の適用が必要。
 Worker の再デプロイも必要。**
 
+## 7.10 出品の状態が取れない件と、手元在庫の除外（2026-10-01・sw.js v85）
+
+### 1. 中古の状態（非常に良い／良い／可）が表示されない
+
+`amazon_offers_json` の `c` が空だった。値段は入っているので
+`Offers[]` は読めていて、**出品1件ごとの状態のキー名が想定と違う**と判断した。
+実データの応答をこちらから見られないため、次の2つで対応した。
+
+**(a) キー名を決め打ちにしない。** `SubCondition` / `subCondition` /
+`sub_condition` / `Condition` のどれでも拾い、キー名が想定外でも
+**値が状態の語**（`VeryGood` / `Good` / `Acceptable` / `Mint` …）なら拾う。
+`ConditionNotes`（自由記述）は拾わない。
+1件も取れなかった商品があると `note` に件数を出す。
+
+**(b) 確認用の読み取り専用エンドポイントを足した。**
+`GET /debug/offers?asin=B075LC617B&cond=used` が返すのは
+**応答のキー名・状態らしいキーと値・値段**だけ（出品者IDや自由記述は返さない）。
+これで本当のキー名が分かる。**分かったら消す**（`/debug/gtin`・`/debug/catalog`
+と同じ扱い）。
+
+D1に入っている中身を直接見るには：
+
+```powershell
+npx wrangler d1 execute pj-sync --remote --command `
+  "SELECT cond, amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json
+     FROM items WHERE asin='B075LC617B'"
+```
+
+### 2. 手元在庫の行は再調達の候補から外す
+
+手元にある商品は手元から発送できるので再調達の必要がない。
+**`on_hand=1` の行を再調達の候補から外した**（Worker の `isRestock` と
+`counts.restock`・`?state=restock`、pj_price の `syncIsRestock` の4か所）。
+
+### 検証
+
+```
+Worker
+  状態のキー名が SubCondition / subCondition / sub_condition / Condition /
+  想定外のキー名（値が状態の語）のどれでも、3件すべて拾える ✅
+  状態がまったく返らないときは note に警告を出す ✅
+  /debug/offers … キー名の一覧・拾えた値・値段を返し、
+  出品者ID（SellerId）と自由記述（ConditionNotes）は返さない ✅ おかしなASINは弾く ✅
+  手元在庫の行は counts.restock・?state=restock・行の restock から外れる ✅
+pj_price（実ブラウザ）
+  手元在庫をオンにすると再調達の候補から外れ、見出しの件数も減る ✅
+回帰すべて ❌なし・pageerror なし ✅
+```
+
+**Worker の再デプロイが必要（D1の変更はなし）。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

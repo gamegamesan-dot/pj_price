@@ -4307,9 +4307,11 @@ function syncOfferNote(r){
   }
   return s;
 }
+/* 再調達の候補：eBayに出ていて、FBAの販売可能が0で、一点物でなく、手元在庫でもない行。
+   手元にある商品は手元から発送できるので再調達の必要がない。 */
 function syncIsRestock(r){
   return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
-      && r.fba_available!==null && !Number(r.one_off||0);
+      && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0);
 }
 function syncRestockN(){
   return ((syncData&&syncData.items)||[]).filter(syncIsRestock).length;

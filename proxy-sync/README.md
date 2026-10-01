@@ -135,6 +135,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | メソッド | パス | 用途 |
 |---|---|---|
 | GET | `/status` | 各行に `ebay_start`（出品開始日時）と `ebay_sold`（直近180日のeBay販売点数）も付く。一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
+| GET | `/debug/offers?asin=B…&cond=used` | Amazonの出品の**キー名と状態らしい値・値段だけ**を返す（出品者IDや自由記述は返さない）。状態が取れない原因を調べるための一時的なもので、分かったら消す |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
@@ -354,7 +355,12 @@ pj_price 側は **ASIN＋新品/中古**で突き合わせて印を決める（I
 | `amazon_lowest` | 最安値（本体＋送料・円） |
 | `amazon_lowest_n` | **最安値と同じ値段の出品者数**（1ならその人が売り切れると相場が変わる） |
 | `amazon_offers` | 見えている出品件数（`Summary.TotalOfferCount` と取得分の大きいほう） |
-| `amazon_offers_json` | 安い順に最大10件の `[{p:値段, c:状態}]`。`p` は本体＋送料、`c` は `SubCondition`（`VeryGood` / `Good` / `Acceptable` …） |
+| `amazon_offers_json` | 安い順に最大10件の `[{p:値段, c:状態}]`。`p` は本体＋送料、`c` は出品の状態（`VeryGood` / `Good` / `Acceptable` …） |
+
+**状態のキー名は綴りを決め打ちにしない。** `SubCondition` / `subCondition` /
+`sub_condition` / `Condition` のどれでも拾い、キー名が想定外でも**値が状態の語**
+（`VeryGood` など）なら拾う。`ConditionNotes`（自由記述）は拾わない。
+1件も取れなかった商品があると `note` に件数を出す。
 
 **許容差額の中に何人いるか、「可」だけかどうかの判定は pj_price 側で行う。**
 しきい値が設定で変わるものを Worker に焼き付けない（Workerは事実だけ持つ）。
