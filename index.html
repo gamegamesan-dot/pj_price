@@ -680,6 +680,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
       <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="chk" style="margin-top:4px"><input type="checkbox" id="syncSkipAcc" checked><label for="syncSkipAcc" style="flex:1">中古の最安値から「可」を除く</label></div>
+      <div class="note2" style="margin-top:0">コンディション「可」の出品を基準から外し、推奨売値も「可を除く最安値」から計算します。「可」しか無い商品では外しません。</div>
       <div class="note2" style="margin-top:0">「最安値＋この額」までの出品を最安グループとして数えます。この範囲に1人しかいないときだけ「1人だけ注意」を出します。</div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="syncOnHand" checked><label for="syncOnHand" style="flex:1">名簿を送るとき、FBA在庫が未確認の行に「手元在庫あり」を付ける</label></div>
       <div class="note2" style="margin-top:0">仕入れてすぐeBayに出し、FBA納品はその後になる運用のためです。印が付いた行はFBAが0でも売り越しの警告を出しません。</div>
@@ -2635,7 +2637,8 @@ function csvLoad(){
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){ if(o[id]!==undefined&&o[id]!=='')$(id).value=o[id]; });
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
-       if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand; }catch(e){}
+       if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand;
+       if(typeof o.syncSkipAcc==='boolean')$('syncSkipAcc').checked=o.syncSkipAcc; }catch(e){}
 }
 function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
@@ -2647,11 +2650,13 @@ function csvSaveCfg(){
          o[id]=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v; });
        o.csvAutoParse=$('csvAutoParse').checked;
        o.syncOnHand=$('syncOnHand').checked;
+       o.syncSkipAcc=$('syncSkipAcc').checked;
        localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o)); }catch(e){}
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); }); });
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('syncOnHand').addEventListener('change',csvSaveCfg);
+$('syncSkipAcc').addEventListener('change',function(){ csvSaveCfg(); syncRender(); });
 // 登録カテゴリを書き換えたら、出品文タブの選択肢も作り直す
 $('csvCatCustom').addEventListener('input',csvAddCatOpts);
 // 入力が終わった時点で、欄の表示からも前後の空白を消す
@@ -4225,7 +4230,8 @@ function syncDefWeight(r){
   return +$('syncWeight').value||400;
 }
 function syncRecommend(r){
-  var low=+r.amazon_lowest||0;
+  // 「可」を除く設定のときは、その最安値を仕入値とみなす
+  var low=syncBasis(r).low||+r.amazon_lowest||0;
   if(!low)return null;
   var row=syncCsvRowFor(r);
   var w=row?(+row.weight||0):0, def=false;
@@ -4262,24 +4268,58 @@ function syncMatch(r){
   if(f==='listed_no_fba'||f==='fba_not_listed')return r.state===f;
   return true;
 }
-/* 最安値の出品者数と、中古のコンディション。
-   「最安値＋許容差額（設定・既定200円）」までを最安グループとして数える。
-   この範囲に1人しかいないときだけ「1人だけ注意」を出す
-   （その人が売り切れると相場が変わるため）。
-   中古は出品の状態（SubCondition）が分かれば出し、最安グループが「可」だけなら注意する。 */
-var SYNC_SUBCOND={New:'新品', Mint:'新品同様', VeryGood:'非常に良い', Good:'良い',
-                  Acceptable:'可', Refurbished:'再生品', Club:'クラブ', OEM:'OEM'};
+/* ---- Amazonの出品の状態（SubCondition） ----
+   実データは**小文字**で返る（例 "acceptable"。2026-10-01 に /debug/offers で確認）。
+   綴りの違い（very_good / VeryGood / verygood）も同じものとして扱うため、
+   英字だけを残した小文字で引く。 */
+var SYNC_SUBCOND={ new:'新品', mint:'ほぼ新品', verygood:'非常に良い', good:'良い',
+                   acceptable:'可', refurbished:'再生品', collectible:'コレクター',
+                   club:'クラブ', oem:'OEM', used:'中古' };
+function syncCondKey(c){ return String(c||'').toLowerCase().replace(/[^a-z]/g,''); }
+function syncCondName(c){ return SYNC_SUBCOND[syncCondKey(c)]||''; }
+function syncIsAcceptable(c){ return syncCondKey(c)==='acceptable'; }
 function syncOffers(r){
   try{
     var a=JSON.parse(r.amazon_offers_json||'[]');
     return Array.isArray(a)?a:[];
   }catch(e){ return []; }
 }
+/* 推奨売値と最安グループの基準を決める。
+   設定「中古の最安値から『可』を除く」（既定オン）がオンのときは、中古の基準から
+   「可」の出品を外す。「可」しか無い（または状態がまったく分からない）ときは外さない。 */
+function syncBasis(r){
+  var all=syncOffers(r);
+  var tol=+$('syncTol').value; if(isNaN(tol)||tol<0)tol=200;
+  var list=all, skipped=false;
+  if($('syncSkipAcc').checked&&r.cond!=='new'&&all.length){
+    var keep=all.filter(function(o){ return !syncIsAcceptable(o.c); });
+    var known=all.filter(function(o){ return !!syncCondName(o.c); });
+    if(keep.length&&known.length){ list=keep; skipped=(keep.length<all.length); }
+  }
+  var lowAll=+r.amazon_lowest||(all.length?(+all[0].p||0):0);
+  var low=list.length?(+list[0].p||0):lowAll;
+  var near=list.filter(function(o){ return (+o.p||0)<=low+tol; });
+  return { low:low, lowAll:lowAll, list:list, near:near, tol:tol,
+           skipped:skipped, hasList:all.length>0 };
+}
+/* 最安値の見出しの文字列。「可」を除いたときは、その最安値の状態（良い など）と
+   全体の最安値も添えて、何を基準にしているかが分かるようにする。 */
+function syncLowLabel(r){
+  var b=syncBasis(r);
+  if(!b.low)return 'Amazon最安値（'+(r.cond==='new'?'新品':'中古')+'） 未取得';
+  if(b.skipped){
+    var nm=b.list.length?syncCondName(b.list[0].c):'';
+    return '可を除く最安値 '+yen(b.low)+'（'+(nm?nm+'・':'')
+          +'全体の最安 '+yen(b.lowAll)+'）';
+  }
+  return 'Amazon最安値（'+(r.cond==='new'?'新品':'中古')+'） '+yen(b.low);
+}
+/* 最安グループの人数と状態。「可」を除く設定のときは、その条件で数える。
+   範囲に1人しかいないときだけ「1人だけ注意」を出す（売り切れると相場が変わるため）。 */
 function syncOfferNote(r){
-  var low=+r.amazon_lowest||0;
-  var list=syncOffers(r);
+  var b=syncBasis(r);
   var t=Number(r.amazon_offers||0);
-  if(!list.length){
+  if(!b.hasList){
     // 出品明細を持っていない古い行は、最安ちょうどの人数だけ出す
     var n0=Number(r.amazon_lowest_n||0);
     if(!n0)return '';
@@ -4287,28 +4327,22 @@ function syncOfferNote(r){
     if(n0<=1)s0='<span style="color:var(--bad);font-weight:700">'+s0+'・1人だけ注意</span>';
     return s0;
   }
-  var tol=+$('syncTol').value; if(isNaN(tol)||tol<0)tol=200;
-  var base=low||(+list[0].p||0);
-  var near=list.filter(function(o){ return (+o.p||0)<=base+tol; });
-  var n=near.length||1;
-  var s='最安グループ '+n+'人（＋'+yen(tol)+'以内'+(t>list.length?('・全'+t+'件'):'')+'）';
+  var n=b.near.length||1;
+  var s='最安グループ '+n+'人（＋'+yen(b.tol)+'以内'+(t>b.list.length?('・全'+t+'件'):'')+'）';
   if(n<=1)s='<span style="color:var(--bad);font-weight:700">'+s+'・1人だけ注意</span>';
-  // 中古は状態を出す。最安グループの状態を安い順に並べる（分かるものだけ）
   if(r.cond!=='new'){
     var cs=[];
-    near.forEach(function(o){
-      var nm=SYNC_SUBCOND[String(o.c||'')]||'';
+    b.near.forEach(function(o){
+      var nm=syncCondName(o.c);
       if(nm&&cs.indexOf(nm)<0)cs.push(nm);
     });
     if(cs.length)s+='　状態 '+cs.join('・');
-    var known=near.filter(function(o){ return !!SYNC_SUBCOND[String(o.c||'')]; });
-    if(known.length&&known.every(function(o){ return String(o.c)==='Acceptable'; }))
+    var known=b.near.filter(function(o){ return !!syncCondName(o.c); });
+    if(known.length&&known.every(function(o){ return syncIsAcceptable(o.c); }))
       s+='<span style="color:var(--bad);font-weight:700">　最安は「可」だけ注意</span>';
   }
   return s;
 }
-/* 再調達の候補：eBayに出ていて、FBAの販売可能が0で、一点物でなく、手元在庫でもない行。
-   手元にある商品は手元から発送できるので再調達の必要がない。 */
 function syncIsRestock(r){
   return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
       && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0);
@@ -4404,10 +4438,9 @@ function syncRender(){
       +'　売値 '+(r.ebay_price?usd(+r.ebay_price):'—')
       +(days===null?'':('　出品 '+days+'日目'))
       +(sold?('　eBay販売 '+sold+'点（180日）'):'')+'</div>'
-      +'<div class="note2" style="margin-top:3px">Amazon最安値'
-      +'（'+(r.cond==='new'?'新品':'中古')+'）'
-      +(low?(' '+yen(low)+'　'+syncOfferNote(r)
-             +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):' 未取得')
+      +'<div class="note2" style="margin-top:3px">'+syncLowLabel(r)
+      +(low?('　'+syncOfferNote(r)
+             +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):'')
       +'</div>'
       +'<div class="note2" style="margin-top:2px">'
       +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>（利益 '+yen(rec.profit)+'）'

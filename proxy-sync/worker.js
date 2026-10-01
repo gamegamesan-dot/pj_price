@@ -523,8 +523,7 @@ async function amazonLowest(env, run, keys) {
     }
   }
   if (skipped) run.notes.push("最安値：条件が分からない結果 " + skipped + "件は使わなかった");
-  if (noCond) run.notes.push("最安値：出品の状態が取れない商品 " + noCond
-    + "件（応答のキー名を GET /debug/offers で確認する）");
+  if (noCond) run.notes.push("最安値：出品の状態が取れない商品 " + noCond + "件");
   return out;
 }
 
@@ -1518,46 +1517,6 @@ async function ordersSummary(env, url) {
   };
 }
 
-/* ---- GET /debug/offers?asin=…&cond=used ----
-   出品の状態（非常に良い／良い／可）がどのキーで返るか分からないときに使う。
-   **キー名と、状態らしい値・値段だけ**を返す。出品者ID等は返さない。
-   原因が分かったら消す（/debug/gtin・/debug/catalog と同じ扱い）。 */
-async function debugOffers(env, url) {
-  const run = newRun("debug");
-  const asin = String(url.searchParams.get("asin") || "").trim().toUpperCase();
-  const cond = (url.searchParams.get("cond") === "used") ? "used" : "new";
-  if (!/^B[0-9A-Z]{9}$/.test(asin)) return { error: "bad_asin" };
-  const body = JSON.stringify({
-    requests: [{
-      uri: "/products/pricing/v0/items/" + asin + "/offers",
-      method: "GET", MarketplaceId: MP_FE,
-      ItemCondition: cond === "new" ? "New" : "Used", CustomerType: "Consumer",
-    }],
-  });
-  const r = await spCall(env, run, "/batches/products/pricing/v0/itemOffers",
-                         { method: "POST", body, label: "getItemOffersBatch" });
-  const out = { asin, cond, ok: r.ok, status: r.status, note: run.notes.join(" / ") };
-  if (!r.ok) return out;
-  const res = ((r.data && r.data.responses) || [])[0] || {};
-  const p = (res.body && res.body.payload) || {};
-  out.response_keys = Object.keys(res);
-  out.payload_keys = Object.keys(p);
-  out.summary_keys = Object.keys(p.Summary || {});
-  out.offer_count = (p.Offers || []).length;
-  out.offers = (p.Offers || []).slice(0, 3).map((o) => {
-    const picked = {};
-    for (const k of Object.keys(o)) {
-      const v = o[k];
-      // 状態らしいキー・値だけ拾う（出品者IDや住所は返さない）
-      if (COND_KEY.test(k) || (typeof v === "string" && COND_VAL.test(v.trim())))
-        picked[k] = v;
-    }
-    return { keys: Object.keys(o), cond_like: picked, found: subCondOf(o),
-             price: landed(o) };
-  });
-  return out;
-}
-
 /* ---- POST /listings（pj_price からの名簿登録） ---- */
 /* 送られてこなかった項目は変えない（null を渡して COALESCE で残す）。
    手元在庫の入/切だけを送る呼び出し（ASIN＋新品/中古のみ）でも、
@@ -1633,9 +1592,6 @@ export default {
     try {
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
-
-      if (request.method === "GET" && url.pathname === "/debug/offers")
-        return json(await debugOffers(env, url), 200, origin);
 
       if (request.method === "GET" && url.pathname === "/orders/summary")
         return json(await ordersSummary(env, url), 200, origin);
