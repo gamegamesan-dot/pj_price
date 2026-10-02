@@ -683,6 +683,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
       <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>相場から下げる額</label><input type="number" id="syncSoldCut" value="0" step="0.5" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="note2" style="margin-top:0">相場が推奨売値に届かない行を「相場に合わせる」ときに、相場からこの額を引いて出します（既定 $0）。損益分岐より下には下げません。</div>
       <div class="chk" style="margin-top:4px"><input type="checkbox" id="syncSkipAcc" checked><label for="syncSkipAcc" style="flex:1">中古の最安値から「可」を除く</label></div>
       <div class="note2" style="margin-top:0">コンディション「可」の出品を基準から外し、推奨売値も「可を除く最安値」から計算します。「可」しか無い商品では外しません。</div>
       <div class="note2" style="margin-top:0">「最安値＋この額」までの出品を最安グループとして数えます。この範囲に1人しかいないときだけ「1人だけ注意」を出します。</div>
@@ -2619,7 +2621,8 @@ var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault',
-                 'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol'];
+                 'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
+                 'syncSoldCut'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4299,6 +4302,99 @@ function syncRecommend(r){
   return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
            weight:w, weightDefault:def };
 }
+/* ---- eBayの売れた相場（Sold）----
+   定義と換算は出品CSVタブの「相場（総額$）」と同じ。
+   ・総額＝購入者が支払った額（商品代＋請求送料）
+   ・商品代＝総額 − 請求送料（基準地帯）
+   計算式は csvPriceFor / priceModel をそのまま使う（式を2か所に持たない）。
+   入力した値と日付は ASIN＋新品/中古 のキーで localStorage に残す。 */
+var SYNC_SOLD_KEY='pj:syncsold:v1';
+var SYNC_SOLD_OLD=30;                 // この日数を過ぎたら「相場が古い」
+var syncSold={};
+function syncSoldLoad(){
+  try{ var o=JSON.parse(localStorage.getItem(SYNC_SOLD_KEY)||'{}');
+       if(o&&typeof o==='object')syncSold=o; }catch(e){ syncSold={}; }
+}
+function syncSoldSave(){
+  try{ localStorage.setItem(SYNC_SOLD_KEY,JSON.stringify(syncSold)); }catch(e){}
+}
+function syncRowKey(r){ return String(r.asin||'')+'|'+(r.cond==='new'?'new':'used'); }
+// 一覧のキー（ASIN|新品/中古）から行を引く
+function syncRowBy(key){
+  var hit=null;
+  ((syncData&&syncData.items)||[]).forEach(function(x){ if(x.asin+'|'+x.cond===key)hit=x; });
+  return hit;
+}
+function syncSoldGet(r){ var o=syncSold[syncRowKey(r)]; return (o&&+o.v>0)?o:null; }
+// 値を入れ替える。空・0は取り消し。入れ直したときは日付も新しくする。
+function syncSoldSet(r,v){
+  var k=syncRowKey(r), n=+v;
+  if(!(n>0))delete syncSold[k];
+  else syncSold[k]={ v:Math.round(n*100)/100, at:new Date().toISOString() };
+  syncSoldSave();
+}
+function syncSoldDays(o){
+  var t=Date.parse(String((o&&o.at)||''));
+  return isNaN(t)?null:Math.max(0,Math.floor((Date.now()-t)/86400000));
+}
+function syncSoldStale(r){
+  var d=syncSoldDays(syncSoldGet(r));
+  return d!==null&&d>SYNC_SOLD_OLD;
+}
+// 入力日の表示（10/03入力）
+function syncSoldAt(o){
+  var t=Date.parse(String((o&&o.at)||''));
+  if(isNaN(t))return '';
+  var d=new Date(t);
+  return (d.getMonth()+1)+'/'+('0'+d.getDate()).slice(-2)+'入力';
+}
+// 相場（総額$）→ 商品代（$）。送料以下の値は誤入力として扱わない。
+function syncSoldItem(r){
+  var o=syncSoldGet(r); if(!o)return null;
+  var rec=syncRecommend(r);
+  var w=(rec&&rec.weight)||syncDefWeight(r);
+  var cost=syncBasis(r).low||+r.amazon_lowest||0;
+  return csvWithItem(cost,w,function(){
+    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
+    return (+o.v<=G)?null:Math.round((+o.v-G)*100)/100;
+  });
+}
+/* 相場と推奨売値・最低利益ライン・損益分岐を比べた判断。
+   kind … 'rec'   相場 ≥ 推奨売値     → 推奨売値で出す
+          'match' 最低利益ライン ≤ 相場 < 推奨売値 → 相場に合わせる
+          'low'   損益分岐 ≤ 相場 < 最低利益ライン → 見送り（利益不足）
+          'loss'  相場 < 損益分岐     → 見送り（赤字）
+          'none'  相場未入力         → 推奨売値を使う
+          'nolow' Amazon最安値が未取得で判断できない
+   「相場に合わせる」の売値は 相場 − 設定「相場から下げる額」。
+   損益分岐より下がるときは損益分岐で止める（赤字で出さないため）。 */
+function syncVerdict(r){
+  var rec=syncRecommend(r);
+  if(!rec)return { kind:'nolow', price:0, rec:null, sold:null };
+  var s=syncSoldItem(r);
+  if(s===null||s===undefined)return { kind:'none', price:rec.price, rec:rec, sold:null };
+  if(s>=rec.price)return { kind:'rec', price:rec.price, rec:rec, sold:s };
+  if(s>=rec.floor){
+    var cut=+$('syncSoldCut').value; if(isNaN(cut)||cut<0)cut=0;
+    var p=Math.round((s-cut)*100)/100, floored=false;
+    if(p<rec.be){ p=rec.be; floored=true; }
+    return { kind:'match', price:p, rec:rec, sold:s, cut:cut, floored:floored };
+  }
+  if(s>=rec.be)return { kind:'low', price:0, rec:rec, sold:s };
+  return { kind:'loss', price:0, rec:rec, sold:s };
+}
+function syncIsSkip(r){ var k=syncVerdict(r).kind; return k==='low'||k==='loss'; }
+// 再調達中なのに相場が「見送り」になった行（取り下げを検討する）
+function syncSoldAlert(r){ return syncIsRestocking(r)&&syncIsSkip(r); }
+var SYNC_VERDICT={
+  rec:  { t:'推奨売値で出す',       c:'#1f7a4d' },
+  match:{ t:'相場に合わせる',       c:'#8a6d00' },
+  low:  { t:'見送り（利益不足）',   c:'#b00020' },
+  loss: { t:'見送り（赤字）',       c:'#b00020' },
+  none: { t:'相場未確認',           c:'#666'    },
+  nolow:{ t:'判断できません',       c:'#666'    }
+};
+
 /* 出品リストの行の突き合わせキー。pj-sync 側と同じ「ASIN＋新品/中古」。
    状態コードは N だけが新品（csvCustomLabel の -U の付け方と揃えてある）。 */
 function syncKeyOf(r){
@@ -4321,7 +4417,7 @@ var SYNC_FILTERS=[
   { v:'all',            label:'すべて',
     f:function(r){ return true; } },
   { v:'warn',           label:'対応が必要（警告あり）',
-    f:function(r){ return (r.warnings||[]).length>0; } },
+    f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
   { v:'restock',        label:'再調達の候補',
@@ -4513,24 +4609,52 @@ function syncToFba(){
   return ((syncData&&syncData.items)||[]).filter(function(x){
     return Number(x.on_hand||0)&&!Number(x.ebay_sold||0); }).length;
 }
-function syncRender(){
-  syncFilterOpts();                 // 絞り込みの件数を先に作り直す
-  var c=(syncData&&syncData.counts)||{};
-  $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
-  $('syncSummary').textContent=syncData
-    ? ('eBayに出ている '+(c.listed||0)+'件　/　FBA在庫なし '+(c.listed_no_fba||0)+'件'
-       +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
-       +'　/　再調達の候補 '+syncRestockN()+'件'
-       +'（再調達中 '+syncRestockingN()+'件）'
-       +'　/　手元在庫 '+(c.on_hand||0)+'件（FBA納品の候補 '+syncToFba()+'件）'
-       +'　/　過去SKU '+(c.past_zero||0)+'件'
-       +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
-    : '「状況を取り込む」を押してください';
-  var rows=(syncData&&syncData.items)||[], h='', shown=0;
-  rows.forEach(function(r){
-    if(!syncMatch(r))return;
-    shown++;
-    var key=r.asin+'|'+r.cond;
+/* 行の相場（総額$）の入力欄と、その判断の説明。
+   ItemIDが無い行（eBay未出品）は相場を使う場面がないので出さない。 */
+function syncSoldHtml(r,key){
+  if(!r.ebay_item_id)return '';
+  var o=syncSoldGet(r), vd=syncVerdict(r), item=vd.sold;
+  var h='<div class="note2" style="margin-top:3px;display:flex;gap:6px;align-items:center">'
+    +'<span style="flex:0 0 auto">相場（総額$）</span>'
+    +'<input type="number" step="0.01" inputmode="decimal" data-ssold="'+esc(key)+'"'
+    +' value="'+(o?esc(String(o.v)):'')+'" placeholder="eBayのSoldの総額"'
+    +' style="flex:0 1 110px;min-width:0;padding:4px 6px;font-size:13px;'
+    +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">';
+  if(o){
+    h+='<span style="flex:1 1 0;min-width:0">'+esc(syncSoldAt(o))
+      +(item!==null&&item!==undefined?('　商品代 '+usd(item)):'　※請求送料以下です')
+      +(syncSoldStale(r)
+        ?'<span style="color:var(--bad);font-weight:700">　'+SYNC_SOLD_OLD+'日より前の相場です</span>'
+        :'')
+      +'</span>';
+  }else{
+    h+='<span style="flex:1 1 0;min-width:0;opacity:.7">未入力のときは推奨売値で出します</span>';
+  }
+  h+='</div>';
+  // 判断の説明（売値をどう決めたか）
+  if(vd.kind==='rec')
+    h+='<div class="note2" style="margin-top:0">相場が推奨売値に届いています → 売値 '
+      +usd(vd.price)+'</div>';
+  if(vd.kind==='match')
+    h+='<div class="note2" style="margin-top:0">相場に合わせる → 売値 '+usd(vd.price)
+      +(vd.cut?('（相場 '+usd(vd.sold)+' − '+usd(vd.cut)+'）'):'')
+      +(vd.floored?'<span style="color:var(--bad);font-weight:700">　損益分岐で止めました</span>':'')
+      +'</div>';
+  if(vd.kind==='low')
+    h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);font-weight:700">'
+      +'相場が最低利益ライン '+usd(vd.rec.floor)+' に届きません（損益分岐 '+usd(vd.rec.be)
+      +' は上回る）</span></div>';
+  if(vd.kind==='loss')
+    h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);font-weight:700">'
+      +'相場が損益分岐 '+usd(vd.rec.be)+' を下回ります</span></div>';
+  if(syncSoldAlert(r))
+    h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);font-weight:700">'
+      +'再調達中ですが相場が見送りです。出品の取り下げか値上げを検討してください。</span></div>';
+  return h;
+}
+/* 一覧の1行。相場を入れたときに1行だけ作り直せるよう、行のHTMLはここにまとめる
+   （一覧全体を作り直すと、次に触ろうとした欄が消えて入力が入らない）。 */
+function syncRowHtml(r,key){
     var rec=syncRecommend(r);
     var warn=(r.warnings||[]);
     var badge=warn.map(function(w){
@@ -4569,10 +4693,21 @@ function syncRender(){
     if(Number(r.one_off||0))
       badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
+    /* 相場（Sold）を使った判断。出す＝緑／相場に合わせる＝黄／見送り＝赤。
+       相場が未入力の行は「相場未確認」で、これまでどおり推奨売値を使う。 */
+    if(r.ebay_item_id){
+      var vd=syncVerdict(r), vi=SYNC_VERDICT[vd.kind];
+      if(vi&&vd.kind!=='nolow')
+        badge+='<span style="display:inline-block;background:'+vi.c+';color:#fff;'
+          +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">'
+          +esc(vi.t)+'</span>';
+      if(syncSoldStale(r))
+        badge+='<span style="display:inline-block;background:#8a6d00;color:#fff;'
+          +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">相場が古い</span>';
+    }
     var days=syncDays(r);
     var low=+r.amazon_lowest||0;
-    h+='<div style="border-top:1px solid var(--line);padding:9px 0">'
-      +'<div style="display:flex;gap:6px;align-items:flex-start">'
+    return '<div style="display:flex;gap:6px;align-items:flex-start">'
       +'<input type="checkbox" data-spick="'+esc(key)+'"'+(syncPick[key]?' checked':'')
       +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:2px">'
       +'<div style="flex:1 1 0;min-width:0">'
@@ -4591,6 +4726,7 @@ function syncRender(){
       +(low?('　'+syncOfferNote(r)
              +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):'')
       +'</div>'
+      +syncSoldHtml(r,key)
       +'<div class="note2" style="margin-top:2px">'
       +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>（利益 '+yen(rec.profit)+'）'
              +'　最低利益ライン '+usd(rec.floor)+'（利益 '+yen(+$('baseProfit').value||0)+'）'
@@ -4614,7 +4750,37 @@ function syncRender(){
         : '')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncRestockingBtn(r,key)+'</div>'
-      +'</div></div></div>';
+      +'</div></div>';
+}
+/* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
+function syncRowReplace(key){
+  var r=syncRowBy(key); if(!r)return;
+  var el=$('syncList').querySelector('[data-srow="'+key+'"]');
+  if(!el){ syncRender(); return; }
+  el.innerHTML=syncRowHtml(r,key);
+  syncFilterOpts();        // 絞り込みの件数だけ直す
+  syncPickNote();
+}
+function syncRender(){
+  syncFilterOpts();                 // 絞り込みの件数を先に作り直す
+  var c=(syncData&&syncData.counts)||{};
+  $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
+  $('syncSummary').textContent=syncData
+    ? ('eBayに出ている '+(c.listed||0)+'件　/　FBA在庫なし '+(c.listed_no_fba||0)+'件'
+       +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
+       +'　/　再調達の候補 '+syncRestockN()+'件'
+       +'（再調達中 '+syncRestockingN()+'件）'
+       +'　/　手元在庫 '+(c.on_hand||0)+'件（FBA納品の候補 '+syncToFba()+'件）'
+       +'　/　過去SKU '+(c.past_zero||0)+'件'
+       +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
+    : '「状況を取り込む」を押してください';
+  var rows=(syncData&&syncData.items)||[], h='', shown=0;
+  rows.forEach(function(r){
+    if(!syncMatch(r))return;
+    shown++;
+    var key=r.asin+'|'+r.cond;
+    h+='<div data-srow="'+esc(key)+'" style="border-top:1px solid var(--line);padding:9px 0">'
+      +syncRowHtml(r,key)+'</div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
   syncShown=shown;
@@ -4707,8 +4873,7 @@ $('syncList').addEventListener('click',function(e){
   var kr=t.getAttribute('data-srestock');
   var key=kh||ko||kr; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
-  var r=null;
-  ((syncData&&syncData.items)||[]).forEach(function(x){ if(x.asin+'|'+x.cond===key)r=x; });
+  var r=syncRowBy(key);
   if(!r)return;
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
@@ -4731,8 +4896,19 @@ $('syncList').addEventListener('click',function(e){
     syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
   }
 });
+$('syncList').addEventListener('input',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var k=t.getAttribute('data-ssold'); if(!k)return;
+  var r=syncRowBy(k); if(!r)return;
+  syncSoldSet(r,t.value);   // 打っている途中は保存だけ（一覧は作り直さない）
+});
 $('syncList').addEventListener('change',function(e){
   var t=e.target; if(!t||!t.getAttribute)return;
+  var ks=t.getAttribute('data-ssold');
+  if(ks){                   // 入力を終えたところで、その行だけ作り直して判断を出す
+    var r=syncRowBy(ks); if(r)syncSoldSet(r,t.value);
+    syncRowReplace(ks); return;
+  }
   var k=t.getAttribute('data-spick');
   if(!k)return;
   syncPick[k]=t.checked;
@@ -4861,15 +5037,35 @@ $('syncRestock').onclick=function(){
   if(!String($('csvShipProfileRe').value||'').trim()){
     alert('出品CSVタブの設定「再調達用ポリシー名」を入れてください。'); return;
   }
-  var list=pick.map(function(r){
-    var rec=syncRecommend(r);
+  /* 相場（Sold）の判断で「見送り」になった行は、既定で除外する。 */
+  var skip=pick.filter(syncIsSkip), go=pick.filter(function(r){ return !syncIsSkip(r); });
+  if(skip.length){
+    if(!confirm('見送りの行が '+skip.length+'件あります。除外して書き出しますか？\n'
+      +skip.map(function(r){
+          var v=syncVerdict(r);
+          return '・'+(r.title||r.asin)+'（'+SYNC_VERDICT[v.kind].t+'）';
+        }).join('\n')
+      +'\n\nOK：除外して書き出す／キャンセル：やめる'))return;
+  }
+  if(!go.length){
+    alert('書き出す行がありません（選んだ行はすべて見送りです）。'); return;
+  }
+  /* 売値は判断の売値を使う。
+     'rec'（推奨売値で出す）… 推奨売値／'match'（相場に合わせる）… 相場 − 下げる額
+     'none'（相場未確認）… これまでどおり推奨売値 */
+  var list=go.map(function(r){
+    var v=syncVerdict(r);
     return { itemId:String(r.ebay_item_id).trim(),
-             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:rec.price, title:r.title||r.asin,
-             row:r, weight:rec.weight };
+             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:v.price, title:r.title||r.asin,
+             row:r, weight:v.rec.weight, kind:v.kind };
   });
+  var kn={rec:0,match:0,none:0};
+  list.forEach(function(x){ kn[x.kind]=(kn[x.kind]||0)+1; });
   var b=syncRestockBuild(list);
   if(!confirm(list.length+'件を再調達で出し直します。\n'
-    +'数量・売値（Amazon最安値から計算した推奨売値）・配送ポリシー（'+b.ship+'）を Revise します。\n'
+    +'売値は 推奨売値 '+kn.rec+'件／相場に合わせる '+kn.match+'件'
+    +'／相場未確認（推奨売値）'+kn.none+'件 です。\n'
+    +'数量・売値・配送ポリシー（'+b.ship+'）を Revise します。\n'
     +'書き出したファイルを Seller Hub にアップロードしてください。\n'
     +'よろしいですか？'))return;
   var name='ebay_restock_itemid_'+csvStamp()+'.csv';
@@ -4881,10 +5077,33 @@ $('syncRestock').onclick=function(){
     $('syncRestockNote').textContent=csvDownload(name,b.text)
       ? ('再調達CSVを書き出しました：'+name
          +'（'+list.length+'件・'+b.cols+'列）　配送ポリシー '+b.ship
+         +'　売値：推奨 '+kn.rec+'件／相場 '+kn.match+'件／相場未確認 '+kn.none+'件'
+         +(skip.length?('　見送り '+skip.length+'件は除外'):'')
          +'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。')
       : '書き出しに失敗しました。';
+    // 除外した行は、数量0にするCSVを別ファイルで書き出せる（任意）
+    if(skip.length)syncZeroAsk(skip);
   });
 };
+/* 見送りの行を「数量0にする」Revise CSV。出品を取り下げる代わりに在庫を0にする。
+   配送ポリシーなどは変えない（数量だけ）。 */
+function syncZeroBuild(rows){
+  var head=[CSV_ACT_COL,'ItemID','*Quantity'];
+  var out=[CSV_INFO,csvLine(head)];
+  rows.forEach(function(r){
+    out.push(csvLine(['Revise',String(r.ebay_item_id||'').trim(),0]));
+  });
+  return { text:out.join('\r\n')+'\r\n', cols:head.length };
+}
+function syncZeroAsk(rows){
+  if(!confirm('除外した見送りの '+rows.length+'件を「数量0にするCSV」として'
+    +'別ファイルで書き出しますか？\n'
+    +'（在庫を0にして売れないようにします。出品自体は残ります）'))return;
+  var z=syncZeroBuild(rows), name='ebay_restock_zero_'+csvStamp()+'.csv';
+  $('syncRestockNote').textContent+=csvDownload(name,z.text)
+    ? ('　／数量0のCSVも書き出しました：'+name+'（'+rows.length+'件）')
+    : '　／数量0のCSVの書き出しに失敗しました。';
+}
 /* 書き出した行を pj-sync で「再調達中」にする（mode=restock）。
    あわせて、その売値で損益分岐に収まる仕入値の上限（円）も送る。
    Worker はこの上限と最安値を比べるだけで、赤字になったら通知（RESTOCK_LOSS）を出せる。 */
@@ -5106,7 +5325,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvAddCatOpts(); csvRender(); syncLoadCache();
+csvLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
