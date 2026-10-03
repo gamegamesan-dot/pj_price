@@ -541,6 +541,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="sub" id="csvSummary">&mdash;</div>
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
+      <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
+      <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
       <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
       <div class="note2" id="csvTitleNote"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
@@ -3444,7 +3446,12 @@ function csvRender(){
     }
     /* 1商品＝1カード。見出し（日本語名）から各種ボタンまで、すべてこの中に入れる。 */
     h+='<div class="lcard" data-row="'+r.id+'">'
-      +'<div class="lhead">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
+      /* 見出しの左に選択のチェック。「選択した行だけ書き出す」で使う。 */
+      +'<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
+      +'<input type="checkbox" data-cpick="'+r.id+'"'+(csvPick[r.id]?' checked':'')
+      +' style="flex:0 0 auto;margin-top:3px">'
+      +'<span style="flex:1 1 0;min-width:0">'+esc(r.titleJa||r.titleEn||'(無題)')+'</span>'
+      +'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(csvRowSummary(r))+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
@@ -3505,6 +3512,7 @@ function csvRender(){
     +hidden+'件は非表示）</div>'+h;
   $('csvList').innerHTML=h||'<div class="note2">'
     +(hidden?('絞り込みに当てはまる行がありません（'+hidden+'件は非表示）'):'リストは空です。')+'</div>';
+  csvPickNote();   // 選択した件数とボタンの表示
   csvTaFitAll();   // 英題が長い行は欄を伸ばす
   var days=+$('csvLogDays').value||0;
   $('csvLogNote').textContent='書き出し済み '+csvLog.length+'件。'
@@ -3660,6 +3668,12 @@ $('csvList').addEventListener('keydown',function(e){
     e.preventDefault();
 });
 $('csvList').addEventListener('change',function(e){
+  var cp=e.target&&e.target.getAttribute&&e.target.getAttribute('data-cpick');
+  if(cp){
+    if(e.target.checked)csvPick[cp]=true; else delete csvPick[cp];
+    csvPickNote();            // 件数だけ書き替える
+    return;
+  }
   // 相場は判定（バッジ・並び順）が変わるので作り直す。
   // 数量・ItemIDは表示が変わらないうえ、ここで作り直すと
   // 次に触ろうとした欄ごと消えてしまうため、作り直さない。
@@ -4007,9 +4021,12 @@ function csvStamp(){
    ・done … 出品済み（ItemIDがある）ので除外。Addで出すと二重出品になる
    ・warn … 注意はあるが、このまま書き出す行
    ・rows … 実際に書き出す行 */
-function csvExportSplit(){
+function csvExportSplit(ids){
   var rows=[], amz=[], bad=[], done=[], warn=[];
+  var only=null;
+  if(ids&&ids.length){ only={}; ids.forEach(function(x){ only[x]=1; }); }
   csvList.forEach(function(r){
+    if(only&&!only[r.id])return;
     var iss=csvIssues(r);
     if(iss.length){
       var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
@@ -4024,6 +4041,25 @@ function csvExportSplit(){
   });
   return { rows:rows, amz:amz, bad:bad, done:done, warn:warn,
            skip:bad.length+amz.length+done.length };
+}
+/* ---- 一覧で選んだ行だけ書き出す ----
+   選択はカードの左上のチェック（data-cpick）。画面を開いているあいだだけ覚える。 */
+var csvPick={};
+function csvPickIds(){
+  return csvList.filter(function(r){ return !!csvPick[r.id]; }).map(function(r){ return r.id; });
+}
+// ボタンの表示と案内を、選んだ件数に合わせて書き替える（一覧は作り直さない）
+function csvPickNote(){
+  var ids=csvPickIds(), n=ids.length;
+  $('csvExportPick').textContent='選択した行だけ書き出す'+(n?('（'+n+'件）'):'');
+  $('csvExportPick').disabled=!n;
+  $('csvExportPick').style.opacity=n?'':'.5';
+  var hid=ids.filter(function(id){
+    var r=csvRowById(id); return r&&!csvMatchFilter(r); }).length;
+  $('csvPickNote').textContent=n
+    ? ('選択 '+n+'件'+(hid?('（うち絞り込みで非表示 '+hid+'件）'):'')
+       +'。この行だけを書き出します（不備・出品済みの行は同じ決まりで除きます）。')
+    : '一覧の各カードの左上のチェックで選びます。';
 }
 // 書き出したファイルを1つずつ保存し直すボタン（iPhoneで同時ダウンロードが落ちるとき用）
 var csvLastFiles=[];
@@ -4041,16 +4077,20 @@ $('csvExportFiles').addEventListener('click',function(e){
   $('csvExportNote').textContent=csvDownload(f.name,f.text)
     ? ('保存しました：'+f.name) : '保存に失敗しました。';
 });
-$('csvExport').onclick=function(){
+/* ids を渡すとその行だけを書き出す（選択した行だけ書き出すボタン）。
+   渡さなければ今までどおり一覧の全行が対象。確認・ZIP・ログの扱いは同じ。 */
+function csvExportRun(ids){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
-  var sp=csvExportSplit(), rows=sp.rows;
+  var pick=!!(ids&&ids.length);
+  var sp=csvExportSplit(ids), rows=sp.rows;
   if(sp.skip||sp.warn.length){
     var list=function(a,withWhy){
       return a.slice(0,5).map(function(x){
         return '  \u30FB'+(x.r.titleJa||x.r.sku)+(withWhy?('：'+x.why):''); }).join('\n')
         +(a.length>5?('\n  \u2026ほか'+(a.length-5)+'件'):'');
     };
-    var msg='書き出す行：'+rows.length+'件\n';
+    var msg=(pick?('選択した '+ids.length+'件のうち、書き出す行：'+rows.length+'件\n')
+                 :('書き出す行：'+rows.length+'件\n'));
     if(sp.skip){
       msg+='\n【除外する行】合計 '+sp.skip+'件\n';
       if(sp.bad.length)msg+=' 不備 '+sp.bad.length+'件\n'+list(sp.bad,true)+'\n';
@@ -4076,7 +4116,7 @@ $('csvExport').onclick=function(){
              label:csvCatName(cat)+'（'+byCat[cat].length+'件）' };
   });
   if(cats.length>1){
-    var zip='ebay_csv_'+stamp+'.zip';
+    var zip='ebay_csv_'+(pick?'pick_':'')+stamp+'.zip';
     if(csvDownloadBlob(zip,csvZip(csvLastFiles)))
       made.push(zip+'（'+cats.length+'ファイル・'+rows.length+'件）');
   }else{
@@ -4094,12 +4134,23 @@ $('csvExport').onclick=function(){
       zeroAct:r.zeroAct,
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
+  // 書き出した行の選択は外す（二重に出さないように）
+  if(pick)rows.forEach(function(r){ delete csvPick[r.id]; });
   csvSaveLog(); csvRender();
   $('csvExportNote').textContent=made.length
-    ? ('書き出しました：'+made.join('　/　')
+    ? ((pick?'選択した行を書き出しました：':'書き出しました：')+made.join('　/　')
        +(csvLastFiles.length>1?'　ZIPを開いて中のCSVをアップロードしてください。'
                               +'うまく保存できないときは下のボタンで1つずつ保存できます。':''))
     : '書き出しに失敗しました。';
+}
+$('csvExport').onclick=function(){ csvExportRun(null); };
+$('csvExportPick').onclick=function(){
+  var ids=csvPickIds();
+  if(!ids.length){
+    alert('行が選ばれていません。\n一覧の各カードの左上のチェックで、書き出す行を選んでください。');
+    return;
+  }
+  csvExportRun(ids);
 };
 /* ---- eBayのアップロード結果ファイルを取り込む ----
    列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
