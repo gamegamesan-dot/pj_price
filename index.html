@@ -545,6 +545,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="csvRedoNote"></div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
       <div class="note2" id="csvExportNote"></div>
+      <!-- 書き出したあと、カテゴリごとに1つずつ保存し直せるボタン（iPhone向けの保険） -->
+      <div id="csvExportFiles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
       <input type="file" id="csvPicFile" accept="image/*" multiple style="display:none">
       <div class="note2" id="csvPicNote"></div>
       <button class="btn" id="csvPicRetry" style="display:none;margin-top:6px">失敗分を送り直す</button>
@@ -2784,14 +2786,59 @@ function csvQuote(v){
 }
 function csvLine(arr){ return arr.map(csvQuote).join(','); }
 // UTF-8（BOMなし）で保存する。BOMが付くと1列目の見出しと一致せず弾かれる。
-function csvDownload(name,text){
+function csvDownloadBlob(name,blob){
   try{
-    var blob=new Blob([text],{type:'text/csv;charset=utf-8'});
     var url=URL.createObjectURL(blob), a=document.createElement('a');
     a.href=url; a.download=name; document.body.appendChild(a); a.click();
     document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},4000);
     return true;
   }catch(e){ return false; }
+}
+function csvDownload(name,text){
+  return csvDownloadBlob(name,new Blob([text],{type:'text/csv;charset=utf-8'}));
+}
+/* ---- ZIP（無圧縮・store）----
+   iPhoneでは複数ファイルを続けてダウンロードすると2つ目以降が保存されないことがある
+   （2026-10-03の報告：カテゴリごとに分かれた書き出しで可動フィギュアの1ファイルだけが
+   保存された）。カテゴリごとのCSVを1つのZIPにまとめ、ダウンロードを1回にする。
+   外部ライブラリは入れない（圏外でも動くようにするため）。 */
+var CSV_CRC_TBL=(function(){
+  var t=new Uint32Array(256), c, n, k;
+  for(n=0;n<256;n++){ c=n; for(k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; }
+  return t;
+})();
+function csvCrc32(u8){
+  var c=0xFFFFFFFF;
+  for(var i=0;i<u8.length;i++)c=CSV_CRC_TBL[(c^u8[i])&0xFF]^(c>>>8);
+  return (c^0xFFFFFFFF)>>>0;
+}
+function csvZip(files){
+  var enc=new TextEncoder(), body=[], dir=[], off=0;
+  var d=new Date();
+  var dt=((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1))&0xFFFF;
+  var dd=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate())&0xFFFF;
+  var u16=function(v){ return [v&0xFF,(v>>>8)&0xFF]; };
+  var u32=function(v){ return [v&0xFF,(v>>>8)&0xFF,(v>>>16)&0xFF,(v>>>24)&0xFF]; };
+  files.forEach(function(f){
+    var nm=enc.encode(f.name), bd=enc.encode(f.text), crc=csvCrc32(bd);
+    // ローカルファイルヘッダ。0x0800 は「ファイル名はUTF-8」の印
+    var h=[0x50,0x4B,0x03,0x04].concat(u16(20),u16(0x0800),u16(0),u16(dt),u16(dd),
+      u32(crc),u32(bd.length),u32(bd.length),u16(nm.length),u16(0));
+    body.push(new Uint8Array(h),nm,bd);
+    dir.push({nm:nm,crc:crc,len:bd.length,off:off});
+    off+=h.length+nm.length+bd.length;
+  });
+  var cstart=off, cd=[];
+  dir.forEach(function(c){
+    var h=[0x50,0x4B,0x01,0x02].concat(u16(20),u16(20),u16(0x0800),u16(0),u16(dt),u16(dd),
+      u32(c.crc),u32(c.len),u32(c.len),u16(c.nm.length),u16(0),u16(0),u16(0),u16(0),
+      u32(0),u32(c.off));
+    cd.push(new Uint8Array(h),c.nm);
+    off+=h.length+c.nm.length;
+  });
+  var end=new Uint8Array([0x50,0x4B,0x05,0x06].concat(u16(0),u16(0),
+    u16(files.length),u16(files.length),u32(off-cstart),u32(cstart),u16(0)));
+  return new Blob(body.concat(cd,[end]),{type:'application/zip'});
 }
 
 /* ---- 取り込み（せどりすとCSV） ---- */
@@ -3244,10 +3291,21 @@ function csvRender(){
     : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
   var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
   if(odef)$('csvSummary').textContent+='　/　原産国が既定値 '+odef+'件';
-  var byCat={}; csvList.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
+  /* 書き出しの見通し。実際に書き出す行だけでカテゴリを数え、除外のぶんは別に出す。
+     カテゴリが2つ以上あるときは1つのZIPにまとめる（iPhoneで取りこぼさないため）。 */
+  var sp=csvExportSplit(), byCat={};
+  sp.rows.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
+  var catsN=Object.keys(byCat).length;
   $('csvExportNote').textContent=csvList.length
-    ? ('カテゴリごとに別ファイルで書き出します：'
-       +Object.keys(byCat).map(function(k){return csvCatName(k)+' '+byCat[k]+'件';}).join('　/　'))
+    ? ('書き出す行 '+sp.rows.length+'件'
+       +(catsN?('（'+Object.keys(byCat).map(function(k){
+            return csvCatName(k)+' '+byCat[k]+'件'; }).join('　/　')+'）'):'')
+       +(catsN>1?'　→ 1つのZIPにまとめます':'')
+       +(sp.skip?('　除外：'
+          +[sp.bad.length?('不備 '+sp.bad.length+'件'):'',
+            sp.amz.length?('Amazon優先 '+sp.amz.length+'件'):'',
+            sp.done.length?('出品済み '+sp.done.length+'件'):'']
+            .filter(Boolean).join('／')):''))
     : '';
   var h='', shown=0, hidden=0;
   csvSorted().forEach(function(r){
@@ -3776,40 +3834,89 @@ function csvStamp(){
   var d=new Date();
   return pad2(d.getFullYear()%100)+pad2(d.getMonth()+1)+pad2(d.getDate());
 }
-$('csvExport').onclick=function(){
-  if(!csvList.length){ alert('出品リストが空です。'); return; }
-  // 除外する理由を「不備」と「Amazon優先」に分けて数える。
-  var rows=csvList.filter(function(r){ return !csvIssues(r).length; });
-  var amz=[], bad=[], warn=[];
+/* 新規出品（Add）の書き出し対象を分ける。
+   ・bad  … 不備で除外（英題なし・カテゴリ未振分など）
+   ・amz  … Amazon優先で除外（行のボタンで書き出せる）
+   ・done … 出品済み（ItemIDがある）ので除外。Addで出すと二重出品になる
+   ・warn … 注意はあるが、このまま書き出す行
+   ・rows … 実際に書き出す行 */
+function csvExportSplit(){
+  var rows=[], amz=[], bad=[], done=[], warn=[];
   csvList.forEach(function(r){
     var iss=csvIssues(r);
-    // 注意は書き出す行にだけ出す（除外される行の注意は言っても仕方がない）
-    if(!iss.length){ var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')}); return; }
-    var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
-    if(rest.length)bad.push({r:r,why:rest.join('・')});
-    else amz.push({r:r});
-  });
-  if(bad.length||amz.length||warn.length){
-    function list(a,withWhy){
-      return a.slice(0,5).map(function(x){
-        return ' \u30FB'+(x.r.titleJa||x.r.sku)+(withWhy?('：'+x.why):''); }).join('\n')
-        +(a.length>5?('\n \u2026ほか'+(a.length-5)+'件'):'');
+    if(iss.length){
+      var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
+      if(rest.length)bad.push({r:r,why:rest.join('・')});
+      else amz.push({r:r,why:'Amazon優先'});
+      return;
     }
-    var msg='書き出し対象：'+rows.length+'件\n';
-    if(bad.length)msg+='\n不備のため除外：'+bad.length+'件\n'+list(bad,true)+'\n';
-    if(amz.length)msg+='\nAmazon優先のため除外：'+amz.length+'件\n'+list(amz,false)+'\n'
-      +'（行の「Amazon優先でも出す」をオンにすると書き出せます）\n';
-    if(warn.length)msg+='\n注意（このまま書き出します）：'+warn.length+'件\n'+list(warn,true)+'\n';
-    msg+='\nOK：上記を除いて書き出す\nキャンセル：中止';
+    // 出品済み（ItemIDあり）は Add の対象から外す（数量・価格の更新CSVを使う）
+    if(String(r.itemId||'').trim()){ done.push({r:r,why:'ItemID '+r.itemId}); return; }
+    rows.push(r);
+    var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')});
+  });
+  return { rows:rows, amz:amz, bad:bad, done:done, warn:warn,
+           skip:bad.length+amz.length+done.length };
+}
+// 書き出したファイルを1つずつ保存し直すボタン（iPhoneで同時ダウンロードが落ちるとき用）
+var csvLastFiles=[];
+function csvExportFilesUI(){
+  if(!csvLastFiles.length){ $('csvExportFiles').innerHTML=''; return; }
+  $('csvExportFiles').innerHTML=csvLastFiles.map(function(f,i){
+    return '<button class="btn" data-xfile="'+i+'" style="padding:5px 8px;font-size:12px">'
+      +esc(f.label)+' を保存</button>';
+  }).join('');
+}
+$('csvExportFiles').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var i=t.getAttribute('data-xfile'); if(i===null)return;
+  var f=csvLastFiles[+i]; if(!f)return;
+  $('csvExportNote').textContent=csvDownload(f.name,f.text)
+    ? ('保存しました：'+f.name) : '保存に失敗しました。';
+});
+$('csvExport').onclick=function(){
+  if(!csvList.length){ alert('出品リストが空です。'); return; }
+  var sp=csvExportSplit(), rows=sp.rows;
+  if(sp.skip||sp.warn.length){
+    var list=function(a,withWhy){
+      return a.slice(0,5).map(function(x){
+        return '  \u30FB'+(x.r.titleJa||x.r.sku)+(withWhy?('：'+x.why):''); }).join('\n')
+        +(a.length>5?('\n  \u2026ほか'+(a.length-5)+'件'):'');
+    };
+    var msg='書き出す行：'+rows.length+'件\n';
+    if(sp.skip){
+      msg+='\n【除外する行】合計 '+sp.skip+'件\n';
+      if(sp.bad.length)msg+=' 不備 '+sp.bad.length+'件\n'+list(sp.bad,true)+'\n';
+      if(sp.amz.length)msg+=' Amazon優先 '+sp.amz.length+'件\n'+list(sp.amz,false)+'\n'
+        +'  （行の「Amazon優先でも出す」をオンにすると書き出せます）\n';
+      if(sp.done.length)msg+=' 出品済み '+sp.done.length+'件\n'+list(sp.done,true)+'\n'
+        +'  （新規出品で二重に出さないため。数量・価格の更新CSVを使ってください）\n';
+    }
+    if(sp.warn.length)
+      msg+='\n【注意だけで書き出す行】'+sp.warn.length+'件\n'+list(sp.warn,true)+'\n';
+    msg+='\nOK：'+(sp.skip?('除外の '+sp.skip+'件を除いて、'+rows.length+'件を書き出す')
+                          :(rows.length+'件を書き出す'))
+      +'\nキャンセル：中止';
     if(!confirm(msg))return;
     if(!rows.length){ alert('書き出せる行がありません。'); return; }
   }
   var byCat={}; rows.forEach(function(r){ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
-  var made=[];
-  Object.keys(byCat).forEach(function(cat){
-    var name='ebay_'+cat+'_'+csvStamp()+'.csv';
-    if(csvDownload(name,csvBuild(cat,byCat[cat],'Add')))made.push(name+'（'+byCat[cat].length+'件）');
+  var cats=Object.keys(byCat), stamp=csvStamp(), made=[];
+  /* カテゴリが2つ以上あるときは1つのZIPにまとめる。
+     iPhoneでは続けてダウンロードすると2つ目以降が保存されないため。 */
+  csvLastFiles=cats.map(function(cat){
+    return { name:'ebay_'+cat+'_'+stamp+'.csv', text:csvBuild(cat,byCat[cat],'Add'),
+             label:csvCatName(cat)+'（'+byCat[cat].length+'件）' };
   });
+  if(cats.length>1){
+    var zip='ebay_csv_'+stamp+'.zip';
+    if(csvDownloadBlob(zip,csvZip(csvLastFiles)))
+      made.push(zip+'（'+cats.length+'ファイル・'+rows.length+'件）');
+  }else{
+    var f=csvLastFiles[0];
+    if(csvDownload(f.name,f.text))made.push(f.name+'（'+byCat[cats[0]].length+'件）');
+  }
+  csvExportFilesUI();
   // 書き出した行をログに残す（次回の取り込みで既出を知らせるため）
   var at=new Date().toISOString().slice(0,10);
   rows.forEach(function(r){
@@ -3820,7 +3927,11 @@ $('csvExport').onclick=function(){
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
   csvSaveLog(); csvRender();
-  $('csvExportNote').textContent=made.length?('書き出しました：'+made.join('　/　')):'書き出しに失敗しました。';
+  $('csvExportNote').textContent=made.length
+    ? ('書き出しました：'+made.join('　/　')
+       +(csvLastFiles.length>1?'　ZIPを開いて中のCSVをアップロードしてください。'
+                              +'うまく保存できないときは下のボタンで1つずつ保存できます。':''))
+    : '書き出しに失敗しました。';
 };
 /* ---- eBayのアップロード結果ファイルを取り込む ----
    列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
