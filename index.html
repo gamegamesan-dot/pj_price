@@ -3119,7 +3119,11 @@ function csvIssues(r){
   if(r.cat!=='139973'&&!String((r.specs||{}).origin||'').trim())a.push('原産国なし');
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
-  if(String(r.uploadErr||'').trim())a.push('アップロード失敗：'+r.uploadErr);
+  /* アップロード失敗は、**失敗したときの中身のまま**なら書き出しを止める
+     （同じものを送っても同じ失敗になるため）。
+     行を直して中身が変わったら止めない（注意として csvNotes に出す）。
+     印（uploadErrSig）を持たない古い行も止めない。 */
+  if(csvUploadBlocked(r))a.push('アップロード失敗：'+r.uploadErr);
   /* 相場未入力は書き出しを止める理由にしない（2026-09-25）。
      売値は相場に関係なく原価と重量から決まるので、確かめずに出す判断は
      こちらでできる。注意としてだけ出し、csvNotes() で扱う。 */
@@ -3173,6 +3177,7 @@ function csvBadgeHtml(r){
   if(r.oneOff)badge+=b('一点物','#6b4fa0');
   if(csvCostLow(r))badge+=b('仕入値要確認','var(--bad)');
   if(csvCostFixed(r))badge+=b('仕入値修正済み（元：'+yen(+r.costOrig||0)+'）','#2f6fb0');
+  if(csvUploadFixed(r))badge+=b('前回アップロード失敗（直し済み）','#8a6d00');
   var lgN=csvSpecLong(r);
   if(lgN.length)badge+=b(lgN.join('・')+' を短縮しました','#8a6d00');
   if(th.relaxed)badge+=b('緩和','var(--mute)');
@@ -3209,9 +3214,29 @@ function csvSpecLong(r){
   });
   return a;
 }
+/* 行の中身の印。アップロード失敗のあとで直したかどうかを見るために使う。
+   eBayへ送る値のうち、失敗の原因になりうるものだけを並べる（軽く作る）。 */
+function csvRowSig(r){
+  var sp=r.specs||{};
+  return [r.titleEn,r.cat,r.condId,(+r.price||0).toFixed(2),(+r.floor||0).toFixed(2),r.qty,
+          (r.pics||[]).length,String(r.descHtml||'').length,r.jan,
+          sp.gameName,sp.platform,sp.publisher,sp.brand,sp.franchise,sp.character,
+          sp.model,sp.origin,sp.scale,sp.height,csvShipProfileFor(r)].join('|');
+}
+// まだ直していないアップロード失敗（書き出しを止める）
+function csvUploadBlocked(r){
+  if(!String(r.uploadErr||'').trim())return false;
+  if(!r.uploadErrSig)return false;            // 古い行は止めない
+  return csvRowSig(r)===r.uploadErrSig;       // 中身が変わっていなければ止める
+}
+// 直したあとに残っているアップロード失敗（注意としてだけ出す）
+function csvUploadFixed(r){
+  return !!String(r.uploadErr||'').trim()&&!csvUploadBlocked(r);
+}
 function csvNotes(r){
   var a=[];
   if(csvVerdict(r)==='none')a.push('相場未確認');
+  if(csvUploadFixed(r))a.push('前回アップロード失敗（直したので書き出せます）：'+r.uploadErr);
   // 65文字を超える Item Specifics は書き出しで短くなる。どの項目かを出す
   var lg=csvSpecLong(r);
   if(lg.length)a.push(lg.join('・')+' を短縮しました');
@@ -3498,6 +3523,11 @@ function csvRender(){
       +(r.fba?'オン':'オフ')+'</button>'
       +'<button class="btn" data-zero="'+r.id+'" style="padding:5px 8px;font-size:12px">在庫0時：'
       +({hold:'寝かせる',restock:'再調達',end:'終了'}[r.zeroAct]||'寝かせる')+'</button>'
+      +(String(r.uploadErr||'').trim()
+        ? ('<button class="btn" data-uperr="'+r.id+'" style="padding:5px 8px;font-size:12px'
+           +(csvUploadBlocked(r)?';background:#b00020;color:#fff;border-color:#b00020':'')
+           +'">アップロード失敗を消す</button>')
+        : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
       /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
@@ -3533,7 +3563,8 @@ $('csvList').addEventListener('click',function(e){
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
-        ||t.getAttribute('data-regen')||t.getAttribute('data-orig');
+        ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
+        ||t.getAttribute('data-uperr');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
@@ -3562,6 +3593,13 @@ $('csvList').addEventListener('click',function(e){
   if(t.hasAttribute('data-pics')){
     csvPicTarget=id; csvPicFailed=[]; $('csvPicRetry').style.display='none';
     csvPicNote(''); $('csvPicFile').click(); return;
+  }
+  if(t.hasAttribute('data-uperr')){
+    if(!confirm('この行の「アップロード失敗」を消します。\n'
+      +'直したうえで消してください（直していないと、また同じ失敗になります）。\n'
+      +csvList[i].uploadErr+'\n\nよろしいですか？'))return;
+    csvList[i].uploadErr=''; csvList[i].uploadErrSig='';
+    csvSaveList(); csvRender(); return;
   }
   if(t.hasAttribute('data-del'))csvList.splice(i,1);
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
@@ -3962,8 +4000,16 @@ function csvRowFor(r,raw){
                   &&String($('csvPayProfile').value).trim());
   o['*DispatchTimeMax']=byPolicy?'':$('csvDispatch').value;
   o['*ReturnsAcceptedOption']=byPolicy?'':'ReturnsAccepted';
-  o['BestOfferEnabled']='1';
-  o['MinimumBestOfferPrice']=(+r.floor||0).toFixed(2);
+  /* Best Offer の自動拒否ライン（MinimumBestOfferPrice）は、
+     eBayの決まりで **売値（*StartPrice）より下** でなければならない。
+     同じか上だと [22003] Auto decline amount cannot be greater than or equal to
+     the Buy It Now price. で出品が丸ごと弾かれる（2026-10-03の報告）。
+     最低利益ラインが売値以上になる行（原価が低い行で起きる）は、
+     売値の1セント下まで下げる。それでも0以下になるなら Best Offer を切る。 */
+  var bo=Math.min(+r.floor||0, (+r.price||0)-0.01);
+  bo=Math.floor(bo*100)/100;
+  if(bo>0){ o['BestOfferEnabled']='1'; o['MinimumBestOfferPrice']=bo.toFixed(2); }
+  else { o['BestOfferEnabled']=''; o['MinimumBestOfferPrice']=''; }
   o['ImmediatePayRequired']='';   // 支払いポリシー側で決まるので常に空欄
   // eBayは画像を取りに来るので、公開URLをパイプ区切りで並べる。1枚目がメイン。
   o['PicURL']=(r.pics||[]).map(function(x){return x.url;}).join('|');
@@ -4187,7 +4233,7 @@ function csvResImport(text){
       var isWarn=/^warning$/i.test(st);
       if(!item){ notes.push((line?('行'+line+'：'):'')+'ItemIDが空です'); continue; }
       ok++; if(isWarn)warnN++;
-      if(hit){ hit.itemId=item; hit.uploadErr=''; }
+      if(hit){ hit.itemId=item; hit.uploadErr=''; hit.uploadErrSig=''; }
       else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（ItemID '+item+'）'); }
       // 警告文はログに残すだけで、行の指摘には出さない（出品は成立しているため）。
       var wmsg=isWarn
@@ -4204,7 +4250,7 @@ function csvResImport(text){
       var msg=String((iMs>=0?r[iMs]:'')||'').trim();
       var code=String((iCd>=0?r[iCd]:'')||'').trim();
       var full=(code?('['+code+'] '):'')+(msg||'内容不明のエラー');
-      if(hit)hit.uploadErr=full;
+      if(hit){ hit.uploadErr=full; hit.uploadErrSig=csvRowSig(hit); }
       else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（'+full+'）'); }
     }
   }
