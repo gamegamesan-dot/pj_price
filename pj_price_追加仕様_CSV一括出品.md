@@ -1001,6 +1001,59 @@ pj_price（実ブラウザ。計算値で確認）
 
 **pj_price だけの修正（Worker・D1 の変更はなし）。sw.js を v95 に上げた。**
 
+## 6.10 Item Specifics を65文字に収める（2026-10-03・sw.js v96）
+
+eBay の Item Specifics は**1つの値が65文字まで**で、超えると取り込みで弾かれる。
+書き出すときに切り詰める。
+
+### 1. 切り詰め方（`csvSpecFit()`）
+
+- 65文字以内はそのまま
+- 超えたら**単語の区切り（半角スペース）で切る**。語の途中では切らない
+- 区切りが前半（32文字目）より前にしか無いとき＝1語が長いときだけ、文字数で切る
+- 末尾に残った区切り記号（`, ; : / & - – — ( （ 「`）と空白は落とす
+
+```
+Nintendo Switch Super Mario Odyssey Collector Edition Limited Japan Import（74字）
+→ Nintendo Switch Super Mario Odyssey Collector Edition Limited（61字）
+```
+
+### 2. どの値に効くか
+
+`csvRowFor()` が作った列のうち、**列名が `C:` または `*C:` で始まるものすべて**に効く。
+ゲームの `Game Name` `Platform` `Publisher`、フィギュアの `Character` `Franchise`
+`Brand` `Model` なども同じ扱いで、あとで項目が増えてもそのまま効く。
+
+`Game Name` は商品名が空のとき英題（最大80字）を流用するので、実際に超えやすい。
+
+### 3. 行への表示
+
+上限を超えている項目名を `csvSpecLong()` が返し、
+行のバッジと `csvNotes()` に「**Game Name を短縮しました**」と出す
+（複数なら「Franchise・Character を短縮しました」）。
+`csvNotes()` に入れてあるので、**書き出しの確認ダイアログの
+【注意だけで書き出す行】にも出る**（除外はしない）。
+
+値の作り方を2か所に持たないよう、`csvSpecLong()` は書き出しと同じ
+`csvRowFor(r, true)`（切り詰めない生の値）を見る。
+
+### 4. 確認したこと
+
+```
+pj_price（実ブラウザ。書き出したZIPの中身はアプリ本体の csvParse で読んで数えた）
+  65文字ちょうどはそのまま・66文字（1語）は文字数で切る ✅
+  長い英文は単語の区切りで切れ、語の途中で切れない ✅
+  末尾に区切り記号を残さない ✅ 短い値と空はそのまま ✅
+  書き出す値（C: 列）に65文字超が無い ✅
+  ゲームの行は Game Name、フィギュアの行は Franchise・Character が対象 ✅
+  行に「Game Name を短縮しました」「Franchise・Character を短縮しました」が出る ✅
+  短い行には出ない ✅ 確認ダイアログの注意にも出る ✅
+  実ファイル：C:列 96個のうちいちばん長い値が 62字（切り詰め後）✅
+回帰すべて ❌なし・pageerror なし ✅
+```
+
+**pj_price だけの修正（Worker・D1 の変更はなし）。sw.js を v96 に上げた。**
+
 ## 7. API連携（フェーズ2）
 
 ### 実装上の制約

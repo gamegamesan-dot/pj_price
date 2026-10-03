@@ -3171,6 +3171,8 @@ function csvBadgeHtml(r){
   if(r.oneOff)badge+=b('一点物','#6b4fa0');
   if(csvCostLow(r))badge+=b('仕入値要確認','var(--bad)');
   if(csvCostFixed(r))badge+=b('仕入値修正済み（元：'+yen(+r.costOrig||0)+'）','#2f6fb0');
+  var lgN=csvSpecLong(r);
+  if(lgN.length)badge+=b(lgN.join('・')+' を短縮しました','#8a6d00');
   if(th.relaxed)badge+=b('緩和','var(--mute)');
   var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
   if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
@@ -3181,9 +3183,36 @@ function csvBadgeHtml(r){
   if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
   return badge;
 }
+/* ---- Item Specifics の文字数上限 ----
+   eBay の Item Specifics は1つの値が 65 文字まで。超えると取り込みで弾かれるので、
+   書き出すときに切り詰める。切るのは**単語の区切り**で、語の途中では切らない
+   （区切りが前半に無いとき＝1語が長いときだけ文字数で切る）。
+   末尾に残った区切り記号（, / - & など）は落とす。 */
+var CSV_SPEC_MAX=65;
+function csvSpecFit(v){
+  var t=String(v==null?'':v).trim();
+  if(t.length<=CSV_SPEC_MAX)return t;
+  var cut=t.slice(0,CSV_SPEC_MAX);
+  var sp=cut.lastIndexOf(' ');
+  if(sp>=Math.floor(CSV_SPEC_MAX/2))cut=cut.slice(0,sp);   // 単語の区切りで切る
+  return cut.replace(/[\s,;:\/&\-–—(（「]+$/,'').trim();
+}
+/* 上限を超えている Item Specifics の項目名（列名から C: を外したもの）。
+   値の作り方を2か所に持たないよう、書き出しと同じ csvRowFor(r,true) を使う。 */
+function csvSpecLong(r){
+  var o=csvRowFor(r,true), a=[];
+  Object.keys(o).forEach(function(k){
+    if(!/^\*?C:/.test(k))return;
+    if(String(o[k]==null?'':o[k]).trim().length>CSV_SPEC_MAX)a.push(k.replace(/^\*?C:/,''));
+  });
+  return a;
+}
 function csvNotes(r){
   var a=[];
   if(csvVerdict(r)==='none')a.push('相場未確認');
+  // 65文字を超える Item Specifics は書き出しで短くなる。どの項目かを出す
+  var lg=csvSpecLong(r);
+  if(lg.length)a.push(lg.join('・')+' を短縮しました');
   // 0円や極端に低い仕入値は、売値がそのまま安くなるので必ず知らせる
   if(csvCostLow(r))a.push('仕入値要確認（'+yen(+r.cost||0)+'）');
   return a;
@@ -3893,7 +3922,8 @@ function csvShipProfileFor(r){
     ? ($('csvShipProfileRe').value||$('csvShipProfile').value)
     : $('csvShipProfile').value;
 }
-function csvRowFor(r){
+/* raw に true を渡すと Item Specifics を切り詰めない（どの項目が長いかを見るため）。 */
+function csvRowFor(r,raw){
   var o={};
   o['CustomLabel']=csvCustomLabel(r);
   o['*Category']=r.cat;
@@ -3950,6 +3980,11 @@ function csvRowFor(r){
     o['C:Year Manufactured']='';                    // フェーズ2でSP-APIから
     o['C:Item Height']=sp.height||'';
   }
+  /* Item Specifics は eBay の上限（65文字）に収める。
+     列名で見るので、あとで項目が増えてもそのまま効く。 */
+  if(!raw)Object.keys(o).forEach(function(k){
+    if(/^\*?C:/.test(k))o[k]=csvSpecFit(o[k]);
+  });
   return o;
 }
 function csvBuild(cat,rows,action){
