@@ -2606,7 +2606,42 @@ var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits','act'
   ['一番くじ','Ichiban Kuji','Banpresto','fig'],
   ['PROPLICA','PROPLICA','Bandai Spirits',''],
   ['超合金','CHOGOKIN','Bandai Spirits',''],
-  ['CHOGOKIN','CHOGOKIN','Bandai Spirits','']];
+  ['CHOGOKIN','CHOGOKIN','Bandai Spirits',''],
+  /* プライズ（景品）の商品ライン。どれも可動品はほとんど無いので非可動（261055）。
+     ブランドが別に見つからなかったときだけ、ここの親ブランドを使う。
+     長い名前を先に置く（'スーパープレミアムフィギュア' が 'プレミアムフィギュア' に
+     先に当たらないようにする。先に当たったものを採る作りのため）。 */
+  ['ルミナスタ','Luminasta','SEGA','fig'],
+  ['Luminasta','Luminasta','SEGA','fig'],
+  ['スーパープレミアムフィギュア','SPM Figure','SEGA','fig'],
+  ['Super Premium Figure','SPM Figure','SEGA','fig'],
+  ['SPMフィギュア','SPM Figure','SEGA','fig'],
+  ['プレミアムフィギュア','Premium Figure','SEGA','fig'],
+  ['Premium Figure','Premium Figure','SEGA','fig'],
+  ['コレフル','Coreful Figure','TAITO','fig'],
+  ['Coreful','Coreful Figure','TAITO','fig'],
+  ['アートマスターピース','Artist MasterPiece','TAITO','fig'],
+  ['Artist MasterPiece','Artist MasterPiece','TAITO','fig'],
+  ['クーポスケット','Q posket','Banpresto','fig'],
+  ['Q posket','Q posket','Banpresto','fig'],
+  ['Qposket','Q posket','Banpresto','fig'],
+  ['グリッター＆グラマーズ','GLITTER&GLAMOURS','Banpresto','fig'],
+  ['GLITTER & GLAMOURS','GLITTER&GLAMOURS','Banpresto','fig'],
+  ['GLITTER&GLAMOURS','GLITTER&GLAMOURS','Banpresto','fig'],
+  ['グランディスタ','Grandista','Banpresto','fig'],
+  ['Grandista','Grandista','Banpresto','fig'],
+  ['マスタースターズピース','Master Stars Piece','Banpresto','fig'],
+  ['Master Stars Piece','Master Stars Piece','Banpresto','fig'],
+  ['エスプレスト','ESPRESTO','Banpresto','fig'],
+  ['ESPRESTO','ESPRESTO','Banpresto','fig'],
+  ['リラックスタイム','Relax time','Banpresto','fig'],
+  ['Relax time','Relax time','Banpresto','fig'],
+  ['ヌードルストッパー','Noodle Stopper Figure','FuRyu','fig'],
+  ['Noodle Stopper','Noodle Stopper Figure','FuRyu','fig'],
+  ['トリオトライイット','Trio-Try-iT','FuRyu','fig'],
+  ['Trio-Try-iT','Trio-Try-iT','FuRyu','fig'],
+  ['ビキュートバニーズ','BiCute Bunnies','FuRyu','fig'],
+  ['BiCute Bunnies','BiCute Bunnies','FuRyu','fig']];
 var CSV_PUB=['Konami','Capcom','Square Enix','BANDAI NAMCO Entertainment','Nintendo','SEGA',
   'ATLUS','KOEI Corporation','Nippon Ichi Software','Marvelous','Compile Heart','Idea Factory',
   'Aksys Games','Spike Chunsoft, Inc.','5pb','Arc System Works','Gust','FROM Software'];
@@ -3271,14 +3306,15 @@ function csvRender(){
       +'<input type="text" inputmode="numeric" data-item="'+r.id+'" value="'
       +esc(r.itemId||'')+'" placeholder="結果ファイルで自動入力" style="flex:1 1 0;min-width:0;padding:6px;'
       +'font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+      /* ボタン群。写真ボタンは必ず先頭（左端）に置く。
+         カテゴリのプルダウンや原産国ボタンの有無で位置がずれないようにする。 */
+      +'<div data-btns="'+r.id+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'
+      +csvPicBtn(r);
     if(r.cat!=='139973')h+=csvCatSelect(r);
     if(v==='amazon')
       h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
-    h+='<button class="btn" data-pics="'+r.id+'" style="padding:5px 8px;font-size:12px">写真 '
-      +(r.pics||[]).length+'/'+CSV_PIC_MAX+'</button>'
-      +csvOriginBtns(r)
+    h+=csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
       +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
@@ -3479,6 +3515,15 @@ $('csvLogPurge').onclick=function(){
   csvSaveLog(); csvRender();
 };
 
+/* 行の写真ボタン。0枚は赤（塗りつぶし・白文字）で目立たせ、1枚以上は緑にする。
+   位置はボタン群の先頭に固定してある（csvRender）。 */
+function csvPicBtn(r){
+  var n=(r.pics||[]).length;
+  var col=n?'#1f7a4d':'#b00020';
+  return '<button class="btn" data-pics="'+r.id+'" style="padding:5px 8px;font-size:12px;'
+    +'background:'+col+';color:#fff;border-color:'+col+';font-weight:700">写真 '
+    +n+'/'+CSV_PIC_MAX+'</button>';
+}
 /* ---- 写真（proxy-img の Worker に上げる）----
    eBayが画像を取りに来るので、公開URLを PicURL に並べる。
    端末の回線が細いので、送る前にブラウザ側で長辺1600pxまで縮める。 */
