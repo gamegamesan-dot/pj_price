@@ -103,6 +103,13 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
 .tabs button{flex:1;padding:12px 4px;font-size:14px;font-weight:800;border:0;background:#fff;color:var(--ink);font-family:inherit}
 .tabs button[aria-pressed=true]{background:var(--label);color:var(--ink)}
 td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
+/* 一覧の1件分。商品ごとの区切りが分かるように枠で囲む（出品CSVタブ・販売連携タブ共通）。
+   写真のない行でも、どの商品のボタンかひと目で分かるようにするため。 */
+.lcard{border:1px solid var(--line);border-radius:8px;background:var(--card);
+       padding:11px 12px;margin:0 0 16px;box-shadow:0 1px 2px rgba(26,26,26,.06)}
+.lcard:last-child{margin-bottom:0}
+.lhead{font-size:13px;font-weight:700;line-height:1.45;word-break:break-word;
+       padding-bottom:7px;margin-bottom:7px;border-bottom:1px solid var(--line)}
 
 </style>
 </head>
@@ -3406,8 +3413,9 @@ function csvRender(){
       judge='相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)
         +'　しきい値 '+yen(th.v)+'　差額 '+(diff>=0?'＋':'')+yen(diff);
     }
-    h+='<div style="border-top:1px solid var(--line);padding:8px 0">'
-      +'<div style="font-size:12.5px;line-height:1.5">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
+    /* 1商品＝1カード。見出し（日本語名）から各種ボタンまで、すべてこの中に入れる。 */
+    h+='<div class="lcard" data-row="'+r.id+'">'
+      +'<div class="lhead">'+esc(r.titleJa||r.titleEn||'(無題)')+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(csvRowSummary(r))+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
@@ -3455,7 +3463,14 @@ function csvRender(){
       +'<button class="btn" data-zero="'+r.id+'" style="padding:5px 8px;font-size:12px">在庫0時：'
       +({hold:'寝かせる',restock:'再調達',end:'終了'}[r.zeroAct]||'寝かせる')+'</button>'
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
-      +'</div></div>';
+      +'</div>'
+      /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
+      +'<div class="note2" data-picnote="'+r.id+'" style="margin-top:4px"></div>'
+      +((csvPicTarget===r.id&&csvPicFailed.length)
+        ? ('<button class="btn" data-picretry="'+r.id+'" style="padding:5px 8px;font-size:12px;'
+           +'margin-top:4px">失敗分を送り直す（'+csvPicFailed.length+'枚）</button>')
+        : '')
+      +'</div>';
   });
   if(hidden)h='<div class="note2" style="margin:0 0 6px">絞り込み中：'+shown+'件を表示（'
     +hidden+'件は非表示）</div>'+h;
@@ -3733,6 +3748,14 @@ function csvPicDelete(key){
 function csvPicNote(t,bad){
   $('csvPicNote').textContent=t||'';
   $('csvPicNote').style.color=bad?'var(--bad)':'var(--mute)';
+  // 同じカードの中にも出す（どの商品の写真を送っているか分かるように）
+  var el=csvPicTarget
+    ? document.querySelector('#csvList [data-picnote="'+csvPicTarget+'"]') : null;
+  if(el){
+    el.textContent=t||'';
+    el.style.color=bad?'var(--bad)':'var(--mute)';
+    el.style.fontWeight=bad?'700':'';
+  }
 }
 // 失敗した写真は残しておき、同じボタンで送り直せるようにする。
 var csvPicFailed=[];
@@ -3776,6 +3799,11 @@ $('csvPicRetry').onclick=function(){
   var f=csvPicFailed.slice();
   if(f.length&&csvPicTarget)csvPicSend(f,csvPicTarget);
 };
+// カードの中の「失敗分を送り直す」。同じ処理を2か所に書かない
+$('csvList').addEventListener('click',function(e){
+  var t=e.target;
+  if(t&&t.getAttribute&&t.getAttribute('data-picretry'))$('csvPicRetry').onclick();
+});
 // サムネイルのHTML。1枚目がメイン。
 function csvPicThumbs(r,prefix){
   if(!(r.pics||[]).length)return '';
@@ -4985,11 +5013,14 @@ function syncRowHtml(r,key){
     }
     var days=syncDays(r);
     var low=+r.amazon_lowest||0;
-    return '<div style="display:flex;gap:6px;align-items:flex-start">'
+    /* カードの一番上に商品名を見出しとして置く（選択のチェックは見出しの左）。
+       以下の行とボタンはすべて同じカードの中に入る。 */
+    return '<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
       +'<input type="checkbox" data-spick="'+esc(key)+'"'+(syncPick[key]?' checked':'')
-      +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:2px">'
-      +'<div style="flex:1 1 0;min-width:0">'
-      +'<div style="font-size:13px;line-height:1.45;word-break:break-word">'+esc(r.title||r.asin)+'</div>'
+      +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:3px">'
+      +'<span style="flex:1 1 0;min-width:0">'+esc(r.title||r.asin)+'</span>'
+      +'</div>'
+      +'<div>'
       +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
       +'　/　'+esc(r.asin)+'（'+(r.cond==='new'?'新品':'中古')+'）</div>'
@@ -5028,7 +5059,7 @@ function syncRowHtml(r,key){
         : '')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncRestockingBtn(r,key)+'</div>'
-      +'</div></div>';
+      +'</div>';
 }
 /* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
 function syncRowReplace(key){
@@ -5057,8 +5088,7 @@ function syncRender(){
     if(!syncMatch(r))return;
     shown++;
     var key=r.asin+'|'+r.cond;
-    h+='<div data-srow="'+esc(key)+'" style="border-top:1px solid var(--line);padding:9px 0">'
-      +syncRowHtml(r,key)+'</div>';
+    h+='<div class="lcard" data-srow="'+esc(key)+'">'+syncRowHtml(r,key)+'</div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
   syncShown=shown;
