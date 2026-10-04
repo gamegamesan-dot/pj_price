@@ -3261,6 +3261,61 @@ function csvRank(r){
 }
 /* 一覧の絞り込み。並び順（csvSorted）とは分けてあるので、
    「次の未完成へ」などの巡回は絞り込みに影響されない。 */
+/* ---- 相場を調べるリンク（Amazon・メルカリ・eBay）----
+   せどりすとの日本語の商品名には、検索の邪魔になる語が多い。
+   メルカリの検索語は、それらを落として短くしたものを使う。
+   行ごとに手で直せて（r.mercKw）、直した値でリンクを作り直す。 */
+var CSV_KW_DROP=[
+  /【[^】]*】/g, /［[^］]*］/g, /（[^）]*）/g, /\([^)]*\)/g, /\[[^\]]*\]/g,
+  /ノン\s*[・]?\s*スケール/g,
+  /\d+\s*[\/／]\s*\d+\s*スケール/g,
+  /(?:全高)?\s*[約]?\s*\d+(?:\.\d+)?\s*(?:mm|cm|ｍｍ|ｃｍ|ミリ|センチ)/gi,
+  /ABS\s*[&＆・]?\s*PVC\s*製?/gi, /PVC\s*製/gi, /ABS\s*製/gi,
+  /プラスチック製/g, /ポリレジン製?/g, /ソフビ製/g,
+  /塗装済み?\s*(?:完成品)?\s*(?:可動)?\s*フィギュア/g,
+  /塗装済み?\s*完成品/g, /完成品フィギュア/g, /可動フィギュア/g,
+  /再販(?:分)?/g, /特典\s*(?:無し|なし)/g, /日本正規品/g, /正規品/g,
+  /新品未開封/g, /送料無料/g
+];
+function csvSearchKw(t){
+  var s=String(t||'');
+  CSV_KW_DROP.forEach(function(re){ s=s.replace(re,' '); });
+  // 区切り記号と連続する空白を整える
+  s=s.replace(/[\/|｜\\]+/g,' ').replace(/[\s　]+/g,' ').trim();
+  return s;
+}
+// 行の検索語。手で直してあればそれを使う
+function csvKwOf(r){
+  var m=String(r.mercKw||'').trim();
+  return m||csvSearchKw(r.titleJa||r.titleEn||'');
+}
+/* eBayのSold検索は英題から。国や状態の語は検索の幅を狭めるので落とす。 */
+var CSV_EN_DROP=[/\bused\b/gi, /\bjapan import\b/gi, /\bfrom japan\b/gi,
+                 /\bjapanese\b/gi, /\bf\/s\b/gi, /\bbrand new\b/gi];
+function csvEbayKw(t){
+  var s=String(t||'');
+  CSV_EN_DROP.forEach(function(re){ s=s.replace(re,' '); });
+  return s.replace(/\s+/g,' ').trim();
+}
+/* 行の見出しの下に並べる小さなリンク。どれも新しいタブで開く。 */
+function csvLinkBar(o){
+  var a=function(href,label,col){
+    return '<a class="btn" href="'+esc(href)+'" target="_blank" rel="noopener"'
+      +' style="padding:4px 7px;font-size:11.5px;text-decoration:none;'
+      +'display:inline-block;line-height:1.3'+(col?(';color:'+col):'')+'">'+esc(label)+'</a>';
+  };
+  var h='';
+  if(o.asin)h+=a('https://www.amazon.co.jp/dp/'+encodeURIComponent(o.asin),'Amazon');
+  if(o.kw){
+    var q=encodeURIComponent(o.kw);
+    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=on_sale','メル 販売中');
+    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=sold_out','メル 売切');
+  }
+  if(o.en)h+=a('https://www.ebay.com/sch/i.html?_nkw='+encodeURIComponent(o.en)
+    +'&LH_Sold=1&LH_Complete=1','eBay Sold');
+  return h?('<div style="display:flex;gap:5px;flex-wrap:wrap;margin:5px 0 2px">'+h+'</div>'):'';
+}
+
 /* 手を入れた行。不備を直すと「不備がある行だけ」から消えてしまい、
    直した行を探せなくなるため、この絞り込みを用意する（2026-10-04の報告）。
    仕入値を直した／前回のアップロード失敗を直した／英題を手で直した／
@@ -3512,6 +3567,15 @@ function csvRender(){
       +' style="flex:0 0 auto;margin-top:3px">'
       +'<span style="flex:1 1 0;min-width:0">'+esc(r.titleJa||r.titleEn||'(無題)')+'</span>'
       +'</div>'
+      /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
+      +'<div data-links="'+r.id+'">'
+      +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn)})+'</div>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
+      +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
+      +' placeholder="メルカリの検索語（空にすると商品名から作り直します）"'
+      +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div class="note2" style="margin-top:2px">'+esc(csvRowSummary(r))+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
@@ -3696,6 +3760,16 @@ $('csvList').addEventListener('input',function(e){
   }
   /* 仕入値を直したら、その行の売値・eBay優先ライン・利益をその場で出し直す。
      行は作り直さない（いま触っている欄が消えないように）。 */
+  // メルカリの検索語。打つたびにその行のリンクだけ作り直す
+  var kid=t.getAttribute('data-kw');
+  if(kid){
+    var rk=csvRowById(kid); if(!rk)return;
+    rk.mercKw=String(t.value||'').trim();
+    csvSaveList();
+    var lb=document.querySelector('#csvList [data-links="'+kid+'"]');
+    if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin,kw:csvKwOf(rk),en:csvEbayKw(rk.titleEn)});
+    return;
+  }
   var cid=t.getAttribute('data-cost');
   if(cid){
     var rc=csvRowById(cid); if(!rc)return;
@@ -5190,6 +5264,10 @@ function syncRowHtml(r,key){
       +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:3px">'
       +'<span style="flex:1 1 0;min-width:0">'+esc(r.title||r.asin)+'</span>'
       +'</div>'
+      /* 出品CSVタブと同じ、相場を調べるリンク。
+         商品名が英字だけの行（eBayの出品名）は eBay のSold検索も出す。 */
+      +csvLinkBar({asin:r.asin, kw:csvSearchKw(r.title),
+                   en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):''})
       +'<div>'
       +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
