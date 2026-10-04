@@ -1219,7 +1219,7 @@ pj_price（実ブラウザ）
 |---|---|
 | Amazon | `https://www.amazon.co.jp/dp/{ASIN}` |
 | メル 販売中 | `https://jp.mercari.com/search?keyword={検索語}&status=on_sale` |
-| メル 売切 | `https://jp.mercari.com/search?keyword={検索語}&status=sold_out` |
+| メル 売切 | `https://jp.mercari.com/search?keyword={検索語}&status=sold_out%7Ctrading` |
 | eBay Sold | `https://www.ebay.com/sch/i.html?_nkw={英題から除いた語}&LH_Sold=1&LH_Complete=1` |
 
 出品CSVタブは**せどりすとCSVを取り込んだ直後から**出る（英題が無い行は eBay Sold だけ出ない）。
@@ -1248,6 +1248,11 @@ ABS&PVC製 塗装済み完成品フィギュア
 その行のリンクだけがその場で作り直される（一覧は作り直さない）。
 空にすると商品名から作り直す。
 
+> **売り切れは `sold_out%7Ctrading`（`sold_out|trading`）。**
+> メルカリの「売り切れ」の絞り込みは **sold_out（売却済み）と trading（取引中）をまとめた条件**で、
+> `sold_out` だけにすると販売中の商品が混ざって出る（2026-10-04の報告・sw.js v101で修正）。
+> 販売中は `on_sale` のまま。
+
 ### 2. eBayの検索語（`csvEbayKw()`）
 
 英題から `Used` `Japan Import` `From Japan` `Japanese` `F/S` `Brand New` を落とす。
@@ -1265,6 +1270,7 @@ pj_price（実ブラウザ）
   検索語を直すと行に残り、2つのメルカリのリンクがその場で作り直される ✅
   空にすると商品名から作り直す ✅ 一覧を作り直しても欄に残る ✅
   販売連携タブも同じ位置・同じ決まり。英字の行だけ eBay Sold が出る ✅
+  売切のリンクは sold_out|trading、販売中は on_sale（両タブ・v101）✅
 回帰すべて ❌なし・pageerror なし ✅
 ```
 

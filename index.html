@@ -3309,7 +3309,10 @@ function csvLinkBar(o){
   if(o.kw){
     var q=encodeURIComponent(o.kw);
     h+=a('https://jp.mercari.com/search?keyword='+q+'&status=on_sale','メル 販売中');
-    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=sold_out','メル 売切');
+    /* メルカリの「売り切れ」は sold_out と trading（取引中）をまとめた条件。
+       sold_out だけだと販売中の商品も混ざって出る（2026-10-04の報告）。
+       %7C は | （パイプ）。 */
+    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=sold_out%7Ctrading','メル 売切');
   }
   if(o.en)h+=a('https://www.ebay.com/sch/i.html?_nkw='+encodeURIComponent(o.en)
     +'&LH_Sold=1&LH_Complete=1','eBay Sold');
