@@ -575,11 +575,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <button class="btn" id="csvPickEbay" style="flex:0 0 auto;white-space:nowrap">eBay優先だけ残す</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <!-- 選択肢は件数つきで csvFilterOpts() が作り直す -->
           <select id="csvFilter" style="flex:1 1 0;min-width:0">
             <option value="all" selected>すべての行を表示</option>
-            <option value="origin">原産国：既定値の行だけ</option>
-            <option value="review">要確認（review）の行だけ</option>
-            <option value="ng">不備がある行だけ</option>
           </select>
         </div>
         <div id="csvList"></div>
@@ -3263,12 +3261,48 @@ function csvRank(r){
 }
 /* 一覧の絞り込み。並び順（csvSorted）とは分けてあるので、
    「次の未完成へ」などの巡回は絞り込みに影響されない。 */
+/* 手を入れた行。不備を直すと「不備がある行だけ」から消えてしまい、
+   直した行を探せなくなるため、この絞り込みを用意する（2026-10-04の報告）。
+   仕入値を直した／前回のアップロード失敗を直した／英題を手で直した／
+   原産国を手で決めた／カテゴリを手で選んだ行が入る。 */
+function csvFixed(r){
+  return csvCostFixed(r)||csvUploadFixed(r)||!!r.titleManual
+      ||!!(r.specs||{}).originManual||!!r.catManual;
+}
+/* 一覧の絞り込み。値・表示・判定を1か所にまとめ、選択肢は件数つきで作り直す。 */
+var CSV_FILTERS=[
+  { v:'all',    label:'すべての行を表示',
+    f:function(r){ return true; } },
+  { v:'fixed',  label:'直した行だけ（修正済み）',
+    f:function(r){ return csvFixed(r); } },
+  { v:'pick',   label:'選択した行だけ',
+    f:function(r){ return !!csvPick[r.id]; } },
+  { v:'ng',     label:'不備がある行だけ',
+    f:function(r){ return csvIssues(r).length>0; } },
+  { v:'origin', label:'原産国：既定値の行だけ',
+    f:function(r){ return !!(r.specs||{}).originDefault; } },
+  { v:'review', label:'要確認（review）の行だけ',
+    f:function(r){ return r.titleStatus==='review'; } }
+];
+function csvFilterBy(v){
+  for(var i=0;i<CSV_FILTERS.length;i++)if(CSV_FILTERS[i].v===v)return CSV_FILTERS[i];
+  return CSV_FILTERS[0];
+}
 function csvMatchFilter(r){
-  var m=$('csvFilter')?$('csvFilter').value:'all';
-  if(m==='origin')return !!(r.specs||{}).originDefault;
-  if(m==='review')return r.titleStatus==='review';
-  if(m==='ng')return csvIssues(r).length>0;
-  return true;
+  return csvFilterBy($('csvFilter')?$('csvFilter').value:'all').f(r);
+}
+// 選択肢を件数つきで作り直す。いま選んでいる項目は保つ。
+function csvFilterOpts(){
+  var sel=$('csvFilter'); if(!sel)return;
+  var now=sel.value||'all', h='';
+  CSV_FILTERS.forEach(function(x){
+    var n=0;
+    csvList.forEach(function(r){ if(x.f(r))n++; });
+    h+='<option value="'+x.v+'">'+esc(x.label)+'（'+n+'）</option>';
+  });
+  sel.innerHTML=h;
+  sel.value=now;
+  if(sel.value!==now)sel.value='all';
 }
 function csvSorted(){
   var a=csvList.slice(), mode=$('csvSort').value;
@@ -3413,6 +3447,7 @@ function csvCatSelect(r){
     +h+'</select>';
 }
 function csvRender(){
+  csvFilterOpts();   // 絞り込みの選択肢と件数を先に作り直す
   $('csvCount').textContent=csvList.length;
   var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
   csvList.forEach(function(r){
@@ -3709,7 +3744,8 @@ $('csvList').addEventListener('change',function(e){
   var cp=e.target&&e.target.getAttribute&&e.target.getAttribute('data-cpick');
   if(cp){
     if(e.target.checked)csvPick[cp]=true; else delete csvPick[cp];
-    csvPickNote();            // 件数だけ書き替える
+    csvPickNote();            // ボタンの件数
+    csvFilterOpts();          // 絞り込み「選択した行だけ」の件数（一覧は作り直さない）
     return;
   }
   // 相場は判定（バッジ・並び順）が変わるので作り直す。
@@ -3727,9 +3763,11 @@ $('csvList').addEventListener('change',function(e){
   var cid=t.getAttribute('data-cat');
   if(cid){
     var rc=csvRowById(cid); if(!rc)return;
-    if(t.value){ rc.cat=t.value; rc.catDone=true; }
+    // catManual は「人が選んだ」印。自動の振り分け（catDone）と区別して
+    // 絞り込み「直した行だけ」に使う。
+    if(t.value){ rc.cat=t.value; rc.catDone=true; rc.catManual=true; }
     // 空は「カテゴリ未振分」。取り込み時と同じ既定（非可動）に戻して指摘を出し直す
-    else { rc.cat='261055'; rc.catDone=false; }
+    else { rc.cat='261055'; rc.catDone=false; rc.catManual=false; }
     // カテゴリで梱包マージンが変わるので重量と利益を引き直す
     if(!rc.wManual){ rc.weight=csvWeightFor(rc); csvRecalc(rc); }
     csvSaveList(); csvRender(); return;
