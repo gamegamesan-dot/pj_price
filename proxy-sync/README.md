@@ -73,6 +73,7 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0005-restock.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0006-offers.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0007-restocking.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.sql
 ```
 
 **順番は「D1 を先 → deploy を後」。** 先に deploy すると、新しいコードが
@@ -81,8 +82,8 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql
 
 ```powershell
 cd proxy-sync
-npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql   # 先
-npx wrangler deploy                                                          # 後
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.sql   # 先
+npx wrangler deploy                                                                # 後
 ```
 
 すでに適用済みの回を実行すると `duplicate column name: ...` が出ます。

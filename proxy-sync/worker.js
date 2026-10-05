@@ -380,8 +380,19 @@ function invQuery(mode, arg) {
   // mode === "all" は絞り込みなし（1ページ目だけ取る切り分け用）
   return q;
 }
+// null / undefined はそのまま（未取得）。数字はそのまま数字で返す
+const numOrNull = (v) => (v === null || v === undefined) ? null : Number(v);
 function invRow(s) {
   const d = s.inventoryDetails || {};
+  /* 予約済みの内訳。合計だけだと、納品した直後の「FC処理中」を
+     売れた（顧客注文）と取り違える。details=true で3つとも取れる。
+     応答に内訳が入っていないときは null（未取得）にする。0 で埋めると
+     「予約済みはあるが顧客注文は0」＝受領処理中と誤って判断し、
+     本当に売れた行の警告を落としてしまう。 */
+  const rq = d.reservedQuantity || {};
+  const has = (k) => rq[k] !== null && rq[k] !== undefined;
+  const rKnown = has("pendingCustomerOrderQuantity") || has("pendingTransshipmentQuantity")
+              || has("fcProcessingQuantity");
   return {
     sku: String(s.sellerSku || ""),
     asin: String(s.asin || ""),
@@ -389,7 +400,11 @@ function invRow(s) {
     available: Number(d.fulfillableQuantity || 0),
     inbound: Number(d.inboundWorkingQuantity || 0) + Number(d.inboundShippedQuantity || 0)
              + Number(d.inboundReceivingQuantity || 0),
-    reserved: Number((d.reservedQuantity && d.reservedQuantity.totalReservedQuantity) || 0),
+    reserved: Number(rq.totalReservedQuantity || 0),
+    // 顧客注文（本当に売れた）／FC間の移管／FCでの受領・処理中。null は未取得
+    resCust: rKnown ? Number(rq.pendingCustomerOrderQuantity || 0) : null,
+    resTrans: rKnown ? Number(rq.pendingTransshipmentQuantity || 0) : null,
+    resProc: rKnown ? Number(rq.fcProcessingQuantity || 0) : null,
   };
 }
 const BAD_TOKEN = /nextToken/i;
@@ -782,7 +797,9 @@ const EV_TEXT = {
     + " / eBay " + d.ebay_qty + "）",
   INBOUND_LISTED: (d) => "納品待ちの商品がeBayに出ています：" + d.title,
   RESERVED_ONLY: (d) => "最優先：" + d.title + " はFBAの販売可能が0で予約済み "
-    + d.fba_reserved + "点のみ（Amazonで注文済み・出荷待ち）。eBay残数 " + d.ebay_qty,
+    + d.fba_reserved + "点のみ（うち顧客注文 "
+    + ((d.res_cust === null || d.res_cust === undefined) ? "不明" : (d.res_cust + "点"))
+    + "・出荷待ち）。eBay残数 " + d.ebay_qty,
   TEST: (d) => "通知テスト（" + d.tag + "）。同じ印のテストは二度届きません",
   FBA_REMOVAL: (d) => "返送で手元に戻ります：" + d.title + "（" + d.qty
     + "点）。売上ではありません（長期保管在庫・販売不可在庫の返送）",
@@ -867,14 +884,21 @@ function stateEvents(env, rows) {
     if (r.ebay_qty === null || r.fba_seen_at == null) continue;  // 片側しか無い行は UNMATCHED 側で扱う
     const rv = Number(r.fba_reserved || 0);
     const onHand = !!Number(r.on_hand || 0);
+    const rb = resBreak(r);
     const d = { title: r.title || r.ebay_sku || r.asin, ebay_qty: q,
                 fba_available: av, fba_inbound: inb, fba_reserved: rv,
+                // 予約済みの内訳（内訳をまだ取っていない行は null）
+                res_cust: rb.known ? rb.cust : null,
+                res_trans: rb.known ? rb.trans : null,
+                res_proc: rb.known ? rb.proc : null,
                 on_hand: onHand ? 1 : 0, mode: r.mode || "" };
     const base = "|" + r.asin + "|" + r.cond + "|" + dayKey();
     /* 予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
-       手元在庫があってもAmazon側で在庫が消える話なので、こちらは抑えない。 */
+       手元在庫があってもAmazon側で在庫が消える話なので、こちらは抑えない。
+       ただし通知するのは顧客注文のぶんがあるときだけ。FC移管・FC処理中だけなら
+       納品した直後の正常な状態なので、通知しない（通常扱い）。 */
     if (av === 0 && rv > 0 && q >= 1) {
-      out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
+      if (resCust(r) >= 1) out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
       continue;
     }
     // 手元在庫あり（on_hand）は、FBAが0でも売り越しではない
@@ -889,7 +913,8 @@ function stateEvents(env, rows) {
 }
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
-  ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
+  ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved,
+  fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
@@ -1149,16 +1174,20 @@ async function writeInventory(env, run, rows) {
     const zero = (r.available + r.inbound + r.reserved) === 0;
     stmts.push(env.DB.prepare(
       `INSERT INTO skus (seller_sku, asin, cond, cond_code, prefix, scope, purchased_on, cost,
-         ebay_custom_label, title, fba_available, fba_inbound, fba_reserved, fba_seen_at,
+         ebay_custom_label, title, fba_available, fba_inbound, fba_reserved,
+         fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
          active, updated_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
        ON CONFLICT(seller_sku) DO UPDATE SET
          title=COALESCE(NULLIF(excluded.title,''), skus.title),
          fba_available=excluded.fba_available, fba_inbound=excluded.fba_inbound,
-         fba_reserved=excluded.fba_reserved, fba_seen_at=excluded.fba_seen_at,
+         fba_reserved=excluded.fba_reserved,
+         fba_res_cust=excluded.fba_res_cust, fba_res_trans=excluded.fba_res_trans,
+         fba_res_proc=excluded.fba_res_proc, fba_seen_at=excluded.fba_seen_at,
          active=excluded.active, updated_at=excluded.updated_at`
     ).bind(r.sku, asin, cond, p.condCode || "", p.prefix || "", p.scope, p.purchasedOn || "",
-           p.cost, null, r.title, r.available, r.inbound, r.reserved, nowIso(),
+           p.cost, null, r.title, r.available, r.inbound, r.reserved,
+           numOrNull(r.resCust), numOrNull(r.resTrans), numOrNull(r.resProc), nowIso(),
            zero ? 0 : 1, nowIso()));
     stmts.push(itemSeed(env, asin, cond, p.scope, r.title));
     keys[asin + "|" + cond] = { asin, cond };
@@ -1178,6 +1207,18 @@ async function writeInventory(env, run, rows) {
        fba_inbound  =(SELECT COALESCE(SUM(fba_inbound),0)  FROM skus
                       WHERE skus.asin=items.asin AND skus.cond=items.cond),
        fba_reserved =(SELECT COALESCE(SUM(fba_reserved),0) FROM skus
+                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       /* 予約済みの内訳も合算する。ただし内訳が取れていない個体が1件でもあれば
+          NULL（未取得）のままにする。足りない分を0として足すと、本当に売れた行の
+          警告を落としてしまうため。 */
+       fba_res_cust =(SELECT CASE WHEN SUM(CASE WHEN fba_res_cust IS NULL THEN 1 ELSE 0 END)>0
+                                  THEN NULL ELSE SUM(fba_res_cust) END FROM skus
+                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       fba_res_trans=(SELECT CASE WHEN SUM(CASE WHEN fba_res_trans IS NULL THEN 1 ELSE 0 END)>0
+                                  THEN NULL ELSE SUM(fba_res_trans) END FROM skus
+                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       fba_res_proc =(SELECT CASE WHEN SUM(CASE WHEN fba_res_proc IS NULL THEN 1 ELSE 0 END)>0
+                                  THEN NULL ELSE SUM(fba_res_proc) END FROM skus
                       WHERE skus.asin=items.asin AND skus.cond=items.cond),
        fba_seen_at=?3, updated_at=?3
      WHERE asin=?1 AND cond=?2`
@@ -1450,6 +1491,10 @@ async function jobNotify(env) {
    在庫0の過去SKUを数から外すために使う。SQLとJSで同じ条件にしてある。 */
 const SQL_IN_STOCK =
   "(COALESCE(fba_available,0)+COALESCE(fba_inbound,0)+COALESCE(fba_reserved,0))>0";
+/* FBAの受領処理中だけの行（予約済みはあるが顧客注文は0）。納品した直後の正常な状態。
+   内訳は3つ一緒に書くので、fba_res_cust が NULL なら「内訳をまだ取っていない」。 */
+const SQL_FC_PROC =
+  "(fba_res_cust IS NOT NULL AND COALESCE(fba_reserved,0)>0 AND COALESCE(fba_res_cust,0)=0)";
 function inStock(r) {
   return (Number(r.fba_available || 0) + Number(r.fba_inbound || 0)
           + Number(r.fba_reserved || 0)) > 0;
@@ -1479,6 +1524,31 @@ function isRestocking(r) {
 /* 無在庫出品：手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
    この行も「FBAに在庫が無いまま出している」のが正常なので、売り越し系の警告を出さない。
    売れたときに「要仕入れ」を出すのが本来の知らせ方。 */
+/* 予約済みの内訳。
+   「予約済み」には 顧客注文・FC移管・FC処理中 が混ざっている。
+   納品した直後は fcProcessingQuantity（FCでの受領・処理中）に入るので、
+   合計だけで判定すると「売れた」と取り違える（2026-10-05の誤通知）。
+   known=false は内訳をまだ取っていない行（次のrollcallまで）。
+   そのときは取りこぼさないよう、これまでどおり合計で判定する。 */
+function resBreak(r) {
+  const c = r.fba_res_cust, t = r.fba_res_trans, p2 = r.fba_res_proc;
+  const known = !(c === null || c === undefined) || !(t === null || t === undefined)
+             || !(p2 === null || p2 === undefined);
+  const total = Number(r.fba_reserved || 0);
+  if (!known) return { known: false, cust: total, trans: 0, proc: 0, total };
+  const cu = Number(c || 0), tr = Number(t || 0), pr = Number(p2 || 0);
+  /* 内訳の合計が予約済みに届かないときは、説明のつかない残りがある。
+     その残りを「売れていない」側に寄せると注文を取りこぼすので、未取得として扱う。 */
+  if (cu + tr + pr < total) return { known: false, cust: total, trans: tr, proc: pr, total };
+  return { known: true, cust: cu, trans: tr, proc: pr, total };
+}
+/* 顧客注文のぶんの予約済み（本当に売れた数）。内訳が無い行は合計を返す。 */
+const resCust = (r) => resBreak(r).cust;
+/* FBAの受領処理中だけの行。納品した直後の正常な状態なので、警告も通知もしない。 */
+function isFcProcessing(r) {
+  const b = resBreak(r);
+  return b.known && b.total > 0 && b.cust === 0;
+}
 function isDropship(r) {
   return !!Number(r.dropship || 0) && Number(r.ebay_qty || 0) >= 1;
 }
@@ -1494,6 +1564,9 @@ function isRestock(r) {
       && !Number(r.on_hand || 0)
       // 無在庫出品は、もともと在庫を持たない出品なので再調達の対象ではない
       && !Number(r.dropship || 0)
+      /* FBAの受領処理中だけの行は、納品した在庫がこれから販売可能になる。
+         買い直す必要がないので候補にしない（納品直後の二重仕入れを防ぐ）。 */
+      && !isFcProcessing(r)
       && !isRestocking(r);
 }
 /* 再調達の仕入値として見る最安値（円）。
@@ -1559,7 +1632,13 @@ function warnOf(r) {
     if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
     return w;
   }
-  if (av === 0 && rv > 0 && q >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
+  /* 予約済みのみ。顧客注文（pendingCustomerOrderQuantity）が1以上のときだけ
+     「Amazonで注文済み」とする。FC移管・FC処理中だけなら納品直後の正常な状態で、
+     しばらくすると販売可能に変わるので警告しない。 */
+  if (av === 0 && rv > 0 && q >= 1) {
+    if (resCust(r) >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
+    return w;                       // FBA受領処理中（通常扱い・警告しない）
+  }
   if (av === 0 && q >= 1) {
     if (onHand) return w;                     // 手元にあるので売り越しではない
     w.push(inb > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
@@ -1586,7 +1665,8 @@ async function statusBody(env, url) {
   else if (p.get("state") === "dropship")
     where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
-    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0)");
+    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0"
+      + " AND NOT " + SQL_FC_PROC + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1608,6 +1688,8 @@ async function statusBody(env, url) {
     Object.assign({}, r, { state: stateOf(r), restock: isRestock(r) ? 1 : 0,
                            restocking: isRestocking(r) ? 1 : 0,
                            restock_trouble: restockTrouble(r),
+                           // FBAの受領処理中（予約済みだが顧客注文ではない）
+                           fc_processing: isFcProcessing(r) ? 1 : 0,
                            warnings: warnOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
   const st = p.get("state");
@@ -1652,7 +1734,7 @@ async function statusBody(env, url) {
        -- （すでに再調達で出し直した行は切り替え済みなので候補から外す）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
-          AND restocking=0 AND dropship=0) AS restock,
+          AND restocking=0 AND dropship=0 AND NOT ${SQL_FC_PROC}) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND restocking=1) AS restocking,
@@ -1892,4 +1974,5 @@ export default {
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
-                        isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText };
+                        isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
+                        resBreak, resCust, isFcProcessing, invRow, writeInventory };

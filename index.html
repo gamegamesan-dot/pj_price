@@ -4983,6 +4983,34 @@ function syncIsSkip(r){ var k=syncVerdict(r).kind; return k==='low'||k==='loss';
    CustomLabel が M- の行は pj-sync 側の取り込みで自動的に印が立つ。
    既存の出品（E-・せどりすとSKU）は CustomLabel を変えず、行のボタンで印を付ける。 */
 function syncIsDropship(r){ return !!Number(r.dropship||0); }
+/* 予約済みの内訳。顧客注文・FC移管・FC処理中が混ざっている。
+   納品した直後は「FC処理中」に入るので、合計だけで判定すると売れたと取り違える。
+   内訳をまだ取っていない行（次のrollcallまで）は、合計を顧客注文として扱う
+   （警告を取りこぼさないため。Worker 側の resBreak と同じ決まり）。 */
+function syncResBreak(r){
+  var c=r.fba_res_cust, t=r.fba_res_trans, p=r.fba_res_proc;
+  var known=(c!==null&&c!==undefined)||(t!==null&&t!==undefined)||(p!==null&&p!==undefined);
+  var total=Number(r.fba_reserved||0);
+  if(!known)return { known:false, cust:total, trans:0, proc:0, total:total };
+  var cu=Number(c||0), tr=Number(t||0), pr=Number(p||0);
+  /* 内訳の合計が予約済みに届かないときは、説明のつかない残りがある。
+     その残りを「売れていない」側に寄せると注文を取りこぼすので、未取得として扱う。 */
+  if(cu+tr+pr<total)return { known:false, cust:total, trans:tr, proc:pr, total:total };
+  return { known:true, cust:cu, trans:tr, proc:pr, total:total };
+}
+// FBAの受領処理中だけの行（予約済みだが顧客注文ではない）。納品直後の正常な状態。
+function syncIsFcProc(r){
+  var b=syncResBreak(r);
+  return b.known&&b.total>0&&b.cust===0;
+}
+// 一覧に出す予約済みの内訳。「予約 2（注文 1／移管 0／処理中 1）」
+function syncResText(r){
+  if(r.fba_reserved===null||r.fba_reserved===undefined)return '／予約 —';
+  var b=syncResBreak(r);
+  if(!b.total)return '／予約 0';
+  if(!b.known)return '／予約 '+b.total+'（内訳は次の取り込みから）';
+  return '／予約 '+b.total+'（注文 '+b.cust+'／移管 '+b.trans+'／処理中 '+b.proc+'）';
+}
 // いまeBayに出ている無在庫の件数（上限の見張りに使う）
 function syncDropN(){
   return ((syncData&&syncData.items)||[]).filter(function(r){
@@ -5144,6 +5172,9 @@ function syncIsRestock(r){
       && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0)
       // 無在庫出品はもともと在庫を持たない出品なので、再調達の対象ではない（Worker側と同じ）
       && !Number(r.dropship||0)
+      /* FBAの受領処理中だけの行は、納品した在庫がこれから販売可能になるので
+         買い直す必要がない（納品直後の二重仕入れを防ぐ。Worker側と同じ）。 */
+      && !syncIsFcProc(r)
       && !syncIsRestocking(r);     // すでに出し直した行は候補から外す
 }
 function syncRestockingN(){
@@ -5313,6 +5344,10 @@ function syncRowHtml(r,key){
     if(Number(r.one_off||0))
       badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
+    /* FBAの受領処理中。納品した直後の正常な状態で、警告ではないことを明示する。 */
+    if(syncIsFcProc(r)&&Number(r.fba_available||0)===0)
+      badge+='<span style="display:inline-block;background:#2f6fb0;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">FBA受領処理中</span>';
     /* 無在庫の印。売れたら仕入れる行なので、一覧でひと目で分かるようにする。 */
     if(syncIsDropship(r))
       badge+='<span style="display:inline-block;background:#0b6b8a;color:#fff;border-radius:2px;'
@@ -5348,7 +5383,7 @@ function syncRowHtml(r,key){
       +'　/　'+esc(r.asin)+'（'+(r.cond==='new'?'新品':'中古')+'）</div>'
       +'<div class="note2" style="margin-top:3px">FBA 販売可能 '+(r.fba_available===null?'—':r.fba_available)
       +'／入庫 '+(r.fba_inbound===null?'—':r.fba_inbound)
-      +'／予約 '+(r.fba_reserved===null?'—':r.fba_reserved)
+      +syncResText(r)
       +'　eBay 数量 '+(r.ebay_qty===null?'—':r.ebay_qty)
       +'　売値 '+(r.ebay_price?usd(+r.ebay_price):'—')
       +(days===null?'':('　出品 '+days+'日目'))
@@ -6005,7 +6040,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v104';   // sw.js の const V と必ず同じ値にする
+var APP_V='v105';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

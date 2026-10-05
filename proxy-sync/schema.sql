@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS items (
   fba_available    INTEGER,
   fba_inbound      INTEGER,
   fba_reserved     INTEGER,
+  /* 予約済みの内訳。NULL は「内訳をまだ取っていない」（合計で判定する）。
+     cust  … 顧客注文（本当に売れた。これが1以上のときだけ「予約済みのみ」とする）
+     trans … FC間の移管／proc … FCでの受領・処理中（納品した直後はここに入る） */
+  fba_res_cust     INTEGER,
+  fba_res_trans    INTEGER,
+  fba_res_proc     INTEGER,
   fba_seen_at      TEXT,
   mode             TEXT,                       -- 'hold' / 'restock' / 'end'（pj_priceの在庫0時の動作）
   one_off          INTEGER NOT NULL DEFAULT 0,
@@ -73,6 +79,10 @@ CREATE TABLE IF NOT EXISTS skus (
   fba_available     INTEGER,
   fba_inbound       INTEGER,
   fba_reserved      INTEGER,
+  -- 予約済みの内訳（items と同じ。NULL は未取得）
+  fba_res_cust      INTEGER,
+  fba_res_trans     INTEGER,
+  fba_res_proc      INTEGER,
   fba_seen_at       TEXT,
   active            INTEGER NOT NULL DEFAULT 1, -- 0 は在庫0の過去SKU（照会対象から外す）
   updated_at        TEXT NOT NULL
