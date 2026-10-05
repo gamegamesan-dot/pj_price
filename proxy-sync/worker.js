@@ -202,17 +202,23 @@ function parseSku(sku) {
     cost: Number(cost),
   };
 }
-/* eBayのCustomLabel から ASIN＋新品/中古を取り出す。
-   E-<ASIN> / E-<ASIN>-U（FBA連動）、M-<ASIN> / M-<ASIN>-U（無在庫）、
+/* eBayのCustomLabel から ASIN＋状態を取り出す。
+   E-<ASIN> / E-<ASIN>-U / E-<ASIN>-C（FBA連動・無在庫でない）、
+   M-<ASIN> / M-<ASIN>-U / M-<ASIN>-C（無在庫）、
    せどりすとSKUそのまま（一点物）のいずれにも対応する。
-   M- は E- と同じく ASIN＋新品/中古で照合し、あわせて無在庫の印を立てる。 */
+   M- は E- と同じく照合し、あわせて無在庫の印を立てる。
+   -C は「カートリッジのみ」（箱・説明書なし）で、箱付き中古（-U）とは別物。
+   items の主キーは (asin, cond) なので cond='cart' として別の行になる。 */
 function parseLabel(label) {
   const s = String(label || "").trim();
-  let m = /^([EM])-(B[0-9A-Z]{9})(-U)?$/i.exec(s);
+  let m = /^([EM])-(B[0-9A-Z]{9})(-U|-C)?$/i.exec(s);
   if (m) {
     const drop = m[1].toUpperCase() === "M";
-    return { ok: true, asin: m[2].toUpperCase(), cond: m[3] ? "used" : "new",
-             scope: "ebay", from: drop ? "dropship" : "stable", dropship: drop };
+    const suf = String(m[3] || "").toUpperCase();
+    const cond = suf === "-C" ? "cart" : (suf === "-U" ? "used" : "new");
+    return { ok: true, asin: m[2].toUpperCase(), cond,
+             scope: "ebay", from: drop ? "dropship" : "stable", dropship: drop,
+             cart: cond === "cart" };
   }
   const p = parseSku(s);
   if (p.ok) return { ok: true, asin: p.asin, cond: p.cond, scope: p.scope, from: "sedori" };
@@ -986,6 +992,8 @@ function stateEvents(env, rows) {
     /* 無在庫出品（dropship=1）も、在庫を持たないのが正常。
        売り越し・予約済みのみ・納品待ちは出さず、数量の食い違いだけを見る
        （売れたときの「要仕入れ」が本来の知らせ方）。 */
+    /* カートリッジのみは手元から発送する。FBAの在庫で売り越しの通知を出さない。 */
+    if (isCart(r)) continue;
     if (isDropship(r)) {
       const av2 = Number(r.fba_available || 0);
       if (av2 > 0 && q > 0 && av2 < q)
@@ -1030,7 +1038,7 @@ function stateEvents(env, rows) {
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
-  mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship,
+  mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
@@ -1664,6 +1672,16 @@ function isFcProcessing(r) {
   const b = resBreak(r);
   return b.known && b.total > 0 && b.cust === 0;
 }
+/* カートリッジのみの行（CustomLabel が -C）。FBAには送らず手元から発送するので、
+   FBAの在庫が無いのが正常。代わりに「eBayの数量＝手元にある数」かどうかを見張る。 */
+function isCart(r) { return String(r.cond || "") === "cart"; }
+/* 手元の数とeBayの数量が合っているか。手元の数をまだ送っていない行は見ない。 */
+function cartMismatch(r) {
+  if (!isCart(r)) return false;
+  const h = r.hand_qty;
+  if (h === null || h === undefined) return false;
+  return Number(r.ebay_qty || 0) !== Number(h);
+}
 function isDropship(r) {
   return !!Number(r.dropship || 0) && Number(r.ebay_qty || 0) >= 1;
 }
@@ -1679,6 +1697,9 @@ function isRestock(r) {
       && !Number(r.on_hand || 0)
       // 無在庫出品は、もともと在庫を持たない出品なので再調達の対象ではない
       && !Number(r.dropship || 0)
+      /* カートリッジのみは、Amazonの最安値が箱付きの値段なので基準にならない。
+         既定で候補から外す（買い直すなら箱付きとは別の判断が要る）。 */
+      && !isCart(r)
       /* FBAの受領処理中だけの行は、納品した在庫がこれから販売可能になる。
          買い直す必要がないので候補にしない（納品直後の二重仕入れを防ぐ）。 */
       && !isFcProcessing(r)
@@ -1725,7 +1746,12 @@ function warnOf(r) {
   /* 手元在庫の行は、FBAに記録が無いのが正常（納品前にeBayへ出す運用）。
      7〜10日の納品待ちのあいだ警告を出し続けない。 */
   if (st === "listed_no_fba") {
-    // 無在庫出品はFBAに記録が無いのが正常
+    /* 無在庫出品とカートリッジのみは、FBAに記録が無いのが正常。
+       カートリッジのみは代わりに「数量と手元の数」が合っているかを見る。 */
+    if (isCart(r)) {
+      if (cartMismatch(r)) w.push("数量と手元在庫が合いません");
+      return w;
+    }
     if (!onHand && !Number(r.dropship || 0)) w.push("FBA在庫なし");
     return w;
   }
@@ -1733,6 +1759,12 @@ function warnOf(r) {
   const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
   /* 再調達中の行は、FBAに在庫が無いまま出しているのが正常。
      売り越し・予約済みのみ・納品待ちは出さず、代わりに値段の異変だけを見る。 */
+  /* カートリッジのみは手元から発送するので、FBAの在庫で売り越しを見ない。
+     手元の数とeBayの数量が合わないときだけ知らせる。 */
+  if (isCart(r)) {
+    if (cartMismatch(r)) w.push("数量と手元在庫が合いません");
+    return w;
+  }
   /* 無在庫出品は在庫を持たないのが正常。売り越し・予約済みのみ・納品待ちは出さない
      （FBAに在庫が残っているときの数量の食い違いだけは従来どおり出す）。 */
   if (isDropship(r)) {
@@ -1781,7 +1813,7 @@ async function statusBody(env, url) {
     where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
     where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0"
-      + " AND NOT " + SQL_FC_PROC + ")");
+      + " AND cond<>'cart' AND NOT " + SQL_FC_PROC + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1805,6 +1837,9 @@ async function statusBody(env, url) {
                            restock_trouble: restockTrouble(r),
                            // FBAの受領処理中（予約済みだが顧客注文ではない）
                            fc_processing: isFcProcessing(r) ? 1 : 0,
+                           // カートリッジのみ（手元から発送する行）
+                           cart: isCart(r) ? 1 : 0,
+                           cart_mismatch: cartMismatch(r) ? 1 : 0,
                            warnings: warnOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
   const st = p.get("state");
@@ -1849,7 +1884,8 @@ async function statusBody(env, url) {
        -- （すでに再調達で出し直した行は切り替え済みなので候補から外す）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
-          AND restocking=0 AND dropship=0 AND NOT ${SQL_FC_PROC}) AS restock,
+          AND restocking=0 AND dropship=0 AND cond<>'cart'
+          AND NOT ${SQL_FC_PROC}) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND restocking=1) AS restocking,
@@ -1961,10 +1997,17 @@ async function putListings(env, body) {
     /* CustomLabel から読んだ結果。SKUでキーが決まる行でも、M- の判定にはこちらを使う
        （名簿では せどりすとSKU と CustomLabel の両方が送られてくる）。 */
     const lab = parseLabel(label);
-    let k = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : lab;
+    /* 個体（skus）のキーは せどりすとSKU のまま。
+       出品（items）のキーは、-C のときだけ CustomLabel を優先する。
+       「可」の個体の せどりすとSKU は中古（used）だが、出品は
+       カートリッジのみ（cart）の別物なので、SKUに合わせると箱付き中古の行に
+       ItemID が付いてしまう。 */
+    const kSku = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : null;
+    let k = (lab.ok && lab.cart) ? lab : (kSku || lab);
     if ((!k || !k.asin) && /^B[0-9A-Z]{9}$/.test(String(x.asin || "").trim())) {
+      const c0 = String(x.cond || "");
       k = { asin: String(x.asin).trim(),
-            cond: (String(x.cond || "") === "used") ? "used" : "new",
+            cond: (c0 === "used" || c0 === "cart") ? c0 : "new",
             scope: "" };     // scope は既存の値を尊重する（itemSeed が上書きしない）
     }
     if (!k || !k.asin) { bad++; continue; }
@@ -1977,7 +2020,8 @@ async function putListings(env, body) {
            ebay_custom_label=excluded.ebay_custom_label,
            title=COALESCE(NULLIF(excluded.title,''), skus.title),
            updated_at=excluded.updated_at`
-      ).bind(sku, k.asin, k.cond, (p && p.condCode) || "", (p && p.prefix) || "", k.scope,
+      ).bind(sku, (kSku || k).asin, (kSku || k).cond, (p && p.condCode) || "",
+             (p && p.prefix) || "", (kSku || k).scope,
              (p && p.purchasedOn) || "", (p && p.cost) || null, label,
              String(x.title || ""), nowIso()));
     }
@@ -1991,6 +2035,8 @@ async function putListings(env, body) {
          /* 無在庫の印。CustomLabel が M- の行は自動で立て、
             それ以外は送られてきた指定（?14）に従う。 */
          dropship=CASE WHEN ?15=1 THEN 1 ELSE COALESCE(?14, dropship) END,
+         -- カートリッジのみの手元在庫数。送られてこなければそのまま残す
+         hand_qty=COALESCE(?16, hand_qty),
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
@@ -2010,7 +2056,9 @@ async function putListings(env, body) {
            String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand"),
            numOf(x, "restock_price"), numOf(x, "restock_max_cost"),
            flagOf(x, "restock_skip_acc"), flagOf(x, "restocking"),
-           flagOf(x, "dropship"), lab.dropship ? 1 : 0));
+           flagOf(x, "dropship"), lab.dropship ? 1 : 0,
+           (x.hand_qty === null || x.hand_qty === undefined) ? null
+             : Math.max(0, Math.round(Number(x.hand_qty) || 0))));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -2197,4 +2245,4 @@ export default {
 export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, isFcProcessing, invRow, writeInventory,
-                        gtinJp, catFromCatalog, catFromBrowse };
+                        gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch };

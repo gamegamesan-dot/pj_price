@@ -113,6 +113,7 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0006-offers.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0007-restocking.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0010-cart-hand.sql
 ```
 
 **順番は「D1 を先 → deploy を後」。** 先に deploy すると、新しいコードが
@@ -121,8 +122,8 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.s
 
 ```powershell
 cd proxy-sync
-npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.sql   # 先
-npx wrangler deploy                                                                # 後
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0010-cart-hand.sql   # 先
+npx wrangler deploy                                                           # 後
 ```
 
 すでに適用済みの回を実行すると `duplicate column name: ...` が出ます。
@@ -189,6 +190,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
+| POST | `/listings` | `hand_qty` も受ける（カートリッジのみの手元在庫数）。`cond` に `cart` を直接指定できる |
 | POST | `/lowest` | `{items:[{asin,cond}]}`。選んだASINの最安値をその場で取り寄せる（出品CSVタブの「無在庫（新品）」用）。日次の pricing と同じ `amazonLowest` を使い、結果は `items` にも残す |
 | POST | `/catalog` | `{gtins:[...]}`（最大20件）。JANでeBayカタログを引き、候補の `epid` / `title` / `image` / `gtins` / `jp`（日本のJANか）を返す。カタログのスコープが無いときは Browse API に切り替えて `epid` だけ拾い、`fallback_note` でそれを知らせる |
 | GET | `/catalog/check` | カタログのスコープが今のトークンで足りるかを確かめる。足りないときは eBay が返した理由と、申請・再認可が必要な旨を返す |

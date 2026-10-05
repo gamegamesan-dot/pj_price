@@ -422,6 +422,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="body">
       <div class="chk" id="prizeRow"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
+      <div class="chk"><input type="checkbox" id="bCart"><label for="bCart" style="flex:1">カートリッジのみ（箱・説明書なし）の注記を入れる</label></div>
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
@@ -554,6 +555,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
+      <!-- カートリッジのみ：同じASINの出品がすでにあるときは、数量を+1する -->
+      <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px">カートリッジのみ：既存の出品に+1するCSV</button>
+      <div class="warn" id="csvCartNote" style="display:none;margin-top:8px"></div>
       <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
@@ -739,6 +743,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
       <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="row"><label>既定重量（ゲーム）</label><input type="number" id="syncWeightGame" value="150" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>既定重量（カートリッジのみ）</label><input type="number" id="csvWeightCart" value="50" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">箱・説明書なしで出す行の重量です。せどりすとCSVに実重量が入っていればそちらを使います。</div>
       <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
       <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
@@ -1737,12 +1743,25 @@ function headingTitle(){
 // パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
 // Japan Import は最後尾に付けるが、80文字を超えるときだけ省く。
 // 書式はここ1か所。出品文タブも出品リストの一括生成も、同じ関数を通す。
-function gameTitleFrom(used, platform, name){
-  var head=[(used?'Used':''), String(platform||'').trim(), String(name||'').trim()]
-             .filter(Boolean).join(' ');
-  if(!head) return {text:'', dropped:[]};
-  var full=head+' Japan Import';
-  return full.length<=80 ? {text:full, dropped:[]} : {text:head, dropped:['Japan Import']};
+/* cartOnly のときは末尾に Cartridge Only を必ず入れる。
+   80文字を超えるときは Japan Import → ソフト名を短縮 の順に詰める
+   （Cartridge Only は落とさない。何を売っているかが伝わらなくなるため）。 */
+function gameTitleFrom(used, platform, name, cartOnly){
+  var pre=(used?'Used':''), pf=String(platform||'').trim(), nm=String(name||'').trim();
+  var cart=cartOnly?CSV_CART_TITLE:'';
+  var join=function(n,jp){ return [pre,pf,n,cart,jp].filter(Boolean).join(' '); };
+  if(![pre,pf,nm].filter(Boolean).length) return {text:'', dropped:[]};
+  var t=join(nm,'Japan Import');
+  if(t.length<=80) return {text:t, dropped:[]};
+  t=join(nm,'');
+  if(t.length<=80) return {text:t, dropped:['Japan Import']};
+  // ソフト名を単語の区切りで詰める（Cartridge Only が収まるまで）
+  var words=nm.split(/\s+/), short=nm;
+  while(words.length>1){
+    words.pop(); short=words.join(' ');
+    if(join(short,'').length<=80)break;
+  }
+  return { text:join(short,''), dropped:['Japan Import','ソフト名を短縮'] };
 }
 function buildGameTitle(){
   return gameTitleFrom($('gCond').value==='used', gamePlatform(), $('gTitle').value);
@@ -1846,6 +1865,11 @@ function descHTML(){
   S+='<h1 style="font-size:20px;margin:6px 0 0;font-weight:bold;line-height:1.4;"><!--TITLE-->'
     +esc(headingTitle())+'<!--/TITLE--></h1></div>';
 
+  /* カートリッジのみは、何が入っていないかを最初に伝える（買ってからの事故を防ぐ）。
+     3DSのリージョン注記など、ほかの自動注記はそのまま後ろに続く。 */
+  if($('bCart')&&$('bCart').checked){
+    S+='<p style="margin:0 0 22px;font-weight:bold;">'+CSV_CART_DESC+'</p>';
+  }
   S+=h2('Condition');
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
   S+='<p style="margin:0 0 22px;">'+CONDNOTE[c]+(extra?' '+esc(extra):'')+'</p>';
@@ -2627,12 +2651,26 @@ function csvAddCatOpts(){
 }
 // せどりすとの状態コード → ConditionID。フィギュア2カテゴリは細分化グレードが
 // 無いことが多いので 1000 / 3000 に寄せる（仕様書5章）。
-var CSV_COND={N:1000,UM:2750,UVG:3000,UG:4000,UA:5000,UKN:5000};
+/* せどりすとの状態 → eBayの状態（ConditionID）。ゲームはこの3つで統一する。
+     非常に良い（UVG）→ Very Good 4000（Amazonの SubCondition very_good）
+     良い（UG）      → Good 5000（good）
+     可（UA）        → Acceptable 6000（acceptable）。可はカートリッジのみとして扱う
+   2026-10-05：UVG 3000／UG 4000／UA 5000 だったのを上の対応に直した。 */
+var CSV_COND={N:1000,UM:2750,UVG:4000,UG:5000,UA:6000,UKN:5000};
 // 「出品コンディション」列の表記 → 状態コード。SKUの状態コードより列を優先する。
 var CSV_COND_COL={'新品':'N','ほぼ新品':'UM','非常に良い':'UVG','良い':'UG','可':'UA'};
 var CSV_COND_FIG={N:1000,UM:3000,UVG:3000,UG:3000,UA:3000,UKN:3000};
 var CSV_COND_NAME={1000:'New',1500:'New other',1750:'New with defects',2750:'Like New',
   3000:'Used',4000:'Very Good',5000:'Good',6000:'Acceptable',7000:'For parts'};
+/* カートリッジのみ（箱・説明書なし）。せどりすとの「可」のゲームは自動でこの扱いにする。
+   eBayの状態の既定は Acceptable（6000）。行ごとに変えられる。 */
+var CSV_CART_COND=6000;
+var CSV_CART_CONDS=[4000,5000,6000,7000];       // 行ごとに選べる状態
+var CSV_CART_TITLE='Cartridge Only';
+var CSV_CART_DESC='Cartridge only. No case or manual included.';
+var CSV_CART_CD='Cartridge only (no case/manual)';
+// 「可」のゲームか（カートリッジのみの自動判定）
+function csvIsCartSrc(cat,code){ return cat==='139973'&&code==='UA'; }
 // Platform：せどりすとのタイトルに出る表記 → eBayの推奨値（一字一句合わせる）
 /* 和名・略称 → Item Specifics の値。上の PLATFORMS から作る。
    title の綴り（gamePlatform() の戻り値）でも引けるようにしておく。 */
@@ -2730,7 +2768,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
-                 'syncSoldCut','syncDropMax'];
+                 'syncSoldCut','syncDropMax','csvWeightCart'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -3019,7 +3057,11 @@ function csvPackMarginFor(cat){
   return (cat==='139973')?(+$('csvPackGame').value||0):(+$('csvPackFig').value||0);
 }
 function csvWeightFor(r){
-  return Math.ceil((+r.wRaw||0)+csvPackMarginFor(r.cat));
+  var base=+r.wRaw||0;
+  /* カートリッジのみは箱がないので軽い。実重量が入っていればそれを使い、
+     空のときだけ既定（設定「既定重量（カートリッジのみ）」・既定50g）を使う。 */
+  if(!base&&r.cartOnly)base=+$('csvWeightCart').value||50;
+  return Math.ceil(base+csvPackMarginFor(r.cat));
 }
 function csvRecalc(r){
   var p=csvPriceFor(r.cost,r.weight);
@@ -3090,8 +3132,13 @@ function csvImport(text){
     if(!code&&(fig?CSV_COND_FIG:CSV_COND)[sp.cond])code=sp.cond;
     var condErr=!code;                                   // どちらでも判定できない
     var condId=condErr?0:(fig?CSV_COND_FIG:CSV_COND)[code];
+    /* 「可」のゲームはカートリッジのみ（箱・説明書なし）として出す。
+       状態は Acceptable（6000）。行のボタンでオン／オフを変えられる。 */
+    var cart=csvIsCartSrc(cat,code);
+    if(cart)condId=CSV_CART_COND;
     var asin=(iAsin>=0?String(r[iAsin]||'').trim():'')||sp.asin;
-    var key=asin+'|'+condId;
+    // カートリッジのみは箱付き中古とは別物なので、同じASINでもまとめない
+    var key=asin+'|'+condId+'|'+(cart?'C':'');
     var cost=iCost>=0?csvNum(r[iCost]):sp.cost;
     var qty=iQty>=0?(csvNum(r[iQty])||1):1;
     var wRaw=iW>=0?csvNum(r[iW]):0;
@@ -3110,7 +3157,9 @@ function csvImport(text){
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
-      forceEbay:false, oneOff:CSV_ONEOFF.test(title), pics:[],
+      // カートリッジのみは一点物にしない（ASINごとに1つの出品を使い続ける）
+      cartOnly:cart,
+      forceEbay:false, oneOff:cart?false:CSV_ONEOFF.test(title), pics:[],
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
@@ -3682,6 +3731,16 @@ function csvRender(){
     h+=csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
+      /* カートリッジのみ（箱・説明書なし）。ゲームの行だけに出す。 */
+      +(r.cat==='139973'
+        ? ('<button class="btn" data-cart="'+r.id+'" style="padding:5px 8px;font-size:12px'
+           +(r.cartOnly?';background:#8a4f00;color:#fff;border-color:#8a4f00':'')
+           +'">カートリッジのみ：'+(r.cartOnly?'オン':'オフ')+'</button>'
+           +(r.cartOnly
+             ? ('<button class="btn" data-ccond="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+                +'状態：'+esc(CSV_COND_NAME[r.condId]||String(r.condId))+'</button>')
+             : ''))
+        : '')
       /* 無在庫の行は CustomLabel が M- になり、配送ポリシーも W2000 側になる。
          見分けられるよう、オンのときは色を付ける。 */
       +'<button class="btn" data-drop="'+r.id+'" style="padding:5px 8px;font-size:12px'
@@ -3699,6 +3758,8 @@ function csvRender(){
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
+      /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
+      +csvCartHtml(r)
       /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
       +csvNewHtml(r)+csvCatHtml(r)
       /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
@@ -3736,7 +3797,8 @@ $('csvList').addEventListener('click',function(e){
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
-        ||t.getAttribute('data-drop')
+        ||t.getAttribute('data-drop')||t.getAttribute('data-cart')
+        ||t.getAttribute('data-ccond')
         ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
         ||t.getAttribute('data-uperr');
   if(!id)return;
@@ -3780,6 +3842,13 @@ $('csvList').addEventListener('click',function(e){
   else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
   else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
   else if(t.hasAttribute('data-drop'))csvList[i].dropship=!csvList[i].dropship;
+  else if(t.hasAttribute('data-cart'))csvCartToggle(csvList[i]);
+  else if(t.hasAttribute('data-ccond')){
+    // 行ごとに eBay の状態を変える（Very Good → Good → Acceptable → For parts）
+    var cs=CSV_CART_CONDS, ci=cs.indexOf(csvList[i].condId);
+    csvList[i].condId=cs[(ci+1)%cs.length];
+    csvCartRefresh(csvList[i]);
+  }
   else if(t.hasAttribute('data-zero')){
     var seq=['hold','restock','end'];
     csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
@@ -4150,11 +4219,190 @@ function csvEditPics(){
   $('csvEditPics').innerHTML=r?csvPicThumbs(r,'e'):'';
 }
 
+/* カートリッジのみの印を入れ替える。英題（末尾の Cartridge Only）と出品文、
+   状態、重量が連動するので、まとめて作り直す。 */
+function csvCartToggle(r){
+  r.cartOnly=!r.cartOnly;
+  if(r.cartOnly){
+    r.condId=CSV_CART_COND;        // 既定は Acceptable
+    r.oneOff=false;                // ASINごとに1つの出品を使い続ける
+  }else{
+    // せどりすとの状態に戻す（取り込み時の表記／SKUの状態コードから引き直す）
+    var code=CSV_COND_COL[String(r.condSrc||'')]||String(r.condSrc||'');
+    r.condId=CSV_COND[code]||r.condId;
+  }
+  csvCartRefresh(r);
+}
+function csvCartRefresh(r){
+  var name=(r.specs||{}).gameName||'';
+  if(name)csvApplyName(r,name);          // 英題を作り直す（Cartridge Only の出し入れ）
+  try{ r.descHtml=csvDescFor(r); }catch(e){}
+  r.weight=r.wManual?r.weight:csvWeightFor(r);
+  csvRecalc(r);
+  csvSaveList(); csvRender();
+}
+
+/* ================= カートリッジのみを既存の出品に積み上げる =================
+   カートリッジのみ（-C）は一点物にせず、ASINごとに1つの出品を使い続ける。
+   「可」の個体を取り込んだとき、同じASINの E-<ASIN>-C がすでにあれば
+   新規出品（Add）ではなく「数量を+1する Revise CSV」の対象にする。
+   最初に撮った実物の写真はそのまま使い続ける（Reviseは数量だけ変える）。 */
+var CSV_CART_KEY='pj:csvcart:v1';
+var csvCart={};            // { ASIN: {itemId, qty, price, cond, at} }
+function csvCartLoad(){
+  try{ var o=JSON.parse(localStorage.getItem(CSV_CART_KEY)||'{}');
+    if(o&&typeof o==='object')csvCart=o; }catch(e){ csvCart={}; }
+}
+function csvCartSave(){
+  try{ localStorage.setItem(CSV_CART_KEY,JSON.stringify(csvCart)); }catch(e){}
+}
+/* 同じASINの既存のカートリッジのみの出品。数量0の出品も対象にする。
+   見る順は 1) 販売連携の取り込み（いちばん新しい） 2) 出品リストの別の行
+   3) 手元の記録（書き出したときに残す）。 */
+function csvCartExisting(r){
+  var asin=String(r.asin||'').trim();
+  if(!asin||!r.cartOnly)return null;
+  var hit=null;
+  ((syncData&&syncData.items)||[]).forEach(function(x){
+    if(String(x.asin)===asin&&String(x.cond)==='cart'&&String(x.ebay_item_id||'').trim())
+      hit={ itemId:String(x.ebay_item_id), qty:Number(x.ebay_qty||0),
+            price:+x.ebay_price||0, from:'sync' };
+  });
+  if(hit)return hit;
+  csvList.forEach(function(x){
+    if(x.id!==r.id&&x.cartOnly&&String(x.asin)===asin&&String(x.itemId||'').trim())
+      hit={ itemId:String(x.itemId), qty:Number(x.qty||1), price:+x.price||0, from:'list' };
+  });
+  if(hit)return hit;
+  var rec=csvCart[asin];
+  if(rec&&String(rec.itemId||'').trim())
+    return { itemId:String(rec.itemId), qty:Number(rec.qty||0),
+             price:+rec.price||0, from:'rec' };
+  return null;
+}
+// 積み上げる行（既存の出品があり、この行自体はまだ出品していない）
+function csvCartStack(r){
+  if(!r.cartOnly||String(r.itemId||'').trim())return null;
+  return csvCartExisting(r);
+}
+/* 売値は既存の出品のものを維持する。推奨売値と大きく違うときだけ知らせる
+   （自動では変えない）。しきい値は2割。 */
+var CSV_CART_GAP=0.2;
+function csvCartPriceGap(r,ex){
+  var now=+((ex||{}).price)||0, rec=+r.price||0;
+  if(!(now>0&&rec>0))return 0;
+  var d=Math.abs(rec-now)/now;
+  return d>=CSV_CART_GAP?d:0;
+}
+/* 前の個体と状態が違うか。違えば「状態の確認」を強く出す
+   （出品中の写真と手元の実物を見比べてもらう）。 */
+function csvCartCondDiff(r){
+  var rec=csvCart[String(r.asin||'')];
+  var now=String(r.condSrc||'');
+  return (rec&&rec.cond&&now&&rec.cond!==now)?rec.cond:'';
+}
+/* 書き出したあと（Add も +1 も）、その出品の記録を残す。 */
+function csvCartRecord(r,itemId,qty,price){
+  var asin=String(r.asin||''); if(!asin)return;
+  csvCart[asin]={ itemId:String(itemId||''), qty:Number(qty||0), price:+price||0,
+                  cond:String(r.condSrc||''), at:new Date().toISOString() };
+  csvCartSave();
+}
+
+/* 行に出す積み上げの案内。 */
+function csvCartHtml(r){
+  if(!r.cartOnly)return '';
+  var ex=csvCartStack(r);
+  var h='';
+  if(ex){
+    var q=Number(ex.qty||0);
+    h+='<div class="note2" style="margin-top:4px">'
+      +'<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
+      +'padding:1px 5px;font-size:11px">既存の出品に追加</span>　'
+      +'現在の数量 '+q+' → '+(q+1)+'　ItemID '+esc(ex.itemId)
+      +(ex.price?('　売値 '+usd(ex.price)+'（維持します）'):'')
+      +'</div>';
+    var gap=csvCartPriceGap(r,ex);
+    if(gap)
+      h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);'
+        +'font-weight:700">価格の見直し候補</span>　いまの売値 '+usd(ex.price)
+        +' と推奨売値 '+usd(+r.price||0)+' の差が '+Math.round(gap*100)+'%'
+        +'（自動では変えません）</div>';
+    var diff=csvCartCondDiff(r);
+    h+='<div class="note2" style="margin-top:0">'
+      +(diff?('<span style="color:var(--bad);font-weight:700">状態の確認</span>　前回は「'
+              +esc(diff)+'」、今回は「'+esc(String(r.condSrc||''))+'」です。')
+            :'<b>状態の確認</b>　')
+      +'出品中の写真と手元の実物を見比べてください（写真は差し替えません）。</div>';
+  }else{
+    h+='<div class="note2" style="margin-top:4px">'
+      +'<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
+      +'padding:1px 5px;font-size:11px">カートリッジのみ</span>　'
+      +'同じASINの出品が無いので新規出品（Add）で出します。'
+      +'カートリッジの表・裏など実物の写真を付けてください。</div>';
+  }
+  return h;
+}
+/* 既存の出品に+1する Revise CSV。売値は送らない（いまの値段を維持する）。
+   あわせて pj-sync に手元在庫の数（+1後）を送る。 */
+function csvCartAddRun(){
+  var ids=csvPickIds();
+  var pick=ids.length?ids:csvList.map(function(r){ return r.id; });
+  var list=[];
+  pick.forEach(function(id){
+    var r=csvRowById(id); if(!r)return;
+    var ex=csvCartStack(r); if(!ex)return;
+    list.push({ r:r, ex:ex });
+  });
+  var box=$('csvCartNote');
+  if(!list.length){
+    box.style.display='';
+    box.textContent=ids.length
+      ? '選んだ行に「既存の出品に追加」の行がありません。'
+      : '「既存の出品に追加」の行がありません（同じASINの出品が無ければ新規出品で出します）。';
+    return;
+  }
+  var gaps=list.filter(function(x){ return csvCartPriceGap(x.r,x.ex); }).length;
+  if(!confirm(list.length+'件を既存の出品に追加します（数量を+1する Revise）。\n'
+    +'売値は変えません（いまの値段を維持します）。\n'
+    +'写真も差し替えません。出品中の写真と手元の実物を見比べてから出してください。\n'
+    +(gaps?('価格の見直し候補 '+gaps+'件（自動では変えません）。\n'):'')
+    +'よろしいですか？'))return;
+  var head=[CSV_ACT_COL,'ItemID','*Quantity'];
+  var out=[CSV_INFO,csvLine(head)];
+  list.forEach(function(x){
+    out.push(csvLine(['Revise',x.ex.itemId,Number(x.ex.qty||0)+1]));
+  });
+  var name='ebay_cart_add_'+csvStamp()+'.csv';
+  var okDl=csvDownload(name,out.join('\r\n')+'\r\n');
+  list.forEach(function(x){
+    csvCartRecord(x.r,x.ex.itemId,Number(x.ex.qty||0)+1,x.ex.price);
+  });
+  box.style.display='';
+  box.innerHTML=(okDl?('書き出しました：'+esc(name)+'（'+list.length+'件・3列）')
+    :'書き出しに失敗しました')
+    +'<br>アップロードしたら、行は削除するか ItemID を入れてください。';
+  // 手元在庫の数を pj-sync へ送る（失敗しても書き出しは済んでいる）
+  if(syncUrl()&&syncApiKey()){
+    fetch(syncUrl()+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:list.map(function(x){
+        return { asin:x.r.asin, cond:'cart', title:x.r.titleJa||x.r.titleEn||'',
+                 item_id:x.ex.itemId, custom_label:csvCustomLabel(x.r),
+                 hand_qty:Number(x.ex.qty||0)+1 };
+      })})})
+      ['catch'](function(){});
+  }
+}
+
 /* ---- CSV書き出し ---- */
 /* FBA連動する行は商品に紐づく安定SKU、一点物はせどりすとSKUをそのまま（6.5.2）。
    無在庫の行は M-<ASIN>（中古 M-<ASIN>-U）。pj-sync 側は M- を E- と同じく
    ASIN＋新品/中古で照合し、あわせて無在庫の印を立てる。 */
 function csvCustomLabel(r){
+  /* カートリッジのみ（箱・説明書なし）は -C。箱付き中古（-U）とは別物として扱う。
+     同じASINで -U と -C が並んで出ていてよい。 */
+  if(r.cartOnly&&r.asin)return (r.dropship?'M-':'E-')+r.asin+'-C';
   if(r.dropship&&r.asin)return 'M-'+r.asin+(r.condId===1000?'':'-U');
   if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
   return r.sku;
@@ -4170,6 +4418,8 @@ function csvShipProfileFor(r){
 function csvRowFor(r,raw){
   var o={};
   o['CustomLabel']=csvCustomLabel(r);
+  // カートリッジのみは Condition Description にも書く（状態の説明として必ず出る）
+  if(r.cartOnly)o['ConditionDescription']=CSV_CART_CD;
   o['*Category']=r.cat;
   o['*Title']=r.titleEn;
   o['*ConditionID']=r.condId;
@@ -4241,6 +4491,10 @@ function csvRowFor(r,raw){
 }
 function csvBuild(cat,rows,action){
   var head=CSV_HEAD[csvCatTpl(cat)].split(',');
+  /* カートリッジのみの行があるときだけ ConditionDescription の列を足す。
+     ほかの書き出しの列は今までどおりにする。 */
+  if(rows.some(function(r){ return !!r.cartOnly; })&&head.indexOf('ConditionDescription')<0)
+    head.push('ConditionDescription');
   var act=head[0];                                  // *Action(...) の列名そのもの
   var out=[CSV_INFO,csvLine(head)];
   rows.forEach(function(r){
@@ -4274,6 +4528,10 @@ function csvExportSplit(ids){
     }
     // 出品済み（ItemIDあり）は Add の対象から外す（数量・価格の更新CSVを使う）
     if(String(r.itemId||'').trim()){ done.push({r:r,why:'ItemID '+r.itemId}); return; }
+    /* カートリッジのみで、同じASINの出品がすでにあるなら新規出品にしない。
+       「+1するCSV」で既存の出品の数量を増やす。 */
+    var ex=csvCartStack(r);
+    if(ex){ done.push({r:r,why:'既存の出品に追加（ItemID '+ex.itemId+'）'}); return; }
     rows.push(r);
     var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')});
   });
@@ -4672,6 +4930,7 @@ function csvNewRun(verify){
     +(why.length?('<br>除外：'+esc(why.join('　/　'))):'')
     +(verify?'<br>VerifyAdd は出品されません。Seller Hub の結果で列と ePID を確かめてから ④ を使ってください。':'');
 }
+$('csvCartAdd').onclick=csvCartAddRun;
 $('csvNewLow').onclick=csvNewLowRun;
 $('csvNewCat').onclick=csvNewCatRun;
 $('csvNewCheck').onclick=csvNewCheckRun;
@@ -4898,7 +5157,7 @@ function csvApplyName(r,name){
   var p=csvPlatOf(r);
   r.specs=r.specs||{};
   r.specs.gameName=name;
-  r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name).text;
+  r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name, !!r.cartOnly).text;
 }
 // 行が持つ5項目を図の並びで取り出す
 function csvFigParts(r){
@@ -5217,7 +5476,7 @@ var CSV_DESC_FIELDS=['cat','brand','series','chara','variant','line','cond','ori
                      'gPlat','gPlatFree','gTitle','gPub','gCond',
                      'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aCond',
                      'extra','title'];
-var CSV_DESC_CHECKS=['bPrize','bJP'];
+var CSV_DESC_CHECKS=['bPrize','bJP','bCart'];
 function csvDescFor(r){
   var save={}, savec={};
   CSV_DESC_FIELDS.forEach(function(id){ save[id]=$(id).value; });
@@ -5226,6 +5485,8 @@ function csvDescFor(r){
     var g=(r.cat==='139973'), sp=r.specs||{};
     CSV_DESC_FIELDS.forEach(function(id){ if(id!=='cat')$(id).value=''; });
     $('cat').value=g?'game':'fig';
+    // カートリッジのみの注記は行の印で決める（計算機のチェック状態は持ち込まない）
+    $('bCart').checked=!!r.cartOnly;
     if(g)$('gCond').value=csvCondToSel(r.condId,true);
     else $('cond').value=csvCondToSel(r.condId,false);
     if(g){
@@ -5297,6 +5558,8 @@ function syncCsvRowFor(r){
 /* 出品リストに同じ商品が無い行の既定重量。SKUの接頭辞で振り分ける。
    接頭辞が分からない行はホビー側（重いほう）を使う＝安全側。 */
 function syncDefWeight(r){
+  // カートリッジのみは箱がないぶん軽い
+  if(String(r.cond||'')==='cart')return +$('csvWeightCart').value||50;
   var pf=String(r.prefix||'').toLowerCase();
   if(pf==='game')return +$('syncWeightGame').value||150;
   return +$('syncWeight').value||400;
@@ -5453,6 +5716,8 @@ var SYNC_VERDICT={
 function syncKeyOf(r){
   var asin=String(r.asin||'').trim();
   if(!asin)return '';
+  // カートリッジのみ（-C）は箱付き中古（-U）とは別の行
+  if(r.cartOnly)return asin+'|cart';
   return asin+'|'+((r.condId===1000)?'new':'used');
 }
 /* 出品してからの日数。出品開始日が取れていない行は null。 */
@@ -6515,7 +6780,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvNewLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+csvLoad(); csvNewLoad(); csvCartLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -6531,7 +6796,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v107';   // sw.js の const V と必ず同じ値にする
+var APP_V='v108';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS items (
      CustomLabel が M-<ASIN>[-U] の行は取り込みで自動的に立つ。既存の出品は
      pj_price のボタンで手動で立てる。立っている行は売り越し系の警告を出さない。 */
   dropship         INTEGER NOT NULL DEFAULT 0,
+  /* カートリッジのみ（cond='cart'）の手元在庫数。FBAに送らず手元から出すので、
+     eBayの数量と合っているかをこれで見張る。NULL はまだ送っていない（見張らない）。 */
+  hand_qty         INTEGER,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
