@@ -5919,10 +5919,15 @@ if('serviceWorker' in navigator){
 function net(){$('netstate').textContent=navigator.onLine?'':'\u2691 オフラインで動作中';}
 addEventListener('online',net);addEventListener('offline',net);net();
 
-/* ---- いま動いているバージョンの表示 ----
-   sw.js の `const V = 'pj-pricing-vNN'` と同じ値を出す（更新のたびに自動で変わる）。
-   1) Service Worker のキャッシュ名（pj-pricing-vNN）から拾う＝いま動いている版
-   2) まだ登録されていない・取れないときは sw.js を読んで拾う */
+/* ---- いま動いているバージョンの表示と、古いままのときの更新 ----
+   基準は APP_V ＝「いま画面に出ているこのHTML自身の版」。
+   以前は Service Worker の版（キャッシュ名・sw.js）だけを出していたので、
+   SWだけ新しくなってHTMLは古いまま、という食い違いに気づけなかった
+   （iPhoneのホーム画面アプリで、v102 と出ているのに並び順が古いままだった原因）。
+   ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
+   SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
+   SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
+var APP_V='v103';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
@@ -5937,7 +5942,11 @@ function appVerFromSw(){
     .then(function(t){ var m=/pj-pricing-(v\d+)/.exec(t||''); return m?m[1]:''; })
     ['catch'](function(){ return ''; });
 }
-function appVerShow(v){ $('appVer').textContent=v?('バージョン '+v):''; }
+/* フッターの表示。出すのはこのHTML自身の版。SW側が新しいときだけ添える。 */
+function appVerShow(sw){
+  var el=$('appVer'); if(!el)return;
+  el.textContent='バージョン '+APP_V+((sw&&sw!==APP_V)?('（新しい版 '+sw+' があります）'):'');
+}
 /* いま動いているSWに直接聞く（これが本当に動いている版）。
    返事が無ければ空を返して、キャッシュ名 → sw.js の順に回す。 */
 function appVerAskSw(){
@@ -5951,7 +5960,54 @@ function appVerAskSw(){
     try{ sw.postMessage({ask:'version'},[ch.port2]); }catch(e){ clearTimeout(t); done(''); }
   });
 }
+/* 開いた直後かどうか。開いた直後なら勝手に読み込み直してよいが、
+   使っている途中で読み込み直すと入力中の値が消えるので、そのときはボタンを出す。 */
+var appVerUsing=false;
+setTimeout(function(){ appVerUsing=true; },8000);
+['pointerdown','keydown'].forEach(function(ev){
+  document.addEventListener(ev,function(){ appVerUsing=true; },{passive:true,once:true});
+});
+/* 画面下に出す更新の知らせ。フッターだけだと気づけないので、固定の帯で出す。 */
+function appVerBar(sw){
+  if($('appVerBar'))return;
+  var d=document.createElement('div');
+  d.id='appVerBar';
+  d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9998;'
+    +'background:var(--ink);color:#fff;font-size:13px;'
+    +'padding:9px 12px calc(9px + env(safe-area-inset-bottom));'
+    +'display:flex;gap:8px;align-items:center;justify-content:center;'
+    +'box-shadow:0 -2px 8px rgba(0,0,0,.25)';
+  d.innerHTML='<span style="flex:1 1 auto">新しい版 '+esc(sw)+' があります（いまは '+esc(APP_V)+'）</span>'
+    +'<button id="appVerGo" style="flex:0 0 auto;font:inherit;font-weight:700;'
+    +'background:var(--label);color:#3a3200;border:0;border-radius:3px;padding:6px 12px">更新する</button>'
+    +'<button id="appVerNo" style="flex:0 0 auto;font:inherit;background:transparent;'
+    +'color:#fff;border:1px solid #666;border-radius:3px;padding:6px 9px">あとで</button>';
+  document.body.appendChild(d);
+  $('appVerGo').addEventListener('click',appVerReload);
+  $('appVerNo').addEventListener('click',function(){ d.remove(); });
+}
+/* 読み込み直す。ブラウザのHTTPキャッシュに古いHTMLが残っていても取り直せるよう、
+   キャッシュを通さずに1回取ってから読み込み直す。 */
+function appVerReload(){
+  var go=function(){ location.reload(); };
+  if(!window.fetch){ go(); return; }
+  fetch('./index.html',{cache:'reload'}).then(go)['catch'](go);
+}
+/* SW側の版がこのHTMLより新しいとき。開いた直後は1回だけ自動で読み込み直し、
+   使っている途中なら帯を出す。同じ版で読み込み直しを繰り返さないよう印を付ける。 */
+function appVerStale(sw){
+  if(!sw||sw===APP_V)return;
+  appVerShow(sw);
+  var k='pj:reload:'+sw, done=false;
+  try{ done=sessionStorage.getItem(k)==='1'; }catch(e){ done=true; }
+  if(!appVerUsing&&!done){
+    try{ sessionStorage.setItem(k,'1'); }catch(e){}
+    appVerReload(); return;
+  }
+  appVerBar(sw);
+}
 function appVerInit(){
+  appVerShow('');            // まずHTML自身の版を出す（SWの返事は待たない）
   var fromCache=function(){
     if(!(window.caches&&caches.keys))return Promise.resolve('');
     return caches.keys().then(appVerPick)['catch'](function(){ return ''; });
@@ -5959,12 +6015,26 @@ function appVerInit(){
   appVerAskSw()
     .then(function(v){ return v||fromCache(); })
     .then(function(v){ return v||appVerFromSw(); })
-    .then(appVerShow);
+    .then(appVerStale);
 }
 appVerInit();
-// 新しい版がキャッシュを作ったら表示も追いつく
-if('serviceWorker' in navigator&&navigator.serviceWorker.addEventListener)
+if('serviceWorker' in navigator&&navigator.serviceWorker.addEventListener){
+  // 新しいSWが入れ替わったとき
   navigator.serviceWorker.addEventListener('controllerchange',appVerInit);
+  // 新しいSWが有効になったときの知らせ（sw.js の activate から届く）
+  navigator.serviceWorker.addEventListener('message',function(e){
+    var v=e.data&&e.data.version; if(v)appVerStale(v);
+  });
+}
+/* ホーム画面アプリに戻ってきたときに、新しい版が出ていないか確かめる
+   （アイコンを押しても読み込み直さないので、ここで気づけるようにする）。 */
+var appVerChecked=Date.now();
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden)return;
+  if(Date.now()-appVerChecked<60000)return;
+  appVerChecked=Date.now();
+  appVerFromSw().then(appVerStale)['catch'](function(){});
+});
 
 (function(){
   var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
