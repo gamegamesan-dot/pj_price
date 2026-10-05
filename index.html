@@ -554,6 +554,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
+      <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
+        <button class="btn" id="csvDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
+      </div>
+      <div class="note2" id="csvDropNote"></div>
       <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
       <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
       <div class="note2" id="csvTitleNote"></div>
@@ -682,6 +688,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="syncPushNote"></div>
       <button class="btn" id="syncOnHandFix" style="width:100%;margin-top:8px">手元在庫の印を付け直す（FBAに在庫がある行から外す）</button>
       <div class="note2" id="syncFixNote"></div>
+      <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="syncDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
+        <button class="btn" id="syncDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
+      </div>
+      <div class="note2" id="syncDropNote"></div>
       <button class="btn" id="syncRestock" style="width:100%;margin-top:8px">再調達で出し直すCSVを書き出す（選んだ行）</button>
       <div class="note2" id="syncRestockNote"></div>
     </div>
@@ -4262,7 +4274,54 @@ function csvPickNote(){
     ? ('選択 '+n+'件'+(hid?('（うち絞り込みで非表示 '+hid+'件）'):'')
        +'。この行だけを書き出します（不備・出品済みの行は同じ決まりで除きます）。')
     : '一覧の各カードの左上のチェックで選びます。';
+  csvDropNote();   // 無在庫の一括ボタンの件数も合わせる
 }
+/* 選んだ行をまとめて無在庫オン／オフにする。
+   出品済み（ItemIDがある）行は、CustomLabel を M- に変えても eBay 側の出品は
+   変わらないので対象外にする。そちらは販売連携タブのボタンで印を付ける。 */
+function csvDropIds(){
+  var ids=csvPickIds(), go=[], listed=[];
+  ids.forEach(function(id){
+    var r=csvRowById(id); if(!r)return;
+    if(String(r.itemId||'').trim())listed.push(r); else go.push(r);
+  });
+  return { go:go, listed:listed };
+}
+function csvDropNote(){
+  var d=csvDropIds(), n=d.go.length, L=d.listed.length;
+  ['csvDropOn','csvDropOff'].forEach(function(id){
+    var b=$(id); if(!b)return;
+    b.disabled=!n; b.style.opacity=n?'':'.5';
+  });
+  $('csvDropOn').textContent='無在庫オン'+(n?('（'+n+'件）'):'');
+  $('csvDropOff').textContent='無在庫オフ'+(n?('（'+n+'件）'):'');
+  $('csvDropNote').textContent=L
+    ? ('出品済みの'+L+'件は販売連携タブで設定してください。')
+    : '';
+}
+function csvDropSet(on){
+  var d=csvDropIds();
+  if(!d.go.length){
+    alert(d.listed.length
+      ? ('選んだ'+d.listed.length+'件はすべて出品済みです。\n'
+         +'出品済みの行は販売連携タブで設定してください。')
+      : '一覧の各カードの左上のチェックで行を選んでください。');
+    return;
+  }
+  if(!confirm(d.go.length+'件を無在庫'+(on?'オン':'オフ')+'にします。'
+    +(d.listed.length?('\n出品済みの'+d.listed.length+'件は対象外です'
+       +'（販売連携タブで設定してください）。'):'')
+    +(on?'\n無在庫の行は CustomLabel を M-<ASIN> で書き出し、'
+         +'配送ポリシーを '+($('csvShipProfileRe').value||'W2000')+' にします。':'')
+    +'\nよろしいですか？'))return;
+  d.go.forEach(function(r){ r.dropship=!!on; });
+  csvSaveList(); csvRender();
+  $('csvDropNote').textContent=d.go.length+'件を無在庫'+(on?'オン':'オフ')+'にしました。'
+    +(d.listed.length?('　出品済みの'+d.listed.length+'件は販売連携タブで設定してください。'):'');
+}
+$('csvDropOn').onclick=function(){ csvDropSet(true); };
+$('csvDropOff').onclick=function(){ csvDropSet(false); };
+
 // 書き出したファイルを1つずつ保存し直すボタン（iPhoneで同時ダウンロードが落ちるとき用）
 var csvLastFiles=[];
 function csvExportFilesUI(){
@@ -5474,7 +5533,80 @@ function syncPickNote(){
     ? (syncShown+'件を表示中。選択 '+pick+'件。'
        +'書き出すと 数量・売値（推奨売値）・配送ポリシー（再調達用）を Revise します。')
     : '';
+  syncDropBtnNote();   // 無在庫の一括ボタンの件数も合わせる
 }
+/* 選んだ行をまとめて無在庫オン／オフにする。
+   CustomLabel は変えない（eBay側の出品はそのまま）。印だけを pj-sync に送る。 */
+function syncPickRows(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    return !!syncPick[r.asin+'|'+r.cond]; });
+}
+function syncDropBtnNote(){
+  var rows=syncPickRows(), n=rows.length;
+  var on=rows.filter(syncIsDropship).length;
+  ['syncDropOn','syncDropOff'].forEach(function(id){
+    var b=$(id); if(!b)return;
+    b.disabled=!n; b.style.opacity=n?'':'.5';
+  });
+  $('syncDropOn').textContent='無在庫オン'+(n?('（'+(n-on)+'件）'):'');
+  $('syncDropOff').textContent='無在庫オフ'+(n?('（'+on+'件）'):'');
+}
+function syncDropBulk(on){
+  var rows=syncPickRows();
+  if(!rows.length){ alert('一覧のチェックで行を選んでください。'); return; }
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncKeyReady('syncDropNote'))return;
+  // すでにその状態の行は送らない（同じ内容の送信を繰り返さない）
+  var go=rows.filter(function(r){ return syncIsDropship(r)!==!!on; });
+  var same=rows.length-go.length;
+  if(!go.length){
+    alert('選んだ'+rows.length+'件はすべて無在庫'+(on?'オン':'オフ')+'です。');
+    return;
+  }
+  var mx=syncDropMax(), after=syncDropN()+(on?go.filter(function(r){
+    return Number(r.ebay_qty||0)>=1; }).length:0);
+  if(!confirm(go.length+'件を無在庫'+(on?'オン':'オフ')+'にします。'
+    +(same?('\nすでに無在庫'+(on?'オン':'オフ')+'の'+same+'件は送りません。'):'')
+    +(on?('\n・売り越しの恐れなどの警告を出しません'
+          +'\n・売れたときに「要仕入れ」の通知を出します'
+          +'\n・名簿を送るときに手元在庫の印を付けません'
+          +'\n実行後の無在庫は '+after+'件'+(mx?('／上限 '+mx+'件'):'（上限なし）')+'。'
+          +(mx&&after>mx?'　※上限を超えます':'')):'')
+    +'\nよろしいですか？'))return;
+  var b1=$('syncDropOn'), b2=$('syncDropOff');
+  b1.disabled=b2.disabled=true;
+  var sent=0, failed=0;
+  function step(i){
+    if(i>=go.length){
+      $('syncDropNote').textContent='無在庫'+(on?'オン':'オフ')+'にしました：'+sent+'件'
+        +(failed?('　'+failed+'件は失敗しました。'):'')
+        +(same?('　すでに同じ状態の'+same+'件は送っていません。'):'');
+      syncSaveCache(); syncRender();
+      return;
+    }
+    var part=go.slice(i,i+200);
+    fetch(syncUrl()+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:part.map(function(r){
+        return { asin:r.asin, cond:r.cond, title:r.title||'', dropship:!!on };
+      })})})
+      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(function(d){
+        sent+=(d.accepted||0); failed+=(d.rejected||0);
+        // 送れた行はその場で表示も合わせる（次の取り込みを待たない）
+        part.forEach(function(r){ r.dropship=on?1:0; });
+      })
+      .catch(function(e){
+        failed+=part.length;
+        $('syncDropNote').textContent='送信に失敗：'+e.message;
+      })
+      .then(function(){ step(i+200); });
+  }
+  $('syncDropNote').textContent='送信中…';
+  step(0);
+}
+$('syncDropOn').onclick=function(){ syncDropBulk(true); };
+$('syncDropOff').onclick=function(){ syncDropBulk(false); };
 $('syncFilter').addEventListener('change',syncRender);
 /* 行の手元在庫を入れ替える。送るのは ASIN＋新品/中古 と on_hand だけ。
    ほかの項目（モード・一点物・FBA連動）は Worker 側でそのまま残る。 */
@@ -6040,7 +6172,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v105';   // sw.js の const V と必ず同じ値にする
+var APP_V='v106';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
