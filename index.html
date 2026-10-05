@@ -42,9 +42,11 @@ section{background:var(--card);border:1px solid var(--line);border-radius:3px;ma
 .h{font-size:11px;letter-spacing:.12em;font-weight:700;color:var(--mute);
    padding:9px 13px;border-bottom:1px solid var(--line);background:#f7f6f2}
 .body{padding:12px 13px}
-.row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+/* ラベルと入力欄を横に並べる。入力欄が広すぎて入らないときは、ラベルを潰さずに
+   入力欄を次の行へ折り返す（iPhoneでラベルが1文字ずつ縦に並んでいた）。 */
+.row{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 .row:last-child{margin-bottom:0}
-.row label{flex:1;font-size:13.5px;color:var(--ink-2)}
+.row label{flex:1 1 auto;min-width:5.5em;font-size:13.5px;color:var(--ink-2)}
 .unit{font-size:12px;color:var(--mute);width:26px}
 input[type=number]{
   width:106px;padding:9px;font-size:16px;text-align:right;
@@ -155,8 +157,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <!-- 商品セクションはタブ共通。広告料率と仕向地はeBay専用なのでShopeeでは隠す。 -->
       <div id="ebayOnlyItem">
       <div class="row"><label>広告料率</label><input type="number" id="adRate" value="5.0" step="0.5" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="row"><label>内訳の表示先</label>
-        <select id="zone" style="flex:0 0 auto">
+      <!-- 選択肢が長いので、ラベルを上に置いて選択欄を全幅にする（iPhoneで潰れないように） -->
+      <div class="rowv"><label for="zone">内訳の表示先</label>
+        <select id="zone" style="width:100%">
           <option value="4" selected>第4地帯（米国）</option>
           <option value="3">第3地帯（オセアニア・カナダ・メキシコ・中近東）</option>
           <option value="2">第2地帯（アジア）</option>
@@ -6854,7 +6857,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v109';   // sw.js の const V と必ず同じ値にする
+var APP_V='v110';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
@@ -6869,10 +6872,17 @@ function appVerFromSw(){
     .then(function(t){ var m=/pj-pricing-(v\d+)/.exec(t||''); return m?m[1]:''; })
     ['catch'](function(){ return ''; });
 }
+// 'v109' → 109。読めなければ 0
+function appVerNum(v){ var m=/^v(\d+)$/.exec(String(v||'')); return m?+m[1]:0; }
+// SW側のほうが新しいか（番号で比べる。違うだけでは「新しい」と言わない）
+function appVerNewer(sw){
+  var a=appVerNum(sw), b=appVerNum(APP_V);
+  return a>0&&b>0&&a>b;
+}
 /* フッターの表示。出すのはこのHTML自身の版。SW側が新しいときだけ添える。 */
 function appVerShow(sw){
   var el=$('appVer'); if(!el)return;
-  el.textContent='バージョン '+APP_V+((sw&&sw!==APP_V)?('（新しい版 '+sw+' があります）'):'');
+  el.textContent='バージョン '+APP_V+(appVerNewer(sw)?('（新しい版 '+sw+' があります）'):'');
 }
 /* いま動いているSWに直接聞く（これが本当に動いている版）。
    返事が無ければ空を返して、キャッシュ名 → sw.js の順に回す。 */
@@ -6920,10 +6930,15 @@ function appVerReload(){
   if(!window.fetch){ go(); return; }
   fetch('./index.html',{cache:'reload'}).then(go)['catch'](go);
 }
-/* SW側の版がこのHTMLより新しいとき。開いた直後は1回だけ自動で読み込み直し、
-   使っている途中なら帯を出す。同じ版で読み込み直しを繰り返さないよう印を付ける。 */
+/* SW側の版を受けたときの判断。
+   ・SWのほうが新しい → 読み込み直す（開いた直後）か、帯で知らせる
+   ・SWのほうが古い   → 帯は出さず、裏で registration.update() を呼んで入れ替える
+     （画面のHTMLはネットワーク優先で先に新しくなるので、この状態はふつうに起きる。
+      v109 のHTMLに v107 のSWで「新しい版 v107 があります」と出ていた不具合）
+   ・同じ → 何もしない */
 function appVerStale(sw){
   if(!sw||sw===APP_V)return;
+  if(!appVerNewer(sw)){ appVerSwUpdate(); return; }
   appVerShow(sw);
   var k='pj:reload:'+sw, done=false;
   try{ done=sessionStorage.getItem(k)==='1'; }catch(e){ done=true; }
@@ -6932,6 +6947,18 @@ function appVerStale(sw){
     appVerReload(); return;
   }
   appVerBar(sw);
+}
+/* 古いSWが動いているときに、新しいSWを取りに行かせる。
+   ホーム画面アプリでは画面の移動が起きないので、自分から呼ばないと入れ替わらない。
+   入れ替わると controllerchange が飛んで、表示も追いつく。 */
+var appVerUpdated=false;
+function appVerSwUpdate(){
+  if(appVerUpdated)return;
+  appVerUpdated=true;
+  if(!('serviceWorker' in navigator)||!navigator.serviceWorker.getRegistration)return;
+  navigator.serviceWorker.getRegistration()
+    .then(function(reg){ if(reg&&reg.update)return reg.update(); })
+    ['catch'](function(){});
 }
 function appVerInit(){
   appVerShow('');            // まずHTML自身の版を出す（SWの返事は待たない）
