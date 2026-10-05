@@ -1156,6 +1156,7 @@ async function syncOrders(env, run, days, maxItems) {
         estmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
         keys.push({ asin: k.asin, cond: k.cond });
         soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId,
+                     qty: Number(li.qty || 0),
                      shipBy: li.shipBy || "", dropship: !!k.dropship });
       } else {
         /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
@@ -1165,6 +1166,27 @@ async function syncOrders(env, run, days, maxItems) {
                      currency: li.currency, at: o.at });
       }
     }
+  }
+  /* カートリッジのみの手元在庫を減らすのは「初めて見た明細」だけ。
+     eBayの注文は lastmodifieddate で引くので、状態が変わると同じ注文が何度も返る。
+     orders に既にある (order_id, line_id) は数えない。 */
+  const fresh = {};
+  {
+    const pairs = soldE.filter((x) => x.cond === "cart")
+      .map((x) => ({ o: x.orderId, l: x.line }));
+    const known = {};
+    for (let i = 0; i < pairs.length; i += 40) {
+      const part = pairs.slice(i, i + 40);
+      const where = part.map(() => "(order_id=? AND line_id=?)").join(" OR ");
+      const bind = [];
+      for (const q of part) bind.push(q.o, q.l);
+      const got = await env.DB.prepare(
+        `SELECT order_id, line_id FROM orders WHERE channel='ebay' AND (${where})`
+      ).bind(...bind).all();
+      for (const x of (got && got.results) || []) known[x.order_id + "|" + x.line_id] = 1;
+    }
+    for (const x of soldE)
+      if (x.cond === "cart") fresh[x.orderId + "|" + x.line] = !known[x.orderId + "|" + x.line];
   }
   await runBatch(env, run, estmts);
 
@@ -1266,6 +1288,27 @@ async function syncOrders(env, run, days, maxItems) {
       { title: s2.title || s2.sku || "（商品名なし）", qty: s2.qty,
         amount: Number(s2.amount || 0).toFixed(2), currency: s2.currency || "USD",
         sku: s2.sku || "", order_id: s2.orderId }));
+  }
+  /* カートリッジのみ（-C）は手元から発送するので、売れたら手元在庫を減らす。
+     eBayの数量もその場で同じだけ減らす（1時間ごとの出品の取り込みを待つあいだ
+     「数量と手元在庫が合いません」が出続けないようにする。次の取り込みで
+     eBay側の本当の数量に上書きされる）。
+     手元の数をまだ送っていない行（NULL）は触らない。 */
+  const cartDown = [];
+  for (const s2 of soldE) {
+    if (s2.cond !== "cart") continue;
+    const n = Number(s2.qty || 0);
+    if (!(n > 0) || !fresh[s2.orderId + "|" + s2.line]) continue;
+    cartDown.push(env.DB.prepare(
+      `UPDATE items SET hand_qty=MAX(0, COALESCE(hand_qty,0)-?3),
+         ebay_qty=CASE WHEN ebay_qty IS NULL THEN ebay_qty ELSE MAX(0, ebay_qty-?3) END,
+         updated_at=?4
+       WHERE asin=?1 AND cond=?2 AND hand_qty IS NOT NULL`
+    ).bind(s2.asin, s2.cond, n, nowIso()));
+  }
+  if (cartDown.length) {
+    await runBatch(env, run, cartDown);
+    run.notes.push("カートリッジのみの手元在庫を減らした " + cartDown.length + "件");
   }
   await runBatch(env, run, ev);
 
@@ -2105,6 +2148,53 @@ async function getLowestNow(env, body) {
   run.notes.push("最安値 " + Object.keys(low).length + "件／要求 " + keys.length + "件");
   return Object.assign({ lowest: low, at }, await saveRun(env, run));
 }
+/* カートリッジのみの「+1するCSV」を書き出す直前に、eBayの<b>いまの</b>数量を取り直す。
+   File Exchange の Revise の数量は上書きなので、古い値＋1で出すと売り越しになる。
+   出品の取り込み（ActiveList）と同じ読み取りをその場で1回行い、
+   要求されたItemIDの数量だけを返す。取れなければ ok:false を返して書き出しを止めさせる。 */
+async function cartQtyNow(env, body) {
+  const run = newRun("cart-qty");
+  const ids = [];
+  const seen = {};
+  for (const x of (Array.isArray(body && body.item_ids) ? body.item_ids : []).slice(0, 200)) {
+    const id = String(x || "").replace(/\D/g, "");
+    if (!id || seen[id]) continue;
+    seen[id] = 1;
+    ids.push(id);
+  }
+  if (!ids.length) {
+    run.notes.push("ItemIDが無い");
+    return Object.assign({ ok: false, err: "no_item_ids", qty: {}, missing: [] },
+                         await saveRun(env, run));
+  }
+  const r = await ebayActive(env, run);
+  if (!r.ok) {
+    return Object.assign({ ok: false, err: "ebay_active", qty: {}, missing: ids },
+                         await saveRun(env, run));
+  }
+  const map = {};
+  for (const x of r.rows) if (x.itemId) map[String(x.itemId)] = x;
+  const at = nowIso();
+  const qty = {}, missing = [], stmts = [];
+  for (const id of ids) {
+    const x = map[id];
+    if (!x) { missing.push(id); continue; }
+    qty[id] = { qty: Number(x.qty || 0), price: Number(x.price || 0), sku: x.sku || "" };
+    /* 取り直した数量はD1にも入れておく（一覧の表示も合うように）。
+       キーは CustomLabel から引く（ItemIDでは引けない行があるため）。 */
+    const k = parseLabel(x.sku);
+    if (k.ok) stmts.push(env.DB.prepare(
+      `UPDATE items SET ebay_qty=?3, ebay_price=?4, ebay_item_id=?5, ebay_seen_at=?6,
+         updated_at=?6 WHERE asin=?1 AND cond=?2`
+    ).bind(k.asin, k.cond, Number(x.qty || 0), Number(x.price || 0), id, at));
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("数量を取り直した " + Object.keys(qty).length + "件"
+    + (missing.length ? ("／出品が見つからない " + missing.length + "件") : ""));
+  return Object.assign({ ok: missing.length === 0, qty, missing, at },
+                       await saveRun(env, run));
+}
+
 /* JANでカタログを引く。1回の要求で複数のJANをまとめて渡せる（1件ずつ順に引く）。 */
 const CATALOG_MAX = 20;
 async function getCatalog(env, body) {
@@ -2188,6 +2278,11 @@ export default {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await getLowestNow(env, body), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/cart-qty") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        return json(await cartQtyNow(env, body), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/catalog") {
         let body; try { body = await request.json(); }

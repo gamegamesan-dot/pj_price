@@ -4343,8 +4343,27 @@ function csvCartHtml(r){
   }
   return h;
 }
+/* カートリッジのみの行の手元在庫の数を pj-sync に送る。
+   Add で出したとき（その行の数量）と、+1したとき（既存の数量+1）に呼ぶ。 */
+function csvCartSendHand(list,qtyOf){
+  if(!list||!list.length)return;
+  if(!syncUrl()||!syncApiKey())return;
+  fetch(syncUrl()+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:list.map(function(x){
+      var r=x.r||x;
+      return { asin:r.asin, cond:'cart', title:r.titleJa||r.titleEn||'',
+               item_id:(x.ex&&x.ex.itemId)||r.itemId||'',
+               custom_label:csvCustomLabel(r),
+               hand_qty:qtyOf?qtyOf(x):Math.max(1,Number(r.qty||1)) };
+    })})})
+    ['catch'](function(){});
+}
 /* 既存の出品に+1する Revise CSV。売値は送らない（いまの値段を維持する）。
-   あわせて pj-sync に手元在庫の数（+1後）を送る。 */
+
+   File Exchange の Revise の数量は<b>上書き</b>なので、古い値＋1で出すと売り越しになる。
+   書き出す直前に eBay のいまの数量を取り直し（POST /cart-qty）、その値＋1で出す。
+   取り直せなかったときは書き出さずに止める。 */
 function csvCartAddRun(){
   var ids=csvPickIds();
   var pick=ids.length?ids:csvList.map(function(r){ return r.id; });
@@ -4355,44 +4374,75 @@ function csvCartAddRun(){
     list.push({ r:r, ex:ex });
   });
   var box=$('csvCartNote');
+  box.style.display='';
   if(!list.length){
-    box.style.display='';
     box.textContent=ids.length
       ? '選んだ行に「既存の出品に追加」の行がありません。'
       : '「既存の出品に追加」の行がありません（同じASINの出品が無ければ新規出品で出します）。';
     return;
   }
+  if(!syncUrl()){
+    box.textContent='設定の「pj-sync のURL」を入れてください。'
+      +'書き出す直前に eBay のいまの数量を取り直すので、URLとキーが必要です。';
+    return;
+  }
+  if(!syncKeyReady('csvCartNote'))return;
+  var b=$('csvCartAdd'); b.disabled=true; b.textContent='数量を確認中…';
+  box.textContent='eBayのいまの数量を取り直しています…';
+  fetch(syncUrl()+'/cart-qty',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({item_ids:list.map(function(x){ return x.ex.itemId; })})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      if(!d||!d.ok){
+        var miss=(d&&d.missing)||[];
+        throw new Error(d&&d.err==='ebay_active'
+          ? 'eBayの出品を読めませんでした'
+          : ('出品が見つかりません（ItemID '+miss.join(' / ')+'）'
+             +'。終了している出品かもしれません'));
+      }
+      csvCartAddGo(list,d,box);
+    })
+    ['catch'](function(e){
+      box.innerHTML='<b>書き出しを止めました</b>：'+esc(e.message)
+        +'<br>Revise の数量は上書きなので、いまの数量が分からないまま出すと売り越しになります。'
+        +'もう一度試すか、Seller Hub で数量を確認してください。';
+    })
+    .then(function(){ b.disabled=false; b.textContent='カートリッジのみ：既存の出品に+1するCSV'; });
+}
+function csvCartAddGo(list,d,box){
+  // 取り直した数量に差し替える（古い値は使わない）
+  list.forEach(function(x){
+    var q=(d.qty||{})[String(x.ex.itemId)];
+    x.now=Number((q&&q.qty)||0);
+    if(q&&+q.price>0)x.ex.price=+q.price;
+  });
+  var moved=list.filter(function(x){ return x.now!==Number(x.ex.qty||0); });
   var gaps=list.filter(function(x){ return csvCartPriceGap(x.r,x.ex); }).length;
   if(!confirm(list.length+'件を既存の出品に追加します（数量を+1する Revise）。\n'
+    +'eBayのいまの数量を取り直しました（'+String(d.at||'').slice(0,16).replace('T',' ')+'）。\n'
+    +list.slice(0,5).map(function(x){
+        return '・'+(x.r.titleJa||x.r.sku)+'：'+x.now+' → '+(x.now+1); }).join('\n')
+    +(list.length>5?('\n…ほか'+(list.length-5)+'件'):'')+'\n'
+    +(moved.length?('※'+moved.length+'件は表示していた数量と違っていました（取り直した値で出します）。\n'):'')
     +'売値は変えません（いまの値段を維持します）。\n'
     +'写真も差し替えません。出品中の写真と手元の実物を見比べてから出してください。\n'
     +(gaps?('価格の見直し候補 '+gaps+'件（自動では変えません）。\n'):'')
-    +'よろしいですか？'))return;
+    +'よろしいですか？')){
+    box.textContent='書き出しをやめました。';
+    return;
+  }
   var head=[CSV_ACT_COL,'ItemID','*Quantity'];
   var out=[CSV_INFO,csvLine(head)];
-  list.forEach(function(x){
-    out.push(csvLine(['Revise',x.ex.itemId,Number(x.ex.qty||0)+1]));
-  });
+  list.forEach(function(x){ out.push(csvLine(['Revise',x.ex.itemId,x.now+1])); });
   var name='ebay_cart_add_'+csvStamp()+'.csv';
   var okDl=csvDownload(name,out.join('\r\n')+'\r\n');
-  list.forEach(function(x){
-    csvCartRecord(x.r,x.ex.itemId,Number(x.ex.qty||0)+1,x.ex.price);
-  });
-  box.style.display='';
+  list.forEach(function(x){ csvCartRecord(x.r,x.ex.itemId,x.now+1,x.ex.price); });
   box.innerHTML=(okDl?('書き出しました：'+esc(name)+'（'+list.length+'件・3列）')
     :'書き出しに失敗しました')
+    +'<br>eBayのいまの数量に+1した値で出しています（Revise の数量は上書きです）。'
     +'<br>アップロードしたら、行は削除するか ItemID を入れてください。';
-  // 手元在庫の数を pj-sync へ送る（失敗しても書き出しは済んでいる）
-  if(syncUrl()&&syncApiKey()){
-    fetch(syncUrl()+'/listings',{method:'POST',
-      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-      body:JSON.stringify({items:list.map(function(x){
-        return { asin:x.r.asin, cond:'cart', title:x.r.titleJa||x.r.titleEn||'',
-                 item_id:x.ex.itemId, custom_label:csvCustomLabel(x.r),
-                 hand_qty:Number(x.ex.qty||0)+1 };
-      })})})
-      ['catch'](function(){});
-  }
+  csvCartSendHand(list,function(x){ return x.now+1; });
 }
 
 /* ---- CSV書き出し ---- */
@@ -5010,6 +5060,10 @@ function csvExportRun(ids){
       zeroAct:r.zeroAct,
       amzLow:r.amzLow||'', amzLowAt:r.amzLowAt||'', itemId:r.itemId||'' });
   });
+  /* カートリッジのみの行は、出した時点で手元に1つある。手元在庫の数を pj-sync に送る
+     （ItemIDはまだ無いので、CustomLabel の E-<ASIN>-C でキーを作ってもらう）。
+     これを送らないと「数量と手元在庫が合いません」の見張りが働かない。 */
+  csvCartSendHand(rows.filter(function(r){ return !!r.cartOnly; }));
   // 書き出した行の選択は外す（二重に出さないように）
   if(pick)rows.forEach(function(r){ delete csvPick[r.id]; });
   csvSaveLog(); csvRender();
@@ -6407,11 +6461,15 @@ $('syncPush').onclick=function(){
     /* 無在庫の行は手元に在庫を持たないので、手元在庫の印を付けない。
        出品リストでの指定と、D1 側に既に付いている印のどちらでも無在庫とみなす。 */
     var drop=!!r.dropship||!!(key&&dropD1[key]);
-    return { sku:r.sku, custom_label:csvCustomLabel(r), item_id:r.itemId||'',
-             title:r.titleJa||r.titleEn||'',
-             mode:r.zeroAct||'hold', one_off:!!r.oneOff, fba_link:!!r.fba,
-             dropship:drop,
-             on_hand:!!(onHandOn&&key&&!stocked[key]&&!drop) };
+    var o={ sku:r.sku, custom_label:csvCustomLabel(r), item_id:r.itemId||'',
+            title:r.titleJa||r.titleEn||'',
+            mode:r.zeroAct||'hold', one_off:!!r.oneOff, fba_link:!!r.fba,
+            dropship:drop,
+            on_hand:!!(onHandOn&&key&&!stocked[key]&&!drop) };
+    /* カートリッジのみは手元から発送するので、手元にある数も送る
+       （出品リストの数量をそのまま。eBayの数量と合っているかの見張りに使う）。 */
+    if(r.cartOnly)o.hand_qty=Math.max(1,Number(r.qty||1));
+    return o;
   });
   var btn=$('syncPush'); btn.disabled=true; btn.textContent='送信中…';
   var sent=0, failed=0;
@@ -6796,7 +6854,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v108';   // sw.js の const V と必ず同じ値にする
+var APP_V='v109';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -190,6 +190,7 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
+| POST | `/cart-qty` | `{item_ids:[...]}`。eBayの出品（ActiveList）をその場で読み直し、そのItemIDの**いまの数量**と売値を返す。File Exchange の Revise の数量は上書きなので、「+1するCSV」を書き出す直前に必ず通す。読めなかった・出品が見つからないときは `ok:false` を返す（pj_price は書き出しを止める） |
 | POST | `/listings` | `hand_qty` も受ける（カートリッジのみの手元在庫数）。`cond` に `cart` を直接指定できる |
 | POST | `/lowest` | `{items:[{asin,cond}]}`。選んだASINの最安値をその場で取り寄せる（出品CSVタブの「無在庫（新品）」用）。日次の pricing と同じ `amazonLowest` を使い、結果は `items` にも残す |
 | POST | `/catalog` | `{gtins:[...]}`（最大20件）。JANでeBayカタログを引き、候補の `epid` / `title` / `image` / `gtins` / `jp`（日本のJANか）を返す。カタログのスコープが無いときは Browse API に切り替えて `epid` だけ拾い、`fallback_note` でそれを知らせる |
