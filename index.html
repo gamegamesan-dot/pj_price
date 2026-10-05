@@ -532,6 +532,18 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <!-- ============ 出品CSVタブ（フェーズ1：手動） ============ -->
   <div id="tabCsv" style="display:none">
 
+  <!-- ① 取り込み（普段は閉じておく。開閉の状態は保存する） -->
+  <section>
+    <details id="csvImportBox">
+      <summary class="h" style="cursor:pointer">せどりすとCSVを取り込む</summary>
+      <div class="body">
+        <input type="file" id="csvFile" accept=".csv,text/csv" style="width:100%">
+        <div class="note2">文字コードCP932（Shift_JIS）として読み込みます。eBay出品用のリストを書き出したファイルを選んでください。</div>
+        <div class="warn" id="csvImportResult" style="display:none;margin-top:8px"></div>
+      </div>
+    </details>
+  </section>
+
   <section>
     <div class="h">出品リスト</div>
     <div class="body">
@@ -562,6 +574,22 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="csvPicNote"></div>
       <button class="btn" id="csvPicRetry" style="display:none;margin-top:6px">失敗分を送り直す</button>
     </div>
+  </section>
+
+  <!-- ③ アップロード結果（書き出したあとに使う） -->
+  <section>
+    <details id="csvResBox">
+      <summary class="h" style="cursor:pointer">アップロード結果を取り込む</summary>
+      <div class="body">
+        <input type="file" id="csvResFile" accept=".csv,text/csv" style="width:100%">
+        <div class="note2">eBayの結果ファイル（Line Number / Action / Status / ItemID / CustomLabel …）を選んでください。Success の行はItemIDを出品リストと書き出しログに記録し、Failure の行はエラー内容を行の指摘として表示します。</div>
+        <div class="warn" id="csvResResult" style="display:none;margin-top:8px"></div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ④ 一覧（各商品） -->
+  <section>
     <details id="csvListBox">
       <summary>一覧を表示</summary>
       <div style="padding:0 13px 12px">
@@ -585,23 +613,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     </details>
   </section>
 
-  <section>
-    <div class="h">せどりすとCSVを取り込む</div>
-    <div class="body">
-      <input type="file" id="csvFile" accept=".csv,text/csv" style="width:100%">
-      <div class="note2">文字コードCP932（Shift_JIS）として読み込みます。eBay出品用のリストを書き出したファイルを選んでください。</div>
-      <div class="warn" id="csvImportResult" style="display:none;margin-top:8px"></div>
-    </div>
-  </section>
 
-  <section>
-    <div class="h">アップロード結果を取り込む</div>
-    <div class="body">
-      <input type="file" id="csvResFile" accept=".csv,text/csv" style="width:100%">
-      <div class="note2">eBayの結果ファイル（Line Number / Action / Status / ItemID / CustomLabel …）を選んでください。Success の行はItemIDを出品リストと書き出しログに記録し、Failure の行はエラー内容を行の指摘として表示します。</div>
-      <div class="warn" id="csvResResult" style="display:none;margin-top:8px"></div>
-    </div>
-  </section>
 
   <section>
     <div class="h">書き出し済みログ</div>
@@ -1411,15 +1423,27 @@ function calc(){
   if(msg.length){wn.style.display='block';wn.textContent='\u26A0 '+msg.join(' ');}else{wn.style.display='none';}
 }
 
-/* ---- 結果の詳細（折りたたみ）----
-   既定は閉じる。開閉状態だけを持ち越す。 */
+/* ---- 折りたたみの開閉（持ち越し）----
+   既定は閉じる。開閉状態だけを localStorage に持ち越す。
+   出品CSVタブの取り込み欄と一覧も同じ仕組みで覚える。 */
 var UI_KEY='pj:ui:v1';
-$('detailBox').addEventListener('toggle',function(){
-  try{ localStorage.setItem(UI_KEY,JSON.stringify({detail:$('detailBox').open})); }catch(e){}
-});
+var UI_BOXES=[['detail','detailBox'],['csvImport','csvImportBox'],
+              ['csvRes','csvResBox'],['csvList','csvListBox']];
+function uiSaveBoxes(){
+  try{
+    var o={};
+    UI_BOXES.forEach(function(x){ var el=$(x[1]); if(el)o[x[0]]=!!el.open; });
+    localStorage.setItem(UI_KEY,JSON.stringify(o));
+  }catch(e){}
+}
 (function(){
-  try{ var o=JSON.parse(localStorage.getItem(UI_KEY)||'{}'); $('detailBox').open=!!o.detail; }
-  catch(e){}
+  var o={};
+  try{ o=JSON.parse(localStorage.getItem(UI_KEY)||'{}')||{}; }catch(e){ o={}; }
+  UI_BOXES.forEach(function(x){
+    var el=$(x[1]); if(!el)return;
+    if(typeof o[x[0]]==='boolean')el.open=o[x[0]];
+    el.addEventListener('toggle',uiSaveBoxes);
+  });
 })();
 
 const KEY='pj:pricing:v1';
@@ -3077,6 +3101,8 @@ function csvImport(text){
 }
 $('csvFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
+  // 結果のメッセージが折りたたみの中に隠れないよう、開いておく
+  $('csvImportBox').open=true;
   var box=$('csvImportResult');
   var fr=new FileReader();
   fr.onload=function(){
@@ -4374,6 +4400,7 @@ function csvResImport(text){
 }
 $('csvResFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
+  $('csvResBox').open=true;
   var box=$('csvResResult');
   var fr=new FileReader();
   fr.onload=function(){
