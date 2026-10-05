@@ -47,11 +47,16 @@ CREATE TABLE IF NOT EXISTS items (
   -- 計算式（為替・手数料・重量）は pj_price 側の設定で変わるので、Workerは数字だけ持つ。
   restock_max_cost INTEGER,
   restock_skip_acc INTEGER,                    -- その上限を「可」を除いて出したか（0/1）
+  /* 無在庫出品の印。手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
+     CustomLabel が M-<ASIN>[-U] の行は取り込みで自動的に立つ。既存の出品は
+     pj_price のボタンで手動で立てる。立っている行は売り越し系の警告を出さない。 */
+  dropship         INTEGER NOT NULL DEFAULT 0,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
 CREATE INDEX IF NOT EXISTS idx_items_scope ON items(scope);
 CREATE INDEX IF NOT EXISTS idx_items_sku   ON items(ebay_sku);
+CREATE INDEX IF NOT EXISTS idx_items_dropship ON items(dropship);
 
 -- 個体単位。せどりすとSKU（カテゴリ-仕入日-状態コード-ASIN-仕入原価）。
 CREATE TABLE IF NOT EXISTS skus (

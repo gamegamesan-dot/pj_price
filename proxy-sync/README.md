@@ -71,7 +71,22 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0003-on-hand.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0004-ebay-start.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0005-restock.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0006-offers.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0007-restocking.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql
 ```
+
+**順番は「D1 を先 → deploy を後」。** 先に deploy すると、新しいコードが
+まだ無い列（`dropship` など）を読もうとして `no such column` で落ち、
+その回の取り込みと通知がまるごと失敗します。D1 を直してから deploy してください。
+
+```powershell
+cd proxy-sync
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql   # 先
+npx wrangler deploy                                                          # 後
+```
+
+すでに適用済みの回を実行すると `duplicate column name: ...` が出ます。
+そのときは何もせず次へ進んで構いません（列はもう入っています）。
 
 ### 1-5. シークレットを登録する
 

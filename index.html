@@ -674,6 +674,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="v num" id="syncCount">0</div>
         <div class="sub" id="syncSummary">&mdash;</div>
       </div>
+      <!-- 無在庫が上限を超えたときの警告（設定の「無在庫の上限」） -->
+      <div class="warn" id="syncDropWarn" style="display:none;margin-bottom:8px"></div>
       <button class="btn primary" id="syncLoad" style="width:100%">状況を取り込む</button>
       <div class="note2" id="syncNote"></div>
       <button class="btn" id="syncPush" style="width:100%;margin-top:8px">出品リストの名簿を送る（手元在庫の印つき）</button>
@@ -708,6 +710,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
       <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>無在庫の上限</label><input type="number" id="syncDropMax" value="20" step="1" min="0" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2" style="margin-top:0">売れてから仕入れる出品（CustomLabel が M-、または行のボタンで印を付けた出品）の上限です。超えると警告を出します。0 で上限なし。</div>
       <div class="row"><label>相場から下げる額</label><input type="number" id="syncSoldCut" value="0" step="0.5" inputmode="decimal"><span class="unit">$</span></div>
       <div class="note2" style="margin-top:0">相場が推奨売値に届かない行を「相場に合わせる」ときに、相場からこの額を引いて出します（既定 $0）。損益分岐より下には下げません。</div>
       <div class="chk" style="margin-top:4px"><input type="checkbox" id="syncSkipAcc" checked><label for="syncSkipAcc" style="flex:1">中古の最安値から「可」を除く</label></div>
@@ -2694,7 +2698,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
-                 'syncSoldCut'];
+                 'syncSoldCut','syncDropMax'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -3646,6 +3650,11 @@ function csvRender(){
     h+=csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
+      /* 無在庫の行は CustomLabel が M- になり、配送ポリシーも W2000 側になる。
+         見分けられるよう、オンのときは色を付ける。 */
+      +'<button class="btn" data-drop="'+r.id+'" style="padding:5px 8px;font-size:12px'
+      +(r.dropship?';background:#0b6b8a;color:#fff;border-color:#0b6b8a':'')+'">無在庫：'
+      +(r.dropship?'オン':'オフ')+'</button>'
       +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
       +'<button class="btn" data-fba="'+r.id+'" style="padding:5px 8px;font-size:12px">FBA連動 '
       +(r.fba?'オン':'オフ')+'</button>'
@@ -3691,6 +3700,7 @@ $('csvList').addEventListener('click',function(e){
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
+        ||t.getAttribute('data-drop')
         ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
         ||t.getAttribute('data-uperr');
   if(!id)return;
@@ -3733,6 +3743,7 @@ $('csvList').addEventListener('click',function(e){
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
   else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
   else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
+  else if(t.hasAttribute('data-drop'))csvList[i].dropship=!csvList[i].dropship;
   else if(t.hasAttribute('data-zero')){
     var seq=['hold','restock','end'];
     csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
@@ -4104,14 +4115,18 @@ function csvEditPics(){
 }
 
 /* ---- CSV書き出し ---- */
-// FBA連動する行は商品に紐づく安定SKU、一点物はせどりすとSKUをそのまま（6.5.2）。
+/* FBA連動する行は商品に紐づく安定SKU、一点物はせどりすとSKUをそのまま（6.5.2）。
+   無在庫の行は M-<ASIN>（中古 M-<ASIN>-U）。pj-sync 側は M- を E- と同じく
+   ASIN＋新品/中古で照合し、あわせて無在庫の印を立てる。 */
 function csvCustomLabel(r){
+  if(r.dropship&&r.asin)return 'M-'+r.asin+(r.condId===1000?'':'-U');
   if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
   return r.sku;
 }
-// 再調達モードの行は別の送料ポリシー（既定 W2000）で出す。
+/* 送料ポリシー。再調達モードと無在庫の行は、売れてから仕入れるので
+   ハンドリングタイムの長いポリシー（既定 W2000）で出す。 */
 function csvShipProfileFor(r){
-  return (r&&r.zeroAct==='restock')
+  return (r&&(r.zeroAct==='restock'||r.dropship))
     ? ($('csvShipProfileRe').value||$('csvShipProfile').value)
     : $('csvShipProfile').value;
 }
@@ -4964,6 +4979,18 @@ function syncVerdict(r){
   return { kind:'loss', price:0, rec:rec, sold:s };
 }
 function syncIsSkip(r){ var k=syncVerdict(r).kind; return k==='low'||k==='loss'; }
+/* 無在庫出品。手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
+   CustomLabel が M- の行は pj-sync 側の取り込みで自動的に印が立つ。
+   既存の出品（E-・せどりすとSKU）は CustomLabel を変えず、行のボタンで印を付ける。 */
+function syncIsDropship(r){ return !!Number(r.dropship||0); }
+// いまeBayに出ている無在庫の件数（上限の見張りに使う）
+function syncDropN(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    return syncIsDropship(r)&&Number(r.ebay_qty||0)>=1; }).length;
+}
+// 上限（0 なら上限なし）
+function syncDropMax(){ var n=+$('syncDropMax').value; return (isFinite(n)&&n>0)?Math.floor(n):0; }
+function syncDropOver(){ var m=syncDropMax(); return m>0&&syncDropN()>m; }
 // 再調達中なのに相場が「見送り」になった行（取り下げを検討する）
 function syncSoldAlert(r){ return syncIsRestocking(r)&&syncIsSkip(r); }
 var SYNC_VERDICT={
@@ -5004,6 +5031,9 @@ var SYNC_FILTERS=[
     f:function(r){ return syncIsRestock(r); } },
   { v:'restocking',     label:'再調達中',
     f:function(r){ return syncIsRestocking(r); } },
+  /* 無在庫：売れてから仕入れる出品。件数は上限の見張りに使う。 */
+  { v:'dropship',       label:'無在庫',
+    f:function(r){ return syncIsDropship(r); } },
   /* 手元在庫の行。eBayで売れていなければFBAに送る候補、売れていれば送らない。
      どちらも一緒に出して、行のバッジで見分ける。 */
   { v:'on_hand',        label:'FBA納品の判断',
@@ -5112,6 +5142,8 @@ function syncIsRestocking(r){
 function syncIsRestock(r){
   return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
       && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0)
+      // 無在庫出品はもともと在庫を持たない出品なので、再調達の対象ではない（Worker側と同じ）
+      && !Number(r.dropship||0)
       && !syncIsRestocking(r);     // すでに出し直した行は候補から外す
 }
 function syncRestockingN(){
@@ -5176,6 +5208,14 @@ function syncRestockingBtn(r,key){
     return '<button class="btn" data-srestock="'+esc(key)+'" '
       +'style="padding:5px 8px;font-size:12px">再調達中にする</button>';
   return '';
+}
+/* 行の無在庫ボタン。一点物と同じ形。オン／オフの2つだけ（不明は持たない）。
+   CustomLabel が M- の行は pj-sync 側で自動オンになるので、ここでは表示するだけ。 */
+function syncDropBtn(r,key){
+  var on=syncIsDropship(r);
+  return '<button class="btn" data-sdrop="'+esc(key)+'" style="padding:5px 8px;font-size:12px'
+    +(on?';background:#0b6b8a;color:#fff;border-color:#0b6b8a':'')+'">無在庫 '
+    +(on?'オン':'オフ')+'</button>';
 }
 /* 行の一点物ボタン。手元在庫と同じ形。まだ決めていない行は「一点物 不明」と出す。 */
 function syncOneOffBtn(r,key){
@@ -5273,6 +5313,10 @@ function syncRowHtml(r,key){
     if(Number(r.one_off||0))
       badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
+    /* 無在庫の印。売れたら仕入れる行なので、一覧でひと目で分かるようにする。 */
+    if(syncIsDropship(r))
+      badge+='<span style="display:inline-block;background:#0b6b8a;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">無在庫</span>';
     /* 相場（Sold）を使った判断。出す＝緑／相場に合わせる＝黄／見送り＝赤。
        相場が未入力の行は「相場未確認」で、これまでどおり推奨売値を使う。 */
     if(r.ebay_item_id){
@@ -5336,7 +5380,8 @@ function syncRowHtml(r,key){
            +'</div>')
         : '')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
-      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncRestockingBtn(r,key)+'</div>'
+      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
+      +syncRestockingBtn(r,key)+'</div>'
       +'</div>';
 }
 /* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
@@ -5357,10 +5402,13 @@ function syncRender(){
        +'　/　在庫ありeBay未出品 '+(c.fba_not_listed||0)+'件'
        +'　/　再調達の候補 '+syncRestockN()+'件'
        +'（再調達中 '+syncRestockingN()+'件）'
+       +'　/　無在庫 '+syncDropN()+'件'
+       +(syncDropMax()?('（上限 '+syncDropMax()+'件）'):'')
        +'　/　手元在庫 '+(c.on_hand||0)+'件（FBA納品の候補 '+syncToFba()+'件）'
        +'　/　過去SKU '+(c.past_zero||0)+'件'
        +'　/　解析不可の出品 '+(c.ebay_unparsed||0)+'件')
     : '「状況を取り込む」を押してください';
+  syncDropWarn();
   var rows=(syncData&&syncData.items)||[], h='', shown=0;
   rows.forEach(function(r){
     if(!syncMatch(r))return;
@@ -5371,6 +5419,16 @@ function syncRender(){
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
   syncShown=shown;
   syncPickNote();
+}
+/* 無在庫が上限を超えたときの警告。出品を増やしすぎないための見張り。
+   件数は「いまeBayに出ている無在庫」で数える（終了した出品は数えない）。 */
+function syncDropWarn(){
+  var el=$('syncDropWarn'); if(!el)return;
+  if(!syncData||!syncDropOver()){ el.style.display='none'; el.textContent=''; return; }
+  el.style.display='';
+  el.textContent='無在庫が '+syncDropN()+'件で、上限 '+syncDropMax()+'件を超えています。'
+    +'新しい無在庫の出品を止めるか、出品を取り下げてください'
+    +'（絞り込み「無在庫」で一覧できます）。';
 }
 var syncShown=0;
 // 選択の件数だけ書き替える。一覧は作り直さない（触っている欄が消えないように）
@@ -5456,14 +5514,27 @@ function syncRestockingSend(t,r,on,label){
 $('syncList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var kh=t.getAttribute('data-sonhand'), ko=t.getAttribute('data-soneoff');
-  var kr=t.getAttribute('data-srestock');
-  var key=kh||ko||kr; if(!key)return;
+  var kr=t.getAttribute('data-srestock'), kd=t.getAttribute('data-sdrop');
+  var key=kh||ko||kr||kd; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
   if(!r)return;
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
     syncFlagSend(t,r,'on_hand',!Number(r.on_hand||0),'手元在庫');
+  }else if(kd){
+    /* 無在庫の印。オンにすると売り越し系の警告が止まり、売れたときに
+       「要仕入れ」の通知が出るようになる。CustomLabel は変えない。 */
+    var dOn=!syncIsDropship(r);
+    if(dOn){
+      var mx2=syncDropMax(), n2=syncDropN();
+      if(!confirm('この行を「無在庫」にします（eBay側は変えません）。\n'
+        +'・売り越しの恐れなどの警告を出しません\n'
+        +'・売れたときに「要仕入れ」の通知（Amazon最安値・ハンドリング期限つき）を出します\n'
+        +'・名簿を送るときに手元在庫の印を付けません\n'
+        +'いまの無在庫 '+n2+'件'+(mx2?('／上限 '+mx2+'件'):'（上限なし）')+'。\nよろしいですか？'))return;
+    }
+    syncFlagSend(t,r,'dropship',dOn,'無在庫');
   }else if(kr){
     if(syncIsRestocking(r)){
       if(!confirm('再調達中を解除します（通常の出品に戻します）。\n'
@@ -5532,17 +5603,24 @@ $('syncPush').onclick=function(){
   /* FBAに在庫がある商品には手元在庫の印を付けない。
      突き合わせは **ASIN＋新品/中古** で行う（ItemIDやCustomLabelに頼らない。
      FBAにあってeBay未出品の行は ebay_sku が空なので、ラベルでは一致しない）。 */
-  var stocked={};
+  var stocked={}, dropD1={};
   ((syncData&&syncData.items)||[]).forEach(function(x){
+    var k2=String(x.asin)+'|'+String(x.cond);
     var n=Number(x.fba_available||0)+Number(x.fba_inbound||0)+Number(x.fba_reserved||0);
-    if(n>0)stocked[String(x.asin)+'|'+String(x.cond)]=1;
+    if(n>0)stocked[k2]=1;
+    // すでに D1 側で無在庫の印が付いている行（出品リスト側の指定が無くても尊重する）
+    if(Number(x.dropship||0))dropD1[k2]=1;
   });
   var items=csvList.map(function(r){
     var key=syncKeyOf(r);
+    /* 無在庫の行は手元に在庫を持たないので、手元在庫の印を付けない。
+       出品リストでの指定と、D1 側に既に付いている印のどちらでも無在庫とみなす。 */
+    var drop=!!r.dropship||!!(key&&dropD1[key]);
     return { sku:r.sku, custom_label:csvCustomLabel(r), item_id:r.itemId||'',
              title:r.titleJa||r.titleEn||'',
              mode:r.zeroAct||'hold', one_off:!!r.oneOff, fba_link:!!r.fba,
-             on_hand:!!(onHandOn&&key&&!stocked[key]) };
+             dropship:drop,
+             on_hand:!!(onHandOn&&key&&!stocked[key]&&!drop) };
   });
   var btn=$('syncPush'); btn.disabled=true; btn.textContent='送信中…';
   var sent=0, failed=0;
@@ -5927,7 +6005,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v103';   // sw.js の const V と必ず同じ値にする
+var APP_V='v104';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

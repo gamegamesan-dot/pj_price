@@ -198,12 +198,17 @@ function parseSku(sku) {
   };
 }
 /* eBayのCustomLabel から ASIN＋新品/中古を取り出す。
-   E-<ASIN> / E-<ASIN>-U（FBA連動）と、せどりすとSKUそのまま（一点物）の両方に対応する。 */
+   E-<ASIN> / E-<ASIN>-U（FBA連動）、M-<ASIN> / M-<ASIN>-U（無在庫）、
+   せどりすとSKUそのまま（一点物）のいずれにも対応する。
+   M- は E- と同じく ASIN＋新品/中古で照合し、あわせて無在庫の印を立てる。 */
 function parseLabel(label) {
   const s = String(label || "").trim();
-  let m = /^E-(B[0-9A-Z]{9})(-U)?$/i.exec(s);
-  if (m) return { ok: true, asin: m[1].toUpperCase(), cond: m[2] ? "used" : "new",
-                  scope: "ebay", from: "stable" };
+  let m = /^([EM])-(B[0-9A-Z]{9})(-U)?$/i.exec(s);
+  if (m) {
+    const drop = m[1].toUpperCase() === "M";
+    return { ok: true, asin: m[2].toUpperCase(), cond: m[3] ? "used" : "new",
+             scope: "ebay", from: drop ? "dropship" : "stable", dropship: drop };
+  }
   const p = parseSku(s);
   if (p.ok) return { ok: true, asin: p.asin, cond: p.cond, scope: p.scope, from: "sedori" };
   return { ok: false, asin: "", cond: "", scope: "unknown", from: "" };
@@ -587,6 +592,10 @@ async function ebayOrders(env, run, sinceIso) {
           qty: Number(li.quantity || 0),
           amount: Number((li.total && li.total.value) || 0),
           currency: String((li.total && li.total.currency) || "USD"),
+          /* ハンドリング期限（この日までに発送する）。無在庫の「要仕入れ」通知で
+             残り日数を出すために使う。日付だけで、購入者の情報は読まない。 */
+          shipBy: String((li.lineItemFulfillmentInstructions
+            && li.lineItemFulfillmentInstructions.shipByDate) || ""),
         });
       }
       out.push({
@@ -754,8 +763,15 @@ const EV_IMMEDIATE = { EBAY_SOLD: 1, EBAY_SOLD_UNMATCHED: 1, OVERSELL_RISK: 1,
 const EV_TEXT = {
   FBA_SOLD: (d) => "FBAで売れた：" + d.title + " / eBay残数 " + d.ebay_qty
     + "。フェイズBではここでeBayを更新します",
-  EBAY_SOLD: (d) => "eBayで売れた：" + d.title + " / FBA販売可能 " + d.fba_available
-    + "。MCFでの取り寄せが必要です",
+  /* 無在庫（dropship）の行は、売れた時点で仕入れが必要。先頭に「要仕入れ」を出し、
+     Amazonの最安値（送料込み）と、ハンドリング期限までの残り日数を添える。 */
+  EBAY_SOLD: (d) => (d.dropship
+    ? ("要仕入れ：eBayで売れた（無在庫）：" + d.title
+       + " / Amazon最安値 " + (d.low > 0 ? ("¥" + d.low + "（送料込み）") : "未取得")
+       + " / ハンドリング期限 " + dueText(d)
+       + "。Amazonで注文して発送してください")
+    : ("eBayで売れた：" + d.title + " / FBA販売可能 " + d.fba_available
+       + "。MCFでの取り寄せが必要です")),
   EBAY_SOLD_UNMATCHED: (d) => "eBayで売れた（対応付けなし・自己発送）："
     + d.title + " / 数量 " + d.qty + " / " + (d.currency === "USD" ? "$" : "")
     + d.amount + (d.currency === "USD" ? "" : " " + d.currency)
@@ -779,6 +795,16 @@ const EV_TEXT = {
   UNMATCHED: (d) => "eBayに出ているのにFBA在庫が無い：新規 " + d.added
     + "件（合計 " + d.total + "件）。一覧の絞り込み state=listed_no_fba で確認してください",
 };
+/* ハンドリング期限の出し方。残り日数と日付を出す。期限が取れなければそう書く。 */
+function dueText(d) {
+  if (d.days === null || d.days === undefined || d.days === "") return "不明（期限の情報なし）";
+  const n = Number(d.days);
+  const md = String(d.ship_by || "").slice(0, 10).replace(/^\d{4}-/, "").replace("-", "/");
+  const when = md ? ("（" + md + "）") : "";
+  if (n < 0) return "超過 " + (-n) + "日" + when;
+  if (n === 0) return "本日まで" + when;
+  return "あと" + n + "日" + when;
+}
 function evStmt(env, type, key, item, detail) {
   return env.DB.prepare(
     `INSERT OR IGNORE INTO events (type, asin, cond, sku, dedup_key, detail, created_at)
@@ -788,6 +814,13 @@ function evStmt(env, type, key, item, detail) {
          JSON.stringify(detail || {}), nowIso());
 }
 const dayKey = () => nowIso().slice(0, 10);
+/* ハンドリング期限までの残り日数。期限が取れなければ null。
+   当日いっぱいは 0 日（切り上げ）で数える。 */
+function daysLeft(iso) {
+  const t = Date.parse(String(iso || ""));
+  if (isNaN(t)) return null;
+  return Math.ceil((t - Date.now()) / 86400000);
+}
 
 /* 在庫・出品の状態から食い違い系のイベントを作る。
    同じ日に同じ内容は1回だけ（dedup_key に日付を入れる）。 */
@@ -818,6 +851,19 @@ function stateEvents(env, rows) {
       }
       continue;
     }
+    /* 無在庫出品（dropship=1）も、在庫を持たないのが正常。
+       売り越し・予約済みのみ・納品待ちは出さず、数量の食い違いだけを見る
+       （売れたときの「要仕入れ」が本来の知らせ方）。 */
+    if (isDropship(r)) {
+      const av2 = Number(r.fba_available || 0);
+      if (av2 > 0 && q > 0 && av2 < q)
+        out.push(evStmt(env, "QTY_MISMATCH",
+          "QTY_MISMATCH|" + r.asin + "|" + r.cond + "|" + dayKey(), r,
+          { title: r.title || r.ebay_sku || r.asin, ebay_qty: q,
+            fba_available: av2, fba_inbound: inb, fba_reserved: Number(r.fba_reserved || 0),
+            on_hand: Number(r.on_hand || 0) ? 1 : 0, mode: r.mode || "" }));
+      continue;
+    }
     if (r.ebay_qty === null || r.fba_seen_at == null) continue;  // 片側しか無い行は UNMATCHED 側で扱う
     const rv = Number(r.fba_reserved || 0);
     const onHand = !!Number(r.on_hand || 0);
@@ -844,7 +890,7 @@ function stateEvents(env, rows) {
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved, fba_seen_at,
-  mode, one_off, one_off_known, fba_link, on_hand, restocking,
+  mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
@@ -883,13 +929,17 @@ async function flushEvents(env, run, onlyImmediate) {
   const rows = (r && r.results) || [];
   const pick = rows.filter((x) => !onlyImmediate || EV_IMMEDIATE[x.type]);
   if (!pick.length) return 0;
-  const lines = [];
-  for (const x of pick) {
+  /* 「要仕入れ」（無在庫が売れた）は手を動かす必要があるので、通知の先頭に出す。
+     それ以外の並びは今までどおり（イベントのid順）。 */
+  const made = pick.map((x) => {
     let d = {};
     try { d = JSON.parse(x.detail || "{}"); } catch (e) { d = {}; }
     const f = EV_TEXT[x.type];
-    lines.push("・" + (f ? f(d) : x.type));
-  }
+    const text = f ? f(d) : x.type;
+    return { urgent: x.type === "EBAY_SOLD" && !!d.dropship, text };
+  });
+  const lines = made.filter((m) => m.urgent).concat(made.filter((m) => !m.urgent))
+    .map((m) => "・" + m.text);
   const ok = await notify(env, run, lines.join("\n"));
   if (!ok) return 0;
   const at = nowIso();
@@ -957,7 +1007,8 @@ async function syncOrders(env, run, days, maxItems) {
       if (k.ok) {
         estmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
         keys.push({ asin: k.asin, cond: k.cond });
-        soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId });
+        soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId,
+                     shipBy: li.shipBy || "", dropship: !!k.dropship });
       } else {
         /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
            商品を特定できないので items には足さないが、売れたことは必ず知らせる。 */
@@ -1047,9 +1098,15 @@ async function syncOrders(env, run, days, maxItems) {
   }
   for (const s2 of soldE) {
     const it = map[s2.asin + "|" + s2.cond] || { asin: s2.asin, cond: s2.cond, scope: "ebay" };
+    /* 無在庫の行は売れた時点で仕入れが必要。Amazonの最安値（送料込み）と
+       ハンドリング期限までの残り日数を通知に入れる。
+       印は items の dropship か、CustomLabel が M- かのどちらかで立つ。 */
+    const drop = !!Number(it.dropship || 0) || !!s2.dropship;
     ev.push(evStmt(env, "EBAY_SOLD", "EBAY_SOLD|" + s2.orderId + "|" + s2.line, it,
-      { title: it.title || s2.asin, fba_available: it.fba_available || 0,
-        ebay_qty: it.ebay_qty || 0 }));
+      Object.assign({ title: it.title || s2.asin, fba_available: it.fba_available || 0,
+        ebay_qty: it.ebay_qty || 0 },
+        drop ? { dropship: 1, low: Math.round(Number(it.amazon_lowest || 0)),
+                 ship_by: s2.shipBy || "", days: daysLeft(s2.shipBy) } : {})));
   }
   /* 対応付けできない出品も通知する（自己発送）。
      注文IDと明細IDで重複を防ぐので、同じ注文を二度通知しない。
@@ -1202,10 +1259,13 @@ async function syncEbayActive(env, run) {
     stmts.push(env.DB.prepare(
       `UPDATE items SET ebay_item_id=?3, ebay_sku=?4, ebay_qty=?5, ebay_price=?6,
          ebay_currency=?7, ebay_seen_at=?8, title=COALESCE(NULLIF(title,''),?9),
-         ebay_start=COALESCE(NULLIF(?10,''), ebay_start), updated_at=?8
+         ebay_start=COALESCE(NULLIF(?10,''), ebay_start),
+         -- CustomLabel が M- の行は無在庫。印は立てるだけで、下ろすのは手動のみ
+         dropship=CASE WHEN ?11=1 THEN 1 ELSE dropship END,
+         updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
-           it.start || ""));
+           it.start || "", k.dropship ? 1 : 0));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -1416,6 +1476,12 @@ function stateOf(r) {
 function isRestocking(r) {
   return !!Number(r.restocking || 0) && Number(r.ebay_qty || 0) >= 1;
 }
+/* 無在庫出品：手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
+   この行も「FBAに在庫が無いまま出している」のが正常なので、売り越し系の警告を出さない。
+   売れたときに「要仕入れ」を出すのが本来の知らせ方。 */
+function isDropship(r) {
+  return !!Number(r.dropship || 0) && Number(r.ebay_qty || 0) >= 1;
+}
 /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
    一点物でない行。一点物かどうかが分からない行（one_off_known=0）も候補に入れる。
    すでに再調達で出し直した行（restocking=1）は候補から外す（切り替え済み）。 */
@@ -1426,6 +1492,8 @@ function isRestock(r) {
       && !Number(r.one_off || 0)
       // 手元にある商品は手元から発送できるので、再調達の必要がない
       && !Number(r.on_hand || 0)
+      // 無在庫出品は、もともと在庫を持たない出品なので再調達の対象ではない
+      && !Number(r.dropship || 0)
       && !isRestocking(r);
 }
 /* 再調達の仕入値として見る最安値（円）。
@@ -1468,11 +1536,21 @@ function warnOf(r) {
   const onHand = !!Number(r.on_hand || 0);
   /* 手元在庫の行は、FBAに記録が無いのが正常（納品前にeBayへ出す運用）。
      7〜10日の納品待ちのあいだ警告を出し続けない。 */
-  if (st === "listed_no_fba") { if (!onHand) w.push("FBA在庫なし"); return w; }
+  if (st === "listed_no_fba") {
+    // 無在庫出品はFBAに記録が無いのが正常
+    if (!onHand && !Number(r.dropship || 0)) w.push("FBA在庫なし");
+    return w;
+  }
   const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
   const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
   /* 再調達中の行は、FBAに在庫が無いまま出しているのが正常。
      売り越し・予約済みのみ・納品待ちは出さず、代わりに値段の異変だけを見る。 */
+  /* 無在庫出品は在庫を持たないのが正常。売り越し・予約済みのみ・納品待ちは出さない
+     （FBAに在庫が残っているときの数量の食い違いだけは従来どおり出す）。 */
+  if (isDropship(r)) {
+    if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
+    return w;
+  }
   if (isRestocking(r)) {
     const tr = restockTrouble(r);
     if (tr === "loss") w.push("再調達で赤字");
@@ -1505,8 +1583,10 @@ async function statusBody(env, url) {
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND " + SQL_IN_STOCK + ")");
   if (p.get("state") === "restocking")
     where.push("(restocking=1 AND ebay_qty>=1)");
+  else if (p.get("state") === "dropship")
+    where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
-    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0)");
+    where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0)");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1534,6 +1614,8 @@ async function statusBody(env, url) {
   // restock / restocking は state の値ではなく別の条件なので、行に付けた印で絞る
   if (st === "restock") items = items.filter((x) => x.restock);
   else if (st === "restocking") items = items.filter((x) => x.restocking);
+  // 無在庫も state の値ではないので、ここで分けて絞る（state 比較に落とすと0件になる）
+  else if (st === "dropship") items = items.filter((x) => isDropship(x));
   else if (st) items = items.filter((x) => x.state === st);
 
   const soldH = Math.min(24 * 14, Math.max(1, Number(p.get("sold") || 24)));
@@ -1570,10 +1652,13 @@ async function statusBody(env, url) {
        -- （すでに再調達で出し直した行は切り替え済みなので候補から外す）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
-          AND restocking=0) AS restock,
+          AND restocking=0 AND dropship=0) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND restocking=1) AS restocking,
+       -- 無在庫：いまeBayに出ている無在庫出品の件数（上限の見張りに使う）
+       (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
+          AND dropship=1) AS dropship,
        (SELECT COUNT(*) FROM skus WHERE active=1 AND scope='ebay') AS roster,
        (SELECT CAST(COALESCE((SELECT v FROM sync_state WHERE k='ebay.unparsed'),'0') AS INTEGER))
          AS ebay_unparsed`).first();
@@ -1676,7 +1761,10 @@ async function putListings(env, body) {
     const p = sku ? parseSku(sku) : null;
     /* キーの決め方は3通り。SKU → CustomLabel → ASIN＋新品/中古 を直接指定。
        3つめは、出品リストに無い（以前に出した）商品の印を付け替えるために使う。 */
-    let k = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : parseLabel(label);
+    /* CustomLabel から読んだ結果。SKUでキーが決まる行でも、M- の判定にはこちらを使う
+       （名簿では せどりすとSKU と CustomLabel の両方が送られてくる）。 */
+    const lab = parseLabel(label);
+    let k = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : lab;
     if ((!k || !k.asin) && /^B[0-9A-Z]{9}$/.test(String(x.asin || "").trim())) {
       k = { asin: String(x.asin).trim(),
             cond: (String(x.cond || "") === "used") ? "used" : "new",
@@ -1703,6 +1791,9 @@ async function putListings(env, body) {
          -- 一点物の指定が来たら「人が決めた」印も立てる
          one_off_known=CASE WHEN ?4 IS NULL THEN one_off_known ELSE 1 END,
          fba_link=COALESCE(?5, fba_link),
+         /* 無在庫の印。CustomLabel が M- の行は自動で立て、
+            それ以外は送られてきた指定（?14）に従う。 */
+         dropship=CASE WHEN ?15=1 THEN 1 ELSE COALESCE(?14, dropship) END,
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
@@ -1721,7 +1812,8 @@ async function putListings(env, body) {
            flagOf(x, "one_off"), flagOf(x, "fba_link"),
            String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand"),
            numOf(x, "restock_price"), numOf(x, "restock_max_cost"),
-           flagOf(x, "restock_skip_acc"), flagOf(x, "restocking")));
+           flagOf(x, "restock_skip_acc"), flagOf(x, "restocking"),
+           flagOf(x, "dropship"), lab.dropship ? 1 : 0));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -1799,4 +1891,5 @@ export default {
 
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
-export const __test = { assertReadOnly, parseSku, parseLabel, warnOf };
+export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
+                        isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText };
