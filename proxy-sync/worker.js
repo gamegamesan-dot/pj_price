@@ -102,6 +102,11 @@ const ALLOWED = [
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/identity\/v1\/oauth2\/token$/ },
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/sell\/fulfillment\/v1\/order\?/ },
+  // eBayカタログの照会（JANから候補を探す）。どちらも読み取り。
+  { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/catalog\/v1_beta\/product_summary\/search\?/ },
+  { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/catalog\/v1_beta\/product\// },
+  // カタログのスコープが無いときの代わり。出品の検索からePIDだけを拾う。
+  { m: "GET",  re: /^https:\/\/api\.ebay\.com\/buy\/browse\/v1\/item_summary\/search\?/ },
   // Trading API。X-EBAY-API-CALL-NAME が読み取り呼び出しのときだけ通す。
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/ws\/api\.dll$/, calls: EBAY_READ_CALLS },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
@@ -212,6 +217,116 @@ function parseLabel(label) {
   const p = parseSku(s);
   if (p.ok) return { ok: true, asin: p.asin, cond: p.cond, scope: p.scope, from: "sedori" };
   return { ok: false, asin: "", cond: "", scope: "unknown", from: "" };
+}
+
+/* ---- eBayカタログ（JANから候補を探す）----
+   Catalog API は Limited Release で、スコープ
+   `.../oauth/api_scope/commerce.catalog.readonly` の付与が必要。
+   いまのユーザートークンの同意範囲は sell.fulfillment.readonly と sell.inventory だけ
+   なので、このスコープは入っていない（README「1-3」参照）。
+   そこで、
+     1) client_credentials のアプリトークンでカタログを引く（付与されていれば通る）
+     2) 取れないときは Browse API（基本スコープ）でJAN検索し、ePIDだけ拾う
+   の2段で動かす。Browse の画像は「出品者の写真」なので、カタログ画像としては使わない。 */
+const EBAY_CAT_SCOPE = "https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly";
+const EBAY_BASE_SCOPE = "https://api.ebay.com/oauth/api_scope";
+async function ebayAppToken(env, run, scope) {
+  const key = "ebay:app:" + scope;
+  const cached = await env.SYNC_CACHE.get(key);
+  if (cached) return { ok: true, token: cached };
+  const basic = btoa(env.EBAY_CLIENT_ID + ":" + env.EBAY_CLIENT_SECRET);
+  const resp = await net(run, EBAY_API + "/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded",
+               "authorization": "Basic " + basic },
+    body: new URLSearchParams({ grant_type: "client_credentials", scope }).toString(),
+  });
+  const text = await resp.text();
+  if (!resp.ok) return { ok: false, status: resp.status, err: text.slice(0, 300) };
+  const d = JSON.parse(text);
+  const ttl = Math.max(60, (d.expires_in || 7200) - 300);
+  await env.SYNC_CACHE.put(key, d.access_token, { expirationTtl: ttl });
+  return { ok: true, token: d.access_token };
+}
+/* 日本のJAN（EAN-13）は 45 か 49 で始まる。どちらも日本の国コードなので
+   両方を日本版として扱う（カジの指示は「49」だが、45 も日本のJANなので含める）。 */
+const JP_GTIN = /^(45|49)/;
+const gtinJp = (list) => (list || []).some((g) => JP_GTIN.test(String(g).replace(/\D/g, "")));
+function catFromCatalog(d) {
+  const out = [];
+  for (const x of (d && d.productSummaries) || []) {
+    const gt = (x.gtins || []).map((g) => String(g).replace(/\D/g, "")).filter(Boolean);
+    out.push({
+      epid: String(x.epid || ""),
+      title: String(x.title || "").slice(0, 200),
+      image: String((x.image && x.image.imageUrl) || ""),
+      brand: String(x.brand || ""),
+      mpn: ((x.mpns || [])[0] || "") + "",
+      gtins: gt.slice(0, 5),
+      jp: gtinJp(gt),
+      from: "catalog",
+    });
+  }
+  return out;
+}
+function catFromBrowse(d) {
+  const out = [], seen = {};
+  for (const x of (d && d.itemSummaries) || []) {
+    const epid = String(x.epid || "");
+    if (!epid || seen[epid]) continue;
+    seen[epid] = 1;
+    out.push({
+      epid,
+      title: String(x.title || "").slice(0, 200),
+      // Browse の画像は出品者の写真。カタログ画像ではないので、その印を付ける
+      image: String((x.image && x.image.imageUrl) || ""),
+      brand: String((x.brand) || ""),
+      mpn: "",
+      gtins: [],
+      jp: null,                 // JANが返らないので日本版か分からない
+      from: "browse",
+    });
+  }
+  return out;
+}
+async function ebayCatalogSearch(env, run, gtin) {
+  const g = String(gtin || "").replace(/\D/g, "");
+  if (g.length < 8) return { ok: false, err: "bad_gtin", list: [], from: "" };
+  const a = await ebayAppToken(env, run, EBAY_CAT_SCOPE);
+  if (a.ok) {
+    const q = new URLSearchParams({ gtin: g, limit: "10" });
+    const r = await net(run, EBAY_API + "/commerce/catalog/v1_beta/product_summary/search?"
+      + q.toString(), { headers: { authorization: "Bearer " + a.token,
+        accept: "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" } });
+    const t = await r.text();
+    if (r.ok) {
+      run.pages++;
+      let d = {}; try { d = JSON.parse(t); } catch (e) { d = {}; }
+      return { ok: true, from: "catalog", list: catFromCatalog(d) };
+    }
+    run.notes.push("catalog -> " + r.status);
+    var catErr = { status: r.status, body: t.slice(0, 300) };
+  }
+  /* カタログが使えないときの代わり。ePIDだけ拾って、画像とJANは出さない。 */
+  const b = await ebayAppToken(env, run, EBAY_BASE_SCOPE);
+  if (!b.ok) return { ok: false, err: "token", list: [], from: "",
+                      detail: { catalog: catErr || a, browse: b } };
+  const q2 = new URLSearchParams({ gtin: g, limit: "10" });
+  const r2 = await net(run, EBAY_API + "/buy/browse/v1/item_summary/search?" + q2.toString(),
+    { headers: { authorization: "Bearer " + b.token, accept: "application/json",
+                 "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" } });
+  const t2 = await r2.text();
+  if (!r2.ok) {
+    run.errors++; run.notes.push("browse -> " + r2.status);
+    return { ok: false, err: "browse_" + r2.status, list: [], from: "",
+             detail: { catalog: catErr || a, browse: { status: r2.status, body: t2.slice(0, 300) } } };
+  }
+  run.pages++;
+  let d2 = {}; try { d2 = JSON.parse(t2); } catch (e) { d2 = {}; }
+  return { ok: true, from: "browse", list: catFromBrowse(d2),
+           note: "カタログのスコープが無いので、出品の検索からePIDだけ拾いました"
+                 + "（画像はカタログ画像ではありません）",
+           detail: { catalog: catErr || a } };
 }
 
 /* ---- Amazon SP-API ---- */
@@ -1903,6 +2018,100 @@ async function putListings(env, body) {
   return { accepted: list.length - bad, rejected: bad, run: info };
 }
 
+/* 選んだASINの最安値をその場で取り寄せる（出品CSVタブの「無在庫（新品）」用）。
+   日次の pricing と同じ amazonLowest を使う（式も上限も1か所）。
+   取れた値は items にも残すので、次からは一覧にも出る。 */
+async function getLowestNow(env, body) {
+  const run = newRun("lowest");
+  const list = Array.isArray(body && body.items) ? body.items.slice(0, PRICING_BATCH * PRICING_MAX_CALLS) : [];
+  const keys = [], seen = {};
+  for (const x of list) {
+    const asin = String((x && x.asin) || "").trim().toUpperCase();
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) continue;
+    const cond = (String((x && x.cond) || "new") === "used") ? "used" : "new";
+    const id = asin + "|" + cond;
+    if (seen[id]) continue;
+    seen[id] = 1;
+    keys.push({ asin, cond });
+  }
+  if (!keys.length) {
+    run.notes.push("対象なし");
+    return Object.assign({ lowest: {} }, await saveRun(env, run));
+  }
+  const low = await amazonLowest(env, run, keys);
+  const at = nowIso();
+  const stmts = [];
+  for (const k of keys) {
+    const v = low[k.asin + "|" + k.cond];
+    if (!v) continue;
+    /* 中古の出品から引いた新品の最安値も残しておく（ASIN＋新品の行として）。
+       scope は既存の値を尊重する（itemSeed は unknown のときだけ入れる）。 */
+    stmts.push(itemSeed(env, k.asin, k.cond, "ebay", ""));
+    stmts.push(env.DB.prepare(
+      `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
+         amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
+       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at,
+         JSON.stringify(v.offers || [])));
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("最安値 " + Object.keys(low).length + "件／要求 " + keys.length + "件");
+  return Object.assign({ lowest: low, at }, await saveRun(env, run));
+}
+/* JANでカタログを引く。1回の要求で複数のJANをまとめて渡せる（1件ずつ順に引く）。 */
+const CATALOG_MAX = 20;
+async function getCatalog(env, body) {
+  const run = newRun("catalog");
+  const raw = Array.isArray(body && body.gtins) ? body.gtins : [];
+  const list = [], seen = {};
+  for (const g of raw.slice(0, CATALOG_MAX * 2)) {
+    const n = String(g || "").replace(/\D/g, "");
+    if (n.length < 8 || seen[n]) continue;
+    seen[n] = 1;
+    list.push(n);
+    if (list.length >= CATALOG_MAX) break;
+  }
+  const out = {};
+  let from = "", note = "", detail = null;
+  for (const g of list) {
+    const r = await ebayCatalogSearch(env, run, g);
+    out[g] = { ok: !!r.ok, from: r.from || "", list: r.list || [], err: r.err || "" };
+    if (r.from) from = r.from;
+    if (r.note) note = r.note;
+    if (r.detail) detail = r.detail;
+  }
+  run.notes.push("カタログ照合 " + list.length + "件" + (from ? ("／" + from) : ""));
+  /* 実行の記録（saveRun）にも note があるので、こちらは別の名前で返す。 */
+  return Object.assign({ gtins: out, from, fallback_note: note, detail },
+                       await saveRun(env, run));
+}
+/* カタログのスコープが今のトークンで足りるかを確かめる。
+   足りないときは eBay が返した理由をそのまま出す（再認可の判断に使う）。 */
+async function catalogCheck(env) {
+  const run = newRun("catalog-check");
+  const a = await ebayAppToken(env, run, EBAY_CAT_SCOPE);
+  const res = { scope: EBAY_CAT_SCOPE, app_token: a.ok };
+  if (!a.ok) {
+    res.app_token_error = { status: a.status, body: a.err };
+    res.verdict = "カタログのスコープが使えません。eBayに Catalog API の利用申請をして、"
+      + "承認後に再認可してください（README「カタログの照合」参照）";
+  } else {
+    const q = new URLSearchParams({ gtin: "4902370548501", limit: "1" });
+    const r = await net(run, EBAY_API + "/commerce/catalog/v1_beta/product_summary/search?"
+      + q.toString(), { headers: { authorization: "Bearer " + a.token,
+        accept: "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" } });
+    const t = await r.text();
+    res.search_status = r.status;
+    res.search_ok = r.ok;
+    if (!r.ok) res.search_error = t.slice(0, 400);
+    res.verdict = r.ok ? "カタログの照合が使えます" :
+      "トークンは取れましたが照会が通りません。利用申請が承認されているか確認してください";
+  }
+  const b = await ebayAppToken(env, run, EBAY_BASE_SCOPE);
+  res.browse_fallback = b.ok;
+  if (!b.ok) res.browse_error = { status: b.status, body: b.err };
+  return Object.assign(res, await saveRun(env, run));
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin") || "";
@@ -1927,6 +2136,18 @@ export default {
         ).bind(Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || 20)))).all();
         return json({ runs: (r && r.results) || [] }, 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/lowest") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        return json(await getLowestNow(env, body), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/catalog") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        return json(await getCatalog(env, body), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/catalog/check")
+        return json(await catalogCheck(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/listings") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
@@ -1975,4 +2196,5 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
-                        resBreak, resCust, isFcProcessing, invRow, writeInventory };
+                        resBreak, resCust, isFcProcessing, invRow, writeInventory,
+                        gtinJp, catFromCatalog, catFromBrowse };

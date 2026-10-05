@@ -50,6 +50,45 @@ XML解析と全件スイープが入らない。
 5. refresh_token の有効期間は **18か月**。切れると `/runs` に
    `EBAY_USER_REFRESH_TOKEN が失効。再同意が必要` と出るので、2からやり直す
 
+### 1-3b. eBayカタログの照合（JANから候補を探す）— 再認可が必要
+
+**いまのトークンでは足りません。** 1-3 の同意URLの `scope` は
+`sell.fulfillment.readonly` と `sell.inventory` だけで、カタログの照会に必要な
+
+```
+https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly
+```
+
+が入っていません。いま使えるかどうかは `GET /catalog/check` で確かめられます
+（pj_price の出品CSVタブ「カタログのスコープを確認する」ボタンでも同じ）。
+
+**Catalog API は Limited Release** で、スコープを付与してもらうには eBay への
+利用申請と承認が必要です。手順は次の3つ。
+
+1. **eBayに Catalog API の利用申請をする**（developer.ebay.com → Application Keys →
+   該当アプリ → *Limited Release* の API を申請）。承認されるまでスコープは付きません。
+2. **承認後、アプリのスコープに `commerce.catalog.readonly` を足す。**
+   この API は**アプリトークン**（`client_credentials`）で呼ぶので、
+   承認が下りればユーザーの同意なしで通ります（`/catalog/check` が「使えます」になる）。
+3. それでも通らないときだけ、ユーザートークンを取り直す。
+   **SP-API の `Amazon Fulfillment` ロールを入れ替えるとき（1-2）に合わせて**、
+   1-3 の同意URLの `scope` に次を足して、同じ流れで refresh_token を取り直す。
+
+   ```
+   ...&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope%2Fsell.fulfillment.readonly%20https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope%2Fsell.inventory%20https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope%2Fcommerce.catalog.readonly
+   ```
+
+   取り直した refresh_token を `EBAY_USER_REFRESH_TOKEN` に入れ替える（1-5）。
+   **古いトークンはこの時点で無効になる**ので、Amazon 側の入れ替えとまとめて行うと
+   失敗が出る時間が1回で済む。
+
+**承認が下りるまでの間も使えます。** カタログが引けないときは、
+`POST /catalog` が **Browse API**（基本スコープ・申請不要）に切り替えて
+JAN検索し、**ePIDだけ**を拾います。ただし返ってくる画像は**出品者の写真**で
+カタログ画像ではないので、pj_price 側でその旨を赤字で出し、CSVには入れません
+（CSVは ePID だけを渡し、画像はeBayがカタログから付けます）。
+JANが返らないので「日本版か分かりません」の扱いになります。
+
 ### 1-4. D1 と KV を作る
 
 ```powershell
@@ -150,6 +189,9 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 
 | メソッド | パス | 用途 |
 |---|---|---|
+| POST | `/lowest` | `{items:[{asin,cond}]}`。選んだASINの最安値をその場で取り寄せる（出品CSVタブの「無在庫（新品）」用）。日次の pricing と同じ `amazonLowest` を使い、結果は `items` にも残す |
+| POST | `/catalog` | `{gtins:[...]}`（最大20件）。JANでeBayカタログを引き、候補の `epid` / `title` / `image` / `gtins` / `jp`（日本のJANか）を返す。カタログのスコープが無いときは Browse API に切り替えて `epid` だけ拾い、`fallback_note` でそれを知らせる |
+| GET | `/catalog/check` | カタログのスコープが今のトークンで足りるかを確かめる。足りないときは eBay が返した理由と、申請・再認可が必要な旨を返す |
 | GET | `/status` | 各行に `ebay_start`（出品開始日時）と `ebay_sold`（直近180日のeBay販売点数）も付く。一覧。`scope=ebay`（既定）/`out`/`unknown`/`all`、`warn=1`、`state=listed_no_fba\|fba_not_listed\|past\|ok\|restock\|restocking`、`all=1`（在庫0の過去SKUも出す）、`sold=24`、`limit=500` |
 | GET | `/orders/summary?days=7` | 注文の内訳（注文日が期間内か・状態ごと・販売経路ごと・区分ごと） |
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |

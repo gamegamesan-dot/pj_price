@@ -582,6 +582,26 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     </div>
   </section>
 
+  <!-- ②-2 無在庫（新品・カタログ画像）で出す -->
+  <section>
+    <details id="csvNewBox">
+      <summary class="h" style="cursor:pointer">無在庫（新品・カタログ画像）で出す</summary>
+      <div class="body">
+        <div class="note2" style="margin-top:0">一覧で選んだ行を、せどりすとの状態や仕入値に関係なく<b>新品</b>として出します。売値は<b>Amazonの新品最安値（送料込み）を仕入値とみなして</b>計算します（再調達と同じ計算）。SKUは変えず、CustomLabel は M-&lt;ASIN&gt;、配送ポリシーは再調達用（既定 W2000）です。</div>
+        <button class="btn" id="csvNewLow" style="width:100%;margin-top:8px">① 選んだ行の新品最安値を取る</button>
+        <div class="note2" id="csvNewLowNote"></div>
+        <button class="btn" id="csvNewCat" style="width:100%;margin-top:8px">② 選んだ行のeBayカタログを照合（JAN）</button>
+        <div class="note2" id="csvNewCatNote"></div>
+        <div class="note2" style="margin-top:4px">候補は一覧の各カードに出ます。<b>日本版かどうかを画像で見て</b>、行ごとに「この商品で出す」を押してください（自動では決めません）。</div>
+        <button class="btn" id="csvNewVerify" style="width:100%;margin-top:8px">③ VerifyAdd用のCSVを書き出す（出品しない確認）</button>
+        <button class="btn primary" id="csvNewExport" style="width:100%;margin-top:8px">④ 無在庫（新品）のCSVを書き出す</button>
+        <div class="warn" id="csvNewNote" style="display:none;margin-top:8px"></div>
+        <button class="btn" id="csvNewCheck" style="width:100%;margin-top:8px">カタログのスコープを確認する</button>
+        <div class="note2" id="csvNewCheckNote"></div>
+      </div>
+    </details>
+  </section>
+
   <!-- ③ アップロード結果（書き出したあとに使う） -->
   <section>
     <details id="csvResBox">
@@ -1444,7 +1464,7 @@ function calc(){
    出品CSVタブの取り込み欄と一覧も同じ仕組みで覚える。 */
 var UI_KEY='pj:ui:v1';
 var UI_BOXES=[['detail','detailBox'],['csvImport','csvImportBox'],
-              ['csvRes','csvResBox'],['csvList','csvListBox']];
+              ['csvNew','csvNewBox'],['csvRes','csvResBox'],['csvList','csvListBox']];
 function uiSaveBoxes(){
   try{
     var o={};
@@ -3679,6 +3699,8 @@ function csvRender(){
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
+      /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
+      +csvNewHtml(r)+csvCatHtml(r)
       /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
       +'<div class="note2" data-picnote="'+r.id+'" style="margin-top:4px"></div>'
       +((csvPicTarget===r.id&&csvPicFailed.length)
@@ -3709,6 +3731,8 @@ function csvRender(){
 }
 $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
+  /* eBayカタログの候補は「行ID|ePID」を持つので、行IDの照合より先に処理する。 */
+  if(t.hasAttribute('data-cepid')){ csvCatPickClick(t.getAttribute('data-cepid')); return; }
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
@@ -4321,6 +4345,338 @@ function csvDropSet(on){
 }
 $('csvDropOn').onclick=function(){ csvDropSet(true); };
 $('csvDropOff').onclick=function(){ csvDropSet(false); };
+
+
+/* ================= 無在庫（新品・カタログ画像）で出す =================
+   せどりすとの状態（中古など）や仕入値に関係なく、新品として出すための仕組み。
+   ・売値 … Amazonの新品最安値（送料込み）を仕入値とみなして csvPriceFor で計算する
+            （再調達とまったく同じ計算。相場（総額$）が入っていれば soldVerdict で判断も同じ）
+   ・照合 … JAN で eBayカタログを引き、候補の ePID・タイトル・画像を出す。
+            自動では確定しない。行ごとに「この商品で出す」を押して決める。
+   ・書き出し … ConditionID 1000・ePID付き・写真なし（カタログのストック画像が付く）。
+            CustomLabel は M-<ASIN>、配送ポリシーは再調達用（既定 W2000）。
+   取った最安値・候補・選んだ候補は localStorage に残す（読み込み直しても消えない）。 */
+var CSV_NEW_KEY='pj:csvnew:v1';
+var csvNew={ low:{}, cat:{}, pick:{} };
+function csvNewLoad(){
+  try{ var o=JSON.parse(localStorage.getItem(CSV_NEW_KEY)||'{}');
+    if(o&&typeof o==='object'){
+      csvNew.low=o.low||{}; csvNew.cat=o.cat||{}; csvNew.pick=o.pick||{};
+    } }catch(e){ csvNew={ low:{}, cat:{}, pick:{} }; }
+}
+function csvNewSave(){
+  try{ localStorage.setItem(CSV_NEW_KEY,JSON.stringify(csvNew)); }catch(e){}
+}
+// 新品最安値（送料込み・円）。取っていなければ0
+function csvNewLow(r){
+  var o=csvNew.low[String(r.asin||'')];
+  return (o&&+o.v>0)?+o.v:0;
+}
+function csvNewLowAt(r){
+  var o=csvNew.low[String(r.asin||'')];
+  return (o&&o.at)?String(o.at).slice(0,16).replace('T',' '):'';
+}
+/* 新品最安値を仕入値とみなした推奨売値。再調達（syncRecommend）と同じ csvPriceFor を使う。 */
+function csvNewRec(r){
+  var low=csvNewLow(r); if(!low)return null;
+  var w=+r.weight||0; if(!w)return null;
+  var p=csvPriceFor(low,w);
+  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit, weight:w, low:low };
+}
+// 相場（総額$）→ 商品代（$）。販売連携タブの syncSoldItem と同じ決まり
+function csvNewSoldItem(r){
+  var sold=+r.sold||0; if(!(sold>0))return null;
+  var low=csvNewLow(r); if(!low)return null;
+  return csvWithItem(low,+r.weight||0,function(){
+    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
+    return (sold<=G)?null:Math.round((sold-G)*100)/100;
+  });
+}
+// 判断は販売連携の再調達と同じ soldVerdict（しきい値の帯も「相場から下げる額」も共通）
+function csvNewVerdict(r){
+  return soldVerdict(csvNewRec(r),csvNewSoldItem(r),$('syncSoldCut').value);
+}
+// 書き出す売値。'rec'（推奨売値）と 'match'（相場に合わせる）と 'none'（未入力）だけ出す
+function csvNewPrice(r){
+  var v=csvNewVerdict(r);
+  return (v.kind==='rec'||v.kind==='match')?v.price
+       : (v.kind==='none'?v.rec.price:0);
+}
+// 選んだ候補（この商品で出す を押した行）
+function csvNewPick(r){ var o=csvNew.pick[r.id]; return (o&&o.epid)?o:null; }
+function csvNewCands(r){ var o=csvNew.cat[r.id]; return (o&&o.list)||null; }
+
+/* ---- ①新品最安値を取る ---- */
+function csvNewLowRun(){
+  var ids=csvPickIds();
+  if(!ids.length){ alert('一覧の各カードの左上のチェックで行を選んでください。'); return; }
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncKeyReady('csvNewLowNote'))return;
+  var rows=ids.map(csvRowById).filter(function(r){ return r&&/^B[0-9A-Z]{9}$/.test(String(r.asin||'')); });
+  if(!rows.length){ alert('ASINのある行がありません。'); return; }
+  var b=$('csvNewLow'); b.disabled=true; b.textContent='取得中…';
+  $('csvNewLowNote').textContent='Amazonに問い合わせています…';
+  fetch(syncUrl()+'/lowest',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:rows.map(function(r){
+      return { asin:r.asin, cond:'new' }; })})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      var got=0, at=d.at||new Date().toISOString();
+      Object.keys(d.lowest||{}).forEach(function(k){
+        var m=/^(B[0-9A-Z]{9})\|new$/.exec(k); if(!m)return;
+        var v=d.lowest[k];
+        csvNew.low[m[1]]={ v:+v.low||0, n:+v.lowN||0, total:+v.total||0, at:at };
+        got++;
+      });
+      csvNewSave(); csvRender();
+      $('csvNewLowNote').textContent='新品最安値を取りました：'+got+'件'
+        +(rows.length-got?('　'+(rows.length-got)+'件は新品の出品が見つかりませんでした。'):'');
+    })
+    ['catch'](function(e){ $('csvNewLowNote').textContent='取得に失敗：'+e.message; })
+    .then(function(){ b.disabled=false; b.textContent='① 選んだ行の新品最安値を取る'; });
+}
+
+/* ---- ②eBayカタログを照合（JAN） ---- */
+function csvNewCatRun(){
+  var ids=csvPickIds();
+  if(!ids.length){ alert('一覧の各カードの左上のチェックで行を選んでください。'); return; }
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてplease'.replace('please','ください。')); return; }
+  if(!syncKeyReady('csvNewCatNote'))return;
+  var rows=ids.map(csvRowById).filter(function(r){
+    return r&&String(r.jan||'').replace(/\D/g,'').length>=8; });
+  var noJan=ids.length-rows.length;
+  if(!rows.length){
+    alert('JANのある行がありません。カタログの照合はJANで行います。'); return; }
+  var b=$('csvNewCat'); b.disabled=true; b.textContent='照合中…';
+  $('csvNewCatNote').textContent='eBayカタログに問い合わせています…';
+  fetch(syncUrl()+'/catalog',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({gtins:rows.map(function(r){
+      return String(r.jan).replace(/\D/g,''); })})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      var at=new Date().toISOString(), hit=0, none=0;
+      rows.forEach(function(r){
+        var g=String(r.jan).replace(/\D/g,''), res=(d.gtins||{})[g];
+        var list=(res&&res.list)||[];
+        csvNew.cat[r.id]={ at:at, from:(res&&res.from)||'', list:list };
+        if(list.length)hit++; else none++;
+        // 候補が消えたら、前に選んでいた候補も外す
+        if(csvNew.pick[r.id]&&!list.some(function(x){
+          return x.epid===csvNew.pick[r.id].epid; }))delete csvNew.pick[r.id];
+      });
+      csvNewSave(); csvRender();
+      $('csvNewCatNote').textContent='照合しました：候補あり '+hit+'件／候補なし '+none+'件'
+        +(noJan?('　JANなし '+noJan+'件は照合できません。'):'')
+        +(d.fallback_note?('　※'+d.fallback_note):'');
+    })
+    ['catch'](function(e){ $('csvNewCatNote').textContent='照合に失敗：'+e.message; })
+    .then(function(){ b.disabled=false; b.textContent='② 選んだ行のeBayカタログを照合（JAN）'; });
+}
+
+/* ---- カタログのスコープの確認 ---- */
+function csvNewCheckRun(){
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncKeyReady('csvNewCheckNote'))return;
+  var b=$('csvNewCheck'); b.disabled=true;
+  $('csvNewCheckNote').textContent='確認中…';
+  fetch(syncUrl()+'/catalog/check',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ return res.json(); })
+    .then(function(d){
+      $('csvNewCheckNote').textContent=(d.verdict||'')
+        +(d.app_token?'':('　理由：'+JSON.stringify(d.app_token_error||{})))
+        +(d.browse_fallback?'　（代わりに出品の検索でePIDだけは拾えます）':'');
+    })
+    ['catch'](function(e){ $('csvNewCheckNote').textContent='確認に失敗：'+e.message; })
+    .then(function(){ b.disabled=false; });
+}
+
+/* ---- 一覧のカードに出す候補 ---- */
+function csvCatHtml(r){
+  var c=csvNew.cat[r.id];
+  if(!c)return '';
+  var pick=csvNewPick(r);
+  var h='<div class="note2" style="margin-top:4px;border-top:1px dashed var(--line);padding-top:4px">'
+    +'<b>eBayカタログの候補</b>'+(c.from==='browse'
+      ? '<span style="color:var(--bad)">（出品の検索から。画像はカタログ画像ではありません）</span>'
+      : '')+'</div>';
+  if(!c.list.length)
+    return h+'<div class="note2" style="margin-top:0"><span style="color:var(--bad);'
+      +'font-weight:700">候補なし（このJANではカタログに見つかりません）</span></div>';
+  if(pick)
+    h+='<div class="note2" style="margin-top:0"><span style="display:inline-block;'
+      +'background:#1f7a4d;color:#fff;border-radius:2px;padding:1px 5px;font-size:11px">'
+      +'この商品で出す</span>　ePID '+esc(pick.epid)+'　'+esc(pick.title.slice(0,40))
+      +'　<button class="btn" data-cepid="'+r.id+'|" style="padding:2px 6px;font-size:11px">'
+      +'選び直す</button></div>';
+  c.list.forEach(function(x){
+    var on=pick&&pick.epid===x.epid;
+    h+='<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px;'
+      +(on?'background:#eef7f1;':'')+'padding:3px;border-radius:2px">'
+      +(x.image?('<img src="'+esc(x.image)+'" alt="" style="width:46px;height:46px;'
+        +'object-fit:contain;background:#fff;border:1px solid var(--line);flex:0 0 auto">')
+        :'<span style="width:46px;height:46px;flex:0 0 auto;border:1px solid var(--line);'
+        +'display:inline-block"></span>')
+      +'<div style="flex:1 1 0;min-width:0">'
+      +'<div class="note2" style="margin:0">'+esc(x.title.slice(0,70))+'</div>'
+      +'<div class="note2" style="margin:0">ePID '+esc(x.epid)
+      +(x.gtins&&x.gtins.length?('　JAN '+esc(x.gtins.join(' / '))):'')
+      +(x.jp===false?'　<span style="color:var(--bad);font-weight:700">日本版でない可能性</span>':'')
+      +(x.jp===null?'　<span style="color:var(--bad)">日本版か分かりません（JANが返りません）</span>':'')
+      +'</div>'
+      +(on?'':('<button class="btn" data-cepid="'+r.id+'|'+esc(x.epid)+'" '
+        +'style="padding:3px 7px;font-size:11px;margin-top:2px">この商品で出す</button>'))
+      +'</div></div>';
+  });
+  return h;
+}
+/* 新品最安値と、それを仕入値とみなした推奨売値・判断。取っていない行には出さない。 */
+function csvNewHtml(r){
+  var low=csvNewLow(r); if(!low)return '';
+  var rec=csvNewRec(r);
+  if(!rec)return '<div class="note2" style="margin-top:4px">新品最安値 '+yen(low)
+    +'　<span style="color:var(--bad);font-weight:700">重量が空なので売値を出せません</span></div>';
+  var v=csvNewVerdict(r), vi=SYNC_VERDICT[v.kind];
+  var h='<div class="note2" style="margin-top:4px">新品最安値 '+yen(low)
+    +'（'+esc(csvNewLowAt(r))+'）　→　無在庫の推奨売値 '+usd(rec.price)
+    +'　最低利益 '+usd(rec.floor)+'　損益分岐 '+usd(rec.be);
+  if(v.kind!=='none'&&vi)
+    h+='　<span style="display:inline-block;background:'+vi.c+';color:#fff;border-radius:2px;'
+      +'padding:1px 5px;font-size:11px">'+esc(vi.t)+'</span>';
+  if(v.kind==='match')h+='　相場に合わせて '+usd(v.price)
+    +(v.floored?'（損益分岐で止めました）':'');
+  if(v.kind==='low'||v.kind==='loss')
+    h+='　<span style="color:var(--bad);font-weight:700">この行は書き出しません</span>';
+  h+='</div>';
+  return h;
+}
+/* 「この商品で出す」「選び直す」 */
+function csvCatPickClick(v){
+  var i=String(v).indexOf('|');
+  var id=String(v).slice(0,i), epid=String(v).slice(i+1);
+  var r=csvRowById(id); if(!r)return;
+  if(!epid){ delete csvNew.pick[id]; csvNewSave(); csvRender(); return; }
+  var c=csvNew.cat[id], x=((c&&c.list)||[]).filter(function(y){ return y.epid===epid; })[0];
+  if(!x)return;
+  if(x.jp===false&&!confirm('この候補は「日本版でない可能性」があります（JAN '
+    +(x.gtins||[]).join(' / ')+'）。\n画像を見て日本版だと確かめましたか？\n\n'
+    +x.title+'\nePID '+epid))return;
+  if(x.jp===null&&!confirm('この候補はJANが返らないので、日本版か分かりません。\n'
+    +'画像とタイトルで確かめてください。\n\n'+x.title+'\nePID '+epid))return;
+  csvNew.pick[id]={ epid:epid, title:x.title, image:x.image, jp:x.jp, from:x.from };
+  csvNewSave(); csvRender();
+}
+
+/* ---- 書き出し ---- */
+/* 除外の理由ごとに分ける。
+   nolow … 新品最安値を取っていない／出品が無い
+   nocat … カタログを照合していない
+   none  … 候補なし
+   nopick… 候補はあるが「この商品で出す」を押していない
+   skip  … 相場の判断が見送り（利益不足・赤字）
+   rows  … 書き出す行 */
+function csvNewSplit(ids){
+  var rows=[], nolow=[], nocat=[], none=[], nopick=[], skip=[];
+  (ids||[]).forEach(function(id){
+    var r=csvRowById(id); if(!r)return;
+    if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||''))){ nolow.push(r); return; }
+    if(!csvNewRec(r)){ nolow.push(r); return; }
+    var c=csvNew.cat[r.id];
+    if(!c){ nocat.push(r); return; }
+    if(!c.list.length){ none.push(r); return; }
+    if(!csvNewPick(r)){ nopick.push(r); return; }
+    var v=csvNewVerdict(r);
+    if(v.kind==='low'||v.kind==='loss'){ skip.push(r); return; }
+    rows.push(r);
+  });
+  return { rows:rows, nolow:nolow, nocat:nocat, none:none, nopick:nopick, skip:skip };
+}
+// 新品の出品文。カタログに任せる前提なので短くする（状態の説明は入れない）
+function csvNewDesc(r,pick){
+  return '<div style="font-family:-apple-system,Arial,sans-serif;font-size:14px">'
+    +'<p>'+esc(pick.title)+'</p>'
+    +'<p>Brand new, unopened. Japanese version, imported from Japan.</p>'
+    +'<p>Shipped from Japan with tracking. Carefully packed.</p></div>';
+}
+// eBayのタイトル上限（80文字）に単語の区切りで収める
+function csvFit80(t){
+  var s2=String(t||'').replace(/\s+/g,' ').trim();
+  if(s2.length<=80)return s2;
+  var cut=s2.slice(0,80), sp=cut.lastIndexOf(' ');
+  return (sp>40?cut.slice(0,sp):cut).trim();
+}
+/* 列は呼ぶときに作る。CSV_ACT_COL（*Action(...) の長い列名）はこの下で定義されるので、
+   読み込みの時点で配列に入れると空になってしまう。 */
+function csvNewHead(){
+  return [CSV_ACT_COL,'CustomLabel','EPID','*Category','*Title','*ConditionID',
+    '*Description','*Format','*Duration','*StartPrice','*Quantity','*Location',
+    'ShippingProfileName','ReturnProfileName','PaymentProfileName'];
+}
+function csvNewBuild(rows,action){
+  var head=csvNewHead();
+  var out=[CSV_INFO,csvLine(head)];
+  var ship=$('csvShipProfileRe').value||$('csvShipProfile').value;
+  rows.forEach(function(r){
+    var pick=csvNewPick(r);
+    var o={};
+    o[CSV_ACT_COL]=action||'Add';
+    o['CustomLabel']='M-'+r.asin;                 // 中古の -U とは別の出品になる
+    o['EPID']=pick.epid;
+    o['*Category']=r.cat;
+    o['*Title']=csvFit80(pick.title);             // カタログのタイトルをそのまま使う
+    o['*ConditionID']=1000;                       // New
+    o['*Description']=csvNewDesc(r,pick);
+    o['*Format']='FixedPrice';
+    o['*Duration']='GTC';
+    o['*StartPrice']=(+csvNewPrice(r)||0).toFixed(2);
+    o['*Quantity']=1;
+    o['*Location']=$('csvLocation').value;
+    o['ShippingProfileName']=ship;
+    o['ReturnProfileName']=$('csvRetProfile').value;
+    o['PaymentProfileName']=$('csvPayProfile').value;
+    out.push(csvLine(head.map(function(h){ return o[h]===undefined?'':o[h]; })));
+  });
+  return out.join('\r\n')+'\r\n';
+}
+function csvNewRun(verify){
+  var ids=csvPickIds();
+  if(!ids.length){ alert('一覧の各カードの左上のチェックで行を選んでください。'); return; }
+  var d=csvNewSplit(ids);
+  var box=$('csvNewNote');
+  var why=[];
+  if(d.nolow.length)why.push('新品最安値なし（①を押す／重量が空）'+d.nolow.length+'件');
+  if(d.nocat.length)why.push('カタログ未照合（②を押す）'+d.nocat.length+'件');
+  if(d.none.length)why.push('候補なし'+d.none.length+'件');
+  if(d.nopick.length)why.push('候補を選んでいない'+d.nopick.length+'件');
+  if(d.skip.length)why.push('相場が見送り'+d.skip.length+'件');
+  if(!d.rows.length){
+    box.style.display=''; box.innerHTML='書き出す行がありません。<br>'+esc(why.join('　/　'));
+    return;
+  }
+  var ship=$('csvShipProfileRe').value||$('csvShipProfile').value;
+  if(!String(ship).trim()){
+    alert('設定の「再調達用ポリシー名」を入れてください（無在庫はこちらで出します）。'); return; }
+  if(!confirm(d.rows.length+'件を無在庫（新品）で'
+    +(verify?'VerifyAdd（実際には出品しない確認）':'出品（Add）')+'します。\n'
+    +'状態 New・ePID付き・写真なし（カタログの画像が付きます）。\n'
+    +'CustomLabel は M-<ASIN>、配送ポリシーは '+ship+'。\n'
+    +(why.length?('除外 '+why.join('／')+'\n'):'')
+    +'よろしいですか？'))return;
+  var name=(verify?'ebay_new_verify_':'ebay_new_add_')+csvStamp()+'.csv';
+  var okDl=csvDownload(name,csvNewBuild(d.rows,verify?'VerifyAdd':'Add'));
+  box.style.display='';
+  box.innerHTML=(okDl?('書き出しました：'+esc(name)+'（'+d.rows.length+'件・'
+      +csvNewHead().length+'列）')
+    :'書き出しに失敗しました（ブラウザのダウンロードを許可してください）')
+    +(why.length?('<br>除外：'+esc(why.join('　/　'))):'')
+    +(verify?'<br>VerifyAdd は出品されません。Seller Hub の結果で列と ePID を確かめてから ④ を使ってください。':'');
+}
+$('csvNewLow').onclick=csvNewLowRun;
+$('csvNewCat').onclick=csvNewCatRun;
+$('csvNewCheck').onclick=csvNewCheckRun;
+$('csvNewVerify').onclick=function(){ csvNewRun(true); };
+$('csvNewExport').onclick=function(){ csvNewRun(false); };
 
 // 書き出したファイルを1つずつ保存し直すボタン（iPhoneで同時ダウンロードが落ちるとき用）
 var csvLastFiles=[];
@@ -5022,20 +5378,23 @@ function syncSoldItem(r){
           'nolow' Amazon最安値が未取得で判断できない
    「相場に合わせる」の売値は 相場 − 設定「相場から下げる額」。
    損益分岐より下がるときは損益分岐で止める（赤字で出さないため）。 */
-function syncVerdict(r){
-  var rec=syncRecommend(r);
+/* 判断の中身はここ1か所。推奨売値（rec）と相場の商品代（item）を比べるだけなので、
+   販売連携タブの再調達と、出品CSVタブの無在庫（新品）の両方から同じものを使う。 */
+function soldVerdict(rec,item,cut){
   if(!rec)return { kind:'nolow', price:0, rec:null, sold:null };
-  var s=syncSoldItem(r);
-  if(s===null||s===undefined)return { kind:'none', price:rec.price, rec:rec, sold:null };
-  if(s>=rec.price)return { kind:'rec', price:rec.price, rec:rec, sold:s };
-  if(s>=rec.floor){
-    var cut=+$('syncSoldCut').value; if(isNaN(cut)||cut<0)cut=0;
-    var p=Math.round((s-cut)*100)/100, floored=false;
+  if(item===null||item===undefined)return { kind:'none', price:rec.price, rec:rec, sold:null };
+  if(item>=rec.price)return { kind:'rec', price:rec.price, rec:rec, sold:item };
+  if(item>=rec.floor){
+    var c=+cut; if(isNaN(c)||c<0)c=0;
+    var p=Math.round((item-c)*100)/100, floored=false;
     if(p<rec.be){ p=rec.be; floored=true; }
-    return { kind:'match', price:p, rec:rec, sold:s, cut:cut, floored:floored };
+    return { kind:'match', price:p, rec:rec, sold:item, cut:c, floored:floored };
   }
-  if(s>=rec.be)return { kind:'low', price:0, rec:rec, sold:s };
-  return { kind:'loss', price:0, rec:rec, sold:s };
+  if(item>=rec.be)return { kind:'low', price:0, rec:rec, sold:item };
+  return { kind:'loss', price:0, rec:rec, sold:item };
+}
+function syncVerdict(r){
+  return soldVerdict(syncRecommend(r), syncSoldItem(r), $('syncSoldCut').value);
 }
 function syncIsSkip(r){ var k=syncVerdict(r).kind; return k==='low'||k==='loss'; }
 /* 無在庫出品。手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
@@ -6156,7 +6515,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+csvLoad(); csvNewLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -6172,7 +6531,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v106';   // sw.js の const V と必ず同じ値にする
+var APP_V='v107';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
