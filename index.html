@@ -5356,6 +5356,43 @@ $('csvExportPick').onclick=function(){
    Success・Warning は ItemID を行と書き出しログへ（Warning は警告文もログに残す）。
    Failure だけエラー文を行の指摘として表示する。 */
 function csvResKey(h){ return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+/* 結果ファイルの CustomLabel を、書き出しと同じ規則で読む。
+   E-<ASIN> / E-<ASIN>-U / E-<ASIN>-C と M-… のどれでも ASIN＋区分だけを取り出す。
+   **E- と M- の違いは照合に使わない。** 無在庫の印を切り替えたあとや、
+   復活で M- を E- に変えて出したあとでも、同じ出品として結び付けるため
+   （2026-10-06：-C の行の ItemID が記録されなかった原因）。 */
+function csvLabelKey(label){
+  var m=/^([EM])-(B[0-9A-Z]{9})(-U|-C)?$/i.exec(String(label||'').trim());
+  if(!m)return null;
+  var suf=String(m[3]||'').toUpperCase();
+  return { asin:m[2].toUpperCase(),
+           kind:(suf==='-C')?'cart':((suf==='-U')?'used':'new') };
+}
+var CSV_KIND_NAME={new:'新品',used:'箱付き中古',cart:'カートリッジのみ'};
+// 行がその CustomLabel の出品かどうか（書き出しと同じ規則で見る）
+function csvLabelHit(r,label){
+  if(csvCustomLabel(r)===label)return true;        // 文字どおりの一致
+  var k=csvLabelKey(label);
+  if(!k)return false;
+  return String(r.asin||'').toUpperCase()===k.asin&&csvKindOf(r)===k.kind;
+}
+// 書き出しログの行がその CustomLabel のものか
+function csvLogHit(L,label){
+  if(String(L.sku||'')===label)return true;
+  var a=csvLabelKey(L.sku), b=csvLabelKey(label);
+  return !!(a&&b&&a.asin===b.asin&&a.kind===b.kind);
+}
+// 一致しなかったときの理由（何をすればよいか分かるように）
+function csvLabelWhy(label){
+  var k=csvLabelKey(label);
+  if(!k)return 'この CustomLabel の行が出品リストにありません';
+  var same=csvList.filter(function(x){
+    return String(x.asin||'').toUpperCase()===k.asin; });
+  if(!same.length)return 'この商品（'+k.asin+'）の行が出品リストにありません';
+  return '同じASINの行はありますが区分が違います（結果は'+(CSV_KIND_NAME[k.kind]||k.kind)
+    +'、出品リストの行は'+same.map(function(x){
+        return CSV_KIND_NAME[csvKindOf(x)]||csvKindOf(x); }).join('・')+'）';
+}
 function csvResImport(text){
   var rows=csvParse(text);
   if(!rows.length)return {err:'空のファイルです'};
@@ -5380,22 +5417,26 @@ function csvResImport(text){
     var item=String((iId>=0?r[iId]:'')||'').trim();
     var line=String((iLn>=0?r[iLn]:'')||'').trim();
     var hit=null;
-    if(label)csvList.forEach(function(x){ if(csvCustomLabel(x)===label)hit=x; });
+    // 書き出しと同じ規則で照合する（E-/M- の違いは見ない。-U/-C は区別する）
+    if(label)csvList.forEach(function(x){ if(csvLabelHit(x,label))hit=x; });
     // Warning も出品自体は通っているので成功として扱う
     if(/^(success|warning)$/i.test(st)){
       var isWarn=/^warning$/i.test(st);
       if(!item){ notes.push((line?('行'+line+'：'):'')+'ItemIDが空です'); continue; }
       ok++; if(isWarn)warnN++;
       if(hit){ hit.itemId=item; hit.uploadErr=''; hit.uploadErrSig=''; }
-      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（ItemID '+item+'）'); }
+      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」'
+        +csvLabelWhy(label)+'。ItemID '+item
+        +' は行の「ItemID」欄に手で入れられます'); }
       // 警告文はログに残すだけで、行の指摘には出さない（出品は成立しているため）。
       var wmsg=isWarn
         ? String(((iWn>=0?r[iWn]:'')||(iMs>=0?r[iMs]:''))||'').trim()
         : '';
       // 書き出しログにも記録する。同じSKUが複数あれば、ItemIDが空の最新分へ入れる。
       var tgt=null;
-      csvLog.forEach(function(L){ if(L.sku===label&&!String(L.itemId||'').trim())tgt=L; });
-      if(!tgt)csvLog.forEach(function(L){ if(L.sku===label)tgt=L; });
+      csvLog.forEach(function(L){
+        if(csvLogHit(L,label)&&!String(L.itemId||'').trim())tgt=L; });
+      if(!tgt)csvLog.forEach(function(L){ if(csvLogHit(L,label))tgt=L; });
       if(tgt){ tgt.itemId=item; if(isWarn)tgt.warn=wmsg||'（警告文なし）'; logged++; }
       else if(isWarn&&wmsg)notes.push((line?('行'+line+'：'):'')+'警告（ログ未記録）'+wmsg);
     }else if(/^(failure|error)$/i.test(st)){
@@ -5404,7 +5445,8 @@ function csvResImport(text){
       var code=String((iCd>=0?r[iCd]:'')||'').trim();
       var full=(code?('['+code+'] '):'')+(msg||'内容不明のエラー');
       if(hit){ hit.uploadErr=full; hit.uploadErrSig=csvRowSig(hit); }
-      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」に一致する行がありません（'+full+'）'); }
+      else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」'
+        +csvLabelWhy(label)+'（'+full+'）'); }
     }
   }
   csvSaveList(); csvSaveLog();
@@ -7123,7 +7165,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v113';   // sw.js の const V と必ず同じ値にする
+var APP_V='v114';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
