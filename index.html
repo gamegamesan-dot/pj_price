@@ -581,8 +581,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:8px">英題を作り直す（手で編集していない未出品の行）</button>
       <div class="note2" id="csvRedoNote"></div>
       <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
-      <div class="chk"><input type="checkbox" id="csvPriceChangedOnly"><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値が変わった行だけ</label></div>
-      <div class="note2" style="margin-top:0" id="csvChangedNote">仕入値を直して売値が変わった行（出品済み）だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
+      <div class="chk"><input type="checkbox" id="csvPriceChangedOnly"><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値の見直しが要る行だけ</label></div>
+      <div class="note2" style="margin-top:0" id="csvChangedNote">いまの設定で計算した推奨売値と、eBayに出している売値を比べて、差が大きい行だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
+      <div class="row"><label>見直しのしきい値（金額）</label><input type="number" id="csvReviewAbs" value="1" step="0.5" min="0" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row"><label>見直しのしきい値（割合）</label><input type="number" id="csvReviewPct" value="3" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
+      <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
+      <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
       <div class="note2" id="csvExportNote"></div>
       <!-- 書き出したあと、カテゴリごとに1つずつ保存し直せるボタン（iPhone向けの保険） -->
       <div id="csvExportFiles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
@@ -2778,7 +2783,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
-                 'syncSoldCut','syncDropMax','csvWeightCart','csvSort'];
+                 'syncSoldCut','syncDropMax','csvWeightCart','csvSort',
+                 'csvReviewAbs','csvReviewPct'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -2804,6 +2810,7 @@ function csvLoad(){
        if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
        if(typeof o.csvPriceChangedOnly==='boolean')
          $('csvPriceChangedOnly').checked=o.csvPriceChangedOnly;
+       if(typeof o.csvReviewZero==='boolean')$('csvReviewZero').checked=o.csvReviewZero;
        if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand;
        if(typeof o.syncSkipAcc==='boolean')$('syncSkipAcc').checked=o.syncSkipAcc; }catch(e){}
 }
@@ -2850,6 +2857,7 @@ function csvSaveCfg(){
     o.csvAutoParse=$('csvAutoParse').checked;
     o.csvShowNew=$('csvShowNew').checked;
     o.csvPriceChangedOnly=$('csvPriceChangedOnly').checked;
+    o.csvReviewZero=$('csvReviewZero').checked;
     o.syncOnHand=$('syncOnHand').checked;
     o.syncSkipAcc=$('syncSkipAcc').checked;
     localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o));
@@ -2867,6 +2875,10 @@ window.addEventListener('pageshow',csvSecretFill);
 window.addEventListener('focus',csvSecretFill);
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('csvPriceChangedOnly').addEventListener('change',csvSaveCfg);
+$('csvReviewZero').addEventListener('change',function(){ csvSaveCfg(); csvRender(); });
+['csvReviewAbs','csvReviewPct'].forEach(function(id){
+  $(id).addEventListener('input',function(){ csvRender(); });
+});
 $('syncOnHand').addEventListener('change',csvSaveCfg);
 $('syncSkipAcc').addEventListener('change',function(){ csvSaveCfg(); syncRender(); });
 // 登録カテゴリを書き換えたら、出品文タブの選択肢も作り直す
@@ -3365,14 +3377,78 @@ function csvNotes(r){
   if(csvCostLow(r))a.push('仕入値要確認（'+yen(+r.cost||0)+'）');
   return a;
 }
-/* 売値が、前に出した売値と変わった行。価格更新CSVの絞り込みに使う。
-   priceSent は出品CSV・価格更新CSVを書き出したときの売値。
-   まだ控えていない行（この版より前に出した行）は、仕入値を直したかどうかで見る。 */
-function csvPriceChanged(r){
-  if(!String(r.itemId||'').trim())return false;
-  if(r.priceSent===undefined||r.priceSent===null)return csvCostFixed(r);
-  return Math.abs((+r.price||0)-(+r.priceSent||0))>=0.01;
+/* ================= 売値の見直し（価格更新CSVの絞り込み）=================
+   「仕入値を直したか」ではなく、**いまの設定で計算した推奨売値**と
+   **eBayに出している売値**の差で判定する。
+   こうすると、仕入値・下限利益・仕入への連動率・売上比下限・税率・送料設定・為替など、
+   売値の計算に入るものを何を変えても対象になる（計算は csvPriceFor を通るので1か所）。
+
+   いまの売値 … pj-sync の取り込み（ebay_price）→ 無ければ最後に書き出した売値（priceSent）
+   新しい売値 … 相場（総額$）が入っていれば相場の判定で決まった売値、無ければ推奨売値
+   しきい値 … 金額（既定$1）と割合（既定3%）の**両方**を超えた行だけ
+   数量0の出品 … 既定で対象外（復活のときに売値を直すため。設定で入れられる） */
+// いまの設定での推奨売値（この行の仕入値と重量で引き直す）
+function csvRecOf(r){
+  var p=csvPriceFor(+r.cost||0,+r.weight||0);
+  return (p&&p.price>0)?p:null;
 }
+// 相場（総額$）→ 商品代（$）。販売連携・無在庫（新品）と同じ決まり
+function csvSoldItemOf(r){
+  var sold=+r.sold||0; if(!(sold>0))return null;
+  return csvWithItem(+r.cost||0,+r.weight||0,function(){
+    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
+    return (sold<=G)?null:Math.round((sold-G)*100)/100;
+  });
+}
+/* いまの設定で出すべき売値。相場が入っていれば soldVerdict の判定に従う
+   （見送り＝利益不足・赤字の行は 0 を返し、見直しの対象にしない）。 */
+function csvWantPrice(r){
+  var rec=csvRecOf(r); if(!rec)return 0;
+  var v=soldVerdict(rec,csvSoldItemOf(r),$('syncSoldCut').value);
+  if(v.kind==='rec'||v.kind==='match')return v.price;
+  if(v.kind==='none')return rec.price;
+  return 0;
+}
+// eBayに出している売値と、その出どころ
+function csvNowPrice(r){
+  var ex=csvSameListing(r);
+  if(ex&&+ex.price>0)return { v:+ex.price, from:'sync', qty:ex.qty };
+  if(r.priceSent!==undefined&&r.priceSent!==null&&+r.priceSent>0)
+    return { v:+r.priceSent, from:'sent', qty:null };
+  return null;
+}
+function csvRevAbs(){ var n=+$('csvReviewAbs').value; return isFinite(n)&&n>=0?n:1; }
+function csvRevPct(){ var n=+$('csvReviewPct').value; return isFinite(n)&&n>=0?n:3; }
+/* 見直しが要る行なら中身を返す。要らなければ null。 */
+function csvPriceReview(r){
+  if(!String(r.itemId||'').trim())return null;
+  var next=csvWantPrice(r); if(!(next>0))return null;
+  var now=csvNowPrice(r);
+  /* eBayの売値も、最後に書き出した売値も分からない行。差は出せないが、
+     仕入値を直した行は見直しの対象にする（v94 からの拾い方を残す）。 */
+  if(!now){
+    if(!csvCostFixed(r))return null;
+    return { now:null, next:next, diff:null, pct:null, up:null,
+             from:'none', why:'仕入値の変更' };
+  }
+  // 数量0の出品は既定で対象外（復活のときに売値を直す）
+  if(now.qty===0&&!$('csvReviewZero').checked)return null;
+  var diff=Math.round((next-now.v)*100)/100;
+  var pct=now.v>0?(Math.abs(diff)/now.v*100):0;
+  if(Math.abs(diff)<csvRevAbs()||pct<csvRevPct())return null;
+  /* 主な理由。仕入値を直した行は「仕入値」、為替が動いた行は「為替」、
+     どちらでもなければ「設定」（下限利益・連動率・送料などの変更）。 */
+  var why=[];
+  if(csvCostFixed(r))why.push('仕入値');
+  var fxNow=+$('fx').value||0;
+  if(r.fxSent!==undefined&&r.fxSent!==null&&+r.fxSent>0
+     &&Math.abs(fxNow-(+r.fxSent))>=0.01)why.push('為替');
+  if(!why.length)why.push('設定');
+  return { now:now.v, next:next, diff:diff, pct:Math.round(pct*10)/10,
+           up:diff>0, from:now.from, why:why.join('・')+'の変更' };
+}
+// 絞り込み用（これまでの名前のまま使えるようにしておく）
+function csvPriceChanged(r){ return !!csvPriceReview(r); }
 /* 並び順（6.5.1）。相場入力が絞り込みの入口なので、未判定を先頭に置き、
    その中はライン（低いほどeBayで超えやすい）の昇順にする。
    未判定 → eBay優先かつ未完成 → eBay優先 → 未完成 → それ以外 */
@@ -3662,10 +3738,19 @@ function csvRender(){
             sp.done.length?('出品済み '+sp.done.length+'件'):'']
             .filter(Boolean).join('／')):''))
     : '';
-  var chN=csvList.filter(csvPriceChanged).length;
-  $('csvChangedNote').textContent='仕入値を直して売値が変わった行（出品済み）だけを書き出します。'
-    +'外すとItemIDがある行すべてを書き出します。'
-    +(chN?('　いま '+chN+'件あります。'):'　いまは0件です。');
+  /* 設定（下限利益・連動率・売上比下限・税率・送料・為替・梱包）を変えたら、
+     表示と書き出しの売値も追いつくように引き直す。csvRecalc は
+     仕入値と重量から csvPriceFor で出すだけなので、何度呼んでも同じ結果になる。 */
+  csvList.forEach(csvRecalc);
+  var chL=csvList.map(csvPriceReview).filter(Boolean);
+  var upN=chL.filter(function(x){ return x.up===true; }).length;
+  var dnN=chL.filter(function(x){ return x.up===false; }).length;
+  var unN=chL.length-upN-dnN;
+  $('csvChangedNote').textContent='いまの設定で計算した推奨売値と、eBayに出している売値を比べて、'
+    +'差が大きい行だけを書き出します（金額 '+usd(csvRevAbs())+' 以上 かつ '
+    +csvRevPct()+'% 以上）。外すとItemIDがある行すべてを書き出します。'
+    +(chL.length?('　いま '+chL.length+'件（上げる '+upN+'件／下げる '+dnN+'件'
+                  +(unN?('／比べられない '+unN+'件'):'')+'）。'):'　いまは0件です。');
   var h='', shown=0, hidden=0;
   csvSorted().forEach(function(r){
     /* 行のバッジは csvBadgeHtml() にまとめてある（下）。
@@ -3772,6 +3857,8 @@ function csvRender(){
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
+      /* 売値の見直しの案内 */
+      +csvReviewHtml(r)
       /* 既存の出品の復活・重複の案内 */
       +csvReviveHtml(r)
       /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
@@ -4376,6 +4463,21 @@ function csvCartRecord(r,itemId,qty,price){
 }
 
 /* 行に出す「復活」「重複」の案内。 */
+/* 行に出す売値の見直しの案内。対象の行だけに出す。 */
+function csvReviewHtml(r){
+  var v=csvPriceReview(r);
+  if(!v)return '';
+  var col=(v.up===null)?'#666':(v.up?'#1f7a4d':'#b35c00');
+  return '<div class="note2" style="margin-top:4px">'
+    +'<span style="display:inline-block;background:'+col+';color:#fff;'
+    +'border-radius:2px;padding:1px 5px;font-size:11px">売値の見直し</span>　'
+    +((v.now===null)?('→ '+usd(v.next)):(usd(v.now)+' → '+usd(v.next)))
+    +'（'+esc(v.why)+'）'
+    +((v.up===null)?'':('　'+(v.up?'＋':'−')+usd(Math.abs(v.diff))+'・'+v.pct+'%'))
+    +(v.from==='sent'?'　※いまの売値は最後に書き出した値です（eBayの取り込みがありません）':'')
+    +(v.from==='none'?'　※いまの売値が分かりません（eBayの取り込みも書き出しの記録もありません）':'')
+    +'</div>';
+}
 /* 判定のもとは pj-sync が取り込んだ eBay の出品（ItemID・CustomLabel・数量）。
    取り込んでいないと「既存の出品があるか」が分からないので、黙って新規出品にしない。 */
 function csvSyncLoaded(){ return !!(syncData&&(syncData.items||[]).length); }
@@ -5323,6 +5425,7 @@ function csvExportRun(ids){
   var at=new Date().toISOString().slice(0,10);
   rows.forEach(function(r){
     r.priceSent=+r.price||0;      // 出した売値を控える（価格更新CSVの絞り込みに使う）
+    r.fxSent=+$('fx').value||0;   // そのときの為替も控える（見直しの理由に使う）
     csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
       at:at, price:r.price, fba:!!r.fba, forceEbay:!!r.forceEbay, oneOff:!!r.oneOff,
       pics:(r.pics||[]).length, shipProfile:csvShipProfileFor(r),
@@ -5785,7 +5888,9 @@ function csvReviseBuild(rows,opt){
   rows.forEach(function(r){
     var line=['Revise', String(r.itemId||'').trim()];
     if(opt.qty)line.push(r.qty);
-    if(opt.price)line.push((+r.price||0).toFixed(2));
+    /* 書き出す売値は「いまの設定で出すべき売値」。相場（総額$）が入っている行は
+       相場の判定で決まった売値を使う。出せない行（相場が見送り）は推奨売値に戻す。 */
+    if(opt.price)line.push((+csvWantPrice(r)||+r.price||0).toFixed(2));
     out.push(csvLine(line));
   });
   return { text:out.join('\r\n')+'\r\n', cols:head.length };
@@ -5811,30 +5916,45 @@ function csvReviseRun(opt,label,slug,changedOnly){
       : 'ItemIDが入っている行がありません。\n結果ファイルを取り込むか、行のItemID欄に直接入力してください。');
     return;
   }
-  /* 売値が変わった行だけに絞る（仕入値を直した行を出し直すとき）。
-     自分でチェックして選んだときは、その指定を優先してこの絞り込みは使わない。 */
+  /* 「売値の見直しが要る行だけ」の絞り込み。
+     選んだ行があるときは、**選んだ中の対象行だけ**を書き出す。 */
   var rows=all, note='';
-  if(changedOnly&&!pick){
+  if(changedOnly){
     rows=all.filter(csvPriceChanged);
     if(!rows.length){
-      alert('売値が変わった行がありません。\n'
-        +'（仕入値を直した行だけを出すには、行の仕入値欄で直してください。'
-        +'全部の行を出すには「売値が変わった行だけ」のチェックを外してください）');
+      alert(pick
+        ? ('選んだ'+all.length+'件には、売値の見直しが要る行がありません。\n'
+           +'（しきい値は 金額 '+usd(csvRevAbs())+' 以上 かつ '+csvRevPct()+'% 以上です。'
+           +'全部の行を出すには「売値の見直しが要る行だけ」のチェックを外してください）')
+        : ('売値の見直しが要る行がありません。\n'
+           +'（いまの設定で計算した推奨売値と、eBayに出している売値の差が'
+           +' 金額 '+usd(csvRevAbs())+' 以上 かつ '+csvRevPct()+'% 以上の行が対象です。'
+           +'全部の行を出すには「売値の見直しが要る行だけ」のチェックを外してください）'));
       return;
     }
-    note='　売値が変わった '+rows.length+'件だけを対象にしました（ItemIDがある '+all.length+'件のうち）。';
+    note='　売値の見直しが要る '+rows.length+'件だけを対象にしました（ItemIDがある '
+      +all.length+'件のうち）。';
   }
   // 書き出す前に件数で確認する
+  var rv=rows.map(csvPriceReview).filter(Boolean);
+  var rvUp=rv.filter(function(x){ return x.up===true; }).length;
+  var rvDn=rv.filter(function(x){ return x.up===false; }).length;
   if(!confirm(label+'を書き出します。\n'
     +(pick?('選択した '+ids.length+'件のうち '+rows.length+'件'):('全件 '+rows.length+'件'))
-    +'（ItemIDのある行）\n'
+    +'（'+(changedOnly?'売値の見直しが要る行':'ItemIDのある行')+'）\n'
+    +((opt.price&&rv.length)
+      ? ('売値の見直しが要る行 '+rv.length+'件（上げる '+rvUp+'件／下げる '+rvDn+'件'
+         +((rv.length-rvUp-rvDn)?('／比べられない '+(rv.length-rvUp-rvDn)+'件'):'')+'）\n'
+         +rv.slice(0,5).map(function(x){
+             return '　・'+((x.now===null)?'':(usd(x.now)+' '))+'→ '+usd(x.next)
+               +'（'+x.why+'）'; }).join('\n')
+         +(rv.length>5?('\n　…ほか'+(rv.length-5)+'件'):'')+'\n')
+      : '')
     +(skip?('ItemIDが無い '+skip+'件は除外します：\n'
             +noId.slice(0,5).map(function(r){
                 return '　・'+(r.titleJa||r.sku)+'（'+csvCustomLabel(r)+'）'; }).join('\n')
             +(noId.length>5?('\n　…ほか'+(noId.length-5)+'件'):'')+'\n'
             +'　結果ファイルを取り込むか、行のItemID欄に入れてください。\n'):'')
-    +(changedOnly&&pick
-      ? '選んだ行は「売値が変わった行だけ」の絞り込みを使いません。\n':'')
     +'よろしいですか？'))return;
   var b=csvReviseBuild(rows,opt);
   var name='ebay_'+slug+'_itemid_'+csvStamp()+'.csv';
@@ -5842,7 +5962,10 @@ function csvReviseRun(opt,label,slug,changedOnly){
     $('csvExportNote').textContent='書き出しに失敗しました。'; return;
   }
   // 出した売値を控える（次に「売値が変わった行」を選ぶときの基準にする）
-  if(opt.price)rows.forEach(function(r){ r.priceSent=+r.price||0; });
+  if(opt.price)rows.forEach(function(r){
+    r.priceSent=+csvWantPrice(r)||+r.price||0;   // 実際に書き出した売値を控える
+    r.fxSent=+$('fx').value||0;                  // そのときの為替も控える（理由に使う）
+  });
   csvSaveList(); csvRender();
   $('csvExportNote').textContent=label+'を書き出しました：'+name
     +'（'+rows.length+'件・'+b.cols+'列）'
@@ -7192,7 +7315,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v115';   // sw.js の const V と必ず同じ値にする
+var APP_V='v116';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
