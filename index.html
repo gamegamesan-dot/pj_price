@@ -631,7 +631,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div style="padding:0 13px 12px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <select id="csvSort" style="flex:1 1 0;min-width:0">
-            <option value="std" selected>相場未確認→eBay優先→未完成の順</option>
+            <!-- 既定は「新しい順」。取り込んだばかりの行がいちばん上に来る -->
+            <option value="new" selected>新しい順（追加の逆順）</option>
+            <option value="std">相場未確認→eBay優先→未完成の順</option>
             <option value="ebay">eBay優先を先に</option>
             <option value="ng">未完成を先に</option>
             <option value="add">追加順</option>
@@ -2776,7 +2778,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
-                 'syncSoldCut','syncDropMax','csvWeightCart'];
+                 'syncSoldCut','syncDropMax','csvWeightCart','csvSort'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -3485,6 +3487,8 @@ function csvFilterOpts(){
 }
 function csvSorted(){
   var a=csvList.slice(), mode=$('csvSort').value;
+  // 新しい順＝追加の逆順。いちばん後ろに足した行がいちばん上に来る
+  if(mode==='new')a.reverse();
   if(mode==='std')a.sort(function(x,y){
     var d=csvRank(x)-csvRank(y); if(d)return d;
     if(csvRank(x)===0)return (csvEbayLine(x)||0)-(csvEbayLine(y)||0);   // ラインの低い順
@@ -4008,7 +4012,10 @@ $('csvList').addEventListener('change',function(e){
      ここでは作り直さない。作り直すと、続けて触ろうとした隣の行の欄が消えてしまう。 */
   if(t.getAttribute('data-sold'))csvRender();
 });
-$('csvSort').addEventListener('change',csvRender);
+$('csvSort').addEventListener('change',function(){
+  csvSaveCfg();          // 選んだ並び順は端末に残す（開き直しても同じ順で出す）
+  csvRender();
+});
 $('csvFilter').addEventListener('change',csvRender);
 $('csvPickEbay').onclick=function(){
   var keep=csvList.filter(csvEbayFirst);
@@ -7116,7 +7123,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v112';   // sw.js の const V と必ず同じ値にする
+var APP_V='v113';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
