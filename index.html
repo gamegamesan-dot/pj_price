@@ -559,6 +559,9 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
       <!-- カートリッジのみ：同じASINの出品がすでにあるときは、数量を+1する -->
+      <!-- 数量0で残っている出品を、写真・状態・英題・出品文を入れ直して復活させる -->
+      <button class="btn" id="csvRevive2" style="width:100%;margin-top:8px">既存の出品を復活させるCSV</button>
+      <div class="warn" id="csvReviveNote" style="display:none;margin-top:8px"></div>
       <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px">カートリッジのみ：既存の出品に+1するCSV</button>
       <div class="warn" id="csvCartNote" style="display:none;margin-top:8px"></div>
       <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
@@ -684,6 +687,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや出品文タブで確定した値は上書きしません。</div></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
+      <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
       <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
       <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
       <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
@@ -2794,6 +2799,7 @@ function csvLoad(){
        CSV_CFG_IDS.forEach(function(id){
          if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
+       if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
        if(typeof o.csvPriceChangedOnly==='boolean')
          $('csvPriceChangedOnly').checked=o.csvPriceChangedOnly;
        if(typeof o.syncOnHand==='boolean')$('syncOnHand').checked=o.syncOnHand;
@@ -2840,6 +2846,7 @@ function csvSaveCfg(){
       o[id]=v; csvSecretKeep(id,v);
     });
     o.csvAutoParse=$('csvAutoParse').checked;
+    o.csvShowNew=$('csvShowNew').checked;
     o.csvPriceChangedOnly=$('csvPriceChangedOnly').checked;
     o.syncOnHand=$('syncOnHand').checked;
     o.syncSkipAcc=$('syncSkipAcc').checked;
@@ -3761,6 +3768,8 @@ function csvRender(){
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
+      /* 既存の出品の復活・重複の案内 */
+      +csvReviveHtml(r)
       /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
       +csvCartHtml(r)
       /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
@@ -4259,6 +4268,45 @@ function csvCartLoad(){
 function csvCartSave(){
   try{ localStorage.setItem(CSV_CART_KEY,JSON.stringify(csvCart)); }catch(e){}
 }
+/* 行の状態区分。eBayの出品を突き合わせるときのキーの後半。
+   新品 → 'new'／箱付き中古 → 'used'／カートリッジのみ → 'cart' */
+function csvKindOf(r){
+  if(r.cartOnly)return 'cart';
+  return (r.condId===1000)?'new':'used';
+}
+/* 同じASIN・同じ区分の eBay の出品（販売連携の取り込みから引く）。
+   数量0の出品も返す（復活の対象になる）。 */
+function csvSameListing(r){
+  var asin=String(r.asin||'').trim(); if(!asin)return null;
+  var kind=csvKindOf(r), hit=null;
+  ((syncData&&syncData.items)||[]).forEach(function(x){
+    if(String(x.asin)!==asin||String(x.cond)!==kind)return;
+    if(!String(x.ebay_item_id||'').trim())return;
+    hit={ itemId:String(x.ebay_item_id), qty:Number(x.ebay_qty||0),
+          price:+x.ebay_price||0, sku:String(x.ebay_sku||''),
+          dropship:!!Number(x.dropship||0), kind:kind };
+  });
+  return hit;
+}
+/* 復活の対象：同じASIN・同じ区分の出品があって、数量が0の行。
+   この行自体がまだ出品していない（ItemIDが空）ときだけ。 */
+function csvRevive(r){
+  if(String(r.itemId||'').trim())return null;
+  var ex=csvSameListing(r);
+  return (ex&&ex.qty===0)?ex:null;
+}
+/* 重複の恐れ：同じASIN・同じ区分で数量1以上の出品がすでにある（カートリッジのみを除く）。
+   カートリッジのみは同じ出品に積み上げるので、こちらでは扱わない。 */
+function csvDupListing(r){
+  if(r.cartOnly||String(r.itemId||'').trim())return null;
+  var ex=csvSameListing(r);
+  return (ex&&ex.qty>=1)?ex:null;
+}
+/* 復活後の CustomLabel。M- の出品は E- に変える（区分の印はそのまま）。 */
+function csvReviveLabel(r){
+  var suf=(csvKindOf(r)==='cart')?'-C':((csvKindOf(r)==='new')?'':'-U');
+  return 'E-'+r.asin+suf;
+}
 /* 同じASINの既存のカートリッジのみの出品。数量0の出品も対象にする。
    見る順は 1) 販売連携の取り込み（いちばん新しい） 2) 出品リストの別の行
    3) 手元の記録（書き出したときに残す）。 */
@@ -4283,10 +4331,13 @@ function csvCartExisting(r){
              price:+rec.price||0, from:'rec' };
   return null;
 }
-// 積み上げる行（既存の出品があり、この行自体はまだ出品していない）
+/* 積み上げる行（既存の出品があり、この行自体はまだ出品していない）。
+   数量0の出品は「復活」に回す（写真を撮り直して全差し替えするため）。
+   数量が残っているあいだは同じ個体のまとまりなので、写真はそのまま使い続ける。 */
 function csvCartStack(r){
   if(!r.cartOnly||String(r.itemId||'').trim())return null;
-  return csvCartExisting(r);
+  var ex=csvCartExisting(r);
+  return (ex&&Number(ex.qty||0)>=1)?ex:null;
 }
 /* 売値は既存の出品のものを維持する。推奨売値と大きく違うときだけ知らせる
    （自動では変えない）。しきい値は2割。 */
@@ -4312,6 +4363,41 @@ function csvCartRecord(r,itemId,qty,price){
   csvCartSave();
 }
 
+/* 行に出す「復活」「重複」の案内。 */
+function csvReviveHtml(r){
+  var rv=csvRevive(r);
+  if(rv){
+    var pics=(r.pics||[]).length;
+    var h='<div class="note2" style="margin-top:4px">'
+      +'<span style="display:inline-block;background:#2f6fb0;color:#fff;border-radius:2px;'
+      +'padding:1px 5px;font-size:11px">既存の出品を復活</span>　'
+      +'ItemID '+esc(rv.itemId)+'・現在の数量 0'
+      +(rv.price?('　売値 '+usd(rv.price)+'（維持します）'):'')
+      +(rv.dropship?('　<b>CustomLabel を '+esc(csvReviveLabel(r))+' に変えます</b>'):'')
+      +'</div>';
+    var gap=csvCartPriceGap(r,rv);
+    if(gap)
+      h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);'
+        +'font-weight:700">価格の見直し候補</span>　いまの売値 '+usd(rv.price)
+        +' と推奨売値 '+usd(+r.price||0)+' の差が '+Math.round(gap*100)+'%'
+        +'（自動では変えません）</div>';
+    h+='<div class="note2" style="margin-top:0">'
+      +(pics
+        ? ('写真 '+pics+'枚で全差し替えします。状態・英題・出品文も入れ直します。')
+        : ('<span style="color:var(--bad);font-weight:700">写真が0枚なので復活させません</span>'
+           +'　前の出品の写真のまま復活させないため、撮り直した写真を付けてください。'))
+      +'</div>';
+    return h;
+  }
+  var dp=csvDupListing(r);
+  if(dp)
+    return '<div class="note2" style="margin-top:4px">'
+      +'<span style="display:inline-block;background:#b00020;color:#fff;border-radius:2px;'
+      +'padding:1px 5px;font-size:11px">同じ出品があります</span>　'
+      +'ItemID '+esc(dp.itemId)+'・数量 '+dp.qty
+      +'　重複出品になるので書き出しません（数量を足すなら数量更新CSVを使ってください）。</div>';
+  return '';
+}
 /* 行に出す積み上げの案内。 */
 function csvCartHtml(r){
   if(!r.cartOnly)return '';
@@ -4362,6 +4448,137 @@ function csvCartSendHand(list,qtyOf){
     })})})
     ['catch'](function(){});
 }
+/* ================= 数量0の出品を復活させる =================
+   同じASIN・同じ区分の出品が数量0で残っているときは、新しく出し直さずにその出品を
+   Revise で作り直す（同じ商品の出品を2つ作らない）。
+   ・写真は撮り直したものに全差し替え（PicURL を入れ替える）
+   ・状態（ConditionID）・Condition Description・英題・出品文も入れ直す
+   ・数量は書き出す直前に eBay のいまの数量を取り直して＋1（取れなければ止める）
+   ・売値は変えない（推奨売値と2割以上ずれていたら「価格の見直し候補」を出すだけ）
+   ・CustomLabel が M- の出品は E- に変える（区分の印はそのまま）
+   ・写真が0枚の行は書き出さない（前の出品の写真のまま復活させないため） */
+function csvReviveSplit(ids){
+  var rows=[], nopic=[];
+  (ids||[]).forEach(function(id){
+    var r=csvRowById(id); if(!r)return;
+    var rv=csvRevive(r); if(!rv)return;
+    if(!(r.pics||[]).length){ nopic.push(r); return; }
+    rows.push({ r:r, ex:rv });
+  });
+  return { rows:rows, nopic:nopic };
+}
+function csvReviveHead(rows){
+  var h=[CSV_ACT_COL,'ItemID','CustomLabel','*Title','*ConditionID'];
+  if(rows.some(function(x){ return !!x.r.cartOnly; }))h.push('ConditionDescription');
+  h.push('*Description','PicURL','*Quantity');
+  return h;
+}
+function csvReviveBuild(rows){
+  var head=csvReviveHead(rows);
+  var out=[CSV_INFO,csvLine(head)];
+  rows.forEach(function(x){
+    var r=x.r, o={};
+    o[CSV_ACT_COL]='Revise';
+    o['ItemID']=x.ex.itemId;
+    o['CustomLabel']=csvReviveLabel(r);      // M- は E- に変える
+    o['*Title']=r.titleEn;
+    o['*ConditionID']=r.condId;
+    if(r.cartOnly)o['ConditionDescription']=CSV_CART_CD;
+    o['*Description']=r.descHtml;
+    o['PicURL']=(r.pics||[]).map(function(y){ return y.url; }).join('|');
+    o['*Quantity']=x.now+1;                  // 取り直した数量＋1
+    out.push(csvLine(head.map(function(k){ return o[k]===undefined?'':o[k]; })));
+  });
+  return out.join('\r\n')+'\r\n';
+}
+function csvReviveRun(){
+  var ids=csvPickIds();
+  var pick=ids.length?ids:csvList.map(function(r){ return r.id; });
+  var d=csvReviveSplit(pick);
+  var box=$('csvReviveNote');
+  box.style.display='';
+  if(!d.rows.length){
+    box.textContent=d.nopic.length
+      ? ('復活できる行がありません。写真が0枚の'+d.nopic.length+'件は、'
+         +'撮り直した写真を付けてから書き出してください。')
+      : (ids.length?'選んだ行に「既存の出品を復活」の行がありません。'
+                   :'「既存の出品を復活」の行がありません。');
+    return;
+  }
+  if(!syncUrl()){
+    box.textContent='設定の「pj-sync のURL」を入れてください。'
+      +'書き出す直前に eBay のいまの数量を取り直すので、URLとキーが必要です。';
+    return;
+  }
+  if(!syncKeyReady('csvReviveNote'))return;
+  var b=$('csvRevive2'); b.disabled=true; b.textContent='数量を確認中…';
+  box.textContent='eBayのいまの数量を取り直しています…';
+  fetch(syncUrl()+'/cart-qty',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({item_ids:d.rows.map(function(x){ return x.ex.itemId; })})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(q){
+      if(!q||!q.ok){
+        var miss=(q&&q.missing)||[];
+        throw new Error(q&&q.err==='ebay_active'
+          ? 'eBayの出品を読めませんでした'
+          : ('出品が見つかりません（ItemID '+miss.join(' / ')+'）'
+             +'。終了している出品かもしれません（その場合は新規出品で出してください）'));
+      }
+      csvReviveGo(d,q,box);
+    })
+    ['catch'](function(e){
+      box.innerHTML='<b>書き出しを止めました</b>：'+esc(e.message)
+        +'<br>Revise の数量は上書きなので、いまの数量が分からないまま出すと売り越しになります。';
+    })
+    .then(function(){ b.disabled=false; b.textContent='既存の出品を復活させるCSV'; });
+}
+function csvReviveGo(d,q,box){
+  d.rows.forEach(function(x){
+    var v=(q.qty||{})[String(x.ex.itemId)];
+    x.now=Number((v&&v.qty)||0);
+    if(v&&+v.price>0)x.ex.price=+v.price;
+  });
+  var gaps=d.rows.filter(function(x){ return csvCartPriceGap(x.r,x.ex); }).length;
+  var relabel=d.rows.filter(function(x){ return x.ex.dropship; }).length;
+  if(!confirm(d.rows.length+'件の出品を復活させます（Revise）。\n'
+    +'eBayのいまの数量を取り直しました（'+String(q.at||'').slice(0,16).replace('T',' ')+'）。\n'
+    +d.rows.slice(0,5).map(function(x){
+        return '・'+(x.r.titleJa||x.r.sku)+'：数量 '+x.now+' → '+(x.now+1)
+          +'／写真 '+(x.r.pics||[]).length+'枚に差し替え'; }).join('\n')
+    +(d.rows.length>5?('\n…ほか'+(d.rows.length-5)+'件'):'')+'\n'
+    +'写真は全差し替え、状態・英題・出品文も入れ直します。\n'
+    +'売値は変えません（いまの値段を維持します）。\n'
+    +(relabel?('CustomLabel を M- から E- に変えます '+relabel+'件。\n'):'')
+    +(gaps?('価格の見直し候補 '+gaps+'件（自動では変えません）。\n'):'')
+    +(d.nopic.length?('写真が0枚の'+d.nopic.length+'件は書き出しません。\n'):'')
+    +'よろしいですか？')){
+    box.textContent='書き出しをやめました。';
+    return;
+  }
+  var name='ebay_revive_'+csvStamp()+'.csv';
+  var okDl=csvDownload(name,csvReviveBuild(d.rows));
+  box.innerHTML=(okDl?('書き出しました：'+esc(name)+'（'+d.rows.length+'件・'
+      +csvReviveHead(d.rows).length+'列）')
+    :'書き出しに失敗しました')
+    +(d.nopic.length?('<br>写真が0枚の'+d.nopic.length+'件は除きました。'):'')
+    +'<br>アップロードしたら、行は削除するか ItemID を入れてください。';
+  /* 復活させた出品は手元から発送する。無在庫の印を下ろし、手元在庫の印を立てる。
+     カートリッジのみの行は手元にある数も送る。 */
+  if(syncUrl()&&syncApiKey()){
+    fetch(syncUrl()+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:d.rows.map(function(x){
+        var o={ asin:x.r.asin, cond:csvKindOf(x.r), title:x.r.titleJa||x.r.titleEn||'',
+                item_id:x.ex.itemId, custom_label:csvReviveLabel(x.r),
+                dropship:false, on_hand:true };
+        if(x.r.cartOnly)o.hand_qty=x.now+1;
+        return o;
+      })})})
+      ['catch'](function(){});
+  }
+}
+
 /* 既存の出品に+1する Revise CSV。売値は送らない（いまの値段を維持する）。
 
    File Exchange の Revise の数量は<b>上書き</b>なので、古い値＋1で出すと売り越しになる。
@@ -4581,10 +4798,18 @@ function csvExportSplit(ids){
     }
     // 出品済み（ItemIDあり）は Add の対象から外す（数量・価格の更新CSVを使う）
     if(String(r.itemId||'').trim()){ done.push({r:r,why:'ItemID '+r.itemId}); return; }
-    /* カートリッジのみで、同じASINの出品がすでにあるなら新規出品にしない。
+    /* カートリッジのみで、同じASINの出品に在庫が残っているなら新規出品にしない。
        「+1するCSV」で既存の出品の数量を増やす。 */
     var ex=csvCartStack(r);
     if(ex){ done.push({r:r,why:'既存の出品に追加（ItemID '+ex.itemId+'）'}); return; }
+    /* 同じASIN・同じ区分の出品が数量0で残っているなら、新規に出さずに復活させる
+       （同じ商品の出品を2つ作らない）。 */
+    var rv=csvRevive(r);
+    if(rv){ done.push({r:r,why:'既存の出品を復活（ItemID '+rv.itemId+'・現在の数量 0）'}); return; }
+    /* 同じASIN・同じ区分で数量1以上の出品がすでにある。Addすると重複出品になる。 */
+    var dp=csvDupListing(r);
+    if(dp){ done.push({r:r,why:'同じ出品がすでにあります（ItemID '+dp.itemId
+      +'・数量 '+dp.qty+'）。重複を防ぐため書き出しません'}); return; }
     rows.push(r);
     var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')});
   });
@@ -4657,6 +4882,22 @@ function csvDropSet(on){
 $('csvDropOn').onclick=function(){ csvDropSet(true); };
 $('csvDropOff').onclick=function(){ csvDropSet(false); };
 
+
+/* 無在庫（新品・カタログ画像）の欄を出すかどうか（設定・既定オフ）。
+   しくみ（関数・Worker の /lowest・/catalog・/catalog/check）は消していない。 */
+function csvNewShown(){ var el=$('csvShowNew'); return !!(el&&el.checked); }
+function csvNewBoxApply(){
+  var box=$('csvNewBox'); if(!box)return;
+  var on=csvNewShown();
+  box.parentNode.style.display=on?'':'none';
+  if(!on)box.open=false;
+}
+$('csvShowNew').addEventListener('change',function(){
+  csvNewBoxApply();
+  // 自分でオンにしたときは開いて見せる（そのあとの開閉は折りたたみの記憶に任せる）
+  if(csvNewShown()&&$('csvNewBox'))$('csvNewBox').open=true;
+  csvRender();
+});
 
 /* ================= 無在庫（新品・カタログ画像）で出す =================
    せどりすとの状態（中古など）や仕入値に関係なく、新品として出すための仕組み。
@@ -4805,6 +5046,7 @@ function csvNewCheckRun(){
 
 /* ---- 一覧のカードに出す候補 ---- */
 function csvCatHtml(r){
+  if(!csvNewShown())return '';          // 設定でオフのときは行にも出さない
   var c=csvNew.cat[r.id];
   if(!c)return '';
   var pick=csvNewPick(r);
@@ -4844,6 +5086,7 @@ function csvCatHtml(r){
 }
 /* 新品最安値と、それを仕入値とみなした推奨売値・判断。取っていない行には出さない。 */
 function csvNewHtml(r){
+  if(!csvNewShown())return '';          // 設定でオフのときは行にも出さない
   var low=csvNewLow(r); if(!low)return '';
   var rec=csvNewRec(r);
   if(!rec)return '<div class="note2" style="margin-top:4px">新品最安値 '+yen(low)
@@ -4983,6 +5226,7 @@ function csvNewRun(verify){
     +(why.length?('<br>除外：'+esc(why.join('　/　'))):'')
     +(verify?'<br>VerifyAdd は出品されません。Seller Hub の結果で列と ePID を確かめてから ④ を使ってください。':'');
 }
+$('csvRevive2').onclick=csvReviveRun;
 $('csvCartAdd').onclick=csvCartAddRun;
 $('csvNewLow').onclick=csvNewLowRun;
 $('csvNewCat').onclick=csvNewCatRun;
@@ -6841,7 +7085,7 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
-csvLoad(); csvNewLoad(); csvCartLoad(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -6857,7 +7101,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v110';   // sw.js の const V と必ず同じ値にする
+var APP_V='v111';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
