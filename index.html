@@ -5793,15 +5793,28 @@ function csvReviseBuild(rows,opt){
 // 数量更新・価格更新で共通。ItemID のある行だけを対象にする。
 function csvReviseRun(opt,label,slug,changedOnly){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
-  var all=csvList.filter(function(r){ return !!String(r.itemId||'').trim(); });
-  var skip=csvList.length-all.length;
+  /* 一覧のチェックが付いているときは、その行だけを書き出す。
+     チェックが無いときは今までどおり（全件、または「売値が変わった行だけ」）。 */
+  var ids=csvPickIds(), pick=ids.length>0;
+  var target=pick?ids.map(csvRowById).filter(Boolean):csvList;
+  var all=target.filter(function(r){ return !!String(r.itemId||'').trim(); });
+  // ItemIDが無くて外す行（選んだ行のときは理由を出す）
+  var noId=target.filter(function(r){ return !String(r.itemId||'').trim(); });
+  var skip=noId.length;
   if(!all.length){
-    alert('ItemIDが入っている行がありません。\n結果ファイルを取り込むか、行のItemID欄に直接入力してください。');
+    alert(pick
+      ? ('選んだ'+target.length+'件には ItemID が入っていません。\n'
+         +'結果ファイルを取り込むか、行のItemID欄に直接入力してください。\n'
+         +noId.slice(0,5).map(function(r){
+             return '・'+(r.titleJa||r.sku)+'（'+csvCustomLabel(r)+'）'; }).join('\n')
+         +(noId.length>5?('\n…ほか'+(noId.length-5)+'件'):''))
+      : 'ItemIDが入っている行がありません。\n結果ファイルを取り込むか、行のItemID欄に直接入力してください。');
     return;
   }
-  // 売値が変わった行だけに絞る（仕入値を直した行を出し直すとき）
+  /* 売値が変わった行だけに絞る（仕入値を直した行を出し直すとき）。
+     自分でチェックして選んだときは、その指定を優先してこの絞り込みは使わない。 */
   var rows=all, note='';
-  if(changedOnly){
+  if(changedOnly&&!pick){
     rows=all.filter(csvPriceChanged);
     if(!rows.length){
       alert('売値が変わった行がありません。\n'
@@ -5811,6 +5824,18 @@ function csvReviseRun(opt,label,slug,changedOnly){
     }
     note='　売値が変わった '+rows.length+'件だけを対象にしました（ItemIDがある '+all.length+'件のうち）。';
   }
+  // 書き出す前に件数で確認する
+  if(!confirm(label+'を書き出します。\n'
+    +(pick?('選択した '+ids.length+'件のうち '+rows.length+'件'):('全件 '+rows.length+'件'))
+    +'（ItemIDのある行）\n'
+    +(skip?('ItemIDが無い '+skip+'件は除外します：\n'
+            +noId.slice(0,5).map(function(r){
+                return '　・'+(r.titleJa||r.sku)+'（'+csvCustomLabel(r)+'）'; }).join('\n')
+            +(noId.length>5?('\n　…ほか'+(noId.length-5)+'件'):'')+'\n'
+            +'　結果ファイルを取り込むか、行のItemID欄に入れてください。\n'):'')
+    +(changedOnly&&pick
+      ? '選んだ行は「売値が変わった行だけ」の絞り込みを使いません。\n':'')
+    +'よろしいですか？'))return;
   var b=csvReviseBuild(rows,opt);
   var name='ebay_'+slug+'_itemid_'+csvStamp()+'.csv';
   if(!csvDownload(name,b.text)){
@@ -5820,7 +5845,9 @@ function csvReviseRun(opt,label,slug,changedOnly){
   if(opt.price)rows.forEach(function(r){ r.priceSent=+r.price||0; });
   csvSaveList(); csvRender();
   $('csvExportNote').textContent=label+'を書き出しました：'+name
-    +'（'+rows.length+'件・'+b.cols+'列）'+note
+    +'（'+rows.length+'件・'+b.cols+'列）'
+    +(pick?('　一覧で選んだ '+ids.length+'件のうちの分です。'):'　全件が対象です。')
+    +note
     +(skip?('　ItemIDのない '+skip+'件は対象外です。'):'')
     +'　変更しない列は列ごと省いています。';
 }
@@ -7165,7 +7192,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v114';   // sw.js の const V と必ず同じ値にする
+var APP_V='v115';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
