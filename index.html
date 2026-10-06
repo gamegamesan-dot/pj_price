@@ -4307,9 +4307,11 @@ function csvReviveLabel(r){
   var suf=(csvKindOf(r)==='cart')?'-C':((csvKindOf(r)==='new')?'':'-U');
   return 'E-'+r.asin+suf;
 }
-/* 同じASINの既存のカートリッジのみの出品。数量0の出品も対象にする。
-   見る順は 1) 販売連携の取り込み（いちばん新しい） 2) 出品リストの別の行
-   3) 手元の記録（書き出したときに残す）。 */
+/* 同じASINの既存のカートリッジのみの出品。
+   **数量は pj-sync が取り込んだ eBay の出品からだけ取る。**
+   出品リストの行や手元の記録は ItemID の手がかりにしか使わない
+   （出品リストの数量は「せどりすとの個数」で、eBayの出品数量ではないため）。
+   数量が分からないときは qtyKnown:false にして、書き出し時に必ず取り直す。 */
 function csvCartExisting(r){
   var asin=String(r.asin||'').trim();
   if(!asin||!r.cartOnly)return null;
@@ -4317,18 +4319,18 @@ function csvCartExisting(r){
   ((syncData&&syncData.items)||[]).forEach(function(x){
     if(String(x.asin)===asin&&String(x.cond)==='cart'&&String(x.ebay_item_id||'').trim())
       hit={ itemId:String(x.ebay_item_id), qty:Number(x.ebay_qty||0),
-            price:+x.ebay_price||0, from:'sync' };
+            price:+x.ebay_price||0, from:'sync', qtyKnown:true };
   });
   if(hit)return hit;
   csvList.forEach(function(x){
     if(x.id!==r.id&&x.cartOnly&&String(x.asin)===asin&&String(x.itemId||'').trim())
-      hit={ itemId:String(x.itemId), qty:Number(x.qty||1), price:+x.price||0, from:'list' };
+      hit={ itemId:String(x.itemId), qty:0, price:+x.price||0, from:'list', qtyKnown:false };
   });
   if(hit)return hit;
   var rec=csvCart[asin];
   if(rec&&String(rec.itemId||'').trim())
-    return { itemId:String(rec.itemId), qty:Number(rec.qty||0),
-             price:+rec.price||0, from:'rec' };
+    return { itemId:String(rec.itemId), qty:0,
+             price:+rec.price||0, from:'rec', qtyKnown:false };
   return null;
 }
 /* 積み上げる行（既存の出品があり、この行自体はまだ出品していない）。
@@ -4337,7 +4339,10 @@ function csvCartExisting(r){
 function csvCartStack(r){
   if(!r.cartOnly||String(r.itemId||'').trim())return null;
   var ex=csvCartExisting(r);
-  return (ex&&Number(ex.qty||0)>=1)?ex:null;
+  if(!ex)return null;
+  // pj-sync で数量が分からない行は、書き出し時に取り直す前提で積み上げの対象にする
+  if(!ex.qtyKnown)return ex;
+  return (Number(ex.qty||0)>=1)?ex:null;
 }
 /* 売値は既存の出品のものを維持する。推奨売値と大きく違うときだけ知らせる
    （自動では変えない）。しきい値は2割。 */
@@ -4364,7 +4369,15 @@ function csvCartRecord(r,itemId,qty,price){
 }
 
 /* 行に出す「復活」「重複」の案内。 */
+/* 判定のもとは pj-sync が取り込んだ eBay の出品（ItemID・CustomLabel・数量）。
+   取り込んでいないと「既存の出品があるか」が分からないので、黙って新規出品にしない。 */
+function csvSyncLoaded(){ return !!(syncData&&(syncData.items||[]).length); }
 function csvReviveHtml(r){
+  if(!csvSyncLoaded()&&/^B[0-9A-Z]{9}$/.test(String(r.asin||'')))
+    return '<div class="note2" style="margin-top:4px">'
+      +'<span style="color:var(--bad)">eBayの出品を取り込んでいません</span>　'
+      +'販売連携タブの「状況を取り込む」を押すと、同じ商品の出品がすでにあるか'
+      +'（数量0なら復活させるか）を見分けられます。</div>';
   var rv=csvRevive(r);
   if(rv){
     var pics=(r.pics||[]).length;
@@ -4408,7 +4421,9 @@ function csvCartHtml(r){
     h+='<div class="note2" style="margin-top:4px">'
       +'<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
       +'padding:1px 5px;font-size:11px">既存の出品に追加</span>　'
-      +'現在の数量 '+q+' → '+(q+1)+'　ItemID '+esc(ex.itemId)
+      +(ex.qtyKnown?('現在の数量 '+q+' → '+(q+1))
+                   :'現在の数量は書き出すときに取り直します')
+      +'　ItemID '+esc(ex.itemId)
       +(ex.price?('　売値 '+usd(ex.price)+'（維持します）'):'')
       +'</div>';
     var gap=csvCartPriceGap(r,ex);
@@ -7101,7 +7116,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v111';   // sw.js の const V と必ず同じ値にする
+var APP_V='v112';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
