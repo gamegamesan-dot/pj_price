@@ -1011,17 +1011,17 @@ function stateEvents(env, rows) {
     const d = { title: r.title || r.ebay_sku || r.asin, ebay_qty: q,
                 fba_available: av, fba_inbound: inb, fba_reserved: rv,
                 // 予約済みの内訳（内訳をまだ取っていない行は null）
-                res_cust: rb.known ? rb.cust : null,
-                res_trans: rb.known ? rb.trans : null,
-                res_proc: rb.known ? rb.proc : null,
+                res_cust: rb.cust, res_trans: rb.trans, res_proc: rb.proc,
+                res_known: rb.known ? 1 : 0,
                 on_hand: onHand ? 1 : 0, mode: r.mode || "" };
     const base = "|" + r.asin + "|" + r.cond + "|" + dayKey();
     /* 予約済みのみ（Amazonで注文が入って出荷待ち）が最優先。
        手元在庫があってもAmazon側で在庫が消える話なので、こちらは抑えない。
        ただし通知するのは顧客注文のぶんがあるときだけ。FC移管・FC処理中だけなら
-       納品した直後の正常な状態なので、通知しない（通常扱い）。 */
+       納品した直後の正常な状態なので、通知しない（通常扱い）。
+       内訳が分からない行も通知しない（内訳が取れるまで待つ）。 */
     if (av === 0 && rv > 0 && q >= 1) {
-      if (resCust(r) >= 1) out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
+      if (resSold(r)) out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
       continue;
     }
     // 手元在庫あり（on_hand）は、FBAが0でも売り越しではない
@@ -1374,18 +1374,39 @@ async function writeInventory(env, run, rows) {
                       WHERE skus.asin=items.asin AND skus.cond=items.cond),
        fba_reserved =(SELECT COALESCE(SUM(fba_reserved),0) FROM skus
                       WHERE skus.asin=items.asin AND skus.cond=items.cond),
-       /* 予約済みの内訳も合算する。ただし内訳が取れていない個体が1件でもあれば
-          NULL（未取得）のままにする。足りない分を0として足すと、本当に売れた行の
-          警告を落としてしまうため。 */
-       fba_res_cust =(SELECT CASE WHEN SUM(CASE WHEN fba_res_cust IS NULL THEN 1 ELSE 0 END)>0
-                                  THEN NULL ELSE SUM(fba_res_cust) END FROM skus
-                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
-       fba_res_trans=(SELECT CASE WHEN SUM(CASE WHEN fba_res_trans IS NULL THEN 1 ELSE 0 END)>0
-                                  THEN NULL ELSE SUM(fba_res_trans) END FROM skus
-                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
-       fba_res_proc =(SELECT CASE WHEN SUM(CASE WHEN fba_res_proc IS NULL THEN 1 ELSE 0 END)>0
-                                  THEN NULL ELSE SUM(fba_res_proc) END FROM skus
-                      WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       /* 予約済みの内訳も合算する。予約済みを持つ個体のうち内訳が取れていないものが
+          1件でもあれば NULL（内訳不明）にする。足りない分を0として足すと、
+          本当に売れた行の警告を落としてしまうため。
+          予約済みが0の個体は内訳も0なので、その NULL では不明にしない
+          （在庫0のまま更新されない古いSKUが1件あると、商品ごと永久に
+          「内訳不明」になってしまう。2026-10-07）。 */
+       fba_res_cust =(SELECT CASE
+          /* 予約済みを持つ個体が無ければ内訳も0。古いSKUの NULL で
+             「内訳不明」にしてしまわないよう、予約済みが0の個体は見ない。 */
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 THEN 1 ELSE 0 END)=0 THEN 0
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 AND fba_res_cust IS NULL
+                        THEN 1 ELSE 0 END)>0 THEN NULL
+          ELSE SUM(CASE WHEN COALESCE(fba_reserved,0)>0
+                        THEN COALESCE(fba_res_cust,0) ELSE 0 END) END
+                      FROM skus WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       fba_res_trans=(SELECT CASE
+          /* 予約済みを持つ個体が無ければ内訳も0。古いSKUの NULL で
+             「内訳不明」にしてしまわないよう、予約済みが0の個体は見ない。 */
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 THEN 1 ELSE 0 END)=0 THEN 0
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 AND fba_res_trans IS NULL
+                        THEN 1 ELSE 0 END)>0 THEN NULL
+          ELSE SUM(CASE WHEN COALESCE(fba_reserved,0)>0
+                        THEN COALESCE(fba_res_trans,0) ELSE 0 END) END
+                      FROM skus WHERE skus.asin=items.asin AND skus.cond=items.cond),
+       fba_res_proc =(SELECT CASE
+          /* 予約済みを持つ個体が無ければ内訳も0。古いSKUの NULL で
+             「内訳不明」にしてしまわないよう、予約済みが0の個体は見ない。 */
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 THEN 1 ELSE 0 END)=0 THEN 0
+          WHEN SUM(CASE WHEN COALESCE(fba_reserved,0)>0 AND fba_res_proc IS NULL
+                        THEN 1 ELSE 0 END)>0 THEN NULL
+          ELSE SUM(CASE WHEN COALESCE(fba_reserved,0)>0
+                        THEN COALESCE(fba_res_proc,0) ELSE 0 END) END
+                      FROM skus WHERE skus.asin=items.asin AND skus.cond=items.cond),
        fba_seen_at=?3, updated_at=?3
      WHERE asin=?1 AND cond=?2`
   ).bind(k.asin, k.cond, nowIso()));
@@ -1657,10 +1678,11 @@ async function jobNotify(env) {
    在庫0の過去SKUを数から外すために使う。SQLとJSで同じ条件にしてある。 */
 const SQL_IN_STOCK =
   "(COALESCE(fba_available,0)+COALESCE(fba_inbound,0)+COALESCE(fba_reserved,0))>0";
-/* FBAの受領処理中だけの行（予約済みはあるが顧客注文は0）。納品した直後の正常な状態。
-   内訳は3つ一緒に書くので、fba_res_cust が NULL なら「内訳をまだ取っていない」。 */
-const SQL_FC_PROC =
-  "(fba_res_cust IS NOT NULL AND COALESCE(fba_reserved,0)>0 AND COALESCE(fba_res_cust,0)=0)";
+/* 予約済みはあるが「売れた」と言えない行（SQL版・JSの resHold と同じ条件）。
+   FC移管・FC処理中だけの行（顧客注文が0）と、内訳をまだ取っていない行
+   （fba_res_cust が NULL）の両方。どちらも再調達の候補にしない。 */
+const SQL_RES_HOLD =
+  "(COALESCE(fba_reserved,0)>0 AND COALESCE(fba_res_cust,0)=0)";
 function inStock(r) {
   return (Number(r.fba_available || 0) + Number(r.fba_inbound || 0)
           + Number(r.fba_reserved || 0)) > 0;
@@ -1694,26 +1716,47 @@ function isRestocking(r) {
    「予約済み」には 顧客注文・FC移管・FC処理中 が混ざっている。
    納品した直後は fcProcessingQuantity（FCでの受領・処理中）に入るので、
    合計だけで判定すると「売れた」と取り違える（2026-10-05の誤通知）。
-   known=false は内訳をまだ取っていない行（次のrollcallまで）。
-   そのときは取りこぼさないよう、これまでどおり合計で判定する。 */
+   known=false は内訳が分からない行（次のrollcallまで、または内訳の合計が
+   予約済みに届かない行）。そのときは「売れた」とも「売れていない」とも決めず、
+   「予約済み（内訳不明）」として内訳が取れるまで待つ（2026-10-07）。 */
 function resBreak(r) {
+  const nn = (v) => !(v === null || v === undefined);
   const c = r.fba_res_cust, t = r.fba_res_trans, p2 = r.fba_res_proc;
-  const known = !(c === null || c === undefined) || !(t === null || t === undefined)
-             || !(p2 === null || p2 === undefined);
   const total = Number(r.fba_reserved || 0);
-  if (!known) return { known: false, cust: total, trans: 0, proc: 0, total };
+  /* 内訳をまったく持っていない行。顧客注文を 0 とも 合計 とも決めつけない
+     （合計に寄せると納品直後のFC処理中を売れたと取り違え、0に寄せると本当の
+     注文を落とす）。cust=null の「内訳不明」として、内訳が取れるまで待つ。 */
+  if (!nn(c) && !nn(t) && !nn(p2))
+    return { known: false, cust: null, trans: null, proc: null, total, rest: total };
   const cu = Number(c || 0), tr = Number(t || 0), pr = Number(p2 || 0);
+  const rest = total - (cu + tr + pr);
   /* 内訳の合計が予約済みに届かないときは、説明のつかない残りがある。
-     その残りを「売れていない」側に寄せると注文を取りこぼすので、未取得として扱う。 */
-  if (cu + tr + pr < total) return { known: false, cust: total, trans: tr, proc: pr, total };
-  return { known: true, cust: cu, trans: tr, proc: pr, total };
+     分かっている顧客注文はそのまま使い、残りがあるぶんは内訳不明として扱う。 */
+  if (rest > 0) return { known: false, cust: cu, trans: tr, proc: pr, total, rest };
+  return { known: true, cust: cu, trans: tr, proc: pr, total, rest: 0 };
 }
-/* 顧客注文のぶんの予約済み（本当に売れた数）。内訳が無い行は合計を返す。 */
+/* 顧客注文のぶんの予約済み（本当に売れた数）。内訳が分からない行は null。 */
 const resCust = (r) => resBreak(r).cust;
-/* FBAの受領処理中だけの行。納品した直後の正常な状態なので、警告も通知もしない。 */
+/* 本当に売れた行（顧客注文が1点以上ある）。内訳不明の行はここに入れない。 */
+function resSold(r) { return Number(resBreak(r).cust || 0) >= 1; }
+/* 予約済みはあるが内訳が分からない行。売れたとみなさず、内訳が取れるまで待つ。 */
+function resUnknown(r) {
+  const b = resBreak(r);
+  return b.total > 0 && !b.known && !resSold(r);
+}
+/* FBAの受領処理中・FC移管だけの行。納品した直後の正常な状態なので、警告も通知もしない。 */
 function isFcProcessing(r) {
   const b = resBreak(r);
   return b.known && b.total > 0 && b.cust === 0;
+}
+/* 予約済みはあるが「売れた」と言えない行（FC移管・FC処理中だけ／内訳不明）。
+   再調達の候補にしない。納品直後の二重仕入れを防ぎ、内訳が取れるまで待つ。 */
+function resHold(r) { return Number(r.fba_reserved || 0) > 0 && !resSold(r); }
+/* 予約済みの行に出す言葉。内訳で分ける。空文字は通常扱い（警告しない）。 */
+function resWarn(r) {
+  if (resSold(r)) return "予約済みのみ（Amazonで注文済み）";
+  if (resUnknown(r)) return "予約済み（内訳不明）";
+  return "";
 }
 /* カートリッジのみの行（CustomLabel が -C）。FBAには送らず手元から発送するので、
    FBAの在庫が無いのが正常。代わりに「eBayの数量＝手元にある数」かどうかを見張る。 */
@@ -1743,9 +1786,11 @@ function isRestock(r) {
       /* カートリッジのみは、Amazonの最安値が箱付きの値段なので基準にならない。
          既定で候補から外す（買い直すなら箱付きとは別の判断が要る）。 */
       && !isCart(r)
-      /* FBAの受領処理中だけの行は、納品した在庫がこれから販売可能になる。
-         買い直す必要がないので候補にしない（納品直後の二重仕入れを防ぐ）。 */
-      && !isFcProcessing(r)
+      /* 予約済みがあって顧客注文が無い行は候補にしない。
+         FC移管・FC処理中だけなら納品した在庫がこれから販売可能になるので
+         買い直す必要がなく（納品直後の二重仕入れを防ぐ）、
+         内訳不明の行は内訳が取れるまで判断を待つ。 */
+      && !resHold(r)
       && !isRestocking(r);
 }
 /* 再調達の仕入値として見る最安値（円）。
@@ -1822,12 +1867,14 @@ function warnOf(r) {
     if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
     return w;
   }
-  /* 予約済みのみ。顧客注文（pendingCustomerOrderQuantity）が1以上のときだけ
-     「Amazonで注文済み」とする。FC移管・FC処理中だけなら納品直後の正常な状態で、
-     しばらくすると販売可能に変わるので警告しない。 */
+  /* 予約済みのみ。内訳で分ける。
+     顧客注文（pendingCustomerOrderQuantity）が1以上 … 「Amazonで注文済み」
+     FC移管・FC処理中だけ … 納品直後の正常な状態なので警告しない
+     内訳が分からない … 「予約済み（内訳不明）」。売れたとはみなさない。 */
   if (av === 0 && rv > 0 && q >= 1) {
-    if (resCust(r) >= 1) { w.push("予約済みのみ（Amazonで注文済み）"); return w; }
-    return w;                       // FBA受領処理中（通常扱い・警告しない）
+    const rw = resWarn(r);
+    if (rw) w.push(rw);             // 注文済み／内訳不明。FC移管・FC処理中だけなら空
+    return w;
   }
   if (av === 0 && q >= 1) {
     if (onHand) return w;                     // 手元にあるので売り越しではない
@@ -1856,7 +1903,7 @@ async function statusBody(env, url) {
     where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
     where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0"
-      + " AND cond<>'cart' AND NOT " + SQL_FC_PROC + ")");
+      + " AND cond<>'cart' AND NOT " + SQL_RES_HOLD + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1878,8 +1925,12 @@ async function statusBody(env, url) {
     Object.assign({}, r, { state: stateOf(r), restock: isRestock(r) ? 1 : 0,
                            restocking: isRestocking(r) ? 1 : 0,
                            restock_trouble: restockTrouble(r),
-                           // FBAの受領処理中（予約済みだが顧客注文ではない）
+                           // FBAの受領処理中・FC移管（予約済みだが顧客注文ではない）
                            fc_processing: isFcProcessing(r) ? 1 : 0,
+                           // 予約済みの内訳が分からない行（判断を待つ）
+                           res_unknown: resUnknown(r) ? 1 : 0,
+                           // 予約済みだが売れたとは言えない行（再調達の候補にしない）
+                           res_hold: resHold(r) ? 1 : 0,
                            // カートリッジのみ（手元から発送する行）
                            cart: isCart(r) ? 1 : 0,
                            cart_mismatch: cartMismatch(r) ? 1 : 0,
@@ -1928,7 +1979,7 @@ async function statusBody(env, url) {
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
           AND restocking=0 AND dropship=0 AND cond<>'cart'
-          AND NOT ${SQL_FC_PROC}) AS restock,
+          AND NOT ${SQL_RES_HOLD}) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND restocking=1) AS restocking,
@@ -2339,5 +2390,6 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
-                        resBreak, resCust, isFcProcessing, invRow, writeInventory,
+                        resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
+                        invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch };
