@@ -875,6 +875,36 @@ function stateSet(env, k, v) {
      ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`
   ).bind(k, String(v == null ? "" : v), nowIso());
 }
+/* ---- 画面の設定を端末をまたいで同じにする（GET/POST /settings）----
+   pj_price の「詳細設定（目標の決め方）」を JSON ひとつとして sync_state に置く。
+   どちらが新しいか決められるよう、変更した時刻（at）を一緒に持ち、
+   **古い時刻の書き込みは退ける**（別の端末であとから変えた値を守るため）。
+   退けたときは、いま入っている設定を返して端末側に合わせてもらう。 */
+const SETTINGS_KEY = "ui.settings";
+const SETTINGS_MAX = 8000;              // 設定だけなので十分な上限（文字数）
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/;
+async function settingsGet(env) {
+  const s = await stateGet(env, SETTINGS_KEY);
+  if (!s) return { ok: true, at: "", settings: {} };
+  try {
+    const o = JSON.parse(s);
+    return { ok: true, at: String(o.at || ""), settings: o.settings || {} };
+  } catch (e) { return { ok: true, at: "", settings: {} }; }
+}
+async function settingsPut(env, body) {
+  const at = String((body && body.at) || "");
+  const st = body && body.settings;
+  if (!ISO_RE.test(at) || !st || typeof st !== "object" || Array.isArray(st))
+    return { ok: false, error: "bad_request" };
+  const txt = JSON.stringify({ at, settings: st });
+  if (txt.length > SETTINGS_MAX) return { ok: false, error: "too_large" };
+  const cur = await settingsGet(env);
+  // いま入っている設定のほうが新しければ書かない（同じ時刻なら新しい書き込みを採る）
+  if (cur.at && cur.at > at)
+    return { ok: true, stored: false, at: cur.at, settings: cur.settings };
+  await stateSet(env, SETTINGS_KEY, txt).run();
+  return { ok: true, stored: true, at, settings: st };
+}
 async function runBatch(env, run, stmts) {
   if (!stmts.length) return;
   for (let i = 0; i < stmts.length; i += 50) {
@@ -2316,6 +2346,15 @@ export default {
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
 
+      if (request.method === "GET" && url.pathname === "/settings")
+        return json(await settingsGet(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/settings") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ ok: false, error: "bad_request" }, 400, origin); }
+        const r = await settingsPut(env, body);
+        return json(r, r.ok ? 200 : 400, origin);
+      }
+
       if (request.method === "GET" && url.pathname === "/orders/summary")
         return json(await ordersSummary(env, url), 200, origin);
 
@@ -2392,4 +2431,5 @@ export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,
-                        gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch };
+                        gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
+                        settingsGet, settingsPut };

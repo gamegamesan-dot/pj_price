@@ -226,6 +226,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="row"><label>米国の想定税率</label><input type="number" id="usTaxRate" value="8" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
         <button class="btn" id="resetAuto">初期値に戻す</button>
         <span class="note2" id="autoNote" style="margin:0 0 0 8px"></span>
+        <div class="note2" id="advSyncNote" style="margin:6px 0 0"></div>
       </div>
     </details>
   </section>
@@ -1024,7 +1025,8 @@ $('resetShip').onclick=function(){ shipEdited=false; suggestShip(); calc(); buil
 // 単位ごとに直前の値を覚えておき、切り替えで値が壊れないようにする。
 /* ---- 目標の決め方（詳細設定）----
    人が決めるのは相場の入力だけにしたいので、目標利益は設定値から自動で出す。
-   これらは localStorage に保存しない。開き直すと必ず既定値から始まる。 */
+   この5つは端末（localStorage）と pj-sync（D1）に保存する。開き直しても
+   変更後の値で始まる（v118。それまでは毎回既定値に戻っていた）。 */
 const BASE_PROFIT_DEFAULT=1000;   // 下限利益（円）
 const LINK_RATE_DEFAULT=30;       // 仕入への連動率（%）
 const SALE_RATE_DEFAULT=15;       // 売上比下限（%）
@@ -1055,19 +1057,102 @@ function applyTargetUnit(){
   $('targetMode').style.background=($('targetMode').value!==TARGET_MODE_DEFAULT)?'#fff4d6':'';
   $('autoNote').textContent=ch?'既定値から変更中':'';
 }
-// 詳細設定と相場入力は触るたびに引き直す。どれも localStorage には保存しない。
+/* ---- 詳細設定の保存（端末＋pj-sync）----
+   開き直すと既定値（下限利益1000円・連動率30%）に戻っていたので、変更した値を
+   端末に保存する。v116 の「売値の見直し」はこの設定で推奨売値を出すため、
+   既定値に戻ると意図しない行が見直しの対象になってしまう。
+   pj-sync（D1）にも置き、iPhone と PC など別の端末でも同じ値で始まるようにする。
+   端末と D1 で違うときは、**あとから変えたほう**（at が新しいほう）を使う。 */
+const ADV_FIELDS=['targetMode','baseProfit','linkRate','saleRate','usTaxRate'];
+function advDefaults(){
+  return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
+           linkRate:String(LINK_RATE_DEFAULT), saleRate:String(SALE_RATE_DEFAULT),
+           usTaxRate:String(US_TAX_DEFAULT) };
+}
+var advAt='';          // 詳細設定を最後に変えた時刻（ISO）。D1 との突き合わせに使う
+function advGet(){
+  var o={}; ADV_FIELDS.forEach(function(id){ o[id]=String($(id).value); }); return o;
+}
+/* 受け取った値を欄に入れる。選択肢に無い値（古い版の設定）は捨てて既定のままにする。 */
+function advApply(o){
+  if(!o)return false;
+  var hit=false;
+  ADV_FIELDS.forEach(function(id){
+    var v=o[id];
+    if(v===undefined||v===null||v==='')return;
+    var el=$(id);
+    if(el.tagName==='SELECT'){
+      var ok=false,i;
+      for(i=0;i<el.options.length;i++)if(el.options[i].value===String(v))ok=true;
+      if(!ok)return;
+    }
+    el.value=String(v); hit=true;
+  });
+  return hit;
+}
+// 変えた時刻を控えて端末に保存し、少し待って pj-sync にも送る
+function advTouch(){ advAt=new Date().toISOString(); save(); advPushLater(); }
+function advNote(t){ var el=$('advSyncNote'); if(el)el.textContent=t||''; }
+var advPushT=0;
+function advPushLater(){
+  if(advPushT)clearTimeout(advPushT);
+  advPushT=setTimeout(function(){ advPushT=0; advPush(); },800);
+}
+/* D1 の設定に合わせる。売値の計算が変わるので、表示も一緒に引き直す。 */
+function advAdopt(d){
+  if(!advApply(d&&d.settings))return false;
+  advAt=String((d&&d.at)||'');
+  save(); applyTargetUnit();
+  try{ calc(); buildListing(); buildShopee(); }catch(e){}
+  try{ if(typeof csvRender==='function'&&typeof csvList!=='undefined')csvRender(); }catch(e){}
+  advNote('ほかの端末で変えた設定に合わせました');
+  return true;
+}
+function advPush(){
+  if(!syncUrl()||!syncApiKey()||!advAt)return;
+  fetch(syncUrl()+'/settings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({ at:advAt, settings:advGet() })})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ advNote('この端末だけに保存しました'); return; }
+      /* 書き込みが退けられたのは、D1 にもっと新しい設定があるとき。
+         別の端末であとから変えた値を上書きしないよう、そちらに合わせる。 */
+      if(d.stored===false&&d.at&&d.at>advAt){ advAdopt(d); return; }
+      advNote('pj-sync にも保存しました（ほかの端末でも同じ値で始まります）');
+    })['catch'](function(){
+      advNote('この端末だけに保存しました（pj-sync に届きません）');
+    });
+}
+/* 開いたときに D1 と突き合わせる。新しいほうを採り、端末のほうが新しければ送る。 */
+function advPull(){
+  if(!syncUrl()||!syncApiKey())return;
+  fetch(syncUrl()+'/settings',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true)return;
+      var at=String(d.at||'');
+      if(at&&(!advAt||at>advAt)){ advAdopt(d); return; }   // D1 のほうが新しい
+      if(advAt&&(!at||advAt>at))advPush();                 // 端末のほうが新しい
+    })['catch'](function(){});
+}
+function advSyncInit(){ advPull(); }
+// 詳細設定と相場入力は触るたびに引き直す。詳細設定は変えた値も保存する。
 ['baseProfit','linkRate','saleRate','usTaxRate','targetMode','soldPrice','soldOrigin']
   .forEach(function(id){
-    $(id).addEventListener('input',function(){ applyTargetUnit(); calc(); buildListing(); buildShopee(); });
-    $(id).addEventListener('change',function(){ applyTargetUnit(); calc(); buildListing(); buildShopee(); });
+    var hit=function(){
+      applyTargetUnit();
+      if(ADV_FIELDS.indexOf(id)>=0)advTouch();
+      calc(); buildListing(); buildShopee();
+    };
+    $(id).addEventListener('input',hit);
+    $(id).addEventListener('change',hit);
   });
+// 初期値に戻すのもひとつの変更として保存する（次に開いたときも既定値で始まる）
 $('resetAuto').onclick=function(){
-  $('baseProfit').value=BASE_PROFIT_DEFAULT;
-  $('linkRate').value=LINK_RATE_DEFAULT;
-  $('saleRate').value=SALE_RATE_DEFAULT;
-  $('usTaxRate').value=US_TAX_DEFAULT;
-  $('targetMode').value=TARGET_MODE_DEFAULT;
-  applyTargetUnit(); calc(); buildListing(); buildShopee();
+  advApply(advDefaults());
+  applyTargetUnit(); advTouch(); calc(); buildListing(); buildShopee();
+  try{ if(typeof csvRender==='function'&&typeof csvList!=='undefined')csvRender(); }catch(e){}
 };
 
 /* ---- 製品ライン / ゲーム機種 → 梱包後重量の自動入力 ---- */
@@ -1512,6 +1597,9 @@ function save(){
     // 目標利益は設定値から毎回計算するので保存しない。
     // 広告料率も商品ごとに決める値なので保存しない（開き直すと既定の5%から始める）。
     delete o.cost;delete o.weight;delete o.shipCharge;delete o.adRate;
+    // 詳細設定（目標の決め方）は保存する。変えた時刻も一緒に持ち、D1 と突き合わせる
+    ADV_FIELDS.forEach(function(id){ o[id]=$(id).value; });
+    o.advAt=advAt;
     o.fxEdited=fxEdited;   // 手入力の為替を自動取得で上書きしないため
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
@@ -1531,11 +1619,13 @@ function load(){
         }
         el.value=o[k];});
       fxEdited=!!o.fxEdited;   // 為替を手入力していたら自動取得しない
+      advAt=String(o.advAt||'');   // 詳細設定を最後に変えた時刻
     }
   }catch(e){}
   // ここから下は保存データの有無に関わらず、開いたときの初期状態を作る。
-  // 以前の版が保存した請求送料・目標利益・その単位が残っていても、要素が無いか
+  // 以前の版が保存した請求送料・その単位が残っていても、要素が無いか
   // 下の suggestShip() が入れ直すので無視される。
+  // 詳細設定（目標の決め方）は上の復元でそのまま入る（v118 から保存している）。
   shipEdited=false;
   $('resetFx').style.display=fxEdited?'inline-block':'none';
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
@@ -7321,6 +7411,9 @@ $('addToCsv').onclick=function(){
 };
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+/* 詳細設定を pj-sync と突き合わせる。pj-sync のURL・キーは csvLoad() で入るので、
+   そのあとで呼ぶ。届かなくても端末に保存した値でそのまま動く。 */
+advSyncInit();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -7336,7 +7429,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v117';   // sw.js の const V と必ず同じ値にする
+var APP_V='v118';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
