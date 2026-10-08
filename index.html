@@ -2743,14 +2743,18 @@ function csvCatName(cat){
 }
 /* 出品文タブの「eBayカテゴリ」の選択肢も、登録したカテゴリを含めて作り直す。
    いま選んでいる値は選び直さない（登録から消えた値だけは先頭に戻る）。 */
-function csvAddCatOpts(){
+function csvAddCatOpts(keep){
   var sel=$('addCsvCat'); if(!sel)return;
-  var cur=sel.value, h='';
-  function add(v,t){ h+='<option value="'+v+'">'+esc(t)+'</option>'; }
+  var cur=sel.value, h='', vals=[];
+  function add(v,t){ vals.push(v); h+='<option value="'+v+'">'+esc(t)+'</option>'; }
   add('261055',CSV_CAT['261055']+'（261055）');
   add('261068',CSV_CAT['261068']+'（261068）');
   csvCustomCats().forEach(function(c){ add(c.id,c.name+'（'+c.id+'）'); });
   add('139973',CSV_CAT['139973']+'（139973）');
+  /* 登録から消えたIDの行を開いたときも、その値を選択肢に残す。
+     残さないと選べる値が無くなり、書き戻しでカテゴリが空になってしまう。 */
+  var k=String(keep||'').trim();
+  if(k&&vals.indexOf(k)<0)add(k,csvCatName(k)+'（登録なし）');
   sel.innerHTML=h;
   if(cur)sel.value=cur;
 }
@@ -2776,6 +2780,80 @@ var CSV_CART_DESC='Cartridge only. No case or manual included.';
 var CSV_CART_CD='Cartridge only (no case/manual)';
 // 「可」のゲームか（カートリッジのみの自動判定）
 function csvIsCartSrc(cat,code){ return cat==='139973'&&code==='UA'; }
+/* ---- 商品名に機種が書いてあるゲームの行 ----
+   せどりすとの接頭辞が game でない行（hobby / toy で取り込んだ行）は
+   「カテゴリ未振分」になり、手で選び直す手間がかかっていた。
+   「SW版」「Switch版」「［Switch］」「-Switch」などが入っていれば、
+   機種とカテゴリ（ゲーム 139973）をここで確定する。
+
+   ・Switch 2 を先に見る（「Switch2版」を Switch に落とさない）
+   ・「SW」だけだと スター・ウォーズ（SW）のフィギュアを拾ってしまうので、
+     「版」が付くときだけ機種として読む
+   ・「2本」「2枚」のような数え方は Switch 2 にしない */
+var CSV_GAME_HINT=[
+  { re:/(?:^|[^0-9A-Za-z])(?:switch|sw|nsw)\s*2(?:\s*版)?(?![0-9A-Za-z本枚個台巻])/i,
+    key:'switch2' },
+  { re:/スイッチ\s*2(?![本枚個台巻])/, key:'switch2' },
+  { re:/(?:^|[^0-9A-Za-z])(?:sw|nsw)\s*版/i, key:'switch' },
+  { re:/(?:^|[^0-9A-Za-z])switch(?:\s*版)?(?![0-9A-Za-z])/i, key:'switch' },
+  { re:/スイッチ/, key:'switch' }
+];
+function csvGameHint(t){
+  var s=String(t||'');
+  for(var i=0;i<CSV_GAME_HINT.length;i++)
+    if(CSV_GAME_HINT[i].re.test(s))return CSV_GAME_HINT[i].key;
+  return '';
+}
+// その機種の Item Specifics の値（Platform）
+function csvGameSpec(key){ var p=key?platByKey(key):null; return p?p.spec:''; }
+/* フィギュアの手がかりがある行は、商品名に機種名が入っていてもゲームにしない
+   （「ねんどろいど …（Switch）」のような行を取り違えないため）。 */
+function csvLooksFig(t){
+  var s=String(t||'');
+  return !!(csvLineFrom(s)||csvScaleFrom(s)||CSV_ACT_WORDS.test(s));
+}
+/* 行が持っているせどりすとの状態（列の表記かSKUの状態コード）を状態コードに直す。
+   カテゴリを変えると ConditionID の表が変わるので、引き直すのに使う。 */
+function csvCodeOf(r){
+  var v=String(r.condSrc||'').trim();
+  if(CSV_COND_COL[v])return CSV_COND_COL[v];
+  return (CSV_COND[v]||CSV_COND_FIG[v])?v:'';
+}
+/* 行のカテゴリを変える。カテゴリで変わるもの（状態の表・機種・カートリッジのみ・
+   梱包マージンぶんの重量）もここでそろえる。人が選んだときも、自動で確定した
+   ときも同じ関数を通し、以降の流れが分かれないようにする。 */
+function csvCatApply(r,cat,manual){
+  var wasGame=(String(r.cat||'')==='139973'), now=String(cat||'');
+  var g=(now==='139973');
+  r.cat=now; r.catDone=true;
+  if(manual)r.catManual=true;
+  var code=csvCodeOf(r);
+  // ゲームとフィギュアで状態の表が違う。区分が変わった行だけ引き直す
+  if(code&&wasGame!==g){
+    r.cartOnly=g?csvIsCartSrc(now,code):false;
+    r.condId=r.cartOnly?CSV_CART_COND:((g?CSV_COND:CSV_COND_FIG)[code]||r.condId);
+    r.condErr=false;
+  }
+  if(!g)r.cartOnly=false;                     // カートリッジのみはゲームだけの印
+  var sp=r.specs=r.specs||{};
+  // ゲームにしたら機種を商品名から拾う。拾えなければ行で選んでもらう
+  if(g&&!String(sp.platform||'').trim())
+    sp.platform=csvPlatformFrom(r.titleJa)||csvGameSpec(csvGameHint(r.titleJa));
+  if(!r.wManual)r.weight=csvWeightFor(r);
+  csvRecalc(r);
+  return r;
+}
+/* 商品名に機種が書いてあるゲームの行を、ゲーム（139973）に確定する。
+   ゲーム以外のカテゴリが確定している行（人が選んだ行・自動で振り分けが済んだ行）
+   は変えない。直した行は true を返す。 */
+function csvGameFix(r){
+  if(!r||String(r.cat||'')==='139973')return false;
+  if(r.catManual||r.catDone||r.catFixed)return false;
+  if(!csvGameHint(r.titleJa)||csvLooksFig(r.titleJa))return false;
+  csvCatApply(r,'139973',false);
+  r.catFixed=true;          // 「カテゴリ未振分」にしない（手で選び直さなくてよい）
+  return true;
+}
 // Platform：せどりすとのタイトルに出る表記 → eBayの推奨値（一字一句合わせる）
 /* 和名・略称 → Item Specifics の値。上の PLATFORMS から作る。
    title の綴り（gamePlatform() の戻り値）でも引けるようにしておく。 */
@@ -2892,6 +2970,11 @@ function csvLoad(){
     if(ln){ if(!sp.line)sp.line=ln.line; sp.brand=ln.brand; }
     else if(sp.brand){ var nb=csvBrandFrom(sp.brand); if(nb)sp.brand=nb; }
   });
+  /* 商品名に機種が書いてあるゲームの行を、保存済みの行にも当てる。
+     すでに取り込んであった「カテゴリ未振分」の行を、手で選び直さなくてよいようにする
+     （人が選んだ行・振り分けが済んだ行は触らない）。 */
+  var gfix=csvList.filter(csvGameFix).length;
+  if(gfix)csvSaveList();
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){
@@ -3238,6 +3321,12 @@ function csvImport(text){
     var sku=String(r[iSku]).trim(), sp=csvSkuParts(sku);
     var cat=CSV_PREFIX[sp.prefix];
     if(cat===undefined||cat===null){ skipped++; continue; }
+    var title=iTitle>=0?String(r[iTitle]||'').trim():'';
+    /* 商品名に機種が書いてあるゲーム（「SW版」「Switch版」など）は、
+       接頭辞が game でなくてもゲームとして取り込む（未振分にしない）。
+       フィギュアの手がかりがある行は触らない。 */
+    var gh=(cat!=='139973'&&!csvLooksFig(title))?csvGameHint(title):'';
+    if(gh)cat='139973';
     var fig=(cat!=='139973');
     // 状態は「出品コンディション」列が正。列が空か想定外の値のときだけ SKU の状態コードを使う。
     // SKU と列が食い違ってもエラーにはしない（列を採る）。
@@ -3263,10 +3352,11 @@ function csvImport(text){
       if(wRaw>g.wRaw)g.wRaw=wRaw;
       continue;
     }
-    var title=iTitle>=0?String(r[iTitle]||'').trim():'';
     groups[key]={ id:'c'+Date.now().toString(36)+n.toString(36),
       src:'sedori', sku:sku, jan:iJan>=0?String(r[iJan]||'').trim():'', asin:asin,
-      titleJa:title, titleEn:'', cat:cat, catFixed:(sp.prefix==='game'),
+      titleJa:title, titleEn:'', cat:cat,
+      // 機種が書いてある行は確定扱い（「カテゴリ未振分」にしない）
+      catFixed:(sp.prefix==='game'||!!gh),
       condId:condId, condErr:condErr, condSrc:(condCol||sp.cond||''),
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
@@ -3277,7 +3367,8 @@ function csvImport(text){
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
-              platform:fig?'':csvPlatformFrom(title),
+              // 「SW版」のように表に無い書き方は csvGameHint で補う
+              platform:fig?'':(csvPlatformFrom(title)||csvGameSpec(gh)),
               brand:fig?(csvBrandFrom(title)||((csvLineFrom(title)||{}).brand||'')):'',
               line:fig?((csvLineFrom(title)||{}).line||''):'',
               gameName:'', publisher:'', franchise:'', character:'', model:'',
@@ -3782,13 +3873,16 @@ function csvTitleBox(r){
    変わってしまわないようにする）。 */
 function csvCatSelect(r){
   var un=(!r.catFixed&&!r.catDone);
-  var cur=un?'':String(r.cat), vals=['261055','261068'], h='';
+  var cur=un?'':String(r.cat), vals=['261055','261068','139973'], h='';
   function add(v,t){
     h+='<option value="'+v+'"'+(cur===v?' selected':'')+'>'+esc(t)+'</option>'; }
   if(!r.catFixed)
     h+='<option value=""'+(un?' selected':'')+'>カテゴリ未振分</option>';
   add('261055',CSV_CAT['261055']+'（261055）');
   add('261068',CSV_CAT['261068']+'（261068）');
+  /* ゲームもここで選べるようにする。これまでは出品文タブでしか選べず、
+     そのために「出品文を作る」を通さねばならず、流れが通常の行と違っていた。 */
+  add('139973',CSV_CAT['139973']+'（139973）');
   csvCustomCats().forEach(function(c){ vals.push(c.id); add(c.id,c.name+'（'+c.id+'）'); });
   if(cur&&vals.indexOf(cur)<0)add(cur,csvCatName(cur)+'（登録なし）');
   return '<select data-cat="'+r.id+'" style="flex:0 0 auto;max-width:100%;padding:5px;'
@@ -3913,7 +4007,9 @@ function csvRender(){
          カテゴリのプルダウンや原産国ボタンの有無で位置がずれないようにする。 */
       +'<div data-btns="'+r.id+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'
       +csvPicBtn(r);
-    if(r.cat!=='139973')h+=csvCatSelect(r);
+    /* カテゴリの選択はどの行にも出す。ゲームの行にも出さないと、
+       取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
+    h+=csvCatSelect(r);
     if(v==='amazon')
       h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -4175,13 +4271,13 @@ $('csvList').addEventListener('change',function(e){
   var cid=t.getAttribute('data-cat');
   if(cid){
     var rc=csvRowById(cid); if(!rc)return;
-    // catManual は「人が選んだ」印。自動の振り分け（catDone）と区別して
-    // 絞り込み「直した行だけ」に使う。
-    if(t.value){ rc.cat=t.value; rc.catDone=true; rc.catManual=true; }
+    /* catManual は「人が選んだ」印。自動の振り分け（catDone）と区別して
+       絞り込み「直した行だけ」に使う。
+       カテゴリで変わるもの（状態の表・機種・カートリッジのみ・梱包マージンぶんの
+       重量）は csvCatApply がまとめてそろえる（自動の確定と同じ流れにする）。 */
+    if(t.value)csvCatApply(rc,t.value,true);
     // 空は「カテゴリ未振分」。取り込み時と同じ既定（非可動）に戻して指摘を出し直す
-    else { rc.cat='261055'; rc.catDone=false; rc.catManual=false; }
-    // カテゴリで梱包マージンが変わるので重量と利益を引き直す
-    if(!rc.wManual){ rc.weight=csvWeightFor(rc); csvRecalc(rc); }
+    else { csvCatApply(rc,'261055',false); rc.catDone=false; rc.catManual=false; }
     csvSaveList(); csvRender(); return;
   }
   /* 相場を入れ終えたら一覧を作り直す（判定で並び順が変わる）。
@@ -5690,8 +5786,11 @@ function csvPlatOf(r){ return platBy('spec',(r.specs||{}).platform); }
 // ゲームか、フィギュアか
 function csvTitleKind(r){
   if(r.cat==='139973')return 'game';
-  // 登録した任意カテゴリもフィギュアとして扱う（英題も出品文も作り方は同じ）
-  return (CSV_FIG_CATS.indexOf(r.cat)>=0||csvCatOf(r.cat))?'fig':'';
+  /* ゲーム以外はすべてフィギュアと同じ作り方にする（英題も出品文も同じ）。
+     以前は登録カテゴリを設定から引けたときだけ 'fig' にしていたため、
+     設定の登録を消した行・別の端末で登録が無い行は、英題欄も再生成も出ず、
+     一括作成の対象からも外れていた。 */
+  return String(r.cat||'').trim()?'fig':'';
 }
 /* 生成の対象になり得る行か。
    'ok'      … そのまま送れる
@@ -7293,6 +7392,8 @@ function csvEditOpen(id){
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
   $('addCsvJan').value=r.jan||'';
+  // 行のカテゴリを必ず選べるようにしてから入れる（登録から消えたIDも残す）
+  csvAddCatOpts(r.cat);
   $('addCsvCat').value=r.cat;
   if(r.sku){ $('sku').value=r.sku; skuEdited=true; }
   // どの商品を編集中かが常に見えるように、和名・JAN・SKU・状態を上部に出す。
@@ -7320,12 +7421,20 @@ function csvEditOpen(id){
 // いまの生成結果を行へ書き戻す
 function csvEditWrite(){
   var r=csvRowById(csvEditId); if(!r)return false;
-  r.titleEn=$('title').value.trim();
-  r.titleManual=true;          // 出品文タブで仕上げた行は再生成で上書きしない
+  var tNew=$('title').value.trim(), tOld=String(r.titleEn||'').trim();
+  if(tNew)r.titleEn=tNew;
+  /* 「手で直した行」の印は、英題を自分で書き換えたときだけ付ける。
+     以前はカテゴリを選んで書き戻しただけの行にも付いていたため、
+     その行が英題の一括作成・作り直しの対象から外れていた。 */
+  if(titleEdited&&tNew&&tNew!==tOld)r.titleManual=true;
   r.descHtml=descHTML();
   r.sku=$('sku').value||r.sku;
   r.jan=$('addCsvJan').value.trim();
-  r.cat=$('addCsvCat').value; r.catDone=true;
+  /* カテゴリは選べた値だけ採る。選択肢に無い値（登録から消えたID）のときに
+     空で上書きすると、行のカテゴリが消えて英題も出品文も作れなくなる。 */
+  var cNew=String($('addCsvCat').value||'').trim();
+  if(cNew&&cNew!==String(r.cat||''))csvCatApply(r,cNew,true);
+  else if(cNew)r.catDone=true;
   r.cost=+$('cost').value||r.cost;
   // 状態は新品／中古の区分が食い違うときだけ入れ替える。同じ区分なら細かい等級を残す。
   var ck=condKey(), wantNew=(ck==='sealed'||ck==='newopen');
@@ -7429,7 +7538,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v118';   // sw.js の const V と必ず同じ値にする
+var APP_V='v119';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
