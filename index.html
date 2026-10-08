@@ -129,11 +129,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 <div class="tabbar">
   <div class="wrap">
     <div class="tabs">
-      <button id="tabA" aria-pressed="true">eBay</button>
-      <button id="tabB" aria-pressed="false">出品文</button>
-      <button id="tabC" aria-pressed="false">Shopee</button>
-      <button id="tabD" aria-pressed="false">出品CSV</button>
+      <!-- 並びは使う順。開いたときは「出品CSV」を出す。
+           「出品文」は eBay タブの中（値付け｜出品文）に入れてある。 -->
+      <button id="tabD" aria-pressed="true">出品CSV</button>
       <button id="tabE" aria-pressed="false">販売連携</button>
+      <button id="tabA" aria-pressed="false">eBay</button>
+      <button id="tabC" aria-pressed="false">Shopee</button>
     </div>
   </div>
 </div>
@@ -141,8 +142,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 <div class="wrap">
   <div id="tip"></div>
 
-  <!-- 計算機の「商品」欄はタブの下。出品CSV・販売連携では switchTab() が隠す。 -->
-  <section id="itemBox">
+  <!-- eBayタブの中の切り替え。値付けと出品文を1つのタブにまとめてある。
+       どちらも「商品」欄（仕入値・重量）を使うので、この下に共通で置く。 -->
+  <div class="tabs" id="ebSubBar" style="display:none">
+    <button id="ebSubPrice" aria-pressed="true">値付け</button>
+    <button id="ebSubList" aria-pressed="false">出品文</button>
+  </div>
+
+  <!-- 計算機の「商品」欄はタブの下。出品CSV・販売連携では switchTab() が隠す。
+       開いたときは出品CSVなので、最初から隠した状態で描く。 -->
+  <section id="itemBox" style="display:none">
     <div class="h">商品</div>
     <div class="body">
       <div class="row"><label>仕入値（税込）</label><input type="number" id="cost" value="500" inputmode="numeric"><span class="unit">円</span></div>
@@ -170,7 +179,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     </div>
   </section>
 
-  <div id="tabPricing">
+  <div id="tabPricing" style="display:none">
 
   <section>
     <div class="h">相場と目標</div>
@@ -417,7 +426,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" id="skuHist" style="margin-top:6px"></div>
     </div>
     <div class="note">
-      YYMMDD-端末記号HHMM-仕入値。出品文タブを開いたときに自動で発番します。手で書き換えても構いません。
+      YYMMDD-端末記号HHMM-仕入値。eBayタブの「出品文」を開いたときに自動で発番します。手で書き換えても構いません。
     </div>
   </section>
 
@@ -535,7 +544,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </div>
 
   <!-- ============ 出品CSVタブ（フェーズ1：手動） ============ -->
-  <div id="tabCsv" style="display:none">
+  <div id="tabCsv">
 
   <!-- ① 取り込み（普段は閉じておく。開閉の状態は保存する） -->
   <section>
@@ -691,8 +700,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">これ未満の仕入値の行に「仕入値要確認」の赤い印を付け、書き出しの確認でも注意として出します（せどりすとで0円などを入れたままの行を見つけるため）。行の仕入値欄で直せます。</div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
       <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
-      <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と出品文タブの「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
-      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや出品文タブで確定した値は上書きしません。</div></div>
+      <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
+      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや eBayタブの「出品文」で確定した値は上書きしません。</div></div>
       <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
@@ -1654,19 +1663,30 @@ var titleEdited=false;
 // 空のあいだは「自動で振り分け」ボタンを無効化。手入力での出品は通常どおり可能（自動は補助）。
 var PARSE_API='https://pj-price.gamegamesan.workers.dev'; // デプロイ済みWorker(pj-price)
 
-$('tabA').onclick=function(){switchTab('A');};
-$('tabB').onclick=function(){switchTab('B');};
+/* eBayタブのボタンは、最後に見ていた側（値付け／出品文）で開く。
+   出品文を書いている途中にほかのタブへ寄っても、戻ったときに続けられる。 */
+$('tabA').onclick=function(){switchTab(EB_SUB);};
 $('tabC').onclick=function(){switchTab('C');};
 $('tabD').onclick=function(){switchTab('D');};
 $('tabE').onclick=function(){switchTab('E');};
+/* eBayタブの中の切り替え。'A'＝値付け／'B'＝出品文。
+   外から switchTab('B') を呼べばこれまでどおり出品文側が開く
+   （出品CSVタブの行の「出品文を作る」がこれを使う）。 */
+$('ebSubPrice').onclick=function(){switchTab('A');};
+$('ebSubList').onclick=function(){switchTab('B');};
+var EB_SUB='A';          // eBayタブの中でいま出している側
 function switchTab(t){
-  $('tabA').setAttribute('aria-pressed',t==='A');
-  $('tabB').setAttribute('aria-pressed',t==='B');
+  if(t==='A'||t==='B')EB_SUB=t;
+  var eb=(t==='A'||t==='B');          // eBayタブ（値付け・出品文のどちらか）
+  $('tabA').setAttribute('aria-pressed',eb);
   $('tabC').setAttribute('aria-pressed',t==='C');
   $('tabD').setAttribute('aria-pressed',t==='D');
   $('tabE').setAttribute('aria-pressed',t==='E');
-  $('tabPricing').style.display=t==='A'?'block':'none';
-  $('tabListing').style.display=t==='B'?'block':'none';
+  $('ebSubBar').style.display=eb?'flex':'none';
+  $('ebSubPrice').setAttribute('aria-pressed',eb&&EB_SUB==='A');
+  $('ebSubList').setAttribute('aria-pressed',eb&&EB_SUB==='B');
+  $('tabPricing').style.display=(eb&&EB_SUB==='A')?'block':'none';
+  $('tabListing').style.display=(eb&&EB_SUB==='B')?'block':'none';
   $('tabShopee').style.display=t==='C'?'block':'none';
   $('tabCsv').style.display=t==='D'?'block':'none';
   $('tabSync').style.display=t==='E'?'block':'none';
@@ -1674,10 +1694,10 @@ function switchTab(t){
      （どちらも行ごとの値で計算する）。タブより上が長いと一覧が見づらいので隠す。 */
   $('itemBox').style.display=(t==='D'||t==='E')?'none':'block';
   // 設定セクションは全タブ共通なので、Shopeeを開いている間だけ eBay 専用の項目を隠す。
-  var eb=(t!=='C');
-  $('ebayOnly').style.display=eb?'block':'none';
-  $('ebayNote').style.display=eb?'block':'none';
-  $('ebayOnlyItem').style.display=eb?'block':'none';
+  var notSp=(t!=='C');
+  $('ebayOnly').style.display=notSp?'block':'none';
+  $('ebayNote').style.display=notSp?'block':'none';
+  $('ebayOnlyItem').style.display=notSp?'block':'none';
   if(t==='B')buildListing();
   if(t==='C'){ buildShopee(); fetchSpFx(); }
   if(t==='D')csvRender();
@@ -2554,13 +2574,13 @@ function buildShopee(){
 
   var wn=$('spWarn'),msg=[];
   if(fx<=0)msg.push('為替レートを入力してください。');
-  if(m.w<=0)msg.push('実測重量（梱包込）を入力してください。eBayタブの重量を使います。');
+  if(m.w<=0)msg.push('実測重量（梱包込）を入力してください。eBayタブ（値付け）の重量を使います。');
   if(m.fOn>=1)msg.push('手数料の合計が100%を超えています。');
   if(!m.rec.rateOk)msg.push('売上比下限が高すぎて売値を決められません（手数料を引いた上限 '+((1-m.fOn)*100).toFixed(1)+'%未満にしてください）。円式のみで計算しています。');
   if(m.newOn&&profitOff<0)msg.push('新規セラー免除が切れるとこの価格では赤字になります。');
   if(msg.length){wn.style.display='block';wn.textContent='⚠ '+msg.join(' ');}else{wn.style.display='none';}
 
-  $('spItemNote').textContent='仕入値・実測重量（梱包込）・梱包資材・輸出免税の設定は eBayタブと共通です。'
+  $('spItemNote').textContent='仕入値・実測重量（梱包込）・梱包資材・輸出免税の設定は eBayタブ（値付け）と共通です。'
     +'いまの値：仕入 '+yen(+$('cost').value||0)+'　/　重量 '+(+$('weight').value||0).toLocaleString()+'g　/　梱包資材 '+yen(m.K);
 }
 
@@ -3903,7 +3923,7 @@ function csvRender(){
     ? ('相場未確認 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
        +'　/　英題なし '+noEn+'件　/　説明文なし '+noDesc+'件　/　中古（要撮影）'+used+'件')
-    : 'せどりすとCSVを取り込むか、出品文タブから1件ずつ追加してください';
+    : 'せどりすとCSVを取り込むか、eBayタブの「出品文」から1件ずつ追加してください';
   var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
   if(odef)$('csvSummary').textContent+='　/　原産国が既定値 '+odef+'件';
   /* 書き出しの見通し。実際に書き出す行だけでカテゴリを数え、除外のぶんは別に出す。
@@ -7523,6 +7543,10 @@ csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRe
 /* 詳細設定を pj-sync と突き合わせる。pj-sync のURL・キーは csvLoad() で入るので、
    そのあとで呼ぶ。届かなくても端末に保存した値でそのまま動く。 */
 advSyncInit();
+/* 開いたときは「出品CSV」を出す（いちばん使うタブ）。
+   タブの中身の出し分けは switchTab にまとめてあるので、ここから1回呼ぶ。
+   出品リストの読み込み（csvLoad）より後に呼ぶこと。 */
+switchTab('D');
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -7538,7 +7562,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v119';   // sw.js の const V と必ず同じ値にする
+var APP_V='v120';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -10,14 +10,18 @@ const p=await T.open();
 await p.waitForTimeout(300);
 
 console.log('=== どのタブも例外なく開く ===');
-for(const t of ['tabA','tabB','tabC','tabD','tabE']){
+// タブは 出品CSV ― 販売連携 ― eBay ― Shopee。eBayの中は 値付け｜出品文
+for(const t of ['tabD','tabE','tabA','tabC']){
   await p.click('#'+t); await p.waitForTimeout(150);
 }
 await p.click('#tabA'); await p.waitForTimeout(150);
+await p.click('#ebSubList'); await p.waitForTimeout(150);
+await p.click('#ebSubPrice'); await p.waitForTimeout(150);
 console.log('   pageerror: '+JSON.stringify(T.errs));
-ok(T.errs.length===0,'★5つのタブを開いても例外が出ない');
+ok(T.errs.length===0,'★4つのタブと eBay の中の切り替えを開いても例外が出ない');
 
 console.log('\n=== 1品ごとの値は今も保存しない ===');
+await p.click('#tabA'); await p.waitForTimeout(150);
 await p.evaluate(()=>{ $('advBox').open=true; });
 await p.fill('#cost','3210'); await p.fill('#weight','345');
 await p.fill('#adRate','7.5'); await p.fill('#shipCharge','12');

@@ -5,9 +5,11 @@ const ok = T.ok;
 const ADV=['targetMode','baseProfit','linkRate','saleRate','usTaxRate'];
 (async()=>{
 const p=await T.open();
-// 詳細設定の欄は既定で畳まれているので、触る前に開く
-const show=async()=>{ await p.evaluate(()=>{ var d=$('advBox'); if(d)d.open=true; });
-  await p.waitForTimeout(100); };
+/* 詳細設定は eBayタブ（値付け）の中にあり、欄は既定で畳まれている。
+   開いたときのタブは「出品CSV」なので、触る前に eBayタブを開いて欄も開く。 */
+const show=async()=>{ await p.evaluate(()=>{ switchTab('A');
+  var d=$('advBox'); if(d)d.open=true; });
+  await p.waitForTimeout(120); };
 await show();
 const vals=()=>p.evaluate((ids)=>{
   const o={}; ids.forEach(id=>o[id]=$(id).value); o.at=advAt; return o; },ADV);
