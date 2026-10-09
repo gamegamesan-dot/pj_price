@@ -566,44 +566,63 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <div class="v num" id="csvCount">0</div>
         <div class="sub" id="csvSummary">&mdash;</div>
       </div>
+      <!-- ここはいつも開いている。毎日使うボタンだけを置く。 -->
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
-      <!-- カートリッジのみ：同じASINの出品がすでにあるときは、数量を+1する -->
-      <!-- 数量0で残っている出品を、写真・状態・英題・出品文を入れ直して復活させる -->
+      <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
+      <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
+      <div class="note2" id="csvTitleNote"></div>
+      <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:8px">英題を作り直す（手で編集していない未出品の行）</button>
+      <div class="note2" id="csvRedoNote"></div>
+      <!-- 数量0で残っている出品を、写真・状態・英題・出品文を入れ直して復活させる。
+           カートリッジのみは、同じASINの出品がすでにあるときに数量を+1する。
+           どちらも対象の行があるときだけ件数を出して目立たせる（csvRender が付け替える）。 -->
       <button class="btn" id="csvRevive2" style="width:100%;margin-top:8px">既存の出品を復活させるCSV</button>
       <div class="warn" id="csvReviveNote" style="display:none;margin-top:8px"></div>
       <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px">カートリッジのみ：既存の出品に+1するCSV</button>
       <div class="warn" id="csvCartNote" style="display:none;margin-top:8px"></div>
-      <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
-        <button class="btn" id="csvDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
-      </div>
-      <div class="note2" id="csvDropNote"></div>
-      <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
-      <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
-      <div class="note2" id="csvTitleNote"></div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn" id="csvRevise" style="flex:1 1 0;min-width:0;padding:9px 4px">数量更新CSV</button>
-        <button class="btn" id="csvPriceCsv" style="flex:1 1 0;min-width:0;padding:9px 4px">価格更新CSV</button>
-        <button class="btn" id="csvClear" style="flex:1 1 0;min-width:0;padding:9px 4px">リストを空にする</button>
-      </div>
-      <button class="btn" id="csvTitleRedo" style="width:100%;margin-top:8px">英題を作り直す（手で編集していない未出品の行）</button>
-      <div class="note2" id="csvRedoNote"></div>
-      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
-      <div class="chk"><input type="checkbox" id="csvPriceChangedOnly"><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値の見直しが要る行だけ</label></div>
-      <div class="note2" style="margin-top:0" id="csvChangedNote">いまの設定で計算した推奨売値と、eBayに出している売値を比べて、差が大きい行だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
-      <div class="row"><label>見直しのしきい値（金額）</label><input type="number" id="csvReviewAbs" value="1" step="0.5" min="0" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="row"><label>見直しのしきい値（割合）</label><input type="number" id="csvReviewPct" value="3" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
-      <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
-      <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
+
+      <!-- ときどき使う。畳んでおく（開閉は端末に保存する）。 -->
+      <details id="csvStockBox" style="margin-top:10px">
+        <summary class="note2" style="margin:0;cursor:pointer" id="csvStockSum">在庫・数量（ときどき）</summary>
+        <div style="padding:6px 0 0">
+          <div class="note2" style="margin:0 0 6px">使うタイミング：無在庫の印を付け替えるとき・eBayの数量を直すとき。</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
+            <button class="btn" id="csvDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
+          </div>
+          <div class="note2" id="csvDropNote"></div>
+          <button class="btn" id="csvRevise" style="width:100%;margin-top:8px">数量更新CSV</button>
+          <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
+        </div>
+      </details>
+
+      <!-- 設定を変えたとき・為替が動いたときに使う。見出しに件数を出す。 -->
+      <details id="csvReviewBox" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer" id="csvReviewSum">売値の見直し</summary>
+        <div style="padding:6px 0 0">
+          <div class="note2" style="margin:0 0 6px">使うタイミング：設定を変えたとき・為替が動いたとき・週1回の点検。</div>
+          <button class="btn" id="csvPriceCsv" style="width:100%">価格更新CSV</button>
+          <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvPriceChangedOnly" checked><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値の見直しが要る行だけ</label></div>
+          <div class="note2" style="margin-top:0" id="csvChangedNote">いまの設定で計算した推奨売値と、eBayに出している売値を比べて、差が大きい行だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
+          <div class="row"><label>見直しのしきい値（金額）</label><input type="number" id="csvReviewAbs" value="1" step="0.5" min="0" inputmode="decimal"><span class="unit">$</span></div>
+          <div class="row"><label>見直しのしきい値（割合）</label><input type="number" id="csvReviewPct" value="3" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+          <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
+          <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
+          <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
+        </div>
+      </details>
+
       <div class="note2" id="csvExportNote"></div>
       <!-- 書き出したあと、カテゴリごとに1つずつ保存し直せるボタン（iPhone向けの保険） -->
       <div id="csvExportFiles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
       <input type="file" id="csvPicFile" accept="image/*" multiple style="display:none">
       <div class="note2" id="csvPicNote"></div>
       <button class="btn" id="csvPicRetry" style="display:none;margin-top:6px">失敗分を送り直す</button>
+      <!-- 消す操作はほかのボタンから離して一番下に置く（押し間違いを防ぐ）。
+           消した行はゴミ箱に入るので、あとから戻せる。 -->
+      <button class="btn" id="csvClear" style="width:100%;margin-top:18px">リストを空にする</button>
+      <div class="note2" style="margin-top:2px">消した行はゴミ箱（一覧の上）に入ります。30日のあいだ元に戻せます。</div>
     </div>
   </section>
 
@@ -1617,7 +1636,10 @@ function calc(){
    出品CSVタブの取り込み欄と一覧も同じ仕組みで覚える。 */
 var UI_KEY='pj:ui:v1';
 var UI_BOXES=[['detail','detailBox'],['csvImport','csvImportBox'],
-              ['csvNew','csvNewBox'],['csvRes','csvResBox'],['csvList','csvListBox']];
+              ['csvNew','csvNewBox'],['csvRes','csvResBox'],['csvList','csvListBox'],
+              // 出品CSVタブのボタンの畳み（在庫・数量／売値の見直し）
+              ['csvStock','csvStockBox'],['csvReview','csvReviewBox'],
+              ['csvTrash','csvTrashBox'],['csvPicFind','csvPicFindBox']];
 function uiSaveBoxes(){
   try{
     var o={};
@@ -4258,6 +4280,31 @@ $('csvPicFindAdd').onclick=function(){
   csvPicFoundPick={}; csvPicFindRender(); csvPicFindRows();
   csvPicFindNote(news.length+'枚を付けました。');
 };
+/* 畳んである欄の見出しと、対象のあるボタンに件数を出す。
+   毎日使うボタンは開いたまま、ときどき使うものは畳んであるので、
+   「いま対象が何件あるか」は見出しとボタンの字で分かるようにする。 */
+function csvCountBadge(n){ return n?('（'+n+'件）'):''; }
+function csvBtnHot(id,on,label){
+  var b=$(id); if(!b)return;
+  b.textContent=label;
+  if(on){ b.classList.add('primary'); b.style.opacity=''; }
+  else { b.classList.remove('primary'); b.style.opacity='.55'; }
+}
+function csvGroupsRender(){
+  var ids=csvList.map(function(r){ return r.id; });
+  // 復活できる行（写真0枚の行は外れる）
+  var rv=csvReviveSplit(ids).rows.length;
+  csvBtnHot('csvRevive2',rv>0,'既存の出品を復活させるCSV'+csvCountBadge(rv));
+  // カートリッジのみで既存の出品に積み上げる行
+  var ca=csvList.filter(function(r){ return !!csvCartStack(r); }).length;
+  csvBtnHot('csvCartAdd',ca>0,'カートリッジのみ：既存の出品に+1するCSV'+csvCountBadge(ca));
+  // 売値の見直しが要る行
+  var rvw=csvList.map(csvPriceReview).filter(Boolean).length;
+  var sum=$('csvReviewSum');
+  sum.textContent='売値の見直し'+csvCountBadge(rvw);
+  sum.style.fontWeight=rvw?'800':'';
+  sum.style.color=rvw?'var(--bad)':'';
+}
 function csvRender(){
   csvTrashRender();  // ゴミ箱の件数は一覧と一緒に出し直す
   csvPicFindDayInit();
@@ -4298,6 +4345,7 @@ function csvRender(){
      表示と書き出しの売値も追いつくように引き直す。csvRecalc は
      仕入値と重量から csvPriceFor で出すだけなので、何度呼んでも同じ結果になる。 */
   csvList.forEach(csvRecalc);
+  csvGroupsRender();   // 畳んである欄の見出しとボタンの件数
   var chL=csvList.map(csvPriceReview).filter(Boolean);
   var upN=chL.filter(function(x){ return x.up===true; }).length;
   var dnN=chL.filter(function(x){ return x.up===false; }).length;
@@ -7926,7 +7974,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v122';   // sw.js の const V と必ず同じ値にする
+var APP_V='v123';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

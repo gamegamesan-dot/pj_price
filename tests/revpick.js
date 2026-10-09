@@ -2,7 +2,7 @@
    ・チェックがあればその行だけ
    ・ItemIDが無い行は除外して理由を出す
    ・「売値の見直しが要る行だけ」と組み合わせると、選んだ中の対象行だけ */
-const { harness } = require('./lib');
+const { harness, openCsvBoxes } = require('./lib');
 const T = harness('出品CSVタブ：更新CSVの選択行');
 const ok = T.ok;
 (async()=>{
@@ -13,7 +13,8 @@ const dl=[]; p.on('download',async d=>dl.push({name:d.suggestedFilename(),
   text:fs.readFileSync(await d.path(),'utf8')}));
 await p.click('#tabD');
 
-const setup=async()=>await p.evaluate(()=>{
+const setup=async()=>{ await setupRaw(); await openCsvBoxes(p); };
+const setupRaw=async()=>await p.evaluate(()=>{
   $('csvSort').value='add';
   $('csvShipProfile').value='W1000'; $('csvRetProfile').value='R';
   $('csvPayProfile').value='P'; $('csvLocation').value='Tokyo'; $('fx').value='160';

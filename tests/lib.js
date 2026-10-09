@@ -67,4 +67,14 @@ function harness(title){
   return { ok:ok, say:say, open:open, done:done, errs:errs,
            get page(){ return page; } };
 }
-module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath };
+/* 出品CSVタブの畳んである欄（在庫・数量／売値の見直し）を開く。
+   ボタンは畳まれていると Playwright から押せないので、押す前に呼ぶ。 */
+async function openCsvBoxes(page){
+  await page.evaluate(()=>{
+    ['csvStockBox','csvReviewBox','csvListBox'].forEach(function(id){
+      var el=document.getElementById(id); if(el)el.open=true;
+    });
+  });
+  await page.waitForTimeout(80);
+}
+module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath, openCsvBoxes };

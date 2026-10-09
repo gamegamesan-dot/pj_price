@@ -1,7 +1,7 @@
 /* 出品CSVタブ：価格更新CSVの「売値の見直しが要る行だけ」（6.24）
    いまの設定で計算した推奨売値と、eBayに出している売値の差で判定する。
    しきい値（金額・割合）・相場の行・数量0の除外・確認の件数を見張る。 */
-const { harness } = require('./lib');
+const { harness, openCsvBoxes } = require('./lib');
 const T = harness('出品CSVタブ：売値の見直しの判定');
 const ok = T.ok;
 (async()=>{
@@ -14,7 +14,8 @@ await p.click('#tabD');
 
 /* 下ごしらえ。3行とも ItemID があり、eBayに出している売値は
    いまの設定で計算した推奨売値とぴったり同じ状態から始める。 */
-const setup=async()=>await p.evaluate(()=>{
+const setup=async()=>{ await setupRaw(); await openCsvBoxes(p); };
+const setupRaw=async()=>await p.evaluate(()=>{
   $('csvSort').value='add';
   $('csvShipProfile').value='W1000'; $('csvRetProfile').value='R';
   $('csvPayProfile').value='P'; $('csvLocation').value='Tokyo';
