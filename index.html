@@ -644,6 +644,35 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <details id="csvListBox">
       <summary>一覧を表示</summary>
       <div style="padding:0 13px 12px">
+        <!-- ゴミ箱。消した行をすぐには捨てず、ここから元に戻せる。 -->
+        <details id="csvTrashBox" style="margin-bottom:8px">
+          <summary class="note2" style="margin:0;cursor:pointer" id="csvTrashSum">ゴミ箱（0件）</summary>
+          <div style="padding:6px 0 0">
+            <div class="note2" id="csvTrashNote" style="margin:0 0 6px"></div>
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+              <button class="btn" id="csvTrashAll" style="flex:1 1 0;min-width:0;padding:7px 4px">すべて戻す</button>
+              <button class="btn" id="csvTrashPurge" style="flex:1 1 0;min-width:0;padding:7px 4px">ゴミ箱を空にする</button>
+            </div>
+            <div id="csvTrashList"></div>
+          </div>
+        </details>
+        <!-- R2に残っている写真を行に付け直す（行ごと消してしまったときの戻し方）。 -->
+        <details id="csvPicFindBox" style="margin-bottom:8px">
+          <summary class="note2" style="margin:0;cursor:pointer">写真から戻す（R2に残っている写真を行に付ける）</summary>
+          <div style="padding:6px 0 0">
+            <div class="note2" style="margin:0 0 6px">行を消すと写真のURLも一緒に消えますが、写真そのもの（R2）は残しています。上げた日で探して、行に付け直せます。<br><b>日付は世界標準時（UTC）です。</b>日本時間の朝9時より前に上げた写真は、1日前の日付に入っています。</div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <input type="date" id="csvPicFindDay" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">
+              <button class="btn" id="csvPicFind" style="flex:0 0 auto;white-space:nowrap">写真を探す</button>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <select id="csvPicFindRow" style="flex:1 1 0;min-width:0"></select>
+              <button class="btn" id="csvPicFindAdd" style="flex:0 0 auto;white-space:nowrap">選んだ写真を付ける</button>
+            </div>
+            <div class="note2" id="csvPicFindNote" style="margin:0 0 6px"></div>
+            <div id="csvPicFindList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+          </div>
+        </details>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <select id="csvSort" style="flex:1 1 0;min-width:0">
             <!-- 既定は「新しい順」。取り込んだばかりの行がいちばん上に来る -->
@@ -820,7 +849,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     </div>
   </section>
 
-  <footer>
+  <!-- 消した直後に数秒だけ出る帯。押せばその場で戻せる。 -->
+<div id="csvUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;
+     background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
+     align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
+  <span id="csvUndoText" style="flex:1 1 0;min-width:0"></span>
+  <button class="btn" id="csvUndoBtn" style="flex:0 0 auto;padding:6px 10px;font-size:13px">元に戻す</button>
+  <button class="btn" id="csvUndoClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
+</div>
+
+<footer>
     日本郵便 2026-08-07 時点の料金表を内蔵<br>
     国際エアパケット / EMS・第1〜第5地帯<br>
     <span id="netstate"></span><br>
@@ -2995,6 +3033,7 @@ function csvLoad(){
      （人が選んだ行・振り分けが済んだ行は触らない）。 */
   var gfix=csvList.filter(csvGameFix).length;
   if(gfix)csvSaveList();
+  csvTrashLoad();   // ゴミ箱（30日で自動的に消える）
   try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){
@@ -3008,6 +3047,118 @@ function csvLoad(){
        if(typeof o.syncSkipAcc==='boolean')$('syncSkipAcc').checked=o.syncSkipAcc; }catch(e){}
 }
 function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
+/* ---- ゴミ箱 ----
+   行の「削除」と「リストを空にする」で消した行は、すぐには捨てずにここへ移す。
+   写真・英題・出品文・カテゴリ・仕入値の直し・ItemID など、行の中身はそのまま残す。
+   1件は { at:消した時刻, pos:消す前の並びの位置, r:行まるごと }。
+   pos は「追加順」での位置。元に戻すときは同じ位置へ差し込む。
+
+   R2 の写真はゴミ箱に入れても消さない。完全に消すときも消さない
+   （いまは行を消しても写真を掃除していないため。掃除を入れるときは、
+     ほかの行とゴミ箱の両方で使われていない写真だけにすること）。 */
+var CSV_TRASH_KEY='pj:csvtrash:v1';
+var CSV_TRASH_DAYS=30;      // ここを過ぎた行は自動で消す
+var CSV_TRASH_MAX=300;      // 多くなりすぎたら古いものから消す
+var csvTrash=[];
+function csvTrashLoad(){
+  try{ var a=JSON.parse(localStorage.getItem(CSV_TRASH_KEY)||'[]');
+       csvTrash=Array.isArray(a)?a.filter(function(x){ return x&&x.r&&x.r.id; }):[]; }
+  catch(e){ csvTrash=[]; }
+  csvTrashPrune();
+}
+function csvTrashSave(){
+  try{ localStorage.setItem(CSV_TRASH_KEY,JSON.stringify(csvTrash)); }catch(e){}
+}
+/* 30日を過ぎたものと、上限を超えたぶん（古いものから）を落とす。落とした件数を返す。 */
+function csvTrashPrune(){
+  var lim=Date.now()-CSV_TRASH_DAYS*86400000, before=csvTrash.length;
+  csvTrash=csvTrash.filter(function(x){
+    var t=Date.parse(x.at); return !isFinite(t)||t>=lim; });
+  // 新しい順に並べてから上限で切る
+  csvTrash.sort(function(a,b){ return (Date.parse(b.at)||0)-(Date.parse(a.at)||0); });
+  if(csvTrash.length>CSV_TRASH_MAX)csvTrash=csvTrash.slice(0,CSV_TRASH_MAX);
+  return before-csvTrash.length;
+}
+// 消す行をゴミ箱へ移す。渡した行は csvList から外しておくこと。
+function csvTrashPut(rows){
+  var at=new Date().toISOString();
+  rows.forEach(function(x){
+    csvTrash.unshift({ at:at, pos:(x.pos===undefined?csvList.length:x.pos), r:x.r });
+  });
+  csvTrashPrune(); csvTrashSave();
+}
+function csvTrashOf(id){
+  for(var i=0;i<csvTrash.length;i++)if(csvTrash[i].r.id===id)return csvTrash[i];
+  return null;
+}
+/* 元に戻す。消す前と同じ位置（追加順）へ差し込む。
+   同じSKUの行がすでに一覧にあれば、戻す前に確認する（重複させないため）。 */
+function csvTrashRestore(ids,opt){
+  var pick=[];
+  (ids||[]).forEach(function(id){ var t=csvTrashOf(id); if(t)pick.push(t); });
+  if(!pick.length)return 0;
+  if(!(opt&&opt.force)){
+    var dup=pick.filter(function(t){
+      var sku=String(t.r.sku||'').trim();
+      return sku&&csvList.some(function(r){ return String(r.sku||'').trim()===sku; });
+    });
+    if(dup.length&&!confirm('同じSKUの行がすでに一覧にあります（'+dup.length+'件）。\n'
+      +dup.slice(0,5).map(function(t){
+          return '・'+(t.r.titleJa||t.r.sku); }).join('\n')
+      +(dup.length>5?('\n…ほか'+(dup.length-5)+'件'):'')
+      +'\n\n戻すと同じ商品の行が2つ並びます。よろしいですか？'))return 0;
+  }
+  // 位置の小さい順に差し込む（まとめて戻しても元の並びになる）
+  pick.sort(function(a,b){ return (a.pos||0)-(b.pos||0); });
+  pick.forEach(function(t){
+    var r=t.r;
+    // 同じ id の行が残っているときだけ新しい id にする（取り違えを防ぐ）
+    if(csvRowById(r.id))r.id='c'+Date.now().toString(36)
+      +Math.floor(Math.random()*1296).toString(36);
+    var at=Math.max(0,Math.min(csvList.length,+t.pos||0));
+    csvList.splice(at,0,r);
+  });
+  var ids2={}; pick.forEach(function(t){ ids2[t.r.id]=1; });
+  csvTrash=csvTrash.filter(function(x){ return !ids2[x.r.id]; });
+  csvSaveList(); csvTrashSave();
+  return pick.length;
+}
+// ゴミ箱から完全に消す（写真は消さない。上の注記を参照）
+function csvTrashDrop(ids){
+  var m={}; (ids||[]).forEach(function(id){ m[id]=1; });
+  var before=csvTrash.length;
+  csvTrash=csvTrash.filter(function(x){ return !m[x.r.id]; });
+  csvTrashSave();
+  return before-csvTrash.length;
+}
+/* 消した直後の帯。押せばその場で戻せる。数秒で自分から消える。 */
+var csvUndoIds=[], csvUndoT=0;
+function csvUndoHide(){
+  if(csvUndoT){ clearTimeout(csvUndoT); csvUndoT=0; }
+  csvUndoIds=[]; $('csvUndoBar').style.display='none';
+}
+function csvUndoShow(ids,label){
+  csvUndoIds=ids.slice();
+  $('csvUndoText').textContent=label;
+  $('csvUndoBar').style.display='flex';
+  if(csvUndoT)clearTimeout(csvUndoT);
+  csvUndoT=setTimeout(csvUndoHide,7000);
+}
+/* 行を消す（ゴミ箱へ移す）。消した件数を返す。
+   pos は「追加順」での位置なので、並べ替えて表示していても元の位置に戻せる。 */
+function csvDeleteRows(rows,label){
+  if(!rows.length)return 0;
+  var put=[], ids=[];
+  rows.forEach(function(r){
+    var i=csvList.indexOf(r); if(i<0)return;
+    put.push({ pos:i, r:r }); ids.push(r.id);
+  });
+  put.slice().reverse().forEach(function(x){ csvList.splice(csvList.indexOf(x.r),1); });
+  csvTrashPut(put);
+  csvSaveList();
+  csvUndoShow(ids,label||((ids.length)+'件を削除しました（ゴミ箱に入れました）'));
+  return ids.length;
+}
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
 // 前後の空白を落として保存する欄（貼り付けで混ざりやすいURL・トークン類）
 var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken','syncApi','syncKey'];
@@ -3909,7 +4060,161 @@ function csvCatSelect(r){
     +'font-size:12px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
     +h+'</select>';
 }
+/* ゴミ箱の中身。新しい順に並べ、行ごとに「元に戻す」を出す。 */
+function csvTrashRender(){
+  csvTrashPrune();
+  var n=csvTrash.length;
+  $('csvTrashSum').textContent='ゴミ箱（'+n+'件）';
+  $('csvTrashNote').textContent=n
+    ? ('消した行は '+CSV_TRASH_DAYS+'日で自動的に消えます（'+CSV_TRASH_MAX
+       +'件を超えると古いものから）。写真・英題・出品文・ItemID はそのまま残しています。')
+    : '消した行はここに入ります。'+CSV_TRASH_DAYS+'日のあいだ元に戻せます。';
+  $('csvTrashAll').disabled=!n;
+  $('csvTrashPurge').disabled=!n;
+  if(!n){ $('csvTrashList').innerHTML=''; return; }
+  var h='';
+  csvTrash.forEach(function(t){
+    var r=t.r, pics=(r.pics||[]).length;
+    h+='<div class="lcard" style="margin-bottom:8px">'
+      +'<div class="lhead">'+esc(r.titleJa||r.titleEn||r.sku||'(無題)')+'</div>'
+      +'<div class="note2" style="margin:0">'
+      +esc(String(t.at).slice(0,16).replace('T',' '))+' に削除　'
+      +esc(r.sku||'SKUなし')+'　/　'+esc(csvCatName(r.cat))
+      +'　/　写真 '+pics+'枚'
+      +(String(r.titleEn||'').trim()?'　/　英題あり':'　/　英題なし')
+      +(String(r.descHtml||'').trim()?'　/　出品文あり':'')
+      +(String(r.itemId||'').trim()?('　/　ItemID '+esc(r.itemId)):'')
+      +'</div>'
+      +'<div style="display:flex;gap:6px;margin-top:6px">'
+      +'<button class="btn" data-undel="'+esc(r.id)+'" style="padding:5px 8px;font-size:12px">元に戻す</button>'
+      +'<button class="btn" data-tdrop="'+esc(r.id)+'" style="padding:5px 8px;font-size:12px">完全に消す</button>'
+      +'</div></div>';
+  });
+  $('csvTrashList').innerHTML=h;
+}
+$('csvTrashList').addEventListener('click',function(e){
+  var t=e.target; if(!t||t.tagName!=='BUTTON')return;
+  var un=t.getAttribute('data-undel');
+  if(un){ if(csvTrashRestore([un]))csvRender(); return; }
+  var dp=t.getAttribute('data-tdrop');   // 一覧の「無在庫」（data-drop）と混ざらない名前にする
+  if(dp){
+    var it=csvTrashOf(dp); if(!it)return;
+    if(!confirm('「'+(it.r.titleJa||it.r.sku||'この行')+'」をゴミ箱から完全に消します。\n'
+      +'もう元に戻せません。よろしいですか？\n'
+      +'（eBayに出した写真は消しません）'))return;
+    csvTrashDrop([dp]); csvRender();
+  }
+});
+$('csvTrashAll').onclick=function(){
+  var ids=csvTrash.map(function(t){ return t.r.id; });
+  if(!ids.length)return;
+  if(csvTrashRestore(ids))csvRender();
+};
+$('csvTrashPurge').onclick=function(){
+  if(!csvTrash.length)return;
+  if(!confirm('ゴミ箱の '+csvTrash.length+'件を完全に消します。\n'
+    +'もう元に戻せません。よろしいですか？\n'
+    +'（eBayに出した写真は消しません）'))return;
+  csvTrashDrop(csvTrash.map(function(t){ return t.r.id; }));
+  csvRender();
+};
+$('csvUndoBtn').onclick=function(){
+  var ids=csvUndoIds.slice();
+  csvUndoHide();
+  if(ids.length&&csvTrashRestore(ids,{force:true}))csvRender();
+};
+$('csvUndoClose').onclick=csvUndoHide;
+/* ---- R2に残っている写真を行に付け直す ----
+   行を消すと写真のURLも一緒に消えるが、写真そのものは R2 に残っている
+   （行を消しても写真の掃除はしていない）。キーは「上げた日／ランダム」なので、
+   日付で一覧を取り、選んだ写真を行に付ける。 */
+var csvPicFound=[], csvPicFoundPick={};
+function csvPicFindNote(t,bad){
+  var el=$('csvPicFindNote');
+  el.textContent=t||'';
+  el.style.color=bad?'var(--bad)':'var(--mute)';
+}
+// 付け先の行の選択肢。いま一覧にある行から選ぶ。
+/* 日付の欄の既定値。キーの日付は世界標準時なので、そちらで入れる。 */
+function csvPicFindDayInit(){
+  var el=$('csvPicFindDay');
+  if(el&&!el.value)el.value=new Date().toISOString().slice(0,10);
+}
+function csvPicFindRows(){
+  var sel=$('csvPicFindRow'), cur=sel.value, h='';
+  csvSorted().forEach(function(r){
+    h+='<option value="'+esc(r.id)+'">'+esc((r.titleJa||r.titleEn||r.sku||'(無題)')
+      +'（写真 '+((r.pics||[]).length)+'枚）')+'</option>';
+  });
+  sel.innerHTML=h||'<option value="">（一覧に行がありません）</option>';
+  if(cur)sel.value=cur;
+}
+function csvPicFindRender(){
+  var h='';
+  csvPicFound.forEach(function(x){
+    var on=!!csvPicFoundPick[x.key];
+    h+='<label style="display:inline-block;position:relative;cursor:pointer">'
+      +'<img src="'+esc(x.url)+'" alt="" style="width:72px;height:72px;object-fit:cover;'
+      +'border:2px solid '+(on?'var(--good)':'var(--line)')+';border-radius:3px">'
+      +'<input type="checkbox" data-pfind="'+esc(x.key)+'"'+(on?' checked':'')
+      +' style="position:absolute;left:3px;top:3px;width:18px;height:18px">'
+      +'</label>';
+  });
+  $('csvPicFindList').innerHTML=h;
+}
+$('csvPicFindList').addEventListener('change',function(e){
+  var k=e.target&&e.target.getAttribute&&e.target.getAttribute('data-pfind');
+  if(!k)return;
+  if(e.target.checked)csvPicFoundPick[k]=1; else delete csvPicFoundPick[k];
+  csvPicFindRender();
+});
+$('csvPicFind').onclick=function(){
+  var d=String($('csvPicFindDay').value||'').replace(/[^0-9]/g,'');
+  if(d.length!==8){ csvPicFindNote('日付を選んでください。',true); return; }
+  if(!csvImgBase()||!csvImgToken()){
+    csvPicFindNote('設定の「画像のURL」と「画像のトークン」を入れてください。',true); return; }
+  var b=this; b.disabled=true;
+  csvPicFindNote('探しています…');
+  fetch(csvImgBase()+'/list?day='+d+'&limit=300',
+    {headers:{'Authorization':'Bearer '+csvImgToken()}})
+    .then(function(res){ return res.json().catch(function(){ return {}; })
+      .then(function(j){ if(!res.ok)throw new Error(j.error||('HTTP '+res.status)); return j; }); })
+    .then(function(j){
+      csvPicFound=(j.items||[]); csvPicFoundPick={};
+      csvPicFindRows(); csvPicFindRender();
+      /* いまどの行にも付いていない写真が、消してしまった行のものである可能性が高い。
+         見分けられるよう件数を出す。 */
+      var used={};
+      csvList.concat(csvTrash.map(function(t){ return t.r; })).forEach(function(r){
+        (r.pics||[]).forEach(function(q){ if(q&&q.key)used[q.key]=1; }); });
+      var free=csvPicFound.filter(function(x){ return !used[x.key]; }).length;
+      csvPicFindNote(csvPicFound.length+'枚見つかりました（どの行にも付いていない写真 '
+        +free+'枚）。'+(j.truncated?'　多いので一部だけ出しています。':''));
+    })
+    ['catch'](function(e){ csvPicFound=[]; csvPicFindRender();
+      csvPicFindNote('探せませんでした：'+e.message
+        +'　画像のWorker（proxy-img）を新しい版にしてください。',true); })
+    .then(function(){ b.disabled=false; });
+};
+$('csvPicFindAdd').onclick=function(){
+  var id=$('csvPicFindRow').value, r=id?csvRowById(id):null;
+  if(!r){ csvPicFindNote('付ける行を選んでください。',true); return; }
+  var add=csvPicFound.filter(function(x){ return csvPicFoundPick[x.key]; });
+  if(!add.length){ csvPicFindNote('付ける写真を選んでください。',true); return; }
+  var have={}; (r.pics||[]).forEach(function(q){ if(q&&q.key)have[q.key]=1; });
+  var news=add.filter(function(x){ return !have[x.key]; });
+  if(!news.length){ csvPicFindNote('選んだ写真はすべてこの行に付いています。'); return; }
+  if(!confirm('「'+(r.titleJa||r.sku||'この行')+'」に写真 '+news.length+'枚を付けます。\n'
+    +'よろしいですか？'))return;
+  r.pics=(r.pics||[]).concat(news.map(function(x){ return { url:x.url, key:x.key }; }));
+  csvSaveList(); csvRender();
+  csvPicFoundPick={}; csvPicFindRender(); csvPicFindRows();
+  csvPicFindNote(news.length+'枚を付けました。');
+};
 function csvRender(){
+  csvTrashRender();  // ゴミ箱の件数は一覧と一緒に出し直す
+  csvPicFindDayInit();
+  csvPicFindRows();  // 付け先の行の選択肢も作り直す
   csvFilterOpts();   // 絞り込みの選択肢と件数を先に作り直す
   $('csvCount').textContent=csvList.length;
   var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
@@ -4146,7 +4451,12 @@ $('csvList').addEventListener('click',function(e){
     csvList[i].uploadErr=''; csvList[i].uploadErrSig='';
     csvSaveList(); csvRender(); return;
   }
-  if(t.hasAttribute('data-del'))csvList.splice(i,1);
+  /* 削除はゴミ箱へ移すだけ。押し間違えても一覧の上の「ゴミ箱」から戻せる。 */
+  if(t.hasAttribute('data-del')){
+    var dr=csvList[i];
+    csvDeleteRows([dr],'「'+(dr.titleJa||dr.sku||'1件')+'」を削除しました');
+    csvRender(); return;
+  }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
   else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
   else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
@@ -4318,8 +4628,12 @@ $('csvPickEbay').onclick=function(){
 };
 $('csvClear').onclick=function(){
   if(!csvList.length)return;
-  if(!confirm('出品リストの '+csvList.length+'件をすべて削除します。よろしいですか？'))return;
-  csvList=[]; csvSaveList(); csvRender();
+  if(!confirm('出品リストの '+csvList.length+'件をすべて削除します。\n'
+    +'ゴミ箱に入るので、あとから「すべて戻す」で戻せます。\n'
+    +'よろしいですか？'))return;
+  var n=csvDeleteRows(csvList.slice(),csvList.length+'件を削除しました（ゴミ箱に入れました）');
+  csvRender();
+  if(!n)return;
 };
 $('csvReweigh').onclick=function(){
   var n=0;
@@ -7562,7 +7876,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v120';   // sw.js の const V と必ず同じ値にする
+var APP_V='v121';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -14,6 +14,7 @@
  * エンドポイント:
  *   POST   /upload   … 画像を1枚保存。Authorization: Bearer <UPLOAD_TOKEN> 必須
  *   GET    /i/<key>  … 公開配信（認証なし）
+ *   GET    /list?day=YYYYMMDD … その日に上げた写真の一覧。トークン必須（復旧用）
  *   DELETE /i/<key>  … 削除。トークン必須
  *
  * 悪用対策:
@@ -110,6 +111,27 @@ export default {
     // ここから下はブラウザからの呼び出し。Origin が付いていて不一致なら拒否。
     if (origin && origin !== ALLOW_ORIGIN)
       return json({ error: "forbidden_origin" }, 403, origin);
+
+    /* ---- 一覧（取り違えて消した行の写真を探す用）----
+       キーはサーバが決めた YYYYMMDD/<uuid> なので、絞り込めるのは日付だけ。
+       行を消すと写真のURLも一緒に消えてしまうので、日付から探して付け直せるようにする。
+       読み取りだけ・トークン必須。画像そのものは返さない（URLを返す）。 */
+    if (request.method === "GET" && url.pathname === "/list") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401, origin);
+      const day = String(url.searchParams.get("day") || "").replace(/[^0-9]/g, "");
+      if (!/^[0-9]{8}$/.test(day)) return json({ error: "bad_day" }, 400, origin);
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || 200)));
+      const r = await env.IMG.list({ prefix: day + "/", limit });
+      const items = ((r && r.objects) || []).map((o) => ({
+        key: o.key,
+        url: `${url.origin}/i/${o.key}`,
+        at: o.uploaded ? new Date(o.uploaded).toISOString() : "",
+        size: o.size || 0,
+      }));
+      items.sort((a, b) => (a.at < b.at ? 1 : -1));        // 新しい順
+      return json({ ok: true, day, n: items.length,
+                    truncated: !!(r && r.truncated), items }, 200, origin);
+    }
 
     /* ---- アップロード ---- */
     if (request.method === "POST" && url.pathname === "/upload") {
