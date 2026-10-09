@@ -1821,6 +1821,10 @@ function isRestock(r) {
          買い直す必要がなく（納品直後の二重仕入れを防ぐ）、
          内訳不明の行は内訳が取れるまで判断を待つ。 */
       && !resHold(r)
+      /* 入庫中（納品した在庫がFCへ向かっている）行も候補にしない。
+         売れたから0になったのではなく、これから販売可能になる。
+         候補にするのは Amazon で実際に売れた行だけ（2026-10-09）。 */
+      && Number(r.fba_inbound || 0) === 0
       && !isRestocking(r);
 }
 /* 再調達の仕入値として見る最安値（円）。
@@ -1855,11 +1859,23 @@ function restockTrouble(r) {
   if (max > 0 && low > max) return "loss";
   return "";
 }
-function warnOf(r) {
-  const w = [];
-  if (r.scope !== "ebay") return w;
+/* 配送ポリシーが再調達用（W2000）で出している行か。
+   pj_price の csvShipProfileFor() と同じ決まり：
+   「在庫0のときの動作＝再調達」の行と、無在庫の行が再調達用のポリシーになる。
+   この2つは FBA に在庫が無いまま出しているのが運用どおりなので、
+   納品待ちを警告にしない（2026-10-09）。 */
+function isShipRestock(r) {
+  return String(r.mode || "") === "restock" || !!Number(r.dropship || 0)
+      || !!Number(r.restocking || 0);
+}
+/* 行の判定。w＝対応が必要（警告）、n＝情報（対応は要らないが見えていてほしい）。
+   warnOf / noteOf はここから取り出すだけにして、判定を1か所にまとめてある。 */
+function judgeRow(r) {
+  const w = [], n = [];
+  const out = () => ({ w, n });
+  if (r.scope !== "ebay") return out();
   const st = stateOf(r);
-  if (st === "fba_not_listed" || st === "past") return w;   // 出していないだけ／過去SKU
+  if (st === "fba_not_listed" || st === "past") return out();   // 出していないだけ／過去SKU
   const onHand = !!Number(r.on_hand || 0);
   /* 手元在庫の行は、FBAに記録が無いのが正常（納品前にeBayへ出す運用）。
      7〜10日の納品待ちのあいだ警告を出し続けない。 */
@@ -1868,10 +1884,10 @@ function warnOf(r) {
        カートリッジのみは代わりに「数量と手元の数」が合っているかを見る。 */
     if (isCart(r)) {
       if (cartMismatch(r)) w.push("数量と手元在庫が合いません");
-      return w;
+      return out();
     }
     if (!onHand && !Number(r.dropship || 0)) w.push("FBA在庫なし");
-    return w;
+    return out();
   }
   const q = Number(r.ebay_qty || 0), av = Number(r.fba_available || 0);
   const rv = Number(r.fba_reserved || 0), inb = Number(r.fba_inbound || 0);
@@ -1881,13 +1897,13 @@ function warnOf(r) {
      手元の数とeBayの数量が合わないときだけ知らせる。 */
   if (isCart(r)) {
     if (cartMismatch(r)) w.push("数量と手元在庫が合いません");
-    return w;
+    return out();
   }
   /* 無在庫出品は在庫を持たないのが正常。売り越し・予約済みのみ・納品待ちは出さない
      （FBAに在庫が残っているときの数量の食い違いだけは従来どおり出す）。 */
   if (isDropship(r)) {
     if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
-    return w;
+    return out();
   }
   if (isRestocking(r)) {
     const tr = restockTrouble(r);
@@ -1895,7 +1911,7 @@ function warnOf(r) {
     else if (tr === "no_offer") w.push("再調達の仕入先なし");
     // FBAに在庫が残っていて、それより多くeBayに出している食い違いは従来どおり出す
     if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
-    return w;
+    return out();
   }
   /* 予約済みのみ。内訳で分ける。
      顧客注文（pendingCustomerOrderQuantity）が1以上 … 「Amazonで注文済み」
@@ -1904,16 +1920,28 @@ function warnOf(r) {
   if (av === 0 && rv > 0 && q >= 1) {
     const rw = resWarn(r);
     if (rw) w.push(rw);             // 注文済み／内訳不明。FC移管・FC処理中だけなら空
-    return w;
+    /* FC移管・FC処理中だけの行はここでは何も足さない。
+       画面にはすでに「FBA受領処理中」の印（fc_processing）が出ている。 */
+    return out();
   }
   if (av === 0 && q >= 1) {
-    if (onHand) return w;                     // 手元にあるので売り越しではない
-    w.push(inb > 0 ? "納品待ちで出品中" : "売り越しの恐れ");
-    return w;
+    if (onHand) return out();                 // 手元にあるので売り越しではない
+    /* 納品待ちで出品中。配送ポリシーが再調達用（W2000）の行は、
+       FBAに在庫が無いまま出しているのが運用どおりなので情報にする。
+       それ以外（手元発送のポリシー）は、届くまで売り越しになるので警告のまま。 */
+    if (inb > 0) {
+      if (isShipRestock(r)) n.push("納品待ちで出品中（再調達ポリシー）");
+      else w.push("納品待ちで出品中");
+      return out();
+    }
+    w.push("売り越しの恐れ");
+    return out();
   }
   if (av > 0 && q > 0 && av < q) w.push("数量の食い違い");
-  return w;
+  return out();
 }
+function warnOf(r) { return judgeRow(r).w; }
+function noteOf(r) { return judgeRow(r).n; }
 async function statusBody(env, url) {
   const p = url.searchParams;
   const scope = p.get("scope") || "ebay";          // 既定は eBay対象だけ
@@ -1933,7 +1961,7 @@ async function statusBody(env, url) {
     where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
     where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0"
-      + " AND cond<>'cart' AND NOT " + SQL_RES_HOLD + ")");
+      + " AND cond<>'cart' AND COALESCE(fba_inbound,0)=0 AND NOT " + SQL_RES_HOLD + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -1964,7 +1992,11 @@ async function statusBody(env, url) {
                            // カートリッジのみ（手元から発送する行）
                            cart: isCart(r) ? 1 : 0,
                            cart_mismatch: cartMismatch(r) ? 1 : 0,
-                           warnings: warnOf(r) }));
+                           // 配送ポリシーが再調達用（W2000）とみなせる行
+                           ship_restock: isShipRestock(r) ? 1 : 0,
+                           warnings: warnOf(r),
+                           // 情報（対応は要らないが見えていてほしいもの）
+                           notes: noteOf(r) }));
   if (p.get("warn") === "1") items = items.filter((x) => x.warnings.length);
   const st = p.get("state");
   // restock / restocking は state の値ではなく別の条件なので、行に付けた印で絞る
@@ -2009,6 +2041,7 @@ async function statusBody(env, url) {
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
           AND restocking=0 AND dropship=0 AND cond<>'cart'
+          AND COALESCE(fba_inbound,0)=0
           AND NOT ${SQL_RES_HOLD}) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
@@ -2427,7 +2460,8 @@ export default {
 
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
-export const __test = { assertReadOnly, parseSku, parseLabel, warnOf,
+export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, judgeRow,
+                        isShipRestock,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,

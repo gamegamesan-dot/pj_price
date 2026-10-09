@@ -806,6 +806,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <option value="all" selected>すべて</option>
         </select>
       </div>
+      <!-- 警告の理由ごとの件数。何から手を付けるか分かるようにする。 -->
+      <div class="note2" id="syncWarnBreak" style="margin:0 0 8px"></div>
       <div id="syncList"></div>
     </div>
   </details>
@@ -7007,6 +7009,9 @@ function syncIsRestock(r){
          FC移管・FC処理中だけなら納品した在庫がこれから販売可能になるので
          買い直す必要がなく、内訳不明の行は内訳が取れるまで判断を待つ。 */
       && !syncResHold(r)
+      /* 入庫中の行も候補にしない（Worker側と同じ）。売れて0になったのではなく、
+         納品した在庫がこれから販売可能になる。 */
+      && Number(r.fba_inbound||0)===0
       && !syncIsRestocking(r);     // すでに出し直した行は候補から外す
 }
 function syncRestockingN(){
@@ -7133,10 +7138,38 @@ function syncSoldHtml(r,key){
   if(syncSoldAlert(r))
     h+='<div class="note2" style="margin-top:0"><span style="color:var(--bad);font-weight:700">'
       +'再調達中ですが相場が見送りです。出品の取り下げか値上げを検討してください。</span></div>';
+  /* 納品待ちで出品中の警告が残る行（配送ポリシーが再調達用でない行）。
+     届くまで売り越しになるので、どちらかの直し方を案内する。 */
+  if((r.warnings||[]).indexOf('納品待ちで出品中')>=0)
+    h+='<div class="note2" style="margin-top:0">'
+      +'配送ポリシーを W2000（再調達用）に変えるか、受領まで eBay の数量を0にしてください。'
+      +'</div>';
   return h;
 }
 /* 一覧の1行。相場を入れたときに1行だけ作り直せるよう、行のHTMLはここにまとめる
    （一覧全体を作り直すと、次に触ろうとした欄が消えて入力が入らない）。 */
+/* 警告の理由ごとの件数。多い順に出す。情報（灰色）は分けて数える。 */
+function syncWarnBreakRender(){
+  var el=$('syncWarnBreak'); if(!el)return;
+  var rows=(syncData&&syncData.items)||[], cw={}, cn={}, nw=0, nn=0;
+  rows.forEach(function(r){
+    (r.warnings||[]).forEach(function(w){ cw[w]=(cw[w]||0)+1; });
+    if((r.warnings||[]).length)nw++;
+    (r.notes||[]).forEach(function(t){ cn[t]=(cn[t]||0)+1; });
+    if((r.notes||[]).length)nn++;
+  });
+  var ks=Object.keys(cw).sort(function(a,b){ return cw[b]-cw[a]; });
+  var ns=Object.keys(cn).sort(function(a,b){ return cn[b]-cn[a]; });
+  if(!ks.length&&!ns.length){ el.textContent=rows.length?'対応が必要な行はありません。':''; return; }
+  var h='';
+  if(ks.length)
+    h+='<b>対応が必要 '+nw+'件</b>　'
+      +ks.map(function(k){ return esc(k)+' '+cw[k]+'件'; }).join('／');
+  if(ns.length)
+    h+=(h?'<br>':'')+'情報 '+nn+'件　'
+      +ns.map(function(k){ return esc(k)+' '+cn[k]+'件'; }).join('／');
+  el.innerHTML=h;
+}
 function syncRowHtml(r,key){
     var rec=syncRecommend(r);
     var warn=(r.warnings||[]);
@@ -7146,6 +7179,13 @@ function syncRowHtml(r,key){
         :(w.indexOf('予約済み')===0)?'#b00020':(w==='FBA在庫なし'?'#8a6d00':'#b35c00');
       return '<span style="display:inline-block;background:'+col+';color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">'+esc(w)+'</span>';
+    }).join('');
+    /* 情報（灰色）。対応は要らないが、状態として見えていてほしいもの。
+       「対応が必要」には数えない。 */
+    badge+=(r.notes||[]).map(function(t){
+      return '<span style="display:inline-block;background:#8a8a8a;color:#fff;'
+        +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">'
+        +esc(t)+'</span>';
     }).join('');
     var sold=Number(r.ebay_sold||0);
     if(Number(r.on_hand||0)){
@@ -7270,6 +7310,7 @@ function syncRowReplace(key){
 }
 function syncRender(){
   syncFilterOpts();                 // 絞り込みの件数を先に作り直す
+  syncWarnBreakRender();            // 警告の理由ごとの件数
   var c=(syncData&&syncData.counts)||{};
   $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
   $('syncSummary').textContent=syncData
@@ -7974,7 +8015,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v123';   // sw.js の const V と必ず同じ値にする
+var APP_V='v124';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
