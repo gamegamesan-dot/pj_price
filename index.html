@@ -1760,36 +1760,72 @@ var CONDNOTE={
    title … タイトルに出す表記（gPlat の選択肢の値もこれ）
    spec  … eBay Item Specifics の Platform に入れる値
    pat   … せどりすとの和名に出てくる綴り。上から順に見るので長いものを先に置く
-   target… 英語タイトル自動生成（/titles）の対象機種か
-   lock  … 出品文にリージョンロックの注記を出す機種 */
+   lock  … 出品文にリージョンロックの注記を出す機種（PLAT_LOCK のキー）
+
+   2026-10-09：以前あった target（英語タイトル自動生成の対象機種か）は外した。
+   対象外にすると英題の入力欄ごと出ず、手で入れることもできずに止まっていたため
+   （Kanon カノン＝ドリームキャストなど）。いまはどの機種でも英題を作る。 */
 var PLATFORMS=[
-  {key:'switch2',title:'Nintendo Switch 2',spec:'Nintendo Switch 2',pat:['Switch 2','Switch2','スイッチ2'],target:true},
-  {key:'switch', title:'Nintendo Switch',  spec:'Nintendo Switch',  pat:['スイッチ','Switch'],target:true},
-  {key:'ps5',    title:'PS5',              spec:'Sony PlayStation 5',pat:['PS5'],target:true},
-  {key:'ps4',    title:'PS4',              spec:'Sony PlayStation 4',pat:['PS4'],target:true},
-  {key:'ps3',    title:'PS3',              spec:'Sony PlayStation 3',pat:['PS3'],target:true},
-  {key:'ps2',    title:'PS2',              spec:'Sony PlayStation 2',pat:['PS2'],target:true},
-  {key:'psvita', title:'PS Vita',          spec:'Sony PlayStation Vita',pat:['PS Vita','PSVita'],target:true},
-  {key:'psp',    title:'PSP',              spec:'Sony PSP',          pat:['PSP'],target:true},
-  {key:'ps1',    title:'PS1',              spec:'Sony PlayStation 1',pat:['PS1']},
-  {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],target:true,lock:'3ds'},
-  {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS'],target:true},
-  {key:'xboxone',title:'Xbox One',         spec:'Microsoft Xbox One',pat:['Xbox One','XboxOne'],target:true},
+  {key:'switch2',title:'Nintendo Switch 2',spec:'Nintendo Switch 2',pat:['Switch 2','Switch2','スイッチ2']},
+  {key:'switch', title:'Nintendo Switch',  spec:'Nintendo Switch',  pat:['スイッチ','Switch']},
+  {key:'ps5',    title:'PS5',              spec:'Sony PlayStation 5',pat:['PS5']},
+  {key:'ps4',    title:'PS4',              spec:'Sony PlayStation 4',pat:['PS4']},
+  {key:'ps3',    title:'PS3',              spec:'Sony PlayStation 3',pat:['PS3']},
+  {key:'ps2',    title:'PS2',              spec:'Sony PlayStation 2',pat:['PS2'],lock:'ps2'},
+  {key:'psvita', title:'PS Vita',          spec:'Sony PlayStation Vita',pat:['PS Vita','PSVita']},
+  {key:'psp',    title:'PSP',              spec:'Sony PSP',          pat:['PSP']},
+  {key:'ps1',    title:'PS1',              spec:'Sony PlayStation',  pat:['PS1']},
+  {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],lock:'3ds'},
+  {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS']},
+  {key:'x360',   title:'Xbox 360',         spec:'Microsoft Xbox 360',pat:['Xbox 360','Xbox360','X360'],lock:'x360'},
+  {key:'xboxone',title:'Xbox One',         spec:'Microsoft Xbox One',pat:['Xbox One','XboxOne']},
   {key:'wiiu',   title:'Wii U',            spec:'Nintendo Wii U',    pat:['Wii U','WiiU']},
-  {key:'wii',    title:'Wii',              spec:'Nintendo Wii',      pat:['Wii']},
-  {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC']},
+  {key:'wii',    title:'Wii',              spec:'Nintendo Wii',      pat:['Wii'],lock:'wii'},
+  {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC'],lock:'gc'},
   {key:'gba',    title:'Game Boy Advance', spec:'Nintendo Game Boy Advance',pat:['GBA']},
   {key:'gbc',    title:'Game Boy Color',   spec:'Nintendo Game Boy Color',pat:['GBC']},
   {key:'gb',     title:'Game Boy',         spec:'Nintendo Game Boy', pat:['GB']},
   {key:'n64',    title:'N64',              spec:'Nintendo 64',       pat:['N64']},
   {key:'sfc',    title:'Super Famicom',    spec:'Nintendo Super Famicom',pat:['スーパーファミコン','SFC']},
   {key:'fc',     title:'Famicom',          spec:'Nintendo NES',      pat:['ファミコン','FC']},
-  {key:'ss',     title:'Sega Saturn',      spec:'Sega Saturn',       pat:['サターン']},
-  {key:'dc',     title:'Dreamcast',        spec:'Sega Dreamcast',    pat:['ドリームキャスト']},
+  {key:'ss',     title:'Sega Saturn',      spec:'Sega Saturn',       pat:['サターン'],lock:'ss'},
+  {key:'dc',     title:'Dreamcast',        spec:'Sega Dreamcast',    pat:['ドリームキャスト'],lock:'dc'},
   {key:'md',     title:'Mega Drive',       spec:'Sega Genesis',      pat:['メガドライブ']},
   // 最後の保険。上のどれにも当たらなかった "PS" だけ初代とみなす
-  {key:'ps1b',   title:'PS1',              spec:'Sony PlayStation 1',pat:['PS'],alias:true}
+  {key:'ps1b',   title:'PS1',              spec:'Sony PlayStation',  pat:['PS'],alias:true}
 ];
+/* 本体のリージョンで動かない可能性がある機種の注記。文言は 3DS の書き方に合わせる。
+   買ってから動かない事故を防ぐため、「日本仕様の注意」のチェックに関わらず必ず出す。 */
+var PLAT_LOCK={
+  '3ds':{ h:'Region lock \u2014 Japanese 3DS system required',
+    b:'Nintendo 3DS systems are region-locked. This is a Japanese release, so it will only '
+      +'run on a Japanese 3DS, 3DS LL/XL, 2DS or New 3DS system. It will not run on a North '
+      +'American, European or other region system.' },
+  'ps2':{ h:'Region lock \u2014 Japanese PlayStation 2 system required',
+    b:'PlayStation 2 discs are region-locked. This is a Japanese release, so it will only '
+      +'run on a Japanese PlayStation 2 system. It will not run on a North American, '
+      +'European or other region system.' },
+  'wii':{ h:'Region lock \u2014 Japanese Wii system required',
+    b:'Wii discs are region-locked. This is a Japanese release, so it will only run on a '
+      +'Japanese Wii system. It will not run on a North American, European or other region '
+      +'system.' },
+  'gc':{ h:'Region lock \u2014 Japanese GameCube system required',
+    b:'Nintendo GameCube discs are region-locked. This is a Japanese release, so it will '
+      +'only run on a Japanese GameCube system. It will not run on a North American, '
+      +'European or other region system.' },
+  'ss':{ h:'Region lock \u2014 Japanese Sega Saturn system required',
+    b:'Sega Saturn discs are region-locked. This is a Japanese release, so it will only run '
+      +'on a Japanese Sega Saturn system. It will not run on a North American, European or '
+      +'other region system.' },
+  'dc':{ h:'Region lock \u2014 Japanese Dreamcast system required',
+    b:'Dreamcast discs are region-locked. This is a Japanese release, so it will only run '
+      +'on a Japanese Dreamcast system. It will not run on a North American, European or '
+      +'other region system.' },
+  'x360':{ h:'Region lock \u2014 Japanese Xbox 360 system may be required',
+    b:'Xbox 360 discs are region-locked unless the title itself is region-free. This is a '
+      +'Japanese release, so it may only run on a Japanese Xbox 360 system. Please check '
+      +'before buying if you are using a North American, European or other region system.' }
+};
 // Worker が返す機種キーから表の1行を引く
 function platByKey(k){
   var t=String(k||'').trim(); if(!t)return null;
@@ -1825,7 +1861,7 @@ function makerName(){
 // 原産国はアーケードパーツだけ既定が違うので欄を分けている（既定 Japan）。
 function originValue(){ return (isArcade()?$('aOrigin').value:$('origin').value); }
 // 機種は選択肢＋自由入力。Other または未選択のときだけ自由入力を使う。
-// 本体側がリージョンロックされている機種か（いまは3DSのみ）
+// 本体側がリージョンロックされている機種か（PLAT_LOCK のキーを返す）
 function platLock(){
   if(!isGame())return '';
   var p=platBy('title',gamePlatform());
@@ -2051,11 +2087,13 @@ function descHTML(){
     S+=h2('About Japanese prize figures');
     S+='<p style="margin:0 0 22px;">'+pick(V_PRIZE)+'</p>';
   }
-  /* 3DSは本体側がリージョンロックされている。買ってから動かない事故を防ぐため、
+  /* 本体側がリージョンロックされている機種（3DS・PS2・Wii・ゲームキューブ・
+     サターン・ドリームキャスト・Xbox 360）。買ってから動かない事故を防ぐため、
      Japanese version のチェックに関わらず必ず出す。 */
-  if(platLock()==='3ds'){
-    S+=h2('Region lock \u2014 Japanese 3DS system required');
-    S+='<p style="margin:0 0 22px;">Nintendo 3DS systems are region-locked. This is a Japanese release, so it will only run on a Japanese 3DS, 3DS LL/XL, 2DS or New 3DS system. It will not run on a North American, European or other region system.</p>';
+  var lk=PLAT_LOCK[platLock()];
+  if(lk){
+    S+=h2(lk.h);
+    S+='<p style="margin:0 0 22px;">'+lk.b+'</p>';
   }
 
   if($('bJP').checked){
@@ -2717,9 +2755,10 @@ function descPlain(){
     L.push('\u25A0 ABOUT JAPANESE PRIZE FIGURES');
     L.push(pick(V_PRIZE)); L.push('');
   }
-  if(platLock()==='3ds'){
-    L.push('\u25A0 REGION LOCK - JAPANESE 3DS SYSTEM REQUIRED');
-    L.push('Nintendo 3DS systems are region-locked. This is a Japanese release, so it will only run on a Japanese 3DS, 3DS LL/XL, 2DS or New 3DS system. It will not run on a North American, European or other region system.');
+  var lkT=PLAT_LOCK[platLock()];
+  if(lkT){
+    L.push('\u25A0 '+lkT.h.replace(/\u2014/g,'-').toUpperCase());
+    L.push(lkT.b);
     L.push('');
   }
   if($('bJP').checked){
@@ -3940,15 +3979,19 @@ var CSV_TSTAT={ok:['ok','var(--good)'],review:['要確認','#8a6d00'],
   not_found:['見つからない','var(--mute)'],invalid_jan:['JAN不正','var(--bad)'],
   error:['通信エラー','var(--bad)']};
 // 機種が分からない行に出すプルダウン。選べば英題生成の対象になる。
+/* 行の機種。ゲームの行にはいつでも出す（取り違えをその場で直せるように）。
+   いま入っている機種は選んだ状態にする。 */
 function csvPlatSelect(r){
+  var cur=csvPlatOf(r), k=cur?cur.key:'';
   var h='<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
     +'<span class="note2" style="margin:0;flex:0 0 auto">機種</span>'
     +'<select data-plat="'+r.id+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;'
     +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
-    +'<option value="">商品名から判定できません。選んでください</option>';
+    +'<option value=""'+(k?'':' selected')+'>商品名から判定できません。選んでください</option>';
   PLATFORMS.forEach(function(p){
     if(p.alias)return;
-    h+='<option value="'+esc(p.key)+'">'+esc(p.title)+(p.target?'':'（対象外）')+'</option>';
+    h+='<option value="'+esc(p.key)+'"'+(k===p.key?' selected':'')+'>'
+      +esc(p.title)+'</option>';
   });
   return h+'</select></div>';
 }
@@ -4004,13 +4047,16 @@ function csvTaFitAll(){
 function csvTitleBox(r){
   var t=csvTitleTarget(r);
   if(!t)return '';                                   // ゲーム・フィギュア以外は出さない
-  if(t==='out')
-    return '<div class="note2" style="margin-top:4px">英語タイトル生成：対象外機種（手入力）</div>';
+  /* 英題の入力欄は必ず出す。自動で作れない行（JANもASINも無い・機種が分からない）でも、
+     手で入れて先に進めるようにするため（2026-10-09）。 */
+  var pre='';
+  if(csvTitleKind(r)==='game')pre+=csvPlatSelect(r);
   if(t==='noid')
-    return '<div class="note2" style="margin-top:4px">英語タイトル生成：JANもASINも無いので照会できません（手入力）</div>';
-  if(t==='unknown')
-    return csvPlatSelect(r)
-      +'<div class="note2" style="margin-top:2px">機種を選ぶか、「英語タイトル生成」でAmazonから補完します。'
+    pre+='<div class="note2" style="margin-top:2px">'
+      +'JANもASINも無いので英語タイトル生成は使えません。下の欄に手で入れてください。</div>';
+  else if(t==='unknown')
+    pre+='<div class="note2" style="margin-top:2px">機種を選ぶか、「英語タイトル生成」でAmazonから補完します。'
+      +'（英題は下の欄に手で入れてもかまいません）'
       +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
   var te=String(r.titleEn||''), len=te.length;
   var col=len>80?'var(--bad)':(len>72?'#8a6d00':'var(--mute)');
@@ -4031,6 +4077,7 @@ function csvTitleBox(r){
     +(st?('　<span style="color:'+st[1]+'">'+esc(st[0])+'</span>'):'')
     +(r.titleManual?'　<span style="color:#2f6fb0">編集済み</span>':'')
     +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
+  h=pre+h;
   if(csvTitleKind(r)==='fig')h+=csvFigFields(r);
   if((r.titleCands||[]).length)
     h+='<details style="margin-top:2px"><summary class="note2" style="margin:0">候補にした元タイトル '
@@ -6139,7 +6186,10 @@ function csvTitleTarget(r){
   if(k!=='game')return '';
   var p=csvPlatOf(r);
   if(!p)return 'unknown';
-  return p.target?'ok':'out';
+  /* どの機種でも英題を作る。以前は「対象外機種」として英題欄ごと出さず、
+     手で入れることもできずに止まっていた（Kanon＝ドリームキャストなど）。
+     Worker が作れなかったときは、出てくる入力欄に手で入れてもらう。 */
+  return 'ok';
 }
 function csvTitleSendable(r){ var t=csvTitleTarget(r); return t==='ok'||t==='unknown'; }
 
@@ -7876,7 +7926,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v121';   // sw.js の const V と必ず同じ値にする
+var APP_V='v122';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

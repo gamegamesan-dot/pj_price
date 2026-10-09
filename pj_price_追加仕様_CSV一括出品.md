@@ -2251,6 +2251,111 @@ pj_price（実ブラウザ・trash.js 38項目）
 **写真から戻す機能を使うには proxy-img のデプロイが必要**（ゴミ箱だけならデプロイ不要）。
 **D1 のマイグレーションは不要。**
 
+## 6.28 対象外機種をやめ、どの機種でも英題を作る（2026-10-09・sw.js v122）
+
+### 症状
+
+「Kanon カノン」（ゲーム 139973・ドリームキャスト）の行に
+**「英語タイトル生成：対象外機種（手入力）」**とだけ出て、
+**英題の入力欄すら出ず**、「英題なし・説明文なし・Game Name なし」のまま
+先に進めなかった。
+
+### 原因
+
+機種の表（`PLATFORMS`）に `target`（英語タイトル自動生成の対象機種か）という印があり、
+`csvTitleTarget()` が対象外の機種に `'out'` を返していた。
+`csvTitleBox()` は `'out'` のとき**その一文だけを返して終わり**だったので、
+英題の入力欄・「再生成」・80文字チェック・Item Specifics の欄がどれも出ず、
+`csvTitleSendable()` も false なので一括作成の対象にもならなかった。
+手で入れる道も無く、完全に詰まっていた。
+
+### 直したこと
+
+**(1) `target` を廃止。どの機種でも英題を作る。**
+
+- `csvTitleTarget()` は、機種が分かっていれば `'ok'`（`'out'` は返さない）。
+- **英題の入力欄は必ず出す。** JANもASINも無い行（`'noid'`）、機種が分からない行
+  （`'unknown'`）でも、案内の下に入力欄・「再生成」・80文字チェックを出す。
+  自動で作れなくても手で入れて先に進める。
+- **機種の選択欄をゲームの行すべてに出す**（これまでは機種が読めなかった行だけ）。
+  いま入っている機種を選んだ状態にし、取り違えをその場で直せるようにした
+  （以前は選択中の機種が表示されていなかった）。
+- 選んだあとは通常の行と同じ：英題の生成・再生成・80文字・Item Specifics・
+  「出品文を作る」→「書き戻す」・一括作成。
+
+**(2) Xbox 360 を足した。** 表に無かったので商品名から読めなかった。
+`Xbox 360 / Xbox360 / X360` → `Microsoft Xbox 360`。取り込んだ時点で機種が入り、
+英題の一括作成の対象になる。
+
+**(3) 機種ごとのリージョン注記（`PLAT_LOCK`）。**
+3DS だけだった注記を、本体のリージョンで動かない機種すべてに広げた。
+文言は 3DS の書き方に合わせ、HTML版・テキスト版の両方に出す。
+「日本仕様の注意」のチェックに関わらず必ず出す（買ってから動かない事故を防ぐため）。
+
+| 機種 | 見出し |
+|---|---|
+| Nintendo 3DS | Region lock — Japanese 3DS system required |
+| PS2 | Region lock — Japanese PlayStation 2 system required |
+| Wii | Region lock — Japanese Wii system required |
+| GameCube | Region lock — Japanese GameCube system required |
+| Sega Saturn | Region lock — Japanese Sega Saturn system required |
+| Dreamcast | Region lock — Japanese Dreamcast system required |
+| **Xbox 360** | Region lock — Japanese Xbox 360 system **may be** required（ソフトによる） |
+
+**(4) PS1 の Platform を `Sony PlayStation 1` → `Sony PlayStation` に直した**
+（eBay の推奨値に合わせる）。
+
+**(5) 英題のWorker（proxy-title）にも機種を足した。**
+ドリームキャスト・セガサターン・ゲームキューブを読めるようにし、
+PS1 は数字なしの `Sony PlayStation` でも読めるようにした（PS2 以降と取り違えない）。
+ここに無いと、候補の英題から機種違いのものを落とせない。
+
+### 機種と eBay の Platform
+
+| 機種 | Platform |
+|---|---|
+| ドリームキャスト | Sega Dreamcast |
+| セガサターン | Sega Saturn |
+| Xbox 360 | Microsoft Xbox 360 |
+| Xbox One | Microsoft Xbox One |
+| PS2 / PS1 | Sony PlayStation 2 / Sony PlayStation |
+| PSP / PS Vita | Sony PSP / Sony PlayStation Vita |
+| Wii / Wii U | Nintendo Wii / Nintendo Wii U |
+| ゲームキューブ | Nintendo GameCube |
+
+### 確認したこと
+
+```
+pj_price（実ブラウザ・plat.js 42項目）
+  商品名から読む機種と Platform（上の表の12通り）✅
+  ドリームキャストの行：対象外にならず、英題欄・再生成・80文字・機種の選択欄が出る ✅
+    英題生成の対象になる ✅
+  Xbox 360：取り込んだ時点で機種が入り、生成の対象 ✅
+  機種が分からない行でも英題の入力欄は出す（空欄で止まらない）✅
+  4行すべてが「英題と出品文を一括作成」の対象 ✅
+  機種を選ぶと行の Platform に入り、通常の行と同じ扱いになる ✅
+    いま入っている機種が選ばれた状態で出る ✅
+  英題を手で入れる → 「英題なし」が消える ✅
+    「出品文を作る」→ eBayタブの出品文が開き、機種も引き継ぐ ✅
+    「書き戻す」で Game Name・Platform が入り、指摘が無くなる ✅
+    書き出しにも進み、CSVに Platform と Game Name が入る ✅
+  リージョン注記：3DS・Xbox 360・ドリームキャスト・セガサターン・PS2・Wii・
+    ゲームキューブの7機種で HTML版・テキスト版の両方に入る ✅
+    Switch・PS5 には出ない ✅ Xbox 360 だけ「ソフトによっては」の書き方 ✅
+英題のWorker（Node・titleplat.mjs 23項目）
+  pj_price から届く Platform 15通りを読む ✅ 和名からも読む ✅
+  機種違いの候補を落とす（ドリームキャストの行から PS2・Switch の候補）✅
+  「Sony PlayStation」(PS1) と PS2 を取り違えない ✅
+回帰：tests/ の16本・416項目すべて ❌なし・pageerror なし ✅
+```
+
+**pj_price と英題のWorker（proxy-title）を直した。sw.js を v122 に上げた。**
+**機種違いの候補を落とす改善を効かせるには proxy-title のデプロイが必要**
+（画面の動きだけならデプロイ不要）。**D1 のマイグレーションは不要。**
+
+> Xbox 360 / Xbox One は重量の帯（`GAME_WEIGHTS`）に入れていない。
+> 実測していないため、重量はこれまでどおり手入力になる。
+
 ## 7. API連携（フェーズ2）
 
 ### 実装上の制約

@@ -70,14 +70,21 @@ const PLATFORM_KEYS = [
   ["ds",      /\b(nintendo\s*)?ds\b|ニンテンドー\s*ds/i],
   ["xboxone", /\bxbox\s*one\b|エックスボックス\s*ワン/i],
 ];
-// 対象外の機種も、候補が別物だと見抜くために読めるようにしておく
+/* 上の表に無い機種。候補が別商品だと見抜くために読めるようにしておく。
+   2026-10-09：pj_price 側が「対象外機種」をやめ、どの機種でも英題を作るように
+   なったので、ドリームキャスト・セガサターン・ゲームキューブも読めるようにした
+   （ここに無いと機種違いの候補を落とせない）。 */
 const OTHER_PLATFORM_KEYS = [
   ["wiiu",   /\bwii\s*u\b/i],
   ["wii",    /\bwii\b|ウィー/i],
   ["xbox360",/\bxbox\s*360\b/i],
   ["xbox",   /\bxbox\b|エックスボックス/i],
   ["gba",    /\bgame\s*boy\s*advance\b|\bgba\b/i],
-  ["ps1",    /\b(playstation\s*1|ps\s*one|psone|ps1)\b/i],
+  // PS1 は eBay の推奨値が "Sony PlayStation"（数字なし）。2以降と取り違えない
+  ["ps1",    /\b(playstation\s*1|ps\s*one|psone|ps1)\b|\bsony\s+playstation\b(?!\s*\d)/i],
+  ["dc",     /\bdreamcast\b|ドリームキャスト/i],
+  ["ss",     /\b(sega\s*)?saturn\b|セガサターン|サターン/i],
+  ["gc",     /\b(nintendo\s*)?game\s*cube\b|ゲームキューブ/i],
 ];
 const ALL_PLATFORM_KEYS = PLATFORM_KEYS.concat(OTHER_PLATFORM_KEYS);
 
@@ -1061,3 +1068,7 @@ export default {
     return json({ results }, 200, origin);
   },
 };
+
+/* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
+   本番の動きには関与しない（fetch からは使わない）。 */
+export const __test = { platformsIn, platformKey, filterCandidates };
