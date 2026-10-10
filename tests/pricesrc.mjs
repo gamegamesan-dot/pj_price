@@ -164,6 +164,33 @@ console.log('   '+JSON.stringify({low:itN.amazon_new_low,n:itN.amazon_new_n}));
 ok(itN.amazon_new_low===6280&&itN.amazon_new_n===13,
    '★一覧に新品の最安値を返す（pj_price が基準価格に使う）');
 
+console.log('\n=== 値下げの記録を戻す／失敗の理由を残す ===');
+// mark_at は空文字で消せる（アップロードが Failure だったときに戻すため）
+await asJson(await worker.fetch(post('/listings',{items:[
+  { asin:'B0PSRC0002', cond:'used', mark_at:'2026-10-09T00:00:00.000Z' }]}),env));
+await asJson(await worker.fetch(post('/listings',{items:[
+  { asin:'B0PSRC0002', cond:'used', mark_at:'', revise_err:'[21919137] small picture' }]}),env));
+let v4=await env.DB.prepare(`SELECT mark_at,revise_err,revise_err_at FROM items
+  WHERE asin='B0PSRC0002' AND cond='used'`).first();
+console.log('   '+JSON.stringify(v4));
+ok(v4.mark_at===null,'★mark_at は空文字で消せる（値下げの回数を進めない）');
+ok(/21919137/.test(v4.revise_err||'')&&!!v4.revise_err_at,
+   '★失敗の理由と時刻を残す');
+await asJson(await worker.fetch(post('/listings',{items:[
+  { asin:'B0PSRC0002', cond:'used', revise_err:'' }]}),env));
+v4=await env.DB.prepare(`SELECT revise_err,revise_err_at FROM items
+  WHERE asin='B0PSRC0002' AND cond='used'`).first();
+ok(!v4.revise_err&&!v4.revise_err_at,'★次が通れば消える');
+// ベストオファーの設定を一覧で返す
+await env.DB.prepare(`UPDATE items SET ebay_bo=1, ebay_bo_accept=22.5,
+  ebay_bo_decline=22.96 WHERE asin='B0PSRC0001' AND cond='used'`).run();
+const stB=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
+const itB=stB.items.find((x)=>x.asin==='B0PSRC0001');
+console.log('   '+JSON.stringify({bo:itB.ebay_bo,acc:itB.ebay_bo_accept,
+  dec:itB.ebay_bo_decline}));
+ok(itB.ebay_bo===1&&itB.ebay_bo_accept===22.5&&itB.ebay_bo_decline===22.96,
+   '★ベストオファーの設定を一覧に返す（CSVの金額に使う）');
+
 console.log('\n=== 一覧の上限と、切れたかどうか ===');
 const all=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body.rows_total;
 st=(await asJson(await worker.fetch(get('/status?limit=2'),env))).body;

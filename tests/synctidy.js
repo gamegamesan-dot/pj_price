@@ -128,14 +128,16 @@ await p.evaluate(()=>{
 await p.waitForTimeout(120);
 bar=await p.evaluate(()=>({ show:getComputedStyle($('syncBar')).display,
   n:$('syncBarN').textContent,
-  btn:['syncBarRev','syncBarFloor','syncBarDrop','syncBarMark'].map(id=>$(id).textContent),
+  btn:Array.from(document.querySelectorAll('#syncBar > div:nth-child(2) button'))
+    .map(b=>b.textContent),
   restock:$('syncBarRestock').style.display }));
 console.log('   '+JSON.stringify(bar));
 ok(bar.show!=='none'&&/選択 1件/.test(bar.n),'★選ぶと画面の下に出る');
-ok(bar.btn.join('|')==='見直し価格にする|最低売値まで下げる|無在庫オン|値下げしない',
-   '★見直し価格・最低売値・無在庫・値下げしない を並べる');
+ok(bar.btn.join('|')==='見直し価格にする|最低売値まで下げる|印を付ける ▾|選択解除',
+   '★バーは4つ（見直し価格・最低売値・印を付ける・選択解除）');
 ok(bar.restock==='none','★再調達CSVは「再調達の候補」を見ているときだけ');
 const rst=await p.evaluate(()=>{
+  $('syncBarMarkBtn').click();            // 印の欄を開く（再調達CSVはこの中）
   $('syncFilter').value='restock'; syncRender();
   const cb=document.querySelector('#syncList input[data-spick]');
   cb.checked=true; cb.dispatchEvent(new Event('change',{bubbles:true}));

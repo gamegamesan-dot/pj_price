@@ -861,6 +861,14 @@ async function ebayActive(env, run) {
          「納品待ちで出品中」を警告にするか情報にするかの判定に使う。
          返らない出品もあるので、空のときは今までどおり推測で判定する。 */
       const prof = xmlTag(xmlTag(b, "SellerProfiles"), "SellerShippingProfile");
+      /* ベストオファーの設定。値段を下げるときは自動拒否額も一緒に下げる必要がある。
+         返らない出品もあるので、取れた分だけ持ち帰る（空は「分からない」）。 */
+      const bod = xmlTag(b, "BestOfferDetails");
+      const boOn = xmlTag(bod, "BestOfferEnabled");
+      const boAcc = xmlTag(det, "BestOfferAutoAcceptPrice")
+                 || xmlTag(b, "BestOfferAutoAcceptPrice");
+      const boDec = xmlTag(det, "MinimumBestOfferPrice")
+                 || xmlTag(b, "MinimumBestOfferPrice");
       rows.push({
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
@@ -870,6 +878,9 @@ async function ebayActive(env, run) {
         price: Number(price || 0),
         currency: xmlAttr(b, "CurrentPrice", "currencyID") || "USD",
         shipProfile: xmlTag(prof, "ShippingProfileName"),
+        bo: boOn === "" ? null : (/^(true|1)$/i.test(boOn) ? 1 : 0),
+        boAccept: boAcc === "" ? null : (Number(boAcc) || 0),
+        boDecline: boDec === "" ? null : (Number(boDec) || 0),
       });
     }
   }
@@ -1097,6 +1108,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
+  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, amazon_new_low, amazon_new_n, amazon_new_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
@@ -1551,10 +1563,18 @@ async function syncEbayActive(env, run) {
          dropship=CASE WHEN ?11=1 THEN 1 ELSE dropship END,
          -- 配送ポリシー名。返らなかった回で消さないよう、空のときは前の値を残す
          ebay_ship_profile=COALESCE(NULLIF(?12,''), ebay_ship_profile),
+         /* ベストオファーの設定。返らなかった回で消さないよう、
+            NULL（未取得）のときは前の値を残す。 */
+         ebay_bo=COALESCE(?13, ebay_bo),
+         ebay_bo_accept=COALESCE(?14, ebay_bo_accept),
+         ebay_bo_decline=COALESCE(?15, ebay_bo_decline),
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
-           it.start || "", k.dropship ? 1 : 0, it.shipProfile || ""));
+           it.start || "", k.dropship ? 1 : 0, it.shipProfile || "",
+           (it.bo === null || it.bo === undefined) ? null : it.bo,
+           (it.boAccept === null || it.boAccept === undefined) ? null : it.boAccept,
+           (it.boDecline === null || it.boDecline === undefined) ? null : it.boDecline));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -2312,11 +2332,16 @@ async function putListings(env, body) {
          cost_yen=COALESCE(?18, cost_yen),
          -- 相場は 0 で取り消せる（NULLI は「送られてこなかった」）
          sold_usd=COALESCE(?19, sold_usd),
-         -- 3日ごとの値下げの記録
-         mark_at=COALESCE(?20, mark_at),
+         /* 3日ごとの値下げの記録。空文字（''）を送ると消す
+            （アップロードが Failure だったときに、進めた記録を戻すため）。 */
+         mark_at=CASE WHEN ?20='' THEN NULL ELSE COALESCE(?20, mark_at) END,
          mark_stop=COALESCE(?21, mark_stop),
          -- eBay優先の印（Amazon同等ラインでの引き上げをやめる行）
          ebay_first=COALESCE(?22, ebay_first),
+         /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
+         revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
+         revise_err_at=CASE WHEN ?23='' THEN NULL
+                            WHEN ?23 IS NULL THEN revise_err_at ELSE ?8 END,
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
@@ -2340,8 +2365,10 @@ async function putListings(env, body) {
            (x.hand_qty === null || x.hand_qty === undefined) ? null
              : Math.max(0, Math.round(Number(x.hand_qty) || 0)),
            numOf(x, "weight_g"), numOf(x, "cost_yen"), numZero(x, "sold_usd"),
-           x.mark_at ? String(x.mark_at) : null, flagOf(x, "mark_stop"),
-           flagOf(x, "ebay_first")));
+           (x.mark_at === "") ? "" : (x.mark_at ? String(x.mark_at) : null),
+           flagOf(x, "mark_stop"), flagOf(x, "ebay_first"),
+           (x.revise_err === undefined || x.revise_err === null)
+             ? null : String(x.revise_err)));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

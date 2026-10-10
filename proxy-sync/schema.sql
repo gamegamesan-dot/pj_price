@@ -19,6 +19,16 @@ CREATE TABLE IF NOT EXISTS items (
   ebay_seen_at     TEXT,                       -- eBayから取り込んだ時刻
   ebay_start       TEXT,                       -- 出品開始日時（ListingDetails.StartTime）
   ebay_ship_profile TEXT,                      -- 配送ポリシー名（SellerProfiles）。NULLは未取得
+  /* ベストオファーの設定。値段を下げるときは自動拒否額も一緒に下げないと
+     「Auto decline amount cannot be greater than or equal to the Buy It Now price」
+     （22003）で失敗する。NULL は未取得（列を出さない＝勝手にオンにしない）。 */
+  ebay_bo          INTEGER,
+  ebay_bo_accept   REAL,
+  ebay_bo_decline  REAL,
+  /* アップロード結果が Failure だった理由（写真が小さい・ベストオファー金額など）。
+     直って次の Revise が通ったら消す。 */
+  revise_err       TEXT,
+  revise_err_at    TEXT,
   fba_available    INTEGER,
   fba_inbound      INTEGER,
   fba_reserved     INTEGER,
