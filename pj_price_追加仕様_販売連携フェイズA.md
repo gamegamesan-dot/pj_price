@@ -2233,6 +2233,66 @@ pj_price（実ブラウザ・inboundui.js 16項目）
 **Worker のデプロイが必要**（判定が Worker 側にあるため）。
 **D1 のマイグレーションは不要。**
 
+## 7.26 配送ポリシーを eBay から取る（2026-10-10・sw.js v125・D1 migrate-0011）
+
+### なぜ
+
+7.25 では「納品待ちで出品中」を警告にするか情報にするかを、
+`mode='restock'` ／ 無在庫 ／ 再調達中 から**推測**していた。
+6.30 で「出品はすべて W2000、即発送の印の行だけ W1000」に変わるので、
+この推測は合わなくなる。
+
+### 取り込み
+
+`GetMyeBaySelling` の `Item/SellerProfiles/SellerShippingProfile/ShippingProfileName`
+を読み、`items.ebay_ship_profile` に保存する（**migrate-0011**）。
+
+- 返らない出品もあるので、**空のときは前の値を残す**
+  （`COALESCE(NULLIF(?,''), ebay_ship_profile)`）。
+- ポリシーを使っていない出品では空のまま。その行はこれまでどおり推測で判定する。
+
+### 判定
+
+`isShipRestock(r)` は、**取れたポリシー名があればそれで決める**。
+無い行だけ、これまでの推測に落とす。
+
+名前がどちらかを決めるのに、**pj_price の設定（出品用・再調達用のポリシー名）**を使う。
+設定は 7.24 の `/settings` で D1（`ui.settings`）に入っているので、Worker はそれを読む
+（`shipNamesLoad()`。入口で1回）。設定が無いときは名前に `2000` / `1000` を含むかで見る。
+
+- `/status` の行に **`ebay_ship_profile`**（名前）と **`ship_known`**（名前で判定したか）
+  を足した。pj_price はこの名前と行の印を見比べ、食い違う行に
+  「ポリシーが印と違います」を出す。
+- **Discord の「納品待ちの商品がeBayに出ています」も同じ決まり**にした
+  （W2000 の行は通知しない）。
+
+### 確認したこと
+
+```
+Worker（Node＋node:sqlite・shipprof.mjs 22項目）
+  pj_price の設定から名前を読む（W2000 / w2000 / 前後の空白 / W1000 / 知らない名前）✅
+  名前が取れていればそれで決める（mode が hold でも W2000 なら再調達用）✅
+    名前が W1000 なら mode が restock でも即発送とみなす ✅
+    名前が無い行はこれまでどおり推測 ✅
+  納品待ちの分け方が名前で決まる（W2000→情報／W1000→警告）✅ ship_known の印 ✅
+  一覧にポリシー名を返す ✅
+  設定が無くても W1000 / W2000 は読める ✅ pj_price で付けた別の名前でも読める ✅
+  通知も同じ決まり（W2000 の行は「納品待ち」を通知しない）✅
+  最後に売れた日時（ebay_sold_at）を返す ✅
+pj_price（実ブラウザ・markdown.js 40項目・inboundui.js 21項目）
+  → 出品CSV側の確認は 6.30 を参照
+回帰：tests/ の21本・553項目すべて ❌なし・pageerror なし ✅
+```
+
+**D1 を先 → deploy を後。**
+```
+cd proxy-sync
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0011-ship-profile.sql
+npx wrangler deploy
+```
+ポリシー名は次の取り込み（1時間ごと、または「状況を取り込む」）から入る。
+入るまでは、これまでどおり推測で判定する。
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS items (
   ebay_currency    TEXT,
   ebay_seen_at     TEXT,                       -- eBayから取り込んだ時刻
   ebay_start       TEXT,                       -- 出品開始日時（ListingDetails.StartTime）
+  ebay_ship_profile TEXT,                      -- 配送ポリシー名（SellerProfiles）。NULLは未取得
   fba_available    INTEGER,
   fba_inbound      INTEGER,
   fba_reserved     INTEGER,

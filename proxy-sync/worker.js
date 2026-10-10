@@ -837,6 +837,10 @@ async function ebayActive(env, run) {
         ? Number(avail)
         : Math.max(0, Number(xmlTag(b, "Quantity") || 0)
                       - Number(xmlTag(b, "QuantitySold") || 0));
+      /* 配送ポリシー名（ビジネスポリシーを使っている出品だけ入る）。
+         「納品待ちで出品中」を警告にするか情報にするかの判定に使う。
+         返らない出品もあるので、空のときは今までどおり推測で判定する。 */
+      const prof = xmlTag(xmlTag(b, "SellerProfiles"), "SellerShippingProfile");
       rows.push({
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
@@ -845,6 +849,7 @@ async function ebayActive(env, run) {
         qty: qty,
         price: Number(price || 0),
         currency: xmlAttr(b, "CurrentPrice", "currencyID") || "USD",
+        shipProfile: xmlTag(prof, "ShippingProfileName"),
       });
     }
   }
@@ -1059,14 +1064,17 @@ function stateEvents(env, rows) {
       out.push(evStmt(env, "OVERSELL_RISK", "OVERSELL_RISK" + base, r, d));
     if (av > 0 && q > 0 && av < q)
       out.push(evStmt(env, "QTY_MISMATCH", "QTY_MISMATCH" + base, r, d));
-    if (!onHand && av === 0 && inb > 0 && q >= 1)
+    /* 納品待ちで出品中。配送ポリシーが再調達用（W2000）の行は運用どおりなので
+       通知しない（画面でも情報として出すだけ。2026-10-10）。 */
+    if (!onHand && av === 0 && inb > 0 && q >= 1 && !isShipRestock(r))
       out.push(evStmt(env, "INBOUND_LISTED", "INBOUND_LISTED" + base, r, d));
   }
   return out;
 }
 // 一覧の1行を作るための共通SELECT
 const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
-  ebay_currency, ebay_seen_at, ebay_start, fba_available, fba_inbound, fba_reserved,
+  ebay_currency, ebay_seen_at, ebay_start, ebay_ship_profile,
+  fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
@@ -1520,10 +1528,12 @@ async function syncEbayActive(env, run) {
          ebay_start=COALESCE(NULLIF(?10,''), ebay_start),
          -- CustomLabel が M- の行は無在庫。印は立てるだけで、下ろすのは手動のみ
          dropship=CASE WHEN ?11=1 THEN 1 ELSE dropship END,
+         -- 配送ポリシー名。返らなかった回で消さないよう、空のときは前の値を残す
+         ebay_ship_profile=COALESCE(NULLIF(?12,''), ebay_ship_profile),
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
-           it.start || "", k.dropship ? 1 : 0));
+           it.start || "", k.dropship ? 1 : 0, it.shipProfile || ""));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -1859,12 +1869,40 @@ function restockTrouble(r) {
   if (max > 0 && low > max) return "loss";
   return "";
 }
+/* 配送ポリシーの名前。pj_price の設定（出品用・再調達用）を D1 の ui.settings から
+   読み、どちらに当たるかを見る。設定が無いときは「2000 を含むなら再調達用」で見る
+   （運用上の名前が W1000 / W2000 のため）。 */
+let SHIP_NAMES = null;            // { fast:'W1000', restock:'W2000' }
+async function shipNamesLoad(env) {
+  try {
+    const s = await stateGet(env, SETTINGS_KEY);
+    const o = s ? JSON.parse(s) : null;
+    const st = (o && o.settings) || {};
+    SHIP_NAMES = { fast: String(st.csvShipProfile || "").trim(),
+                   restock: String(st.csvShipProfileRe || "").trim() };
+  } catch (e) { SHIP_NAMES = { fast: "", restock: "" }; }
+  return SHIP_NAMES;
+}
+const shipNorm = (v) => String(v || "").trim().toLowerCase();
+/* 取れたポリシー名が再調達用か。
+   'yes' / 'no' / '' （名前が無い・どちらとも言えない） */
+function shipKindOf(name) {
+  const v = shipNorm(name);
+  if (!v) return "";
+  const n = SHIP_NAMES || { fast: "", restock: "" };
+  if (n.restock && v === shipNorm(n.restock)) return "yes";
+  if (n.fast && v === shipNorm(n.fast)) return "no";
+  if (/2000/.test(v)) return "yes";
+  if (/1000/.test(v)) return "no";
+  return "";
+}
 /* 配送ポリシーが再調達用（W2000）で出している行か。
-   pj_price の csvShipProfileFor() と同じ決まり：
-   「在庫0のときの動作＝再調達」の行と、無在庫の行が再調達用のポリシーになる。
-   この2つは FBA に在庫が無いまま出しているのが運用どおりなので、
-   納品待ちを警告にしない（2026-10-09）。 */
+   **eBayから取ったポリシー名があればそれで決める**（2026-10-10）。
+   取れていない行だけ、これまでどおり pj_price の書き出しの決まりから推測する
+   （「在庫0のときの動作＝再調達」の行と無在庫の行が再調達用）。 */
 function isShipRestock(r) {
+  const k = shipKindOf(r.ebay_ship_profile);
+  if (k) return k === "yes";
   return String(r.mode || "") === "restock" || !!Number(r.dropship || 0)
       || !!Number(r.restocking || 0);
 }
@@ -1971,6 +2009,10 @@ async function statusBody(env, url) {
       (SELECT COALESCE(SUM(qty),0) FROM orders o
         WHERE o.channel='ebay' AND o.asin=items.asin AND o.cond=items.cond
           AND o.ordered_at>=?${bind.length + 1}) AS ebay_sold,
+      -- 最後に eBay で売れた日時。pj_price の「値下げ中の行が売れたら止める」に使う
+      (SELECT MAX(o2.ordered_at) FROM orders o2
+        WHERE o2.channel='ebay' AND o2.asin=items.asin AND o2.cond=items.cond)
+        AS ebay_sold_at,
       -- せどりすとSKUの接頭辞（game / hobby / toy …）。既定重量の振り分けに使う
       (SELECT s.prefix FROM skus s
         WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix
@@ -1992,8 +2034,10 @@ async function statusBody(env, url) {
                            // カートリッジのみ（手元から発送する行）
                            cart: isCart(r) ? 1 : 0,
                            cart_mismatch: cartMismatch(r) ? 1 : 0,
-                           // 配送ポリシーが再調達用（W2000）とみなせる行
+                           // 配送ポリシーが再調達用（W2000）か
                            ship_restock: isShipRestock(r) ? 1 : 0,
+                           // eBayから取ったポリシー名で判定できたか（推測ではないか）
+                           ship_known: shipKindOf(r.ebay_ship_profile) ? 1 : 0,
                            warnings: warnOf(r),
                            // 情報（対応は要らないが見えていてほしいもの）
                            notes: noteOf(r) }));
@@ -2374,6 +2418,8 @@ export default {
     if (!authorized(request, env)) return json({ error: "unauthorized" }, 401, origin);
     if (!env.DB) return json({ error: "server_misconfigured", detail: "DB" }, 500, origin);
     if (!env.SYNC_CACHE) return json({ error: "server_misconfigured", detail: "SYNC_CACHE" }, 500, origin);
+    // 配送ポリシーの名前（pj_price の設定）。判定の前に一度だけ読む
+    await shipNamesLoad(env);
 
     try {
       if (request.method === "GET" && url.pathname === "/status")
@@ -2449,6 +2495,7 @@ export default {
 
   async scheduled(event, env, ctx) {
     const cron = String(event.cron || "");
+    ctx.waitUntil(shipNamesLoad(env));      // 配送ポリシーの名前を読んでおく
     if (cron.indexOf("*/15") === 0) { ctx.waitUntil(jobOrders(env, 0)); return; }
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
     ctx.waitUntil((async () => {
@@ -2461,7 +2508,7 @@ export default {
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, judgeRow,
-                        isShipRestock,
+                        isShipRestock, shipKindOf, shipNamesLoad,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,

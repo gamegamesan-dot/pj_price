@@ -107,5 +107,43 @@ ok(/対応が必要 4件/.test(brk),'★対応が必要の合計を出す');
   ok(brk.indexOf(t)>=0,'★理由ごとの件数：'+t));
 ok(/情報 1件/.test(brk)&&/納品待ちで出品中（再調達ポリシー） 1件/.test(brk),
    '★情報も分けて数える');
+console.log('\n=== 選んだ行を最低売値まで下げるCSV ===');
+const fs=require('fs');
+const dlg=[]; p.on('dialog',async d=>{ dlg.push(d.message()); await d.accept(); });
+const dl=[]; p.on('download',async d=>dl.push({name:d.suggestedFilename(),
+  text:fs.readFileSync(await d.path(),'utf8')}));
+const prep=await p.evaluate(()=>{
+  $('fx').value='160'; $('baseProfit').value='1000'; $('linkRate').value='30';
+  $('saleRate').value='15'; $('usTaxRate').value='8'; $('targetMode').value='auto';
+  // 出品リストに同じ商品があれば、その仕入値から最低売値を出す
+  csvList=[{id:'s1',src:'sedori',sku:'game-20260101-UG-B0SOLDOUT01-1200',
+    asin:'B0SOLDOUT01',cond:'used',titleJa:'売り切れ',cat:'139973',catFixed:true,
+    condId:5000,cost:3000,weight:200,qty:1,pics:[],descHtml:'',specs:{},
+    zeroAct:'hold',itemId:'110333'}];
+  csvSaveList();
+  syncData.items.forEach(r=>{ r.ebay_price=90; });
+  // 一点物の行を1つ作る
+  syncData.items[4].one_off=1;
+  syncPick={}; syncPick['B0SOLDOUT01|used']=true;   // 下げられる行
+  syncPick['B0MISMATCH1|used']=true;                // 一点物
+  syncRender();
+  const r=syncData.items.find(x=>x.asin==='B0SOLDOUT01');
+  return { floor:syncFloorOf(r), now:+r.ebay_price };
+});
+console.log('   '+JSON.stringify(prep));
+ok(prep.floor.v>0&&prep.floor.from==='list',
+   '★出品リストに仕入値があれば、そこから最低売値を出す');
+dlg.length=0; dl.length=0;
+await p.click('#syncFloorCsv'); await p.waitForTimeout(500);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+const L=((dl[0]||{}).text||'').trim().split(/\r\n/);
+console.log('   '+JSON.stringify(L));
+ok(/選んだ 2件のうち 1件を最低売値まで下げます/.test(dlg[0]||''),
+   '★件数と「今の売値 → 最低売値」を出す');
+ok(/一点物/.test(dlg[0]||''),'★一点物は外して理由を出す');
+ok(L.length===3&&L[2]==='Revise,110333,'+prep.floor.v.toFixed(2),
+   '★最低売値で書き出す');
+ok(/書き出しました/.test(await p.textContent('#syncFloorNote')),'結果を出す');
+
 await T.done();
 })();
