@@ -1,9 +1,11 @@
-/* 出品CSVタブ：ボタンを使う頻度で整理した（6.29）
-   ・毎日使うものは開いたまま、ときどき使うものは畳む
-   ・畳んだ状態でも書き出しの結果は変わらない
-   ・見出しとボタンに件数を出す */
-const { harness } = require('./lib');
-const T = harness('出品CSVタブ：ボタンの整理');
+/* 画面の整理（6.33）
+   ・出品CSVタブ：①〜⑤の手順バー／毎日使うボタンだけ常に表示／
+     対象があるときだけ出すボタン／その他に畳む／価格の操作は置かない
+   ・設定は⚙の1か所。各タブは今の値を1行だけ出す
+   ・畳んだ状態・開いた状態の保存
+   ・整理しても書き出すCSVの中身と件数は変わらない */
+const { harness, openCsvBoxes } = require('./lib');
+const T = harness('画面の整理（出品CSVタブ）');
 const ok = T.ok;
 (async()=>{
 const p=await T.open();
@@ -33,183 +35,152 @@ const setup=async()=>await p.evaluate(()=>{
            row('p3','B0CWGXZWNV')];
   csvPick={}; csvTrash=[]; csvTrashSave(); syncData=null;
   csvList.forEach(csvRecalc);
-  // p1 だけ eBayに出している売値を推奨売値から離す（見直しの対象にする）
   csvList.forEach(r=>{ r.priceSent=r.price; r.fxSent=160; });
-  csvRowById('p1').priceSent=Math.round((csvRowById('p1').price-10)*100)/100;
   csvSaveList(); csvRender();
 });
 
-/* 価格の操作は販売連携タブの出品データで行うようになった（6.31）。
-   出品CSVタブのボタンはそちらへ移って同じ処理を呼ぶので、出品データを用意する。 */
-const withSync=async()=>await p.evaluate(()=>{
-  syncData={at:new Date().toISOString(),counts:{},
-    items:csvList.filter(r=>r.itemId).map(r=>({
-      asin:r.asin,cond:'used',scope:'ebay',ebay_sku:'E-'+r.asin+'-U',
-      ebay_item_id:r.itemId,ebay_qty:2,
-      // p1 だけ eBayの売値を推奨売値から $10 離す（見直しの対象にする）
-      ebay_price:(r.id==='p1')?Math.round((r.price-10)*100)/100:r.price,
-      dropship:0,restocking:0,one_off:0,mark_stop:0,mark_at:null,ebay_sold_at:null,
-      warnings:[],notes:[],state:'ok'}))};
-  syncRender();
+console.log('=== 仕入れのたびの手順（①〜⑤）===');
+await setup();
+const st=await p.evaluate(()=>{
+  const b=Array.from(document.querySelectorAll('#csvSteps button'));
+  return { n:b.length, txt:b.map(x=>x.textContent.replace(/\s+/g,' ')),
+    cls:b.map(x=>x.className), go:b.map(x=>x.getAttribute('data-step')),
+    head:$('csvSteps').previousElementSibling.textContent };
 });
+console.log('   '+JSON.stringify(st.txt));
+ok(st.n===5,'★手順は①〜⑤の5つ');
+ok(/①取り込み/.test(st.head)&&/⑤結果ファイル/.test(st.head),
+   '★画面の上に使い方の案内を出す');
+ok(/①/.test(st.txt[0])&&/リスト 3件/.test(st.txt[0]),'★①に今の件数を出す');
+ok(/書き出せる 1件/.test(st.txt[3]),'★④に書き出せる件数を出す');
+ok(st.go.join()==='csvImportBox,csvGenAll,csvListBox,csvExport,csvResBox',
+   '★押すとその場所へ移動する');
+// 残りがある手順は目立たせる
+const st2=await p.evaluate(()=>{
+  csvRowById('p3').titleEn='';          // 英題なしを1件作る
+  csvRowById('p3').pics=[];             // 写真なしも1件
+  csvSaveList(); csvRender();
+  const b=Array.from(document.querySelectorAll('#csvSteps button'));
+  return { txt:b.map(x=>x.textContent.replace(/\s+/g,' ')), cls:b.map(x=>x.className) };
+});
+console.log('   '+JSON.stringify(st2.txt));
+ok(/残り 1件/.test(st2.txt[1])&&st2.cls[1]==='todo','★残りがある手順は赤くする');
+ok(/確認 1件/.test(st2.txt[2]),'★写真・原産国・カテゴリの残りも数える');
+// 押すとその欄が開く
+await setup();
+await p.evaluate(()=>{ $('csvImportBox').open=false; });
+await p.click('#csvSteps button[data-step="csvImportBox"]');
+await p.waitForTimeout(150);
+ok(await p.evaluate(()=>$('csvImportBox').open===true),'★押すと畳んである欄が開く');
 
-console.log('=== いつも開いているボタン ===');
+console.log('\n=== いつも出すボタン ===');
 await setup();
 const vis=async(id)=>await p.isVisible('#'+id);
-for(const id of ['csvExport','csvExportPick','csvGenAll','csvTitleRedo',
-                 'csvRevive2','csvCartAdd']){
+for(const id of ['csvExport','csvExportPick','csvGenAll','csvImportBox','csvResBox',
+                 'csvListBox']){
   const v=await vis(id);
   console.log('   '+id+': '+v);
   ok(v,'★'+id+' は畳まずに出す');
 }
-console.log('\n=== 畳んである欄 ===');
-const boxes=await p.evaluate(()=>({
-  stock:$('csvStockBox').open, review:$('csvReviewBox').open,
-  revise:getComputedStyle($('csvRevise')).display,
-  price:getComputedStyle($('csvPriceCsv')).display }));
-console.log('   '+JSON.stringify(boxes));
-ok(boxes.stock===false&&boxes.review===false,'★在庫・数量／売値の見直しは畳んである');
-ok(!(await vis('csvRevise'))&&!(await vis('csvPriceCsv')),
-   '★中のボタン（数量更新CSV・価格更新CSV）は畳むと見えない');
-const inStock=await p.evaluate(()=>{
-  const b=$('csvStockBox');
-  return ['csvDropOn','csvDropOff','csvRevise','csvRevisePrice']
-    .every(id=>b.contains($(id)));
-});
-ok(inStock,'★無在庫オン／オフ・数量更新CSV・売値も含める は「在庫・数量」の中');
-const inReview=await p.evaluate(()=>{
-  const b=$('csvReviewBox');
-  return ['csvPriceCsv','csvPriceChangedOnly','csvReviewAbs','csvReviewPct','csvReviewZero']
-    .every(id=>b.contains($(id)));
-});
-ok(inReview,'★価格更新CSV・見直しの設定は「売値の見直し」の中');
-// 畳んでいる間は innerText が空になるので textContent で見る
-const tip=await p.evaluate(()=>$('csvReviewBox').textContent);
-console.log('   '+(tip.match(/使うタイミング[^。]*。/)||[''])[0]);
-ok(/使うタイミング：設定を変えたとき・為替が動いたとき・週1回の点検/.test(tip),
-   '★使うタイミングを1行で書く');
-ok(await p.evaluate(()=>$('csvPriceChangedOnly').checked),
-   '★「見直しが要る行だけ」は既定でオン');
 
-console.log('\n=== 見出しの件数 ===');
-let sum=await p.evaluate(()=>({t:$('csvReviewSum').textContent,
-  w:$('csvReviewSum').style.fontWeight,c:$('csvReviewSum').style.color}));
-console.log('   '+JSON.stringify(sum));
-ok(/^売値の見直し（1件）/.test(sum.t),'★見出しに件数を出す');
-ok(sum.w==='800'&&!!sum.c,'★1件以上なら見出しを目立たせる');
-await p.evaluate(()=>{
-  // 見直しの対象を無くす
-  csvList.forEach(r=>{ r.priceSent=r.price; });
-  csvSaveList(); csvRender();
-});
-sum=await p.evaluate(()=>({t:$('csvReviewSum').textContent,
-  w:$('csvReviewSum').style.fontWeight,open:$('csvReviewBox').open}));
-console.log('   0件: '+JSON.stringify(sum));
-ok(sum.t==='売値の見直し'&&!sum.w,'★0件のときは件数を出さず、目立たせない');
-ok(sum.open===false,'★0件のときは畳んだまま');
-
-console.log('\n=== 対象の行があるときだけ目立たせる（復活・+1）===');
-const hot=await p.evaluate(()=>{
-  // 数量0の出品・カートリッジのみの出品を pj-sync 側に用意する
+console.log('\n=== 対象があるときだけ出すボタン ===');
+let hot=await p.evaluate(()=>({
+  rv:getComputedStyle($('csvRevive2')).display,
+  ca:getComputedStyle($('csvCartAdd')).display }));
+console.log('   '+JSON.stringify(hot));
+ok(hot.rv==='none'&&hot.ca==='none','★対象が無いときは出さない');
+hot=await p.evaluate(()=>{
+  // 数量0で残っている出品を pj-sync 側に用意する（復活の対象）
   syncData={at:new Date().toISOString(),counts:{},items:[
     {asin:'B0CWGXZWNV',cond:'used',scope:'ebay',ebay_sku:'E-B0CWGXZWNV-U',
-     ebay_item_id:'110333',ebay_qty:0,ebay_price:40,dropship:0,warnings:[],state:'ok'}]};
+     ebay_item_id:'110333',ebay_qty:0,ebay_price:40,dropship:0,warnings:[],
+     notes:[],state:'ok'}]};
   csvRender();
   const b=$('csvRevive2');
-  return { label:b.textContent, hot:b.classList.contains('primary'), op:b.style.opacity };
+  return { show:getComputedStyle(b).display, label:b.textContent,
+    hot:b.classList.contains('primary') };
 });
 console.log('   '+JSON.stringify(hot));
-ok(/既存の出品を復活させるCSV（1件）/.test(hot.label),'★件数をボタンに出す');
-ok(hot.hot&&!hot.op,'★対象があるときは目立たせる');
-const cold=await p.evaluate(()=>{
-  syncData=null; csvRender();
-  const b=$('csvRevive2'), c=$('csvCartAdd');
-  return { label:b.textContent, hot:b.classList.contains('primary'), op:b.style.opacity,
-    cart:c.textContent, cartHot:c.classList.contains('primary') };
-});
-console.log('   '+JSON.stringify(cold));
-ok(cold.label==='既存の出品を復活させるCSV'&&!cold.hot&&cold.op==='0.55',
-   '★対象が無いときは件数を出さず、控えめにする');
-ok(cold.cart==='カートリッジのみ：既存の出品に+1するCSV'&&!cold.cartHot,
-   '+1のボタンも同じ');
+ok(hot.show!=='none'&&/（1件）/.test(hot.label)&&hot.hot,
+   '★対象ができたら件数つきで出す');
 
-console.log('\n=== 「リストを空にする」は一番下 ===');
-const pos=await p.evaluate(()=>{
-  const box=$('csvClear').closest('section');
-  const all=Array.from(box.querySelectorAll('button'));
-  return { last:all[all.length-1].id, idx:all.indexOf($('csvClear')), n:all.length,
-    note:$('csvClear').nextElementSibling.textContent };
+console.log('\n=== その他に畳む ===');
+await setup();
+const more=await p.evaluate(()=>{
+  const b=$('csvMoreBox');
+  return { open:b.open,
+    has:['csvTitleRedo','csvDropOn','csvDropOff','csvShipCsv','csvRevise',
+         'csvTrashBox','csvClear'].every(id=>b.contains($(id))),
+    last:(function(){ const all=Array.from(b.querySelectorAll('button'));
+      return all[all.length-1].id; })() };
 });
-console.log('   '+JSON.stringify(pos));
-ok(pos.last==='csvClear','★ボタンの中でいちばん下にある');
-ok(/ゴミ箱/.test(pos.note),'★ゴミ箱に入ると書いてある');
+console.log('   '+JSON.stringify(more));
+ok(more.open===false,'★「その他」は畳んである');
+ok(more.has,'★英題を作り直す・無在庫・数量更新CSV・ゴミ箱・リストを空にする が入っている');
+ok(more.last==='csvClear','★「リストを空にする」は一番下');
+ok(!(await vis('csvRevise'))&&!(await vis('csvClear')),'★畳むと中は見えない');
 
-console.log('\n=== 畳んだ状態でも書き出しの結果は変わらない ===');
-await setup(); await withSync();
-// 開いた状態で価格更新CSVを出す（販売連携タブへ移って同じ処理を呼ぶ）
-await p.evaluate(()=>{ $('csvReviewBox').open=true; });
-await p.waitForTimeout(100);
-dlg.length=0; dl.length=0;
-await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
-const opened=((dl[0]||{}).text||'').trim();
-console.log('   開いた状態: '+JSON.stringify(opened.split(/\r\n/)));
-ok(opened.split(/\r\n/).length===3,'開いた状態で1件書き出す');
-ok(await p.evaluate(()=>$('tabE').getAttribute('aria-pressed')==='true'),
-   '★押すと販売連携タブへ移る');
-// 畳んだ状態で同じことをする（ボタンは押せないので、その場で呼ぶ）
-await p.click('#tabD');
-await setup(); await withSync();
-await p.evaluate(()=>{ $('csvReviewBox').open=false; });
-dlg.length=0; dl.length=0;
-await p.evaluate(()=>{ $('csvPriceCsv').click(); });
-await p.waitForTimeout(500);
-const closed=((dl[0]||{}).text||'').trim();
-console.log('   畳んだ状態: '+JSON.stringify(closed.split(/\r\n/)));
-ok(closed===opened,'★畳んでいても中身は同じ');
-ok(/1件（売値の見直しが要る行）/.test(dlg[0]||''),'確認の中身も同じ');
-// 取り込みが無いときは案内だけ（二重に書き出さない）
-await p.click('#tabD');
+console.log('\n=== 価格の操作は出品CSVタブに置かない ===');
+const gone=await p.evaluate(()=>['csvPriceCsv','csvFloorCsv','csvMarkRun','csvMarkBar',
+  'csvReviewBox','csvStockBox'].map(id=>id+':'+!!$(id)));
+console.log('   '+JSON.stringify(gone));
+ok(gone.every(x=>/:false$/.test(x)),
+   '★価格更新CSV・最低売値・3日値下げのボタンは無い（販売連携タブにある）');
+const inCfg=await p.evaluate(()=>{
+  const c=$('tabCfg');
+  return ['csvReviewAbs','csvReviewPct','csvMarkDays','csvMarkStep','csvPriceChangedOnly',
+          'csvPackGame','syncWeight','baseProfit','fx','spFeeSale']
+    .every(id=>c.contains($(id)));
+});
+ok(inCfg,'★しきい値・値下げの間隔などの設定は⚙設定にある');
+const inTab=await p.evaluate(()=>{
+  const d=$('tabCsv');
+  return ['csvPackGame','csvDispatch','csvShipProfile','csvTitleApi']
+    .some(id=>d.contains($(id)));
+});
+ok(!inTab,'★出品CSVタブには設定欄を置かない');
+ok(/梱包マージン/.test(await p.textContent('#cfgLineCsv')),
+   '★いまの値は1行だけ出す');
+
+console.log('\n=== 畳んだ状態でも書き出しの中身は変わらない ===');
 await setup();
 dlg.length=0; dl.length=0;
-await p.evaluate(()=>{ $('csvPriceCsv').click(); });
-await p.waitForTimeout(300);
-console.log('   取り込み無し: '+JSON.stringify(dlg[0]));
-ok(/販売連携タブ/.test(dlg[0]||'')&&dl.length===0,
-   '★出品データが無いときは案内を出して書き出さない');
-// 数量更新CSVも同じ
-await p.click('#tabD');
-await setup();
-dlg.length=0; dl.length=0;
-await p.evaluate(()=>{ $('csvStockBox').open=true; });
-await p.waitForTimeout(100);
+await openCsvBoxes(p);
 await p.click('#csvRevise'); await p.waitForTimeout(500);
 const qOpen=((dl[0]||{}).text||'').trim();
+console.log('   開いた状態: '+JSON.stringify(qOpen.split(/\r\n/)));
 await setup();
 dlg.length=0; dl.length=0;
-await p.evaluate(()=>{ $('csvStockBox').open=false; $('csvRevise').click(); });
+await p.evaluate(()=>{ $('csvMoreBox').open=false; $('csvRevise').click(); });
 await p.waitForTimeout(500);
 const qClosed=((dl[0]||{}).text||'').trim();
-console.log('   数量更新: '+(qOpen===qClosed));
-ok(qOpen===qClosed&&qOpen.split(/\r\n/).length===4,'★数量更新CSVも畳んでいて同じ');
+console.log('   畳んだ状態: '+(qOpen===qClosed));
+ok(qOpen===qClosed&&qOpen.split(/\r\n/).length===4,
+   '★数量更新CSVは畳んでいても同じ（3件・同じ中身）');
+// 書き出し（カテゴリごと）も同じ
+await setup();
+dlg.length=0; dl.length=0;
+await p.click('#csvExport'); await p.waitForTimeout(600);
+const ex=((dl[0]||{}).text||'').trim();
+console.log('   書き出し: '+ex.split(/\r\n/).length+'行 / '+(dl[0]||{}).name);
+ok(ex.split(/\r\n/).length===3&&/B0CWGXZWNV/.test(ex),
+   '★CSVの書き出しも中身と件数はそのまま（未出品の1件）');
 
 console.log('\n=== 開いた・畳んだ状態は端末に保存する ===');
 await p.evaluate(()=>{
-  $('csvStockBox').open=true; $('csvStockBox').dispatchEvent(new Event('toggle'));
-  $('csvReviewBox').open=true; $('csvReviewBox').dispatchEvent(new Event('toggle'));
+  $('csvMoreBox').open=true; $('csvMoreBox').dispatchEvent(new Event('toggle'));
 });
 await p.waitForTimeout(150);
 const ui=await p.evaluate(()=>JSON.parse(localStorage.getItem('pj:ui:v1')||'{}'));
 console.log('   '+JSON.stringify(ui));
-ok(ui.csvStock===true&&ui.csvReview===true,'★開いた状態を保存する');
+ok(ui.csvMore===true,'★開いた状態を保存する');
 await p.reload(); await p.waitForTimeout(500); await p.click('#tabD');
-const after=await p.evaluate(()=>({stock:$('csvStockBox').open,review:$('csvReviewBox').open}));
-console.log('   開き直し: '+JSON.stringify(after));
-ok(after.stock===true&&after.review===true,'★開き直しても開いたまま');
+ok(await p.evaluate(()=>$('csvMoreBox').open)===true,'★開き直しても開いたまま');
 await p.evaluate(()=>{
-  $('csvStockBox').open=false; $('csvStockBox').dispatchEvent(new Event('toggle'));
+  $('csvMoreBox').open=false; $('csvMoreBox').dispatchEvent(new Event('toggle'));
 });
 await p.waitForTimeout(150);
 await p.reload(); await p.waitForTimeout(500); await p.click('#tabD');
-ok(await p.evaluate(()=>$('csvStockBox').open)===false,'★畳んだ状態も残る');
+ok(await p.evaluate(()=>$('csvMoreBox').open)===false,'★畳んだ状態も残る');
 await T.done();
 })();

@@ -11,20 +11,22 @@ await p.waitForTimeout(300);
 
 console.log('=== どのタブも例外なく開く ===');
 // タブは 出品CSV ― 販売連携 ― eBay ― Shopee。eBayの中は 値付け｜出品文
-for(const t of ['tabD','tabE','tabA','tabC']){
+for(const t of ['tabD','tabE','tabA','tabC','tabG']){
   await p.click('#'+t); await p.waitForTimeout(150);
 }
 await p.click('#tabA'); await p.waitForTimeout(150);
 await p.click('#ebSubList'); await p.waitForTimeout(150);
 await p.click('#ebSubPrice'); await p.waitForTimeout(150);
 console.log('   pageerror: '+JSON.stringify(T.errs));
-ok(T.errs.length===0,'★4つのタブと eBay の中の切り替えを開いても例外が出ない');
+ok(T.errs.length===0,'★4つのタブ・⚙設定・eBay の中の切り替えを開いても例外が出ない');
 
 console.log('\n=== 1品ごとの値は今も保存しない ===');
 await p.click('#tabA'); await p.waitForTimeout(150);
-await p.evaluate(()=>{ $('advBox').open=true; });
 await p.fill('#cost','3210'); await p.fill('#weight','345');
 await p.fill('#adRate','7.5'); await p.fill('#shipCharge','12');
+// 詳細設定（目標の決め方）は⚙設定画面にある
+await p.click('#tabG'); await p.waitForTimeout(150);
+await p.evaluate(()=>{ $('advBox').open=true; });
 await p.fill('#baseProfit','2200');
 await p.waitForTimeout(250);
 const raw=await p.evaluate(()=>JSON.parse(localStorage.getItem('pj:pricing:v1')||'{}'));

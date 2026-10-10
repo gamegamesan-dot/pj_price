@@ -67,11 +67,12 @@ function harness(title){
   return { ok:ok, say:say, open:open, done:done, errs:errs,
            get page(){ return page; } };
 }
-/* 出品CSVタブの畳んである欄（在庫・数量／売値の見直し）を開く。
+/* 畳んである欄を開く（出品CSVタブの「その他」・一覧、販売連携タブの価格の操作など）。
    ボタンは畳まれていると Playwright から押せないので、押す前に呼ぶ。 */
 async function openCsvBoxes(page){
   await page.evaluate(()=>{
-    ['csvStockBox','csvReviewBox','csvListBox'].forEach(function(id){
+    ['csvMoreBox','csvListBox','csvTrashBox','syncPriceBox','syncMoreBox',
+     'syncListBox','csvStockBox','csvReviewBox'].forEach(function(id){
       var el=document.getElementById(id); if(el)el.open=true;
     });
   });

@@ -151,18 +151,23 @@ console.log('   '+JSON.stringify(fl));
 ok(fl.floor>0&&fl.floor<fl.price,'最低売値はいまの売値より下');
 ok(fl.from==='list','出品リストに行があるときはその仕入値で出す');
 dlg.length=0; dl.length=0;
-// 出品CSVタブで選んだ行は、販売連携タブでも選んだ状態で引き継ぐ
+// 販売連携タブの一覧でチェックした行が対象
+await p.click('#tabE'); await openCsvBoxes(p);
 await p.evaluate(()=>{
-  ['m1','m3','m7'].forEach(id=>{ csvPick[id]=true; });
-  csvRender();
+  syncPick={};
+  ['110001','110003'].forEach(id=>{
+    const r=syncData.items.find(x=>x.ebay_item_id===id);
+    if(r)syncPick[r.asin+'|'+r.cond]=true;
+  });
+  syncRender();
 });
-await p.click('#csvFloorCsv'); await p.waitForTimeout(500);
+await p.click('#syncFloorCsv'); await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/選んだ 2件のうち 1件を最低売値まで下げます/.test(dlg[0]||''),
    '★件数と「今の売値 → 最低売値」を出す');
 ok((dlg[0]||'').indexOf('一点物')>=0,'★一点物は外して理由を出す');
-ok(await p.evaluate(()=>$('tabE').getAttribute('aria-pressed')==='true'),
-   '★出品CSVタブのボタンは販売連携タブへ移って同じ処理を呼ぶ');
+ok(await p.evaluate(()=>getComputedStyle($('syncBar')).display!=='none'),
+   '★行を選ぶと画面の下に操作バーが出る');
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&L[2]==='Revise,110001,'+fl.floor.toFixed(2),
@@ -172,12 +177,15 @@ ok((await sRow('110001')).at!=='','★下限に着いた行は値下げの記録
 await p.click('#tabD');
 await setup();
 dlg.length=0; dl.length=0;
+await p.click('#tabE'); await openCsvBoxes(p);
 await p.evaluate(()=>{
-  csvPick={}; csvPick.m2=true;
-  syncData.items[1].ebay_price=1;     // 最低売値より下
-  csvRender();
+  syncPick={};
+  const r=syncData.items[1];
+  r.ebay_price=1;                     // 最低売値より下
+  syncPick[r.asin+'|'+r.cond]=true;
+  syncRender();
 });
-await p.click('#csvFloorCsv'); await p.waitForTimeout(400);
+await p.click('#syncFloorCsv'); await p.waitForTimeout(400);
 console.log('   '+JSON.stringify(dlg[0]));
 ok(/すでに最低売値以下/.test(dlg[0]||'')&&dl.length===0,
    '★すでに最低売値以下の行は対象外');
@@ -185,11 +193,13 @@ ok(/すでに最低売値以下/.test(dlg[0]||'')&&dl.length===0,
 console.log('\n=== 3日ごとの値下げ ===');
 await p.click('#tabD');
 await setup();
+await p.click('#tabE'); await openCsvBoxes(p);
 const due=await p.evaluate(()=>{
   const o={};
   syncData.items.forEach(r=>{ o[r.ebay_item_id]={due:syncMarkDue(r),why:syncMarkSkip(r)}; });
-  o.__bar=$('csvMarkRun').textContent;
-  o.__show=getComputedStyle($('csvMarkBar')).display;
+  o.__bar=$('syncMarkRun').textContent;
+  o.__show=getComputedStyle($('syncMarkBar')).display;
+  o.__open=$('syncPriceBox').open;
   return o;
 });
 ['110001','110002','110003','110004','110005','110006'].forEach(k=>
@@ -202,11 +212,13 @@ ok(due['110003'].why==='一点物'&&due['110004'].why==='値下げしない'
    '★一点物・値下げしない・無在庫は対象外');
 ok(due['110006'].why==='売れたので値下げ停止','★値下げ後に売れた出品は止める');
 ok(due.__show!=='none'&&/値下げの時期です（1件）/.test(due.__bar),
-   '★上部に「値下げの時期です（n件）」と出す');
+   '★「値下げの時期です（n件）」と出す');
+ok(due.__open===true,'★値下げの時期が来ていれば「価格の操作」は自動で開く');
 // 出品していない行は対象外（出品データに無い＝値下げの対象にならない）
 ok(await p.evaluate(()=>syncMarkSkip({asin:'B0MARK00007',cond:'used'})==='出品していません'),
    '出品していない行は対象外');
 // 行の表示（出品CSVタブの一覧にも、販売連携タブと同じ案内を出す）
+await p.click('#tabD');
 const rowTxt=await p.evaluate(()=>{
   const t=(w)=>(Array.from(document.querySelectorAll('#csvList > div'))
     .map(d=>d.textContent).find(x=>x.indexOf(w)>=0)||'');
@@ -220,7 +232,8 @@ ok(/売れたので値下げ停止/.test(rowTxt.m6),'★売れた行はそう出
 // 書き出し
 dlg.length=0; dl.length=0;
 const before=await sRow('110001');
-await p.click('#csvMarkRun'); await p.waitForTimeout(500);
+await p.click('#tabE'); await openCsvBoxes(p);
+await p.click('#syncMarkRun'); await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L)+' / '+JSON.stringify(before));

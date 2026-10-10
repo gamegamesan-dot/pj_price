@@ -5,7 +5,7 @@
    ・同じSKUの行があるときは戻す前に確認する
    ・30日で自動的に消える／多すぎたら古いものから
    ・写真（R2）は消さない */
-const { harness } = require('./lib');
+const { harness, openCsvBoxes } = require('./lib');
 const T = harness('出品CSVタブ：ゴミ箱');
 const ok = T.ok;
 (async()=>{
@@ -15,7 +15,8 @@ p.on('dialog',async d=>{ dlg.push(d.message()); if(answer)await d.accept();
   else await d.dismiss(); });
 await p.click('#tabD');
 
-const setup=async()=>await p.evaluate(()=>{
+const setup=async()=>{ await setupRaw(); await openCsvBoxes(p); };
+const setupRaw=async()=>await p.evaluate(()=>{
   window.__del=[];                     // R2の削除（DELETE /i/…）を見張る
   const real=window.fetch;
   window.fetch=function(u,i){

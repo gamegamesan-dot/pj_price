@@ -45,6 +45,15 @@ const setupRaw=async()=>await p.evaluate(()=>{
 const lines=(i)=>(((dl[i]||{}).text)||'').trim().split(/\r\n/).filter(Boolean);
 /* 価格更新CSVは販売連携タブの出品データ（ItemID）で書き出す（6.31）。
    eBayに出ている売値＝いまの推奨売値（差0）から始める。 */
+// 販売連携タブの一覧で ItemID の行を選ぶ
+const syncPickIds=async(ids)=>await p.evaluate((ids)=>{
+  syncPick={};
+  ids.forEach(function(id){
+    const r=syncData.items.find(x=>x.ebay_item_id===id);
+    if(r)syncPick[r.asin+'|'+r.cond]=true;
+  });
+  syncRender();
+},ids);
 const withSync=async()=>await p.evaluate(()=>{
   syncPick={};
   syncData={at:new Date().toISOString(),counts:{},
@@ -116,17 +125,18 @@ console.log('   '+JSON.stringify(dlg[0]));
 ok(/選んだ2件には ItemID が入っていません/.test(dlg[0]||''),'★そう知らせる');
 ok(dl.length===0,'★CSVは書き出さない');
 
-console.log('\n=== 価格更新CSVも同じ（列は売値だけ。選択は販売連携タブへ引き継ぐ）===');
+console.log('\n=== 価格更新CSVも同じ（列は売値だけ。選ぶのは販売連携タブの一覧）===');
 await setup(); await withSync();
 dlg.length=0; dl.length=0;
-await p.click('#csvList input[data-cpick="r2"]'); await p.waitForTimeout(200);
-await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
+await p.click('#tabE'); await openCsvBoxes(p);
+await syncPickIds(['110002']);
+await p.click('#syncPriceCsv'); await p.waitForTimeout(500);
 L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&/,110002,/.test(L[2]),'★選んだ1件だけ');
 ok(/\*StartPrice/.test(L[1])&&!/\*Quantity/.test(L[1]),'★数量の列は入れない');
-ok(await p.evaluate(()=>Object.keys(syncPick).filter(k=>syncPick[k]).length===1),
-   '★出品CSVタブの選択を販売連携タブへ引き継ぐ');
+ok(await p.evaluate(()=>getComputedStyle($('syncBar')).display!=='none'),
+   '★選ぶと画面の下に操作バーが出る');
 
 console.log('\n=== 「売値の見直しが要る行だけ」との組み合わせ ===');
 await p.click('#tabD');
@@ -139,7 +149,8 @@ await p.evaluate(()=>{
   csvRender(); syncRender();
 });
 dlg.length=0; dl.length=0;
-await p.click('#csvPriceCsv'); await p.waitForTimeout(500);   // チェックなし
+await p.click('#tabE'); await openCsvBoxes(p);
+await p.click('#syncPriceCsv'); await p.waitForTimeout(500);   // チェックなし
 console.log('   チェックなし: '+JSON.stringify(dlg[0]));
 L=lines(0);
 console.log('   '+JSON.stringify(L));
@@ -149,20 +160,18 @@ ok(/1件（売値の見直しが要る行）/.test(dlg[0]||'')
    '★確認に上げる行・下げる行の数を出す');
 
 // 対象ではない r2 だけを選んだとき
-await p.click('#tabD');
 dlg.length=0; dl.length=0;
-await p.click('#csvList input[data-cpick="r2"]'); await p.waitForTimeout(200);
-await p.click('#csvPriceCsv'); await p.waitForTimeout(400);
+await syncPickIds(['110002']);
+await p.click('#syncPriceCsv'); await p.waitForTimeout(400);
 console.log('   r2だけ選ぶ: '+JSON.stringify(dlg[0]));
 ok(/選んだ 1件には、売値の見直しが要る出品がありません/.test(dlg[0]||''),
    '★選んだ中に対象が無ければ書き出さずに知らせる');
 ok(dl.length===0,'★対象外の行は選んでも書き出さない');
 
 // 選んだ中の対象行だけを書き出す（r1 と r2 を選ぶ → r1 だけ）
-await p.click('#tabD');
 dlg.length=0; dl.length=0;
-await p.click('#csvList input[data-cpick="r1"]'); await p.waitForTimeout(200);
-await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
+await syncPickIds(['110001','110002']);
+await p.click('#syncPriceCsv'); await p.waitForTimeout(500);
 console.log('   r1とr2を選ぶ: '+JSON.stringify(dlg[0]));
 L=lines(0);
 console.log('   '+JSON.stringify(L));

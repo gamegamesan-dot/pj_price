@@ -233,7 +233,8 @@ console.log('   いまの対象: '+JSON.stringify(expect));
 ok(expect.n===3&&(expect.up+expect.down)===3,'3行が対象になっている');
 ok(expect.csv===expect.n,'★出品リストの行で見ても同じ件数');
 dlg.length=0; dl.length=0;
-await p.click('#csvPriceCsv');
+await p.click('#tabE'); await openCsvBoxes(p);
+await p.click('#syncPriceCsv');
 await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(dlg[0]&&dlg[0].indexOf(expect.n+'件（売値の見直しが要る行）')>=0
@@ -256,7 +257,8 @@ await p.evaluate(()=>{
   syncData.items.forEach(r=>{ r.ebay_price=syncWantPrice(r); });
   syncRender();
 });
-await p.click('#csvPriceCsv'); await p.waitForTimeout(400);
+await p.click('#tabE'); await openCsvBoxes(p);
+await p.click('#syncPriceCsv'); await p.waitForTimeout(400);
 console.log('   '+JSON.stringify(dlg.map(d=>d.split('\n')[0])));
 ok(dlg.some(d=>/売値の見直しが要る出品がありません/.test(d))&&dl.length===0,
    '★売値が新しい値になっていれば2回目は対象なし');

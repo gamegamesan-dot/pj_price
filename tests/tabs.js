@@ -1,6 +1,6 @@
 /* タブの並びと、eBayタブの中の「値付け｜出品文」の切り替え（6.26）
    ・並びは 出品CSV ― 販売連携 ― eBay ― Shopee。開いたときは出品CSV
-   ・出品文は eBay タブの中に入れた（タブは4つ）
+   ・出品文は eBay タブの中に入れた（タブは4つ＋⚙設定）
    ・出品CSVの行の「出品文を作る」→ eBay タブの出品文側 →「書き戻す」の往復
    ・各タブの設定が混ざらないこと */
 const { harness } = require('./lib');
@@ -14,9 +14,9 @@ console.log('=== 並びと初期表示 ===');
 const bar=await p.$$eval('.tabbar .tabs button',bs=>bs.map(b=>b.id+':'+b.textContent
   +':'+b.getAttribute('aria-pressed')));
 console.log('   '+JSON.stringify(bar));
-ok(bar.length===4,'★タブは4つ（出品文は eBay の中に入れた）');
-ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|Shopee',
-   '★並びは 出品CSV ― 販売連携 ― eBay ― Shopee');
+ok(bar.length===5,'★タブは4つ＋⚙設定（出品文は eBay の中に入れた）');
+ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|Shopee|⚙',
+   '★並びは 出品CSV ― 販売連携 ― eBay ― Shopee ― ⚙設定');
 ok(bar[0].indexOf(':true')>0&&bar.slice(1).every(x=>x.indexOf(':false')>0),
    '★開いたときは「出品CSV」が選ばれている');
 const vis=()=>p.evaluate(()=>{
@@ -122,27 +122,32 @@ console.log('   一覧: '+card.ten+' / '+card.text.replace(/\n/g,' | ').slice(0,
 ok(card.ten==='Nendoroid Hatsune Miku Japan','★出品CSVの一覧（英題欄）にも出る');
 ok(/編集済み/.test(card.text),'★手で直した行として出る');
 
-console.log('\n=== 各タブの設定が混ざらない ===');
+console.log('\n=== 設定は⚙の1か所にまとまっている ===');
 const cfg=await p.evaluate(()=>{
-  switchTab('A');
+  switchTab('G');
   $('baseProfit').value='2800'; $('baseProfit').dispatchEvent(new Event('input'));
-  switchTab('D');
   $('csvPackGame').value='33'; $('csvPackGame').dispatchEvent(new Event('input'));
   csvSaveCfg();
-  switchTab('C');
-  const spShown=getComputedStyle($('ebayOnly')).display;
+  const r={ cfgShown:getComputedStyle($('tabCfg')).display,
+    // 設定の欄が各タブに残っていないこと（⚙を閉じると見えない）
+    has:['baseProfit','csvPackGame','syncWeight','csvReviewAbs','spFeeSale']
+      .every(id=>!!$(id)) };
+  switchTab('D');
+  r.csvShown=getComputedStyle($('tabCfg')).display;
+  r.line=$('cfgLineCsv').textContent;
   switchTab('A');
-  return { ebShown:getComputedStyle($('ebayOnly')).display, spShown:spShown };
+  return r;
 });
 console.log('   '+JSON.stringify(cfg));
-ok(cfg.spShown==='none'&&cfg.ebShown!=='none',
-   '★Shopeeタブでは eBay 専用の設定だけ隠す（これまでどおり）');
+ok(cfg.cfgShown==='block'&&cfg.has,'★⚙設定にすべての設定がある');
+ok(cfg.csvShown==='none','★ほかのタブでは設定画面を出さない');
+ok(/梱包マージン ゲーム33g/.test(cfg.line),'★各タブにはいまの値を1行だけ出す');
 await p.reload(); await p.waitForTimeout(500);
 const kept=await p.evaluate(()=>({base:$('baseProfit').value,pack:$('csvPackGame').value,
-  tab:['tabD','tabE','tabA','tabC'].filter(x=>$(x)
+  tab:['tabD','tabE','tabA','tabC','tabG'].filter(x=>$(x)
     &&$(x).getAttribute('aria-pressed')==='true').join()}));
 console.log('   開き直し: '+JSON.stringify(kept));
-ok(kept.base==='2800','★eBayタブの詳細設定は残る（v118 の保存）');
+ok(kept.base==='2800','★詳細設定は残る（v118 の保存）');
 ok(kept.pack==='33','★出品CSVタブの設定も残る');
 ok(kept.tab==='tabD','★開き直すとまた「出品CSV」から始まる');
 
