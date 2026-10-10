@@ -121,6 +121,14 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .steps button.todo{border-color:var(--bad);background:#fff7f6}
 .steps button.todo .n{color:var(--bad)}
 .steps button.done{opacity:.6}
+/* 一覧のページの帯（上と下）。25／50／100件ずつ出す。 */
+.pager{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:0 0 8px}
+.pager button{min-width:30px;padding:5px 7px;font-size:12px;font-family:inherit;
+  border:1px solid var(--line);border-radius:4px;background:#fcfbf8;color:var(--ink)}
+.pager button.on{background:var(--label);font-weight:800}
+.pager button[disabled]{opacity:.35}
+.pager .gap{font-size:12px;color:var(--mute);padding:0 2px}
+.pager .cnt{flex:1 1 100%;margin:2px 0 0}
 /* 今日やること（販売連携の入口）。押すとその絞り込みになる。 */
 .todo{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
 .todo button{flex:1 1 44%;min-width:120px;display:flex;align-items:center;gap:6px;
@@ -687,7 +695,21 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
             <option value="all" selected>すべての行を表示</option>
           </select>
         </div>
+        <!-- ページ内を全て選択と、1ページの件数（⚙設定にも同じ項目がある） -->
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <div class="chk" style="flex:1 1 0;min-width:0;margin:0">
+            <input type="checkbox" id="csvPageAll">
+            <label for="csvPageAll" style="flex:1" id="csvPageAllLabel">このページを全て選択</label>
+          </div>
+          <select id="csvPerPage2" style="flex:0 0 auto">
+            <option value="25" selected>25件ずつ</option>
+            <option value="50">50件ずつ</option>
+            <option value="100">100件ずつ</option>
+          </select>
+        </div>
+        <div id="csvPagerTop"></div>
         <div id="csvList"></div>
+        <div id="csvPagerBot"></div>
       </div>
     </details>
   </section>
@@ -793,7 +815,21 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
       <!-- 警告の理由ごとの件数。何から手を付けるか分かるようにする。 -->
       <div class="note2" id="syncWarnBreak" style="margin:0 0 8px"></div>
+      <!-- ページ内を全て選択と、1ページの件数（⚙設定にも同じ項目がある） -->
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <div class="chk" style="flex:1 1 0;min-width:0;margin:0">
+          <input type="checkbox" id="syncPageAll">
+          <label for="syncPageAll" style="flex:1" id="syncPageAllLabel">このページを全て選択</label>
+        </div>
+        <select id="syncPerPage2" style="flex:0 0 auto">
+          <option value="25" selected>25件ずつ</option>
+          <option value="50">50件ずつ</option>
+          <option value="100">100件ずつ</option>
+        </select>
+      </div>
+      <div id="syncPagerTop"></div>
       <div id="syncList"></div>
+      <div id="syncPagerBot"></div>
     </div>
   </details>
 
@@ -967,6 +1003,15 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     <div class="h">画面</div>
     <div class="body">
       <div class="note2" style="margin-top:0">使わないタブを隠せます。隠しても中身は消えません。いつでも戻せます。</div>
+      <div class="row"><label>一覧の1ページ（出品CSV）</label>
+        <select id="csvPerPage" style="flex:0 0 auto">
+          <option value="25" selected>25件</option><option value="50">50件</option><option value="100">100件</option>
+        </select></div>
+      <div class="row"><label>一覧の1ページ（販売連携）</label>
+        <select id="syncPerPage" style="flex:0 0 auto">
+          <option value="25" selected>25件</option><option value="50">50件</option><option value="100">100件</option>
+        </select></div>
+      <div class="note2" style="margin-top:0">一覧は1ページずつ出します。2ページ目から先は、押したときに初めて描きます（最初に全部を描かないので、出品が増えても重くなりません）。一覧の上でも選べます。</div>
       <div class="chk"><input type="checkbox" id="uiHideShopee"><label for="uiHideShopee" style="flex:1">Shopee タブを隠す</label></div>
       <div class="chk"><input type="checkbox" id="uiHideEbay"><label for="uiHideEbay" style="flex:1">eBay タブ（値付け・出品文）を隠す</label></div>
       <div class="note2" style="margin-top:0">出品CSVと販売連携は隠せません（毎日使うため）。隠したタブの設定も、この画面から消えます。</div>
@@ -1779,6 +1824,64 @@ function calc(){
    既定は閉じる。開閉状態だけを localStorage に持ち越す。
    出品CSVタブの取り込み欄と一覧も同じ仕組みで覚える。 */
 var UI_KEY='pj:ui:v1';
+/* ================= 一覧のページ分け =================
+   出品CSVタブと販売連携タブの一覧を 25／50／100件ずつに分ける。
+   ・2ページ目から先は、押したときに初めて描く（最初に全件を描かない）
+   ・1ページの件数はタブごとに別に覚える（⚙設定と一覧の上のどちらでも選べる）
+   ・選んだ行はページを移っても残る。操作は全ページの選択行に対して行う
+   ・絞り込みを変えたら1ページ目に戻し、見えなくなった行の選択は外す */
+function num(n){ return String(Math.round(+n||0)).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
+var PAGE_SIZES=[25,50,100];
+var csvPage=1, syncPage=1;          // いま出しているページ（1始まり）
+var csvPageIds=[], syncPageIds=[];  // いまのページに出している行のキー
+function pagePer(id){
+  var n=+($(id)?$(id).value:25);
+  return (PAGE_SIZES.indexOf(n)>=0)?n:25;
+}
+function pageMax(total,per){ return Math.max(1,Math.ceil(total/per)); }
+function pageClamp(page,total,per){
+  return Math.min(Math.max(1,page||1),pageMax(total,per));
+}
+/* 出すページ番号。前後1つと、最初・最後は必ず出す。間は「…」でつめる。 */
+function pageNums(cur,max){
+  var set={}, a=[], i;
+  [1,2,max-1,max,cur-1,cur,cur+1].forEach(function(n){ if(n>=1&&n<=max)set[n]=1; });
+  Object.keys(set).map(Number).sort(function(x,y){ return x-y; })
+    .forEach(function(n){
+      if(a.length&&n-a[a.length-1]>1)a.push('…');
+      a.push(n);
+    });
+  return a;
+}
+/* ページの帯（上と下に同じものを出す）。1ページに収まるときは番号を出さない。 */
+function pageBarHtml(kind,cur,total,per){
+  if(!total)return '';
+  var max=pageMax(total,per);
+  var from=(cur-1)*per+1, to=Math.min(total,cur*per), h='<div class="pager">';
+  if(max>1){
+    h+='<button type="button" data-'+kind+'page="'+(cur-1)+'"'+(cur<=1?' disabled':'')
+      +'>‹ 前へ</button>';
+    pageNums(cur,max).forEach(function(n){
+      if(n==='…'){ h+='<span class="gap">…</span>'; return; }
+      h+='<button type="button" data-'+kind+'page="'+n+'"'+(n===cur?' class="on"':'')
+        +'>'+n+'</button>';
+    });
+    h+='<button type="button" data-'+kind+'page="'+(cur+1)+'"'+(cur>=max?' disabled':'')
+      +'>次へ ›</button>';
+  }
+  h+='<span class="note2 cnt">全 '+num(total)+'件中 '+num(from)+'〜'+num(to)+'件目'
+    +(max>1?('（'+cur+'/'+max+'ページ）'):'')+'</span></div>';
+  return h;
+}
+/* 「このページを全て選択」の表示。一部だけ選んでいるときは「−」にする。 */
+function pageAllRender(box,label,ids,pick){
+  var el=$(box); if(!el)return;
+  var n=ids.length, on=ids.filter(function(k){ return !!pick[k]; }).length;
+  el.disabled=!n;
+  el.checked=(n>0&&on===n);
+  el.indeterminate=(on>0&&on<n);
+  $(label).textContent='このページを全て選択'+(n?('（'+n+'件）'):'');
+}
 var UI_BOXES=[['detail','detailBox'],['csvImport','csvImportBox'],
               ['csvNew','csvNewBox'],['csvRes','csvResBox'],['csvList','csvListBox'],
               // 出品CSVタブの「その他」
@@ -3264,6 +3367,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
                  'syncSoldCut','syncDropMax','syncLimit','csvWeightCart','csvSort',
                  'csvReviewAbs','csvReviewPct','amzFeeRate','amzFbaFee',
+                 // 一覧の1ページの件数（タブごとに別）
+                 'csvPerPage','syncPerPage',
                  // 3日ごとの値下げ（間隔・下げ幅）
                  'csvMarkDays','csvMarkStep'];
 
@@ -4724,11 +4829,21 @@ function csvRender(){
     +(chL.length?('　いま '+chL.length+'件（上げる '+upN+'件／下げる '+dnN+'件'
                   +(unN?('／比べられない '+unN+'件'):'')+'）。'):'　いまは0件です。');
   var h='', shown=0, hidden=0;
+  /* 絞り込みに当てはまる行だけを並べ、いまのページぶんだけを描く。
+     2ページ目から先は、押したときに初めて描く。 */
+  var keep=[];
   csvSorted().forEach(function(r){
+    if(csvMatchFilter(r))keep.push(r); else hidden++;
+  });
+  shown=keep.length;
+  var cPer=pagePer('csvPerPage');
+  csvPage=pageClamp(csvPage,shown,cPer);
+  var cFrom=(csvPage-1)*cPer;
+  var cRows=keep.slice(cFrom,cFrom+cPer);
+  csvPageIds=cRows.map(function(r){ return r.id; });
+  cRows.forEach(function(r){
     /* 行のバッジは csvBadgeHtml() にまとめてある（下）。
        仕入値を直したときは、その行のバッジだけを入れ替える。 */
-    if(!csvMatchFilter(r)){ hidden++; return; }
-    shown++;
     var badge=csvBadgeHtml(r);
     var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
     // 未判定はライン、判定済みはしきい値との差額を出す
@@ -4868,10 +4983,14 @@ function csvRender(){
         : '')
       +'</div>';
   });
-  if(hidden)h='<div class="note2" style="margin:0 0 6px">絞り込み中：'+shown+'件を表示（'
+  if(hidden)h='<div class="note2" style="margin:0 0 6px">絞り込み中：'+shown+'件が対象（'
     +hidden+'件は非表示）</div>'+h;
   $('csvList').innerHTML=h||'<div class="note2">'
     +(hidden?('絞り込みに当てはまる行がありません（'+hidden+'件は非表示）'):'リストは空です。')+'</div>';
+  var cBar=pageBarHtml('c',csvPage,shown,cPer);
+  $('csvPagerTop').innerHTML=cBar;
+  $('csvPagerBot').innerHTML=cBar;
+  pageAllRender('csvPageAll','csvPageAllLabel',csvPageIds,csvPick);
   csvPickNote();   // 選択した件数とボタンの表示
   csvTaFitAll();   // 英題が長い行は欄を伸ばす
   var days=+$('csvLogDays').value||0;
@@ -5077,6 +5196,7 @@ $('csvList').addEventListener('change',function(e){
     if(e.target.checked)csvPick[cp]=true; else delete csvPick[cp];
     csvPickNote();            // ボタンの件数
     csvFilterOpts();          // 絞り込み「選択した行だけ」の件数（一覧は作り直さない）
+    pageAllRender('csvPageAll','csvPageAllLabel',csvPageIds,csvPick);
     return;
   }
   // 相場は判定（バッジ・並び順）が変わるので作り直す。
@@ -5110,9 +5230,46 @@ $('csvList').addEventListener('change',function(e){
 });
 $('csvSort').addEventListener('change',function(){
   csvSaveCfg();          // 選んだ並び順は端末に残す（開き直しても同じ順で出す）
+  csvPage=1;             // 並び順を変えたら1ページ目から
   csvRender();
 });
-$('csvFilter').addEventListener('change',csvRender);
+/* 絞り込みを変えたら1ページ目に戻し、見えなくなった行の選択は外す
+   （見えない行をうっかり一括変更しないため）。 */
+function csvPickPrune(){
+  var ok={};
+  csvList.forEach(function(r){ if(csvMatchFilter(r))ok[r.id]=1; });
+  Object.keys(csvPick).forEach(function(id){ if(!ok[id])delete csvPick[id]; });
+}
+$('csvFilter').addEventListener('change',function(){
+  csvPage=1; csvPickPrune(); csvRender();
+});
+/* ページの切り替え。押したページだけを描き、一覧の先頭へ戻す。 */
+function csvPageGo(n){
+  csvPage=n; csvRender();
+  var el=$('csvPagerTop'); if(el)el.scrollIntoView({block:'start'});
+}
+['csvPagerTop','csvPagerBot'].forEach(function(id){
+  $(id).addEventListener('click',function(e){
+    var t=e.target;
+    while(t&&t!==this&&!(t.getAttribute&&t.getAttribute('data-cpage')))t=t.parentNode;
+    if(!t||t===this)return;
+    var n=+t.getAttribute('data-cpage');
+    if(n>=1)csvPageGo(n);
+  });
+});
+/* このページの行だけをまとめて選ぶ／外す（ほかのページは変えない）。 */
+$('csvPageAll').addEventListener('change',function(){
+  var on=this.checked;
+  csvPageIds.forEach(function(id){ if(on)csvPick[id]=true; else delete csvPick[id]; });
+  csvRender();
+});
+/* 1ページの件数。一覧の上と⚙設定のどちらで変えても同じ値になる。 */
+function csvPerApply(v){
+  $('csvPerPage').value=v; $('csvPerPage2').value=v;
+  csvSaveCfg(); csvPage=1; csvRender();
+}
+$('csvPerPage2').addEventListener('change',function(){ csvPerApply(this.value); });
+$('csvPerPage').addEventListener('change',function(){ csvPerApply(this.value); });
 $('csvPickEbay').onclick=function(){
   var keep=csvList.filter(csvEbayFirst);
   if(!keep.length){ alert('eBay優先と判定された行がありません。'); return; }
@@ -6037,8 +6194,11 @@ function csvPickNote(){
   $('csvExportPick').style.opacity=n?'':'.5';
   var hid=ids.filter(function(id){
     var r=csvRowById(id); return r&&!csvMatchFilter(r); }).length;
+  var now={}; csvPageIds.forEach(function(id){ now[id]=1; });
+  var off=ids.filter(function(id){ return !now[id]; }).length;
   $('csvPickNote').textContent=n
-    ? ('選択 '+n+'件'+(hid?('（うち絞り込みで非表示 '+hid+'件）'):'')
+    ? ('選択 '+n+'件'+(off?('（うち他のページ '+off+'件）'):'')
+       +(hid?('（うち絞り込みで非表示 '+hid+'件）'):'')
        +'。この行だけを書き出します（不備・出品済みの行は同じ決まりで除きます）。')
     : '一覧の各カードの左上のチェックで選びます。';
   csvDropNote();   // 無在庫の一括ボタンの件数も合わせる
@@ -7674,6 +7834,7 @@ $('syncTodo').addEventListener('click',function(e){
   $('syncFilter').value=v;
   if($('syncFilter').value!==v)return;     // 選択肢がまだ無いときは何もしない
   $('syncListBox').open=true;
+  syncPage=1; syncPickPrune();             // 1ページ目から。見えない行の選択は外す
   syncRender();
   $('syncListBox').scrollIntoView({block:'start'});
 });
@@ -7683,8 +7844,9 @@ function syncBarRender(){
   var rows=syncPickRows(), n=rows.length;
   el.style.display=n?'block':'none';
   if(!n)return;
-  var on=rows.filter(syncIsDropship).length;
-  $('syncBarN').textContent='選択 '+n+'件';
+  var on=rows.filter(syncIsDropship).length, off=syncPickOff();
+  $('syncBarN').textContent='選択 '+n+'件'
+    +(off?('（他のページ '+off+'件を含む）'):'');
   $('syncBarDrop').textContent=(on>=n)?'無在庫オフ':'無在庫オン';
   $('syncBarMark').textContent=rows.filter(syncMarkStopOf).length>=n
     ? '値下げする' : '値下げしない';
@@ -8495,13 +8657,22 @@ function syncRender(){
     (($('syncFilter').value==='restock')&&(syncData&&(syncData.items||[]).length))
       ? 'block' : 'none';
   var rows=(syncData&&syncData.items)||[], h='', shown=0;
-  rows.forEach(function(r){
-    if(!syncMatch(r))return;
-    shown++;
+  var keep=rows.filter(syncMatch);
+  shown=keep.length;
+  var sPer=pagePer('syncPerPage');
+  syncPage=pageClamp(syncPage,shown,sPer);
+  var sFrom=(syncPage-1)*sPer;
+  var sRows=keep.slice(sFrom,sFrom+sPer);
+  syncPageIds=sRows.map(function(r){ return r.asin+'|'+r.cond; });
+  sRows.forEach(function(r){
     var key=r.asin+'|'+r.cond;
     h+='<div class="lcard" data-srow="'+esc(key)+'">'+syncRowHtml(r,key)+'</div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
+  var sBar=pageBarHtml('s',syncPage,shown,sPer);
+  $('syncPagerTop').innerHTML=sBar;
+  $('syncPagerBot').innerHTML=sBar;
+  pageAllRender('syncPageAll','syncPageAllLabel',syncPageIds,syncPick);
   syncShown=shown;
   syncPickNote();
   syncBarRender();
@@ -8518,11 +8689,18 @@ function syncDropWarn(){
 }
 var syncShown=0;
 // 選択の件数だけ書き替える。一覧は作り直さない（触っている欄が消えないように）
+// いま見えていないページで選んでいる件数
+function syncPickOff(){
+  var now={}; syncPageIds.forEach(function(k){ now[k]=1; });
+  return Object.keys(syncPick).filter(function(k){
+    return syncPick[k]&&!now[k]; }).length;
+}
 function syncPickNote(){
   var pick=Object.keys(syncPick).filter(function(k){return syncPick[k];}).length;
-  var rows=(syncData&&syncData.items)||[];
+  var rows=(syncData&&syncData.items)||[], off=syncPickOff();
   $('syncRestockNote').textContent=rows.length
-    ? (syncShown+'件を表示中。選択 '+pick+'件。'
+    ? (syncShown+'件が対象（このページ '+syncPageIds.length+'件）。選択 '+pick+'件'
+       +(off?('（うち他のページ '+off+'件）'):'')+'。'
        +'書き出すと 数量・売値（推奨売値）・配送ポリシー（再調達用）を Revise します。')
     : '';
   syncDropBtnNote();   // 無在庫の一括ボタンの件数も合わせる
@@ -8599,7 +8777,40 @@ function syncDropBulk(on){
 }
 $('syncDropOn').onclick=function(){ syncDropBulk(true); };
 $('syncDropOff').onclick=function(){ syncDropBulk(false); };
-$('syncFilter').addEventListener('change',syncRender);
+/* 絞り込みを変えたら1ページ目に戻し、見えなくなった行の選択は外す。 */
+function syncPickPrune(){
+  var ok={};
+  ((syncData&&syncData.items)||[]).forEach(function(r){
+    if(syncMatch(r))ok[r.asin+'|'+r.cond]=1; });
+  Object.keys(syncPick).forEach(function(k){ if(!ok[k])delete syncPick[k]; });
+}
+$('syncFilter').addEventListener('change',function(){
+  syncPage=1; syncPickPrune(); syncRender();
+});
+function syncPageGo(n){
+  syncPage=n; syncRender();
+  var el=$('syncPagerTop'); if(el)el.scrollIntoView({block:'start'});
+}
+['syncPagerTop','syncPagerBot'].forEach(function(id){
+  $(id).addEventListener('click',function(e){
+    var t=e.target;
+    while(t&&t!==this&&!(t.getAttribute&&t.getAttribute('data-spage')))t=t.parentNode;
+    if(!t||t===this)return;
+    var n=+t.getAttribute('data-spage');
+    if(n>=1)syncPageGo(n);
+  });
+});
+$('syncPageAll').addEventListener('change',function(){
+  var on=this.checked;
+  syncPageIds.forEach(function(k){ if(on)syncPick[k]=true; else delete syncPick[k]; });
+  syncRender();
+});
+function syncPerApply(v){
+  $('syncPerPage').value=v; $('syncPerPage2').value=v;
+  csvSaveCfg(); syncPage=1; syncRender();
+}
+$('syncPerPage2').addEventListener('change',function(){ syncPerApply(this.value); });
+$('syncPerPage').addEventListener('change',function(){ syncPerApply(this.value); });
 /* 行の手元在庫を入れ替える。送るのは ASIN＋新品/中古 と on_hand だけ。
    ほかの項目（モード・一点物・FBA連動）は Worker 側でそのまま残る。 */
 /* 行の印（手元在庫・一点物）を入れ替える。送るのは ASIN＋新品/中古 と、
@@ -8738,6 +8949,7 @@ $('syncList').addEventListener('change',function(e){
   syncPick[k]=t.checked;
   syncPickNote();          // 一覧は作り直さない
   syncBarRender();         // 下の操作バーは出し入れする
+  pageAllRender('syncPageAll','syncPageAllLabel',syncPageIds,syncPick);
 });
 /* 状況を取り込む（読み取りだけ） */
 $('syncLoad').onclick=function(){
@@ -9194,6 +9406,10 @@ $('addToCsv').onclick=function(){
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 uiTabsApply(); cfgLineRender();
+/* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
+$('csvPerPage2').value=$('csvPerPage').value;
+$('syncPerPage2').value=$('syncPerPage').value;
+csvRender();
 /* 詳細設定を pj-sync と突き合わせる。pj-sync のURL・キーは csvLoad() で入るので、
    そのあとで呼ぶ。届かなくても端末に保存した値でそのまま動く。 */
 advSyncInit();
@@ -9216,7 +9432,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v129';   // sw.js の const V と必ず同じ値にする
+var APP_V='v130';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
