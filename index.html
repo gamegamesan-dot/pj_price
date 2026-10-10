@@ -1031,6 +1031,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
      background:var(--ink);color:#fff;padding:8px 10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
   <div style="font-size:12px;margin-bottom:6px" id="syncBarN">選択 0件</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <button class="btn" id="syncBarRev" style="flex:1 1 0;min-width:0;padding:7px 4px;font-size:12px">見直し価格にする</button>
     <button class="btn" id="syncBarFloor" style="flex:1 1 0;min-width:0;padding:7px 4px;font-size:12px">最低売値まで下げる</button>
     <button class="btn" id="syncBarRestock" style="flex:1 1 0;min-width:0;padding:7px 4px;font-size:12px;display:none">再調達CSV</button>
     <button class="btn" id="syncBarDrop" style="flex:1 1 0;min-width:0;padding:7px 4px;font-size:12px">無在庫</button>
@@ -7609,11 +7610,14 @@ function syncRevHtml(r){
     +usd(x.now)+' → <b>'+usd(x.next)+'</b>（差 '+(x.up?'+':'-')+usd(Math.abs(x.diff))
     +'・'+x.pct.toFixed(1)+'%／'+esc(syncFromName(x.from))+'）</div>';
 }
-function syncRevRun(){
+/* forceAll＝true のときは「見直しが要る行だけ」の絞り込みを使わず、
+   選んだ行すべてを見直し価格（上げも下げも）に変える（操作バーのボタン）。 */
+function syncRevRun(forceAll){
   if(!syncData||!((syncData.items||[]).length)){
     alert('出品データがありません。「状況を取り込む」を押してください。'); return;
   }
-  var picked=syncPickRows(), changedOnly=$('csvPriceChangedOnly').checked;
+  var picked=syncPickRows();
+  var changedOnly=forceAll?false:$('csvPriceChangedOnly').checked;
   var base=picked.length?picked:((syncData&&syncData.items)||[]);
   var listed=base.filter(function(r){ return String(r.ebay_item_id||'').trim(); });
   if(!listed.length){
@@ -7642,7 +7646,8 @@ function syncRevRun(){
   var br=syncCostBreak(rows.map(function(x){ return x.r; }));
   if(!confirm('価格更新CSVを書き出します。\n'
     +(picked.length?('選んだ '+picked.length+'件のうち '):'出品データ全体から ')
-    +rows.length+'件（'+(changedOnly?'売値の見直しが要る行':'売値を計算できる行')+'）\n'
+    +rows.length+'件（'+(changedOnly?'売値の見直しが要る行'
+      :(forceAll?'選んだ行すべて（上げも下げも）':'売値を計算できる行'))+'）\n'
     +'上げる '+up+'件／下げる '+dn+'件\n'
     +rows.slice(0,5).map(function(x){
         return '　・'+x.name+'：'+usd(x.now)+' → '+usd(x.next); }).join('\n')
@@ -7663,7 +7668,8 @@ function syncRevRun(){
   // せどりすとSKUから読めた仕入値は D1 に残す（次からは「保存済み」になる）
   syncCostSave(rows.map(function(x){ return x.r; }),'syncPriceNote');
 }
-$('syncPriceCsv').onclick=syncRevRun;
+/* クリックのイベントが forceAll に入らないよう、引数なしで呼ぶ。 */
+$('syncPriceCsv').onclick=function(){ syncRevRun(); };
 /* ---- 選んだ行を最低売値まで下げる ----
    最低売値＝いまの詳細設定（下限利益・連動率）で計算した下限。
    仕入値は出品リスト → D1 → Amazon最安値の順に使うので、出品リストに行が
@@ -7679,8 +7685,15 @@ function syncFloorRun(){
     var fl=syncFloorOf(r), now=+r.ebay_price||0;
     if(!(fl.v>0)){ skip.push([name,'最低売値が分かりません（仕入値も最安値も無い）']); return; }
     if(!(now>0)){ skip.push([name,'いまの売値が分かりません']); return; }
-    if(now<=fl.v){ skip.push([name,'すでに最低売値以下']); return; }
-    go.push({ r:r, name:name, now:now, fl:fl.v, from:fl.from });
+    /* Amazonの方が得な行は、そのライン（Amazonと同じ利益になる売値）より下げない。
+       いまの売値がすでにそれより安いときは、下げる話ではないので外す。 */
+    if(now<=fl.v){
+      skip.push([name,fl.amz
+        ? ('Amazonの方が得（'+usd(fl.v)+' 未満では出しません）')
+        : 'すでに最低売値以下']);
+      return;
+    }
+    go.push({ r:r, name:name, now:now, fl:fl.v, from:fl.from, amz:!!fl.amz });
   });
   if(!go.length){
     alert('下げられる行がありません。\n'
@@ -7688,11 +7701,14 @@ function syncFloorRun(){
     return;
   }
   var brF=syncCostBreak(go.map(function(x){ return x.r; }));
+  var amzN=go.filter(function(x){ return x.amz; }).length;
   if(!confirm('選んだ '+rows.length+'件のうち '+go.length+'件を最低売値まで下げます。\n'
     +go.slice(0,5).map(function(x){
         return '　・'+x.name+'：'+usd(x.now)+' → '+usd(x.fl); }).join('\n')
     +(go.length>5?('\n　…ほか'+(go.length-5)+'件'):'')+'\n'
     +syncCostBreakText(brF)
+    +(amzN?('うち '+amzN+'件は Amazon同等ライン（Amazonで売ったときと同じ利益になる'
+            +'売値）で止めます。\n'):'')
     +(skip.length?('外す '+skip.length+'件：\n'
         +skip.slice(0,5).map(function(x){ return '　・'+x[0]+'：'+x[1]; }).join('\n')+'\n'):'')
     +'よろしいですか？'))return;
@@ -7854,6 +7870,9 @@ function syncBarRender(){
   $('syncBarRestock').style.display=
     ($('syncFilter').value==='restock')?'':'none';
 }
+/* 選んだ行を「売値の見直し」の価格にする（上げも下げもする）。
+   ⚙設定の「見直しが要る行だけ」に関係なく、選んだ行すべてが対象。 */
+$('syncBarRev').onclick=function(){ syncRevRun(true); };
 $('syncBarFloor').onclick=function(){ syncFloorRun(); };
 $('syncBarRestock').onclick=function(){ $('syncRestock').click(); };
 $('syncBarDrop').onclick=function(){
@@ -8577,10 +8596,14 @@ function syncRowHtml(r,key){
       +(function(){
          var rc=syncRecCost(r);
          if(!rc)return '';
+         /* 最低売値は Amazon同等ラインで上がることがある。操作で使う値をそのまま出し、
+            上がっているときだけ仕入値基準の値を添える（押したときとの食い違いを防ぐ）。 */
+         var fo=syncFloorOf(r);
          return '<div class="note2" style="margin-top:2px">仕入値 '+yen(rc.cost)
            +'（'+esc(syncFromName(rc.costFrom))+'）'
            +'　この仕入値での推奨売値 <b>'+usd(rc.price)+'</b>'
-           +'　最低売値 '+usd(rc.floor)
+           +'　最低売値 <b>'+usd(fo.v)+'</b>'
+           +(fo.amz?('（Amazonの方が得。仕入値基準では '+usd(rc.floor)+'）'):'')
            +'　重量 '+syncWeightNote(r)+'</div>';
        })()
       /* Amazonで売ったときの利益と、それに並ぶ eBay の売値。
@@ -9432,7 +9455,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v130';   // sw.js の const V と必ず同じ値にする
+var APP_V='v131';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -45,6 +45,8 @@ const setup=async()=>{
   });
   await openCsvBoxes(p);
 };
+// 画面の usd() と同じ書き方にそろえる（$と3桁区切り）
+const usdStr=(v)=>'$'+(+v).toFixed(2).replace(/\B(?=(\d{3})+(?!\d)\.)/g,',');
 const row=async(i)=>await p.evaluate((i)=>{
   const r=syncData.items[i];
   const f=syncFloorOf(r), a=syncAmzLine(r), rv=syncPriceReview(r);
@@ -114,6 +116,50 @@ console.log('   在庫なし: '+JSON.stringify(nostock));
 ok(nostock.alert===false,'★在庫が無ければ注意は出さない');
 ok(nostock.floor>0,'★下限（Amazon同等ライン）はそのまま効く');
 
+console.log('\n=== 操作バー：見直し価格にする／最低売値まで下げる ===');
+await setup();
+await p.evaluate(()=>{
+  const r=syncData.items[0];
+  syncPick={}; syncPick[r.asin+'|'+r.cond]=true; syncRender();
+});
+const barBtn=await p.evaluate(()=>({
+  show:getComputedStyle($('syncBar')).display,
+  btn:Array.from(document.querySelectorAll('#syncBar button')).map(b=>b.textContent),
+  // 一覧に出る最低売値は、押したときに使う値と同じ
+  card:(Array.from(document.querySelectorAll('#syncList > div'))
+    .map(d=>d.textContent).find(x=>x.indexOf('B000VO8NZ4')>=0)||'').replace(/\s+/g,' ') }));
+console.log('   '+JSON.stringify(barBtn.btn));
+ok(barBtn.btn.indexOf('見直し価格にする')>=0,'★操作バーに「見直し価格にする」がある');
+ok(new RegExp('最低売値 \\'+usdStr(a.line)).test(barBtn.card)
+   &&/Amazonの方が得。仕入値基準では/.test(barBtn.card),
+   '★一覧の「最低売値」も Amazon同等ライン（仕入値基準は添えるだけ）');
+// 見直し価格にする（選んだ行すべて・上げも下げも）
+dlg.length=0; dl.length=0;
+await p.click('#syncBarRev'); await p.waitForTimeout(500);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+const RL=((dl[0]||{}).text||'').trim().split(/\r\n/);
+console.log('   '+JSON.stringify(RL));
+ok(/選んだ行すべて（上げも下げも）/.test(dlg[0]||''),
+   '★「見直しが要る行だけ」の設定に関係なく、選んだ行すべてが対象');
+ok(RL.length===3&&RL[2]==='Revise,118NZ4,'+a.line.toFixed(2),
+   '★選んだ行を見直し価格（Amazon同等ライン）にする');
+// 最低売値まで下げる → Amazon同等ラインより下げない
+dlg.length=0; dl.length=0;
+await p.click('#syncBarFloor'); await p.waitForTimeout(500);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+ok(/Amazonの方が得（\$[\d.]+ 未満では出しません）/.test(dlg[0]||'')&&dl.length===0,
+   '★Amazonの方が得な行は、そのラインより下げない');
+// ラインより上にいる行は、ラインまで下げる（下限は仕入値基準ではない）
+dlg.length=0; dl.length=0;
+await p.evaluate(()=>{ syncData.items[0].ebay_price=99; syncRender(); });
+await p.click('#syncBarFloor'); await p.waitForTimeout(500);
+const FL=((dl[0]||{}).text||'').trim().split(/\r\n/);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+console.log('   '+JSON.stringify(FL));
+ok(/Amazon同等ライン/.test(dlg[0]||''),'★確認に「Amazon同等ラインで止めます」と出す');
+ok(FL.length===3&&FL[2]==='Revise,118NZ4,'+a.line.toFixed(2),
+   '★下げ先は Amazon同等ライン（仕入値基準の最低売値ではない）');
+
 console.log('\n=== Amazon利益が下限利益以下の行は今までどおり ===');
 const b=await row(1);
 console.log('   '+JSON.stringify(b));
@@ -129,6 +175,7 @@ ok(c.amzProfit===null&&!c.line,'★計算しない');
 ok(c.floor===c.costFloor&&c.due===true,'★今までどおりの下限と値下げ');
 
 console.log('\n=== eBay優先をオンにすると今までの値に戻る ===');
+await setup();          // 前の節で売値と値下げの記録を動かしたので、入れ直す
 const on=await p.evaluate(()=>{
   const r=syncData.items[0];
   const before={ floor:syncFloorOf(r).v, want:syncWantPrice(r), due:syncMarkDue(r) };

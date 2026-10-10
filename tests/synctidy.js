@@ -128,12 +128,12 @@ await p.evaluate(()=>{
 await p.waitForTimeout(120);
 bar=await p.evaluate(()=>({ show:getComputedStyle($('syncBar')).display,
   n:$('syncBarN').textContent,
-  btn:['syncBarFloor','syncBarDrop','syncBarMark'].map(id=>$(id).textContent),
+  btn:['syncBarRev','syncBarFloor','syncBarDrop','syncBarMark'].map(id=>$(id).textContent),
   restock:$('syncBarRestock').style.display }));
 console.log('   '+JSON.stringify(bar));
 ok(bar.show!=='none'&&/選択 1件/.test(bar.n),'★選ぶと画面の下に出る');
-ok(bar.btn.join('|')==='最低売値まで下げる|無在庫オン|値下げしない',
-   '★最低売値・無在庫・値下げしない を並べる');
+ok(bar.btn.join('|')==='見直し価格にする|最低売値まで下げる|無在庫オン|値下げしない',
+   '★見直し価格・最低売値・無在庫・値下げしない を並べる');
 ok(bar.restock==='none','★再調達CSVは「再調達の候補」を見ているときだけ');
 const rst=await p.evaluate(()=>{
   $('syncFilter').value='restock'; syncRender();
