@@ -8226,14 +8226,30 @@ function syncBasisCalc(r){
   var lowAll=+r.amazon_lowest||(all.length?(+all[0].p||0):0);
   var low=list.length?(+list[0].p||0):lowAll;
   var near=list.filter(function(o){ return (+o.p||0)<=low+tol; });
+  /* 中古（-U）・カートリッジのみ（-C）の行は、**新品のほうが安ければ新品**を
+     基準にする。新品が ¥6,280 で買えるなら、中古が ¥9,719 で売れる前提は
+     成り立たないため（どちらも送料込みの総額で比べる）。
+     新品の最安値が取れていない行は、これまでどおり中古の最安値を使う。 */
+  var usedLow=low, nw=+r.amazon_new_low||0, useNew=false;
+  if(r.cond!=='new'&&nw>0&&(!low||nw<low)){
+    useNew=true; low=nw;
+    if(!lowAll||nw<lowAll)lowAll=nw;
+    near=[];                      // 新品側の明細は持っていない（人数は newN で数える）
+    skipped=false;                // 「可を除く」は中古の話なので、新品基準では出さない
+  }
   return { low:low, lowAll:lowAll, list:list, near:near, tol:tol,
-           skipped:skipped, hasList:all.length>0 };
+           skipped:skipped, hasList:all.length>0,
+           useNew:useNew, usedLow:usedLow, newLow:nw,
+           newN:Number(r.amazon_new_n||0) };
 }
 /* 最安値の見出しの文字列。「可」を除いたときは、その最安値の状態（良い など）と
    全体の最安値も添えて、何を基準にしているかが分かるようにする。 */
 function syncLowLabel(r){
   var b=syncBasis(r);
   if(!b.low)return 'Amazon最安値（'+(r.cond==='new'?'新品':'中古')+'） 未取得';
+  // 新品のほうが安いときは、どちらを基準にしたかが分かるように出す
+  if(b.useNew)return 'Amazon基準 '+yen(b.low)+'（新品の方が安い・中古 '
+    +(b.usedLow?yen(b.usedLow):'—')+'）';
   if(b.skipped){
     var nm=b.list.length?syncCondName(b.list[0].c):'';
     return '可を除く最安値 '+yen(b.low)+'（'+(nm?nm+'・':'')
@@ -8246,6 +8262,14 @@ function syncLowLabel(r){
 function syncOfferNote(r){
   var b=syncBasis(r);
   var t=Number(r.amazon_offers||0);
+  /* 新品を基準にした行は、新品側の人数で判定する（中古の最安グループは使わない）。 */
+  if(b.useNew){
+    var nn=b.newN;
+    if(!nn)return '新品の最安値を基準にしています';
+    var sn='新品の最安グループ '+nn+'人';
+    if(nn<=1)sn='<span style="color:var(--bad);font-weight:700">'+sn+'・1人だけ注意</span>';
+    return sn;
+  }
   if(!b.hasList){
     // 出品明細を持っていない古い行は、最安ちょうどの人数だけ出す
     var n0=Number(r.amazon_lowest_n||0);
@@ -8556,7 +8580,7 @@ function syncRowHtml(r,key){
           +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">相場が古い</span>';
     }
     var days=syncDays(r);
-    var low=+r.amazon_lowest||0;
+    var low=syncBasis(r).low||+r.amazon_lowest||0;
     /* カードの一番上に商品名を見出しとして置く（選択のチェックは見出しの左）。
        以下の行とボタンはすべて同じカードの中に入る。 */
     return '<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
@@ -8609,13 +8633,18 @@ function syncRowHtml(r,key){
       /* Amazonで売ったときの利益と、それに並ぶ eBay の売値。
          FBA在庫がある行で eBay の売値がこれより下なら、赤字の注意も出す。 */
       +(function(){
-         var a=syncAmzLine(r);
-         if(!a)return '';
-         return '<div class="note2" style="margin-top:2px">Amazon利益 '+yen(a.profit)
-           +'（最安値 '+yen(syncBasis(r).low||+r.amazon_lowest||0)+' − 手数料'
-           +Math.round(amzFeeRate()*1000)/10+'% − FBA '+yen(amzFbaFee())
+         /* Amazonで売ったときの利益。下限利益以下の行でも数字は出す（バッジと
+            赤い注意だけを出さない）。基準の値段は syncBasis（新品のほうが安ければ新品）。 */
+         var pf=syncAmzProfit(r);
+         if(pf===null)return '';
+         var b=syncBasis(r), a=syncAmzLine(r);
+         return '<div class="note2" style="margin-top:2px">Amazon利益 '+yen(pf)
+           +'（'+(b.useNew?'新品の最安値 ':'最安値 ')+yen(b.low||+r.amazon_lowest||0)
+           +' − 手数料'+Math.round(amzFeeRate()*1000)/10+'% − FBA '+yen(amzFbaFee())
            +' − 仕入値 '+yen(syncCostOf(r).v)+'）'
-           +'　<b>eBayで同じ利益 '+usd(a.price)+'</b>'
+           +(a?('　<b>eBayで同じ利益 '+usd(a.price)+'</b>')
+              :('　<span style="opacity:.75">下限利益 '+yen(+$('baseProfit').value||0)
+                +' 以下なので、eBay の下限には使いません</span>'))
            +(syncAmzAlert(r)
              ? ('<br><span style="color:var(--bad);font-weight:700">同じ在庫を Amazon でも'
                 +'販売中です。eBay を '+usd(a.price)+' 以上にするか、eBay を数量0に'
@@ -9455,7 +9484,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v131';   // sw.js の const V と必ず同じ値にする
+var APP_V='v132';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS items (
   -- 許容差額の中に何人いるか、「可」だけかどうかは pj_price 側で判定する。
   amazon_offers_json TEXT,
   amazon_lowest_at TEXT,
+  /* 中古（used / cart）の行だけに入る「新品の最安値」。
+     新品のほうが安いときは、そちらを値付けの基準にする（中古がその値段で
+     売れる前提が成り立たないため）。判定と表示は pj_price 側。 */
+  amazon_new_low   REAL,
+  amazon_new_n     INTEGER,
+  amazon_new_at    TEXT,
   /* 再調達で出し直した「いまの状態」。pj_price が再調達CSVの書き出しのときに送る。
      mode（在庫0のときの動作）とは別物：mode='restock' は出品リストで決める方針で、
      こちらは「いま、FBA在庫なしのままAmazon最安値基準で出し続けている」行の印。 */

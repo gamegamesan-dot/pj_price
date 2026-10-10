@@ -612,6 +612,26 @@ function condOf(v) {
   // New 以外（Used / Collectible / Refurbished …）は中古側として扱う
   return /^new$/i.test(t) ? "new" : "used";
 }
+/* 取り寄せる組み合わせを作る。中古（used / cart）の行は、新品の最安値も一緒に取る
+   （新品のほうが安ければ、そちらを値付けの基準にするため）。
+   要求は行ごとに「その行の状態 → 新品」の順に並べ、上限で切れても
+   片方だけが落ち続けないようにする。 */
+function lowestReqs(keys) {
+  const out = [], seen = {};
+  for (const k of keys) {
+    const own = (k.cond === "new") ? "new" : "used";
+    [own, (own === "used") ? "new" : null].forEach((c) => {
+      if (!c) return;
+      const id = k.asin + "|" + c;
+      if (seen[id]) return;
+      seen[id] = 1;
+      out.push({ asin: k.asin, cond: c });
+    });
+  }
+  return out;
+}
+// 行（cart を含む）から、取り寄せの答えを引くときのキー
+function lowestKey(k) { return k.asin + "|" + ((k.cond === "new") ? "new" : "used"); }
 async function amazonLowest(env, run, keys) {
   const out = {};
   let skipped = 0, noCond = 0;
@@ -1079,7 +1099,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
-  amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
+  amazon_lowest_at, amazon_new_low, amazon_new_n, amazon_new_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
@@ -1562,20 +1582,30 @@ async function syncPricing(env, run) {
     `SELECT asin, cond FROM items WHERE scope='ebay' AND ebay_qty>0
        ORDER BY restocking DESC, amazon_lowest_at IS NOT NULL,
        amazon_lowest_at LIMIT ?1`
-  ).bind(PRICING_BATCH * PRICING_MAX_CALLS).all();
+    /* 1行につき最大2回（その行の状態＋新品）要求するので、行数は上限の半分にする。 */
+  ).bind(Math.ceil(PRICING_BATCH * PRICING_MAX_CALLS / 2)).all();
   const keys = (q && q.results) || [];
   if (!keys.length) return 0;
-  const low = await amazonLowest(env, run, keys);
+  const low = await amazonLowest(env, run, lowestReqs(keys));
   const at = nowIso();
   const stmts = [];
   for (const k of keys) {
-    const v = low[k.asin + "|" + k.cond];
-    if (!v) continue;
-    stmts.push(env.DB.prepare(
+    /* cart（カートリッジのみ）の行は、Amazon では中古として引く。
+       これまでは 'B…|cart' で探していて、いつも空振りしていた。 */
+    const v = low[lowestKey(k)];
+    if (v) stmts.push(env.DB.prepare(
       `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
          amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
        WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at,
          JSON.stringify(v.offers || [])));
+    // 中古の行には「新品の最安値」も入れる（新品のほうが安ければ値付けの基準になる）
+    if (k.cond !== "new") {
+      const vn = low[k.asin + "|new"];
+      if (vn) stmts.push(env.DB.prepare(
+        `UPDATE items SET amazon_new_low=?3, amazon_new_n=?4, amazon_new_at=?5,
+           updated_at=?5 WHERE asin=?1 AND cond=?2`)
+        .bind(k.asin, k.cond, vn.low, vn.lowN, at));
+    }
   }
   await runBatch(env, run, stmts);
   run.notes.push("最安値 " + stmts.length + "件");
@@ -1856,8 +1886,12 @@ function restockLowest(r) {
     const known = list.filter((o) => COND_NAME_RE.test(condNorm(o.c)));
     if (keep.length && known.length) list = keep;
   }
-  if (list.length) return Number(list[0].p || 0) || 0;
-  return Number(r.amazon_lowest || 0) || 0;
+  let low = list.length ? (Number(list[0].p || 0) || 0)
+                        : (Number(r.amazon_lowest || 0) || 0);
+  /* 新品のほうが安ければ、そちらで買い直す前提にする（pj_price と同じ決まり）。 */
+  const nw = Number(r.amazon_new_low || 0) || 0;
+  if (r.cond !== "new" && nw > 0 && (!low || nw < low)) low = nw;
+  return low;
 }
 /* 再調達中の行の異変。'loss' は仕入値が上限を超えた（出し直した売値では赤字）、
    'no_offer' は仕入先の出品が消えた（買い直せない）。問題なければ空文字。 */
@@ -2335,20 +2369,27 @@ async function getLowestNow(env, body) {
     run.notes.push("対象なし");
     return Object.assign({ lowest: {} }, await saveRun(env, run));
   }
-  const low = await amazonLowest(env, run, keys);
+  const low = await amazonLowest(env, run, lowestReqs(keys));
   const at = nowIso();
   const stmts = [];
   for (const k of keys) {
-    const v = low[k.asin + "|" + k.cond];
-    if (!v) continue;
-    /* 中古の出品から引いた新品の最安値も残しておく（ASIN＋新品の行として）。
-       scope は既存の値を尊重する（itemSeed は unknown のときだけ入れる）。 */
+    const v = low[lowestKey(k)];
+    /* 取れた値は items にも残す。scope は既存の値を尊重する
+       （itemSeed は unknown のときだけ入れる）。 */
     stmts.push(itemSeed(env, k.asin, k.cond, "ebay", ""));
-    stmts.push(env.DB.prepare(
+    if (v) stmts.push(env.DB.prepare(
       `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
          amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
        WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at,
          JSON.stringify(v.offers || [])));
+    // 中古の行には新品の最安値も入れる（新品のほうが安ければ値付けの基準になる）
+    if (k.cond !== "new") {
+      const vn = low[k.asin + "|new"];
+      if (vn) stmts.push(env.DB.prepare(
+        `UPDATE items SET amazon_new_low=?3, amazon_new_n=?4, amazon_new_at=?5,
+           updated_at=?5 WHERE asin=?1 AND cond=?2`)
+        .bind(k.asin, k.cond, vn.low, vn.lowN, at));
+    }
   }
   await runBatch(env, run, stmts);
   run.notes.push("最安値 " + Object.keys(low).length + "件／要求 " + keys.length + "件");
@@ -2561,4 +2602,5 @@ export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, ju
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
+                        lowestReqs, lowestKey, restockLowest, restockTrouble,
                         settingsGet, settingsPut };

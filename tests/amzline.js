@@ -205,7 +205,101 @@ const btn=await p.evaluate(()=>{
 console.log('   ボタン: '+btn);
 ok(/eBay優先 オフ/.test(btn),'★行に「eBay優先」のボタンを出す');
 
+console.log('\n=== 中古は、新品のほうが安ければ新品を基準にする ===');
+/* 依頼の例：ねんどろいど 錦木千束 E-B0BF56J4GD-U
+   中古最安 ¥9,719／新品最安 ¥6,280（送料込み）／仕入値 ¥4,500／eBay $75.11 */
+const nd=async()=>await p.evaluate(()=>{
+  const u=(asin,o)=>Object.assign({asin:asin,cond:'used',scope:'ebay',prefix:'hobby',
+    ebay_sku:'E-'+asin+'-U',ebay_item_id:'88'+asin.slice(-6),ebay_qty:1,ebay_price:75.11,
+    one_off:0,dropship:0,restocking:0,mark_at:null,mark_stop:0,ebay_first:0,
+    ebay_sold_at:null,cost_yen:4500,weight_g:400,amazon_offers:15,
+    fba_available:0,fba_inbound:1,fba_reserved:0,warnings:[],notes:[],state:'ok'},o||{});
+  syncData={at:new Date().toISOString(),counts:{},items:[
+    // ① 新品のほうが安い（中古 ¥9,719／新品 ¥6,280）
+    u('B0BF56J4GD',{amazon_lowest:9719,amazon_lowest_n:2,
+      amazon_offers_json:JSON.stringify([{p:9719,c:'very_good'},{p:9800,c:'good'}]),
+      amazon_new_low:6280,amazon_new_n:13}),
+    // ② 中古のほうが安い（新品 ¥9,000）→ 今までどおり
+    u('B0BF56J4GE',{amazon_lowest:5000,amazon_lowest_n:1,
+      amazon_offers_json:JSON.stringify([{p:5000,c:'very_good'}]),
+      amazon_new_low:9000,amazon_new_n:4}),
+    // ③ 新品の最安値が取れていない → 今までどおり中古を使う
+    u('B0BF56J4GF',{amazon_lowest:9719,amazon_lowest_n:2,
+      amazon_offers_json:JSON.stringify([{p:9719,c:'very_good'}]),
+      amazon_new_low:null,amazon_new_n:null})]};
+  syncPick={}; syncRender();
+  return syncData.items.map(function(r){
+    var b=syncBasis(r), a=syncAmzLine(r), rc=syncRecCost(r);
+    return { asin:r.asin, low:b.low, useNew:b.useNew, usedLow:b.usedLow,
+      rec:syncRecommend(r).price, floorAmz:syncRecommend(r).floor,
+      be:syncRecommend(r).be,
+      amzProfit:syncAmzProfit(r), line:a&&a.price,
+      floor:syncFloorOf(r).v, amz:!!syncFloorOf(r).amz, costFloor:rc&&rc.floor,
+      better:syncAmzBetter(r), alert:syncAmzAlert(r),
+      label:syncLowLabel(r), note:syncOfferNote(r) };
+  });
+});
+await setup();
+const N=await nd();
+console.log('   ①新品が安い: '+JSON.stringify(N[0]));
+ok(N[0].low===6280&&N[0].useNew===true,
+   '★Amazon基準価格は min（中古 ¥9,719, 新品 ¥6,280）＝ ¥6,280');
+ok(N[0].amzProfit===438,'★Amazon利益 ¥438（6280×0.85 − 400 − 4500）');
+ok(N[0].line===null||N[0].line===undefined,
+   '★下限利益以下なので Amazon同等ラインは使わない');
+ok(N[0].better===false&&N[0].alert===false,
+   '★「Amazonの方が得」バッジと赤い注意は出さない');
+ok(N[0].floor===N[0].costFloor&&!N[0].amz,'★最低売値は仕入値基準に戻る');
+ok(/Amazon基準 ¥6,280（新品の方が安い・中古 ¥9,719）/.test(N[0].label),
+   '★「Amazon基準 ¥6,280（新品の方が安い・中古 ¥9,719）」と出す');
+ok(/新品の最安グループ 13人/.test(N[0].note),'★最安グループの判定も同じ基準価格で');
+// 推奨売値・最低利益ライン・損益分岐も新品基準
+const nw=await p.evaluate(()=>{
+  const r=syncData.items[0];
+  const a=syncRecommend(r).price;
+  const keep=r.amazon_new_low; r.amazon_new_low=null; syncRender();
+  const b=syncRecommend(r).price;
+  r.amazon_new_low=keep; syncRender();
+  return { newBase:a, usedBase:b };
+});
+console.log('   '+JSON.stringify(nw));
+ok(nw.newBase<nw.usedBase,
+   '★推奨売値・最低利益ライン・損益分岐も新品基準（中古基準より安くなる）');
+console.log('   ②中古が安い: '+JSON.stringify(N[1]));
+ok(N[1].low===5000&&!N[1].useNew,'★中古のほうが安い行は今までどおり中古の最安値');
+ok(/Amazon最安値（中古）/.test(N[1].label)||/可を除く最安値/.test(N[1].label),
+   '★表示も今までどおり');
+console.log('   ③新品が取れない: '+JSON.stringify(N[2]));
+ok(N[2].low===9719&&!N[2].useNew,'★新品が取れない行は中古の最安値のまま');
+// 新品の行は変わらない
+const nn=await p.evaluate(()=>{
+  const r=syncData.items[0];
+  const keep=r.amazon_offers_json;
+  r.cond='new'; r.amazon_lowest=6280; r.amazon_new_low=3000;  // 新品の行には使わない
+  r.amazon_offers_json=JSON.stringify([{p:6280,c:'new'}]);
+  syncRender();
+  const o={ low:syncBasis(r).low, useNew:syncBasis(r).useNew, label:syncLowLabel(r) };
+  r.cond='used'; r.amazon_lowest=9719; r.amazon_new_low=6280;
+  r.amazon_offers_json=keep; syncRender();
+  return o;
+});
+console.log('   新品の行: '+JSON.stringify(nn));
+ok(nn.low===6280&&!nn.useNew&&/Amazon最安値（新品）/.test(nn.label),
+   '★新品の行は今までどおり（新品の最安値をそのまま使う）');
+// 書き出すCSVの列と形式は変わらない
+dlg.length=0; dl.length=0;
+await p.evaluate(()=>{
+  syncPick={}; syncPick[syncData.items[0].asin+'|used']=true; syncRender();
+});
+await p.click('#syncBarRev'); await p.waitForTimeout(500);
+const NL=((dl[0]||{}).text||'').trim().split(/\r\n/);
+console.log('   '+JSON.stringify(NL));
+ok(NL.length===3&&/^\*Action\(SiteID=US/.test(NL[1])&&/,ItemID,\*StartPrice$/.test(NL[1])
+   &&/^Revise,8856J4GD,\d+\.\d\d$/.test(NL[2]),
+   '★CSVの列と形式は変わらない');
+
 console.log('\n=== 手数料は⚙設定で変えられる ===');
+await setup();          // 依頼の例（仕入値1,680／最安値5,100）に戻す
 const cfg=await p.evaluate(()=>{
   const r=syncData.items[0];
   const a1=syncAmzProfit(r);

@@ -136,6 +136,34 @@ const sc=st.items.find((x)=>x.asin==='B0SKU00002'&&x.cond==='cart');
 console.log('   カートのみ: '+JSON.stringify({sku_cost:sc.sku_cost}));
 ok(sc.sku_cost===3500,'★カートリッジのみは中古の個体の仕入値を使う（安全側）');
 
+console.log('\n=== 中古の行は新品の最安値も取る（基準価格に使う）===');
+const { T:W }=await loadWorker('pricesrc-w');
+const reqs=W.lowestReqs([{asin:'B0AAA00001',cond:'used'},{asin:'B0AAA00002',cond:'new'},
+                         {asin:'B0AAA00003',cond:'cart'}]);
+console.log('   '+JSON.stringify(reqs));
+ok(reqs.length===5,'★中古・カートリッジの行は「その状態＋新品」の2回ぶん要求する');
+ok(reqs[0].cond==='used'&&reqs[1].cond==='new'&&reqs[1].asin==='B0AAA00001',
+   '★行ごとに並べる（上限で切れても片方だけ落ち続けない）');
+ok(reqs[2].cond==='new'&&reqs[2].asin==='B0AAA00002','新品の行は1回だけ');
+ok(W.lowestKey({asin:'B0AAA00003',cond:'cart'})==='B0AAA00003|used',
+   '★カートリッジのみは中古として引く（これまで空振りしていた）');
+// 新品のほうが安ければ、再調達の仕入値も新品で見る
+ok(W.restockLowest({cond:'used',amazon_lowest:9719,amazon_new_low:6280,
+     amazon_offers_json:'[]'})===6280,
+   '★再調達の仕入値も「新品のほうが安ければ新品」');
+ok(W.restockLowest({cond:'used',amazon_lowest:5000,amazon_new_low:6280,
+     amazon_offers_json:'[]'})===5000,'中古のほうが安ければ中古のまま');
+ok(W.restockLowest({cond:'new',amazon_lowest:6280,amazon_new_low:0,
+     amazon_offers_json:'[]'})===6280,'新品の行は今までどおり');
+// /status が新品の最安値を返す
+await env.DB.prepare(`UPDATE items SET amazon_new_low=6280, amazon_new_n=13,
+  amazon_new_at=?1 WHERE asin='B0PSRC0001' AND cond='used'`).bind(now).run();
+const stN=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
+const itN=stN.items.find((x)=>x.asin==='B0PSRC0001');
+console.log('   '+JSON.stringify({low:itN.amazon_new_low,n:itN.amazon_new_n}));
+ok(itN.amazon_new_low===6280&&itN.amazon_new_n===13,
+   '★一覧に新品の最安値を返す（pj_price が基準価格に使う）');
+
 console.log('\n=== 一覧の上限と、切れたかどうか ===');
 const all=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body.rows_total;
 st=(await asJson(await worker.fetch(get('/status?limit=2'),env))).body;
