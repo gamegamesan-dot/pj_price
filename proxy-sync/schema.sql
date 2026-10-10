@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS items (
   weight_g         INTEGER,                    -- 実重量（梱包込）
   cost_yen         INTEGER,                    -- 仕入値（手直し後）
   sold_usd         REAL,                       -- 相場（総額$）
+  /* eBay優先の印。1 なら「Amazonの方が得」の引き上げ（Amazon同等ライン）を使わない。
+     Amazonの最安値が高いだけで売れていない商品や、eBayで実績を作りたい商品に立てる。 */
+  ebay_first       INTEGER NOT NULL DEFAULT 0,
   /* 3日ごとの値下げの記録。端末を変えても続きから動くよう D1 に置く。 */
   mark_at          TEXT,                       -- 最後に値下げCSVを書き出した時刻
   mark_stop        INTEGER NOT NULL DEFAULT 0, -- 1 なら値下げしない

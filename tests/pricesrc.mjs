@@ -62,6 +62,22 @@ v=await row('B0PSRC0002');
 console.log('   '+JSON.stringify(v));
 ok(v.mark_stop===0&&v.mark_at===at,'★印は下ろせる。値下げした日は残る');
 
+console.log('\n=== eBay優先の印（Amazon同等ラインを使わない行）===');
+await asJson(await worker.fetch(post('/listings',{items:[
+  { asin:'B0PSRC0003', cond:'used', ebay_first:true }]}),env));
+let v3=await env.DB.prepare(
+  `SELECT ebay_first,weight_g FROM items WHERE asin='B0PSRC0003' AND cond='used'`).first();
+console.log('   '+JSON.stringify(v3));
+ok(v3.ebay_first===1,'★印を保存する');
+await asJson(await worker.fetch(post('/listings',{items:[
+  { asin:'B0PSRC0003', cond:'used', ebay_first:false }]}),env));
+v3=await env.DB.prepare(
+  `SELECT ebay_first FROM items WHERE asin='B0PSRC0003' AND cond='used'`).first();
+ok(v3.ebay_first===0,'★下ろせる');
+const st0=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
+ok('ebay_first' in (st0.items.find((x)=>x.asin==='B0PSRC0003')||{}),
+   '★一覧にも返す（pj_price が読む）');
+
 console.log('\n=== 相場は 0 を送ると取り消せる ===');
 await asJson(await worker.fetch(post('/listings',{items:[
   { asin:'B0PSRC0001', cond:'used', sold_usd:0 }]}),env));

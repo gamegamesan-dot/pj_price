@@ -1077,7 +1077,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
-  weight_g, cost_yen, sold_usd, mark_at, mark_stop,
+  weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
@@ -2281,6 +2281,8 @@ async function putListings(env, body) {
          -- 3日ごとの値下げの記録
          mark_at=COALESCE(?20, mark_at),
          mark_stop=COALESCE(?21, mark_stop),
+         -- eBay優先の印（Amazon同等ラインでの引き上げをやめる行）
+         ebay_first=COALESCE(?22, ebay_first),
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
@@ -2304,7 +2306,8 @@ async function putListings(env, body) {
            (x.hand_qty === null || x.hand_qty === undefined) ? null
              : Math.max(0, Math.round(Number(x.hand_qty) || 0)),
            numOf(x, "weight_g"), numOf(x, "cost_yen"), numZero(x, "sold_usd"),
-           x.mark_at ? String(x.mark_at) : null, flagOf(x, "mark_stop")));
+           x.mark_at ? String(x.mark_at) : null, flagOf(x, "mark_stop"),
+           flagOf(x, "ebay_first")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

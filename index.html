@@ -911,6 +911,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
       <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
       <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="note2" style="margin:0 0 4px"><b>Amazonの方が得なときの下限</b>　Amazonで売ったときの利益と同じ利益になる eBay の売値（<b>Amazon同等ライン</b>）より下では出しません。Amazonの利益が下限利益以下の行には使いません。</div>
+      <div class="row"><label>Amazon販売手数料</label><input type="number" id="amzFeeRate" value="15" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>FBA配送代行手数料</label><input type="number" id="amzFbaFee" value="400" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">Amazon手取り ＝ 最安値 ×（1 − 販売手数料）− FBA手数料。行ごとに「Amazonの方が得」と出ます。行の<b>eBay優先</b>をオンにすると、その行だけこの下限を使いません。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="row"><label>値下げの間隔</label><input type="number" id="csvMarkDays" value="3" step="1" min="1" inputmode="numeric"><span class="unit">日</span></div>
       <div class="row"><label>1回の下げ幅</label><input type="number" id="csvMarkStep" value="1" step="0.5" min="0.1" inputmode="decimal"><span class="unit">$</span></div>
       <div class="note2" style="margin-top:0" id="csvMarkCfgNote"></div>
@@ -1255,6 +1261,11 @@ const ADV_FIELDS=['targetMode','baseProfit','linkRate','saleRate','usTaxRate'];
    どの名前が出品用（即発送）でどれが再調達用かを知る必要がある（2026-10-10）。
    こちらは出品CSVタブの設定なので、戻すときは csvSaveCfg も呼ぶ。 */
 var ADV_SHIP=['csvShipProfile','csvShipProfileRe'];
+/* Amazonの手数料も pj-sync に送る。Amazon同等ライン（Amazonで売ったときと同じ利益に
+   なる eBay の売値）の計算に使うので、どの端末でも同じ値で動かす。 */
+var ADV_AMZ=['amzFeeRate','amzFbaFee'];
+// 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
+function advCsvCfg(){ return ADV_SHIP.concat(ADV_AMZ); }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
            linkRate:String(LINK_RATE_DEFAULT), saleRate:String(SALE_RATE_DEFAULT),
@@ -1263,14 +1274,14 @@ function advDefaults(){
 var advAt='';          // 詳細設定を最後に変えた時刻（ISO）。D1 との突き合わせに使う
 function advGet(){
   var o={};
-  ADV_FIELDS.concat(ADV_SHIP).forEach(function(id){ o[id]=String($(id).value); });
+  ADV_FIELDS.concat(advCsvCfg()).forEach(function(id){ o[id]=String($(id).value); });
   return o;
 }
 /* 受け取った値を欄に入れる。選択肢に無い値（古い版の設定）は捨てて既定のままにする。 */
 function advApply(o){
   if(!o)return false;
   var hit=false, ship=false;
-  ADV_SHIP.forEach(function(id){
+  advCsvCfg().forEach(function(id){
     var v=o[id];
     if(v===undefined||v===null||v==='')return;
     if($(id).value!==String(v)){ $(id).value=String(v); ship=true; hit=true; }
@@ -1885,7 +1896,8 @@ function cfgLineRender(){
   if(sy)sy.innerHTML='設定：既定重量 ゲーム'+esc(g('syncWeightGame'))+'g・ホビー'
     +esc(g('syncWeight'))+'g　値下げ '+esc(g('csvMarkDays'))+'日ごとに$'
     +esc(g('csvMarkStep'))+'　見直し $'+esc(g('csvReviewAbs'))+'かつ'
-    +esc(g('csvReviewPct'))+'%　取り込み上限 '+esc(g('syncLimit'))+'件'+btn;
+    +esc(g('csvReviewPct'))+'%　Amazon手数料 '+esc(g('amzFeeRate'))+'%＋FBA'
+    +esc(g('amzFbaFee'))+'円　取り込み上限 '+esc(g('syncLimit'))+'件'+btn;
   var eb=$('cfgLineEbay');
   if(eb)eb.innerHTML='設定：下限利益 '+esc(g('baseProfit'))+'円／連動率 '
     +esc(g('linkRate'))+'%／売上比 '+esc(g('saleRate'))+'%　為替 '+esc(g('fx'))+'円'+btn;
@@ -3251,7 +3263,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
                  'syncSoldCut','syncDropMax','syncLimit','csvWeightCart','csvSort',
-                 'csvReviewAbs','csvReviewPct',
+                 'csvReviewAbs','csvReviewPct','amzFeeRate','amzFbaFee',
                  // 3日ごとの値下げ（間隔・下げ幅）
                  'csvMarkDays','csvMarkStep'];
 
@@ -3468,7 +3480,7 @@ $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('csvPriceChangedOnly').addEventListener('change',csvSaveCfg);
 $('csvReviewZero').addEventListener('change',function(){ csvSaveCfg(); csvRender(); });
 /* 配送ポリシーの名前を変えたら pj-sync にも送る（Workerの判定に使うため）。 */
-ADV_SHIP.forEach(function(id){
+advCsvCfg().forEach(function(id){
   $(id).addEventListener('input',function(){ advTouch(); });
 });
 ['csvReviewAbs','csvReviewPct'].forEach(function(id){
@@ -3674,6 +3686,21 @@ function csvPriceFor(cost,weight){
              be:ceil2(m.denB>0?(m.restB/m.denB):0), zone:m.basisZone,
              profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
   })||{price:0,floor:0,be:0,zone:0,profit:0};
+}
+/* 目標の利益（円）をちょうど得られる eBay の売値（総額$）。
+   地帯ごとに (利益＋rest)/den を出し、いちばん高い地帯（利益がいちばん薄い地帯）に
+   合わせる。係数は priceModel のものをそのまま使う（式を2か所に持たない）。
+   「Amazonで売ったときと同じ利益になる eBay の売値」を出すのに使う。 */
+function csvPriceForProfit(cost,weight,yen){
+  if(!(yen>0))return 0;
+  return csvWithItem(cost,weight,function(){
+    var m=priceModel(), best=0;
+    ZONES.forEach(function(z){
+      var c=m.zoneCoef(z);
+      if(c.den>0)best=Math.max(best,(yen+c.rest)/c.den);
+    });
+    return ceil2(best);
+  })||0;
 }
 // 梱包マージンはeBayカテゴリ別。フィギュアは箱があるぶん重い。
 function csvPackMarginFor(cat){
@@ -7270,16 +7297,75 @@ function syncRecOf(r){ return syncRecCost(r)||syncRecommend(r); }
 function syncWantPrice(r){
   var rec=syncRecOf(r); if(!rec)return 0;
   var v=soldVerdict(rec,syncSoldItem(r),$('syncSoldCut').value);
-  if(v.kind==='rec'||v.kind==='match')return v.price;
-  if(v.kind==='none')return rec.price;
-  return 0;
+  var p=0;
+  if(v.kind==='rec'||v.kind==='match')p=v.price;
+  else if(v.kind==='none')p=rec.price;
+  if(!(p>0))return 0;
+  /* Amazonで売ったほうが得な行は、その利益に並ぶところまで上げる
+     （相場に合わせる判定より、こちらを優先する）。 */
+  var a=syncAmzLine(r);
+  return (a&&a.price>p)?a.price:p;
 }
-/* 最低売値（下限利益のライン）。from … 'list'／'d1'／'amazon' */
+/* ================= Amazonの方が得なときの下限（Amazon同等ライン）=================
+   仕入値基準で下限を出すと、安く仕入れた商品ほど eBay の売値が下がる。
+   その結果、Amazonで売ったほうが利益の大きい商品まで安売りしてしまう。
+   そこで「Amazonで売ったときと同じ利益になる eBay の売値」を下限に足す。
+     Amazon手取り ＝ Amazon最安値 ×（1 − 販売手数料率）− FBA配送代行手数料
+     Amazon利益   ＝ Amazon手取り − 仕入値（仕入値の優先順はそのまま）
+     Amazon同等ライン ＝ その利益になる eBay 売値（csvPriceForProfit で逆算）
+   使わない行：Amazon最安値が取れない／仕入値が分からない／
+   Amazon利益が下限利益（設定）以下／行の「eBay優先」がオン。 */
+function amzFeeRate(){ var n=+$('amzFeeRate').value; return (isFinite(n)&&n>=0)?n/100:0.15; }
+function amzFbaFee(){ var n=+$('amzFbaFee').value; return (isFinite(n)&&n>=0)?n:400; }
+// この行が「eBay優先」（Amazon同等ラインを使わない）か
+function syncEbayFirst(r){ return !!Number(r.ebay_first||0); }
+/* Amazonで売ったときの利益（円）。分からない行は null。 */
+function syncAmzProfit(r){
+  var low=syncBasis(r).low||+r.amazon_lowest||0;
+  if(!(low>0))return null;
+  var c=syncCostOf(r); if(!(c.v>0))return null;
+  return Math.round(low*(1-amzFeeRate())-amzFbaFee()-c.v);
+}
+/* Amazon同等ライン。効かない行は null。
+   { profit:Amazon利益（円）, price:同じ利益になる eBay 売値（$） } */
+function syncAmzLine(r){
+  return syncMemoGet(r,'amz',function(){ return syncAmzLineCalc(r); });
+}
+function syncAmzLineCalc(r){
+  if(syncEbayFirst(r))return null;              // この行は使わない
+  var p=syncAmzProfit(r);
+  if(p===null)return null;
+  var base=+$('baseProfit').value||0;
+  if(p<=base)return null;                       // Amazonの利益が下限利益以下なら今までどおり
+  var v=csvPriceForProfit(syncCostOf(r).v,syncWeightOf(r).v,p);
+  return (v>0)?{ profit:p, price:v }:null;
+}
+/* 最低売値（下限利益のライン）。from … 'list'／'d1'／'sku'／'amazon'
+   Amazon同等ラインのほうが高ければ、そちらまで引き上げる（amz:true）。 */
 function syncFloorOf(r){
-  var rc=syncRecCost(r);
-  if(rc)return { v:rc.floor, from:rc.costFrom };
-  var am=syncRecommend(r);
-  return am?{ v:am.floor, from:'amazon' }:{ v:0, from:'' };
+  var rc=syncRecCost(r), o;
+  if(rc)o={ v:rc.floor, from:rc.costFrom };
+  else{
+    var am=syncRecommend(r);
+    o=am?{ v:am.floor, from:'amazon' }:{ v:0, from:'' };
+  }
+  var a=syncAmzLine(r);
+  if(a&&a.price>o.v){ o.v=a.price; o.amz=true; }
+  return o;
+}
+/* Amazon同等ラインが効いている行（下限・推奨売値を引き上げている行）か。 */
+function syncAmzBetter(r){
+  var a=syncAmzLine(r); if(!a)return false;
+  var rc=syncRecCost(r)||syncRecommend(r);
+  return !!(rc&&(a.price>rc.floor||a.price>rc.price));
+}
+/* FBA在庫（入庫中を含む）があるのに、eBayの売値が Amazon同等ラインより下の行。
+   同じ在庫をAmazonでも売っているので、安いほうから先に売れてしまう。 */
+function syncAmzAlert(r){
+  var a=syncAmzLine(r); if(!a)return false;
+  var st=Number(r.fba_available||0)+Number(r.fba_inbound||0);
+  var now=+r.ebay_price||0;
+  return st>0&&now>0&&now<a.price;
 }
 // 仕入値の出どころの言い方（確認の文と一覧に出す）
 function syncFromName(from){
@@ -7487,9 +7573,9 @@ function syncMarkSkip(r){
   if(Number(r.restocking||0))return '再調達中';
   if(syncQtyOf(r)===0)return '数量0';
   if(syncMarkSoldOf(r))return '売れたので値下げ停止';
-  var now=+r.ebay_price||0, fl=syncFloorOf(r).v;
+  var fo=syncFloorOf(r), now=+r.ebay_price||0, fl=fo.v;
   if(!(now>0)||!(fl>0))return '売値か最低売値が分かりません';
-  if(now<=fl)return '最低売値に着いています';
+  if(now<=fl)return fo.amz?'Amazonの方が得（これ以上は下げません）':'最低売値に着いています';
   return '';
 }
 // 次に出す売値（1回ぶん下げる。最低売値で止める）
@@ -7517,7 +7603,8 @@ function syncMarkHtml(r){
   if(!String(r.ebay_item_id||'').trim())return '';
   var why=syncMarkSkip(r);
   if(why){
-    if(why==='売れたので値下げ停止'||why==='最低売値に着いています'||why==='値下げしない')
+    if(why==='売れたので値下げ停止'||why==='最低売値に着いています'
+       ||why==='Amazonの方が得（これ以上は下げません）'||why==='値下げしない')
       return '<div class="note2" style="margin-top:4px">値下げ：'+esc(why)+'</div>';
     return '';
   }
@@ -7885,7 +7972,7 @@ var SYNC_FILTERS=[
   { v:'all',            label:'すべて',
     f:function(r){ return true; } },
   { v:'warn',           label:'対応が必要（警告あり）',
-    f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r); } },
+    f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r)||syncAmzAlert(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
   { v:'restock',        label:'再調達の候補',
@@ -8085,6 +8172,17 @@ function syncRestockingBtn(r,key){
       +'style="padding:5px 8px;font-size:12px">再調達中にする</button>';
   return '';
 }
+/* 行の「eBay優先」の印。Amazon同等ラインでの引き上げをやめる（記録は D1）。
+   Amazonの最安値が高いだけで売れていない商品や、eBayで実績を作りたい商品に使う。
+   Amazon同等ラインが出せる行（または既に印が立っている行）にだけ出す。 */
+function syncEbayFirstBtn(r,key){
+  if(!String(r.ebay_item_id||'').trim())return '';
+  var on=syncEbayFirst(r);
+  if(!on&&!syncAmzLine(r))return '';
+  return '<button class="btn" data-sefirst="'+esc(key)+'" style="padding:5px 8px;font-size:12px'
+    +(on?';background:#1f7a4d;color:#fff;border-color:#1f7a4d':'')+'">eBay優先 '
+    +(on?'オン':'オフ')+'</button>';
+}
 /* 行の「値下げしない」の印。3日ごとの値下げから外す（記録は D1）。
    出品している行だけに出す。 */
 function syncMarkStopBtn(r,key){
@@ -8175,6 +8273,11 @@ function syncWarnBreakRender(){
     (r.notes||[]).forEach(function(t){ cn[t]=(cn[t]||0)+1; });
     if((r.notes||[]).length)nn++;
   });
+  /* Amazonでも販売中（eBayが Amazon同等ラインより安い）は pj_price 側の判定なので、
+     Worker からの警告とは別に数えてここに足す。 */
+  var amz=rows.filter(syncAmzAlert).length;
+  if(amz){ cw['Amazonでも販売中']=amz; nw+=rows.filter(function(r){
+    return syncAmzAlert(r)&&!(r.warnings||[]).length; }).length; }
   var ks=Object.keys(cw).sort(function(a,b){ return cw[b]-cw[a]; });
   var ns=Object.keys(cn).sort(function(a,b){ return cn[b]-cn[a]; });
   if(!ks.length&&!ns.length){ el.textContent=rows.length?'対応が必要な行はありません。':''; return; }
@@ -8235,6 +8338,16 @@ function syncRowHtml(r,key){
     if(Number(r.one_off||0))
       badge+='<span style="display:inline-block;background:#7a3fb0;color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">一点物</span>';
+    /* Amazonで売ったほうが利益が大きい行。eBayの下限をそこまで引き上げている。 */
+    if(syncAmzBetter(r))
+      badge+='<span style="display:inline-block;background:#1f5fa0;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">Amazonの方が得</span>';
+    if(syncAmzAlert(r))
+      badge+='<span style="display:inline-block;background:#b00020;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">Amazonでも販売中</span>';
+    if(syncEbayFirst(r))
+      badge+='<span style="display:inline-block;background:#1f7a4d;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">eBay優先</span>';
     /* 予約済みの内訳で見せ方を分ける。納品した直後の正常な状態なので、
        警告ではないことを明示する（移管中だけ・処理中だけも見分けられるようにする）。 */
     if(syncIsFcProc(r)&&Number(r.fba_available||0)===0){
@@ -8308,6 +8421,23 @@ function syncRowHtml(r,key){
            +'　最低売値 '+usd(rc.floor)
            +'　重量 '+syncWeightNote(r)+'</div>';
        })()
+      /* Amazonで売ったときの利益と、それに並ぶ eBay の売値。
+         FBA在庫がある行で eBay の売値がこれより下なら、赤字の注意も出す。 */
+      +(function(){
+         var a=syncAmzLine(r);
+         if(!a)return '';
+         return '<div class="note2" style="margin-top:2px">Amazon利益 '+yen(a.profit)
+           +'（最安値 '+yen(syncBasis(r).low||+r.amazon_lowest||0)+' − 手数料'
+           +Math.round(amzFeeRate()*1000)/10+'% − FBA '+yen(amzFbaFee())
+           +' − 仕入値 '+yen(syncCostOf(r).v)+'）'
+           +'　<b>eBayで同じ利益 '+usd(a.price)+'</b>'
+           +(syncAmzAlert(r)
+             ? ('<br><span style="color:var(--bad);font-weight:700">同じ在庫を Amazon でも'
+                +'販売中です。eBay を '+usd(a.price)+' 以上にするか、eBay を数量0に'
+                +'してください。</span>')
+             :'')
+           +'</div>';
+       })()
       +syncRevHtml(r)
       +syncMarkHtml(r)
       /* 再調達中の行は、出し直したときの売値と、赤字にならない仕入値の上限を出す。
@@ -8326,7 +8456,7 @@ function syncRowHtml(r,key){
         : '')
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
-      +syncRestockingBtn(r,key)+syncMarkStopBtn(r,key)+'</div>'
+      +syncRestockingBtn(r,key)+syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)+'</div>'
       +'</div>';
 }
 /* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
@@ -8544,8 +8674,8 @@ $('syncList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   var kh=t.getAttribute('data-sonhand'), ko=t.getAttribute('data-soneoff');
   var kr=t.getAttribute('data-srestock'), kd=t.getAttribute('data-sdrop');
-  var km=t.getAttribute('data-smstop');
-  var key=kh||ko||kr||kd||km; if(!key)return;
+  var km=t.getAttribute('data-smstop'), kf=t.getAttribute('data-sefirst');
+  var key=kh||ko||kr||kd||km||kf; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
   if(!r)return;
@@ -8582,6 +8712,9 @@ $('syncList').addEventListener('click',function(e){
   }else if(km){
     /* 値下げしない の印。3日ごとの値下げの対象から外す（eBay側は変えない）。 */
     syncFlagSend(t,r,'mark_stop',!syncMarkStopOf(r),'値下げしない');
+  }else if(kf){
+    /* eBay優先。Amazonの方が得でも、その行だけ下限を引き上げない。 */
+    syncFlagSend(t,r,'ebay_first',!syncEbayFirst(r),'eBay優先');
   }else{
     syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
   }
@@ -9083,7 +9216,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v128';   // sw.js の const V と必ず同じ値にする
+var APP_V='v129';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
