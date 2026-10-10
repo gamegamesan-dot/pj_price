@@ -39,6 +39,20 @@ const setup=async()=>await p.evaluate(()=>{
   csvSaveList(); csvRender();
 });
 
+/* 価格の操作は販売連携タブの出品データで行うようになった（6.31）。
+   出品CSVタブのボタンはそちらへ移って同じ処理を呼ぶので、出品データを用意する。 */
+const withSync=async()=>await p.evaluate(()=>{
+  syncData={at:new Date().toISOString(),counts:{},
+    items:csvList.filter(r=>r.itemId).map(r=>({
+      asin:r.asin,cond:'used',scope:'ebay',ebay_sku:'E-'+r.asin+'-U',
+      ebay_item_id:r.itemId,ebay_qty:2,
+      // p1 だけ eBayの売値を推奨売値から $10 離す（見直しの対象にする）
+      ebay_price:(r.id==='p1')?Math.round((r.price-10)*100)/100:r.price,
+      dropship:0,restocking:0,one_off:0,mark_stop:0,mark_at:null,ebay_sold_at:null,
+      warnings:[],notes:[],state:'ok'}))};
+  syncRender();
+});
+
 console.log('=== いつも開いているボタン ===');
 await setup();
 const vis=async(id)=>await p.isVisible('#'+id);
@@ -131,8 +145,8 @@ ok(pos.last==='csvClear','★ボタンの中でいちばん下にある');
 ok(/ゴミ箱/.test(pos.note),'★ゴミ箱に入ると書いてある');
 
 console.log('\n=== 畳んだ状態でも書き出しの結果は変わらない ===');
-await setup();
-// 開いた状態で価格更新CSVを出す
+await setup(); await withSync();
+// 開いた状態で価格更新CSVを出す（販売連携タブへ移って同じ処理を呼ぶ）
 await p.evaluate(()=>{ $('csvReviewBox').open=true; });
 await p.waitForTimeout(100);
 dlg.length=0; dl.length=0;
@@ -140,8 +154,11 @@ await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
 const opened=((dl[0]||{}).text||'').trim();
 console.log('   開いた状態: '+JSON.stringify(opened.split(/\r\n/)));
 ok(opened.split(/\r\n/).length===3,'開いた状態で1件書き出す');
+ok(await p.evaluate(()=>$('tabE').getAttribute('aria-pressed')==='true'),
+   '★押すと販売連携タブへ移る');
 // 畳んだ状態で同じことをする（ボタンは押せないので、その場で呼ぶ）
-await setup();
+await p.click('#tabD');
+await setup(); await withSync();
 await p.evaluate(()=>{ $('csvReviewBox').open=false; });
 dlg.length=0; dl.length=0;
 await p.evaluate(()=>{ $('csvPriceCsv').click(); });
@@ -149,8 +166,18 @@ await p.waitForTimeout(500);
 const closed=((dl[0]||{}).text||'').trim();
 console.log('   畳んだ状態: '+JSON.stringify(closed.split(/\r\n/)));
 ok(closed===opened,'★畳んでいても中身は同じ');
-ok(/売値の見直しが要る行 1件/.test(dlg[0]||''),'確認の中身も同じ');
+ok(/1件（売値の見直しが要る行）/.test(dlg[0]||''),'確認の中身も同じ');
+// 取り込みが無いときは案内だけ（二重に書き出さない）
+await p.click('#tabD');
+await setup();
+dlg.length=0; dl.length=0;
+await p.evaluate(()=>{ $('csvPriceCsv').click(); });
+await p.waitForTimeout(300);
+console.log('   取り込み無し: '+JSON.stringify(dlg[0]));
+ok(/販売連携タブ/.test(dlg[0]||'')&&dl.length===0,
+   '★出品データが無いときは案内を出して書き出さない');
 // 数量更新CSVも同じ
+await p.click('#tabD');
 await setup();
 dlg.length=0; dl.length=0;
 await p.evaluate(()=>{ $('csvStockBox').open=true; });

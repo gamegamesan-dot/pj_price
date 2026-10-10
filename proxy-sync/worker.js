@@ -1077,6 +1077,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
+  weight_g, cost_yen, sold_usd, mark_at, mark_stop,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
@@ -1983,7 +1984,9 @@ function noteOf(r) { return judgeRow(r).n; }
 async function statusBody(env, url) {
   const p = url.searchParams;
   const scope = p.get("scope") || "ebay";          // 既定は eBay対象だけ
-  const limit = Math.min(1000, Math.max(1, Number(p.get("limit") || 500)));
+  /* 一覧の上限。1000件ちょうどで切れていたので上げた（2026-10-10）。
+     返した件数と全体の件数（rows_total）を比べれば、切れているか分かる。 */
+  const limit = Math.min(5000, Math.max(1, Number(p.get("limit") || 500)));
   const where = [], bind = [];
   if (scope !== "all") { where.push("scope=?" + (bind.length + 1)); bind.push(scope); }
   /* 既定では「eBayに出ている」か「FBA在庫が1点以上ある」行だけ。
@@ -2104,8 +2107,21 @@ async function statusBody(env, url) {
     `SELECT type, asin, cond, sku, detail, created_at, notified_at
      FROM events ORDER BY id DESC LIMIT 30`).all();
 
+  /* いまの絞り込みに当てはまる行の総数。返した件数と比べれば、
+     上限で切れているかどうかが分かる（1000件ちょうどで切れていた。2026-10-10）。 */
+  let rowsTotal = items.length;
+  try {
+    const cw = where.length ? (" WHERE " + where.join(" AND ")) : "";
+    const ct = await env.DB.prepare("SELECT COUNT(*) AS n FROM items" + cw)
+      .bind(...bind.slice(0, bind.length - 1)).first();
+    rowsTotal = Number((ct && ct.n) || items.length);
+  } catch (e) { /* 数えられなくても一覧は返す */ }
   return {
     generated_at: nowIso(),
+    limit: limit,
+    rows_returned: items.length,
+    rows_total: rowsTotal,
+    truncated: items.length >= limit && rowsTotal > items.length,
     counts: counts || {},
     last_runs: (runs && runs.results) || [],
     errors_recent: ((runs && runs.results) || []).some((r) => r.errors > 0),
@@ -2184,6 +2200,14 @@ function numOf(x, key) {
   const n = Number(x[key]);
   return isFinite(n) && n > 0 ? n : null;
 }
+/* numOf と同じだが **0 を「消す」として受け取る**。相場の取り消しに使う
+   （NULL は「送られてこなかった」なので、いまの値をそのまま残す）。 */
+function numZero(x, key) {
+  if (!Object.prototype.hasOwnProperty.call(x, key)) return null;
+  const n = Number(x[key]);
+  if (!isFinite(n) || n < 0) return null;
+  return n;
+}
 async function putListings(env, body) {
   const run = newRun("listings");
   const list = Array.isArray(body && body.items) ? body.items.slice(0, 500) : [];
@@ -2238,6 +2262,15 @@ async function putListings(env, body) {
          dropship=CASE WHEN ?15=1 THEN 1 ELSE COALESCE(?14, dropship) END,
          -- カートリッジのみの手元在庫数。送られてこなければそのまま残す
          hand_qty=COALESCE(?16, hand_qty),
+         /* 価格の元データ。送られてきた項目だけ書き替える（NULLはそのまま）。
+            これがあると、出品リストを空にしても推奨売値・最低売値を出せる。 */
+         weight_g=COALESCE(?17, weight_g),
+         cost_yen=COALESCE(?18, cost_yen),
+         -- 相場は 0 で取り消せる（NULLI は「送られてこなかった」）
+         sold_usd=COALESCE(?19, sold_usd),
+         -- 3日ごとの値下げの記録
+         mark_at=COALESCE(?20, mark_at),
+         mark_stop=COALESCE(?21, mark_stop),
          ebay_item_id=COALESCE(NULLIF(?6,''), ebay_item_id),
          ebay_sku=COALESCE(NULLIF(?7,''), ebay_sku),
          -- 在庫が1点以上ある行は、送られてきても手元在庫にしない
@@ -2259,7 +2292,9 @@ async function putListings(env, body) {
            flagOf(x, "restock_skip_acc"), flagOf(x, "restocking"),
            flagOf(x, "dropship"), lab.dropship ? 1 : 0,
            (x.hand_qty === null || x.hand_qty === undefined) ? null
-             : Math.max(0, Math.round(Number(x.hand_qty) || 0))));
+             : Math.max(0, Math.round(Number(x.hand_qty) || 0)),
+           numOf(x, "weight_g"), numOf(x, "cost_yen"), numZero(x, "sold_usd"),
+           x.mark_at ? String(x.mark_at) : null, flagOf(x, "mark_stop")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS items (
   /* カートリッジのみ（cond='cart'）の手元在庫数。FBAに送らず手元から出すので、
      eBayの数量と合っているかをこれで見張る。NULL はまだ送っていない（見張らない）。 */
   hand_qty         INTEGER,
+  /* 価格の元データ。出品CSVのリストを空にしても推奨売値・最低売値を出せるように、
+     pj_price が書き出し・名簿のときに送る（NULL は未送信＝既定値を使う）。 */
+  weight_g         INTEGER,                    -- 実重量（梱包込）
+  cost_yen         INTEGER,                    -- 仕入値（手直し後）
+  sold_usd         REAL,                       -- 相場（総額$）
+  /* 3日ごとの値下げの記録。端末を変えても続きから動くよう D1 に置く。 */
+  mark_at          TEXT,                       -- 最後に値下げCSVを書き出した時刻
+  mark_stop        INTEGER NOT NULL DEFAULT 0, -- 1 なら値下げしない
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );

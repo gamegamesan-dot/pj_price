@@ -206,40 +206,82 @@ console.log('   見送り: '+JSON.stringify(skip));
 ok(/^(low|loss)$/.test(skip.kind),'相場が低い行は「見送り」と判定される');
 ok(skip.want===0&&!skip.rv,'★「見送り」の行は対象にしない');
 
+/* 書き出しは販売連携タブの出品データ（ItemID）で行う（6.31）。
+   判定の中身は同じなので、出品リストの行と同じ結果になることを見る。 */
 console.log('\n=== 書き出し（確認の件数と、入る売値）===');
 await setup();
 await p.evaluate(()=>{ $('baseProfit').value='3000';
   $('baseProfit').dispatchEvent(new Event('input'));
   csvRowById('C').cost=400; csvRecalc(csvRowById('C')); csvRender(); });
+// eBayに出ている売値を出品データにも入れる（判定はこちらで行う）
 const expect=await p.evaluate(()=>{
-  const rv=csvList.map(csvPriceReview).filter(Boolean);
+  syncData={at:new Date().toISOString(),counts:{},
+    items:csvList.map(r=>({asin:r.asin,cond:'used',scope:'ebay',
+      ebay_sku:'E-'+r.asin+'-U',ebay_item_id:r.itemId,ebay_qty:2,
+      ebay_price:+r.priceSent||0,one_off:0,dropship:0,restocking:0,
+      mark_at:null,mark_stop:0,ebay_sold_at:null,
+      warnings:[],notes:[],state:'ok'}))};
+  syncRender();
+  const rv=syncData.items.map(syncPriceReview).filter(Boolean);
   const up=rv.filter(x=>x.up===true).length;
-  return { n:rv.length, up:up, down:rv.length-up };
+  return { n:rv.length, up:up, down:rv.length-up,
+           // 出品リストの行で見ても同じ件数か（同じ判定を使っている）
+           csv:csvList.map(csvPriceReview).filter(Boolean).length,
+           want:syncData.items.map(r=>r.ebay_item_id+':'+syncWantPrice(r)) };
 });
 console.log('   いまの対象: '+JSON.stringify(expect));
+ok(expect.n===3&&(expect.up+expect.down)===3,'3行が対象になっている');
+ok(expect.csv===expect.n,'★出品リストの行で見ても同じ件数');
 dlg.length=0; dl.length=0;
 await p.click('#csvPriceCsv');
 await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
-ok(expect.n===3&&(expect.up+expect.down)===3,'3行が対象になっている');
-ok(dlg[0]&&dlg[0].indexOf('売値の見直しが要る行 '+expect.n+'件（上げる '+expect.up
-   +'件／下げる '+expect.down+'件）')>=0,
+ok(dlg[0]&&dlg[0].indexOf(expect.n+'件（売値の見直しが要る行）')>=0
+   &&dlg[0].indexOf('上げる '+expect.up+'件／下げる '+expect.down+'件')>=0,
    '★確認に件数と上げる行・下げる行の数を出す');
-ok(/→ \$/.test(dlg[0]||'')&&/の変更）/.test(dlg[0]||''),
-   '★売値の並びと理由を出す');
+ok(/→ \$/.test(dlg[0]||''),'★売値の並びを出す');
 const lines=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(lines));
-const want=await p.evaluate(()=>csvList.map(r=>r.id+':'+csvWantPrice(r)));
-console.log('   新しい売値: '+JSON.stringify(want));
+console.log('   新しい売値: '+JSON.stringify(expect.want));
 ok(lines.length===5,'★3件を書き出す');
 ok(lines.slice(2).every((l,i)=>Math.abs(+l.split(',')[2]
-   -(+want[i].split(':')[1]))<0.005),'★CSVには新しい売値が入る（古い売値ではない）');
+   -(+expect.want[i].split(':')[1]))<0.005),
+   '★CSVには新しい売値が入る（古い売値ではない）');
 
-console.log('\n=== 2回目は対象から外れる（出した売値を控える）===');
+console.log('\n=== 新しい売値で出し直したあとは対象から外れる ===');
+await p.click('#tabD');
 dlg.length=0; dl.length=0;
+// eBay にアップロードして取り込み直した状態（出品データの売値が新しい値になる）
+await p.evaluate(()=>{
+  syncData.items.forEach(r=>{ r.ebay_price=syncWantPrice(r); });
+  syncRender();
+});
 await p.click('#csvPriceCsv'); await p.waitForTimeout(400);
 console.log('   '+JSON.stringify(dlg.map(d=>d.split('\n')[0])));
-ok(dlg.some(d=>/売値の見直しが要る行がありません/.test(d))&&dl.length===0,
-   '★設定を変えていなければ2回目は対象なし');
+ok(dlg.some(d=>/売値の見直しが要る出品がありません/.test(d))&&dl.length===0,
+   '★売値が新しい値になっていれば2回目は対象なし');
+
+console.log('\n=== 出品リストを空にしても同じ判定（D1に残した仕入値と実重量）===');
+await p.click('#tabD');
+const empty=await p.evaluate(()=>{
+  // D1 に残った値（仕入値・実重量）を出品データに移して、出品リストを空にする
+  const by={}; csvList.forEach(r=>{ by[r.itemId]={cost:r.cost,weight:r.weight}; });
+  syncData.items.forEach(r=>{
+    const o=by[r.ebay_item_id]||{};
+    r.cost_yen=o.cost; r.weight_g=o.weight;
+    r.ebay_price=+r.ebay_price||0;
+  });
+  const before=syncData.items.map(r=>r.ebay_item_id+':'+syncWantPrice(r));
+  csvList=[]; csvSaveList(); csvRender();
+  const after=syncData.items.map(r=>r.ebay_item_id+':'+syncWantPrice(r));
+  return { before:before, after:after,
+           w:syncData.items.map(r=>syncWeightNote(r)) };
+});
+console.log('   リストあり: '+JSON.stringify(empty.before));
+console.log('   リスト空　: '+JSON.stringify(empty.after));
+console.log('   重量: '+JSON.stringify(empty.w));
+ok(empty.before.join('|')===empty.after.join('|'),
+   '★出品リストを空にしても推奨売値は同じ');
+ok(empty.w.every(x=>/（実測）$/.test(x)),'★重量は D1 に残した実測を使う');
 await T.done();
 })();

@@ -43,6 +43,18 @@ const setupRaw=async()=>await p.evaluate(()=>{
   csvSaveList(); csvRender(); $('csvListBox').open=true;
 });
 const lines=(i)=>(((dl[i]||{}).text)||'').trim().split(/\r\n/).filter(Boolean);
+/* 価格更新CSVは販売連携タブの出品データ（ItemID）で書き出す（6.31）。
+   eBayに出ている売値＝いまの推奨売値（差0）から始める。 */
+const withSync=async()=>await p.evaluate(()=>{
+  syncPick={};
+  syncData={at:new Date().toISOString(),counts:{},
+    items:csvList.filter(r=>r.itemId).map(r=>({
+      asin:r.asin,cond:'used',scope:'ebay',ebay_sku:'E-'+r.asin+'-U',
+      ebay_item_id:r.itemId,ebay_qty:2,ebay_price:+r.price||0,
+      one_off:0,dropship:0,restocking:0,mark_at:null,mark_stop:0,ebay_sold_at:null,
+      warnings:[],notes:[],state:'ok'}))};
+  syncRender();
+});
 
 console.log('=== チェックなし：ItemIDのある3件 ===');
 await setup();
@@ -104,8 +116,8 @@ console.log('   '+JSON.stringify(dlg[0]));
 ok(/選んだ2件には ItemID が入っていません/.test(dlg[0]||''),'★そう知らせる');
 ok(dl.length===0,'★CSVは書き出さない');
 
-console.log('\n=== 価格更新CSVも同じ（列は売値だけ）===');
-await setup();
+console.log('\n=== 価格更新CSVも同じ（列は売値だけ。選択は販売連携タブへ引き継ぐ）===');
+await setup(); await withSync();
 dlg.length=0; dl.length=0;
 await p.click('#csvList input[data-cpick="r2"]'); await p.waitForTimeout(200);
 await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
@@ -113,17 +125,18 @@ L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&/,110002,/.test(L[2]),'★選んだ1件だけ');
 ok(/\*StartPrice/.test(L[1])&&!/\*Quantity/.test(L[1]),'★数量の列は入れない');
+ok(await p.evaluate(()=>Object.keys(syncPick).filter(k=>syncPick[k]).length===1),
+   '★出品CSVタブの選択を販売連携タブへ引き継ぐ');
 
 console.log('\n=== 「売値の見直しが要る行だけ」との組み合わせ ===');
-await setup();
+await p.click('#tabD');
+await setup(); await withSync();
 await p.evaluate(()=>{
   /* r1 だけ eBayに出している売値を推奨売値から離す。
      r2・r3 は推奨売値と同じなので対象にならない。 */
-  const r=csvRowById('r1');
-  r.priceSent=Math.round((r.price-10)*100)/100;
-  csvSaveList();
+  syncData.items[0].ebay_price=Math.round((csvRowById('r1').price-10)*100)/100;
   $('csvPriceChangedOnly').checked=true;
-  csvRender();
+  csvRender(); syncRender();
 });
 dlg.length=0; dl.length=0;
 await p.click('#csvPriceCsv'); await p.waitForTimeout(500);   // チェックなし
@@ -131,35 +144,34 @@ console.log('   チェックなし: '+JSON.stringify(dlg[0]));
 L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&/,110001,/.test(L[2]),'★見直しの要る行（r1）だけが出る');
-ok(/売値の見直しが要る行 1件（上げる 1件／下げる 0件）/.test(dlg[0]||''),
+ok(/1件（売値の見直しが要る行）/.test(dlg[0]||'')
+   &&/上げる 1件／下げる 0件/.test(dlg[0]||''),
    '★確認に上げる行・下げる行の数を出す');
 
 // 対象ではない r2 だけを選んだとき
+await p.click('#tabD');
 dlg.length=0; dl.length=0;
 await p.click('#csvList input[data-cpick="r2"]'); await p.waitForTimeout(200);
 await p.click('#csvPriceCsv'); await p.waitForTimeout(400);
 console.log('   r2だけ選ぶ: '+JSON.stringify(dlg[0]));
-ok(/選んだ1件には、売値の見直しが要る行がありません/.test(dlg[0]||''),
+ok(/選んだ 1件には、売値の見直しが要る出品がありません/.test(dlg[0]||''),
    '★選んだ中に対象が無ければ書き出さずに知らせる');
 ok(dl.length===0,'★対象外の行は選んでも書き出さない');
 
 // 選んだ中の対象行だけを書き出す（r1 と r2 を選ぶ → r1 だけ）
-await p.evaluate(()=>{
-  const r=csvRowById('r1');
-  r.priceSent=Math.round((r.price-10)*100)/100;   // さきの書き出しで控えた値を戻す
-  csvSaveList(); csvRender();
-});
+await p.click('#tabD');
 dlg.length=0; dl.length=0;
 await p.click('#csvList input[data-cpick="r1"]'); await p.waitForTimeout(200);
 await p.click('#csvPriceCsv'); await p.waitForTimeout(500);
 console.log('   r1とr2を選ぶ: '+JSON.stringify(dlg[0]));
 L=lines(0);
 console.log('   '+JSON.stringify(L));
-ok(/選択した 2件のうち 1件（売値の見直しが要る行）/.test(dlg[0]||''),
-   '★「選択した n件のうち n件」と対象に絞った件数で出す');
+ok(/選んだ 2件のうち 1件（売値の見直しが要る行）/.test(dlg[0]||''),
+   '★「選んだ n件のうち n件」と対象に絞った件数で出す');
 ok(L.length===3&&/,110001,/.test(L[2]),'★選んだ中の見直しが要る行だけを書き出す');
 
 console.log('\n=== キャンセルしたら書き出さない ===');
+await p.click('#tabD');
 await setup();
 p.removeAllListeners('dialog');
 const dlg2=[]; p.on('dialog',async d=>{ dlg2.push(d.message()); await d.dismiss(); });

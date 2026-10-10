@@ -32,35 +32,37 @@ const setupRaw=async()=>await p.evaluate((DAY)=>{
     zeroAct:'hold',fba:true,oneOff:false,itemId:'',titleStatus:'',titleCands:[],
     titleNote:'',titleManual:false},extra||{});
   csvList=[
-    // 出品済み・4日前に値下げ → 今日が値下げの日
-    row('m1','B0MARK00001',{itemId:'110001',markAt:iso(4)}),
-    // 出品済み・1日前に値下げ → まだ
-    row('m2','B0MARK00002',{itemId:'110002',markAt:iso(1)}),
-    // 一点物
-    row('m3','B0MARK00003',{itemId:'110003',oneOff:true,markAt:iso(4)}),
-    // 値下げしない の印
-    row('m4','B0MARK00004',{itemId:'110004',markStop:true,markAt:iso(4)}),
-    // 無在庫
-    row('m5','B0MARK00005',{itemId:'110005',dropship:true,markAt:iso(4)}),
-    // 値下げ後に売れた
-    row('m6','B0MARK00006',{itemId:'110006',markAt:iso(4)}),
+    row('m1','B0MARK00001',{itemId:'110001'}),
+    row('m2','B0MARK00002',{itemId:'110002'}),
+    row('m3','B0MARK00003',{itemId:'110003',oneOff:true}),
+    row('m4','B0MARK00004',{itemId:'110004'}),
+    row('m5','B0MARK00005',{itemId:'110005',dropship:true}),
+    row('m6','B0MARK00006',{itemId:'110006'}),
     // まだ出品していない
     row('m7','B0MARK00007',{})
   ];
   csvPick={}; csvTrash=[]; csvTrashSave();
   csvList.forEach(csvRecalc);
   // eBayに出ている売値（pj-sync の取り込み）
+  /* 値下げの記録（最後に値下げした日 mark_at・値下げしない mark_stop）は D1 に置く。
+     判定も書き出しも、この出品データで行う（出品リストは空でもよい）。 */
   const it=(asin,o)=>Object.assign({asin:asin,cond:'used',scope:'ebay',
     ebay_sku:'E-'+asin+'-U',ebay_qty:1,ebay_price:60,dropship:0,restocking:0,
+    one_off:0,mark_at:null,mark_stop:0,
     ebay_sold_at:null,ebay_ship_profile:'W2000',warnings:[],notes:[],state:'ok'},o||{});
   syncData={at:new Date().toISOString(),counts:{},items:[
-    it('B0MARK00001',{ebay_item_id:'110001'}),
-    it('B0MARK00002',{ebay_item_id:'110002'}),
-    it('B0MARK00003',{ebay_item_id:'110003'}),
-    it('B0MARK00004',{ebay_item_id:'110004'}),
-    it('B0MARK00005',{ebay_item_id:'110005',dropship:1}),
+    // 4日前に値下げ → 今日が値下げの日
+    it('B0MARK00001',{ebay_item_id:'110001',mark_at:iso(4)}),
+    // 1日前に値下げ → まだ
+    it('B0MARK00002',{ebay_item_id:'110002',mark_at:iso(1)}),
+    // 一点物
+    it('B0MARK00003',{ebay_item_id:'110003',one_off:1,mark_at:iso(4)}),
+    // 値下げしない の印
+    it('B0MARK00004',{ebay_item_id:'110004',mark_stop:1,mark_at:iso(4)}),
+    // 無在庫
+    it('B0MARK00005',{ebay_item_id:'110005',dropship:1,mark_at:iso(4)}),
     // 2日前に売れた（値下げは4日前なので「売れたので停止」）
-    it('B0MARK00006',{ebay_item_id:'110006',
+    it('B0MARK00006',{ebay_item_id:'110006',mark_at:iso(4),
       ebay_sold_at:new Date(Date.now()-2*DAY).toISOString()})]};
   csvSaveList(); csvRender(); $('csvListBox').open=true;
 },DAY);
@@ -135,30 +137,40 @@ console.log('   '+mis.card.split(' | ').filter(x=>/ポリシー/.test(x)).join('
 ok(mis.mis==='W1000','★食い違いを見つける');
 ok(/ポリシーが印と違います/.test(mis.card),'★一覧に「ポリシーが印と違います」と出す');
 
-console.log('\n=== 最低売値まで下げるCSV ===');
+console.log('\n=== 最低売値まで下げるCSV（販売連携の出品データで動かす）===');
 await setup();
-const fl=await p.evaluate(()=>{
-  const r=csvRowById('m1');
-  return { floor:csvFloorOf(r), live:csvLivePrice(r), price:r.price };
-});
+// 出品データの行を ItemID で引く
+const sRow=async(id)=>await p.evaluate((id)=>{
+  const r=syncData.items.find(x=>x.ebay_item_id===id);
+  return r?{ price:+r.ebay_price||0, floor:syncFloorOf(r).v, from:syncFloorOf(r).from,
+             skip:syncMarkSkip(r), due:syncMarkDue(r), next:syncMarkNext(r),
+             left:syncMarkLeft(r), at:r.mark_at||'' }:null;
+},id);
+let fl=await sRow('110001');
 console.log('   '+JSON.stringify(fl));
-ok(fl.floor>0&&fl.floor<fl.live,'最低売値はいまの売値より下');
+ok(fl.floor>0&&fl.floor<fl.price,'最低売値はいまの売値より下');
+ok(fl.from==='list','出品リストに行があるときはその仕入値で出す');
 dlg.length=0; dl.length=0;
+// 出品CSVタブで選んだ行は、販売連携タブでも選んだ状態で引き継ぐ
 await p.evaluate(()=>{
   ['m1','m3','m7'].forEach(id=>{ csvPick[id]=true; });
   csvRender();
 });
 await p.click('#csvFloorCsv'); await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
-ok(/選んだ 3件のうち 1件を最低売値まで下げます/.test(dlg[0]||''),
+ok(/選んだ 2件のうち 1件を最低売値まで下げます/.test(dlg[0]||''),
    '★件数と「今の売値 → 最低売値」を出す');
-ok(dlg[0].indexOf('一点物')>=0,'★一点物は外して理由を出す');
-ok(dlg[0].indexOf('出品していません')>=0,'出品していない行も外す');
+ok((dlg[0]||'').indexOf('一点物')>=0,'★一点物は外して理由を出す');
+ok(await p.evaluate(()=>$('tabE').getAttribute('aria-pressed')==='true'),
+   '★出品CSVタブのボタンは販売連携タブへ移って同じ処理を呼ぶ');
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&L[2]==='Revise,110001,'+fl.floor.toFixed(2),
    '★最低売値で書き出す');
+ok((await sRow('110001')).at!=='','★下限に着いた行は値下げの記録を進める');
 // すでに最低売値以下の行は対象外
+await p.click('#tabD');
+await setup();
 dlg.length=0; dl.length=0;
 await p.evaluate(()=>{
   csvPick={}; csvPick.m2=true;
@@ -171,33 +183,35 @@ ok(/すでに最低売値以下/.test(dlg[0]||'')&&dl.length===0,
    '★すでに最低売値以下の行は対象外');
 
 console.log('\n=== 3日ごとの値下げ ===');
+await p.click('#tabD');
 await setup();
 const due=await p.evaluate(()=>{
   const o={};
-  csvList.forEach(r=>{ o[r.id]={due:csvMarkDue(r),why:csvMarkSkip(r)}; });
+  syncData.items.forEach(r=>{ o[r.ebay_item_id]={due:syncMarkDue(r),why:syncMarkSkip(r)}; });
   o.__bar=$('csvMarkRun').textContent;
   o.__show=getComputedStyle($('csvMarkBar')).display;
   return o;
 });
-['m1','m2','m3','m4','m5','m6','m7'].forEach(k=>
+['110001','110002','110003','110004','110005','110006'].forEach(k=>
   console.log('   '+k+': '+JSON.stringify(due[k])));
 console.log('   '+due.__bar+' / '+due.__show);
-ok(due.m1.due===true,'★4日前に下げた行は今日が値下げの日');
-ok(due.m2.due===false,'★1日前の行はまだ（3日たっていない）');
-ok(due.m3.why==='一点物'&&due.m4.why==='値下げしない'&&due.m5.why==='無在庫',
+ok(due['110001'].due===true,'★4日前に下げた出品は今日が値下げの日');
+ok(due['110002'].due===false,'★1日前の出品はまだ（3日たっていない）');
+ok(due['110003'].why==='一点物'&&due['110004'].why==='値下げしない'
+   &&due['110005'].why==='無在庫',
    '★一点物・値下げしない・無在庫は対象外');
-ok(due.m6.why==='売れたので値下げ停止','★値下げ後に売れた行は止める');
-ok(due.m7.why==='出品していません','出品していない行は対象外');
+ok(due['110006'].why==='売れたので値下げ停止','★値下げ後に売れた出品は止める');
 ok(due.__show!=='none'&&/値下げの時期です（1件）/.test(due.__bar),
    '★上部に「値下げの時期です（n件）」と出す');
-// 行の表示
+// 出品していない行は対象外（出品データに無い＝値下げの対象にならない）
+ok(await p.evaluate(()=>syncMarkSkip({asin:'B0MARK00007',cond:'used'})==='出品していません'),
+   '出品していない行は対象外');
+// 行の表示（出品CSVタブの一覧にも、販売連携タブと同じ案内を出す）
 const rowTxt=await p.evaluate(()=>{
   const t=(w)=>(Array.from(document.querySelectorAll('#csvList > div'))
-    .map(d=>d.innerText).find(x=>x.indexOf(w)>=0)||'').replace(/\n/g,' | ');
+    .map(d=>d.textContent).find(x=>x.indexOf(w)>=0)||'');
   return { m1:t('商品m1'), m2:t('商品m2'), m6:t('商品m6') };
 });
-console.log('   m1: '+rowTxt.m1.split(' | ').filter(x=>/値下げ/.test(x)).join('  '));
-console.log('   m2: '+rowTxt.m2.split(' | ').filter(x=>/値下げ/.test(x)).join('  '));
 ok(/値下げ中/.test(rowTxt.m1)&&/→ 下限 \$/.test(rowTxt.m1)&&/あと\d+回/.test(rowTxt.m1),
    '★「値下げ中：$45.00 → 下限 $36.80（あと9回）」の形で出す');
 ok(/今日が値下げの日です/.test(rowTxt.m1),'今日の行はそう出す');
@@ -205,39 +219,42 @@ ok(/次は\d{4}-\d{2}-\d{2}/.test(rowTxt.m2),'まだの行は次の日を出す'
 ok(/売れたので値下げ停止/.test(rowTxt.m6),'★売れた行はそう出す');
 // 書き出し
 dlg.length=0; dl.length=0;
-const before=await p.evaluate(()=>({live:csvLivePrice(csvRowById('m1')),
-  next:csvMarkNext(csvRowById('m1'))}));
+const before=await sRow('110001');
 await p.click('#csvMarkRun'); await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L)+' / '+JSON.stringify(before));
-ok(Math.abs(before.live-before.next-1)<0.001,'★1回で $1 下げる');
+ok(Math.abs(before.price-before.next-1)<0.001,'★1回で $1 下げる');
 ok(L.length===3&&L[2]==='Revise,110001,'+before.next.toFixed(2),'★その値で書き出す');
-const post=await p.evaluate(()=>({at:csvRowById('m1').markAt,
-  due:csvMarkDue(csvRowById('m1')),bar:getComputedStyle($('csvMarkBar')).display}));
+const post=await p.evaluate(()=>{
+  const r=syncData.items.find(x=>x.ebay_item_id==='110001');
+  return { at:r.mark_at, due:syncMarkDue(r),
+    bar:getComputedStyle($('syncMarkBar')).display };
+});
 console.log('   '+JSON.stringify(post));
 ok(!!post.at&&post.due===false,'★書き出した日を記録し、次の3日はそこから数える');
 ok(post.bar==='none','★対象が無くなれば帯は消える');
 
 console.log('\n=== 最低売値で止まる ===');
+await p.click('#tabD');
 await setup();
 const stop=await p.evaluate(()=>{
-  const r=csvRowById('m1'), fl=csvFloorOf(r);
+  const r=syncData.items[0], fl=syncFloorOf(r).v;
   // 下限のすぐ上（$0.40 上）にして、1回で下限に着くか見る
-  syncData.items[0].ebay_price=Math.round((fl+0.4)*100)/100;
+  r.ebay_price=Math.round((fl+0.4)*100)/100;
   csvRender();
-  return { fl:fl, live:csvLivePrice(r), next:csvMarkNext(r), left:csvMarkLeft(r) };
+  return { fl:fl, live:+r.ebay_price, next:syncMarkNext(r), left:syncMarkLeft(r) };
 });
 console.log('   '+JSON.stringify(stop));
 ok(stop.next===stop.fl,'★1回の下げ幅より下限が近いときは下限で止める');
 ok(stop.left===1,'あと1回と出す');
 const stopped=await p.evaluate(()=>{
-  const r=csvRowById('m1'), fl=csvFloorOf(r);
-  syncData.items[0].ebay_price=fl;        // ちょうど下限
+  const r=syncData.items[0];
+  r.ebay_price=syncFloorOf(r).v;        // ちょうど下限
   csvRender();
-  return { why:csvMarkSkip(r), due:csvMarkDue(r),
+  return { why:syncMarkSkip(r), due:syncMarkDue(r),
     row:(Array.from(document.querySelectorAll('#csvList > div'))
-      .map(d=>d.innerText).find(x=>x.indexOf('商品m1')>=0)||'') };
+      .map(d=>d.textContent).find(x=>x.indexOf('商品m1')>=0)||'') };
 });
 console.log('   '+JSON.stringify({why:stopped.why,due:stopped.due}));
 ok(stopped.why==='最低売値に着いています'&&stopped.due===false,
@@ -249,9 +266,9 @@ await setup();
 const cfg=await p.evaluate(()=>{
   $('csvMarkDays').value='7'; $('csvMarkDays').dispatchEvent(new Event('input'));
   $('csvMarkStep').value='2.5'; $('csvMarkStep').dispatchEvent(new Event('input'));
-  const r=csvRowById('m1');
-  return { days:csvMarkDays(), step:csvMarkStep(), due:csvMarkDue(r),
-    next:Math.round((csvLivePrice(r)-csvMarkNext(r))*100)/100 };
+  const r=syncData.items[0];
+  return { days:csvMarkDays(), step:csvMarkStep(), due:syncMarkDue(r),
+    next:Math.round(((+r.ebay_price||0)-syncMarkNext(r))*100)/100 };
 });
 console.log('   '+JSON.stringify(cfg));
 ok(cfg.days===7&&cfg.step===2.5,'★設定を読む');
