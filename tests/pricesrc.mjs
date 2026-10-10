@@ -81,17 +81,57 @@ ok(it.weight_g===520&&it.cost_yen===3000&&Math.abs(it.sold_usd-88.5)<0.001,
    '★pj_price が読めるように一覧に入れて返す');
 ok('mark_at' in it&&'mark_stop' in it,'★値下げの記録も返す');
 
+console.log('\n=== せどりすとSKU の仕入値を返す（D1 に仕入値が無い行のため）===');
+/* せどりすとSKU は 接頭辞-仕入日-状態コード-ASIN-仕入原価。
+   末尾の数字が仕入値（game-20261006-UA-B0DX747PD2-4030 → 4030円）。 */
+async function sku(seller){
+  await asJson(await worker.fetch(post('/listings',{items:[
+    { sku:seller, custom_label:'E-'+seller.split('-')[3]+'-U' }]}),env));
+}
+await seed('B0SKU00001',{ebay_sku:'E-B0SKU00001-U'});
+await sku('game-20261006-UA-B0SKU00001-4030');
+await seed('B0SKU00002',{ebay_sku:'E-B0SKU00002-U'});
+await sku('game-20260901-UG-B0SKU00002-1200');
+await sku('game-20261006-UG-B0SKU00002-3500');   // 同じASINに2つ目（高いほう）
+await sku('game-20261007-UG-B0SKU00002-2000');
+st=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
+const s1=st.items.find((x)=>x.asin==='B0SKU00001');
+const s2=st.items.find((x)=>x.asin==='B0SKU00002');
+console.log('   1つだけ: '+JSON.stringify({sku_cost:s1.sku_cost,cost_yen:s1.cost_yen}));
+console.log('   3つある: '+JSON.stringify({sku_cost:s2.sku_cost}));
+ok(s1.sku_cost===4030,'★SKU の末尾の数字を仕入値として返す');
+ok(s1.cost_yen===null,'D1 の仕入値（cost_yen）とは別に返す');
+ok(s2.sku_cost===3500,'★同じASINに複数あるときはいちばん高い仕入値');
+// 状態区分が違う個体は混ぜない
+await seed('B0SKU00003',{ebay_sku:'E-B0SKU00003'});
+await env.DB.prepare(`UPDATE items SET cond='new' WHERE asin='B0SKU00003'`).run();
+await sku('game-20261006-UG-B0SKU00003-9000');   // こちらは中古の個体
+st=(await asJson(await worker.fetch(get('/status?limit=50&scope=all'),env))).body;
+const s3=st.items.find((x)=>x.asin==='B0SKU00003');
+console.log('   区分ちがい: '+JSON.stringify({cond:s3.cond,sku_cost:s3.sku_cost}));
+ok(s3.cond==='new'&&!s3.sku_cost,'★新品の出品に中古の個体の仕入値は使わない');
+// カートリッジのみ（cart）の出品は、中古の個体の仕入値も見る
+await env.DB.prepare(`INSERT INTO items (asin,cond,scope,title,ebay_sku,ebay_item_id,
+  ebay_qty,ebay_price,ebay_seen_at,updated_at)
+  VALUES ('B0SKU00002','cart','ebay','カートのみ','E-B0SKU00002-C','110999',1,30,?1,?1)`)
+  .bind(now).run();
+st=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
+const sc=st.items.find((x)=>x.asin==='B0SKU00002'&&x.cond==='cart');
+console.log('   カートのみ: '+JSON.stringify({sku_cost:sc.sku_cost}));
+ok(sc.sku_cost===3500,'★カートリッジのみは中古の個体の仕入値を使う（安全側）');
+
 console.log('\n=== 一覧の上限と、切れたかどうか ===');
+const all=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body.rows_total;
 st=(await asJson(await worker.fetch(get('/status?limit=2'),env))).body;
 console.log('   '+JSON.stringify({limit:st.limit,ret:st.rows_returned,
-  total:st.rows_total,cut:st.truncated}));
+  total:st.rows_total,cut:st.truncated})+'（全部で'+all+'件）');
 ok(st.limit===2&&st.rows_returned===2,'★上限どおりの件数を返す');
-ok(st.rows_total===3,'★全部で何件あるかを返す');
+ok(st.rows_total===all&&all>2,'★全部で何件あるかを返す');
 ok(st.truncated===true,'★上限で切れたことを知らせる');
 st=(await asJson(await worker.fetch(get('/status?limit=50'),env))).body;
 console.log('   '+JSON.stringify({limit:st.limit,ret:st.rows_returned,
   total:st.rows_total,cut:st.truncated}));
-ok(st.rows_returned===3&&st.rows_total===3&&st.truncated===false,
+ok(st.rows_returned===all&&st.rows_total===all&&st.truncated===false,
    '★切れていなければ truncated は立たない');
 st=(await asJson(await worker.fetch(get('/status?limit=99999'),env))).body;
 console.log('   上限の指定: limit='+st.limit);

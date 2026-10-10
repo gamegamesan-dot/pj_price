@@ -2018,7 +2018,17 @@ async function statusBody(env, url) {
         AS ebay_sold_at,
       -- せどりすとSKUの接頭辞（game / hobby / toy …）。既定重量の振り分けに使う
       (SELECT s.prefix FROM skus s
-        WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix
+        WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix,
+      /* せどりすとSKU の末尾の仕入値（game-20261006-UA-B0DX747PD2-4030 → 4030）。
+         D1 に仕入値（cost_yen）が無い行の値付けの基準に使う。
+         同じASIN・同じ区分に複数の個体があるときは **いちばん高い仕入値**
+         （安いほうで出すと赤字になりうるため）。
+         カートリッジのみ（cond='cart'）の出品は、個体のSKUが中古（used）なので
+         そちらも見る（箱付き中古の仕入値は cart より高く出るので安全側）。 */
+      (SELECT MAX(s3.cost) FROM skus s3
+        WHERE s3.asin=items.asin AND s3.cost>0
+          AND (s3.cond=items.cond OR (items.cond='cart' AND s3.cond='used')))
+        AS sku_cost
     FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;

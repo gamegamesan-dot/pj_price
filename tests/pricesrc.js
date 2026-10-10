@@ -185,6 +185,83 @@ console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(L.length===4&&/一点物/.test(dlg[0]||''),
    '★出品リストが空でも最低売値CSVが出る（一点物は外す）');
 
+console.log('\n=== D1 に仕入値が無いときは せどりすとSKU の仕入値を使う ===');
+await setup();
+const skuc=await p.evaluate(()=>{
+  /* 出品リストを空にし、D1 の仕入値も無い状態。
+     Worker が返す sku_cost（せどりすとSKU の末尾の数字）だけがある。 */
+  syncData.items.forEach((r,i)=>{ r.weight_g=(i===1)?150:520; delete r.cost_yen;
+    r.amazon_lowest=2500; r.amazon_offers_json=JSON.stringify([{p:2500,c:'good'}]); });
+  syncData.items[0].sku_cost=4030;
+  syncData.items[1].sku_cost=1200;
+  csvList=[]; csvSaveList(); csvRender(); syncRender();
+  // 新しい仕入値での最低売値より少し上に売値を置く（値下げの対象にする）
+  syncData.items.forEach(r=>{ r.ebay_price=Math.round((syncFloorOf(r).v+3)*100)/100; });
+  csvRender(); syncRender();
+  const r0=syncData.items[0], r2=syncData.items[2];
+  return { c0:syncCostOf(r0), c2:syncCostOf(r2),
+    from0:syncFloorOf(r0).from, name:syncFromName('sku'),
+    rec:syncRecCost(r0)&&syncRecCost(r0).cost,
+    // SKU も無い行は Amazon 最安値で代用する
+    from2:syncFloorOf(r2).from,
+    row:(Array.from(document.querySelectorAll('#syncList > div'))
+      .map(d=>d.textContent).find(x=>x.indexOf('B0SRC000001')>=0)||'') };
+});
+console.log('   '+JSON.stringify({c0:skuc.c0,c2:skuc.c2,from0:skuc.from0,from2:skuc.from2}));
+ok(skuc.c0.v===4030&&skuc.c0.from==='sku',
+   '★SKU の末尾の仕入値（4,030円）を使う');
+ok(skuc.rec===4030,'★推奨売値・最低売値もその仕入値で出す');
+ok(skuc.from0==='sku'&&skuc.from2==='amazon',
+   '★SKU からも取れない行だけ Amazon 最安値で代用する');
+ok(/仕入値 ¥4,030（せどりすとSKU）/.test(skuc.row)
+   ||/仕入値 ￥4,030（せどりすとSKU）/.test(skuc.row)
+   ||/4,030.*せどりすとSKU/.test(skuc.row),'★一覧に出どころを出す');
+// 確認の文に、仕入値の出どころごとの件数を分けて出す
+const brk=await p.evaluate(()=>{
+  const n=syncCostBreak(syncData.items);
+  return { n:n, t:syncCostBreakText(n) };
+});
+console.log('   内訳: '+JSON.stringify(brk.n)+' / '+JSON.stringify(brk.t));
+ok(brk.n.sku===2&&brk.n.amazon===1&&brk.n.d1===0,
+   '★SKUから読めた行と、Amazonで代用する行を分けて数える');
+ok(/せどりすとSKUの仕入値 2件／Amazon最安値で代用 1件/.test(brk.t),
+   '★「せどりすとSKUの仕入値 n件／Amazon最安値で代用 n件」と出す');
+dlg.length=0; dl.length=0;
+await p.click('#tabE');
+await p.click('#syncMarkRun'); await p.waitForTimeout(500);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+ok(/せどりすとSKUの仕入値 2件/.test(dlg[0]||''),
+   '★「せどりすとSKUの仕入値 n件」と出す');
+// 一度読めた仕入値は D1（cost_yen）に残す
+const saved=await p.evaluate(()=>({
+  cost:syncData.items[0].cost_yen,
+  from:syncCostOf(syncData.items[0]).from,
+  note:$('syncMarkNote').textContent }));
+console.log('   '+JSON.stringify(saved));
+ok(saved.cost===4030&&saved.from==='d1',
+   '★読めた仕入値は D1 に残し、次からは「保存済み」になる');
+ok(/せどりすとSKUから読んだ仕入値 2件/.test(saved.note),'★何件残したかを出す');
+
+console.log('\n=== 再調達中・無在庫は必ず Amazon最安値を仕入値とみなす ===');
+const rst=await p.evaluate(()=>{
+  const r=syncData.items[1];
+  r.cost_yen=1200; r.sku_cost=1200;
+  r.amazon_lowest=2500; r.amazon_offers_json=JSON.stringify([{p:2500,c:'good'}]);
+  syncRender();
+  const a=syncCostOf(r).from;
+  r.restocking=1; syncRender();
+  const b=syncCostOf(r).from, bf=syncFloorOf(r).from;
+  r.restocking=0; r.dropship=1; syncRender();
+  const c=syncCostOf(r).from;
+  r.dropship=0; syncRender();
+  return { normal:a, restocking:b, floor:bf, drop:c };
+});
+console.log('   '+JSON.stringify(rst));
+ok(rst.normal==='d1','ふだんは保存済みの仕入値を使う');
+ok(rst.restocking===''&&rst.floor==='amazon',
+   '★再調達中はもとの仕入値を使わず、いまのAmazon最安値から最低売値を出す');
+ok(rst.drop==='','★無在庫も同じ（売れてから仕入れるため）');
+
 console.log('\n=== 「値下げしない」の印は D1 に置く ===');
 await setup();
 await p.click('#tabE');

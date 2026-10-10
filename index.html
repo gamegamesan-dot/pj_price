@@ -7074,11 +7074,21 @@ function syncWeightOf(r){
   if(+r.weight_g>0)return { v:+r.weight_g, from:'d1' };
   return { v:syncDefWeight(r), from:'def' };
 }
-/* 仕入値（円・手直し後）。分からない行は 0（Amazon最安値を仕入値とみなすほうに回す）。 */
+/* 仕入値（円・手直し後）。次の順に使う。
+     list … 出品リストの同じ行
+     d1   … D1 に残した仕入値（cost_yen）
+     sku  … せどりすとSKU の末尾の仕入値（Worker が sku_cost で返す。
+             同じASIN・同じ区分に複数あるときはいちばん高い値）
+   どれも無い行は 0（Amazon最安値を仕入値とみなすほうに回す）。 */
 function syncCostOf(r){
+  /* 再調達中・無在庫の行は、売れてから Amazon で仕入れ直す。
+     もとの仕入値（手元にあったときの値）で下限を出すと、いまの最安値が上がって
+     いたときに赤字になる。これらの行は必ず Amazon最安値を仕入値とみなす。 */
+  if(Number(r.restocking||0)||syncIsDropship(r))return { v:0, from:'' };
   var row=syncCsvRowFor(r);
   if(row&&+row.cost>0)return { v:+row.cost, from:'list' };
   if(+r.cost_yen>0)return { v:+r.cost_yen, from:'d1' };
+  if(+r.sku_cost>0)return { v:Math.round(+r.sku_cost), from:'sku' };
   return { v:0, from:'' };
 }
 // 一覧に出す重量の出どころ。「520g（実測）」「150g（既定）」
@@ -7122,7 +7132,52 @@ function syncFloorOf(r){
 }
 // 仕入値の出どころの言い方（確認の文と一覧に出す）
 function syncFromName(from){
-  return from==='list'?'出品リスト':from==='d1'?'保存済み':from==='amazon'?'Amazon最安値':'';
+  return from==='list'?'出品リスト':from==='d1'?'保存済み'
+    :from==='sku'?'せどりすとSKU':from==='amazon'?'Amazon最安値':'';
+}
+/* 仕入値の出どころごとの件数。確認の文に出す（どの行が何を基準にしたか分かるように）。 */
+function syncCostBreak(rows){
+  var n={ list:0, d1:0, sku:0, amazon:0 };
+  (rows||[]).forEach(function(r){
+    var c=syncCostOf(r);
+    if(c.v>0)n[c.from]++; else n.amazon++;
+  });
+  return n;
+}
+function syncCostBreakText(n){
+  var t=[];
+  if(n.d1)t.push('保存済みの仕入値 '+n.d1+'件');
+  if(n.sku)t.push('せどりすとSKUの仕入値 '+n.sku+'件');
+  if(n.amazon)t.push('Amazon最安値で代用 '+n.amazon+'件');
+  return t.length?('うち '+t.join('／')+'。\n'):'';
+}
+/* せどりすとSKU から読めた仕入値を D1 に残す（次からは「保存済み」で出す）。
+   書き出しのときに呼ぶ。送れなければこの端末の表示だけ先に進める。 */
+function syncCostSave(rows,noteId){
+  var list=(rows||[]).filter(function(r){
+    return syncCostOf(r).from==='sku'; });
+  if(!list.length)return;
+  var items=list.map(function(r){
+    return { asin:r.asin, cond:r.cond, title:r.title||'',
+             cost_yen:Math.round(+r.sku_cost||0) };
+  });
+  list.forEach(function(r,i){ r.cost_yen=items[i].cost_yen; });
+  syncMemoClear(); syncSaveCache();
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey())return;
+  function step(i){
+    if(i>=items.length)return;
+    fetch(syncUrl()+'/listings',{method:'POST', keepalive:true,
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:items.slice(i,i+200)})})
+      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      ['catch'](function(e){
+        if(noteId&&$(noteId))$(noteId).textContent+='　（せどりすとSKUの仕入値を pj-sync に'
+          +'残せませんでした：'+e.message+'）';
+      })
+      .then(function(){ step(i+200); });
+  }
+  step(0);
 }
 // eBayの数量。取り込めていない行は null（0 とは区別する）
 function syncQtyOf(r){
@@ -7187,9 +7242,7 @@ function syncRevRun(){
   }
   var up=rows.filter(function(x){ return x.next>x.now; }).length;
   var dn=rows.filter(function(x){ return x.next<x.now; }).length;
-  var d1=rows.filter(function(x){
-    var rc=syncRecCost(x.r); return !!(rc&&rc.costFrom==='d1'); }).length;
-  var amz=rows.filter(function(x){ return !syncRecCost(x.r); }).length;
+  var br=syncCostBreak(rows.map(function(x){ return x.r; }));
   if(!confirm('価格更新CSVを書き出します。\n'
     +(picked.length?('選んだ '+picked.length+'件のうち '):'出品データ全体から ')
     +rows.length+'件（'+(changedOnly?'売値の見直しが要る行':'売値を計算できる行')+'）\n'
@@ -7197,8 +7250,7 @@ function syncRevRun(){
     +rows.slice(0,5).map(function(x){
         return '　・'+x.name+'：'+usd(x.now)+' → '+usd(x.next); }).join('\n')
     +(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
-    +(d1?('うち '+d1+'件は出品リストに行が無いので、D1に残した仕入値で計算しています。\n'):'')
-    +(amz?('うち '+amz+'件は仕入値が分からないので、Amazonの最安値から計算しています。\n'):'')
+    +syncCostBreakText(br)
     +'よろしいですか？'))return;
   var head=[CSV_ACT_COL,'ItemID','*StartPrice'];
   var out=[CSV_INFO,csvLine(head)];
@@ -7209,7 +7261,10 @@ function syncRevRun(){
   var ok2=csvDownload(name,out.join('\r\n')+'\r\n');
   $('syncPriceNote').textContent=(ok2?('書き出しました：'+name+'（'+rows.length+'件）')
     :'書き出しに失敗しました')
+    +(br.sku?('　せどりすとSKUから読んだ仕入値 '+br.sku+'件を pj-sync に残しました。'):'')
     +'　eBay にアップロードしてください。';
+  // せどりすとSKUから読めた仕入値は D1 に残す（次からは「保存済み」になる）
+  syncCostSave(rows.map(function(x){ return x.r; }),'syncPriceNote');
 }
 $('syncPriceCsv').onclick=syncRevRun;
 /* ---- 選んだ行を最低売値まで下げる ----
@@ -7235,14 +7290,12 @@ function syncFloorRun(){
       +skip.slice(0,8).map(function(x){ return '・'+x[0]+'：'+x[1]; }).join('\n'));
     return;
   }
-  var amz=go.filter(function(x){ return x.from==='amazon'; }).length;
-  var d1=go.filter(function(x){ return x.from==='d1'; }).length;
+  var brF=syncCostBreak(go.map(function(x){ return x.r; }));
   if(!confirm('選んだ '+rows.length+'件のうち '+go.length+'件を最低売値まで下げます。\n'
     +go.slice(0,5).map(function(x){
         return '　・'+x.name+'：'+usd(x.now)+' → '+usd(x.fl); }).join('\n')
     +(go.length>5?('\n　…ほか'+(go.length-5)+'件'):'')+'\n'
-    +(d1?('うち '+d1+'件は出品リストに行が無いので、D1に残した仕入値で計算しています。\n'):'')
-    +(amz?('うち '+amz+'件は仕入値が分からないので、Amazonの最安値から出しています。\n'):'')
+    +syncCostBreakText(brF)
     +(skip.length?('外す '+skip.length+'件：\n'
         +skip.slice(0,5).map(function(x){ return '　・'+x[0]+'：'+x[1]; }).join('\n')+'\n'):'')
     +'よろしいですか？'))return;
@@ -7254,9 +7307,11 @@ function syncFloorRun(){
   $('syncFloorNote').textContent=(ok2?('書き出しました：'+name+'（'+go.length+'件）')
     :'書き出しに失敗しました')
     +(skip.length?('　'+skip.length+'件は対象外です。'):'')
+    +(brF.sku?('　せどりすとSKUから読んだ仕入値 '+brF.sku+'件を pj-sync に残しました。'):'')
     +'　eBay にアップロードしてください。';
   /* 下限に着いた行は、次の3日ごとの値下げの対象から外す（記録は D1 に置く）。
      案内に書き足すので、上の textContent より後に呼ぶ。 */
+  syncCostSave(go.map(function(x){ return x.r; }),'syncFloorNote');
   syncMarkPost(go.map(function(x){ return x.r; }),new Date().toISOString(),'syncFloorNote');
 }
 $('syncFloorCsv').onclick=syncFloorRun;
@@ -7375,13 +7430,12 @@ function syncMarkRun(){
     return '　・'+(r.title||r.ebay_sku||r.asin)+'：'+usd(+r.ebay_price||0)
       +' → '+usd(syncMarkNext(r)); });
   var hit=rows.filter(function(r){ return syncMarkNext(r)<=syncFloorOf(r).v; }).length;
-  var amz=rows.filter(function(r){ return !syncRecCost(r); }).length;
+  var brM=syncCostBreak(rows);
   if(!confirm('値下げの Revise CSV を書き出します。\n'
     +rows.length+'件を '+usd(csvMarkStep())+' ずつ下げます。\n'
     +lines.join('\n')+(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
     +(hit?('うち '+hit+'件は最低売値に着きます（次からは対象外）。\n'):'')
-    +(amz?('うち '+amz+'件は仕入値が分からないので、Amazonの最安値から最低売値を'
-           +'出しています。\n'):'')
+    +syncCostBreakText(brM)
     +'よろしいですか？'))return;
   var head=[CSV_ACT_COL,'ItemID','*StartPrice'];
   var out=[CSV_INFO,csvLine(head)];
@@ -7393,8 +7447,10 @@ function syncMarkRun(){
   var ok2=csvDownload(name,out.join('\r\n')+'\r\n');
   $('syncMarkNote').textContent=(ok2?('書き出しました：'+name+'（'+rows.length+'件）')
     :'書き出しに失敗しました')
+    +(brM.sku?('　せどりすとSKUから読んだ仕入値 '+brM.sku+'件を pj-sync に残しました。'):'')
     +'　eBay にアップロードしてください。次の値下げは '+csvMarkDays()+'日後です。';
-  // 値下げした日の記録。案内に書き足すので、上の textContent より後に呼ぶ
+  // 値下げした日と、SKUから読めた仕入値の記録。案内に書き足すので最後に呼ぶ
+  syncCostSave(rows,'syncMarkNote');
   syncMarkPost(rows,at,'syncMarkNote');
 }
 $('syncMarkRun').onclick=syncMarkRun;
@@ -8761,7 +8817,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v126';   // sw.js の const V と必ず同じ値にする
+var APP_V='v127';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
