@@ -161,6 +161,18 @@ ok(stack.dup.indexOf('B0LOOSE001')<0,
 ok(/block/.test(stack.btn)&&/\+1するCSV/.test(stack.btn),
    '★+1するCSVのボタンが出る');
 
+console.log('\n=== ストック写真（カタログ画像）では出さない ===');
+const stock=await p.evaluate(()=>{
+  const fig=csvList.find(r=>r.asin==='B0LOOSE001');
+  const boxed=csvList.find(r=>r.asin==='B0LOOSE003');
+  const sp=csvNewSplit([fig.id,boxed.id]);
+  return { rows:sp.rows.map(r=>r.asin), nolow:sp.nolow.map(r=>r.asin),
+    nocat:sp.nocat.map(r=>r.asin) };
+});
+console.log('   '+JSON.stringify(stock));
+ok(stock.nolow.indexOf('B0LOOSE001')>=0&&stock.rows.indexOf('B0LOOSE001')<0,
+   '★箱なしの行はストック写真の出品に回さない（実物の写真だけで出す）');
+
 console.log('\n=== 既存の CSV の列や形式は変わらない ===');
 const head=await p.evaluate(()=>{
   const fig=csvList.find(r=>r.asin==='B0LOOSE001');

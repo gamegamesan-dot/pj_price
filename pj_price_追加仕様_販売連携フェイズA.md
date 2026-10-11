@@ -2849,7 +2849,7 @@ Worker（Node＋node:sqlite・pricesrc.mjs 34項目）
 ### 確認したこと
 
 ```
-出品CSVタブ（実ブラウザ・loose.js 36項目）
+出品CSVタブ（実ブラウザ・loose.js 37項目）
   「可」のフィギュア → E-<ASIN>-L・cond loose・Used(3000)・一点物オフ ✅
   英題の末尾に Loose No Box（80文字以内）✅ ConditionDescription に箱なし ✅
   出品文の3文（箱なし・封筒発送・付属品は写真のとおり）✅
@@ -2860,6 +2860,7 @@ Worker（Node＋node:sqlite・pricesrc.mjs 34項目）
   封筒用の配送ポリシー ✅ 箱付きの行は送料表・いつものポリシーのまま ✅
   同じASINの -L が出品中 → 新規出品ではなく「既存の出品に+1」✅
   重複の恐れには出さない ✅ +1するCSVのボタンが出る ✅
+  ストック写真（カタログ画像）の出品には回さない ✅
   CSVの1行目と列は今までどおり・箱なしの行があるときだけ末尾に
   ConditionDescription を足す ✅
   販売連携：Amazon基準 ¥9,719 → ¥7,775（×80%）✅ 箱付きは ¥9,719 のまま ✅
@@ -2870,7 +2871,7 @@ Worker（Node＋node:sqlite・loosew.mjs 32項目）
   /listings で -L と -U が別の行になる（PK は asin＋cond）✅
   ItemID・手元在庫・実重量・仕入値が -L の行に入る ✅
   -L は再調達の候補に入らない・箱付き中古は今までどおり入る ✅
-回帰：tests/ の30本・889項目すべて ❌なし・pageerror なし ✅
+回帰：tests/ の30本・890項目すべて ❌なし・pageerror なし ✅
 ```
 
 **7.36 は Worker のデプロイが必要（`-L` の解析のため）。D1 のマイグレーションは不要
