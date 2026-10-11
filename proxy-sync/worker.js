@@ -207,18 +207,21 @@ function parseSku(sku) {
    M-<ASIN> / M-<ASIN>-U / M-<ASIN>-C（無在庫）、
    せどりすとSKUそのまま（一点物）のいずれにも対応する。
    M- は E- と同じく照合し、あわせて無在庫の印を立てる。
-   -C は「カートリッジのみ」（箱・説明書なし）で、箱付き中古（-U）とは別物。
-   items の主キーは (asin, cond) なので cond='cart' として別の行になる。 */
+   -C は「カートリッジのみ」（箱・説明書なし）、-L は「フィギュアのみ」（箱なし）。
+   どちらも箱付き中古（-U）とは別物で、items の主キーは (asin, cond) なので
+   cond='cart' / 'loose' として別の行になる。どちらも手元から発送する。 */
 function parseLabel(label) {
   const s = String(label || "").trim();
-  let m = /^([EM])-(B[0-9A-Z]{9})(-U|-C)?$/i.exec(s);
+  let m = /^([EM])-(B[0-9A-Z]{9})(-U|-C|-L)?$/i.exec(s);
   if (m) {
     const drop = m[1].toUpperCase() === "M";
     const suf = String(m[3] || "").toUpperCase();
-    const cond = suf === "-C" ? "cart" : (suf === "-U" ? "used" : "new");
+    const cond = suf === "-C" ? "cart"
+               : suf === "-L" ? "loose"
+               : (suf === "-U" ? "used" : "new");
     return { ok: true, asin: m[2].toUpperCase(), cond,
              scope: "ebay", from: drop ? "dropship" : "stable", dropship: drop,
-             cart: cond === "cart" };
+             cart: cond === "cart" || cond === "loose" };
   }
   const p = parseSku(s);
   if (p.ok) return { ok: true, asin: p.asin, cond: p.cond, scope: p.scope, from: "sedori" };
@@ -1243,7 +1246,7 @@ async function syncOrders(env, run, days, maxItems) {
      orders に既にある (order_id, line_id) は数えない。 */
   const fresh = {};
   {
-    const pairs = soldE.filter((x) => x.cond === "cart")
+    const pairs = soldE.filter((x) => isCart(x))
       .map((x) => ({ o: x.orderId, l: x.line }));
     const known = {};
     for (let i = 0; i < pairs.length; i += 40) {
@@ -1257,7 +1260,7 @@ async function syncOrders(env, run, days, maxItems) {
       for (const x of (got && got.results) || []) known[x.order_id + "|" + x.line_id] = 1;
     }
     for (const x of soldE)
-      if (x.cond === "cart") fresh[x.orderId + "|" + x.line] = !known[x.orderId + "|" + x.line];
+      if (isCart(x)) fresh[x.orderId + "|" + x.line] = !known[x.orderId + "|" + x.line];
   }
   await runBatch(env, run, estmts);
 
@@ -1367,7 +1370,7 @@ async function syncOrders(env, run, days, maxItems) {
      手元の数をまだ送っていない行（NULL）は触らない。 */
   const cartDown = [];
   for (const s2 of soldE) {
-    if (s2.cond !== "cart") continue;
+    if (!isCart(s2)) continue;
     const n = Number(s2.qty || 0);
     if (!(n > 0) || !fresh[s2.orderId + "|" + s2.line]) continue;
     cartDown.push(env.DB.prepare(
@@ -1849,9 +1852,13 @@ function resWarn(r) {
   if (resUnknown(r)) return "予約済み（内訳不明）";
   return "";
 }
-/* カートリッジのみの行（CustomLabel が -C）。FBAには送らず手元から発送するので、
+/* 箱なしで手元から発送する行（CustomLabel が -C のカートリッジのみ、
+   -L のフィギュアのみ）。FBAには送らず手元から発送するので、
    FBAの在庫が無いのが正常。代わりに「eBayの数量＝手元にある数」かどうかを見張る。 */
-function isCart(r) { return String(r.cond || "") === "cart"; }
+function isCart(r) {
+  const c = String(r.cond || "");
+  return c === "cart" || c === "loose";
+}
 /* 手元の数とeBayの数量が合っているか。手元の数をまだ送っていない行は見ない。 */
 function cartMismatch(r) {
   if (!isCart(r)) return false;
@@ -2056,7 +2063,8 @@ async function statusBody(env, url) {
     where.push("(dropship=1 AND ebay_qty>=1)");
   if (p.get("state") === "restock")
     where.push("(ebay_qty>=1 AND fba_available=0 AND one_off=0 AND on_hand=0 AND dropship=0"
-      + " AND cond<>'cart' AND COALESCE(fba_inbound,0)=0 AND NOT " + SQL_RES_HOLD + ")");
+      + " AND cond NOT IN ('cart','loose') AND COALESCE(fba_inbound,0)=0"
+      + " AND NOT " + SQL_RES_HOLD + ")");
   if (p.get("state") === "past")
     where.push("(ebay_qty IS NULL AND fba_seen_at IS NOT NULL AND NOT " + SQL_IN_STOCK + ")");
   /* eBayでの販売実績（直近180日）。手元在庫の行を
@@ -2077,11 +2085,12 @@ async function statusBody(env, url) {
          D1 に仕入値（cost_yen）が無い行の値付けの基準に使う。
          同じASIN・同じ区分に複数の個体があるときは **いちばん高い仕入値**
          （安いほうで出すと赤字になりうるため）。
-         カートリッジのみ（cond='cart'）の出品は、個体のSKUが中古（used）なので
-         そちらも見る（箱付き中古の仕入値は cart より高く出るので安全側）。 */
+         箱なし（cond='cart' / 'loose'）の出品は、個体のSKUが中古（used）なので
+         そちらも見る（箱付き中古の仕入値のほうが高く出るので安全側）。 */
       (SELECT MAX(s3.cost) FROM skus s3
         WHERE s3.asin=items.asin AND s3.cost>0
-          AND (s3.cond=items.cond OR (items.cond='cart' AND s3.cond='used')))
+          AND (s3.cond=items.cond
+               OR (items.cond IN ('cart','loose') AND s3.cond='used')))
         AS sku_cost
     FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
@@ -2151,7 +2160,7 @@ async function statusBody(env, url) {
        -- （すでに再調達で出し直した行は切り替え済みなので候補から外す）
        (SELECT COUNT(*) FROM items WHERE scope='ebay' AND ebay_qty>=1
           AND fba_available=0 AND one_off=0 AND on_hand=0
-          AND restocking=0 AND dropship=0 AND cond<>'cart'
+          AND restocking=0 AND dropship=0 AND cond NOT IN ('cart','loose')
           AND COALESCE(fba_inbound,0)=0
           AND NOT ${SQL_RES_HOLD}) AS restock,
        -- 再調達中：再調達CSVで出し直して、まだeBayに出ている行
@@ -2287,16 +2296,16 @@ async function putListings(env, body) {
        （名簿では せどりすとSKU と CustomLabel の両方が送られてくる）。 */
     const lab = parseLabel(label);
     /* 個体（skus）のキーは せどりすとSKU のまま。
-       出品（items）のキーは、-C のときだけ CustomLabel を優先する。
+       出品（items）のキーは、-C／-L のときだけ CustomLabel を優先する。
        「可」の個体の せどりすとSKU は中古（used）だが、出品は
        カートリッジのみ（cart）の別物なので、SKUに合わせると箱付き中古の行に
        ItemID が付いてしまう。 */
     const kSku = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : null;
-    let k = (lab.ok && lab.cart) ? lab : (kSku || lab);
+    let k = (lab.ok && lab.cart) ? lab : (kSku || lab);   // lab.cart は -C と -L
     if ((!k || !k.asin) && /^B[0-9A-Z]{9}$/.test(String(x.asin || "").trim())) {
       const c0 = String(x.cond || "");
       k = { asin: String(x.asin).trim(),
-            cond: (c0 === "used" || c0 === "cart") ? c0 : "new",
+            cond: (c0 === "used" || c0 === "cart" || c0 === "loose") ? c0 : "new",
             scope: "" };     // scope は既存の値を尊重する（itemSeed が上書きしない）
     }
     if (!k || !k.asin) { bad++; continue; }

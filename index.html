@@ -448,6 +448,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="chk" id="prizeRow"><input type="checkbox" id="bPrize" checked><label for="bPrize" style="flex:1">プライズ品の注意書きを入れる</label></div>
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
       <div class="chk"><input type="checkbox" id="bCart"><label for="bCart" style="flex:1">カートリッジのみ（箱・説明書なし）の注記を入れる</label></div>
+      <div class="chk"><input type="checkbox" id="bLoose"><label for="bLoose" style="flex:1">フィギュアのみ（箱なし・封筒発送）の注記を入れる</label></div>
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
@@ -573,7 +574,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <!-- 対象の行があるときだけ出す（csvGroupsRender が出し入れする）。 -->
       <button class="btn" id="csvRevive2" style="width:100%;margin-top:8px;display:none">既存の出品を復活させるCSV</button>
       <div class="warn" id="csvReviveNote" style="display:none;margin-top:8px"></div>
-      <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px;display:none">カートリッジのみ：既存の出品に+1するCSV</button>
+      <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px;display:none">箱なしで出す行：既存の出品に+1するCSV</button>
       <div class="warn" id="csvCartNote" style="display:none;margin-top:8px"></div>
 
       <div class="note2" id="csvExportNote"></div>
@@ -967,6 +968,13 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="row"><label>既定重量（ゲーム）</label><input type="number" id="syncWeightGame" value="150" inputmode="numeric"><span class="unit">g</span></div>
       <div class="row"><label>既定重量（カートリッジのみ）</label><input type="number" id="csvWeightCart" value="50" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>既定重量（フィギュアのみ）</label><input type="number" id="csvWeightLoose" value="200" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">箱を外してプチプチで巻き、封筒で送る行の重量です（プチプチと封筒を含めた値）。せどりすとCSVに実重量が入っていればそちらを使い、<b>箱ぶんの梱包マージンは足しません</b>。</div>
+      <div class="row"><label>封筒の送料</label><input type="number" id="csvShipLoose" value="0" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">フィギュアのみ（箱なし）の行は、重量と地帯の送料表ではなく<b>この金額</b>で推奨売値・最低売値・損益分岐を出します。<b>0 のあいだは今までどおりの送料表</b>です。</div>
+      <div class="rowv"><label>封筒用の配送ポリシー名</label><input type="text" id="csvShipProfileLoose" placeholder="空なら今までのポリシー"><div class="note2" style="margin-top:2px">フィギュアのみの行をこのポリシーで出します。空のときは即発送／再調達用のこれまでの決まりで出します。</div></div>
+      <div class="row"><label>箱なしのAmazon基準</label><input type="number" id="csvLooseAmz" value="80" step="5" min="10" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">フィギュアのみの行は、Amazonの中古最安値（箱付き）をこの割合に割り引いて基準にします。手元の現物を売る行なので「Amazonの方が得」の下限は使いません。</div>
       <div class="note2" style="margin-top:0">箱・説明書なしで出す行の重量です。せどりすとCSVに実重量が入っていればそちらを使います。</div>
       <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
       <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
@@ -1540,6 +1548,14 @@ const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引�
    地帯ごとの前提と、売値Pに対する損益をここだけで決める。式を2か所に持たない。 */
 // targetOverride を渡すと、円式の目標利益だけを差し替えて同じ逆算を行う。
 // 省略時は従来どおり autoTarget()。既存の呼び出しは引数なしなので挙動は変わらない。
+/* 送料を固定額にするときの金額（円）。0 なら今までどおり重量と地帯の表で出す。
+   csvWithFlat() の中だけで立ち、終わったら必ず元に戻す。 */
+var PRICE_FLAT=0;
+function csvWithFlat(yen,fn){
+  var old=PRICE_FLAT;
+  PRICE_FLAT=+yen||0;
+  try{ return fn(); } finally{ PRICE_FLAT=old; }
+}
 function priceModel(targetOverride){
   var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0;
   var R=+$('fx').value||1,x=(+$('fxc').value||0)/100;
@@ -1553,7 +1569,12 @@ function priceModel(targetOverride){
 
   function zoneTax(z){ return z===USA_ZONE?((+$('usTaxRate').value||0)/100):(z===3?ZONE3_TAX/100:0); }
   function zoneShipCharge(z){ return SHIP_ZONES[z]?Gset:0; }
-  function zoneCost(z){ var fc=faceShip(w,z); return stamp?fc*STAMP_DISCOUNT:fc; }
+  /* 送料（こちらの実費）。PRICE_FLAT が入っているあいだは、重量と地帯の表を使わず
+     その額（円）で固定する。フィギュアのみ（箱なし）を封筒で送るときに使う。 */
+  function zoneCost(z){
+    if(PRICE_FLAT>0)return PRICE_FLAT;
+    var fc=faceShip(w,z); return stamp?fc*STAMP_DISCOUNT:fc;
+  }
   // 売値Pに対する係数。profit = P*den − rest（円）。
   // netUSD = (P+G)*u − (1+消費税)*固定手数料、入金は netUSD*R*(1−為替入金コスト)。
   function zoneCoef(z){
@@ -2009,7 +2030,9 @@ function cfgLineRender(){
   var csv=$('cfgLineCsv');
   if(csv)csv.innerHTML='設定：配送ポリシー '+esc(g('csvShipProfileRe'))+'（即発送 '
     +esc(g('csvShipProfile'))+'）　梱包マージン ゲーム'+esc(g('csvPackGame'))+'g・フィギュア'
-    +esc(g('csvPackFig'))+'g　ハンドリング'+esc(g('csvDispatch'))+'日'+btn;
+    +esc(g('csvPackFig'))+'g　ハンドリング'+esc(g('csvDispatch'))+'日'
+    +'　フィギュアのみ '+esc(g('csvWeightLoose'))+'g'
+    +(+g('csvShipLoose')>0?('・封筒 '+esc(g('csvShipLoose'))+'円'):'')+btn;
   var sy=$('cfgLineSync');
   if(sy)sy.innerHTML='設定：既定重量 ゲーム'+esc(g('syncWeightGame'))+'g・ホビー'
     +esc(g('syncWeight'))+'g　値下げ '+esc(g('csvMarkDays'))+'日ごとに$'
@@ -2328,7 +2351,9 @@ function buildArcadeTitle(){
    それ自体でフィギュアと分かるので、末尾の Figure より優先して残す。
    最後の手段で商品ラインを落とすときは、品目が分からなくならないよう Figure を戻す。
    Used は落とさない。 */
-function figTitleFrom(used, p){
+/* loose＝true のときは末尾に Loose No Box を入れる（箱なしで出すフィギュア）。
+   80文字に収まらないときは Loose だけにし、それでも収まらなければ既存の順で削る。 */
+function figTitleFrom(used, p, loose){
   if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale||p.itemName||p.item_name))
     return {text:'', dropped:[]};
   var st={brand:p.brand||'', series:p.series||'', chara:p.chara||'',
@@ -2339,6 +2364,7 @@ function figTitleFrom(used, p){
   // フィギュア以外は末尾の Figure を付けない
   var ty=p.itemType||p.item_type||'figure';
   var tail=(ty==='figure')?FIG_PTYPE:'', tail0=tail;
+  var lo=loose?CSV_LOOSE_TITLE:'';
   /* フィギュアに商品名は入れない。ただしキャラクター名も作品名も無いときは
      商品名が唯一の手がかりなので残す（超合金 CHOGOKIN ROBO 50 など）。 */
   if(ty==='figure'&&(st.chara||st.series))st.itemName='';
@@ -2360,9 +2386,13 @@ function figTitleFrom(used, p){
   }
   function join(){
     return [used?'Used':'', st.brand, st.series, st.chara, st.itemName,
-            st.variant, st.scale, st.line, tail].filter(Boolean).join(' ');
+            st.variant, st.scale, st.line, tail, lo].filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
+  // 箱なしの印は残す。長いときは「Loose No Box」→「Loose」に縮める
+  if(t.length>80&&lo===CSV_LOOSE_TITLE){
+    lo=CSV_LOOSE_TITLE_SHORT; dropped.push('箱なしの表記を短縮'); t=join();
+  }
   if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
   if(t.length>80&&cshort&&cshort!==st.chara){ st.chara=cshort; dropped.push('キャラクター名を短縮'); t=join(); }
   if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
@@ -2400,6 +2430,11 @@ function descHTML(){
      3DSのリージョン注記など、ほかの自動注記はそのまま後ろに続く。 */
   if($('bCart')&&$('bCart').checked){
     S+='<p style="margin:0 0 22px;font-weight:bold;">'+CSV_CART_DESC+'</p>';
+  }
+  /* フィギュアのみ（箱なし）も同じく最初に伝える。封筒で送ることと、
+     付属品は写真に写っているものがすべてであることも書く。 */
+  if($('bLoose')&&$('bLoose').checked){
+    S+='<p style="margin:0 0 22px;font-weight:bold;">'+CSV_LOOSE_DESC+'</p>';
   }
   S+=h2('Condition');
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
@@ -3207,8 +3242,52 @@ var CSV_CART_CONDS=[4000,5000,6000,7000];       // 行ごとに選べる状態
 var CSV_CART_TITLE='Cartridge Only';
 var CSV_CART_DESC='Cartridge only. No case or manual included.';
 var CSV_CART_CD='Cartridge only (no case/manual)';
+/* ---- フィギュアのみ（箱なし・-L）----
+   せどりすとで「可」として取り込んだフィギュアは、箱を外して本体だけで売る。
+   プチプチで巻いて封筒で送れるので、箱付きより送料をかなり抑えられる。
+   仕組みはカートリッジのみ（-C）と同じで、CustomLabel は E-<ASIN>-L、
+   D1 の cond は 'loose'。一点物にせず、同じASINの -L があれば数量を足す。 */
+var CSV_LOOSE_TITLE='Loose No Box';
+var CSV_LOOSE_TITLE_SHORT='Loose';              // 80文字に収まらないときはこちら
+var CSV_LOOSE_DESC='Figure only. The original box is NOT included. '
+  +'Shipped wrapped in bubble wrap in a padded envelope. '
+  +'All included accessories are shown in the photos.';
+var CSV_LOOSE_CD='Figure only (no box)';
+/* フィギュア側の状態は Used（3000）。ホビーのカテゴリは Acceptable（6000）を
+   受け付けないので、カートリッジのみ（Acceptable）とは別の値にしている。 */
+var CSV_LOOSE_COND=3000;
+var CSV_LOOSE_CONDS=[3000,7000];                // 行ごとに選べる状態
+// 箱なしで出す行の既定の状態（ゲーム＝Acceptable／フィギュア＝Used）
+function csvLooseCondOf(r){
+  return (csvLooseKind(r)==='loose')?CSV_LOOSE_COND:CSV_CART_COND;
+}
+// 行ごとに選べる状態の並び
+function csvLooseCondsOf(r){
+  return (csvLooseKind(r)==='loose')?CSV_LOOSE_CONDS:CSV_CART_CONDS;
+}
 // 「可」のゲームか（カートリッジのみの自動判定）
 function csvIsCartSrc(cat,code){ return cat==='139973'&&code==='UA'; }
+// 「可」のフィギュアか（フィギュアのみの自動判定。ゲーム以外＝hobby/toy 側）
+function csvIsLooseSrc(cat,code){ return cat!=='139973'&&code==='UA'; }
+/* 箱なしで出す行の種類。'cart'＝カートリッジのみ／'loose'＝フィギュアのみ／''＝箱付き。
+   どちらも「手元から発送する」「一点物にしない」「同じ出品に積み上げる」で同じ扱い。 */
+function csvLooseKind(r){ return r.cartOnly?'cart':(r.looseOnly?'loose':''); }
+function csvIsLoose(r){ return !!csvLooseKind(r); }
+// その行の CustomLabel の接尾辞
+function csvLooseSuffix(r){
+  var k=csvLooseKind(r);
+  return k==='cart'?'-C':k==='loose'?'-L':'';
+}
+// 行に出す呼び名
+function csvLooseName(r){
+  var k=csvLooseKind(r);
+  return k==='cart'?'カートリッジのみ':k==='loose'?'フィギュアのみ':'';
+}
+// その行の ConditionDescription（箱なしの行だけ）
+function csvLooseCD(r){
+  var k=csvLooseKind(r);
+  return k==='cart'?CSV_CART_CD:k==='loose'?CSV_LOOSE_CD:'';
+}
 /* ---- 商品名に機種が書いてあるゲームの行 ----
    せどりすとの接頭辞が game でない行（hobby / toy で取り込んだ行）は
    「カテゴリ未振分」になり、手で選び直す手間がかかっていた。
@@ -3260,10 +3339,13 @@ function csvCatApply(r,cat,manual){
   // ゲームとフィギュアで状態の表が違う。区分が変わった行だけ引き直す
   if(code&&wasGame!==g){
     r.cartOnly=g?csvIsCartSrc(now,code):false;
-    r.condId=r.cartOnly?CSV_CART_COND:((g?CSV_COND:CSV_COND_FIG)[code]||r.condId);
+    r.looseOnly=g?false:csvIsLooseSrc(now,code);
+    r.condId=csvIsLoose(r)?csvLooseCondOf(r)
+                          :((g?CSV_COND:CSV_COND_FIG)[code]||r.condId);
     r.condErr=false;
   }
   if(!g)r.cartOnly=false;                     // カートリッジのみはゲームだけの印
+  if(g)r.looseOnly=false;                     // フィギュアのみはフィギュア側だけの印
   var sp=r.specs=r.specs||{};
   // ゲームにしたら機種を商品名から拾う。拾えなければ行で選んでもらう
   if(g&&!String(sp.platform||'').trim())
@@ -3381,6 +3463,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
                  'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
                  'syncSoldCut','syncDropMax','syncLimit','csvWeightCart','csvSort',
+                 // フィギュアのみ（箱なし・封筒で送る）
+                 'csvWeightLoose','csvShipLoose','csvShipProfileLoose','csvLooseAmz',
                  'csvReviewAbs','csvReviewPct','amzFeeRate','amzFbaFee',
                  // 一覧の1ページの件数（タブごとに別）
                  'csvPerPage','syncPerPage',
@@ -3802,27 +3886,35 @@ function csvWithItem(cost,weight,fn){
    floor … 基準地帯の利益が「下限利益」（設定・既定1,000円）ちょうどになる売値
             ＝最低利益ライン。Best Offer の自動拒否ラインにも使っている
    be    … 基準地帯の利益が0になる売値 ＝ 損益分岐 */
-function csvPriceFor(cost,weight){
+function csvPriceFor(cost,weight,flat){
   return csvWithItem(cost,weight,function(){
-    var m=priceModel();
-    return { price:ceil2(m.pRec), floor:ceil2(m.floor),
-             be:ceil2(m.denB>0?(m.restB/m.denB):0), zone:m.basisZone,
-             profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
+    return csvWithFlat(flat,function(){
+      var m=priceModel();
+      return { price:ceil2(m.pRec), floor:ceil2(m.floor),
+               be:ceil2(m.denB>0?(m.restB/m.denB):0), zone:m.basisZone,
+               profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
+    });
   })||{price:0,floor:0,be:0,zone:0,profit:0};
 }
+/* 封筒で送る行（フィギュアのみ）の送料。⚙設定で入れる。0 なら今までの送料表。 */
+function csvShipLoose(){ var n=+$('csvShipLoose').value; return (isFinite(n)&&n>0)?n:0; }
+// その行の送料の出し方（フィギュアのみは封筒の固定額）
+function csvFlatOf(r){ return (r&&r.looseOnly)?csvShipLoose():0; }
 /* 目標の利益（円）をちょうど得られる eBay の売値（総額$）。
    地帯ごとに (利益＋rest)/den を出し、いちばん高い地帯（利益がいちばん薄い地帯）に
    合わせる。係数は priceModel のものをそのまま使う（式を2か所に持たない）。
    「Amazonで売ったときと同じ利益になる eBay の売値」を出すのに使う。 */
-function csvPriceForProfit(cost,weight,yen){
+function csvPriceForProfit(cost,weight,yen,flat){
   if(!(yen>0))return 0;
   return csvWithItem(cost,weight,function(){
-    var m=priceModel(), best=0;
-    ZONES.forEach(function(z){
-      var c=m.zoneCoef(z);
-      if(c.den>0)best=Math.max(best,(yen+c.rest)/c.den);
+    return csvWithFlat(flat,function(){
+      var m=priceModel(), best=0;
+      ZONES.forEach(function(z){
+        var c=m.zoneCoef(z);
+        if(c.den>0)best=Math.max(best,(yen+c.rest)/c.den);
+      });
+      return ceil2(best);
     });
-    return ceil2(best);
   })||0;
 }
 // 梱包マージンはeBayカテゴリ別。フィギュアは箱があるぶん重い。
@@ -3831,13 +3923,17 @@ function csvPackMarginFor(cat){
 }
 function csvWeightFor(r){
   var base=+r.wRaw||0;
+  /* フィギュアのみ（箱なし）は封筒で送るので、箱ぶんの梱包マージンは足さない。
+     既定値（⚙設定・初期値200g）はプチプチと封筒を含めた値として扱う。
+     実重量が入っていればそちらを優先する。 */
+  if(r.looseOnly)return Math.ceil(base||(+$('csvWeightLoose').value||200));
   /* カートリッジのみは箱がないので軽い。実重量が入っていればそれを使い、
      空のときだけ既定（設定「既定重量（カートリッジのみ）」・既定50g）を使う。 */
   if(!base&&r.cartOnly)base=+$('csvWeightCart').value||50;
   return Math.ceil(base+csvPackMarginFor(r.cat));
 }
 function csvRecalc(r){
-  var p=csvPriceFor(r.cost,r.weight);
+  var p=csvPriceFor(r.cost,r.weight,csvFlatOf(r));
   r.price=p.price; r.floor=p.floor; r.profit=p.profit; r.zone=p.zone;
   return r;
 }
@@ -3911,13 +4007,16 @@ function csvImport(text){
     if(!code&&(fig?CSV_COND_FIG:CSV_COND)[sp.cond])code=sp.cond;
     var condErr=!code;                                   // どちらでも判定できない
     var condId=condErr?0:(fig?CSV_COND_FIG:CSV_COND)[code];
-    /* 「可」のゲームはカートリッジのみ（箱・説明書なし）として出す。
-       状態は Acceptable（6000）。行のボタンでオン／オフを変えられる。 */
+    /* 「可」のゲームはカートリッジのみ（箱・説明書なし）、
+       「可」のフィギュアはフィギュアのみ（箱なし）として出す。
+       状態はどちらも Acceptable（6000）。行のボタンでオン／オフを変えられる。 */
     var cart=csvIsCartSrc(cat,code);
+    var loose=csvIsLooseSrc(cat,code);
     if(cart)condId=CSV_CART_COND;
+    if(loose)condId=CSV_LOOSE_COND;
     var asin=(iAsin>=0?String(r[iAsin]||'').trim():'')||sp.asin;
-    // カートリッジのみは箱付き中古とは別物なので、同じASINでもまとめない
-    var key=asin+'|'+condId+'|'+(cart?'C':'');
+    // 箱なしは箱付き中古とは別物なので、同じASINでもまとめない
+    var key=asin+'|'+condId+'|'+(cart?'C':loose?'L':'');
     var cost=iCost>=0?csvNum(r[iCost]):sp.cost;
     var qty=iQty>=0?(csvNum(r[iQty])||1):1;
     var wRaw=iW>=0?csvNum(r[iW]):0;
@@ -3937,9 +4036,9 @@ function csvImport(text){
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
-      // カートリッジのみは一点物にしない（ASINごとに1つの出品を使い続ける）
-      cartOnly:cart,
-      forceEbay:false, oneOff:cart?false:CSV_ONEOFF.test(title), pics:[],
+      // 箱なしは一点物にしない（ASINごとに1つの出品を使い続ける）
+      cartOnly:cart, looseOnly:loose,
+      forceEbay:false, oneOff:(cart||loose)?false:CSV_ONEOFF.test(title), pics:[],
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
@@ -4738,7 +4837,7 @@ function csvGroupsRender(){
   csvBtnHot('csvRevive2',rv>0,'既存の出品を復活させるCSV'+csvCountBadge(rv));
   // カートリッジのみで既存の出品に積み上げる行
   var ca=csvList.filter(function(r){ return !!csvCartStack(r); }).length;
-  csvBtnHot('csvCartAdd',ca>0,'カートリッジのみ：既存の出品に+1するCSV'+csvCountBadge(ca));
+  csvBtnHot('csvCartAdd',ca>0,CSV_STACK_BTN+csvCountBadge(ca));
   /* 復活・+1 は対象の行があるときだけ出す（ふだんは押せないボタンを並べない）。 */
   $('csvRevive2').style.display=rv?'block':'none';
   $('csvCartAdd').style.display=ca?'block':'none';
@@ -4941,15 +5040,18 @@ function csvRender(){
     h+=csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
-      /* カートリッジのみ（箱・説明書なし）。ゲームの行だけに出す。 */
+      /* 箱なしで出す印。ゲームは「カートリッジのみ」、フィギュアは「フィギュアのみ」。
+         どちらも箱付きに戻せる（箱の状態が良いものは箱付きで出すため）。 */
       +(r.cat==='139973'
         ? ('<button class="btn" data-cart="'+r.id+'" style="padding:5px 8px;font-size:12px'
            +(r.cartOnly?';background:#8a4f00;color:#fff;border-color:#8a4f00':'')
-           +'">カートリッジのみ：'+(r.cartOnly?'オン':'オフ')+'</button>'
-           +(r.cartOnly
-             ? ('<button class="btn" data-ccond="'+r.id+'" style="padding:5px 8px;font-size:12px">'
-                +'状態：'+esc(CSV_COND_NAME[r.condId]||String(r.condId))+'</button>')
-             : ''))
+           +'">カートリッジのみ：'+(r.cartOnly?'オン':'オフ')+'</button>')
+        : ('<button class="btn" data-loose="'+r.id+'" style="padding:5px 8px;font-size:12px'
+           +(r.looseOnly?';background:#8a4f00;color:#fff;border-color:#8a4f00':'')
+           +'">フィギュアのみ（箱なし）：'+(r.looseOnly?'オン':'オフ')+'</button>'))
+      +(csvIsLoose(r)
+        ? ('<button class="btn" data-ccond="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+           +'状態：'+esc(CSV_COND_NAME[r.condId]||String(r.condId))+'</button>')
         : '')
       /* 無在庫の行は CustomLabel が M- になり、配送ポリシーも W2000 側になる。
          見分けられるよう、オンのときは色を付ける。 */
@@ -5037,6 +5139,7 @@ $('csvList').addEventListener('click',function(e){
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
         ||t.getAttribute('data-drop')||t.getAttribute('data-cart')
+        ||t.getAttribute('data-loose')
         ||t.getAttribute('data-fast')||t.getAttribute('data-mstop')
         ||t.getAttribute('data-ccond')
         ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
@@ -5096,9 +5199,10 @@ $('csvList').addEventListener('click',function(e){
     if(String(fr.itemId||'').trim())fr.shipNeed=csvShipProfileFor(fr);
   }
   else if(t.hasAttribute('data-cart'))csvCartToggle(csvList[i]);
+  else if(t.hasAttribute('data-loose'))csvLooseToggle(csvList[i]);
   else if(t.hasAttribute('data-ccond')){
     // 行ごとに eBay の状態を変える（Very Good → Good → Acceptable → For parts）
-    var cs=CSV_CART_CONDS, ci=cs.indexOf(csvList[i].condId);
+    var cs=csvLooseCondsOf(csvList[i]), ci=cs.indexOf(csvList[i].condId);
     csvList[i].condId=cs[(ci+1)%cs.length];
     csvCartRefresh(csvList[i]);
   }
@@ -5534,23 +5638,31 @@ function csvEditPics(){
   $('csvEditPics').innerHTML=r?csvPicThumbs(r,'e'):'';
 }
 
-/* カートリッジのみの印を入れ替える。英題（末尾の Cartridge Only）と出品文、
-   状態、重量が連動するので、まとめて作り直す。 */
-function csvCartToggle(r){
-  r.cartOnly=!r.cartOnly;
-  if(r.cartOnly){
-    r.condId=CSV_CART_COND;        // 既定は Acceptable
+/* 箱なしの印を入れ替える（ゲーム＝カートリッジのみ／フィギュア＝フィギュアのみ）。
+   英題（末尾の Cartridge Only／Loose No Box）と出品文、状態、重量が連動するので、
+   まとめて作り直す。 */
+function csvCartToggle(r,field){
+  var k=field||'cartOnly';
+  r[k]=!r[k];
+  if(r[k]){
+    r.condId=csvLooseCondOf(r);    // ゲームは Acceptable、フィギュアは Used
     r.oneOff=false;                // ASINごとに1つの出品を使い続ける
   }else{
     // せどりすとの状態に戻す（取り込み時の表記／SKUの状態コードから引き直す）
     var code=CSV_COND_COL[String(r.condSrc||'')]||String(r.condSrc||'');
-    r.condId=CSV_COND[code]||r.condId;
+    var tbl=(k==='cartOnly')?CSV_COND:CSV_COND_FIG;
+    r.condId=tbl[code]||r.condId;
   }
   csvCartRefresh(r);
 }
+function csvLooseToggle(r){ csvCartToggle(r,'looseOnly'); }
 function csvCartRefresh(r){
   var name=(r.specs||{}).gameName||'';
   if(name)csvApplyName(r,name);          // 英題を作り直す（Cartridge Only の出し入れ）
+  // フィギュアは英題を作り直す（末尾の Loose No Box の出し入れ）
+  if(r.cat!=='139973'&&String(r.titleEn||'').trim())
+    try{ r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0,csvFigParts(r),
+                                !!r.looseOnly).text; }catch(e){}
   try{ r.descHtml=csvDescFor(r); }catch(e){}
   r.weight=r.wManual?r.weight:csvWeightFor(r);
   csvRecalc(r);
@@ -5573,8 +5685,11 @@ function csvCartSave(){
 }
 /* 行の状態区分。eBayの出品を突き合わせるときのキーの後半。
    新品 → 'new'／箱付き中古 → 'used'／カートリッジのみ → 'cart' */
+/* 「+1するCSV」のボタンの名前。カートリッジのみ・フィギュアのみの両方で使う。 */
+var CSV_STACK_BTN='箱なしで出す行：既存の出品に+1するCSV';
 function csvKindOf(r){
   if(r.cartOnly)return 'cart';
+  if(r.looseOnly)return 'loose';
   return (r.condId===1000)?'new':'used';
 }
 /* 同じASIN・同じ区分の eBay の出品（販売連携の取り込みから引く）。
@@ -5603,13 +5718,14 @@ function csvRevive(r){
 /* 重複の恐れ：同じASIN・同じ区分で数量1以上の出品がすでにある（カートリッジのみを除く）。
    カートリッジのみは同じ出品に積み上げるので、こちらでは扱わない。 */
 function csvDupListing(r){
-  if(r.cartOnly||String(r.itemId||'').trim())return null;
+  if(csvIsLoose(r)||String(r.itemId||'').trim())return null;
   var ex=csvSameListing(r);
   return (ex&&ex.qty>=1)?ex:null;
 }
 /* 復活後の CustomLabel。M- の出品は E- に変える（区分の印はそのまま）。 */
 function csvReviveLabel(r){
-  var suf=(csvKindOf(r)==='cart')?'-C':((csvKindOf(r)==='new')?'':'-U');
+  var k=csvKindOf(r);
+  var suf=(k==='cart')?'-C':(k==='loose')?'-L':((k==='new')?'':'-U');
   return 'E-'+r.asin+suf;
 }
 /* 同じASINの既存のカートリッジのみの出品。
@@ -5619,16 +5735,18 @@ function csvReviveLabel(r){
    数量が分からないときは qtyKnown:false にして、書き出し時に必ず取り直す。 */
 function csvCartExisting(r){
   var asin=String(r.asin||'').trim();
-  if(!asin||!r.cartOnly)return null;
+  var kind=csvLooseKind(r);
+  if(!asin||!kind)return null;
   var hit=null;
   ((syncData&&syncData.items)||[]).forEach(function(x){
-    if(String(x.asin)===asin&&String(x.cond)==='cart'&&String(x.ebay_item_id||'').trim())
+    if(String(x.asin)===asin&&String(x.cond)===kind&&String(x.ebay_item_id||'').trim())
       hit={ itemId:String(x.ebay_item_id), qty:Number(x.ebay_qty||0),
             price:+x.ebay_price||0, from:'sync', qtyKnown:true };
   });
   if(hit)return hit;
   csvList.forEach(function(x){
-    if(x.id!==r.id&&x.cartOnly&&String(x.asin)===asin&&String(x.itemId||'').trim())
+    if(x.id!==r.id&&csvLooseKind(x)===kind&&String(x.asin)===asin
+       &&String(x.itemId||'').trim())
       hit={ itemId:String(x.itemId), qty:0, price:+x.price||0, from:'list', qtyKnown:false };
   });
   if(hit)return hit;
@@ -5642,7 +5760,7 @@ function csvCartExisting(r){
    数量0の出品は「復活」に回す（写真を撮り直して全差し替えするため）。
    数量が残っているあいだは同じ個体のまとまりなので、写真はそのまま使い続ける。 */
 function csvCartStack(r){
-  if(!r.cartOnly||String(r.itemId||'').trim())return null;
+  if(!csvIsLoose(r)||String(r.itemId||'').trim())return null;
   var ex=csvCartExisting(r);
   if(!ex)return null;
   // pj-sync で数量が分からない行は、書き出し時に取り直す前提で積み上げの対象にする
@@ -5733,7 +5851,8 @@ function csvReviveHtml(r){
 }
 /* 行に出す積み上げの案内。 */
 function csvCartHtml(r){
-  if(!r.cartOnly)return '';
+  if(!csvIsLoose(r))return '';
+  var nm=csvLooseName(r);
   var ex=csvCartStack(r);
   var h='';
   if(ex){
@@ -5761,9 +5880,11 @@ function csvCartHtml(r){
   }else{
     h+='<div class="note2" style="margin-top:4px">'
       +'<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
-      +'padding:1px 5px;font-size:11px">カートリッジのみ</span>　'
+      +'padding:1px 5px;font-size:11px">'+esc(nm)+'</span>　'
       +'同じASINの出品が無いので新規出品（Add）で出します。'
-      +'カートリッジの表・裏など実物の写真を付けてください。</div>';
+      +(csvLooseKind(r)==='loose'
+        ? '箱は付けません。本体と付属品（台座・パーツ）の実物の写真を付けてください。'
+        : 'カートリッジの表・裏など実物の写真を付けてください。')+'</div>';
   }
   return h;
 }
@@ -5820,7 +5941,7 @@ function csvCartSendHand(list,qtyOf){
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:list.map(function(x){
       var r=x.r||x;
-      return { asin:r.asin, cond:'cart', title:r.titleJa||r.titleEn||'',
+      return { asin:r.asin, cond:csvKindOf(r), title:r.titleJa||r.titleEn||'',
                item_id:(x.ex&&x.ex.itemId)||r.itemId||'',
                custom_label:csvCustomLabel(r),
                hand_qty:qtyOf?qtyOf(x):Math.max(1,Number(r.qty||1)) };
@@ -5848,7 +5969,7 @@ function csvReviveSplit(ids){
 }
 function csvReviveHead(rows){
   var h=[CSV_ACT_COL,'ItemID','CustomLabel','*Title','*ConditionID'];
-  if(rows.some(function(x){ return !!x.r.cartOnly; }))h.push('ConditionDescription');
+  if(rows.some(function(x){ return csvIsLoose(x.r); }))h.push('ConditionDescription');
   h.push('*Description','PicURL','*Quantity');
   return h;
 }
@@ -5862,7 +5983,7 @@ function csvReviveBuild(rows){
     o['CustomLabel']=csvReviveLabel(r);      // M- は E- に変える
     o['*Title']=r.titleEn;
     o['*ConditionID']=r.condId;
-    if(r.cartOnly)o['ConditionDescription']=CSV_CART_CD;
+    if(csvIsLoose(r))o['ConditionDescription']=csvLooseCD(r);
     o['*Description']=r.descHtml;
     o['PicURL']=(r.pics||[]).map(function(y){ return y.url; }).join('|');
     o['*Quantity']=x.now+1;                  // 取り直した数量＋1
@@ -5951,7 +6072,7 @@ function csvReviveGo(d,q,box){
         var o={ asin:x.r.asin, cond:csvKindOf(x.r), title:x.r.titleJa||x.r.titleEn||'',
                 item_id:x.ex.itemId, custom_label:csvReviveLabel(x.r),
                 dropship:false, on_hand:true };
-        if(x.r.cartOnly)o.hand_qty=x.now+1;
+        if(csvIsLoose(x.r))o.hand_qty=x.now+1;
         return o;
       })})})
       ['catch'](function(){});
@@ -6007,7 +6128,7 @@ function csvCartAddRun(){
         +'<br>Revise の数量は上書きなので、いまの数量が分からないまま出すと売り越しになります。'
         +'もう一度試すか、Seller Hub で数量を確認してください。';
     })
-    .then(function(){ b.disabled=false; b.textContent='カートリッジのみ：既存の出品に+1するCSV'; });
+    .then(function(){ b.disabled=false; b.textContent=CSV_STACK_BTN; });
 }
 function csvCartAddGo(list,d,box){
   // 取り直した数量に差し替える（古い値は使わない）
@@ -6051,7 +6172,8 @@ function csvCartAddGo(list,d,box){
 function csvCustomLabel(r){
   /* カートリッジのみ（箱・説明書なし）は -C。箱付き中古（-U）とは別物として扱う。
      同じASINで -U と -C が並んで出ていてよい。 */
-  if(r.cartOnly&&r.asin)return (r.dropship?'M-':'E-')+r.asin+'-C';
+  /* 箱なし（カートリッジのみ -C ／ フィギュアのみ -L）は、箱付き中古とは別の出品。 */
+  if(csvIsLoose(r)&&r.asin)return (r.dropship?'M-':'E-')+r.asin+csvLooseSuffix(r);
   if(r.dropship&&r.asin)return 'M-'+r.asin+(r.condId===1000?'':'-U');
   if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
   return r.sku;
@@ -6064,7 +6186,11 @@ function csvCustomLabel(r){
    名簿で自動で付く「手元在庫」の印ではポリシーを変えない（手動専用の印）。 */
 function csvShipFast(){ return $('csvShipProfile').value||$('csvShipProfileRe').value; }
 function csvShipSlow(){ return $('csvShipProfileRe').value||$('csvShipProfile').value; }
+function csvShipLooseProfile(){ return String($('csvShipProfileLoose').value||'').trim(); }
 function csvShipProfileFor(r){
+  /* フィギュアのみ（箱なし）は封筒で送るので、専用のポリシーを使う。
+     ⚙設定が空のときは、これまでどおりのポリシーで出す。 */
+  if(r&&r.looseOnly&&csvShipLooseProfile())return csvShipLooseProfile();
   return (r&&r.fastShip)?csvShipFast():csvShipSlow();
 }
 /* 出品済みの行で、eBay に出ているポリシーを変える必要があるか。
@@ -6092,7 +6218,7 @@ function csvRowFor(r,raw){
   var o={};
   o['CustomLabel']=csvCustomLabel(r);
   // カートリッジのみは Condition Description にも書く（状態の説明として必ず出る）
-  if(r.cartOnly)o['ConditionDescription']=CSV_CART_CD;
+  if(csvIsLoose(r))o['ConditionDescription']=csvLooseCD(r);
   o['*Category']=r.cat;
   o['*Title']=r.titleEn;
   o['*ConditionID']=r.condId;
@@ -6166,7 +6292,7 @@ function csvBuild(cat,rows,action){
   var head=CSV_HEAD[csvCatTpl(cat)].split(',');
   /* カートリッジのみの行があるときだけ ConditionDescription の列を足す。
      ほかの書き出しの列は今までどおりにする。 */
-  if(rows.some(function(r){ return !!r.cartOnly; })&&head.indexOf('ConditionDescription')<0)
+  if(rows.some(function(r){ return csvIsLoose(r); })&&head.indexOf('ConditionDescription')<0)
     head.push('ConditionDescription');
   var act=head[0];                                  // *Action(...) の列名そのもの
   var out=[CSV_INFO,csvLine(head)];
@@ -6541,6 +6667,9 @@ function csvNewSplit(ids){
   (ids||[]).forEach(function(id){
     var r=csvRowById(id); if(!r)return;
     if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||''))){ nolow.push(r); return; }
+    /* フィギュアのみ（箱なし）は中古の現物なので、カタログ画像（ストック写真）では
+       出さない。実物の写真だけで出す。 */
+    if(r.looseOnly){ nolow.push(r); return; }
     if(!csvNewRec(r)){ nolow.push(r); return; }
     var c=csvNew.cat[r.id];
     if(!c){ nocat.push(r); return; }
@@ -6717,7 +6846,7 @@ function csvExportRun(ids){
   /* カートリッジのみの行は、出した時点で手元に1つある。手元在庫の数を pj-sync に送る
      （ItemIDはまだ無いので、CustomLabel の E-<ASIN>-C でキーを作ってもらう）。
      これを送らないと「数量と手元在庫が合いません」の見張りが働かない。 */
-  csvCartSendHand(rows.filter(function(r){ return !!r.cartOnly; }));
+  csvCartSendHand(rows.filter(function(r){ return csvIsLoose(r); }));
   /* 価格の元データ（実重量・仕入値・相場・一点物）も送る。これがあると、
      あとで出品リストを空にしても販売連携タブで見直し・値下げができる。 */
   csvSendPriceSrc(rows,'csvExportNote');
@@ -6750,13 +6879,15 @@ function csvResKey(h){ return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,'
    復活で M- を E- に変えて出したあとでも、同じ出品として結び付けるため
    （2026-10-06：-C の行の ItemID が記録されなかった原因）。 */
 function csvLabelKey(label){
-  var m=/^([EM])-(B[0-9A-Z]{9})(-U|-C)?$/i.exec(String(label||'').trim());
+  var m=/^([EM])-(B[0-9A-Z]{9})(-U|-C|-L)?$/i.exec(String(label||'').trim());
   if(!m)return null;
   var suf=String(m[3]||'').toUpperCase();
   return { asin:m[2].toUpperCase(),
-           kind:(suf==='-C')?'cart':((suf==='-U')?'used':'new') };
+           kind:(suf==='-C')?'cart':((suf==='-L')?'loose'
+                :((suf==='-U')?'used':'new')) };
 }
-var CSV_KIND_NAME={new:'新品',used:'箱付き中古',cart:'カートリッジのみ'};
+var CSV_KIND_NAME={new:'新品',used:'箱付き中古',cart:'カートリッジのみ',
+                   loose:'フィギュアのみ'};
 // 行がその CustomLabel の出品かどうか（書き出しと同じ規則で見る）
 function csvLabelHit(r,label){
   if(csvCustomLabel(r)===label)return true;        // 文字どおりの一致
@@ -6950,7 +7081,8 @@ function csvFigParts(r){
 }
 // 5項目からタイトルを組み立てて行へ書き戻す（フィギュア）
 function csvFigRebuild(r){
-  r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0, csvFigParts(r)).text;
+  r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0, csvFigParts(r),
+                         !!r.looseOnly).text;
 }
 /* 行の原産国が空なら設定の既定値で埋め、目印を立てる。
    一括生成・出品文の一括作成の両方から呼ぶ。埋めたら true を返す。 */
@@ -7299,7 +7431,7 @@ var CSV_DESC_FIELDS=['cat','brand','series','chara','variant','line','cond','ori
                      'gPlat','gPlatFree','gTitle','gPub','gCond',
                      'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aCond',
                      'extra','title'];
-var CSV_DESC_CHECKS=['bPrize','bJP','bCart'];
+var CSV_DESC_CHECKS=['bPrize','bJP','bCart','bLoose'];
 function csvDescFor(r){
   var save={}, savec={};
   CSV_DESC_FIELDS.forEach(function(id){ save[id]=$(id).value; });
@@ -7310,6 +7442,7 @@ function csvDescFor(r){
     $('cat').value=g?'game':'fig';
     // カートリッジのみの注記は行の印で決める（計算機のチェック状態は持ち込まない）
     $('bCart').checked=!!r.cartOnly;
+    $('bLoose').checked=!!r.looseOnly;
     if(g)$('gCond').value=csvCondToSel(r.condId,true);
     else $('cond').value=csvCondToSel(r.condId,false);
     if(g){
@@ -7433,6 +7566,8 @@ function syncCsvRowFor(r){
 function syncDefWeight(r){
   // カートリッジのみは箱がないぶん軽い
   if(String(r.cond||'')==='cart')return +$('csvWeightCart').value||50;
+  // フィギュアのみ（箱なし・封筒）。既定値は梱包込み
+  if(String(r.cond||'')==='loose')return +$('csvWeightLoose').value||200;
   var pf=String(r.prefix||'').toLowerCase();
   if(pf==='game')return +$('syncWeightGame').value||150;
   return +$('syncWeight').value||400;
@@ -7447,7 +7582,7 @@ function syncRecommendCalc(r){
   /* 重量は「出品リストの行 → D1 に残した実測 → 既定重量」の順（syncWeightOf）。
      出品リストを空にしても、D1 に実測が残っていればそれを使う。 */
   var wo=syncWeightOf(r);
-  var p=csvPriceFor(low, wo.v);
+  var p=csvPriceFor(low, wo.v, syncFlatOf(r));
   return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
            weight:wo.v, weightFrom:wo.from, weightDefault:(wo.from==='def') };
 }
@@ -7490,10 +7625,14 @@ function syncWeightNote(r){
 function syncRecCost(r){
   return syncMemoGet(r,'cost',function(){ return syncRecCostCalc(r); });
 }
+// 封筒で送る行（フィギュアのみ）は、送料を⚙設定の固定額で計算する
+function syncFlatOf(r){
+  return (String((r||{}).cond||'')==='loose')?csvShipLoose():0;
+}
 function syncRecCostCalc(r){
   var c=syncCostOf(r); if(!(c.v>0))return null;
   var w=syncWeightOf(r);
-  var p=csvPriceFor(c.v,w.v);
+  var p=csvPriceFor(c.v,w.v,syncFlatOf(r));
   if(!(p&&p.price>0))return null;
   return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
            cost:c.v, costFrom:c.from, weight:w.v, weightFrom:w.from,
@@ -7544,11 +7683,14 @@ function syncAmzLine(r){
 }
 function syncAmzLineCalc(r){
   if(syncEbayFirst(r))return null;              // この行は使わない
+  /* フィギュアのみ（箱なし）は手元にある現物を売る行で、Amazonでは箱付きとして
+     売れない。Amazon同等ライン（Amazonの方が得）は使わない。 */
+  if(String(r.cond||'')==='loose')return null;
   var p=syncAmzProfit(r);
   if(p===null)return null;
   var base=+$('baseProfit').value||0;
   if(p<=base)return null;                       // Amazonの利益が下限利益以下なら今までどおり
-  var v=csvPriceForProfit(syncCostOf(r).v,syncWeightOf(r).v,p);
+  var v=csvPriceForProfit(syncCostOf(r).v,syncWeightOf(r).v,p,syncFlatOf(r));
   return (v>0)?{ profit:p, price:v }:null;
 }
 /* 最低売値（下限利益のライン）。from … 'list'／'d1'／'sku'／'amazon'
@@ -8372,6 +8514,7 @@ function syncKeyOf(r){
   if(!asin)return '';
   // カートリッジのみ（-C）は箱付き中古（-U）とは別の行
   if(r.cartOnly)return asin+'|cart';
+  if(r.looseOnly)return asin+'|loose';
   return asin+'|'+((r.condId===1000)?'new':'used');
 }
 /* 出品してからの日数。出品開始日が取れていない行は null。 */
@@ -8474,10 +8617,18 @@ function syncBasisCalc(r){
     near=[];                      // 新品側の明細は持っていない（人数は newN で数える）
     skipped=false;                // 「可を除く」は中古の話なので、新品基準では出さない
   }
+  /* フィギュアのみ（箱なし）は、Amazonの中古（箱付き）と同じ値段では売れない。
+     ⚙設定の係数（既定80%）で割り引いた額を基準にする。 */
+  var looseCut=false;
+  if(String(r.cond||'')==='loose'&&low>0){
+    var k=+$('csvLooseAmz').value;
+    if(!isFinite(k)||k<=0||k>100)k=80;
+    low=Math.round(low*k/100); looseCut=true;
+  }
   return { low:low, lowAll:lowAll, list:list, near:near, tol:tol,
            skipped:skipped, hasList:all.length>0,
            useNew:useNew, usedLow:usedLow, newLow:nw,
-           newN:Number(r.amazon_new_n||0) };
+           newN:Number(r.amazon_new_n||0), looseCut:looseCut };
 }
 /* 最安値の見出しの文字列。「可」を除いたときは、その最安値の状態（良い など）と
    全体の最安値も添えて、何を基準にしているかが分かるようにする。 */
@@ -8486,7 +8637,10 @@ function syncLowLabel(r){
   if(!b.low)return 'Amazon最安値（'+(r.cond==='new'?'新品':'中古')+'） 未取得';
   // 新品のほうが安いときは、どちらを基準にしたかが分かるように出す
   if(b.useNew)return 'Amazon基準 '+yen(b.low)+'（新品の方が安い・中古 '
-    +(b.usedLow?yen(b.usedLow):'—')+'）';
+    +(b.usedLow?yen(b.usedLow):'—')+'）'
+    +(b.looseCut?('　箱なしのため '+($('csvLooseAmz').value||80)+'%'):'');
+  if(b.looseCut)return 'Amazon基準 '+yen(b.low)+'（箱なしのため最安値の '
+    +($('csvLooseAmz').value||80)+'%・中古 '+yen(b.usedLow)+'）';
   if(b.skipped){
     var nm=b.list.length?syncCondName(b.list[0].c):'';
     return '可を除く最安値 '+yen(b.low)+'（'+(nm?nm+'・':'')
@@ -9319,7 +9473,7 @@ function syncPushRun(done,quiet){
             on_hand:!!(onHandOn&&key&&!stocked[key]&&!drop) };
     /* カートリッジのみは手元から発送するので、手元にある数も送る
        （出品リストの数量をそのまま。eBayの数量と合っているかの見張りに使う）。 */
-    if(r.cartOnly)o.hand_qty=Math.max(1,Number(r.qty||1));
+    if(csvIsLoose(r))o.hand_qty=Math.max(1,Number(r.qty||1));
     /* 価格の元データ（実重量・仕入値・相場・値下げの記録）も一緒に送る。
        これがあると、出品リストを空にしても販売連携タブで値付けを動かせる。 */
     var ps=csvPriceSrcOf(r);
@@ -9739,7 +9893,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v134';   // sw.js の const V と必ず同じ値にする
+var APP_V='v135';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -2817,6 +2817,65 @@ Worker（Node＋node:sqlite・pricesrc.mjs 34項目）
 
 **7.35 は pj_price だけの変更（Worker・D1 の変更は無い）。**
 
+## 7.36 フィギュアのみ（箱なし・-L）を Worker でも扱う（2026-10-11・sw.js v135）
+
+せどりすとで「可」として取り込んだフィギュアを、箱を外して本体だけで出す
+（出品CSVタブ側は **6.38**）。カートリッジのみ（`-C`）と同じ「箱なしで出す行」として
+扱うので、Worker は `-L` を読めるようにするだけでよい。
+
+### Worker（`proxy-sync/worker.js`）
+
+- `parseLabel` が `E-<ASIN>-L` / `M-<ASIN>-L` を読み、`cond='loose'`・`cart=true` を返す。
+- `isCart(r)` は `cond` が `'cart'` と `'loose'` の両方で true
+  （箱なしで手元から発送する行。FBAの在庫が無いのが正常）。
+  これで次がまとめて `-L` にも効く。
+  - 一点物の見張り・在庫の突き合わせから外す（代わりに `hand_qty` と数量を見る）
+  - **再調達の候補にしない**（`cond NOT IN ('cart','loose')`。通知も同じ）
+  - 売れたときの手元在庫の引き算（`hand_qty`）に入れる
+- せどりすとSKU の仕入値（7.32）は、`-L` の行でも**箱付き中古（`-U`）の SKU** から引く
+  （`items.cond IN ('cart','loose') AND s3.cond='used'`）。
+- Amazon の最安値は中古を見る（`lowestKey` は `asin|used`。新品も一緒に取るので、
+  新品のほうが安ければ 7.33 の基準が効く）。
+- `/listings` は `cond` が `'used' / 'cart' / 'loose'` のときだけその値を入れる
+  （それ以外は `'new'`）。
+
+### pj_price（販売連携タブ）
+
+- 既定重量は `csvWeightLoose`（200g）、送料は `csvShipLoose`（封筒1通ぶん固定）。
+- Amazon基準価格は**中古最安値 × `csvLooseAmz`（初期80%）**。
+- **Amazon同等ライン（7.30）は `cond='loose'` では使わない**
+  （Amazonでは箱付きで売るので、箱なしの売値と比べる意味がない）。
+
+### 確認したこと
+
+```
+出品CSVタブ（実ブラウザ・loose.js 36項目）
+  「可」のフィギュア → E-<ASIN>-L・cond loose・Used(3000)・一点物オフ ✅
+  英題の末尾に Loose No Box（80文字以内）✅ ConditionDescription に箱なし ✅
+  出品文の3文（箱なし・封筒発送・付属品は写真のとおり）✅
+  「可」のゲームは今までどおり E-<ASIN>-C（Acceptable 6000）✅
+  「可」以外のフィギュアは E-<ASIN>-U ✅
+  箱付きに切り替えると E-<ASIN>-U・英題の Loose No Box も消える・重量も戻る ✅
+  既定重量 200g（梱包マージンを足さない）✅ 封筒の送料で推奨売値が下がる ✅
+  封筒用の配送ポリシー ✅ 箱付きの行は送料表・いつものポリシーのまま ✅
+  同じASINの -L が出品中 → 新規出品ではなく「既存の出品に+1」✅
+  重複の恐れには出さない ✅ +1するCSVのボタンが出る ✅
+  CSVの1行目と列は今までどおり・箱なしの行があるときだけ末尾に
+  ConditionDescription を足す ✅
+  販売連携：Amazon基準 ¥9,719 → ¥7,775（×80%）✅ 箱付きは ¥9,719 のまま ✅
+  同等ラインを使わない（最低売値も押し上げない）✅ 箱付きでは今までどおり出る ✅
+Worker（Node＋node:sqlite・loosew.mjs 32項目）
+  parseLabel が -L を loose として読む（M-・小文字も）✅ isCart が両方で true ✅
+  lowestKey は asin|used・中古と新品の両方を取る ✅
+  /listings で -L と -U が別の行になる（PK は asin＋cond）✅
+  ItemID・手元在庫・実重量・仕入値が -L の行に入る ✅
+  -L は再調達の候補に入らない・箱付き中古は今までどおり入る ✅
+回帰：tests/ の30本・889項目すべて ❌なし・pageerror なし ✅
+```
+
+**7.36 は Worker のデプロイが必要（`-L` の解析のため）。D1 のマイグレーションは不要
+（`cond` は TEXT なので `'loose'` をそのまま入れられる）。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。
