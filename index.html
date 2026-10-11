@@ -4717,7 +4717,7 @@ function csvStartHtml(r){
 function csvMarkHtml(r){
   if(!String(r.itemId||'').trim())return '';
   var x=csvSyncItem(r);
-  return x?syncMarkHtml(x):'';
+  return x?(syncMarkHtml(x)+syncMdRowHtml(x)):'';
 }
 /* 配送ポリシーを変える Revise CSV（即発送の印を切り替えた出品済みの行）。 */
 function csvShipRun(){
@@ -8176,6 +8176,8 @@ function syncMarkSkip(r){
   if(!String(r.ebay_item_id||'').trim())return '出品していません';
   if(Number(r.one_off||0))return '一点物';
   if(syncMarkStopOf(r))return '値下げしない';
+  // eBayのセール（Markdown Manager）が付いている出品は触らない（二重に下がる）
+  if(Number(r.ebay_sale||0))return 'eBayのセール中';
   if(syncIsDropship(r))return '無在庫';
   if(Number(r.restocking||0))return '再調達中';
   if(syncQtyOf(r)===0)return '数量0';
@@ -8234,30 +8236,37 @@ function syncMarkHtml(r){
 function syncMarkBarRender(){
   syncMdBarRender();
   var el=$('syncMarkBar'); if(!el)return;
-  var rows=syncMarkRows(), n=rows.length;
+  /* CSVで下げる行だけを数える。自動値下げがオン／予定だけ表示のときは、
+     自動値下げが拾う行は外す（押しても二重に下げないため）。 */
+  var auto=(autoMdMode()!=='off');
+  var rows=syncMarkCsvRows(), n=rows.length;
+  var nAll=syncMarkRows().length;
   el.style.display=n?'block':'none';
-  $('syncMarkRun').textContent=(autoMdOn()?'値下げCSVを書き出す（予備・':'値下げの時期です（')
-    +n+'件）';
-  $('syncMarkRun').className='btn'+(autoMdOn()?'':' primary');
+  $('syncMarkRun').textContent=(auto
+    ? ('自動値下げ中：CSVで下げると二重になります（'+n+'件）')
+    : ('値下げの時期です（'+n+'件）'));
+  $('syncMarkRun').className='btn'+(auto?'':' primary');
   if(n)$('syncMarkNote').innerHTML=csvMarkDays()+'日ごとに'
     +'（開始価格 − 最低売値）÷ '+csvMarkTimes()+'回 ずつ下げます（最低売値で止まります）。'
-    +(autoMdOn()
-      ? '<b>いまは自動値下げがオンです。</b>pj-sync が eBay を直接変えるので、'
-        +'このCSVは<b>予備</b>です（二重に下げないよう、ふだんは押さないでください）。'
+    +(auto
+      ? ('<b>自動値下げ中：CSVで下げると二重になります。</b>'
+         +'この'+n+'件は<b>自動値下げの対象外</b>（値下げ幅が未設定など）なので、'
+         +'CSVで下げられます。'
+         +(autoMdOn()?'':'いまは「予定だけ表示」なので、eBay はまだ変わっていません。'))
       : '押すと Revise CSV を書き出すので、eBay にアップロードしてください。');
   /* 価格の欄は畳んである。値下げの時期が来ていれば自動で開く
      （人が閉じたあとでも、次に作り直すときにまた開く＝見落とさないため）。 */
   var box=$('syncPriceBox');
   if(box){
-    if(n)box.open=true;
-    $('syncPriceSum').textContent='価格の操作'+(n?('　値下げの時期 '+n+'件'):'');
-    $('syncPriceSum').style.color=n?'var(--bad)':'';
-    $('syncPriceSum').style.fontWeight=n?'800':'';
+    if(nAll)box.open=true;
+    $('syncPriceSum').textContent='価格の操作'+(nAll?('　値下げの時期 '+nAll+'件'):'');
+    $('syncPriceSum').style.color=nAll?'var(--bad)':'';
+    $('syncPriceSum').style.fontWeight=nAll?'800':'';
   }
   // ⚙設定の「価格の見直しと値下げ」に出す件数
   var cfg=$('csvMarkCfgNote');
   if(cfg)cfg.textContent=syncData
-    ? ('いま値下げの時期の出品：'+n+'件　／　値下げ中の出品：'
+    ? ('いま値下げの時期の出品：'+nAll+'件　／　値下げ中の出品：'
        +((syncData&&syncData.items)||[]).filter(function(x){
            return String(x.ebay_item_id||'').trim()&&!syncMarkSkip(x); }).length+'件')
     : '販売連携タブで「状況を取り込む」を押すと、値下げの時期の件数が出ます。';
@@ -8288,14 +8297,18 @@ function syncTodoRender(){
 $('syncTodo').addEventListener('click',function(e){
   var t=e.target; while(t&&t!==this&&!t.getAttribute('data-todo'))t=t.parentNode;
   if(!t||t===this)return;
-  var v=t.getAttribute('data-todo');
+  syncFilterSet(t.getAttribute('data-todo'));
+});
+/* 絞り込みを切り替えて、一覧を開いて先頭から見せる。
+   「今日やること」と「一覧で見る」から使う。 */
+function syncFilterSet(v){
   $('syncFilter').value=v;
   if($('syncFilter').value!==v)return;     // 選択肢がまだ無いときは何もしない
   $('syncListBox').open=true;
   syncPage=1; syncPickPrune();             // 1ページ目から。見えない行の選択は外す
   syncRender();
   $('syncListBox').scrollIntoView({block:'start'});
-});
+}
 /* 選んだ行の操作バー（画面の下に固定）。選んでいる行があるときだけ出す。 */
 function syncBarRender(){
   var el=$('syncBar'); if(!el)return;
@@ -8469,6 +8482,65 @@ function syncMdPlanOf(r){
   return { md_start:Math.round(now*100)/100, md_floor:Math.round(fl*100)/100,
            md_step:csvMdStepOf(now,fl), md_n:csvMarkTimes() };
 }
+/* 自動値下げが拾う行（pj-sync が選ぶのと同じ条件）。
+   値下げ幅（md_step）と下限（md_floor）が入っていて、とばす理由が無い行。
+   ⚙設定が「オフ」でも、どの行が対象になるかは分かるようにしてある。 */
+function syncMdTarget(r){
+  if(!(+r.md_step>0)||!(+r.md_floor>0))return false;
+  return !syncMarkSkip(r);
+}
+/* 次の自動値下げの日（ミリ秒）。一度も下げていない行・間隔が過ぎている行は
+   「今日（すぐ）」として 0 を返す。対象でない行は null。 */
+function syncMdDueAt(r){
+  if(!syncMdTarget(r))return null;
+  var at=Date.parse(syncMarkAtOf(r));
+  if(!isFinite(at))return 0;
+  var due=at+csvMarkDays()*86400000;
+  return (due<=Date.now())?0:due;
+}
+// 次の自動値下げの日の表示（「今日」または「10/15」）
+function syncMdDueText(r){
+  var due=syncMdDueAt(r);
+  if(due===null)return '';
+  if(!due)return '今日';
+  var d=new Date(due);
+  return (d.getMonth()+1)+'/'+d.getDate();
+}
+/* 自動値下げの予定の件数。「今日 ○件／3日以内 ○件」を出すために分けて数える
+   （3日以内は今日を含む）。 */
+function syncMdCount(){
+  var end=new Date(); end.setHours(23,59,59,999);
+  var e0=end.getTime(), e3=e0+3*86400000;
+  var n=0, today=0, soon=0;
+  ((syncData&&syncData.items)||[]).forEach(function(r){
+    var due=syncMdDueAt(r);
+    if(due===null)return;
+    n++;
+    if(due<=e0)today++;
+    if(due<=e3)soon++;
+  });
+  return { n:n, today:today, soon:soon };
+}
+/* 行に出す「次の自動値下げ」。日付・新しい売値・残り回数・下限を1行で出す。 */
+function syncMdRowHtml(r){
+  if(!syncMdTarget(r))return '';
+  var mode=autoMdMode();
+  return '<div class="note2" style="margin-top:4px">'
+    +'<span style="display:inline-block;background:#1f6f8a;color:#fff;border-radius:2px;'
+    +'padding:1px 5px;font-size:11px">次の自動値下げ</span>　'
+    +esc(syncMdDueText(r))+'　'+usd(+r.ebay_price||0)+' → <b>'+usd(syncMarkNext(r))+'</b>'
+    +'（あと'+syncMarkLeft(r)+'回・下限 '+usd(syncMdFloor(r))+'）'
+    +(mode==='off'?'　※自動値下げはオフです'
+      :(mode==='plan'?'　※予定だけ（eBayは変えません）':''))
+    +'</div>';
+}
+/* 値下げCSVで下げる行。自動値下げがオフなら今までどおり全部。
+   オン／予定だけ表示のときは、自動値下げが拾う行を外す（二重に下げないため）。 */
+function syncMarkCsvRows(){
+  var rows=syncMarkRows();
+  if(autoMdMode()==='off')return rows;
+  return rows.filter(function(r){ return !syncMdTarget(r); });
+}
 /* 値下げ幅を D1 に送る必要がある行。
    ・まだ幅が入っていない行（出品CSVを通さずに出した行・既存の出品）
    ・最低売値が変わって、保存した下限と離れた行（$0.01 以上の差）
@@ -8483,16 +8555,15 @@ function syncMdNeed(){
     return Math.abs((+r.md_floor||0)-p.md_floor)>=0.01;
   });
 }
-/* 次の自動値下げの予定。pj-sync が選ぶ行と同じ条件で、同じ順（古い順）に並べる。 */
+/* 次の自動値下げの予定。対象の行すべてを**次の自動値下げ日が近い順**に並べる
+   （pj-sync も mark_at の古い順に選ぶので、同じ並びになる）。 */
 function syncMdPlan(){
-  var rows=syncMarkRows().filter(function(r){ return +r.md_step>0&&+r.md_floor>0; });
-  // pj-sync は古い順（mark_at の昇順）に選ぶので、画面も同じ順にそろえる
-  rows.sort(function(a,b){
-    return String(a.mark_at||'').localeCompare(String(b.mark_at||'')); });
+  var rows=((syncData&&syncData.items)||[]).filter(syncMdTarget).slice();
+  rows.sort(function(a,b){ return (syncMdDueAt(a)||0)-(syncMdDueAt(b)||0); });
   return rows.map(function(r){
-    return { r:r, name:r.title||r.ebay_sku||r.asin,
+    return { r:r, name:r.title||r.ebay_sku||r.asin, due:syncMdDueText(r),
              now:+r.ebay_price||0, next:syncMarkNext(r),
-             floor:+r.md_floor||0, left:syncMarkLeft(r) };
+             floor:syncMdFloor(r), left:syncMarkLeft(r) };
   });
 }
 /* 自動値下げの帯。オフのときは出さない。 */
@@ -8506,13 +8577,15 @@ function syncMdBarRender(){
     : ((mode==='on'?'自動値下げはオンです。':'予定だけ表示しています（eBayは変えません）。')
        +'pj-sync が1日1回、'+csvMarkDays()+'日ごとに最大 '+autoMdMax()+'件まで動かします。');
   if(mode==='off')return;
-  var plan=syncMdPlan(), need=syncMdNeed();
+  var plan=syncMdPlan(), need=syncMdNeed(), cnt=syncMdCount();
   var last=(syncData&&syncData.md_last)||null;
   $('syncMdNote').innerHTML=
     '<b>'+(mode==='on'?'自動値下げ：オン':'自動値下げ：予定だけ表示')+'</b>　'
-    +'次の自動値下げ予定：'+plan.length+'件'
-    +(plan.length>autoMdMax()
-      ? ('（1日の上限 '+autoMdMax()+'件を超えるぶんは翌日に回ります）'):'')
+    +'次の自動値下げ予定：'+cnt.n+'件'
+    +'（今日 '+cnt.today+'件／3日以内 '+cnt.soon+'件）'
+    +(cnt.today>autoMdMax()
+      ? ('　1日の上限 '+autoMdMax()+'件を超えるぶんは翌日に回ります'):'')
+    +'　<a href="#" id="syncMdPick">一覧で見る</a>'
     +(mode==='plan'?'　<b>eBay は変えません</b>':'')
     +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
             +'・'+(last.mode==='on'?'オン':'予定')+'）：下げた '+Number(last.changed||0)
@@ -8521,7 +8594,7 @@ function syncMdBarRender(){
             +'</b>'):'');
   $('syncMdList').innerHTML=plan.length
     ? (plan.slice(0,10).map(function(x){
-        return '・'+esc(x.name)+'：'+usd(x.now)+' → <b>'+usd(x.next)+'</b>'
+        return '・'+esc(x.due)+'　'+esc(x.name)+'：'+usd(x.now)+' → <b>'+usd(x.next)+'</b>'
           +'（下限 '+usd(x.floor)+'・あと'+x.left+'回）'; }).join('<br>')
        +(plan.length>10?('<br>…ほか'+(plan.length-10)+'件'):''))
     : '値下げの時期になっている出品はありません。';
@@ -8579,19 +8652,37 @@ function syncMdSend(){
   step(0);
 }
 $('syncMdSend').onclick=syncMdSend;
+/* 「一覧で見る」＝絞り込みを「自動値下げの予定」にする（日付の近い順に並ぶ）。 */
+$('syncMdNote').addEventListener('click',function(e){
+  var t=e.target;
+  if(!t||t.id!=='syncMdPick')return;
+  e.preventDefault();
+  syncFilterSet('automd');
+});
 
 /* 値下げ用の Revise CSV。書き出した日を D1 に控え、次の間隔はそこから数える。 */
 function syncMarkRun(){
-  var rows=syncMarkRows();
-  if(!rows.length){ alert('値下げの時期になっている出品がありません。'); return; }
+  var rows=syncMarkCsvRows();
+  if(!rows.length){
+    alert((autoMdMode()!=='off')
+      ? ('CSVで下げる出品はありません。\n'
+         +'値下げの時期の行は自動値下げ（pj-sync）が下げます。')
+      : '値下げの時期になっている出品がありません。');
+    return;
+  }
   var lines=rows.slice(0,5).map(function(r){
     return '　・'+(r.title||r.ebay_sku||r.asin)+'：'+usd(+r.ebay_price||0)
       +' → '+usd(syncMarkNext(r)); });
   var hit=rows.filter(function(r){ return syncMarkNext(r)<=syncFloorOf(r).v; }).length;
   var brM=syncCostBreak(rows);
-  if(autoMdOn()&&!confirm('自動値下げがオンです。\n'
-    +'pj-sync が eBay を直接下げているので、このCSVを出すと'
-    +'**二重に下がる**ことがあります。\nそれでも書き出しますか？'))return;
+  /* 自動値下げがオンのときの念押し。対象の行はこのCSVから外してあるので
+     二重には下がらないが、オンであること自体を知らせる。 */
+  if(autoMdMode()!=='off'&&!confirm('自動値下げが'
+    +(autoMdOn()?'オン':'「予定だけ表示」')+'です。\n'
+    +'この'+rows.length+'件は自動値下げの対象外（値下げ幅が未設定など）なので、'
+    +'二重には下がりません。\n'
+    +'※自動値下げの対象の行をCSVで下げると二重になります。\n'
+    +'書き出しますか？'))return;
   if(!confirm('値下げの Revise CSV を書き出します。\n'
     +rows.length+'件を 1回ぶん（'+usd(syncMdStep(rows[0]))+' など）下げます。\n'
     +lines.join('\n')+(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
@@ -8815,6 +8906,10 @@ var SYNC_FILTERS=[
   /* 価格の操作。いま値下げの時期の出品と、売値の見直しが要る出品。 */
   { v:'markdown',       label:'値下げの時期',
     f:function(r){ return syncMarkDue(r); } },
+  /* 自動値下げ（pj-sync が eBay を直接下げる）の対象になっている出品。
+     この絞り込みのときだけ、次の自動値下げ日が近い順に並べ替える。 */
+  { v:'automd',         label:'自動値下げの予定',
+    f:function(r){ return syncMdTarget(r); } },
   { v:'review',         label:'売値の見直し',
     f:function(r){ return !!syncPriceReview(r); } }
 ];
@@ -9326,6 +9421,8 @@ function syncRowHtml(r,key){
         : '')
       +syncRevHtml(r)
       +syncMarkHtml(r)
+      /* 次の自動値下げ（日付・新しい売値・残り回数・下限） */
+      +syncMdRowHtml(r)
       /* 再調達中の行は、出し直したときの売値と、赤字にならない仕入値の上限を出す。
          いまの最安値がこの上限を超えたら「再調達で赤字」。 */
       +(syncIsRestocking(r)
@@ -9382,6 +9479,11 @@ function syncRender(){
       ? 'block' : 'none';
   var rows=(syncData&&syncData.items)||[], h='', shown=0;
   var keep=rows.filter(syncMatch);
+  /* 「自動値下げの予定」は日付の近い順（今日の行が先）。
+     ほかの絞り込みは取り込んだ順のまま。 */
+  if($('syncFilter').value==='automd')
+    keep=keep.slice().sort(function(a,b){
+      return (syncMdDueAt(a)||0)-(syncMdDueAt(b)||0); });
   shown=keep.length;
   var sPer=pagePer('syncPerPage');
   syncPage=pageClamp(syncPage,shown,sPer);
@@ -10156,7 +10258,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v136';   // sw.js の const V と必ず同じ値にする
+var APP_V='v137';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

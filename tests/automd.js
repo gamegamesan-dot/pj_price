@@ -210,20 +210,144 @@ ui=await p.evaluate(()=>({
     .map(d=>d.textContent).find(x=>/B0AMD000002/.test(x))||'') }));
 console.log('   オン: '+JSON.stringify({mark:ui.mark,cls:ui.cls}));
 console.log('   案内: '+ui.note.slice(0,120));
-ok(/予備/.test(ui.mark)&&!/primary/.test(ui.cls),
-   '★値下げCSVのボタンは「予備」にする（目立たせない）');
-ok(/自動値下げがオンです/.test(ui.note)&&/二重に下げない/.test(ui.note),
-   '★二重に下げないよう案内する');
+ok(/自動値下げ中：CSVで下げると二重になります/.test(ui.mark)&&!/primary/.test(ui.cls),
+   '★値下げCSVのボタンに「自動値下げ中」と出す（目立たせない）');
+ok(/自動値下げ中：CSVで下げると二重になります/.test(ui.note),
+   '★案内にも二重になることを書く');
 console.log('   行: '+ui.rowTxt.replace(/\s+/g,' ').slice(0,160));
 ok(/自動値下げ中/.test(ui.rowTxt),'★行には「自動値下げ中」と出す');
 ok(/\$2\.50 ずつ/.test(ui.rowTxt),'★その行の値下げ幅を出す');
 
+console.log('\n=== 絞り込み「自動値下げの予定」（日付の近い順）===');
+const planSetup=async(mode)=>await p.evaluate((m)=>{
+  $('autoMdMode').value=m; $('csvMarkDays').value='3'; $('csvMarkTimes').value='10';
+  const d=(n)=>new Date(Date.now()-n*86400000).toISOString();
+  const it=(asin,o)=>Object.assign({asin:asin,cond:'used',scope:'ebay',prefix:'game',
+    ebay_sku:'E-'+asin+'-U',ebay_item_id:'78'+asin.slice(-4),ebay_qty:1,
+    ebay_price:47.65,cost_yen:1200,weight_g:150,one_off:0,dropship:0,restocking:0,
+    mark_stop:0,ebay_first:1,ebay_sold_at:null,ebay_bo:1,ebay_sale:null,
+    md_step:1,md_start:57.65,md_floor:44.66,md_n:10,md_done:3,
+    amazon_lowest:3000,amazon_offers_json:JSON.stringify([{p:3000,c:'used'}]),
+    fba_available:1,fba_inbound:0,fba_reserved:0,warnings:[],notes:[],state:'ok'},o||{});
+  syncData={at:new Date().toISOString(),counts:{},md_last:null,items:[
+    // 今日が値下げの日（5日前に下げた）
+    it('B0PLAN00001',{mark_at:d(5)}),
+    // 明日（2日前に下げた＝3日後は明日）
+    it('B0PLAN00002',{mark_at:d(2)}),
+    // 3日後（今日下げた）
+    it('B0PLAN00003',{mark_at:d(0)}),
+    // 値下げ幅が未設定（自動値下げの対象外。CSVで下げる行）
+    it('B0PLAN00004',{mark_at:d(5),md_step:null,md_start:null,md_floor:null,md_n:null}),
+    // 値下げしない
+    it('B0PLAN00005',{mark_at:d(5),mark_stop:1}),
+    // eBayのセール中
+    it('B0PLAN00006',{mark_at:d(5),ebay_sale:1})]};
+  syncPick={}; syncPage=1;
+  switchTab('E'); syncRender();
+  const names=(v)=>SYNC_FILTERS.find(x=>x.v===v);
+  return { opt:Array.from($('syncFilter').options).map(o=>o.textContent),
+    target:syncData.items.filter(syncMdTarget).map(r=>r.asin),
+    count:syncMdCount(),
+    plan:syncMdPlan().map(x=>x.r.asin+':'+x.due+':'+x.now+'→'+x.next),
+    csvN:syncMarkCsvRows().length, allN:syncMarkRows().length,
+    has:!!names('automd') };
+},mode);
+let pl=await planSetup('on');
+console.log('   選択肢: '+JSON.stringify(pl.opt.filter(x=>/自動値下げ|値下げの時期/.test(x))));
+console.log('   対象: '+JSON.stringify(pl.target));
+console.log('   件数: '+JSON.stringify(pl.count));
+console.log('   予定: '+JSON.stringify(pl.plan));
+ok(pl.has&&pl.opt.some(x=>/^自動値下げの予定（3）$/.test(x)),
+   '★絞り込みに「自動値下げの予定（3件）」が出る');
+ok(pl.target.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003',
+   '★幅が未設定・値下げしない・セール中の行は対象にしない');
+ok(pl.count.n===3&&pl.count.today===1&&pl.count.soon===3,
+   '★今日 1件／3日以内 3件（3日以内は今日を含む）');
+const dd=(n)=>{ const d=new Date(Date.now()+n*86400000);
+  return (d.getMonth()+1)+'/'+d.getDate(); };
+ok(pl.plan[0].indexOf('B0PLAN00001:今日')===0,'★今日の行が先頭（「今日」と出す）');
+ok(pl.plan[1]==='B0PLAN00002:'+dd(1)+':47.65→46.65','★次は明日の行（'+dd(1)+'）');
+ok(pl.plan[2].indexOf('B0PLAN00003:'+dd(3))===0,'★そのあとに3日後の行');
+
+console.log('\n=== 一覧も日付の近い順に並ぶ ===');
+await p.evaluate(()=>{ syncFilterSet('automd'); });
+const order=await p.evaluate(()=>({
+  rows:Array.from(document.querySelectorAll('#syncList > div'))
+    .map(d=>(d.getAttribute('data-srow')||'').split('|')[0]),
+  txt:(Array.from(document.querySelectorAll('#syncList > div'))
+    .map(d=>d.textContent).find(x=>/B0PLAN00002/.test(x))||'')
+      .replace(/\s+/g,' ') }));
+console.log('   並び: '+JSON.stringify(order.rows));
+ok(order.rows.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003',
+   '★一覧も次の自動値下げ日が近い順');
+const line=(order.txt.match(/次の自動値下げ[^。]*/)||[''])[0];
+console.log('   行: '+line);
+ok(/次の自動値下げ/.test(order.txt),'★行に「次の自動値下げ」を出す');
+ok(line.indexOf(dd(1))>=0,'★日付（'+dd(1)+'）を出す');
+ok(/\$47\.65 → \$46\.65/.test(line),'★「$47.65 → $46.65」を出す');
+ok(/あと3回/.test(line)&&/下限 \$44\.66/.test(line),'★「あと3回・下限 $44.66」を出す');
+
+console.log('\n=== 「次の自動値下げ予定」の横に 今日／3日以内 を出す ===');
+const note=await p.evaluate(()=>({ note:$('syncMdNote').textContent,
+  list:$('syncMdList').textContent,
+  link:!!document.getElementById('syncMdPick') }));
+console.log('   '+note.note);
+console.log('   '+note.list.slice(0,120));
+ok(/次の自動値下げ予定：3件（今日 1件／3日以内 3件）/.test(note.note),
+   '★「次の自動値下げ予定：3件（今日 1件／3日以内 3件）」');
+ok(note.link,'★「一覧で見る」から絞り込みに飛べる');
+ok(note.list.indexOf('今日　')>=0&&note.list.indexOf(dd(1))>=0,
+   '★予定の一覧にも日付を出す');
+
+console.log('\n=== 値下げCSVの件数は自動値下げの対象外だけ ===');
+let bar=await p.evaluate(()=>({ btn:$('syncMarkRun').textContent,
+  note:$('syncMarkNote').textContent, csvN:syncMarkCsvRows().length,
+  allN:syncMarkRows().length,
+  sum:$('syncPriceSum').textContent }));
+console.log('   '+JSON.stringify(bar));
+ok(bar.csvN===1&&bar.allN===2,
+   '★値下げの時期は2件だが、CSVで下げるのは自動値下げの対象外の1件だけ');
+ok(/自動値下げ中：CSVで下げると二重になります（1件）/.test(bar.btn),
+   '★ボタンに「自動値下げ中：CSVで下げると二重になります（1件）」');
+ok(/自動値下げ中：CSVで下げると二重になります/.test(bar.note),
+   '★案内にも同じことを書く');
+ok(/値下げの時期 2件/.test(bar.sum),'価格の操作の見出しは「値下げの時期」全体の件数');
+
+console.log('\n=== 「予定だけ表示」でも同じ（eBayは変えていないと添える）===');
+pl=await planSetup('plan');
+bar=await p.evaluate(()=>({ btn:$('syncMarkRun').textContent,
+  note:$('syncMarkNote').textContent,
+  row:(Array.from(document.querySelectorAll('#syncList > div'))
+    .map(d=>d.textContent).find(x=>/B0PLAN00001/.test(x))||'') }));
+console.log('   '+JSON.stringify({btn:bar.btn,note:bar.note.slice(-80)}));
+ok(/自動値下げ中：CSVで下げると二重になります（1件）/.test(bar.btn),
+   '★「予定だけ表示」でもボタンに出す');
+ok(/eBay はまだ変わっていません/.test(bar.note),'★eBayはまだ変わっていないと添える');
+ok(/予定だけ（eBayは変えません）/.test(bar.row),'★行にもそう出す');
+
+console.log('\n=== オフなら今までどおり（値下げの時期の件数で出す）===');
+pl=await planSetup('off');
+bar=await p.evaluate(()=>({ btn:$('syncMarkRun').textContent,
+  bar:getComputedStyle($('syncMdBar')).display,
+  csvN:syncMarkCsvRows().length,
+  opt:Array.from($('syncFilter').options).map(o=>o.textContent) }));
+console.log('   '+JSON.stringify(bar));
+ok(bar.csvN===2&&/値下げの時期です（2件）/.test(bar.btn),
+   '★オフのときは値下げの時期の2件すべてがCSVの対象');
+ok(bar.bar==='none','★自動値下げの帯は出さない');
+ok(bar.opt.some(x=>/^自動値下げの予定（3）$/.test(x)),
+   '★絞り込みは残す（オフでも、どの行が対象になるかは見られる）');
+
 console.log('\n=== オンのときに値下げCSVを押すと、まず確認を出す ===');
+await planSetup('on');
+await openCsvBoxes(p);
 dlg.length=0; dl.length=0;
 await p.click('#syncMarkRun');
 await p.waitForTimeout(400);
 console.log('   '+JSON.stringify(dlg));
 ok(dlg.length>=1&&/自動値下げがオンです/.test(dlg[0])
-   &&/二重に下がる/.test(dlg[0]),'★「二重に下がる」ことを先に知らせる');
+   &&/二重には下がりません/.test(dlg[0])
+   &&/対象の行をCSVで下げると二重になります/.test(dlg[0]),
+   '★押す前に「この行は対象外なので二重にはならない」ことを知らせる');
 await T.done();
 })();
