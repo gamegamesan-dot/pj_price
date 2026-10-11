@@ -766,6 +766,12 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         <summary class="note2" style="margin:0;cursor:pointer" id="syncPriceSum">価格の操作</summary>
         <div style="padding:6px 0 0">
           <div class="note2" style="margin:0 0 6px">実重量・仕入値・相場は出品CSVの書き出し・名簿送信のときに pj-sync に残してあるので、<b>出品リストを空にしても</b>ここで値付けを動かせます。</div>
+          <!-- 自動値下げ（pj-sync が eBay を直接変える）。オフのときは出さない -->
+          <div id="syncMdBar" style="display:none;margin-bottom:8px">
+            <div class="note2" id="syncMdNote" style="margin:0 0 4px"></div>
+            <div class="note2" id="syncMdList" style="margin:0 0 4px"></div>
+            <button class="btn" id="syncMdSend" style="width:100%">自動値下げの設定を送る</button>
+          </div>
           <!-- 値下げの時期になった行があるときだけ出す -->
           <div id="syncMarkBar" style="display:none;margin-bottom:8px">
             <button class="btn primary" id="syncMarkRun" style="width:100%">値下げの時期です</button>
@@ -956,9 +962,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="chk"><input type="checkbox" id="csvBoCols" checked><label for="csvBoCols" style="flex:1">値段を変えるCSVに、ベストオファーの金額も一緒に出す</label></div>
       <div class="note2" style="margin-top:0">自動拒否額（MinimumBestOfferPrice）が新しい売値以上だと、eBay は値下げを弾きます（エラー22003）。オンにすると、その行の最低売値（新しい売値以上になるときは「新しい売値 − $0.01」）を一緒に出します。ベストオファーを使っていない出品は空欄のままなので、勝手にオンにはなりません。<b>列名が違うと言われたら、ここを外せばこれまでの3列に戻せます。</b></div>
+      <div class="rowv"><label>出品時の開始価格</label><select id="csvStartMode"><option value="amz">Amazon基準の推奨売値（高めから始める）</option><option value="cost">仕入値基準の推奨売値</option></select><div class="note2" style="margin-top:2px">「Amazon基準」は、Amazonの最安値を仕入値とみなした推奨売値と、仕入値基準の推奨売値の<b>高いほう</b>で出品します（最低売値より下にはなりません）。Amazonの最安値が取れていない行・フィギュアのみ（箱なし）・無在庫は、これまでどおり仕入値基準です。</div></div>
       <div class="row"><label>値下げの間隔</label><input type="number" id="csvMarkDays" value="3" step="1" min="1" inputmode="numeric"><span class="unit">日</span></div>
-      <div class="row"><label>1回の下げ幅</label><input type="number" id="csvMarkStep" value="1" step="0.5" min="0.1" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row"><label>値下げの回数</label><input type="number" id="csvMarkTimes" value="10" step="1" min="1" max="100" inputmode="numeric"><span class="unit">回</span></div>
+      <div class="row"><label>1回の下げ幅（最低）</label><input type="number" id="csvMarkStep" value="1" step="0.5" min="0.1" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="note2" style="margin-top:0">値下げ幅＝（開始価格 − 最低売値）÷ 回数。これより小さくなる行は「1回の下げ幅（最低）」を使います。幅は<b>出品したとき（または自動値下げを有効にしたときの売値）で決めて保存</b>し、途中で変えません。間隔3日×10回で約30日です。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="rowv"><label>自動値下げ</label><select id="autoMdMode"><option value="off">オフ（CSVを書き出して自分でアップロード）</option><option value="plan">予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay を直接変える）</option></select><div class="note2" style="margin-top:2px">オンにすると、pj-sync が1日1回、前回の値下げから間隔が空いた行の売値とベストオファーの自動拒否額を eBay で直接変えます（CSVのアップロードは要りません）。<b>値上げは自動ではしません</b>。設定を変えたら「自動値下げの設定を送る」を押してください。</div></div>
+      <div class="row"><label>1日に変える上限</label><input type="number" id="autoMdMax" value="200" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
       <div class="note2" style="margin-top:0" id="csvMarkCfgNote"></div>
+      <div class="note2" style="margin-top:2px" id="autoMdCfgNote"></div>
     </div>
   </section>
   <section>
@@ -2035,8 +2048,11 @@ function cfgLineRender(){
     +(+g('csvShipLoose')>0?('・封筒 '+esc(g('csvShipLoose'))+'円'):'')+btn;
   var sy=$('cfgLineSync');
   if(sy)sy.innerHTML='設定：既定重量 ゲーム'+esc(g('syncWeightGame'))+'g・ホビー'
-    +esc(g('syncWeight'))+'g　値下げ '+esc(g('csvMarkDays'))+'日ごとに$'
-    +esc(g('csvMarkStep'))+'　見直し $'+esc(g('csvReviewAbs'))+'かつ'
+    +esc(g('syncWeight'))+'g　値下げ '+esc(g('csvMarkDays'))+'日ごとに'
+    +esc(g('csvMarkTimes'))+'回（最低$'+esc(g('csvMarkStep'))+'）'
+    +'　自動値下げ '+({off:'オフ',plan:'予定だけ',on:'オン'}[g('autoMdMode')]||'オフ')
+    +'　開始 '+(g('csvStartMode')==='cost'?'仕入値基準':'Amazon基準')
+    +'　見直し $'+esc(g('csvReviewAbs'))+'かつ'
     +esc(g('csvReviewPct'))+'%　Amazon手数料 '+esc(g('amzFeeRate'))+'%＋FBA'
     +esc(g('amzFbaFee'))+'円　取り込み上限 '+esc(g('syncLimit'))+'件'+btn;
   var eb=$('cfgLineEbay');
@@ -3468,8 +3484,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvReviewAbs','csvReviewPct','amzFeeRate','amzFbaFee',
                  // 一覧の1ページの件数（タブごとに別）
                  'csvPerPage','syncPerPage',
-                 // 3日ごとの値下げ（間隔・下げ幅）
-                 'csvMarkDays','csvMarkStep'];
+                 // 3日ごとの値下げ（間隔・回数・下げ幅の最低）
+                 'csvMarkDays','csvMarkTimes','csvMarkStep',
+                 // 出品時の開始価格の決め方と、自動値下げ（pj-sync が eBay を直接変える）
+                 'csvStartMode','autoMdMode','autoMdMax'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4586,6 +4604,60 @@ function csvCatSelect(r){
 /* 値下げの間隔と1回の下げ幅（出品CSVタブの設定）。販売連携タブの値下げもこれを読む。 */
 function csvMarkDays(){ var n=+$('csvMarkDays').value; return (isFinite(n)&&n>=1)?n:3; }
 function csvMarkStep(){ var n=+$('csvMarkStep').value; return (isFinite(n)&&n>0)?n:1; }
+// 最低売値に着くまでの回数（既定10回。間隔3日なら約30日）
+function csvMarkTimes(){
+  var n=+$('csvMarkTimes').value;
+  return (isFinite(n)&&n>=1)?Math.round(n):10;
+}
+/* ================= 出品時の開始価格と、1回の値下げ幅 =================
+   出品は高め（Amazon基準）から始めて、仕入値基準の最低売値まで少しずつ下げる。
+     開始価格 … ⚙設定「出品時の開始価格」
+       'amz'  … Amazonの最安値を仕入値とみなした推奨売値と、仕入値基準の推奨売値の
+                **高いほう**（最低売値より下にはしない）
+       'cost' … 仕入値基準の推奨売値（これまでの動き）
+     値下げ幅 … （開始価格 − 最低売値）÷ 回数。最低 $1・$0.01単位。
+   幅は出品したときに決めて D1 に残し、途中で変えない（pj-sync の自動値下げが使う）。 */
+function csvStartMode(){
+  return (($('csvStartMode')||{}).value==='cost')?'cost':'amz';
+}
+// Amazonの最安値（円）を仕入値とみなした推奨売値。最安値が無い行は0
+function csvAmzRecOf(r){
+  var low=+r.amzLow||0;
+  if(!(low>0))return 0;
+  var p=csvPriceFor(low,r.weight,csvFlatOf(r));
+  return +p.price||0;
+}
+function csvStartPrice(r){
+  var base=+r.price||0, fl=+r.floor||0;
+  /* フィギュアのみ（箱なし）は Amazonの箱付きの値段を基準にできない。
+     無在庫（M-）は売れてから仕入れるので、これまでどおり仕入値基準で出す。 */
+  if(csvStartMode()==='amz'&&!r.looseOnly&&!r.dropship){
+    var a=csvAmzRecOf(r);
+    if(a>base)base=a;
+  }
+  if(base<fl)base=fl;
+  return Math.round(base*100)/100;
+}
+// 開始価格が推奨売値と違う行か（行の表示に出す）
+function csvStartUp(r){
+  var st=csvStartPrice(r), p=+r.price||0;
+  return (st>p+0.005)?st:0;
+}
+/* 1回の値下げ幅。（開始価格 − 最低売値）÷ 回数。
+   最低は⚙設定「1回の下げ幅（最低）」（既定 $1）。 */
+function csvMdStepOf(start,floor){
+  var s=+start||0, f=+floor||0, n=csvMarkTimes(), min=csvMarkStep();
+  if(!(s>0)||!(f>0)||!(s>f))return min;
+  var v=Math.ceil((s-f)/n*100)/100;
+  return (v<min)?min:v;
+}
+// 行の自動値下げの設定（D1 に送る値）。幅を決められない行は null
+function csvMdPlanOf(r){
+  var st=csvStartPrice(r), fl=+r.floor||0;
+  if(!(st>0)||!(fl>0)||!(st>fl))return null;
+  return { md_start:st, md_floor:Math.round(fl*100)/100,
+           md_step:csvMdStepOf(st,fl), md_n:csvMarkTimes() };
+}
 /* いま eBay に出ている売値。pj-sync の取り込みを優先し、無ければ最後に出した値。 */
 function csvLivePrice(r){
   var ex=csvSameListing(r);
@@ -4627,6 +4699,19 @@ function csvMarkStopToggle(r){
       title:r.titleJa||r.titleEn||'', mark_stop:want }]})})
     ['catch'](function(){});
 }
+/* 行に出す開始価格の案内。推奨売値より高く出す行だけに出す
+   （Amazon基準で高めから始め、値下げで下げていく行）。 */
+function csvStartHtml(r){
+  if(String(r.itemId||'').trim())return '';      // すでに出品済みの行には出さない
+  var st=csvStartUp(r); if(!st)return '';
+  var fl=+r.floor||0, step=csvMdStepOf(st,fl);
+  return '<div class="note2" style="margin-top:4px">'
+    +'<span style="display:inline-block;background:#1f6f8a;color:#fff;'
+    +'border-radius:2px;padding:1px 5px;font-size:11px">開始価格</span>　'
+    +usd(st)+'（Amazon基準）で出し、'+usd(step)+' ずつ下げて最低 '+usd(fl)+' まで'
+    +'（'+csvMarkDays()+'日ごと・'+csvMarkTimes()+'回）。推奨売値は '+usd(+r.price||0)
+    +' です。</div>';
+}
 /* 行に出す値下げの案内。中身は販売連携タブと同じ（syncMarkHtml）。
    取り込みにその出品が無い行には出さない（記録は D1 にあるため）。 */
 function csvMarkHtml(r){
@@ -4662,8 +4747,14 @@ function csvShipRun(){
     +'（'+rows.length+'件）'):'書き出しに失敗しました');
 }
 $('csvShipCsv').onclick=csvShipRun;
-['csvMarkDays','csvMarkStep'].forEach(function(id){
+['csvMarkDays','csvMarkStep','csvMarkTimes','autoMdMax'].forEach(function(id){
   $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); });
+});
+['csvStartMode','autoMdMode'].forEach(function(id){
+  $(id).addEventListener('change',function(){
+    csvSaveCfg(); csvRender();
+    if(typeof syncRender==='function'&&syncData)syncRender();
+  });
 });
 /* ゴミ箱の中身。新しい順に並べ、行ごとに「元に戻す」を出す。 */
 function csvTrashRender(){
@@ -5082,6 +5173,8 @@ function csvRender(){
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
       +'</div>'
+      /* 出品時の開始価格（Amazon基準から始める行） */
+      +csvStartHtml(r)
       /* 値下げ（3日ごと）の案内 */
       +csvMarkHtml(r)
       /* 配送ポリシーの食い違い */
@@ -5905,6 +5998,10 @@ function csvPriceSrcOf(r){
      オフにするのは販売連携タブの行ボタンで行う。 */
   if(r.markAt)o.mark_at=String(r.markAt);
   if(r.markStop||csvMarkStopOf(r))o.mark_stop=true;
+  /* 自動値下げの設定（開始価格・最低売値・値下げ幅・回数）。
+     pj-sync はこれが入っている行だけ自動で下げる。 */
+  var md=csvMdPlanOf(r);
+  if(md)Object.assign(o,md);
   return o;
 }
 function csvSendPriceSrc(rows,noteId){
@@ -6225,7 +6322,10 @@ function csvRowFor(r,raw){
   o['*Description']=r.descHtml;
   o['*Format']='FixedPrice';
   o['*Duration']='GTC';
-  o['*StartPrice']=(+r.price||0).toFixed(2);
+  /* 開始価格。⚙設定「出品時の開始価格」で Amazon基準から始められる
+     （最低売値まで自動値下げで下げていく）。 */
+  var start=+csvStartPrice(r)||0;
+  o['*StartPrice']=start.toFixed(2);
   o['*Quantity']=r.qty;
   o['*Location']=$('csvLocation').value;
   // 送料ポリシーは行ごと。再調達モードは売れてから仕入れるので、
@@ -6247,7 +6347,7 @@ function csvRowFor(r,raw){
      the Buy It Now price. で出品が丸ごと弾かれる（2026-10-03の報告）。
      最低利益ラインが売値以上になる行（原価が低い行で起きる）は、
      売値の1セント下まで下げる。それでも0以下になるなら Best Offer を切る。 */
-  var bo=Math.min(+r.floor||0, (+r.price||0)-0.01);
+  var bo=Math.min(+r.floor||0, start-0.01);
   bo=Math.floor(bo*100)/100;
   if(bo>0){ o['BestOfferEnabled']='1'; o['MinimumBestOfferPrice']=bo.toFixed(2); }
   else { o['BestOfferEnabled']=''; o['MinimumBestOfferPrice']=''; }
@@ -8080,20 +8180,22 @@ function syncMarkSkip(r){
   if(Number(r.restocking||0))return '再調達中';
   if(syncQtyOf(r)===0)return '数量0';
   if(syncMarkSoldOf(r))return '売れたので値下げ停止';
-  var fo=syncFloorOf(r), now=+r.ebay_price||0, fl=fo.v;
+  var fo=syncFloorOf(r), now=+r.ebay_price||0, fl=syncMdFloor(r);
   if(!(now>0)||!(fl>0))return '売値か最低売値が分かりません';
   if(now<=fl)return fo.amz?'Amazonの方が得（これ以上は下げません）':'最低売値に着いています';
   return '';
 }
-// 次に出す売値（1回ぶん下げる。最低売値で止める）
+/* 次に出す売値（1回ぶん下げる。最低売値で止める）。
+   値下げ幅は行ごと（出品時に決めて D1 に保存した md_step）。
+   pj-sync の自動値下げと同じ式にしてある。 */
 function syncMarkNext(r){
-  var now=+r.ebay_price||0, fl=syncFloorOf(r).v;
-  var v=Math.round((now-csvMarkStep())*100)/100;
+  var now=+r.ebay_price||0, fl=syncMdFloor(r);
+  var v=Math.round((now-syncMdStep(r))*100)/100;
   return (v<fl)?fl:v;
 }
 // 最低売値まであと何回下げられるか
 function syncMarkLeft(r){
-  var now=+r.ebay_price||0, fl=syncFloorOf(r).v, st=csvMarkStep();
+  var now=+r.ebay_price||0, fl=syncMdFloor(r), st=syncMdStep(r);
   if(!(now>fl)||!(st>0))return 0;
   return Math.ceil(Math.round((now-fl)*100)/100/st);
 }
@@ -8115,25 +8217,34 @@ function syncMarkHtml(r){
       return '<div class="note2" style="margin-top:4px">値下げ：'+esc(why)+'</div>';
     return '';
   }
-  var now=+r.ebay_price||0, fl=syncFloorOf(r).v, at=Date.parse(syncMarkAtOf(r));
+  var now=+r.ebay_price||0, fl=syncMdFloor(r), at=Date.parse(syncMarkAtOf(r));
   var nx='';
   if(at)nx='　次は'+new Date(at+csvMarkDays()*86400000).toISOString().slice(0,10);
+  var auto=autoMdOn()&&(+r.md_step>0);
   return '<div class="note2" style="margin-top:4px">'
     +'<span style="display:inline-block;background:#8a6d00;color:#fff;border-radius:2px;'
-    +'padding:1px 5px;font-size:11px">値下げ中</span>　'
-    +usd(now)+' → 下限 '+usd(fl)+'（あと'+syncMarkLeft(r)+'回）'
-    +(syncMarkDue(r)?'　<b>今日が値下げの日です</b>':nx)
+    +'padding:1px 5px;font-size:11px">'+(auto?'自動値下げ中':'値下げ中')+'</span>　'
+    +usd(now)+' → 下限 '+usd(fl)+'（'+usd(syncMdStep(r))+' ずつ・あと'
+    +syncMarkLeft(r)+'回）'
+    +(syncMarkDue(r)
+      ? (auto?'　<b>次の実行で下がります</b>':'　<b>今日が値下げの日です</b>'):nx)
     +'</div>';
 }
 /* 販売連携タブ上部の帯。値下げの時期の出品があるときだけ出す。 */
 function syncMarkBarRender(){
+  syncMdBarRender();
   var el=$('syncMarkBar'); if(!el)return;
   var rows=syncMarkRows(), n=rows.length;
   el.style.display=n?'block':'none';
-  $('syncMarkRun').textContent='値下げの時期です（'+n+'件）';
-  if(n)$('syncMarkNote').textContent=csvMarkDays()+'日ごとに '+usd(csvMarkStep())
-    +' ずつ下げます（最低売値で止まります）。押すと Revise CSV を書き出すので、'
-    +'eBay にアップロードしてください。';
+  $('syncMarkRun').textContent=(autoMdOn()?'値下げCSVを書き出す（予備・':'値下げの時期です（')
+    +n+'件）';
+  $('syncMarkRun').className='btn'+(autoMdOn()?'':' primary');
+  if(n)$('syncMarkNote').innerHTML=csvMarkDays()+'日ごとに'
+    +'（開始価格 − 最低売値）÷ '+csvMarkTimes()+'回 ずつ下げます（最低売値で止まります）。'
+    +(autoMdOn()
+      ? '<b>いまは自動値下げがオンです。</b>pj-sync が eBay を直接変えるので、'
+        +'このCSVは<b>予備</b>です（二重に下げないよう、ふだんは押さないでください）。'
+      : '押すと Revise CSV を書き出すので、eBay にアップロードしてください。');
   /* 価格の欄は畳んである。値下げの時期が来ていれば自動で開く
      （人が閉じたあとでも、次に作り直すときにまた開く＝見落とさないため）。 */
   var box=$('syncPriceBox');
@@ -8320,6 +8431,155 @@ function syncMarkPost(rows,at,noteId){
   }
   step(0);
 }
+/* ================= 自動値下げ（pj-sync が eBay を直接変える）=================
+   ⚙設定の「自動値下げ」が
+     'off'  … これまでどおり。値下げCSVを書き出して自分でアップロードする
+     'plan' … eBay は変えず、次の値下げの予定だけ出す
+     'on'   … pj-sync が1日1回、売値とベストオファーの自動拒否額を直接変える
+   値下げ幅（md_step）と最低売値（md_floor）は **この画面が決めて D1 に入れる**。
+   入っていない行は pj-sync が触らないので、設定を送るボタンを出す。 */
+function autoMdMode(){
+  var v=(($('autoMdMode')||{}).value)||'off';
+  return (v==='plan'||v==='on')?v:'off';
+}
+function autoMdOn(){ return autoMdMode()==='on'; }
+function autoMdMax(){
+  var n=+$('autoMdMax').value;
+  return (isFinite(n)&&n>=1)?Math.round(n):200;
+}
+/* 値下げの下限。**保存した md_floor があればそれ**を使う。
+   pj-sync の自動値下げはこの値で止めるので、画面・CSV・自動値下げの3つが
+   同じ値で動くようにしている（いまの計算と離れた行は「設定を送る」に出る）。
+   保存が無い行は、いまの計算（最低売値＝下限利益・Amazon同等ライン）を使う。 */
+function syncMdFloor(r){
+  var f=+r.md_floor||0;
+  return (f>0)?f:syncFloorOf(r).v;
+}
+/* その行の1回の値下げ幅。D1 に保存した値（出品時に決めた幅）を使う。
+   まだ無い行は、いまの売値と最低売値から出す（送れば保存される）。 */
+function syncMdStep(r){
+  var s=+r.md_step||0;
+  if(s>0)return s;
+  return csvMdStepOf(+r.ebay_price||0, syncMdFloor(r));
+}
+// 行の自動値下げの設定（D1 に送る値）。決められない行は null
+function syncMdPlanOf(r){
+  var now=+r.ebay_price||0, fl=syncFloorOf(r).v;
+  if(!(now>0)||!(fl>0)||!(now>fl))return null;
+  return { md_start:Math.round(now*100)/100, md_floor:Math.round(fl*100)/100,
+           md_step:csvMdStepOf(now,fl), md_n:csvMarkTimes() };
+}
+/* 値下げ幅を D1 に送る必要がある行。
+   ・まだ幅が入っていない行（出品CSVを通さずに出した行・既存の出品）
+   ・最低売値が変わって、保存した下限と離れた行（$0.01 以上の差）
+     ※幅（md_step）は保存した値のまま使う（途中で変えない）。 */
+function syncMdNeed(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    if(!String(r.ebay_item_id||'').trim())return false;
+    if(syncMarkStopOf(r)||Number(r.one_off||0)||syncIsDropship(r))return false;
+    if(Number(r.restocking||0)||syncQtyOf(r)===0)return false;
+    var p=syncMdPlanOf(r); if(!p)return false;
+    if(!(+r.md_step>0))return true;
+    return Math.abs((+r.md_floor||0)-p.md_floor)>=0.01;
+  });
+}
+/* 次の自動値下げの予定。pj-sync が選ぶ行と同じ条件で、同じ順（古い順）に並べる。 */
+function syncMdPlan(){
+  var rows=syncMarkRows().filter(function(r){ return +r.md_step>0&&+r.md_floor>0; });
+  // pj-sync は古い順（mark_at の昇順）に選ぶので、画面も同じ順にそろえる
+  rows.sort(function(a,b){
+    return String(a.mark_at||'').localeCompare(String(b.mark_at||'')); });
+  return rows.map(function(r){
+    return { r:r, name:r.title||r.ebay_sku||r.asin,
+             now:+r.ebay_price||0, next:syncMarkNext(r),
+             floor:+r.md_floor||0, left:syncMarkLeft(r) };
+  });
+}
+/* 自動値下げの帯。オフのときは出さない。 */
+function syncMdBarRender(){
+  var bar=$('syncMdBar'); if(!bar)return;
+  var mode=autoMdMode();
+  bar.style.display=(mode==='off')?'none':'block';
+  var cfg=$('autoMdCfgNote');
+  if(cfg)cfg.textContent=(mode==='off')
+    ? '自動値下げはオフです。値下げCSVを書き出して eBay にアップロードしてください。'
+    : ((mode==='on'?'自動値下げはオンです。':'予定だけ表示しています（eBayは変えません）。')
+       +'pj-sync が1日1回、'+csvMarkDays()+'日ごとに最大 '+autoMdMax()+'件まで動かします。');
+  if(mode==='off')return;
+  var plan=syncMdPlan(), need=syncMdNeed();
+  var last=(syncData&&syncData.md_last)||null;
+  $('syncMdNote').innerHTML=
+    '<b>'+(mode==='on'?'自動値下げ：オン':'自動値下げ：予定だけ表示')+'</b>　'
+    +'次の自動値下げ予定：'+plan.length+'件'
+    +(plan.length>autoMdMax()
+      ? ('（1日の上限 '+autoMdMax()+'件を超えるぶんは翌日に回ります）'):'')
+    +(mode==='plan'?'　<b>eBay は変えません</b>':'')
+    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+            +'・'+(last.mode==='on'?'オン':'予定')+'）：下げた '+Number(last.changed||0)
+            +'件／失敗 '+Number(last.failed||0)+'件／とばした '+Number(last.skipped||0)
+            +'件'+(Number(last.capped||0)?('／翌日に回した '+Number(last.capped)+'件'):'')
+            +'</b>'):'');
+  $('syncMdList').innerHTML=plan.length
+    ? (plan.slice(0,10).map(function(x){
+        return '・'+esc(x.name)+'：'+usd(x.now)+' → <b>'+usd(x.next)+'</b>'
+          +'（下限 '+usd(x.floor)+'・あと'+x.left+'回）'; }).join('<br>')
+       +(plan.length>10?('<br>…ほか'+(plan.length-10)+'件'):''))
+    : '値下げの時期になっている出品はありません。';
+  csvBtnHot('syncMdSend',need.length>0,'自動値下げの設定を送る'+csvCountBadge(need.length));
+  $('syncMdSend').disabled=!need.length;
+}
+/* 値下げ幅・最低売値・回数を D1 に送る。これを送るまで pj-sync は値下げしない。 */
+function syncMdSend(){
+  var need=syncMdNeed();
+  if(!need.length){ alert('送る行はありません（すべて設定済みです）。'); return; }
+  var lines=need.slice(0,5).map(function(r){
+    var p=syncMdPlanOf(r);
+    return '　・'+(r.title||r.ebay_sku||r.asin)+'：'+usd(p.md_start)+' → 下限 '
+      +usd(p.md_floor)+'（'+usd(p.md_step)+' ずつ・'+p.md_n+'回）'; });
+  if(!confirm('自動値下げの設定を '+need.length+'件 pj-sync に送ります。\n'
+    +lines.join('\n')+(need.length>5?('\n　…ほか'+(need.length-5)+'件'):'')+'\n'
+    +'値下げ幅はここで決めて保存し、途中では変えません。\nよろしいですか？'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('syncMdNote').textContent='pj-sync のURL・キーを⚙設定に入れてください。'; return;
+  }
+  var items=need.map(function(r){
+    return Object.assign({ asin:r.asin, cond:r.cond, title:r.title||'',
+                           item_id:r.ebay_item_id||'' }, syncMdPlanOf(r)); });
+  var b=$('syncMdSend');
+  b.disabled=true; b.textContent='送っています…';
+  var sent=0, bad=0;
+  function step(i){
+    if(i>=items.length){
+      // 送れた行は表示もその場で合わせる（次の取り込みを待たない）
+      if(!bad)need.forEach(function(r){
+        var p=syncMdPlanOf(r);
+        r.md_step=p.md_step; r.md_floor=p.md_floor; r.md_n=p.md_n;
+        if((+r.md_start||0)!==p.md_start){ r.md_start=p.md_start; r.md_done=0; }
+      });
+      syncSaveCache();
+      b.disabled=false;
+      syncRender();          // 帯を作り直してから書き足す（上書きされないように）
+      $('syncMdNote').innerHTML+='<br>'+(bad
+        ? ('送れませんでした（'+bad+'件）。もう一度押してください。')
+        : ('自動値下げの設定を '+sent+'件 pj-sync に残しました。'
+           +(autoMdOn()?'次の実行（1日1回）から効きます。'
+                       :'「オン」にすると eBay を変えはじめます。')));
+      return;
+    }
+    var part=items.slice(i,i+200);
+    fetch(syncUrl()+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:part})})
+      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(function(d){ sent+=(d&&d.accepted)||0; })
+      ['catch'](function(){ bad+=part.length; })
+      .then(function(){ step(i+200); });
+  }
+  step(0);
+}
+$('syncMdSend').onclick=syncMdSend;
+
 /* 値下げ用の Revise CSV。書き出した日を D1 に控え、次の間隔はそこから数える。 */
 function syncMarkRun(){
   var rows=syncMarkRows();
@@ -8329,8 +8589,11 @@ function syncMarkRun(){
       +' → '+usd(syncMarkNext(r)); });
   var hit=rows.filter(function(r){ return syncMarkNext(r)<=syncFloorOf(r).v; }).length;
   var brM=syncCostBreak(rows);
+  if(autoMdOn()&&!confirm('自動値下げがオンです。\n'
+    +'pj-sync が eBay を直接下げているので、このCSVを出すと'
+    +'**二重に下がる**ことがあります。\nそれでも書き出しますか？'))return;
   if(!confirm('値下げの Revise CSV を書き出します。\n'
-    +rows.length+'件を '+usd(csvMarkStep())+' ずつ下げます。\n'
+    +rows.length+'件を 1回ぶん（'+usd(syncMdStep(rows[0]))+' など）下げます。\n'
     +lines.join('\n')+(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
     +(hit?('うち '+hit+'件は最低売値に着きます（次からは対象外）。\n'):'')
     +syncCostBreakText(brM)
@@ -9893,7 +10156,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v135';   // sw.js の const V と必ず同じ値にする
+var APP_V='v136';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

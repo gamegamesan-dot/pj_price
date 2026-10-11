@@ -90,10 +90,16 @@ function orderKind(salesChannel, sellerOrderId) {
 /* せどりすとの状態コード。N だけが新品。 */
 const COND_CODES = { N: "new", UM: "used", UVG: "used", UG: "used", UA: "used", UKN: "used" };
 
-/* ---- 読み取り専用の許可表 ----
+/* ---- 外向き通信の許可表 ----
    ここに無い通信は net() が例外にする。書き込み系APIを足すには、この表を
-   変えるしかない形にしてある（フェイズBでの変更が目に見えるように）。 */
+   変えるしかない形にしてある（フェイズBでの変更が目に見えるように）。
+
+   2026-10-11（自動値下げ）から、**書き込みは1つだけ**許す：
+   Trading API の ReviseFixedPriceItem（売値とベストオファーの自動拒否額）。
+   write:true の行は、呼ぶ側が net(run, url, {write:true, ...}) と明示したときだけ
+   通る。ふだんの取り込みから間違って書き込むことはできない。 */
 const EBAY_READ_CALLS = ["GetMyeBaySelling"];
+const EBAY_WRITE_CALLS = ["ReviseFixedPriceItem"];
 const ALLOWED = [
   { m: "POST", re: /^https:\/\/api\.amazon\.com\/auth\/o2\/token$/ },
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/orders\/v0\/orders(\/|\?)/ },
@@ -109,6 +115,10 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/buy\/browse\/v1\/item_summary\/search\?/ },
   // Trading API。X-EBAY-API-CALL-NAME が読み取り呼び出しのときだけ通す。
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/ws\/api\.dll$/, calls: EBAY_READ_CALLS },
+  /* 自動値下げ（売値とベストオファーの自動拒否額）。唯一の書き込み。
+     net(..., {write:true}) を付けた呼び出しだけが通る。 */
+  { m: "POST", re: /^https:\/\/api\.ebay\.com\/ws\/api\.dll$/, calls: EBAY_WRITE_CALLS,
+    write: true },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
 ];
 
@@ -167,13 +177,15 @@ async function saveRun(env, run) {
 }
 
 /* ---- 外向きの通信。許可表に無ければ例外 ---- */
-function assertReadOnly(url, method, headers) {
+function assertReadOnly(url, method, headers, allowWrite) {
   const m = String(method || "GET").toUpperCase();
   for (const a of ALLOWED) {
     if (a.m !== m || !a.re.test(url)) continue;
+    // 書き込みの行は、呼ぶ側が write:true と明示したときだけ通す
+    if (a.write && !allowWrite) continue;
     if (a.calls) {
       const call = (headers && (headers["X-EBAY-API-CALL-NAME"] || headers["x-ebay-api-call-name"])) || "";
-      if (a.calls.indexOf(call) < 0) break;
+      if (a.calls.indexOf(call) < 0) continue;
     }
     return;
   }
@@ -181,7 +193,7 @@ function assertReadOnly(url, method, headers) {
 }
 async function net(run, url, init) {
   const opt = init || {};
-  assertReadOnly(url, opt.method || "GET", opt.headers);
+  assertReadOnly(url, opt.method || "GET", opt.headers, !!opt.write);
   run.subrequests++;
   return fetch(url, opt);
 }
@@ -872,6 +884,10 @@ async function ebayActive(env, run) {
                  || xmlTag(b, "BestOfferAutoAcceptPrice");
       const boDec = xmlTag(det, "MinimumBestOfferPrice")
                  || xmlTag(b, "MinimumBestOfferPrice");
+      /* eBayのセール（Markdown Manager／Promotional sale）。設定されている出品には
+         DiscountPriceInfo が付く。自動値下げはこの行をとばす（二重に下がるのを防ぐ）。
+         返らない出品もあるので、空のときは「分からない」（null）にする。 */
+      const disc = xmlTag(b, "DiscountPriceInfo");
       rows.push({
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
@@ -884,6 +900,7 @@ async function ebayActive(env, run) {
         bo: boOn === "" ? null : (/^(true|1)$/i.test(boOn) ? 1 : 0),
         boAccept: boAcc === "" ? null : (Number(boAcc) || 0),
         boDecline: boDec === "" ? null : (Number(boDec) || 0),
+        sale: disc === "" ? null : 1,
       });
     }
   }
@@ -1111,8 +1128,9 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
-  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
+  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at, ebay_sale,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
+  md_step, md_start, md_floor, md_n, md_done,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, amazon_new_low, amazon_new_n, amazon_new_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
   updated_at`;
@@ -1571,13 +1589,16 @@ async function syncEbayActive(env, run) {
          ebay_bo=COALESCE(?13, ebay_bo),
          ebay_bo_accept=COALESCE(?14, ebay_bo_accept),
          ebay_bo_decline=COALESCE(?15, ebay_bo_decline),
+         -- eBayのセールの有無。返らなかった回で消さないよう NULL はそのまま
+         ebay_sale=COALESCE(?16, ebay_sale),
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
            it.start || "", k.dropship ? 1 : 0, it.shipProfile || "",
            (it.bo === null || it.bo === undefined) ? null : it.bo,
            (it.boAccept === null || it.boAccept === undefined) ? null : it.boAccept,
-           (it.boDecline === null || it.boDecline === undefined) ? null : it.boDecline));
+           (it.boDecline === null || it.boDecline === undefined) ? null : it.boDecline,
+           (it.sale === null || it.sale === undefined) ? null : it.sale));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -1765,6 +1786,245 @@ async function jobNotify(env) {
   try { await flushEvents(env, run, false); }
   catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   return saveRun(env, run);
+}
+
+/* ================= 自動値下げ（3日ごとの値下げを eBay に直接反映）=================
+   いままでは値下げCSVを書き出して File Exchange にアップロードしていた。
+   それを Cron（1日1回）で ReviseFixedPriceItem に置き換える。
+   ReviseInventoryStatus はベストオファーを変えられないので使えない
+   （売値だけ下げると自動拒否額が売値以上になり 22003 で弾かれる）。
+
+   安全のための決まり：
+   ・⚙設定の「自動値下げ」が 'on' のときだけ eBay を変える。
+     'plan'（予定だけ表示）では**1回も**書き込みを呼ばない。
+   ・1日に変える件数の上限（既定200件）を超えたぶんは次の日に回す。
+   ・値下げ幅（md_step）と最低売値（md_floor）は pj_price が決めて D1 に入れる。
+     入っていない行は触らない（Worker 側で値付けの式を持たない）。
+   ・失敗した行は売値も回数も進めない。理由を revise_err に残して
+     「対応が必要」に出す。 */
+const MD_MODES = { off: 1, plan: 1, on: 1 };
+const MD_MAX_DEFAULT = 200;        // 1日に変える件数の上限
+const MD_DAYS_DEFAULT = 3;         // 値下げの間隔（日）
+const MD_PICK_LIMIT = 2000;        // 1回に見る行数
+const MD_PLAN_SHOW = 50;           // 予定の一覧に入れる件数
+/* 権限が足りないときのエラー。トークンの取り直しが必要なので、
+   そこで打ち切って通知する（同じ失敗を200件くり返さない）。 */
+const MD_SCOPE_ERR = /scope|insufficient permission|not authorized|21916884|931|932|1.32/i;
+
+async function mdSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const num = (k, d, lo, hi) => {
+    const n = Number(st[k]);
+    return (isFinite(n) && n >= lo && n <= hi) ? n : d;
+  };
+  const mode = String(st.autoMdMode || "off");
+  return {
+    mode: MD_MODES[mode] ? mode : "off",
+    max: Math.round(num("autoMdMax", MD_MAX_DEFAULT, 1, 2000)),
+    days: num("csvMarkDays", MD_DAYS_DEFAULT, 1, 365),
+  };
+}
+/* 値下げの対象にしない理由。空なら対象。pj_price の syncMarkSkip と同じ並びで、
+   Worker から見える条件だけを見る（売値・最低売値は D1 の値）。 */
+function mdSkip(r, st, cutoff) {
+  if (!String(r.ebay_item_id || "").trim()) return "出品していません";
+  if (Number(r.one_off || 0)) return "一点物";
+  if (Number(r.mark_stop || 0)) return "値下げしない";
+  if (isDropship(r)) return "無在庫";
+  if (Number(r.restocking || 0)) return "再調達中";
+  if (Number(r.ebay_sale || 0)) return "eBayのセール中";
+  if (Number(r.ebay_qty || 0) <= 0) return "数量0";
+  const mark = String(r.mark_at || "");
+  const sold = String(r.ebay_sold_at || "");
+  if (mark && sold && sold > mark) return "売れたので値下げ停止";
+  if (!(Number(r.md_step || 0) > 0) || !(Number(r.md_floor || 0) > 0))
+    return "値下げ幅が未設定";
+  const now = Number(r.ebay_price || 0);
+  if (!(now > 0)) return "売値が分かりません";
+  if (now <= Number(r.md_floor || 0)) return "最低売値に着いています";
+  if (mark && mark > cutoff) return "間隔が空いていません";
+  return "";
+}
+/* 次に出す売値。最低売値で止める。下げられないときは null。 */
+function mdNext(r) {
+  const now = Number(r.ebay_price || 0);
+  const fl = Math.round(Number(r.md_floor || 0) * 100) / 100;
+  const step = Number(r.md_step || 0);
+  if (!(now > 0) || !(fl > 0) || !(step > 0)) return null;
+  let v = Math.round((now - step) * 100) / 100;
+  if (v < fl) v = fl;
+  return (v < now) ? v : null;
+}
+/* ベストオファーの金額。pj_price の syncBoCells と同じ式にしてある。
+   自動拒否額（min）は必ず新しい売値より下（22003 を避ける）。
+   自動承諾額（acc）は、いまの値が新しい売値以上になる行だけ下げる。 */
+function mdBo(r, next) {
+  if (!Number(r.ebay_bo || 0)) return { min: 0, acc: 0 };
+  const cap = Math.round((next - 0.01) * 100) / 100;
+  const fl = Math.round(Number(r.md_floor || 0) * 100) / 100;
+  const min = (fl > 0 && fl < cap) ? fl : cap;
+  const acc0 = Number(r.ebay_bo_accept || 0);
+  return { min: min > 0 ? min : 0, acc: (acc0 > 0 && acc0 >= next) ? cap : 0 };
+}
+/* ReviseFixedPriceItem の本文。売値とベストオファーの金額を一度に変える。 */
+function reviseBody(itemId, price, bo) {
+  const money = (tag, v) =>
+    "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
+  const det = [];
+  if (bo && bo.min > 0) det.push(money("MinimumBestOfferPrice", bo.min));
+  if (bo && bo.acc > 0) det.push(money("BestOfferAutoAcceptPrice", bo.acc));
+  return '<?xml version="1.0" encoding="utf-8"?>'
+    + '<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + "<Item><ItemID>" + esc(itemId) + "</ItemID>"
+    + money("StartPrice", price)
+    + (det.length ? ("<ListingDetails>" + det.join("") + "</ListingDetails>") : "")
+    + "</Item></ReviseFixedPriceItemRequest>";
+}
+/* eBay に売値を書き込む（唯一の書き込み。write:true を付けた呼び出しだけ通る）。 */
+async function ebayRevise(env, run, token, itemId, price, bo) {
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    write: true,
+    headers: {
+      "X-EBAY-API-CALL-NAME": "ReviseFixedPriceItem",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: reviseBody(itemId, price, bo),
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  const why = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
+               xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 200);
+  const ok = resp.ok && /^(Success|Warning)$/i.test(ack);
+  return { ok, status: resp.status, ack: ack || ("HTTP" + resp.status),
+           why: ok ? "" : (why || ("HTTP " + resp.status)) };
+}
+/* 1日1回の自動値下げ。mode が 'plan' のときは eBay を呼ばず予定だけ返す。 */
+async function jobMarkdown(env) {
+  const run = newRun("markdown");
+  const res = { mode: "off", picked: 0, changed: 0, failed: 0, skipped: 0,
+                capped: 0, plan: [] };
+  try {
+    const st = await mdSettings(env);
+    res.mode = st.mode;
+    if (st.mode === "off") {
+      run.notes.push("自動値下げはオフ（設定「自動値下げ」を 予定だけ表示 / オン にする）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const cutoff = new Date(Date.now() - st.days * 24 * 60 * 60 * 1000).toISOString();
+    const q = await env.DB.prepare(
+      `SELECT ${ITEM_COLS},
+         (SELECT MAX(o.ordered_at) FROM orders o
+           WHERE o.channel='ebay' AND o.asin=items.asin AND o.cond=items.cond)
+           AS ebay_sold_at
+       FROM items
+       WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>''
+       ORDER BY COALESCE(mark_at,'') ASC LIMIT ${MD_PICK_LIMIT}`).all();
+    const rows = (q && q.results) || [];
+    const due = [];
+    for (const r of rows) {
+      if (mdSkip(r, st, cutoff)) { res.skipped++; continue; }
+      const next = mdNext(r);
+      if (next === null) { res.skipped++; continue; }
+      due.push({ r, next, bo: mdBo(r, next) });
+    }
+    res.picked = due.length;
+    const list = due.slice(0, st.max);
+    res.capped = due.length - list.length;
+    res.plan = list.slice(0, MD_PLAN_SHOW).map((x) => ({
+      asin: x.r.asin, cond: x.r.cond, item_id: x.r.ebay_item_id,
+      from: Number(x.r.ebay_price || 0), to: x.next,
+      floor: Number(x.r.md_floor || 0), step: Number(x.r.md_step || 0),
+      bo: x.bo.min, done: Number(x.r.md_done || 0),
+    }));
+    if (st.mode === "plan") {
+      run.notes.push("予定だけ表示：" + res.picked + "件が値下げの時期"
+        + (res.capped ? ("（上限 " + st.max + "件を超えた " + res.capped + "件は翌日）") : "")
+        + "／とばした " + res.skipped + "件。eBay は変えていません");
+      await mdLog(env, run, st, res);
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!list.length) {
+      run.notes.push("値下げの時期の出品はありません（とばした " + res.skipped + "件）");
+      await mdLog(env, run, st, res);
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const token = await ebayToken(env, run);
+    const at = nowIso();
+    const stmts = [];
+    let scopeErr = "";
+    for (const x of list) {
+      const r = x.r;
+      const v = await ebayRevise(env, run, token, r.ebay_item_id, x.next, x.bo);
+      if (v.ok) {
+        res.changed++;
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET ebay_price=?3, mark_at=?4, md_done=COALESCE(md_done,0)+1,
+             ebay_bo_decline=CASE WHEN ?5>0 THEN ?5 ELSE ebay_bo_decline END,
+             revise_err=NULL, revise_err_at=NULL, updated_at=?4
+           WHERE asin=?1 AND cond=?2`
+        ).bind(r.asin, r.cond, x.next, at, x.bo.min));
+      } else {
+        res.failed++;
+        run.errors++;
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET revise_err=?3, revise_err_at=?4, updated_at=?4
+           WHERE asin=?1 AND cond=?2`
+        ).bind(r.asin, r.cond, ("自動値下げ " + v.why).slice(0, 300), at));
+        if (MD_SCOPE_ERR.test(v.why)) { scopeErr = v.why; break; }
+      }
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("自動値下げ：下げた " + res.changed + "件／失敗 " + res.failed
+      + "件／とばした " + res.skipped + "件"
+      + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
+    if (scopeErr)
+      run.notes.push("権限が足りません（eBayのユーザートークンを sell.inventory の"
+        + "スコープで取り直してください）：" + scopeErr);
+    await mdLog(env, run, st, res, scopeErr);
+    await notify(env, run, mdNotifyText(res, st, scopeErr));
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 実行結果を md_runs に残す（1日1行が基本）。 */
+async function mdLog(env, run, st, res, scopeErr) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO md_runs (at, mode, picked, changed, failed, skipped, capped, note,
+         created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`
+    ).bind(nowIso(), res.mode, res.picked, res.changed, res.failed, res.skipped,
+           res.capped,
+           ((scopeErr ? ("権限不足 " + scopeErr + " / ") : "")
+            + "上限 " + st.max + "件・間隔 " + st.days + "日").slice(0, 500)).run();
+  } catch (e) { /* ログの失敗で本処理を落とさない */ }
+}
+function mdNotifyText(res, st, scopeErr) {
+  if (!res.changed && !res.failed) return "";
+  const t = ["🏷️ 自動値下げ（" + st.days + "日ごと）",
+    "下げた " + res.changed + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"];
+  if (res.capped) t.push("上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
+  if (scopeErr) t.push("⚠️ 権限が足りません。eBayのユーザートークンを取り直してください");
+  res.plan.slice(0, 10).forEach((x) => {
+    t.push("・" + x.asin + "（" + x.cond + "） $" + x.from.toFixed(2)
+      + " → $" + x.to.toFixed(2) + "（下限 $" + x.floor.toFixed(2) + "）");
+  });
+  return t.join("\n");
+}
+/* 直近の実行結果（pj_price の画面に出す）。 */
+async function mdLast(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT at, mode, picked, changed, failed, skipped, capped, note
+         FROM md_runs ORDER BY id DESC LIMIT 1`).first();
+    return r || null;
+  } catch (e) { return null; }
 }
 
 /* ---- GET /status ---- */
@@ -2198,6 +2458,8 @@ async function statusBody(env, url) {
     counts: counts || {},
     last_runs: (runs && runs.results) || [],
     errors_recent: ((runs && runs.results) || []).some((r) => r.errors > 0),
+    // 自動値下げの直近の実行結果（画面に「前回：下げた○件」と出す）
+    md_last: await mdLast(env),
     items,
     sold_recent: (sold && sold.results) || [],
     events_recent: (ev && ev.results) || [],
@@ -2347,6 +2609,16 @@ async function putListings(env, body) {
          mark_stop=COALESCE(?21, mark_stop),
          -- eBay優先の印（Amazon同等ラインでの引き上げをやめる行）
          ebay_first=COALESCE(?22, ebay_first),
+         /* 自動値下げの値下げ幅。出品時と「自動値下げを有効にした時点」に送る。
+            いちど入ったら、送られてこないかぎりそのまま（途中で変えない）。
+            md_start が新しい値で来たら、回数（md_done）を0に戻す
+            （再出品・値上げのあとは下げ直しを最初からやる）。 */
+         md_step=COALESCE(?24, md_step),
+         md_floor=COALESCE(?25, md_floor),
+         md_n=COALESCE(?26, md_n),
+         md_done=CASE WHEN ?27 IS NOT NULL AND (md_start IS NULL OR md_start<>?27)
+                      THEN 0 ELSE md_done END,
+         md_start=COALESCE(?27, md_start),
          /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
          revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
          revise_err_at=CASE WHEN ?23='' THEN NULL
@@ -2377,7 +2649,9 @@ async function putListings(env, body) {
            (x.mark_at === "") ? "" : (x.mark_at ? String(x.mark_at) : null),
            flagOf(x, "mark_stop"), flagOf(x, "ebay_first"),
            (x.revise_err === undefined || x.revise_err === null)
-             ? null : String(x.revise_err)));
+             ? null : String(x.revise_err),
+           numOf(x, "md_step"), numOf(x, "md_floor"), numOf(x, "md_n"),
+           numOf(x, "md_start")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -2602,6 +2876,8 @@ export default {
           return json(await jobSweep(env, Number(body.days || 0)), 200, origin);
         if (kind === "notify")    return json(await jobNotify(env), 200, origin);
         if (kind === "onhand-clean") return json(await jobOnHandClean(env), 200, origin);
+        // 自動値下げ。設定が 'plan' のときは eBay を変えず予定だけ返す
+        if (kind === "markdown")  return json(await jobMarkdown(env), 200, origin);
         if (kind === "test-notify")
           return json(await jobTestNotify(env, body.tag), 200, origin);
         if (kind === "pricing") {
@@ -2625,7 +2901,12 @@ export default {
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
     ctx.waitUntil((async () => {
       await jobHourly(env);
-      if (new Date().getUTCHours() === DAILY_UTC_HOUR) await jobDaily(env);
+      if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
+        await jobDaily(env);
+        /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
+           新しくなっているので、その値で判断できる。 */
+        await jobMarkdown(env);
+      }
     })());
   },
 };
@@ -2639,4 +2920,5 @@ export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, ju
                         invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
                         lowestReqs, lowestKey, restockLowest, restockTrouble,
-                        settingsGet, settingsPut };
+                        settingsGet, settingsPut,
+                        mdSettings, mdSkip, mdNext, mdBo, reviseBody, jobMarkdown, mdLast };

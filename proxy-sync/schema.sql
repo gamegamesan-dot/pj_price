@@ -85,9 +85,20 @@ CREATE TABLE IF NOT EXISTS items (
   /* eBay優先の印。1 なら「Amazonの方が得」の引き上げ（Amazon同等ライン）を使わない。
      Amazonの最安値が高いだけで売れていない商品や、eBayで実績を作りたい商品に立てる。 */
   ebay_first       INTEGER NOT NULL DEFAULT 0,
-  /* 3日ごとの値下げの記録。端末を変えても続きから動くよう D1 に置く。 */
-  mark_at          TEXT,                       -- 最後に値下げCSVを書き出した時刻
+  /* 3日ごとの値下げの記録。端末を変えても続きから動くよう D1 に置く。
+     自動値下げ（Cron が eBay を直接変える）でも同じ列を進める
+     （CSVと二重に下げないため）。 */
+  mark_at          TEXT,                       -- 最後に値下げした時刻（CSV・自動とも）
   mark_stop        INTEGER NOT NULL DEFAULT 0, -- 1 なら値下げしない
+  /* 自動値下げの値下げ幅。出品時（または自動値下げを初めて有効にした時点の売値）で
+     決めて保存し、途中で変えない。式は pj_price 側の設定で変わるので数字だけ持つ。 */
+  md_step          REAL,                       -- 1回の値下げ幅（$・最低1）
+  md_start         REAL,                       -- 幅を決めたときの開始価格（$）
+  md_floor         REAL,                       -- 幅を決めたときの最低売値（$）
+  md_n             INTEGER,                    -- 幅を決めたときの回数（既定10）
+  md_done          INTEGER NOT NULL DEFAULT 0, -- 自動で下げた回数
+  /* eBayのセール（Markdown Manager）が設定されている出品。1 ならとばす。 */
+  ebay_sale        INTEGER,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
@@ -200,3 +211,18 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   note         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_at ON sync_runs(started_at);
+
+-- 自動値下げの実行結果（1日1行が基本）。
+CREATE TABLE IF NOT EXISTS md_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  mode       TEXT NOT NULL,                    -- 'plan' / 'on'
+  picked     INTEGER NOT NULL DEFAULT 0,
+  changed    INTEGER NOT NULL DEFAULT 0,
+  failed     INTEGER NOT NULL DEFAULT 0,
+  skipped    INTEGER NOT NULL DEFAULT 0,
+  capped     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_md_runs_at ON md_runs(at);

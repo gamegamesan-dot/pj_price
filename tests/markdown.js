@@ -237,7 +237,18 @@ await p.click('#syncMarkRun'); await p.waitForTimeout(500);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L)+' / '+JSON.stringify(before));
-ok(Math.abs(before.price-before.next-1)<0.001,'★1回で $1 下げる');
+/* v136 から、1回の下げ幅は（開始価格 − 最低売値）÷ 回数（既定10回・最低 $1）。
+   この行は $60.00 → 下限 $45.03 なので 1.497 → $1.50。 */
+const step1=await p.evaluate(()=>{
+  const r=syncData.items.find(x=>x.ebay_item_id==='110001');
+  return { step:syncMdStep(r), times:csvMarkTimes(), min:csvMarkStep() };
+});
+console.log('   下げ幅: '+JSON.stringify(step1));
+ok(step1.times===10&&step1.min===1,'値下げの回数10回・最低 $1 が既定');
+ok(Math.abs(before.price-before.next-step1.step)<0.001,
+   '★1回で（開始価格 − 最低売値）÷10 ぶん下げる');
+ok(Math.abs(step1.step-Math.ceil((before.price-before.floor)/10*100)/100)<0.001,
+   '★下げ幅は $0.01 単位で切り上げ');
 ok(L.length===3&&L[2]==='Revise,110001,'+before.next.toFixed(2),'★その値で書き出す');
 const post=await p.evaluate(()=>{
   const r=syncData.items.find(x=>x.ebay_item_id==='110001');
