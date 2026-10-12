@@ -576,6 +576,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="warn" id="csvReviveNote" style="display:none;margin-top:8px"></div>
       <button class="btn" id="csvCartAdd" style="width:100%;margin-top:8px;display:none">箱なしで出す行：既存の出品に+1するCSV</button>
       <div class="warn" id="csvCartNote" style="display:none;margin-top:8px"></div>
+      <button class="btn" id="csvBaseLow" style="width:100%;margin-top:8px;display:none">仕入れ前の候補：Amazon基準価格を取る</button>
+      <div class="note2" id="csvBaseLowNote" style="margin-top:0"></div>
 
       <div class="note2" id="csvExportNote"></div>
       <!-- 書き出したあと、カテゴリごとに1つずつ保存し直せるボタン（iPhone向けの保険） -->
@@ -3246,6 +3248,10 @@ function csvAddCatOpts(keep){
      可（UA）        → Acceptable 6000（acceptable）。可はカートリッジのみとして扱う
    2026-10-05：UVG 3000／UG 4000／UA 5000 だったのを上の対応に直した。 */
 var CSV_COND={N:1000,UM:2750,UVG:4000,UG:5000,UA:6000,UKN:5000};
+/* 「基準コンディション」列（新品／中古）→ 状態コード。
+   仕入れ登録前のリスト（SKUが空の行）はこの列だけで状態を決める。
+   中古は細かいグレードが分からないので UKN（ゲーム Good 5000／フィギュア Used 3000）。 */
+var CSV_COND_BASE={'新品':'N','中古':'UKN','新':'N','中古品':'UKN'};
 // 「出品コンディション」列の表記 → 状態コード。SKUの状態コードより列を優先する。
 var CSV_COND_COL={'新品':'N','ほぼ新品':'UM','非常に良い':'UVG','良い':'UG','可':'UA'};
 var CSV_COND_FIG={N:1000,UM:3000,UVG:3000,UG:3000,UA:3000,UKN:3000};
@@ -3951,7 +3957,7 @@ function csvWeightFor(r){
   return Math.ceil(base+csvPackMarginFor(r.cat));
 }
 function csvRecalc(r){
-  var p=csvPriceFor(r.cost,r.weight,csvFlatOf(r));
+  var p=csvPriceFor(csvCostOf(r),r.weight,csvFlatOf(r));
   r.price=p.price; r.floor=p.floor; r.profit=p.profit; r.zone=p.zone;
   return r;
 }
@@ -3972,7 +3978,7 @@ function csvThreshold(r){
 // 相場（商品代＋請求送料の総額）で売ったときの利益。基準地帯で計上する。
 function csvSoldProfit(r){
   var sold=+r.sold||0; if(!(sold>0))return null;
-  return csvWithItem(r.cost,r.weight,function(){
+  return csvWithItem(csvCostOf(r),r.weight,function(){
     var m=priceModel();
     var G=m.zoneShipCharge(m.basisZone);
     if(sold<=G)return null;                        // 送料以下は誤入力
@@ -3983,7 +3989,7 @@ function csvSoldProfit(r){
 // 既存の逆算ロジックをそのまま使う（新しい式は作らない）。
 function csvEbayLine(r){
   var th=csvThreshold(r).v;
-  return csvWithItem(r.cost,r.weight,function(){
+  return csvWithItem(csvCostOf(r),r.weight,function(){
     var m=priceModel(th);
     return Math.round((ceil2(m.pRec)+ceil2(m.zoneShipCharge(m.basisZone)))*100)/100;
   });
@@ -3995,6 +4001,17 @@ function csvVerdict(r){
   return (pr>csvThreshold(r).v)?'ebay':'amazon';
 }
 function csvEbayFirst(r){ return csvVerdict(r)==='ebay'; }
+/* 「カテゴリ」列（せどりすとの分類）→ eBayカテゴリ。
+   仕入れ登録前のリストは SKU の接頭辞が無いので、この列と商品名で振り分ける。
+   フィギュア・ホビーは2つのカテゴリ（261055／261068）のどちらかを人が選ぶので、
+   SKU の hobby と同じ既定（261055）にして「カテゴリ未振分」で出す。 */
+function csvCatFromCol(v,title){
+  var s=String(v||'');
+  if(/ゲーム|ソフト|game|video\s*games/i.test(s))return '139973';
+  if(/フィギュア|ホビー|おもちゃ|トイ|toy|hobby|collectib/i.test(s))return '261055';
+  // 分からない行もホビー側で取り込む（カテゴリは行で選び直せる）
+  return '261055';
+}
 function csvImport(text){
   var rows=csvParse(text);
   if(!rows.length)return {err:'空のファイルです'};
@@ -4003,14 +4020,24 @@ function csvImport(text){
   var iSku=col('SKU'), iJan=col('JAN'), iAsin=col('ASIN'), iTitle=col('タイトル'),
       iCat=col('カテゴリ'), iW=col('重量'), iCost=col('仕入原価'), iQty=col('個数'),
       iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク'),
-      iType=col('出品種別');
+      iType=col('出品種別'), iBase=col('基準コンディション');
   if(iSku<0)return {err:'SKU列が見つかりません。せどりすとの書き出しCSVか確認してください'};
-  var skipped=0, groups={}, order=[];
+  var skipped=0, noSku=0, pre=0, groups={}, order=[];
   for(var n=1;n<rows.length;n++){
-    var r=rows[n]; if(!r||!String(r[iSku]||'').trim())continue;
-    var sku=String(r[iSku]).trim(), sp=csvSkuParts(sku);
-    var cat=CSV_PREFIX[sp.prefix];
+    var r=rows[n]; if(!r)continue;
+    var sku=String(r[iSku]||'').trim();
+    /* ---- 仕入れ登録前のリスト（SKUが空の行）----
+       せどりすとで仕入れ登録前のリストを書き出すと、SKU が空・仕入原価 -1・
+       個数 -1・出品コンディションが空になる。これを「仕入れ前の候補」として
+       取り込む（無在庫と同じ M-<ASIN> で出す）。 */
+    var preBuy=!sku;
+    if(preBuy&&!/^B[0-9A-Z]{9}$/.test(String(iAsin>=0?r[iAsin]:'').trim())){
+      noSku++; continue;                       // ASIN も無い行は取り込めない
+    }
+    var sp=preBuy?{ prefix:'', date:'', cond:'', asin:'', cost:0 }:csvSkuParts(sku);
+    var cat=preBuy?csvCatFromCol(iCat>=0?r[iCat]:''):CSV_PREFIX[sp.prefix];
     if(cat===undefined||cat===null){ skipped++; continue; }
+    if(preBuy){ noSku++; pre++; }
     var title=iTitle>=0?String(r[iTitle]||'').trim():'';
     /* 商品名に機種が書いてあるゲーム（「SW版」「Switch版」など）は、
        接頭辞が game でなくてもゲームとして取り込む（未振分にしない）。
@@ -4023,6 +4050,10 @@ function csvImport(text){
     var condCol=iCond>=0?String(r[iCond]||'').trim():'';
     var code=CSV_COND_COL[condCol]||'';
     if(!code&&(fig?CSV_COND_FIG:CSV_COND)[sp.cond])code=sp.cond;
+    /* 仕入れ前の候補は「基準コンディション」（新品／中古）で決める。
+       出品コンディションもSKUの状態コードも空なので、この列だけが手がかり。 */
+    var baseCol=iBase>=0?String(r[iBase]||'').trim():'';
+    if(!code&&baseCol)code=CSV_COND_BASE[baseCol]||'';
     var condErr=!code;                                   // どちらでも判定できない
     var condId=condErr?0:(fig?CSV_COND_FIG:CSV_COND)[code];
     /* 「可」のゲームはカートリッジのみ（箱・説明書なし）、
@@ -4034,10 +4065,12 @@ function csvImport(text){
     if(loose)condId=CSV_LOOSE_COND;
     var asin=(iAsin>=0?String(r[iAsin]||'').trim():'')||sp.asin;
     // 箱なしは箱付き中古とは別物なので、同じASINでもまとめない
-    var key=asin+'|'+condId+'|'+(cart?'C':loose?'L':'');
-    var cost=iCost>=0?csvNum(r[iCost]):sp.cost;
-    var qty=iQty>=0?(csvNum(r[iQty])||1):1;
-    var wRaw=iW>=0?csvNum(r[iW]):0;
+    var key=asin+'|'+condId+'|'+(cart?'C':loose?'L':'')+(preBuy?'P':'');
+    /* 仕入原価・個数は、仕入れ登録前のリストでは -1 で入っている。
+       仕入値は 0 にして「仮（Amazon基準価格）」で計算し、数量は1にする。 */
+    var cost=Math.max(0,iCost>=0?csvNum(r[iCost]):sp.cost);
+    var qty=Math.max(1,iQty>=0?csvNum(r[iQty]):1);
+    var wRaw=Math.max(0,iW>=0?csvNum(r[iW]):0);
     if(groups[key]){
       var g=groups[key];
       g.qty+=qty; g.rows++;
@@ -4051,12 +4084,16 @@ function csvImport(text){
       // 機種が書いてある行は確定扱い（「カテゴリ未振分」にしない）
       catFixed:(sp.prefix==='game'||!!gh),
       condId:condId, condErr:condErr, condSrc:(condCol||sp.cond||''),
-      descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1,
+      descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1, dropship:preBuy,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
+      /* 仕入れ前の候補。手元に無いので無在庫（M-<ASIN>）で出し、仕入値は
+         Amazon基準価格を仮に使う（行のボタンで E- に切り替えられる）。 */
+      preBuy:preBuy, costTemp:(preBuy&&!(cost>0)),
       // 箱なしは一点物にしない（ASINごとに1つの出品を使い続ける）
       cartOnly:cart, looseOnly:loose,
-      forceEbay:false, oneOff:(cart||loose)?false:CSV_ONEOFF.test(title), pics:[],
+      forceEbay:false,
+      oneOff:(cart||loose||preBuy)?false:CSV_ONEOFF.test(title), pics:[],
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
@@ -4080,7 +4117,8 @@ function csvImport(text){
     csvList.push(g); added++;
   });
   csvSaveList();
-  return { added:added, skipped:skipped, merged:merged, groups:order.length };
+  return { added:added, skipped:skipped, merged:merged, groups:order.length,
+           noSku:noSku, pre:pre };
 }
 $('csvFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
@@ -4096,8 +4134,17 @@ $('csvFile').addEventListener('change',function(){
     box.style.display='block';
     if(r.err){ box.textContent='⚠ '+r.err; return; }
     box.textContent='✓ '+r.added+'件を追加しました。'
+      +(r.pre?('うち '+r.pre+'件は仕入れ前の候補（SKUが空の行）です。'
+               +'無在庫（M-<ASIN>）で取り込み、仕入値は Amazon基準価格を仮に使います。'):'')
       +(r.merged?('同一ASIN＋コンディションの'+r.merged+'行をまとめています。'):'')
-      +(r.skipped?(r.skipped+'件を対象外として除外しました。'):'');
+      +(r.skipped?(r.skipped+'件を対象外として除外しました。'):'')
+      /* 1件も入らなかったときは理由を出す（「0件を追加しました」で終わらせない）。
+         仕入れ登録前のリストは SKU・ASIN が空になることがある。 */
+      +((!r.added&&r.noSku)
+        ? ('SKUが空の行が'+r.noSku+'件あります（仕入れ登録前のリスト）。'
+           +'ASIN が入っていればそのまま取り込めます。'
+           +'この書き出しには ASIN が無いようなので、せどりすとで ASIN を含めて'
+           +'書き出し直してください。'):'');
     csvRender();
   };
   fr.readAsArrayBuffer(f);
@@ -4114,6 +4161,8 @@ function csvIssues(r){
   if(r.cat==='139973'){ if(!r.specs.gameName)a.push('Game Name なし');
                         if(!r.specs.platform)a.push('Platform なし'); }
   if(r.price&&r.floor&&r.price<r.floor)a.push('売値が最低売値未満');
+  // 仕入れ前の候補で、仮の仕入値（Amazon基準価格）も取れていない行
+  if(csvCostUnknown(r))a.push('仕入値が未確定（Amazon基準価格を取ってください）');
   // 状態まわり。コンディションを取り違えるとeBay側で違反になるため必ず出す。
   if(r.condErr)a.push('状態を判定できません'+(r.condSrc?('（'+r.condSrc+'）'):''));
   var te=String(r.titleEn||'');
@@ -4148,7 +4197,28 @@ function csvCostMin(){ var v=+$('csvCostMin').value; return (isFinite(v)&&v>=0)?
 function csvCostFixed(r){
   return r.costOrig!==undefined&&r.costOrig!==null&&(+r.costOrig)!==(+r.cost);
 }
-function csvCostLow(r){ return (+r.cost||0)<csvCostMin(); }
+function csvCostLow(r){ return csvCostOf(r)<csvCostMin(); }
+/* ================= 仮の仕入値（仕入れ前の候補）=================
+   仕入れ登録前のリスト（SKUが空・仕入原価 -1）は仕入値が分からない。
+   Amazon の基準価格（送料込み）を**仮の仕入値**として値付けに使い、
+   行には「仕入値：仮（Amazon基準価格）」と出す。
+   仕入れたら仕入値を入れ直す（入れた時点で仮ではなくなる）。 */
+// Amazon基準価格（送料込み・円）。販売連携の取り込み → 取り寄せた最安値 の順に見る
+function csvAmzBase(r){
+  var x=csvSyncItem(r);
+  if(x){ var b=syncBasis(x); if(+b.low>0)return Math.round(+b.low); }
+  return csvLowOf(String(r.asin||''),(r.condId===1000)?'new':'used');
+}
+// 行の仕入値（円）。仮の行は Amazon基準価格を使う。計算はすべてこれを通す
+function csvCostOf(r){
+  var c=+r.cost||0;
+  if(c>0)return c;
+  return r.costTemp?csvAmzBase(r):0;
+}
+// 仮の仕入値で計算している行か（Amazon基準価格が取れている行だけ）
+function csvCostIsTemp(r){ return !!(r.costTemp&&!(+r.cost>0)&&csvAmzBase(r)>0); }
+// 仮の仕入値も取れていない行（書き出しを止める）
+function csvCostUnknown(r){ return !!(r.costTemp&&!(+r.cost>0)&&!(csvAmzBase(r)>0)); }
 function csvCostSet(r,v){
   var n=Math.max(0,Math.floor(+v||0));
   if(r.costOrig===undefined||r.costOrig===null)r.costOrig=r.cost;   // 元の値を1度だけ控える
@@ -4159,7 +4229,7 @@ function csvCostSet(r,v){
 }
 // 行の見出し行（SKU / カテゴリ / 状態 / 売値 / 重量 / ポリシー）。その場で書き替えるので関数にする
 function csvRowSummary(r){
-  return r.sku+'　/　'+csvCatName(r.cat)+'　/　'
+  return (r.sku||(r.preBuy?'（仕入れ前・SKUなし）':''))+'　/　'+csvCatName(r.cat)+'　/　'
     +(CSV_COND_NAME[r.condId]||(r.condId?r.condId:'状態不明'))+'　/　'+usd(r.price||0)
     +'　/　'+(r.weight||0).toLocaleString()+'g　/　ポリシー '+csvShipProfileFor(r)
     +(csvShipMismatch(r)?('（eBayは '+csvShipMismatch(r)+'）'):'');
@@ -4167,8 +4237,12 @@ function csvRowSummary(r){
 // 仕入値欄の横に出す説明。修正済み・要確認をその場で出す
 function csvCostStat(r){
   var a=[];
+  if(csvCostIsTemp(r))
+    a.push('仕入値：仮（Amazon基準価格 '+yen(csvAmzBase(r))+'・送料込み）');
+  if(csvCostUnknown(r))
+    a.push('仕入値：未確定（「仕入れ前の候補：Amazon基準価格を取る」を押してください）');
   if(csvCostFixed(r))a.push('仕入値修正済み（元：'+yen(+r.costOrig||0)+'）');
-  if(csvCostLow(r))a.push('仕入値要確認');
+  if(csvCostLow(r)&&!r.costTemp)a.push('仕入値要確認');
   return a.join('　');
 }
 /* 行のバッジ。一覧を作り直さずに1行だけ入れ替えられるよう、ここにまとめる。 */
@@ -4182,6 +4256,7 @@ function csvBadgeHtml(r){
   else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
   else badge+=b('相場未確認','#8a6d00');   // 書き出しは止めない。確かめずに出す判断はできる
   if(v==='amazon'&&r.forceEbay)badge+=b('eBayにも出す','#2f6fb0');
+  if(r.preBuy)badge+=b('仕入れ前の候補','#1f6f8a');
   if(r.oneOff)badge+=b('一点物','#6b4fa0');
   if(csvCostLow(r))badge+=b('仕入値要確認','var(--bad)');
   if(csvCostFixed(r))badge+=b('仕入値修正済み（元：'+yen(+r.costOrig||0)+'）','#2f6fb0');
@@ -4929,6 +5004,11 @@ function csvGroupsRender(){
   // カートリッジのみで既存の出品に積み上げる行
   var ca=csvList.filter(function(r){ return !!csvCartStack(r); }).length;
   csvBtnHot('csvCartAdd',ca>0,CSV_STACK_BTN+csvCountBadge(ca));
+  /* 仕入れ前の候補（SKUが空の行）で、仮の仕入値（Amazon基準価格）が
+     まだ取れていない行。取るまでは書き出せない。 */
+  var bl=csvList.filter(csvCostUnknown).length;
+  csvBtnHot('csvBaseLow',bl>0,'仕入れ前の候補：Amazon基準価格を取る'+csvCountBadge(bl));
+  $('csvBaseLow').style.display=bl?'block':'none';
   /* 復活・+1 は対象の行があるときだけ出す（ふだんは押せないボタンを並べない）。 */
   $('csvRevive2').style.display=rv?'block':'none';
   $('csvCartAdd').style.display=ca?'block':'none';
@@ -5992,6 +6072,7 @@ function csvPriceSrcOf(r){
           custom_label:csvCustomLabel(r), item_id:r.itemId||'',
           one_off:!!r.oneOff };
   if(+r.weight>0)o.weight_g=Math.round(+r.weight);
+  // 仮の仕入値（Amazon基準価格）は D1 に残さない（本当の仕入値を上書きしないため）
   if(+r.cost>0)o.cost_yen=Math.round(+r.cost);
   if(+r.sold>0)o.sold_usd=Math.round(+r.sold*100)/100;
   /* 値下げの記録は、この端末に残っていたぶんだけ引き継ぐ（印が立っている行だけ送る）。
@@ -6273,6 +6354,10 @@ function csvCustomLabel(r){
   if(csvIsLoose(r)&&r.asin)return (r.dropship?'M-':'E-')+r.asin+csvLooseSuffix(r);
   if(r.dropship&&r.asin)return 'M-'+r.asin+(r.condId===1000?'':'-U');
   if(r.fba&&r.asin)return 'E-'+r.asin+(r.condId===1000?'':'-U');
+  /* SKU が無い行（仕入れ登録前のリストから取り込んだ行）は、
+     無在庫の印を外しても ASIN から作る（空の CustomLabel で出さない）。 */
+  if(!String(r.sku||'').trim()&&r.asin)
+    return 'E-'+r.asin+(r.condId===1000?'':'-U');
   return r.sku;
 }
 /* 送料ポリシー。再調達モードと無在庫の行は、売れてから仕入れるので
@@ -6551,14 +6636,25 @@ function csvNewLoad(){
 function csvNewSave(){
   try{ localStorage.setItem(CSV_NEW_KEY,JSON.stringify(csvNew)); }catch(e){}
 }
-// 新品最安値（送料込み・円）。取っていなければ0
-function csvNewLow(r){
-  var o=csvNew.low[String(r.asin||'')];
+/* 取り寄せた Amazon最安値（送料込み・円）。
+   キーは 'ASIN|new' / 'ASIN|used'。'ASIN' だけの古い記録は新品として読む
+   （v137 までは新品しか取っていなかった）。 */
+function csvLowOf(asin,cond){
+  var k=String(asin||'');
+  var o=csvNew.low[k+'|'+(cond||'new')]||((cond==='new')?csvNew.low[k]:null);
   return (o&&+o.v>0)?+o.v:0;
 }
-function csvNewLowAt(r){
-  var o=csvNew.low[String(r.asin||'')];
+function csvLowAtOf(asin,cond){
+  var k=String(asin||'');
+  var o=csvNew.low[k+'|'+(cond||'new')]||((cond==='new')?csvNew.low[k]:null);
   return (o&&o.at)?String(o.at).slice(0,16).replace('T',' '):'';
+}
+// 新品最安値（送料込み・円）。取っていなければ0
+function csvNewLow(r){
+  return csvLowOf(String(r.asin||''),'new');
+}
+function csvNewLowAt(r){
+  return csvLowAtOf(String(r.asin||''),'new');
 }
 /* 新品最安値を仕入値とみなした推奨売値。再調達（syncRecommend）と同じ csvPriceFor を使う。 */
 function csvNewRec(r){
@@ -6610,7 +6706,9 @@ function csvNewLowRun(){
       Object.keys(d.lowest||{}).forEach(function(k){
         var m=/^(B[0-9A-Z]{9})\|new$/.exec(k); if(!m)return;
         var v=d.lowest[k];
-        csvNew.low[m[1]]={ v:+v.low||0, n:+v.lowN||0, total:+v.total||0, at:at };
+        var rec={ v:+v.low||0, n:+v.lowN||0, total:+v.total||0, at:at };
+        csvNew.low[m[1]]=rec;                 // 古い形（新品）も残す
+        csvNew.low[m[1]+'|new']=rec;
         got++;
       });
       csvNewSave(); csvRender();
@@ -6620,6 +6718,46 @@ function csvNewLowRun(){
     ['catch'](function(e){ $('csvNewLowNote').textContent='取得に失敗：'+e.message; })
     .then(function(){ b.disabled=false; b.textContent='① 選んだ行の新品最安値を取る'; });
 }
+
+/* ---- 仕入れ前の候補：仮の仕入値（Amazon基準価格）を取る ----
+   /lowest を行の状態（新品／中古）で呼び、ASIN|cond で控える。
+   取れた値はそのまま仕入値として値付けに入る（仕入れたら本当の値を入れ直す）。 */
+function csvBaseLowRun(){
+  var rows=csvList.filter(csvCostUnknown);
+  if(!rows.length){ alert('Amazon基準価格を取る行はありません。'); return; }
+  if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncKeyReady('csvBaseLowNote'))return;
+  var b=$('csvBaseLow'); b.disabled=true; b.textContent='取得中…';
+  $('csvBaseLowNote').textContent='Amazonに問い合わせています…';
+  var items=rows.map(function(r){
+    return { asin:r.asin, cond:(r.condId===1000)?'new':'used' }; });
+  fetch(syncUrl()+'/lowest',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:items})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      var got=0, at=d.at||new Date().toISOString();
+      Object.keys(d.lowest||{}).forEach(function(k){
+        var m=/^(B[0-9A-Z]{9})\|(new|used)$/.exec(k); if(!m)return;
+        var v=d.lowest[k];
+        if(!(+v.low>0))return;
+        var rec={ v:+v.low||0, n:+v.lowN||0, total:+v.total||0, at:at };
+        csvNew.low[m[1]+'|'+m[2]]=rec;
+        if(m[2]==='new')csvNew.low[m[1]]=rec;
+        got++;
+      });
+      csvNewSave();
+      csvList.forEach(csvRecalc);
+      csvSaveList(); csvRender();
+      $('csvBaseLowNote').textContent='Amazon基準価格を取りました：'+got+'件'
+        +(rows.length-got?('　'+(rows.length-got)
+          +'件は出品が見つかりませんでした（仕入値を手で入れてください）。'):'')
+        +'　仮の仕入値として推奨売値を出しています。';
+    })
+    ['catch'](function(e){ $('csvBaseLowNote').textContent='取得に失敗：'+e.message; })
+    .then(function(){ b.disabled=false; csvGroupsRender(); });
+}
+$('csvBaseLow').onclick=csvBaseLowRun;
 
 /* ---- ②eBayカタログを照合（JAN） ---- */
 function csvNewCatRun(){
@@ -10258,7 +10396,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v137';   // sw.js の const V と必ず同じ値にする
+var APP_V='v138';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
