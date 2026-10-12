@@ -4462,7 +4462,30 @@ function csvEbayKw(t){
   CSV_EN_DROP.forEach(function(re){ s=s.replace(re,' '); });
   return s.replace(/\s+/g,' ').trim();
 }
-/* 行の見出しの下に並べる小さなリンク。どれも新しいタブで開く。 */
+/* ================= 相場を調べるリンクの検索条件 =================
+   メルカリ（売り切れ）… 販売状況は sold_out|trading（取引中を含む。2026-10-04 確認）、
+     並び順は**新しい順**（sort=created_time&order=desc）、
+     商品の状態はその行に合わせる（新品の行は「新品、未使用」だけ、
+     中古・カートリッジのみ・フィギュアのみの行はそれ以外のすべて）。
+   ヤフオク（落札相場）… 終了したオークションの検索（closedsearch）、
+     並び順は**終了日時の新しい順**（s1=end&o1=d）、
+     状態は新品（istatus=1）／中古（istatus=2）。
+   メルカリの複数選択は | 区切り（%7C）。status=sold_out|trading と同じ書き方にそろえる。 */
+var MERC_SEP='%7C';
+var MERC_COND_NEW='1';                         // 新品、未使用
+var MERC_COND_USED=['2','3','4','5','6'];      // 未使用に近い 〜 全体的に状態が悪い
+function mercSoldUrl(kw,isNew){
+  return 'https://jp.mercari.com/search?keyword='+encodeURIComponent(kw)
+    +'&status=sold_out'+MERC_SEP+'trading'
+    +'&sort=created_time&order=desc'
+    +'&item_condition_id='+(isNew?MERC_COND_NEW:MERC_COND_USED.join(MERC_SEP));
+}
+function yahooClosedUrl(kw,isNew){
+  return 'https://auctions.yahoo.co.jp/closedsearch/closedsearch?p='
+    +encodeURIComponent(kw)+'&istatus='+(isNew?'1':'2')+'&s1=end&o1=d';
+}
+/* 行の見出しの下に並べる小さなリンク。どれも新しいタブで開く。
+   o.isNew … その行が新品かどうか（中古・カートリッジのみ・フィギュアのみは false）。 */
 function csvLinkBar(o){
   var a=function(href,label,col){
     return '<a class="btn" href="'+esc(href)+'" target="_blank" rel="noopener"'
@@ -4472,12 +4495,10 @@ function csvLinkBar(o){
   var h='';
   if(o.asin)h+=a('https://www.amazon.co.jp/dp/'+encodeURIComponent(o.asin),'Amazon');
   if(o.kw){
-    var q=encodeURIComponent(o.kw);
-    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=on_sale','メル 販売中');
-    /* メルカリの「売り切れ」は sold_out と trading（取引中）をまとめた条件。
-       sold_out だけだと販売中の商品も混ざって出る（2026-10-04の報告）。
-       %7C は | （パイプ）。 */
-    h+=a('https://jp.mercari.com/search?keyword='+q+'&status=sold_out%7Ctrading','メル 売切');
+    /* ヤフオクの落札相場（終了したオークション）。メル 売切と同じキーワードで引く。
+       「メル 販売中」はここに置き換えた（売れた値段のほうが相場に近いため）。 */
+    h+=a(yahooClosedUrl(o.kw,!!o.isNew),'ヤフオク 落札');
+    h+=a(mercSoldUrl(o.kw,!!o.isNew),'メル 売切');
   }
   if(o.en)h+=a('https://www.ebay.com/sch/i.html?_nkw='+encodeURIComponent(o.en)
     +'&LH_Sold=1&LH_Complete=1','eBay Sold');
@@ -5175,7 +5196,8 @@ function csvRender(){
       +'</div>'
       /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
       +'<div data-links="'+r.id+'">'
-      +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn)})+'</div>'
+      +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn),
+                   isNew:(r.condId===1000)})+'</div>'
       +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
       +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
@@ -5456,7 +5478,8 @@ $('csvList').addEventListener('input',function(e){
     rk.mercKw=String(t.value||'').trim();
     csvSaveList();
     var lb=document.querySelector('#csvList [data-links="'+kid+'"]');
-    if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin,kw:csvKwOf(rk),en:csvEbayKw(rk.titleEn)});
+    if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin,kw:csvKwOf(rk),
+      en:csvEbayKw(rk.titleEn),isNew:(rk.condId===1000)});
     return;
   }
   var cid=t.getAttribute('data-cost');
@@ -9501,7 +9524,8 @@ function syncRowHtml(r,key){
       /* 出品CSVタブと同じ、相場を調べるリンク。
          商品名が英字だけの行（eBayの出品名）は eBay のSold検索も出す。 */
       +csvLinkBar({asin:r.asin, kw:csvSearchKw(r.title),
-                   en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):''})
+                   en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):'',
+                   isNew:(r.cond==='new')})
       +'<div>'
       +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
@@ -10410,7 +10434,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v139';   // sw.js の const V と必ず同じ値にする
+var APP_V='v140';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -2923,6 +2923,34 @@ SKU, JAN, ASIN, タイトル, 基準価格, 配送料, 基準コンディショ�
 回帰は33本・1,036項目すべて通った。
 **SKU がある取り込みは変えていない。**
 
+## 6.41 相場のリンクを売れた値段で引く（2026-10-12・sw.js v140）
+
+**6.14** の4つのリンクのうち、販売中の値段を見ていた「メル 販売中」を
+**「ヤフオク 落札」**（落札相場）に置き換え、「メル 売切」の条件を足した。
+どちらも**売れた値段**なので、相場の判断に使える。
+
+| ボタン | 行き先 |
+|---|---|
+| Amazon | `https://www.amazon.co.jp/dp/{ASIN}`（変更なし） |
+| **ヤフオク 落札** | `https://auctions.yahoo.co.jp/closedsearch/closedsearch?p={検索語}&istatus={1\|2}&s1=end&o1=d` |
+| **メル 売切** | `https://jp.mercari.com/search?keyword={検索語}&status=sold_out%7Ctrading&sort=created_time&order=desc&item_condition_id={1 または 2\|3\|4\|5\|6}` |
+| eBay Sold | `https://www.ebay.com/sch/i.html?_nkw={英題から除いた語}&LH_Sold=1&LH_Complete=1`（変更なし） |
+
+- **並び順**：メルカリは新しい順（`sort=created_time&order=desc`）、
+  ヤフオクは終了日時の新しい順（`s1=end&o1=d`）。
+- **商品の状態**：その行に合わせる。
+  - 新品の行 … メルカリ「新品、未使用」（`item_condition_id=1`）／ヤフオク 新品（`istatus=1`）
+  - 中古（-U）・カートリッジのみ（-C）・フィギュアのみ（-L）の行 …
+    メルカリは「新品、未使用」以外のすべて（`2|3|4|5|6`）／ヤフオク 中古（`istatus=2`）
+  - 販売連携タブは `cond` が `new` 以外（`used` / `cart` / `loose`）を中古として引く。
+- **売り切れの条件（`sold_out|trading`）と検索語は変えていない**。
+  行の「検索語」の欄を直せば、両方のリンクがその場で作り直される。
+- メルカリの複数選択は `|`（`%7C`）区切り。`status=sold_out|trading` と同じ書き方に
+  そろえた（区切り文字は `MERC_SEP` の1か所にまとめてある）。
+
+テストは `tests/links.js`（27項目）。回帰は34本・1,063項目すべて通った。
+**pj_price だけの変更（Worker・D1 の変更は無い）。**
+
 ## 7. API連携（フェーズ2）
 
 ### 実装上の制約
