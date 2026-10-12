@@ -4020,7 +4020,10 @@ function csvImport(text){
   var iSku=col('SKU'), iJan=col('JAN'), iAsin=col('ASIN'), iTitle=col('タイトル'),
       iCat=col('カテゴリ'), iW=col('重量'), iCost=col('仕入原価'), iQty=col('個数'),
       iCond=col('出品コンディション'), iGross=col('粗利'), iRank=col('ランク'),
-      iType=col('出品種別'), iBase=col('基準コンディション');
+      iType=col('出品種別'), iBase=col('基準コンディション'),
+      /* せどりすとが見た Amazon の基準価格と配送料。仕入値が分からない行の
+         「仮の仕入値（Amazon基準価格・送料込み）」に使う。 */
+      iAmz=col('基準価格'), iAmzShip=col('配送料');
   if(iSku<0)return {err:'SKU列が見つかりません。せどりすとの書き出しCSVか確認してください'};
   var skipped=0, noSku=0, pre=0, groups={}, order=[];
   for(var n=1;n<rows.length;n++){
@@ -4071,11 +4074,16 @@ function csvImport(text){
     var cost=Math.max(0,iCost>=0?csvNum(r[iCost]):sp.cost);
     var qty=Math.max(1,iQty>=0?csvNum(r[iQty]):1);
     var wRaw=Math.max(0,iW>=0?csvNum(r[iW]):0);
+    /* Amazon基準価格（送料込み・円）。「配送料」は「無料」なら0になる。
+       せどりすとCSVに入っている値なので、取り寄せなくても仮の仕入値が出せる。 */
+    var baseYen=Math.max(0,(iAmz>=0?csvNum(r[iAmz]):0)
+                          +(iAmzShip>=0?csvNum(r[iAmzShip]):0));
     if(groups[key]){
       var g=groups[key];
       g.qty+=qty; g.rows++;
       if(cost>g.cost)g.cost=cost;                     // 高い個体に合わせる
       if(wRaw>g.wRaw)g.wRaw=wRaw;
+      if(baseYen>(+g.baseYen||0))g.baseYen=baseYen;
       continue;
     }
     groups[key]={ id:'c'+Date.now().toString(36)+n.toString(36),
@@ -4089,7 +4097,7 @@ function csvImport(text){
       fba:(iType>=0&&/FBA/i.test(String(r[iType]||''))), zeroAct:'hold',
       /* 仕入れ前の候補。手元に無いので無在庫（M-<ASIN>）で出し、仕入値は
          Amazon基準価格を仮に使う（行のボタンで E- に切り替えられる）。 */
-      preBuy:preBuy, costTemp:(preBuy&&!(cost>0)),
+      preBuy:preBuy, costTemp:(preBuy&&!(cost>0)), baseYen:baseYen,
       // 箱なしは一点物にしない（ASINごとに1つの出品を使い続ける）
       cartOnly:cart, looseOnly:loose,
       forceEbay:false,
@@ -4205,8 +4213,12 @@ function csvCostLow(r){ return csvCostOf(r)<csvCostMin(); }
    仕入れたら仕入値を入れ直す（入れた時点で仮ではなくなる）。 */
 // Amazon基準価格（送料込み・円）。販売連携の取り込み → 取り寄せた最安値 の順に見る
 function csvAmzBase(r){
+  // 販売連携の取り込み（毎日更新される値）が一番新しい
   var x=csvSyncItem(r);
   if(x){ var b=syncBasis(x); if(+b.low>0)return Math.round(+b.low); }
+  // せどりすとCSVの「基準価格＋配送料」（取り込んだときの値）
+  if(+r.baseYen>0)return Math.round(+r.baseYen);
+  // 取り寄せた最安値（「Amazon基準価格を取る」で入る）
   return csvLowOf(String(r.asin||''),(r.condId===1000)?'new':'used');
 }
 // 行の仕入値（円）。仮の行は Amazon基準価格を使う。計算はすべてこれを通す
@@ -4697,7 +4709,9 @@ function csvStartMode(){
 }
 // Amazonの最安値（円）を仕入値とみなした推奨売値。最安値が無い行は0
 function csvAmzRecOf(r){
-  var low=+r.amzLow||0;
+  /* Amazon基準価格（送料込み・円）。せどりすとCSVの「基準価格」・販売連携の
+     取り込み・取り寄せた最安値のいずれかが入っていれば使える。 */
+  var low=+r.amzLow||csvAmzBase(r);
   if(!(low>0))return 0;
   var p=csvPriceFor(low,r.weight,csvFlatOf(r));
   return +p.price||0;
@@ -10396,7 +10410,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v138';   // sw.js の const V と必ず同じ値にする
+var APP_V='v139';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
