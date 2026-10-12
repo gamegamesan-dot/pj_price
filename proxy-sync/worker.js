@@ -1129,6 +1129,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at, ebay_sale,
+  search_kw,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   md_step, md_start, md_floor, md_n, md_done,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
@@ -2619,6 +2620,8 @@ async function putListings(env, body) {
          md_done=CASE WHEN ?27 IS NOT NULL AND (md_start IS NULL OR md_start<>?27)
                       THEN 0 ELSE md_done END,
          md_start=COALESCE(?27, md_start),
+         /* 相場を調べるときの検索語（手で直したもの）。空文字（''）で消す。 */
+         search_kw=CASE WHEN ?28='' THEN NULL ELSE COALESCE(?28, search_kw) END,
          /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
          revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
          revise_err_at=CASE WHEN ?23='' THEN NULL
@@ -2651,7 +2654,9 @@ async function putListings(env, body) {
            (x.revise_err === undefined || x.revise_err === null)
              ? null : String(x.revise_err),
            numOf(x, "md_step"), numOf(x, "md_floor"), numOf(x, "md_n"),
-           numOf(x, "md_start")));
+           numOf(x, "md_start"),
+           (x.search_kw === undefined || x.search_kw === null)
+             ? null : String(x.search_kw).slice(0, 200)));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));

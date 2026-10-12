@@ -2139,31 +2139,32 @@ var CONDNOTE={
    対象外にすると英題の入力欄ごと出ず、手で入れることもできずに止まっていたため
    （Kanon カノン＝ドリームキャストなど）。いまはどの機種でも英題を作る。 */
 var PLATFORMS=[
-  {key:'switch2',title:'Nintendo Switch 2',spec:'Nintendo Switch 2',pat:['Switch 2','Switch2','スイッチ2']},
-  {key:'switch', title:'Nintendo Switch',  spec:'Nintendo Switch',  pat:['スイッチ','Switch']},
+  /* kw … メルカリ・ヤフオクの検索語に付ける短い機種名（無ければ title を使う）。 */
+  {key:'switch2',title:'Nintendo Switch 2',spec:'Nintendo Switch 2',pat:['Switch 2','Switch2','スイッチ2'],kw:'Switch2'},
+  {key:'switch', title:'Nintendo Switch',  spec:'Nintendo Switch',  pat:['スイッチ','Switch'],kw:'Switch'},
   {key:'ps5',    title:'PS5',              spec:'Sony PlayStation 5',pat:['PS5']},
   {key:'ps4',    title:'PS4',              spec:'Sony PlayStation 4',pat:['PS4']},
   {key:'ps3',    title:'PS3',              spec:'Sony PlayStation 3',pat:['PS3']},
   {key:'ps2',    title:'PS2',              spec:'Sony PlayStation 2',pat:['PS2'],lock:'ps2'},
-  {key:'psvita', title:'PS Vita',          spec:'Sony PlayStation Vita',pat:['PS Vita','PSVita']},
+  {key:'psvita', title:'PS Vita',          spec:'Sony PlayStation Vita',pat:['PS Vita','PSVita'],kw:'PSVita'},
   {key:'psp',    title:'PSP',              spec:'Sony PSP',          pat:['PSP']},
   {key:'ps1',    title:'PS1',              spec:'Sony PlayStation',  pat:['PS1']},
-  {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],lock:'3ds'},
-  {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS']},
-  {key:'x360',   title:'Xbox 360',         spec:'Microsoft Xbox 360',pat:['Xbox 360','Xbox360','X360'],lock:'x360'},
-  {key:'xboxone',title:'Xbox One',         spec:'Microsoft Xbox One',pat:['Xbox One','XboxOne']},
-  {key:'wiiu',   title:'Wii U',            spec:'Nintendo Wii U',    pat:['Wii U','WiiU']},
+  {key:'3ds',    title:'Nintendo 3DS',     spec:'Nintendo 3DS',      pat:['3DS'],lock:'3ds',kw:'3DS'},
+  {key:'ds',     title:'Nintendo DS',      spec:'Nintendo DS',       pat:['DS'],kw:'DS'},
+  {key:'x360',   title:'Xbox 360',         spec:'Microsoft Xbox 360',pat:['Xbox 360','Xbox360','X360'],lock:'x360',kw:'Xbox360'},
+  {key:'xboxone',title:'Xbox One',         spec:'Microsoft Xbox One',pat:['Xbox One','XboxOne'],kw:'XboxOne'},
+  {key:'wiiu',   title:'Wii U',            spec:'Nintendo Wii U',    pat:['Wii U','WiiU'],kw:'WiiU'},
   {key:'wii',    title:'Wii',              spec:'Nintendo Wii',      pat:['Wii'],lock:'wii'},
-  {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC'],lock:'gc'},
-  {key:'gba',    title:'Game Boy Advance', spec:'Nintendo Game Boy Advance',pat:['GBA']},
-  {key:'gbc',    title:'Game Boy Color',   spec:'Nintendo Game Boy Color',pat:['GBC']},
-  {key:'gb',     title:'Game Boy',         spec:'Nintendo Game Boy', pat:['GB']},
+  {key:'gc',     title:'GameCube',         spec:'Nintendo GameCube', pat:['ゲームキューブ','GC'],lock:'gc',kw:'ゲームキューブ'},
+  {key:'gba',    title:'Game Boy Advance', spec:'Nintendo Game Boy Advance',pat:['GBA'],kw:'GBA'},
+  {key:'gbc',    title:'Game Boy Color',   spec:'Nintendo Game Boy Color',pat:['GBC'],kw:'GBC'},
+  {key:'gb',     title:'Game Boy',         spec:'Nintendo Game Boy', pat:['GB'],kw:'ゲームボーイ'},
   {key:'n64',    title:'N64',              spec:'Nintendo 64',       pat:['N64']},
-  {key:'sfc',    title:'Super Famicom',    spec:'Nintendo Super Famicom',pat:['スーパーファミコン','SFC']},
-  {key:'fc',     title:'Famicom',          spec:'Nintendo NES',      pat:['ファミコン','FC']},
-  {key:'ss',     title:'Sega Saturn',      spec:'Sega Saturn',       pat:['サターン'],lock:'ss'},
-  {key:'dc',     title:'Dreamcast',        spec:'Sega Dreamcast',    pat:['ドリームキャスト'],lock:'dc'},
-  {key:'md',     title:'Mega Drive',       spec:'Sega Genesis',      pat:['メガドライブ']},
+  {key:'sfc',    title:'Super Famicom',    spec:'Nintendo Super Famicom',pat:['スーパーファミコン','SFC'],kw:'スーパーファミコン'},
+  {key:'fc',     title:'Famicom',          spec:'Nintendo NES',      pat:['ファミコン','FC'],kw:'ファミコン'},
+  {key:'ss',     title:'Sega Saturn',      spec:'Sega Saturn',       pat:['サターン'],lock:'ss',kw:'セガサターン'},
+  {key:'dc',     title:'Dreamcast',        spec:'Sega Dreamcast',    pat:['ドリームキャスト'],lock:'dc',kw:'ドリームキャスト'},
+  {key:'md',     title:'Mega Drive',       spec:'Sega Genesis',      pat:['メガドライブ'],kw:'メガドライブ'},
   // 最後の保険。上のどれにも当たらなかった "PS" だけ初代とみなす
   {key:'ps1b',   title:'PS1',              spec:'Sony PlayStation',  pat:['PS'],alias:true}
 ];
@@ -3423,26 +3424,39 @@ var CSV_BRAND=[['バンプレスト','Banpresto'],['Banpresto','Banpresto'],
    ブランドが別に見つからなかったときだけ親ブランドを使う。 */
 /* 4列目はeBayのカテゴリ。'act'=可動（261068 Action Figure）、'fig'=非可動（261055）。
    空はカテゴリを決めない（「カテゴリ未振分」のまま人に判断してもらう）。 */
-var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits','act'],
-  ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits','act'],
-  ['Figuarts ZERO','Figuarts ZERO','Bandai Spirits','fig'],
+/* 5列目はメルカリ・ヤフオクの検索語に使う短い表記（6.42）。
+   空のときは1列目（和名）をそのまま使う。
+   長い名前を先に置く決まりなので、figuarts mini は S.H.フィギュアーツ より前に置く。 */
+var CSV_LINE=[
+  /* 魂EFFECT は「for S.H.Figuarts」と書かれるので、S.H. より前に置く。 */
+  ['魂EFFECT','TAMASHII EFFECT','Bandai Spirits','','魂EFFECT'],
+  ['TAMASHII EFFECT','TAMASHII EFFECT','Bandai Spirits','','魂EFFECT'],
+  ['S.H.Figuarts mini','Figuarts mini','Bandai Spirits','act','フィギュアーツmini'],
+  ['フィギュアーツmini','Figuarts mini','Bandai Spirits','act','フィギュアーツmini'],
+  ['figuarts mini','Figuarts mini','Bandai Spirits','act','フィギュアーツmini'],
+  ['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits','act','フィギュアーツ'],
+  ['S.H.Figuarts','S.H.Figuarts','Bandai Spirits','act','フィギュアーツ'],
+  ['フィギュアーツZERO','Figuarts ZERO','Bandai Spirits','fig','フィギュアーツZERO'],
+  ['フィギュアーツzero','Figuarts ZERO','Bandai Spirits','fig','フィギュアーツZERO'],
+  ['Figuarts ZERO','Figuarts ZERO','Bandai Spirits','fig','フィギュアーツZERO'],
+  ['FiguartsZERO','Figuarts ZERO','Bandai Spirits','fig','フィギュアーツZERO'],
   ['ねんどろいど','Nendoroid','Good Smile Company','act'],
-  ['Nendoroid','Nendoroid','Good Smile Company','act'],
+  ['Nendoroid','Nendoroid','Good Smile Company','act','ねんどろいど'],
   ['figma','figma','Max Factory','act'],
   ['POP UP PARADE','POP UP PARADE','Good Smile Company','fig'],
   ['一番くじ','Ichiban Kuji','Banpresto','fig'],
   ['PROPLICA','PROPLICA','Bandai Spirits',''],
   ['超合金','CHOGOKIN','Bandai Spirits',''],
-  ['CHOGOKIN','CHOGOKIN','Bandai Spirits',''],
+  ['CHOGOKIN','CHOGOKIN','Bandai Spirits','','超合金'],
   /* プライズ（景品）の商品ライン。どれも可動品はほとんど無いので非可動（261055）。
      ブランドが別に見つからなかったときだけ、ここの親ブランドを使う。
      長い名前を先に置く（'スーパープレミアムフィギュア' が 'プレミアムフィギュア' に
      先に当たらないようにする。先に当たったものを採る作りのため）。 */
-  ['ルミナスタ','Luminasta','SEGA','fig'],
-  ['Luminasta','Luminasta','SEGA','fig'],
-  ['スーパープレミアムフィギュア','SPM Figure','SEGA','fig'],
-  ['Super Premium Figure','SPM Figure','SEGA','fig'],
-  ['SPMフィギュア','SPM Figure','SEGA','fig'],
+  ['ルミナスタ','Luminasta','SEGA','fig','Luminasta'],
+  ['Luminasta','Luminasta','SEGA','fig','Luminasta'],
+  ['スーパープレミアムフィギュア','SPM Figure','SEGA','fig','SPM'],
+  ['Super Premium Figure','SPM Figure','SEGA','fig','SPM'],
+  ['SPMフィギュア','SPM Figure','SEGA','fig','SPM'],
   ['プレミアムフィギュア','Premium Figure','SEGA','fig'],
   ['Premium Figure','Premium Figure','SEGA','fig'],
   ['コレフル','Coreful Figure','TAITO','fig'],
@@ -3463,8 +3477,8 @@ var CSV_LINE=[['S.H.フィギュアーツ','S.H.Figuarts','Bandai Spirits','act'
   ['ESPRESTO','ESPRESTO','Banpresto','fig'],
   ['リラックスタイム','Relax time','Banpresto','fig'],
   ['Relax time','Relax time','Banpresto','fig'],
-  ['ヌードルストッパー','Noodle Stopper Figure','FuRyu','fig'],
-  ['Noodle Stopper','Noodle Stopper Figure','FuRyu','fig'],
+  ['ヌードルストッパー','Noodle Stopper Figure','FuRyu','fig','ヌードルストッパー'],
+  ['Noodle Stopper','Noodle Stopper Figure','FuRyu','fig','ヌードルストッパー'],
   ['トリオトライイット','Trio-Try-iT','FuRyu','fig'],
   ['Trio-Try-iT','Trio-Try-iT','FuRyu','fig'],
   ['ビキュートバニーズ','BiCute Bunnies','FuRyu','fig'],
@@ -3867,7 +3881,10 @@ function csvLineFrom(t){
   var s=String(t||'').toLowerCase();
   for(var i=0;i<CSV_LINE.length;i++)
     if(s.indexOf(CSV_LINE[i][0].toLowerCase())>=0)
-      return {line:CSV_LINE[i][1], brand:CSV_LINE[i][2], cat:CSV_LINE[i][3]||''};
+      return {line:CSV_LINE[i][1], brand:CSV_LINE[i][2], cat:CSV_LINE[i][3]||'',
+              /* メルカリ・ヤフオクの検索語に使う短い表記。
+                 5列目が無ければ和名（1列目）をそのまま使う。 */
+              kw:CSV_LINE[i][4]||CSV_LINE[i][0], key:CSV_LINE[i][0]};
   return null;
 }
 /* 商品ラインとスケールからカテゴリを決める。
@@ -4435,12 +4452,16 @@ var CSV_KW_DROP=[
   /ノン\s*[・]?\s*スケール/g,
   /\d+\s*[\/／]\s*\d+\s*スケール/g,
   /(?:全高)?\s*[約]?\s*\d+(?:\.\d+)?\s*(?:mm|cm|ｍｍ|ｃｍ|ミリ|センチ)/gi,
-  /ABS\s*[&＆・]?\s*PVC\s*製?/gi, /PVC\s*製/gi, /ABS\s*製/gi,
-  /プラスチック製/g, /ポリレジン製?/g, /ソフビ製/g,
+  /* 素材。「ABS&PVC製」「PVC&ABS製」「PVC&ABC製」など並び順も表記もばらつくので、
+     素材の名前が &・/ でつながったひとかたまりとして落とす。 */
+  /(?:ABS|PVC|ABC)(?:\s*[&＆・\/]\s*(?:ABS|PVC|ABC))*\s*製?/gi,
+  /プラスチック製/g, /ポリレジン製?/g, /ソフビ製/g, /ダイキャスト製?/g, /合金製?/g,
   /塗装済み?\s*(?:完成品)?\s*(?:可動)?\s*フィギュア/g,
   /塗装済み?\s*完成品/g, /完成品フィギュア/g, /可動フィギュア/g,
   /再販(?:分)?/g, /特典\s*(?:無し|なし)/g, /日本正規品/g, /正規品/g,
-  /新品未開封/g, /送料無料/g
+  /新品未開封/g, /送料無料/g,
+  // 「塗装済みエフェクトパーツ」「塗装済み可動フィギュア」など、残ったものをまとめて
+  /塗装済み?[^\s　]*/g
 ];
 function csvSearchKw(t){
   var s=String(t||'');
@@ -4449,10 +4470,169 @@ function csvSearchKw(t){
   s=s.replace(/[\/|｜\\]+/g,' ').replace(/[\s　]+/g,' ').trim();
   return s;
 }
-// 行の検索語。手で直してあればそれを使う
+/* ================= 相場を調べる検索語（6.42）=================
+   メルカリ・ヤフオクは **「商品ライン＋キャラクター名」だけ**で引く。
+   Amazonのタイトルはメーカー名・作品名・サイズ・素材・版の言葉が多く、
+   そのまま入れると件数が出ない（毎回手で消していた）。
+
+     TAMASHII NATIONS S.H.フィギュアーツ ドラゴンボール超 スーパーヒーロー
+     ピッコロ SUPER HERO（再販版） 約160mm PVC&ABS製 塗装済み可動フィギュア
+       → フィギュアーツ ピッコロ
+
+   ・商品ラインは CSV_LINE（依頼22の辞書）の5列目＝メルカリで一般的な短い表記。
+   ・キャラクター名は、残った語のうち**いちばん後ろの日本語の語**にする
+     （和名は「ライン → 作品名 → キャラクター名」の順に並ぶため）。
+   ・辞書に無い商品ラインは、掃除だけして残りをそのまま返す（短くしすぎない）。
+   ゲームは「ソフト名＋機種」。廉価版名・型番・特典の説明・【CERO】は落とす。 */
+/* 残った区切り記号・単独のハイフンを落として空白を整える。
+   「ペルソナ5 ザ・ロイヤル - PS4」の「-」のような余りを残さない。 */
+function csvKwTidy(s){
+  return String(s||'')
+    .replace(/[\/|｜\\]+/g,' ')
+    .replace(/(^|[\s　])[-–—‐~〜]+([\s　]|$)/g,' ')
+    .replace(/[\s　]*[-–—‐~〜]+[\s　]*$/,'')
+    .replace(/^[\s　]*[-–—‐~〜]+[\s　]*/,'')
+    .replace(/[\s　]+/g,' ').trim();
+}
+// つなぎの語（for S.H.Figuarts の「for」など）
+var CSV_KW_FILLER=[/\bfor\b/gi, /\bwith\b/gi, /\band\b/gi, /\bver\b/gi];
+// 版・再販・限定など「版の言葉」。キャラ違い・版違いをまとめて探せるように落とす
+var CSV_KW_VER=[
+  /* 直前の1語までを含めて落とす（「White Ver.」「Ver.2」「ver」）。
+     語を2つ以上かからないようにする（「SMOKE White Ver.」の SMOKE を残す）。 */
+  /(?:[A-Za-z0-9＆&'".]+\s+)?ver\s*\.?\s*\d*(?:\.\d+)?(?![A-Za-z])/gi,
+  /(?:[A-Za-z0-9＆&'".]+\s+)?edition\b/gi,                   // Classic Edition など
+  /\d+\s*(?:st|nd|rd|th)\s*Anniversary/gi,
+  /(?:再販|再版)(?:版|分)?/g,
+  /(?:初回|通常|完全|数量)?\s*(?:生産)?限定(?:版|品|生産)?/g,
+  /(?:初回|通常|完全)(?:版|盤)/g,
+  /(?:アニメ|劇場版)?カラーエディション/g,
+  /【[^】]*】/g
+];
+// メーカー名・商品ラインの語を落とす（辞書の見出し語をそのまま使う）
+function csvKwDropDict(s){
+  var out=String(s||'');
+  var kill=[];
+  CSV_BRAND.forEach(function(x){ kill.push(x[0]); });
+  CSV_LINE.forEach(function(x){ kill.push(x[0]); });
+  // 長い語から消す（「フィギュアーツ」が「S.H.フィギュアーツ」より先に当たらないように）
+  kill.sort(function(a,b){ return b.length-a.length; });
+  kill.forEach(function(w){
+    out=out.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),' ');
+  });
+  return out;
+}
+// 「-冒険の夜明け-」のような副題を落とす
+function csvKwDropSub(s){
+  return String(s||'').replace(/[-–—‐]\s*[^-–—‐]{1,30}?\s*[-–—‐]/g,' ');
+}
+/* 残った語からキャラクター名を決める。
+   末尾の番号・版の語は落とし、日本語の語があればいちばん後ろのものを使う。 */
+function csvKwChara(s){
+  var a=String(s||'').split(/[\s　]+/).filter(Boolean);
+  while(a.length&&/^(?:ver\.?\d*|v\d+|\d+(?:\.\d+)?|[#＃]\d+|第\d+弾|[A-Z]{1,3}\d{0,2})$/i
+        .test(a[a.length-1]))a.pop();
+  if(!a.length)return '';
+  var ja=a.filter(function(w){ return /[ぁ-んァ-ヶ一-龥々ー]/.test(w); });
+  return ja.length?ja[ja.length-1]:a[a.length-1];
+}
+// フィギュア・ホビーの検索語
+function csvKwFig(t){
+  var raw=String(t||'');
+  var ln=csvLineFrom(raw);
+  var s=csvSearchKw(raw);                 // 記号つきの補足・スケール・寸法・素材・完成品
+  s=csvKwDropDict(s);                     // メーカー名・商品ライン
+  s=csvKwDropSub(s);                      // 「-…-」の副題
+  CSV_KW_VER.forEach(function(re){ s=s.replace(re,' '); });
+  CSV_KW_FILLER.forEach(function(re){ s=s.replace(re,' '); });
+  s=csvKwTidy(s);
+  if(!ln)return s||csvKwTidy(csvSearchKw(raw));   // 辞書に無いラインは掃除だけ
+  var chara=csvKwChara(s);
+  return (ln.kw+(chara?(' '+chara):'')).trim();
+}
+// 機種の検索語（短い表記）。見つからなければ空
+function csvPlatKw(t){
+  var s=String(t||'');
+  for(var i=0;i<PLATFORMS.length;i++){
+    var p=PLATFORMS[i];
+    if(p.alias)continue;                  // 保険の "PS" は使わない
+    var keys=[p.title].concat(p.pat||[]);
+    for(var j=0;j<keys.length;j++){
+      var k=keys[j];
+      if(new RegExp('(^|[^0-9A-Za-z])'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+                    +'([^0-9A-Za-z]|$)','i').test(s))
+        return p.kw||p.title;
+    }
+  }
+  return '';
+}
+// eBayの機種名（Nintendo Switch など）から短い表記を引く
+function csvPlatKwOf(spec){
+  var v=String(spec||'').trim(); if(!v)return '';
+  for(var i=0;i<PLATFORMS.length;i++)
+    if(PLATFORMS[i].spec===v)return PLATFORMS[i].kw||PLATFORMS[i].title;
+  return '';
+}
+// ゲームの廉価版・型番・特典の言葉
+var CSV_KW_GAME_DROP=[
+  /プラチナ\s*コレクション/gi, /ベスト版/gi, /the\s*best/gi, /best版/gi,
+  /廉価版/gi, /Welcome\s*Price/gi, /お買い得版/gi, /アルティメットヒッツ/gi,
+  /バリュー\s*セレクション/gi, /(?:ニンテンドー|Nintendo)\s*セレクツ/gi,
+  /Nintendo\s*Selects/gi, /PlayStation\s*\d?\s*the\s*Best/gi,
+  /特典[^\s　]*/g, /\b[A-Z]{2,5}-\d{3,5}\b/g, /同梱(?:版|品)?/g
+];
+// ゲームの検索語（ソフト名＋機種）
+function csvKwGame(t,spec){
+  var raw=String(t||'');
+  var plat=csvPlatKw(raw)||csvPlatKwOf(spec);
+  var s=csvSearchKw(raw);                 // 【CERO…】・（…）などはここで落ちる
+  CSV_KW_GAME_DROP.forEach(function(re){ s=s.replace(re,' '); });
+  CSV_KW_VER.forEach(function(re){ s=s.replace(re,' '); });
+  // 機種の語は本文から落として、最後に短い表記で1つだけ付ける
+  PLATFORMS.forEach(function(p){
+    if(p.alias)return;
+    [p.title].concat(p.pat||[]).forEach(function(k){
+      /* 前後の1文字は残す（「三国志大戦DS」の「戦」を消さない）。 */
+      s=s.replace(new RegExp('(^|[^0-9A-Za-z])'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+                             +'([^0-9A-Za-z]|$)','gi'),'$1 $2');
+    });
+  });
+  // 機種の言い方の残り（PlayStation2・ニンテンドー など）とメーカー名
+  s=s.replace(/(?:PlayStation|プレイステーション|プレステ|ニンテンドー|Nintendo|Microsoft|Sony)\s*\d*/gi,' ');
+  s=csvKwTidy(s);
+  return [s,plat].filter(Boolean).join(' ').trim();
+}
+/* 行の検索語（自動で作る値）。ゲームは機種つき、それ以外はライン＋キャラ。 */
+function csvKwAuto(title,cat,spec){
+  return (String(cat||'')==='139973')?csvKwGame(title,spec):csvKwFig(title);
+}
+/* 手で直した検索語を D1 に残す（端末をまたいで、両方のタブで同じ検索語を使う）。
+   空にしたときは空文字を送って消す（自動で作り直す）。 */
+function csvKwPost(asin,cond,kw,title){
+  if(!/^B[0-9A-Z]{9}$/.test(String(asin||'').trim()))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey())return;
+  fetch(syncUrl()+'/listings',{method:'POST', keepalive:true,
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:[{ asin:String(asin).trim(), cond:cond||'new',
+      title:title||'', search_kw:String(kw||'') }]})})
+    ['catch'](function(){});
+}
+/* 手で直した検索語が入っているか（この端末 → D1）。 */
+function csvKwManual(r){
+  if(String(r.mercKw||'').trim())return true;
+  var x=csvSyncItem(r);
+  return !!(x&&String(x.search_kw||'').trim());
+}
+/* 行の検索語。手で直した値（この端末 → D1）があればそれを使う。
+   どちらも無ければ自動で作る。 */
 function csvKwOf(r){
   var m=String(r.mercKw||'').trim();
-  return m||csvSearchKw(r.titleJa||r.titleEn||'');
+  if(m)return m;
+  var x=csvSyncItem(r);
+  var d=x?String(x.search_kw||'').trim():'';
+  if(d)return d;
+  return csvKwAuto(r.titleJa||r.titleEn||'',r.cat,(r.specs||{}).platform);
 }
 /* eBayのSold検索は英題から。国や状態の語は検索の幅を狭めるので落とす。 */
 var CSV_EN_DROP=[/\bused\b/gi, /\bjapan import\b/gi, /\bfrom japan\b/gi,
@@ -4500,8 +4680,15 @@ function csvLinkBar(o){
     h+=a(yahooClosedUrl(o.kw,!!o.isNew),'ヤフオク 落札');
     h+=a(mercSoldUrl(o.kw,!!o.isNew),'メル 売切');
   }
-  if(o.en)h+=a('https://www.ebay.com/sch/i.html?_nkw='+encodeURIComponent(o.en)
+  /* 英語の検索語。英題から作るが、**手で直した検索語が英字だけ**のときは
+     そちらを使う（日本語の検索語は eBay では使わない）。 */
+  var en=String(o.en||'');
+  if(o.kwManual&&/^[\x20-\x7E]+$/.test(String(o.kw||'').trim()))en=String(o.kw).trim();
+  if(en)h+=a('https://www.ebay.com/sch/i.html?_nkw='+encodeURIComponent(en)
     +'&LH_Sold=1&LH_Complete=1','eBay Sold');
+  /* 短くしすぎて見つからないとき用。元の商品名そのままで売り切れを引く。 */
+  if(o.orig&&String(o.orig).trim()&&String(o.orig).trim()!==String(o.kw||'').trim())
+    h+=a(mercSoldUrl(String(o.orig).trim(),!!o.isNew),'元の名前で検索','#666');
   return h?('<div style="display:flex;gap:5px;flex-wrap:wrap;margin:5px 0 2px">'+h+'</div>'):'';
 }
 
@@ -5197,11 +5384,12 @@ function csvRender(){
       /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
       +'<div data-links="'+r.id+'">'
       +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn),
-                   isNew:(r.condId===1000)})+'</div>'
+                   isNew:(r.condId===1000),kwManual:csvKwManual(r),
+                   orig:r.titleJa})+'</div>'
       +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
       +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
-      +' placeholder="メルカリの検索語（空にすると商品名から作り直します）"'
+      +' placeholder="検索語（空にすると商品名から作り直します）"'
       +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div class="note2" style="margin-top:2px">'+esc(csvRowSummary(r))+'</div>'
@@ -5477,9 +5665,12 @@ $('csvList').addEventListener('input',function(e){
     var rk=csvRowById(kid); if(!rk)return;
     rk.mercKw=String(t.value||'').trim();
     csvSaveList();
+    /* 取り込んだ行（D1 に同じ商品がある行）は、入力を終えたときに D1 へ送る。
+       送るのは change（下）で、ここは打っている途中の表示だけ。 */
     var lb=document.querySelector('#csvList [data-links="'+kid+'"]');
     if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin,kw:csvKwOf(rk),
-      en:csvEbayKw(rk.titleEn),isNew:(rk.condId===1000)});
+      en:csvEbayKw(rk.titleEn),isNew:(rk.condId===1000),
+      kwManual:csvKwManual(rk),orig:rk.titleJa});
     return;
   }
   var cid=t.getAttribute('data-cost');
@@ -5527,6 +5718,19 @@ $('csvList').addEventListener('keydown',function(e){
     e.preventDefault();
 });
 $('csvList').addEventListener('change',function(e){
+  /* 検索語は入力を終えたところで D1 に残す（両方のタブで同じ検索語を使う）。 */
+  var kw=e.target&&e.target.getAttribute&&e.target.getAttribute('data-kw');
+  if(kw){
+    var rw=csvRowById(kw);
+    if(rw){
+      rw.mercKw=String(e.target.value||'').trim();
+      csvSaveList();
+      csvKwPost(rw.asin,csvKindOf(rw),rw.mercKw,rw.titleJa||rw.titleEn||'');
+      var x=csvSyncItem(rw);
+      if(x)x.search_kw=rw.mercKw;        // 取り込みの控えもそろえる
+    }
+    return;
+  }
   var cp=e.target&&e.target.getAttribute&&e.target.getAttribute('data-cpick');
   if(cp){
     if(e.target.checked)csvPick[cp]=true; else delete csvPick[cp];
@@ -8882,6 +9086,22 @@ function syncMarkRun(){
   syncMarkPost(rows,at,'syncMarkNote');
 }
 $('syncMarkRun').onclick=syncMarkRun;
+/* 販売連携タブの検索語。D1 に残した値があればそれ、無ければ商品名から作る。
+   ゲームかどうかは せどりすとSKU の接頭辞（prefix）で見る。 */
+function syncKwAuto(r){
+  var cat=(String(r.prefix||'')==='game')?'139973':'261055';
+  return csvKwAuto(r.title||'',cat,'');
+}
+function syncKwOf(r){
+  var d=String(r.search_kw||'').trim();
+  return d||syncKwAuto(r);
+}
+/* 検索語を直したとき。この端末の控えを先に直し、D1 にも送る。 */
+function syncKwSet(r,v){
+  r.search_kw=String(v||'').trim();
+  syncSaveCache();
+  csvKwPost(r.asin,r.cond,r.search_kw,r.title||'');
+}
 /* ---- eBayの売れた相場（Sold）----
    定義と換算は出品CSVタブの「相場（総額$）」と同じ。
    ・総額＝購入者が支払った額（商品代＋請求送料）
@@ -9523,9 +9743,19 @@ function syncRowHtml(r,key){
       +'</div>'
       /* 出品CSVタブと同じ、相場を調べるリンク。
          商品名が英字だけの行（eBayの出品名）は eBay のSold検索も出す。 */
-      +csvLinkBar({asin:r.asin, kw:csvSearchKw(r.title),
+      +'<div data-slinks="'+esc(key)+'">'
+      +csvLinkBar({asin:r.asin, kw:syncKwOf(r),
                    en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):'',
-                   isNew:(r.cond==='new')})
+                   isNew:(r.cond==='new'), kwManual:!!String(r.search_kw||'').trim(),
+                   orig:r.title})
+      +'</div>'
+      /* 検索語（出品CSVタブと同じ欄）。直すと D1 に残り、両方のタブで同じになる。 */
+      +'<div style="display:flex;gap:6px;align-items:center;margin:3px 0">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
+      +'<input type="text" data-skw="'+esc(key)+'" value="'+esc(syncKwOf(r))+'"'
+      +' placeholder="検索語（空にすると商品名から作り直します）"'
+      +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +'<div>'
       +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
@@ -9934,12 +10164,30 @@ $('syncList').addEventListener('click',function(e){
 });
 $('syncList').addEventListener('input',function(e){
   var t=e.target; if(!t||!t.getAttribute)return;
+  /* 検索語。打つたびにその行のリンクだけ作り直す（一覧は作り直さない）。 */
+  var kk=t.getAttribute('data-skw');
+  if(kk){
+    var rk=syncRowBy(kk); if(!rk)return;
+    rk.search_kw=String(t.value||'').trim();
+    var lb=document.querySelector('#syncList [data-slinks="'+kk+'"]');
+    if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin, kw:syncKwOf(rk),
+      en:/^[\x20-\x7E]+$/.test(String(rk.title||''))?csvEbayKw(rk.title):'',
+      isNew:(rk.cond==='new'), kwManual:!!String(rk.search_kw||'').trim(),
+      orig:rk.title});
+    return;
+  }
   var k=t.getAttribute('data-ssold'); if(!k)return;
   var r=syncRowBy(k); if(!r)return;
   syncSoldSet(r,t.value);   // 打っている途中は保存だけ（一覧は作り直さない）
 });
 $('syncList').addEventListener('change',function(e){
   var t=e.target; if(!t||!t.getAttribute)return;
+  var kw=t.getAttribute('data-skw');
+  if(kw){
+    var rw=syncRowBy(kw);
+    if(rw)syncKwSet(rw,t.value);       // D1 に残す（両方のタブで同じ検索語になる）
+    return;
+  }
   var ks=t.getAttribute('data-ssold');
   if(ks){                   // 入力を終えたところで、その行だけ作り直して判断を出す
     var r=syncRowBy(ks);
@@ -10434,7 +10682,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v140';   // sw.js の const V と必ず同じ値にする
+var APP_V='v141';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

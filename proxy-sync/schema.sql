@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS items (
   md_done          INTEGER NOT NULL DEFAULT 0, -- 自動で下げた回数
   /* eBayのセール（Markdown Manager）が設定されている出品。1 ならとばす。 */
   ebay_sale        INTEGER,
+  /* メルカリ・ヤフオクの検索語（手で直したもの）。空は「自動で作る」。
+     出品CSVタブと販売連携タブで共通に使う。 */
+  search_kw        TEXT,
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );

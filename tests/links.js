@@ -43,8 +43,8 @@ console.log('=== 並び（Amazon／ヤフオク 落札／メル 売切／eBay So
 await setup();
 let L=await links('A');
 L.forEach(x=>console.log('   '+x.t+' → '+x.u));
-ok(L.map(x=>x.t).join()==='Amazon,ヤフオク 落札,メル 売切,eBay Sold',
-   '★4つ。「メル 販売中」は無く、同じ場所に「ヤフオク 落札」が入る');
+ok(L.map(x=>x.t).join()==='Amazon,ヤフオク 落札,メル 売切,eBay Sold,元の名前で検索',
+   '★「メル 販売中」は無く、同じ場所に「ヤフオク 落札」が入る（＋元の名前で検索）');
 ok(!L.some(x=>/メル 販売中/.test(x.t)||/status=on_sale/.test(x.u)),
    '★「メル 販売中」は消えている');
 
@@ -98,12 +98,13 @@ const kw=await p.evaluate(()=>{
 console.log('   検索語: '+kw.kw);
 const mA=(await links('A')).find(x=>x.t==='メル 売切').u;
 const yA=(await links('A')).find(x=>x.t==='ヤフオク 落札').u;
-ok(kw.kw==='セガ 初音ミク Project DIVA',
-   '★これまでどおり素材・スケール・完成品フィギュアを落とす');
+ok(kw.kw==='初音ミク Project DIVA',
+   '★メーカー名・素材・スケール・完成品フィギュアを落とす（6.42）');
 ok(mA.indexOf('keyword='+kw.enc)>=0,'★メルカリは keyword= に同じ検索語');
 ok(yA.indexOf('p='+kw.enc)>=0,'★ヤフオクは p= に同じ検索語');
-ok(/%E3%82%BB%E3%82%AC/.test(mA)&&/%E3%82%BB%E3%82%AC/.test(yA),
-   '★日本語は UTF-8 の%エンコード');
+ok(/%E5%88%9D%E9%9F%B3%E3%83%9F%E3%82%AF/.test(mA)
+   &&/%E5%88%9D%E9%9F%B3%E3%83%9F%E3%82%AF/.test(yA),
+   '★日本語は UTF-8 の%エンコード（初音ミク）');
 
 console.log('\n=== 行の「検索語」を直すと両方のリンクが作り直される ===');
 const edit=await p.evaluate(()=>{
