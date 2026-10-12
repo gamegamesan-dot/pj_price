@@ -4274,6 +4274,108 @@ function csvCostStat(r){
   if(csvCostLow(r)&&!r.costTemp)a.push('仕入値要確認');
   return a.join('　');
 }
+/* ================= 仕入値・売値・利益の帯（6.43）=================
+   仕入値・売値・利益が行のあちこちに小さく書かれていて一目で分からなかったので、
+   3つを横に並べた帯にまとめる。出品CSVタブと販売連携タブで同じ見た目にする。
+
+     ┌────────┬────────┬──────────────┐
+     │ 仕入値       │ 売値         │ 利益                │
+     │ ¥10,900（仮）│ $116.78      │ ¥1,250（11.5%）     │
+     │ Amazon基準価格│ ≈¥18,700    │ 目標 ¥4,270         │
+     └────────┴────────┴──────────────┘
+
+   利益の色 … 目標利益以上は緑、下限利益以上は黄、下限未満・赤字は赤。
+   目標利益は「下限利益 ＋ 仕入値 × 連動率」（円式。⚙設定の値をそのまま使う）。 */
+function csvTargetYen(cost){
+  return (+$('baseProfit').value||0)+(+cost||0)*((+$('linkRate').value||0)/100);
+}
+/* その売値（商品代$）で売ったときの利益（円）。基準地帯で計上する
+   （推奨売値の利益・相場の利益と同じ見方）。 */
+function csvProfitAt(cost,weight,price,flat){
+  var p=+price||0;
+  if(!(p>0))return null;
+  var v=csvWithItem(cost,weight,function(){
+    return csvWithFlat(flat,function(){
+      var m=priceModel();
+      return m.zoneProfit(p,m.basisZone).profit;
+    });
+  });
+  return (v===null||v===undefined)?null:Math.round(v);
+}
+function mbCell(label,main,sub,col,dim){
+  return '<div style="flex:1 1 0;min-width:0;border:1px solid var(--line);'
+    +'border-radius:3px;padding:3px 6px 4px;background:#fcfbf8">'
+    +'<div class="note2" style="margin:0;font-size:10.5px;line-height:1.3">'+esc(label)+'</div>'
+    +'<div style="font-size:1.4em;font-weight:800;line-height:1.3;white-space:nowrap;'
+    +'overflow:hidden;text-overflow:ellipsis'+(col?(';color:'+col):'')
+    +(dim?';opacity:.7':'')+'">'+main+'</div>'
+    +'<div class="note2" style="margin:0;font-size:10.5px;line-height:1.3;'
+    +'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(sub||'&nbsp;')+'</div>'
+    +'</div>';
+}
+/* o = { key, cost, costTemp, costUnknown, costNote, price, profit } */
+function moneyBarHtml(o){
+  var fx=+$('fx').value||0;
+  var cost=+o.cost||0, price=+o.price||0;
+  var prof=(o.profit===null||o.profit===undefined)?null:Math.round(o.profit);
+  var tgt=Math.round(csvTargetYen(cost)), base=+$('baseProfit').value||0;
+  var col='', note='';
+  if(prof!==null){
+    if(prof>=tgt)col='var(--good)';
+    else if(prof>=base)col='#8a6d00';
+    else { col='var(--bad)'; note=(prof<0)?'赤字':'下限未満'; }
+  }
+  var rate=(prof!==null&&cost>0)?(Math.round(prof/cost*1000)/10):null;
+  var small=function(t){ return '<span style="font-size:11px;font-weight:700">'+t+'</span>'; };
+  return '<div data-money="'+esc(o.key||'')+'"'
+    +' style="display:flex;gap:5px;margin:5px 0 4px">'
+    +mbCell('仕入値',
+       o.costUnknown?'<span style="color:var(--bad)">未確定</span>'
+                    :(esc(yen(cost))+(o.costTemp?small('（仮）'):'')),
+       o.costUnknown?'<span style="color:var(--bad)">仕入値を入れてください</span>'
+                    :(o.costTemp?'Amazon基準価格':esc(o.costNote||'')),
+       '', !!o.costTemp)
+    +mbCell('売値', price>0?esc(usd(price)):'—',
+       (price>0&&fx>0)?('≈'+esc(yen(Math.round(price*fx/100)*100))):'', '')
+    +mbCell('利益',
+       (prof===null)?'—':(esc(yen(prof))+(rate===null?'':small('（'+rate.toFixed(1)+'%）'))),
+       (prof===null)?'—':((note?(note+'　'):'')+'目標 '+esc(yen(tgt))), col)
+    +'</div>';
+}
+/* 行の帯だけを作り直す（一覧は作り直さない。入力中の欄を消さないため）。 */
+function csvMoneyRefresh(r){
+  var el=document.querySelector('#csvList [data-money="'+r.id+'"]');
+  if(el)el.outerHTML=csvMoneyBar(r);
+}
+function syncMoneyRefresh(r){
+  var k=r.asin+'|'+r.cond;
+  var el=document.querySelector('#syncList [data-money="'+k.replace(/"/g,'')+'"]');
+  if(el)el.outerHTML=syncMoneyBar(r);
+}
+/* 出品CSVタブの帯。売値は**書き出す売値**（開始価格）。 */
+function csvMoneyBar(r){
+  var cost=csvCostOf(r), unk=csvCostUnknown(r);
+  var price=+csvStartPrice(r)||0;
+  return moneyBarHtml({ key:r.id, cost:cost, costTemp:csvCostIsTemp(r), costUnknown:unk,
+    costNote:(csvCostFixed(r)?'手で直した値':''),
+    price:price,
+    profit:unk?null:csvProfitAt(cost,r.weight,price,csvFlatOf(r)) });
+}
+/* 販売連携タブの帯。売値は**eBayに出ている今の売値**。
+   仕入値が分からない行は Amazon基準価格を仮に使う（値付けと同じ優先順）。 */
+function syncMoneyBar(r){
+  var c=syncCostOf(r), temp=false;
+  if(!(c.v>0)){
+    var b=syncBasis(r).low||0;
+    if(b>0){ c={ v:Math.round(b), from:'amazon' }; temp=true; }
+  }
+  var price=+r.ebay_price||0;
+  var w=syncWeightOf(r).v;
+  return moneyBarHtml({ key:r.asin+'|'+r.cond, cost:c.v, costTemp:temp,
+    costUnknown:!(c.v>0), costNote:syncFromName(c.from),
+    price:price,
+    profit:(c.v>0)?csvProfitAt(c.v,w,price,syncFlatOf(r)):null });
+}
 /* 行のバッジ。一覧を作り直さずに1行だけ入れ替えられるよう、ここにまとめる。 */
 function csvBadgeHtml(r){
   var iss=csvIssues(r), badge='';
@@ -5392,16 +5494,23 @@ function csvRender(){
       +' placeholder="検索語（空にすると商品名から作り直します）"'
       +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      +'<div class="note2" style="margin-top:2px">'+esc(csvRowSummary(r))+'</div>'
+      /* 仕入値・売値・利益の帯（6.43）。検索語の下・タグの上に出す。 */
+      +csvMoneyBar(r)
+      +'<div class="note2" data-sum="'+r.id+'" style="margin-top:2px">'
+      +esc(csvRowSummary(r))+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
-      +'<div class="note2" style="margin-top:2px">'+esc(judge)+'</div>'
+      +'<div class="note2" data-judge="'+r.id+'" style="margin-top:2px">'+esc(judge)+'</div>'
       +csvPicThumbs(r,'l')
       /* 仕入値（税込・円）。せどりすとの入力間違いをここで直す。
          SKUは変えないので、Amazon側のSKUとは一致したままになる。 */
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">仕入値</span>'
+      /* 仮の仕入値（仕入れ前の候補）の行は、欄を空にして仮の値を薄く出す
+         （0 と出ていると紛らわしいため）。入れた値は今までどおり優先する。 */
       +'<input type="number" min="0" step="1" inputmode="numeric" data-cost="'+r.id+'" value="'
-      +esc(r.cost)+'" style="flex:0 0 84px;min-width:0;padding:6px;font-size:14px;text-align:right;'
+      +esc((+r.cost>0||!r.costTemp)?r.cost:'')+'"'
+      +(csvCostIsTemp(r)?(' placeholder="'+esc(csvAmzBase(r))+'（仮）"'):'')
+      +' style="flex:0 0 84px;min-width:0;padding:6px;font-size:14px;text-align:right;'
       +'border:1px solid '+(csvCostLow(r)?'var(--bad)':'var(--line)')+';border-radius:2px;'
       +'background:#fcfbf8">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">円</span>'
@@ -5686,11 +5795,14 @@ $('csvList').addEventListener('input',function(e){
     }
     var bd=document.querySelector('#csvList [data-badge="'+cid+'"]');
     if(bd)bd.innerHTML=csvBadgeHtml(rc);
-    var cbox=t.parentNode.parentNode;
-    var cn=cbox.getElementsByClassName('note2');
-    if(cn.length)cn[0].textContent=csvRowSummary(rc);     // 売値の表示
+    csvMoneyRefresh(rc);               // 仕入値・売値・利益の帯
+    /* 見出しの要約と判定の行は、目印（data-sum / data-judge）で引いて入れ替える。
+       note2 の並び順で引くと、帯（6.43）の中の小さな文字を書き替えてしまう。 */
+    var csum=document.querySelector('#csvList [data-sum="'+cid+'"]');
+    if(csum)csum.textContent=csvRowSummary(rc);            // 売値の表示
+    var cjd=document.querySelector('#csvList [data-judge="'+cid+'"]');
     var cv=csvVerdict(rc), cth=csvThreshold(rc), cpr=csvSoldProfit(rc);
-    if(cn.length>=2)cn[1].textContent=(cv==='none')
+    if(cjd)cjd.textContent=(cv==='none')
       ? ('相場未入力のまま書き出せます（売値 '+usd(rc.price||0)+'）。'
          +'eBay優先ライン '+usd(csvEbayLine(rc)||0)+' 以上で売れれば eBay優先'
          +'（しきい値利益 '+yen(cth.v)+'）')
@@ -5702,14 +5814,14 @@ $('csvList').addEventListener('input',function(e){
   if(!id)return;
   var r=csvRowById(id); if(!r)return;
   r.sold=e.target.value; csvSaveList();
-  var box=e.target.parentNode.parentNode;
   var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
   var judge=(v==='none')
     ? ('eBay優先ライン '+usd(csvEbayLine(r)||0)+' 以上で売れれば eBay優先（しきい値利益 '+yen(th.v)+'）')
     : ('相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)+'　しきい値 '+yen(th.v)
        +'　差額 '+((pr-th.v)>=0?'＋':'')+yen(pr-th.v)+'　→ '+(v==='ebay'?'eBay優先':'Amazon優先'));
-  var notes=box.getElementsByClassName('note2');
-  if(notes.length>=2)notes[1].textContent=judge;
+  var jd=document.querySelector('#csvList [data-judge="'+id+'"]');
+  if(jd)jd.textContent=judge;
+  csvMoneyRefresh(r);
   $('csvCount').textContent=csvList.length;
 });
 // テキストエリアで Enter を押しても改行にしない（タイトルは1行）
@@ -9756,6 +9868,8 @@ function syncRowHtml(r,key){
       +' placeholder="検索語（空にすると商品名から作り直します）"'
       +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+      /* 仕入値・売値・利益の帯（6.43）。売値は eBay に出ている今の売値。 */
+      +syncMoneyBar(r)
       +'<div>'
       +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
@@ -10682,7 +10796,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v141';   // sw.js の const V と必ず同じ値にする
+var APP_V='v142';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
