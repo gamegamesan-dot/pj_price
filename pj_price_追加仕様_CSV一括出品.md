@@ -3363,6 +3363,73 @@ v146 で `ADV_MD`・`ADV_RV` を足し、「設定を送る」「目標を送る
 テストは `tests/card.js`（37項目）。回帰は40本・1,351項目すべて通った。
 **pj_price だけの変更（Worker・D1 の変更は無い）。**
 
+## 6.49 送信の失敗を画面に出す（2026-10-15・sw.js v148）
+
+「見直しの目標を送る（433件）」を押すと、`wrangler tail` では
+`POST /settings` と `POST /listings` ×3 がすべて **Ok** なのに、画面は
+「送れませんでした（433件）。もう一度押してください。」だけだった。
+
+### 1. 何が起きていたか
+
+| 思い違い | 実際 |
+| --- | --- |
+| `wrangler tail` が Ok なら成功 | Ok は「Worker が落ちなかった」の意味。**応答が HTTP 401 / 500 でも Ok と出る**（D1 の `no such column` など、Worker が自分で 500 を返した回も Ok） |
+| 失敗の理由は要らない | `.then(res=>{ if(!res.ok)throw new Error('HTTP '+res.status); })` で**状態も本文も捨てていた**ので、画面には件数しか出なかった |
+| 1回でも失敗したら全部やり直し | 200件ずつ3回に分けて送るのに、**失敗が1回でもあると送れた回のぶんも控えに反映していなかった**ので、もう一度押すと同じ行をまた送っていた |
+| `rejected` は失敗 | `/listings` の `rejected` は「SKU・ASIN の形が合わず受け取れなかった件数」。通信の失敗とは別に数える |
+
+### 2. 直し方（送信を1か所にまとめた）
+
+```
+syncJsonPost(path, body, onOk, onErr)
+  … 応答の本文まで読む（res.text() → JSON.parse）。
+    !res.ok でも、200 でも本文に error が入っていれば失敗として onErr(理由)。
+syncPostItems(items, onPart, onDone)
+  … 200件ずつ /listings に送る。
+    onPart(part) … その回が通ったときに呼ぶ（**送れた回だけ**控えを合わせる）
+    onDone({sent, rejected, failed, parts, okParts, why})
+syncPostWhy(status, body, text)
+  … 'HTTP 500 server_error D1_ERROR: no such column: rv_want' のように、
+    状態・エラー名・D1 のエラー文を全部入れた1行を作る。
+syncMigrateHint(detail)
+  … 「no such column: <列>」を見て、どの migrate を実行すればよいかを足す。
+    rv_ → migrate-0018 ／ md_・ebay_sale → 0016 ／ search_kw → 0017 ／
+    ebay_bo → 0015 ／ amazon_new → 0014 ／ ebay_first → 0013 ／
+    weight_g・cost_yen・sold_usd → 0012 ／ ebay_ship_profile → 0011 ／ hand_qty → 0010
+```
+
+出る文の例：
+
+```
+送れませんでした 433件：HTTP 500 server_error D1_ERROR: no such column: rv_want
+　pj-sync の D1 に「rv_want」がありません。proxy-sync の
+　migrate-0018-auto-review.sql を実行してから、もう一度押してください。
+　直したら、もう一度押してください（送れていない行だけを送ります）。
+
+送れませんでした 200件：HTTP 500 …　（送れた 233件は残っています）
+送れませんでした 433件：通信できませんでした（Failed to fetch）
+見直しの目標を 418件 pj-sync に残しました。…　受け取れなかった 15件（SKU・ASINの形が合いません）。
+```
+
+### 3. 直した場所
+
+| ボタン | 直したこと |
+| --- | --- |
+| 見直しの目標を送る（6.47） | 理由を出す／送れた回だけ控えに反映（もう一度押すと**残りだけ**送る）／`rejected` を分けて出す |
+| 自動値下げの設定を送る（6.39） | 同じ |
+| 出品リストの名簿を送る | 同じ（これまでは `HTTP 500` までしか出なかった） |
+| まとめて実行（6.47） | `/sync` の失敗も理由を出す |
+| 状況を取り込む | 失敗したら本文を読んで理由を出す（これまでは `HTTP 500` だけ） |
+
+### 4. 受け入れ
+
+- 433件 → 200・200・33 の3回に分けて送ることをテストで固定した。
+- 2回目だけ 500 にすると「送れませんでした 200件／送れた 233件は残っています」になり、
+  ボタンは「見直しの目標を送る（200件）」に変わる。もう一度押すと**200件だけ**送る。
+
+テストは `tests/sendfail.js`（16項目）。回帰は41本・1,367項目すべて通った。
+**pj_price だけの変更（Worker・D1 の変更は無い）。**
+
 ## 7. API連携（フェーズ2）
 
 ### 実装上の制約

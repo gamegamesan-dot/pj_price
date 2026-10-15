@@ -27,20 +27,21 @@ const setup=async(o)=>await p.evaluate((o)=>{
   const real=window.fetch;
   window.fetch=function(u,i){
     const url=String(u), body=(i&&i.body)?JSON.parse(i.body):null;
+    /* 本物の Response と同じように text() も返す
+       （画面側は本文を読んで失敗の理由を作る・6.49）。 */
+    const res=(o)=>Promise.resolve({ok:true,status:200,
+      text:()=>Promise.resolve(JSON.stringify(o)), json:()=>Promise.resolve(o)});
     if(/\/listings/.test(url)){
       window.__posts.push(body.items);
-      return Promise.resolve({ok:true,json:()=>Promise.resolve({accepted:body.items.length,
-        rejected:0})});
+      return res({accepted:body.items.length,rejected:0});
     }
     if(/\/settings/.test(url)){
       window.__settings.push(body);
-      return Promise.resolve({ok:true,json:()=>Promise.resolve({ok:true,stored:true,
-        at:body.at,settings:body.settings})});
+      return res({ok:true,stored:true,at:body.at,settings:body.settings});
     }
     if(/\/sync/.test(url)){
       window.__sync.push(body);
-      return Promise.resolve({ok:true,json:()=>Promise.resolve({mode:'approve',changed:2,
-        zeroed:1,failed:0,capped:0})});
+      return res({mode:'approve',changed:2,zeroed:1,failed:0,capped:0});
     }
     return real(u,i);
   };

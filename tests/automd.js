@@ -125,8 +125,14 @@ const syncSetup=async(mode)=>await p.evaluate((m)=>{
   window.fetch=function(u,i){
     const url=String(u);
     if(/\/listings/.test(url)){
-      window.__posts.push(JSON.parse(i.body).items);
-      return Promise.resolve({ok:true,json:()=>Promise.resolve({accepted:1,rejected:0})});
+      const items=JSON.parse(i.body).items;
+      window.__posts.push(items);
+      /* 本物の Response と同じように text() も返す
+         （画面側は本文を読んで失敗の理由を作る・6.49）。 */
+      const body={accepted:items.length,rejected:0};
+      return Promise.resolve({ok:true,status:200,
+        text:()=>Promise.resolve(JSON.stringify(body)),
+        json:()=>Promise.resolve(body)});
     }
     return real(u,i);
   };

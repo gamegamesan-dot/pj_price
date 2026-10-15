@@ -9579,35 +9579,26 @@ function syncMdSend(){
   advSyncNow();              // 自動値下げのモード・上限・間隔も D1 にそろえる
   var b=$('syncMdSend');
   b.disabled=true; b.textContent='送っています…';
-  var sent=0, bad=0;
-  function step(i){
-    if(i>=items.length){
-      // 送れた行は表示もその場で合わせる（次の取り込みを待たない）
-      if(!bad)need.forEach(function(r){
-        var p=syncMdPlanOf(r);
-        r.md_step=p.md_step; r.md_floor=p.md_floor; r.md_n=p.md_n;
-        if((+r.md_start||0)!==p.md_start){ r.md_start=p.md_start; r.md_done=0; }
-      });
-      syncSaveCache();
-      b.disabled=false;
-      syncRender();          // 帯を作り直してから書き足す（上書きされないように）
-      $('syncMdNote').innerHTML+='<br>'+(bad
-        ? ('送れませんでした（'+bad+'件）。もう一度押してください。')
-        : ('自動値下げの設定を '+sent+'件 pj-sync に残しました。'
-           +(autoMdOn()?'次の実行（1日1回）から効きます。'
-                       :'「オン」にすると eBay を変えはじめます。')));
-      return;
-    }
-    var part=items.slice(i,i+200);
-    fetch(syncUrl()+'/listings',{method:'POST',
-      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-      body:JSON.stringify({items:part})})
-      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
-      .then(function(d){ sent+=(d&&d.accepted)||0; })
-      ['catch'](function(){ bad+=part.length; })
-      .then(function(){ step(i+200); });
-  }
-  step(0);
+  var byKey={};
+  need.forEach(function(r){ byKey[r.asin+'|'+r.cond]=r; });
+  /* 送れた回のぶんだけ、この端末の表示も合わせる（次の取り込みを待たない）。
+     1回ぶんが失敗しても、送れた行はそのまま残す（6.49）。 */
+  syncPostItems(items,function(part){
+    part.forEach(function(x){
+      var r=byKey[x.asin+'|'+x.cond]; if(!r)return;
+      var p=syncMdPlanOf(r);
+      r.md_step=p.md_step; r.md_floor=p.md_floor; r.md_n=p.md_n;
+      if((+r.md_start||0)!==p.md_start){ r.md_start=p.md_start; r.md_done=0; }
+    });
+    syncSaveCache();
+  },function(res){
+    b.disabled=false;
+    syncRender();          // 帯を作り直してから書き足す（上書きされないように）
+    $('syncMdNote').innerHTML+='<br>'+syncPostNote(res,
+      '自動値下げの設定を '+res.sent+'件 pj-sync に残しました。'
+      +(autoMdOn()?'次の実行（1日1回）から効きます。'
+                  :'「オン」にすると eBay を変えはじめます。'));
+  });
 }
 $('syncMdSend').onclick=syncMdSend;
 /* 「一覧で見る」＝絞り込みを「自動値下げの予定」にする（日付の近い順に並ぶ）。 */
@@ -9618,6 +9609,110 @@ $('syncMdNote').addEventListener('click',function(e){
   syncFilterSet('automd');
 });
 
+/* ================= pj-sync への送信と、その結果の見方（6.49）=================
+   「見直しの目標を送る」で wrangler tail が Ok なのに画面が
+   「送れませんでした（433件）」になった。原因は結果の見方が雑だったこと。
+   ・wrangler tail の Ok は「Worker が落ちなかった」という意味で、
+     応答が HTTP 500（D1 のエラーなど）でも Ok と出る。
+   ・それを `if(!res.ok)throw new Error('HTTP '+res.status)` で捨てていたので、
+     画面には件数しか出ず、何が悪いのか分からなかった。
+   ・分けて送ったぶんのうち1回でも失敗すると、**送れた回のぶんも**
+     画面の控えに反映していなかった（次に押すと同じ行をまた送っていた）。
+   ここでは応答の本文まで読んで理由を作り、回ごとに結果を集計する。 */
+var SYNC_POST_CHUNK=200;              // 1回に送る件数
+/* D1 に列が無いときは、どの migrate を実行すればよいかまで出す。 */
+var SYNC_MIGRATE=[
+  ['rv_','migrate-0018-auto-review.sql'],
+  ['md_','migrate-0016-auto-markdown.sql'],
+  ['ebay_sale','migrate-0016-auto-markdown.sql'],
+  ['search_kw','migrate-0017-search-kw.sql'],
+  ['ebay_bo','migrate-0015-best-offer.sql'],
+  ['amazon_new','migrate-0014-amazon-new-low.sql'],
+  ['ebay_first','migrate-0013-ebay-first.sql'],
+  ['hand_qty','migrate-0010-cart-hand.sql'],
+  ['ebay_ship_profile','migrate-0011-ship-profile.sql'],
+  ['weight_g','migrate-0012-price-source.sql'],
+  ['cost_yen','migrate-0012-price-source.sql'],
+  ['sold_usd','migrate-0012-price-source.sql']
+];
+function syncMigrateHint(d){
+  var m=/no such (?:column|table)[:\s]+([A-Za-z0-9_.]+)/i.exec(String(d||''));
+  if(!m)return '';
+  var col=String(m[1]).replace(/^items\./,''), file='';
+  SYNC_MIGRATE.forEach(function(x){ if(!file&&col.indexOf(x[0])===0)file=x[1]; });
+  return '　pj-sync の D1 に「'+col+'」がありません。proxy-sync の '
+    +(file||'migrate-00xx.sql')+' を実行してから、もう一度押してください。';
+}
+/* 失敗の理由を1行にする。status・error・detail（D1 のエラー文）を全部出す。 */
+function syncPostWhy(status,body,text){
+  var o=body||{};
+  var d=String(o.detail||'').trim()||String(text||'').trim();
+  return 'HTTP '+(status||0)+(o.error?(' '+o.error):'')
+    +(d?(' '+d.slice(0,200)):'')+syncMigrateHint(d);
+}
+/* pj-sync に1回 POST する。失敗したときは理由（文字列）を onErr に渡す。 */
+function syncJsonPost(path,body,onOk,onErr){
+  var st=0;
+  fetch(syncUrl()+path,{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify(body||{})})
+    .then(function(res){
+      st=res.status;
+      return res.text().then(function(t){
+        var b=null; try{ b=JSON.parse(t); }catch(e){}
+        return { ok:res.ok, body:b, text:t };
+      });
+    })
+    .then(function(r){
+      // 200 でも本文に error が入っていれば失敗として扱う
+      if(!r.ok||!r.body||r.body.error){ onErr(syncPostWhy(st,r.body,r.text)); return; }
+      onOk(r.body);
+    })
+    ['catch'](function(e){
+      onErr(st?syncPostWhy(st,null,(e&&e.message)||'')
+             :('通信できませんでした（'+((e&&e.message)||'原因不明')+'）'));
+    });
+}
+/* items を SYNC_POST_CHUNK 件ずつ /listings に送る。
+     onPart(part,accepted,rejected) … その回が通ったときに呼ぶ（控えを合わせる）
+     onDone(res) … 最後に呼ぶ。res = { sent, rejected, failed, parts, okParts, why }
+   sent     … Worker が受け取った件数（accepted の合計）
+   rejected … 受け取れなかった件数（SKU・ASIN の形が合わない行）
+   failed   … 送れなかった件数（その回ぶん全部）
+   why      … 失敗の理由（同じ理由はまとめる） */
+function syncPostItems(items,onPart,onDone){
+  var sent=0, rejected=0, failed=0, okParts=0, whys=[];
+  var parts=Math.ceil(items.length/SYNC_POST_CHUNK);
+  function step(i){
+    if(i>=items.length){
+      onDone({ sent:sent, rejected:rejected, failed:failed, parts:parts,
+               okParts:okParts, why:whys.join(' / ') });
+      return;
+    }
+    var part=items.slice(i,i+SYNC_POST_CHUNK);
+    syncJsonPost('/listings',{items:part},function(d){
+      var a=Number(d.accepted||0), rj=Number(d.rejected||0);
+      sent+=a; rejected+=rj; okParts++;
+      if(onPart)onPart(part,a,rj);
+      step(i+SYNC_POST_CHUNK);
+    },function(why){
+      failed+=part.length;
+      if(whys.indexOf(why)<0)whys.push(why);
+      step(i+SYNC_POST_CHUNK);
+    });
+  }
+  if(!items.length){ onDone({ sent:0, rejected:0, failed:0, parts:0, okParts:0, why:'' }); return; }
+  step(0);
+}
+/* 送信の結果を1行の文にする。失敗があれば理由を必ず出す。 */
+function syncPostNote(res,okText){
+  if(res.failed)
+    return '送れませんでした '+res.failed+'件：'+res.why
+      +(res.sent?('　（送れた '+res.sent+'件は残っています）'):'')
+      +'　直したら、もう一度押してください（送れていない行だけを送ります）。';
+  return okText
+    +(res.rejected?('　受け取れなかった '+res.rejected+'件（SKU・ASINの形が合いません）。'):'');
+}
 /* ================= 売値の見直しの自動反映（6.47）=================
    「売値の見直し」の対象のうち **値上げだけ** を pj-sync が eBay に直接反映する。
    値下げは3日ごとの自動値下げ（syncMd…）に任せ、最低利益ラインより下げない。
@@ -9778,35 +9873,28 @@ function syncRvSend(){
   advSyncNow();              // モード・上限・変更幅も D1 にそろえる
   var b=$('syncRvSend');
   b.disabled=true; b.textContent='送っています…';
-  var sent=0, bad=0;
-  function step(i){
-    if(i>=items.length){
-      if(!bad)need.forEach(function(r){
-        var t=syncRvTargetOf(r);
-        if((+r.rv_want||0)!==t.rv_want)r.rv_fail=0;
-        r.rv_kind=t.rv_kind; r.rv_want=t.rv_want;
-        r.rv_floor=t.rv_floor; r.rv_max_cost=t.rv_max_cost;
-      });
-      syncSaveCache();
-      b.disabled=false;
-      syncRender();
-      $('syncRvDone').textContent=bad
-        ? ('送れませんでした（'+bad+'件）。もう一度押してください。')
-        : ('見直しの目標を '+sent+'件 pj-sync に残しました。'
-           +(autoRvMode()==='auto'?'次の実行（1日1回）から反映します。'
-                                  :'「まとめて実行」で反映できます。'));
-      return;
-    }
-    var part=items.slice(i,i+200);
-    fetch(syncUrl()+'/listings',{method:'POST',
-      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-      body:JSON.stringify({items:part})})
-      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
-      .then(function(d){ sent+=(d&&d.accepted)||0; })
-      ['catch'](function(){ bad+=part.length; })
-      .then(function(){ step(i+200); });
-  }
-  step(0);
+  $('syncRvDone').textContent='送っています…';
+  var byKey={};
+  need.forEach(function(r){ byKey[r.asin+'|'+r.cond]=r; });
+  /* 送れた回のぶんだけ、この端末の控えも合わせる（6.49）。
+     ほかの回が失敗しても、送れた行をもう一度送らないようにする。 */
+  syncPostItems(items,function(part){
+    part.forEach(function(x){
+      var r=byKey[x.asin+'|'+x.cond]; if(!r)return;
+      var t=syncRvTargetOf(r);
+      if((+r.rv_want||0)!==t.rv_want)r.rv_fail=0;
+      r.rv_kind=t.rv_kind; r.rv_want=t.rv_want;
+      r.rv_floor=t.rv_floor; r.rv_max_cost=t.rv_max_cost;
+    });
+    syncSaveCache();
+  },function(res){
+    b.disabled=false;
+    syncRender();            // 帯を作り直してから書き足す（上書きされないように）
+    $('syncRvDone').textContent=syncPostNote(res,
+      '見直しの目標を '+res.sent+'件 pj-sync に残しました。'
+      +(autoRvMode()==='auto'?'次の実行（1日1回）から反映します。'
+                             :'「まとめて実行」で反映できます。'));
+  });
 }
 $('syncRvSend').onclick=syncRvSend;
 /* 確認モードの承認。pj-sync に「いま実行してよい」と伝える。
@@ -9832,20 +9920,16 @@ function syncRvGo(){
   var b=$('syncRvGo');
   b.disabled=true; b.textContent='実行しています…';
   $('syncRvDone').textContent='pj-sync が eBay を変えています…';
-  fetch(syncUrl()+'/sync',{method:'POST',
-    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-    body:JSON.stringify({kind:'review',approve:true})})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
-    .then(function(d){
-      $('syncRvDone').textContent='上げた '+Number(d.changed||0)+'件／数量0 '
-        +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
-        +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'')
-        +'。「状況を取り込む」で表示を更新してください。';
-    })
-    ['catch'](function(e){
-      $('syncRvDone').textContent='失敗しました：'+e.message;
-    })
-    .then(function(){ b.disabled=false; syncRender(); });
+  syncJsonPost('/sync',{kind:'review',approve:true},function(d){
+    $('syncRvDone').textContent='上げた '+Number(d.changed||0)+'件／数量0 '
+      +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
+      +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'')
+      +'。「状況を取り込む」で表示を更新してください。';
+    b.disabled=false; syncRender();
+  },function(why){
+    $('syncRvDone').textContent='失敗しました：'+why;
+    b.disabled=false; syncRender();
+  });
 }
 $('syncRvGo').onclick=syncRvGo;
 /* 値下げ用の Revise CSV。書き出した日を D1 に控え、次の間隔はそこから数える。 */
@@ -11038,7 +11122,16 @@ $('syncLoad').onclick=function(){
   var btn=$('syncLoad'); btn.disabled=true; btn.textContent='取り込み中…';
   syncSay('取り込み中…');
   fetch(u+'/status?limit='+syncLimit(),{headers:{'X-PJ-Key':syncKeyReady()}})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(res){
+      if(res.ok)return res.json();
+      /* 失敗したときは本文まで読んで理由を出す（6.49）。
+         wrangler tail は Ok と出るので、画面に出さないと原因が分からない
+         （D1 の「no such column」＝migrate 未適用など）。 */
+      return res.text().then(function(t){
+        var b=null; try{ b=JSON.parse(t); }catch(e2){}
+        throw new Error(syncPostWhy(res.status,b,t));
+      });
+    })
     .then(function(d){
       syncData={ at:new Date().toISOString(), counts:d.counts||{}, items:d.items||[],
                  last_runs:d.last_runs||[], sold:d.sold_recent||[],
@@ -11108,37 +11201,29 @@ function syncPushRun(done,quiet){
     return o;
   });
   var btn=$('syncPush'); btn.disabled=true; btn.textContent='送信中…';
-  var sent=0, failed=0;
-  function step(i){
-    if(i>=items.length){
-      btn.disabled=false; btn.textContent='出品リストの名簿を送る（手元在庫の印つき）';
-      $('syncPushNote').textContent='名簿を送りました：'+sent+'件'
-        +(failed?('　'+failed+'件は失敗しました。'):'')
-        +(skipPre?('　仕入れ前の候補 '+skipPre+'件は送っていません'
-                   +'（出品してから送ります）。'):'')
-        +'　手元在庫の印 '+items.filter(function(x){return x.on_hand;}).length+'件。'
-        +'　価格の元データ（実重量 '
-        +items.filter(function(x){return x.weight_g;}).length+'件／仕入値 '
-        +items.filter(function(x){return x.cost_yen;}).length+'件／相場 '
-        +items.filter(function(x){return x.sold_usd;}).length+'件）も残しました。'
-        +'　「状況を取り込む」で反映を確認できます。';
-      /* 出品リストと結びついた行は重量が分かるので、推奨売値を出し直す
-         （表示と書き出しの売値を必ず一致させる）。 */
-      syncRender();
-      fin({sent:sent, failed:failed});
-      return;
-    }
-    var part=items.slice(i,i+200);
-    fetch(u+'/listings',{method:'POST',
-      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-      body:JSON.stringify({items:part})})
-      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
-      .then(function(d){ sent+=(d.accepted||0); failed+=(d.rejected||0); })
-      .catch(function(e){ failed+=part.length; $('syncPushNote').textContent='送信に失敗：'+e.message; })
-      .then(function(){ step(i+200); });
-  }
   $('syncPushNote').textContent='送信中…';
-  step(0);
+  syncPostItems(items,null,function(res){
+    btn.disabled=false; btn.textContent='出品リストの名簿を送る（手元在庫の印つき）';
+    /* 失敗したときは理由（HTTPの状態・D1 のエラー）も出す（6.49）。 */
+    $('syncPushNote').textContent=(res.failed
+        ? ('名簿を送れませんでした '+res.failed+'件：'+res.why
+           +(res.sent?('　（送れた '+res.sent+'件は残っています）'):'')+'　')
+        : ('名簿を送りました：'+res.sent+'件'
+           +(res.rejected?('　'+res.rejected+'件は受け取れませんでした'
+                           +'（SKU・ASINの形が合いません）。'):'')))
+      +(skipPre?('　仕入れ前の候補 '+skipPre+'件は送っていません'
+                 +'（出品してから送ります）。'):'')
+      +'　手元在庫の印 '+items.filter(function(x){return x.on_hand;}).length+'件。'
+      +'　価格の元データ（実重量 '
+      +items.filter(function(x){return x.weight_g;}).length+'件／仕入値 '
+      +items.filter(function(x){return x.cost_yen;}).length+'件／相場 '
+      +items.filter(function(x){return x.sold_usd;}).length+'件）も残しました。'
+      +'　「状況を取り込む」で反映を確認できます。';
+    /* 出品リストと結びついた行は重量が分かるので、推奨売値を出し直す
+       （表示と書き出しの売値を必ず一致させる）。 */
+    syncRender();
+    fin({sent:res.sent, failed:res.failed+res.rejected});
+  });
 }
 $('syncPush').onclick=function(){ syncPushRun(); };
 /* 誤って付いた手元在庫の印を、FBAに在庫がある行からまとめて外す。
@@ -11520,7 +11605,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v147';   // sw.js の const V と必ず同じ値にする
+var APP_V='v148';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
