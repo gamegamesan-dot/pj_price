@@ -4005,19 +4005,61 @@ function csvSoldProfit(r){
 // eBay優先ライン＝目標利益にしきい値利益を渡して逆算した推奨売値の総額（USD）。
 // 既存の逆算ロジックをそのまま使う（新しい式は作らない）。
 function csvEbayLine(r){
+  if(csvNoLine(r))return null;        // 仕入れ前の候補はラインを出さない
   var th=csvThreshold(r).v;
   return csvWithItem(csvCostOf(r),r.weight,function(){
     var m=priceModel(th);
     return Math.round((ceil2(m.pRec)+ceil2(m.zoneShipCharge(m.basisZone)))*100)/100;
   });
 }
-// 'ebay' / 'amazon' / 'none'（未判定）
+/* 仕入れ前の候補（M-・仮の仕入値）の行は、**eBay優先ライン・Amazon同等ライン・
+   相場の判定（eBay優先／Amazon優先）を出さない**。
+   仕入値が仮（Amazon基準価格）なので、どの線も根拠にならない。
+   仕入値を入れた時点で、ふつうの行と同じ判定に戻る。 */
+function csvNoLine(r){
+  if(!r)return false;
+  /* 判定の有無は**仕入値が仮かどうか**だけで決める。
+     ・仕入値を実際の値に直したら、その時点でふつうの行に戻る
+     ・M- 以外のSKU（E-）に置き換わっても、仕入値が仮ならまだ判定しない */
+  return !!(csvCostIsTemp(r)||csvCostUnknown(r));
+}
+/* 仕入れ前の候補の行（まだ出品しておらず、仕入値が仮のまま）。
+   販売連携の名簿には送らない（手元在庫・FBAの警告の対象にしないため）。 */
+function csvPreBuyRow(r){
+  return !!(r&&!String(r.itemId||'').trim()&&csvNoLine(r));
+}
+// 'ebay' / 'amazon' / 'none'（未判定）／'pre'（仕入れ前の候補・判定しない）
 function csvVerdict(r){
+  if(csvNoLine(r))return 'pre';
   var pr=csvSoldProfit(r);
   if(pr===null||pr===undefined)return 'none';
   return (pr>csvThreshold(r).v)?'ebay':'amazon';
 }
 function csvEbayFirst(r){ return csvVerdict(r)==='ebay'; }
+/* 行に出す判定の1行（3か所で同じ文を使う）。
+   仕入れ前の候補（仮の仕入値）は、ラインも相場の判定も出さない。 */
+function csvJudgeText(r){
+  var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
+  var hasSold=(pr!==null&&pr!==undefined);
+  if(v==='pre'){
+    return '仕入れ前の候補（'
+      +(csvCostUnknown(r)?'仕入値 未確定':('仮の仕入値 '+yen(csvAmzBase(r))))+'）。'
+      +'eBay優先ライン・Amazon同等ラインと相場の判定は出しません'
+      +'（仕入値を入れると出ます）。'
+      +(hasSold?('　相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)):'');
+  }
+  if(v==='none'){
+    var ln=csvEbayLine(r);
+    return '相場未入力のまま書き出せます（売値 '+usd(csvStartPrice(r)||0)+'）。'
+      +'eBay優先ライン '+usd(ln||0)+' 以上で売れれば eBay優先'
+      +'（しきい値利益 '+yen(th.v)+'・ランク '+(r.rank||0).toLocaleString()+'位'
+      +(th.relaxed?'・緩和で0%':'')+'）';
+  }
+  var diff=pr-th.v;
+  return '相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)
+    +'　しきい値 '+yen(th.v)+'　差額 '+(diff>=0?'＋':'')+yen(diff)
+    +'　→ '+(v==='ebay'?'eBay優先':'Amazon優先');
+}
 /* 「カテゴリ」列（せどりすとの分類）→ eBayカテゴリ。
    仕入れ登録前のリストは SKU の接頭辞が無いので、この列と商品名で振り分ける。
    フィギュア・ホビーは2つのカテゴリ（261055／261068）のどちらかを人が選ぶので、
@@ -4383,9 +4425,10 @@ function csvBadgeHtml(r){
     +';color:#fff;border-radius:2px;padding:1px 5px;font-size:10.5px;margin:0 3px 3px 0">'
     +esc(t)+'</span>'; };
   var v=csvVerdict(r), th=csvThreshold(r);
+  /* 仕入れ前の候補（v==='pre'）は優先の判定を出さない（「仕入れ前の候補」だけ）。 */
   if(v==='ebay')badge+=b('eBay優先','var(--good)');
   else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
-  else badge+=b('相場未確認','#8a6d00');   // 書き出しは止めない。確かめずに出す判断はできる
+  else if(v!=='pre')badge+=b('相場未確認','#8a6d00');
   if(v==='amazon'&&r.forceEbay)badge+=b('eBayにも出す','#2f6fb0');
   if(r.preBuy)badge+=b('仕入れ前の候補','#1f6f8a');
   if(r.oneOff)badge+=b('一点物','#6b4fa0');
@@ -4394,7 +4437,7 @@ function csvBadgeHtml(r){
   if(csvUploadFixed(r))badge+=b('前回アップロード失敗（直し済み）','#8a6d00');
   var lgN=csvSpecLong(r);
   if(lgN.length)badge+=b(lgN.join('・')+' を短縮しました','#8a6d00');
-  if(th.relaxed)badge+=b('緩和','var(--mute)');
+  if(th.relaxed&&!csvNoLine(r))badge+=b('緩和','var(--mute)');
   var rest=iss.filter(function(x){ return x!=='Amazon優先'; });
   if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
   if(!r.jan)badge+=b('JANなし','#8a6d00');
@@ -4450,6 +4493,7 @@ function csvUploadFixed(r){
 function csvNotes(r){
   var a=[];
   if(csvVerdict(r)==='none')a.push('相場未確認');
+  if(csvVerdict(r)==='pre')a.push('仕入れ前の候補（相場の判定とラインは出しません）');
   if(csvUploadFixed(r))a.push('前回アップロード失敗（直したので書き出せます）：'+r.uploadErr);
   // 65文字を超える Item Specifics は書き出しで短くなる。どの項目かを出す
   var lg=csvSpecLong(r);
@@ -4539,6 +4583,9 @@ function csvPriceChanged(r){ return !!csvPriceReview(r); }
    未判定 → eBay優先かつ未完成 → eBay優先 → 未完成 → それ以外 */
 function csvRank(r){
   var v=csvVerdict(r), ng=csvIssues(r).length>0;
+  /* 仕入れ前の候補は相場の判定をしないので、「相場未確認」の先頭には入れず、
+     いちばん後ろにまとめる（並べ替えの対象から外す）。 */
+  if(v==='pre')return 5;
   if(v==='none')return 0;
   if(v==='ebay')return ng?1:2;
   return ng?3:4;
@@ -5400,16 +5447,20 @@ function csvRender(){
   csvPicFindRows();  // 付け先の行の選択肢も作り直す
   csvFilterOpts();   // 絞り込みの選択肢と件数を先に作り直す
   $('csvCount').textContent=csvList.length;
-  var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0;
+  var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0,preN=0;
   csvList.forEach(function(r){
     var v=csvVerdict(r);
-    if(v==='ebay')ebayN++; else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; } else noneN++;
+    if(v==='ebay')ebayN++;
+    else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; }
+    else if(v==='pre')preN++;        // 仕入れ前の候補（判定しない）
+    else noneN++;
     if(!String(r.titleEn||'').trim())noEn++;
     if(!String(r.descHtml||'').trim())noDesc++;
     if(r.condId!==1000)used++; });
   $('csvSummary').textContent=csvList.length
     ? ('相場未確認 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
+       +(preN?('　/　仕入れ前の候補 '+preN+'件（判定しません）'):'')
        +'　/　英題なし '+noEn+'件　/　説明文なし '+noDesc+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、eBayタブの「出品文」から1件ずつ追加してください';
   var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
@@ -5461,20 +5512,8 @@ function csvRender(){
     /* 行のバッジは csvBadgeHtml() にまとめてある（下）。
        仕入値を直したときは、その行のバッジだけを入れ替える。 */
     var badge=csvBadgeHtml(r);
-    var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
-    // 未判定はライン、判定済みはしきい値との差額を出す
-    var judge;
-    if(v==='none'){
-      var ln=csvEbayLine(r);
-      judge='相場未入力のまま書き出せます（売値 '+usd(r.price||0)+'）。'
-        +'eBay優先ライン '+usd(ln||0)+' 以上で売れれば eBay優先'
-        +'（しきい値利益 '+yen(th.v)+'・ランク '+(r.rank||0).toLocaleString()+'位'
-        +(th.relaxed?'・緩和で0%':'')+'）';
-    }else{
-      var diff=pr-th.v;
-      judge='相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)
-        +'　しきい値 '+yen(th.v)+'　差額 '+(diff>=0?'＋':'')+yen(diff);
-    }
+    var v=csvVerdict(r);              // 下の「Amazon優先でも出す」ボタンで使う
+    var judge=csvJudgeText(r);
     /* 1商品＝1カード。見出し（日本語名）から各種ボタンまで、すべてこの中に入れる。 */
     h+='<div class="lcard" data-row="'+r.id+'">'
       /* 見出しの左に選択のチェック。「選択した行だけ書き出す」で使う。 */
@@ -5801,26 +5840,15 @@ $('csvList').addEventListener('input',function(e){
     var csum=document.querySelector('#csvList [data-sum="'+cid+'"]');
     if(csum)csum.textContent=csvRowSummary(rc);            // 売値の表示
     var cjd=document.querySelector('#csvList [data-judge="'+cid+'"]');
-    var cv=csvVerdict(rc), cth=csvThreshold(rc), cpr=csvSoldProfit(rc);
-    if(cjd)cjd.textContent=(cv==='none')
-      ? ('相場未入力のまま書き出せます（売値 '+usd(rc.price||0)+'）。'
-         +'eBay優先ライン '+usd(csvEbayLine(rc)||0)+' 以上で売れれば eBay優先'
-         +'（しきい値利益 '+yen(cth.v)+'）')
-      : ('相場 '+usd(+rc.sold||0)+' → 利益 '+yen(cpr)+'　しきい値 '+yen(cth.v)
-         +'　差額 '+((cpr-cth.v)>=0?'＋':'')+yen(cpr-cth.v));
+    if(cjd)cjd.textContent=csvJudgeText(rc);
     return;
   }
   var id=t.getAttribute('data-sold');
   if(!id)return;
   var r=csvRowById(id); if(!r)return;
   r.sold=e.target.value; csvSaveList();
-  var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
-  var judge=(v==='none')
-    ? ('eBay優先ライン '+usd(csvEbayLine(r)||0)+' 以上で売れれば eBay優先（しきい値利益 '+yen(th.v)+'）')
-    : ('相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)+'　しきい値 '+yen(th.v)
-       +'　差額 '+((pr-th.v)>=0?'＋':'')+yen(pr-th.v)+'　→ '+(v==='ebay'?'eBay優先':'Amazon優先'));
   var jd=document.querySelector('#csvList [data-judge="'+id+'"]');
-  if(jd)jd.textContent=judge;
+  if(jd)jd.textContent=csvJudgeText(r);
   csvMoneyRefresh(r);
   $('csvCount').textContent=csvList.length;
 });
@@ -5837,7 +5865,10 @@ $('csvList').addEventListener('change',function(e){
     if(rw){
       rw.mercKw=String(e.target.value||'').trim();
       csvSaveList();
-      csvKwPost(rw.asin,csvKindOf(rw),rw.mercKw,rw.titleJa||rw.titleEn||'');
+      /* 仕入れ前の候補は D1 に行を作らない（この端末にだけ残す）。
+         出品したあとの名簿送信で、まとめて D1 に入る。 */
+      if(!csvPreBuyRow(rw))
+        csvKwPost(rw.asin,csvKindOf(rw),rw.mercKw,rw.titleJa||rw.titleEn||'');
       var x=csvSyncItem(rw);
       if(x)x.search_kw=rw.mercKw;        // 取り込みの控えもそろえる
     }
@@ -6439,7 +6470,10 @@ function csvPriceSrcOf(r){
   return o;
 }
 function csvSendPriceSrc(rows,noteId){
-  var list=(rows||[]).filter(function(r){ return /^B[0-9A-Z]{9}$/.test(String(r.asin||'').trim()); });
+  /* 仕入れ前の候補（まだ出品しておらず仕入値が仮の行）は送らない。
+     仮の仕入値を D1 に残さないためと、販売連携で警告を出さないため。 */
+  var list=(rows||[]).filter(function(r){
+    return /^B[0-9A-Z]{9}$/.test(String(r.asin||'').trim())&&!csvPreBuyRow(r); });
   if(!list.length)return;
   csvSecretFill();
   if(!syncUrl()||!syncApiKey())return;
@@ -10364,7 +10398,10 @@ function syncPushRun(done,quiet){
     // すでに D1 側で無在庫の印が付いている行（出品リスト側の指定が無くても尊重する）
     if(Number(x.dropship||0))dropD1[k2]=1;
   });
-  var items=csvList.map(function(r){
+  /* 仕入れ前の候補（まだ出品しておらず仕入値が仮の行）は送らない。
+     送ると販売連携で「eBayに出ているのにFBA在庫が無い」などの警告が出てしまう。 */
+  var skipPre=csvList.filter(csvPreBuyRow).length;
+  var items=csvList.filter(function(r){ return !csvPreBuyRow(r); }).map(function(r){
     var key=syncKeyOf(r);
     /* 無在庫の行は手元に在庫を持たないので、手元在庫の印を付けない。
        出品リストでの指定と、D1 側に既に付いている印のどちらでも無在庫とみなす。 */
@@ -10392,6 +10429,8 @@ function syncPushRun(done,quiet){
       btn.disabled=false; btn.textContent='出品リストの名簿を送る（手元在庫の印つき）';
       $('syncPushNote').textContent='名簿を送りました：'+sent+'件'
         +(failed?('　'+failed+'件は失敗しました。'):'')
+        +(skipPre?('　仕入れ前の候補 '+skipPre+'件は送っていません'
+                   +'（出品してから送ります）。'):'')
         +'　手元在庫の印 '+items.filter(function(x){return x.on_hand;}).length+'件。'
         +'　価格の元データ（実重量 '
         +items.filter(function(x){return x.weight_g;}).length+'件／仕入値 '
@@ -10796,7 +10835,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v142';   // sw.js の const V と必ず同じ値にする
+var APP_V='v143';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

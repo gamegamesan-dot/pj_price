@@ -249,6 +249,82 @@ console.log('   '+JSON.stringify(toE));
 ok(toE.off==='E-B0ODD0002Z','★無在庫をオフにすると E-<ASIN>（空にしない）');
 ok(toE.on==='M-B0ODD0002Z','★既定は M-');
 
+console.log('\n=== 仕入れ前の候補は eBay優先ライン・Amazon同等ラインを出さない ===');
+await setup();
+const line=await p.evaluate((text)=>{
+  csvImport(text);
+  $('csvSort').value='add'; $('csvPerPage').value='100'; csvPage=1;
+  csvRender(); $('csvListBox').open=true;
+  const r=csvList.find(x=>x.asin==='B0PRE0002Z');
+  const card=document.querySelector('#csvList [data-row="'+r.id+'"]');
+  return { verdict:csvVerdict(r), noLine:csvNoLine(r), pre:csvPreBuyRow(r),
+    ebayLine:csvEbayLine(r), rank:csvRank(r),
+    judge:card.querySelector('[data-judge]').textContent,
+    badge:card.querySelector('[data-badge]').textContent,
+    band:card.querySelector('[data-money]').innerText.replace(/\n/g,' | '),
+    first:csvEbayFirst(r), notes:csvNotes(r),
+    sum:$('csvSummary').textContent,
+    // 名簿（出品リストの名簿を送る）に入らないこと
+    pushN:csvList.filter(x=>!csvPreBuyRow(x)).length, all:csvList.length };
+},PRE);
+console.log('   判定: '+JSON.stringify({verdict:line.verdict,noLine:line.noLine,
+  ebayLine:line.ebayLine,rank:line.rank,first:line.first}));
+console.log('   判定の行: '+line.judge);
+console.log('   タグ: '+line.badge);
+console.log('   帯: '+line.band);
+console.log('   内訳: '+line.sum);
+ok(line.verdict==='pre'&&line.noLine===true,'★仕入れ前の候補は判定しない（pre）');
+ok(line.ebayLine===null,'★eBay優先ラインを計算しない');
+ok(/仕入れ前の候補（仮の仕入値 ¥3,002）/.test(line.judge),
+   '★代わりに「仕入れ前の候補（仮の仕入値 ¥3,002）」と出す');
+ok(!/eBay優先ライン \$/.test(line.judge)&&!/しきい値/.test(line.judge),
+   '★ラインとしきい値は出さない');
+ok(!/eBay優先/.test(line.badge)&&!/Amazon優先/.test(line.badge)
+   &&!/相場未確認/.test(line.badge),'★判定のタグを付けない');
+ok(/仕入れ前の候補/.test(line.badge),'★「仕入れ前の候補」のタグは出す');
+ok(line.first===false,'★「eBay優先だけ残す」の対象にしない');
+ok(line.rank===5,'★並べ替えでは「相場未確認」の先頭に入れず、後ろにまとめる');
+ok(/仕入れ前の候補 63件（判定しません）/.test(line.sum),'★件数の内訳にも出す');
+ok(/¥3,002（仮）/.test(line.band)&&/\$/.test(line.band)&&/利益/.test(line.band),
+   '★売値・利益は仮の仕入値で今までどおり出す');
+ok(line.pre===true&&line.pushN===0&&line.all===63,
+   '★名簿（販売連携に送る）の対象から外す');
+
+console.log('\n=== 相場を入れても判定しない ===');
+const soldPre=await p.evaluate(()=>{
+  const r=csvList.find(x=>x.asin==='B0PRE0002Z');
+  r.sold='60'; csvRecalc(r);
+  return { verdict:csvVerdict(r), judge:csvJudgeText(r) };
+});
+console.log('   '+JSON.stringify(soldPre));
+ok(soldPre.verdict==='pre'&&!/→ eBay優先|→ Amazon優先/.test(soldPre.judge)
+   &&!/しきい値/.test(soldPre.judge),
+   '★相場を入れても eBay優先／Amazon優先の判定は出さない');
+ok(/相場 \$60\.00 → 利益/.test(soldPre.judge),'相場での利益は出す（参考）');
+
+console.log('\n=== 仕入値を入れると通常の行に戻る ===');
+const back=await p.evaluate(()=>{
+  const r=csvList.find(x=>x.asin==='B0PRE0002Z');
+  r.sold='';
+  csvCostSet(r,2000);
+  $('csvPerPage').value='100'; csvPage=1;
+  csvRender(); $('csvListBox').open=true;
+  const card=document.querySelector('#csvList [data-row="'+r.id+'"]');
+  return { verdict:csvVerdict(r), noLine:csvNoLine(r), pre:csvPreBuyRow(r),
+    line:csvEbayLine(r), rank:csvRank(r),
+    judge:card.querySelector('[data-judge]').textContent,
+    badge:card.querySelector('[data-badge]').textContent,
+    band:card.querySelector('[data-money]').innerText.replace(/\n/g,' | ') };
+});
+console.log('   '+JSON.stringify({verdict:back.verdict,line:back.line,rank:back.rank}));
+console.log('   判定の行: '+back.judge);
+console.log('   帯: '+back.band);
+ok(back.verdict==='none'&&back.noLine===false,'★ふつうの行（相場未確認）に戻る');
+ok(back.line>0&&/eBay優先ライン \$/.test(back.judge),'★eBay優先ラインが出る');
+ok(/相場未確認/.test(back.badge),'★「相場未確認」のタグが出る');
+ok(back.rank===0&&back.pre===false,'★並べ替えと名簿の対象に戻る');
+ok(/¥2,000/.test(back.band)&&!/仮/.test(back.band),'★帯も仮ではなくなる');
+
 console.log('\n=== SKUがある CSV は今までと同じ ===');
 await setup();
 const old=await p.evaluate((text)=>{
