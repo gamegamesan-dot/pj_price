@@ -133,6 +133,26 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .mbsmall{font-size:11px;font-weight:700;white-space:nowrap}
 /* カードの「計算の詳細」（6.48）。カードを短くするため、細かい計算はこの中。
    初期は閉じる。開けた行は端末に控えるので、次に開いたときも開いている。 */
+/* ⚙設定を使う頻度で3段に並べる（6.50）。
+   上（よく変える）は初期から開き、中・下は畳む。見出しをタップで開閉する。 */
+.cfgband{font-size:11.5px;font-weight:800;color:var(--mute);letter-spacing:.04em;
+         margin:14px 2px 4px;display:flex;gap:6px;align-items:baseline}
+.cfgbandn{font-size:10.5px;font-weight:400}
+.cfgg>summary.cfggsum{list-style:none;cursor:pointer;font-size:13.5px;font-weight:700;
+         padding:11px 13px;display:flex;gap:8px;align-items:center;user-select:none}
+.cfgg>summary.cfggsum::-webkit-details-marker{display:none}
+.cfgg>summary.cfggsum::before{content:"\25B8";font-size:10px;color:var(--mute)}
+.cfgg[open]>summary.cfggsum::before{content:"\25BE"}
+.cfgg>summary.cfggbad{color:var(--bad)}
+.cfggn{font-size:11px;font-weight:700;color:var(--bad);margin-left:auto}
+.cfgg>.body{padding-top:0}
+.cfgsub{font-size:11.5px;font-weight:700;color:var(--mute);margin:8px 0 2px}
+/* 説明は1行だけ出し、残りは「?」をタップしたときに出す（6.50）。 */
+.cfgq1{display:inline}
+.cfgqb{display:inline-block;margin-left:4px;padding:0 5px;border:1px solid var(--line);
+       border-radius:9px;font-size:10.5px;font-weight:700;color:var(--mute);
+       text-decoration:none;background:#fcfbf8}
+.cfgqd{display:block;margin-top:3px}
 .det{margin-top:5px;border-top:1px dashed var(--line)}
 .detsum{list-style:none;cursor:pointer;font-size:11.5px;color:var(--mute);
         padding:4px 0 2px;user-select:none}
@@ -865,9 +885,163 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
     </div>
   </section>
 
+  <!-- ============ 使う頻度で3段に並べる（6.50）============
+       上：よく変える（初期から開く）／中：ときどき変える／下：ほぼ触らない。
+       見出しをタップで開閉。開閉はこの端末に保存する（pj:cfggrp:v1）。
+       要対応（キーが空・設定を送っていない）があるグループは自動で開く。 -->
+  <div class="cfgband">よく変える<span class="cfgbandn">初期から開いています</span></div>
   <section>
-    <div class="h">共通（為替・手数料・端末記号）</div>
-    <div class="body">
+    <details class="cfgg" id="advBox" data-cfgg="goal" open>
+      <summary class="cfggsum">値付けの目標<span class="cfggn"></span></summary>
+      <div class="body">
+        <div class="row"><label>目標の決め方</label>
+          <select id="targetMode" style="flex:0 0 auto">
+            <option value="auto" selected>自動（高い方）</option>
+            <option value="yen">円式のみ</option>
+            <option value="rate">売上比のみ</option>
+          </select>
+        </div>
+        <div class="row"><label>下限利益</label><input type="number" id="baseProfit" value="1000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>仕入への連動率</label><input type="number" id="linkRate" value="30" step="1" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="row"><label>売上比下限</label><input type="number" id="saleRate" value="15" step="1" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="row"><label>米国の想定税率</label><input type="number" id="usTaxRate" value="8" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
+        <button class="btn" id="resetAuto">初期値に戻す</button>
+        <span class="note2" id="autoNote" style="margin:0 0 0 8px"></span>
+        <div class="note2" id="advSyncNote" style="margin:6px 0 0"></div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgMdBox" data-cfgg="md" open>
+      <summary class="cfggsum">自動値下げ<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="rowv"><label>自動値下げ</label><select id="autoMdMode"><option value="off">オフ（CSVを書き出して自分でアップロード）</option><option value="plan">予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay を直接変える）</option></select><div class="note2" style="margin-top:2px">オンにすると、pj-sync が1日1回、前回の値下げから間隔が空いた行の売値とベストオファーの自動拒否額を eBay で直接変えます（CSVのアップロードは要りません）。<b>値上げは自動ではしません</b>。設定を変えたら「自動値下げの設定を送る」を押してください。</div></div>
+      <div class="row"><label>1日に変える上限</label><input type="number" id="autoMdMax" value="200" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2" style="margin-top:0" id="csvMarkCfgNote"></div>
+      <div class="note2" style="margin-top:2px" id="autoMdCfgNote"></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">出品時の開始価格</div>
+      <div class="rowv"><label>出品時の開始価格</label><select id="csvStartMode"><option value="amz">Amazon基準の推奨売値（高めから始める）</option><option value="cost">仕入値基準の推奨売値</option></select><div class="note2" style="margin-top:2px">「Amazon基準」は、Amazonの最安値を仕入値とみなした推奨売値と、仕入値基準の推奨売値の<b>高いほう</b>で出品します（最低売値より下にはなりません）。Amazonの最安値が取れていない行・フィギュアのみ（箱なし）・無在庫は、これまでどおり仕入値基準です。</div></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">値下げの回数と間隔</div>
+      <div class="row"><label>値下げの間隔</label><input type="number" id="csvMarkDays" value="3" step="1" min="1" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="row"><label>値下げの回数</label><input type="number" id="csvMarkTimes" value="10" step="1" min="1" max="100" inputmode="numeric"><span class="unit">回</span></div>
+      <div class="row"><label>1回の下げ幅（最低）</label><input type="number" id="csvMarkStep" value="1" step="0.5" min="0.1" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="note2" style="margin-top:0">値下げ幅＝（開始価格 − 最低売値）÷ 回数。これより小さくなる行は「1回の下げ幅（最低）」を使います。幅は<b>出品したとき（または自動値下げを有効にしたときの売値）で決めて保存</b>し、途中で変えません。間隔3日×10回で約30日です。</div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgRvBox" data-cfgg="rv" open>
+      <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
+      <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0" id="autoRvCfgNote"></div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgSoldBox" data-cfgg="sold" open>
+      <summary class="cfggsum">相場の扱い<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="row"><label>相場から下げる額</label><input type="number" id="syncSoldCut" value="0" step="0.5" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="note2" style="margin-top:0">相場が推奨売値に届かない行を「相場に合わせる」ときに、相場からこの額を引いて出します（既定 $0）。損益分岐より下には下げません。</div>
+      <div class="chk" style="margin-top:4px"><input type="checkbox" id="syncSkipAcc" checked><label for="syncSkipAcc" style="flex:1">中古の最安値から「可」を除く</label></div>
+      <div class="note2" style="margin-top:0">コンディション「可」の出品を基準から外し、推奨売値も「可を除く最安値」から計算します。「可」しか無い商品では外しません。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">最安グループの許容差額</div>
+      <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">「最安値＋この額」までの出品を最安グループとして数えます。この範囲に1人しかいないときだけ「1人だけ注意」を出します。</div>
+      </div>
+    </details>
+  </section>
+
+  <div class="cfgband">ときどき変える<span class="cfgbandn">ふだんは畳んでおきます</span></div>
+  <section>
+    <details class="cfgg" id="cfgTuneBox" data-cfgg="tune">
+      <summary class="cfggsum">見直しのしきい値・既定重量・梱包<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="cfgsub">価格の見直し</div>
+      <div class="note2" style="margin-top:0">販売連携タブの「売値の見直し」「最低売値」「3日ごとの値下げ」で使います。</div>
+      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvPriceChangedOnly" checked><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値の見直しが要る行だけ</label></div>
+      <div class="note2" style="margin-top:0" id="csvChangedNote">いまの設定で計算した推奨売値と、eBayに出している売値を比べて、差が大きい行だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
+      <div class="row"><label>見直しのしきい値（金額）</label><input type="number" id="csvReviewAbs" value="1" step="0.5" min="0" inputmode="decimal"><span class="unit">$</span></div>
+      <div class="row"><label>見直しのしきい値（割合）</label><input type="number" id="csvReviewPct" value="3" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
+      <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
+      <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">値段を変えるCSV</div>
+      <div class="chk"><input type="checkbox" id="csvBoCols" checked><label for="csvBoCols" style="flex:1">値段を変えるCSVに、ベストオファーの金額も一緒に出す</label></div>
+      <div class="note2" style="margin-top:0">自動拒否額（MinimumBestOfferPrice）が新しい売値以上だと、eBay は値下げを弾きます（エラー22003）。オンにすると、その行の最低売値（新しい売値以上になるときは「新しい売値 − $0.01」）を一緒に出します。ベストオファーを使っていない出品は空欄のままなので、勝手にオンにはなりません。<b>列名が違うと言われたら、ここを外せばこれまでの3列に戻せます。</b></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">既定重量と封筒の送料</div>
+      <div class="row"><label>既定重量（ゲーム）</label><input type="number" id="syncWeightGame" value="150" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
+      <div class="row"><label>既定重量（カートリッジのみ）</label><input type="number" id="csvWeightCart" value="50" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">箱・説明書なしで出す行の重量です。せどりすとCSVに実重量が入っていればそちらを使います。</div>
+      <div class="row"><label>既定重量（フィギュアのみ）</label><input type="number" id="csvWeightLoose" value="200" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="note2" style="margin-top:0">箱を外してプチプチで巻き、封筒で送る行の重量です（プチプチと封筒を含めた値）。せどりすとCSVに実重量が入っていればそちらを使い、<b>箱ぶんの梱包マージンは足しません</b>。</div>
+      <div class="row"><label>封筒の送料</label><input type="number" id="csvShipLoose" value="0" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">フィギュアのみ（箱なし）の行は、重量と地帯の送料表ではなく<b>この金額</b>で推奨売値・最低売値・損益分岐を出します。<b>0 のあいだは今までどおりの送料表</b>です。</div>
+      <div class="row"><label>箱なしのAmazon基準</label><input type="number" id="csvLooseAmz" value="80" step="5" min="10" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">フィギュアのみの行は、Amazonの中古最安値（箱付き）をこの割合に割り引いて基準にします。手元の現物を売る行なので「Amazonの方が得」の下限は使いません。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">梱包マージン</div>
+      <div class="row"><label>梱包マージン（ゲーム）</label><input type="number" id="csvPackGame" value="60" inputmode="numeric"><span class="unit">g</span></div>
+      <div class="row"><label>梱包マージン（フィギュア）</label><input type="number" id="csvPackFig" value="250" inputmode="numeric"><span class="unit">g</span></div>
+      <button class="btn" id="csvReweigh" style="width:100%;margin:4px 0 10px">取り込み済みの重量を再計算</button>
+      <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">判定のしきい値</div>
+      <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
+      <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
+      <div class="row"><label>仕入値の下限（要確認）</label><input type="number" id="csvCostMin" value="100" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">これ未満の仕入値の行に「仕入値要確認」の赤い印を付け、書き出しの確認でも注意として出します（せどりすとで0円などを入れたままの行を見つけるため）。行の仕入値欄で直せます。</div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgListBox" data-cfgg="list">
+      <summary class="cfggsum">原産国・eBayカテゴリ・出品の既定値<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや eBayタブの「出品文」で確定した値は上書きしません。</div></div>
+      <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">出品の既定値</div>
+      <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="note2" style="margin-top:0">ビジネスポリシー（下の3つ）を使うときは、この値と返品条件はCSVに出さずポリシー側の設定が使われます。ポリシー名を空にしたときだけ使われます。</div>
+      <div class="chk"><input type="checkbox" id="csvAutoParse" checked><label for="csvAutoParse" style="flex:1">英題が空の行を開いたら「自動で振り分け」を実行する</label></div>
+      <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
+      <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
+      </div>
+    </details>
+  </section>
+
+  <div class="cfgband">ほぼ触らない<span class="cfgbandn">入れ替えるときだけ開きます</span></div>
+  <section>
+    <details class="cfgg" id="cfgConnBox" data-cfgg="conn">
+      <summary class="cfggsum" id="cfgConnSum">接続設定（URL・キー・トークン）<span class="cfggn"></span></summary>
+      <div class="body">
+        <div class="note2" style="margin-top:0" id="cfgConnNote">Worker の公開URLとキーです。入れたらこの端末に保存されます。</div>
+      <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
+      <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <div class="rowv"><label>画像サーバーURL</label><input type="text" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev"></div>
+      <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
+      <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
+      <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgFeeBox" data-cfgg="fee">
+      <summary class="cfggsum">手数料・為替・関税などの計算の前提<span class="cfggn"></span></summary>
+      <div class="body">
       <div class="row"><label>端末記号</label><input type="text" id="devCode" maxlength="1" placeholder="A" style="flex:0 0 60px;text-align:center"><span class="unit">SKU用・1文字</span></div>
       <!-- ここから eBay 専用。Shopeeタブでは隠す（端末記号はSKU用で共通なので残す）。
            Shopeeは「市場別 手数料設定」の為替（1通貨あたり）を使うので、USD/JPY もここに含める。 -->
@@ -892,129 +1066,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
         </select>
       </div>
       </div><!-- /ebayOnly -->
-    </div>
     <div class="note" id="ebayNote">
       為替は実勢より低い値を入れると安全側に出ます。手数料率は実際の取引明細と突き合わせて調整してください。米国関税・通関手数料は Zonos 実測（2026-09-05）の固定値で、米国宛のみ加算されます。設定は自動保存されます。
     </div>
-  </section>
-
-  <section>
-    <div class="h">値付けの目標</div>
-    <!-- いつも確かめる値なので、初期状態で開いておく（6.46）。 -->
-    <details id="advBox" open>
-      <summary>詳細設定（目標の決め方）</summary>
-      <div class="body">
-        <div class="row"><label>目標の決め方</label>
-          <select id="targetMode" style="flex:0 0 auto">
-            <option value="auto" selected>自動（高い方）</option>
-            <option value="yen">円式のみ</option>
-            <option value="rate">売上比のみ</option>
-          </select>
-        </div>
-        <div class="row"><label>下限利益</label><input type="number" id="baseProfit" value="1000" inputmode="numeric"><span class="unit">円</span></div>
-        <div class="row"><label>仕入への連動率</label><input type="number" id="linkRate" value="30" step="1" inputmode="decimal"><span class="unit">%</span></div>
-        <div class="row"><label>売上比下限</label><input type="number" id="saleRate" value="15" step="1" inputmode="decimal"><span class="unit">%</span></div>
-        <div class="row"><label>米国の想定税率</label><input type="number" id="usTaxRate" value="8" step="0.1" inputmode="decimal"><span class="unit">%</span></div>
-        <button class="btn" id="resetAuto">初期値に戻す</button>
-        <span class="note2" id="autoNote" style="margin:0 0 0 8px"></span>
-        <div class="note2" id="advSyncNote" style="margin:6px 0 0"></div>
-      </div>
-    </details>
-  </section>
-
-  <section>
-    <div class="h">出品CSV</div>
-    <div class="body">
-      <div class="row"><label>梱包マージン（ゲーム）</label><input type="number" id="csvPackGame" value="60" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="row"><label>梱包マージン（フィギュア）</label><input type="number" id="csvPackFig" value="250" inputmode="numeric"><span class="unit">g</span></div>
-      <button class="btn" id="csvReweigh" style="width:100%;margin:4px 0 10px">取り込み済みの重量を再計算</button>
-      <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
-      <div class="chk"><input type="checkbox" id="csvAutoParse" checked><label for="csvAutoParse" style="flex:1">英題が空の行を開いたら「自動で振り分け」を実行する</label></div>
-      <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
-      <div class="note2" style="margin-top:0">ビジネスポリシー（下の3つ）を使うときは、この値と返品条件はCSVに出さずポリシー側の設定が使われます。ポリシー名を空にしたときだけ使われます。</div>
-      <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="row"><label>ランク緩和しきい値</label><input type="number" id="csvRankLimit" value="100000" inputmode="numeric"><span class="unit">位</span></div>
-      <div class="row"><label>仕入値の下限（要確認）</label><input type="number" id="csvCostMin" value="100" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="note2" style="margin-top:0">これ未満の仕入値の行に「仕入値要確認」の赤い印を付け、書き出しの確認でも注意として出します（せどりすとで0円などを入れたままの行を見つけるため）。行の仕入値欄で直せます。</div>
-      <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
-      <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
-      <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
-      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや eBayタブの「出品文」で確定した値は上書きしません。</div></div>
-      <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
-      <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
-      <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
-      <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
-      <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
-      <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
-      <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
-      <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
-    </div>
-  </section>
-  <section>
-    <div class="h">価格の見直しと値下げ</div>
-    <div class="body">
-      <div class="note2" style="margin-top:0">販売連携タブの「売値の見直し」「最低売値」「3日ごとの値下げ」で使います。</div>
-      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvPriceChangedOnly" checked><label for="csvPriceChangedOnly" style="flex:1">価格更新CSVは売値の見直しが要る行だけ</label></div>
-      <div class="note2" style="margin-top:0" id="csvChangedNote">いまの設定で計算した推奨売値と、eBayに出している売値を比べて、差が大きい行だけを書き出します。外すとItemIDがある行すべてを書き出します。</div>
-      <div class="row"><label>見直しのしきい値（金額）</label><input type="number" id="csvReviewAbs" value="1" step="0.5" min="0" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="row"><label>見直しのしきい値（割合）</label><input type="number" id="csvReviewPct" value="3" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="note2" style="margin-top:0">為替の小さな動きで毎回全件にならないよう、<b>金額と割合の両方</b>を超えた行だけを対象にします。</div>
-      <div class="chk"><input type="checkbox" id="csvReviewZero"><label for="csvReviewZero" style="flex:1">数量0の出品も見直しの対象にする</label></div>
-      <div class="note2" style="margin-top:0">既定では対象外です（復活のときに売値を直すため）。</div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">Amazonの方が得なときの下限（Amazon同等ライン）</div>
       <div class="note2" style="margin:0 0 4px"><b>Amazonの方が得なときの下限</b>　Amazonで売ったときの利益と同じ利益になる eBay の売値（<b>Amazon同等ライン</b>）より下では出しません。Amazonの利益が下限利益以下の行には使いません。</div>
       <div class="row"><label>Amazon販売手数料</label><input type="number" id="amzFeeRate" value="15" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>FBA配送代行手数料</label><input type="number" id="amzFbaFee" value="400" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
       <div class="note2" style="margin-top:0">Amazon手取り ＝ 最安値 ×（1 − 販売手数料）− FBA手数料。行ごとに「Amazonの方が得」と出ます。行の<b>eBay優先</b>をオンにすると、その行だけこの下限を使いません。</div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
-      <div class="chk"><input type="checkbox" id="csvBoCols" checked><label for="csvBoCols" style="flex:1">値段を変えるCSVに、ベストオファーの金額も一緒に出す</label></div>
-      <div class="note2" style="margin-top:0">自動拒否額（MinimumBestOfferPrice）が新しい売値以上だと、eBay は値下げを弾きます（エラー22003）。オンにすると、その行の最低売値（新しい売値以上になるときは「新しい売値 − $0.01」）を一緒に出します。ベストオファーを使っていない出品は空欄のままなので、勝手にオンにはなりません。<b>列名が違うと言われたら、ここを外せばこれまでの3列に戻せます。</b></div>
-      <div class="rowv"><label>出品時の開始価格</label><select id="csvStartMode"><option value="amz">Amazon基準の推奨売値（高めから始める）</option><option value="cost">仕入値基準の推奨売値</option></select><div class="note2" style="margin-top:2px">「Amazon基準」は、Amazonの最安値を仕入値とみなした推奨売値と、仕入値基準の推奨売値の<b>高いほう</b>で出品します（最低売値より下にはなりません）。Amazonの最安値が取れていない行・フィギュアのみ（箱なし）・無在庫は、これまでどおり仕入値基準です。</div></div>
-      <div class="row"><label>値下げの間隔</label><input type="number" id="csvMarkDays" value="3" step="1" min="1" inputmode="numeric"><span class="unit">日</span></div>
-      <div class="row"><label>値下げの回数</label><input type="number" id="csvMarkTimes" value="10" step="1" min="1" max="100" inputmode="numeric"><span class="unit">回</span></div>
-      <div class="row"><label>1回の下げ幅（最低）</label><input type="number" id="csvMarkStep" value="1" step="0.5" min="0.1" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="note2" style="margin-top:0">値下げ幅＝（開始価格 − 最低売値）÷ 回数。これより小さくなる行は「1回の下げ幅（最低）」を使います。幅は<b>出品したとき（または自動値下げを有効にしたときの売値）で決めて保存</b>し、途中で変えません。間隔3日×10回で約30日です。</div>
-      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
-      <div class="rowv"><label>自動値下げ</label><select id="autoMdMode"><option value="off">オフ（CSVを書き出して自分でアップロード）</option><option value="plan">予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay を直接変える）</option></select><div class="note2" style="margin-top:2px">オンにすると、pj-sync が1日1回、前回の値下げから間隔が空いた行の売値とベストオファーの自動拒否額を eBay で直接変えます（CSVのアップロードは要りません）。<b>値上げは自動ではしません</b>。設定を変えたら「自動値下げの設定を送る」を押してください。</div></div>
-      <div class="row"><label>1日に変える上限</label><input type="number" id="autoMdMax" value="200" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
-      <div class="note2" style="margin-top:0" id="csvMarkCfgNote"></div>
-      <div class="note2" style="margin-top:2px" id="autoMdCfgNote"></div>
-      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
-      <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
-      <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
-      <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
-      <div class="note2" style="margin-top:0" id="autoRvCfgNote"></div>
-    </div>
-  </section>
-  <section>
-    <div class="h">販売連携（pj-sync）</div>
-    <div class="body">
-      <div class="row"><label>既定重量（ゲーム）</label><input type="number" id="syncWeightGame" value="150" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="row"><label>既定重量（カートリッジのみ）</label><input type="number" id="csvWeightCart" value="50" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="row"><label>既定重量（フィギュアのみ）</label><input type="number" id="csvWeightLoose" value="200" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="note2" style="margin-top:0">箱を外してプチプチで巻き、封筒で送る行の重量です（プチプチと封筒を含めた値）。せどりすとCSVに実重量が入っていればそちらを使い、<b>箱ぶんの梱包マージンは足しません</b>。</div>
-      <div class="row"><label>封筒の送料</label><input type="number" id="csvShipLoose" value="0" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="note2" style="margin-top:0">フィギュアのみ（箱なし）の行は、重量と地帯の送料表ではなく<b>この金額</b>で推奨売値・最低売値・損益分岐を出します。<b>0 のあいだは今までどおりの送料表</b>です。</div>
-      <div class="rowv"><label>封筒用の配送ポリシー名</label><input type="text" id="csvShipProfileLoose" placeholder="空なら今までのポリシー"><div class="note2" style="margin-top:2px">フィギュアのみの行をこのポリシーで出します。空のときは即発送／再調達用のこれまでの決まりで出します。</div></div>
-      <div class="row"><label>箱なしのAmazon基準</label><input type="number" id="csvLooseAmz" value="80" step="5" min="10" max="100" inputmode="numeric"><span class="unit">%</span></div>
-      <div class="note2" style="margin-top:0">フィギュアのみの行は、Amazonの中古最安値（箱付き）をこの割合に割り引いて基準にします。手元の現物を売る行なので「Amazonの方が得」の下限は使いません。</div>
-      <div class="note2" style="margin-top:0">箱・説明書なしで出す行の重量です。せどりすとCSVに実重量が入っていればそちらを使います。</div>
-      <div class="row"><label>既定重量（ホビー・おもちゃ）</label><input type="number" id="syncWeight" value="400" inputmode="numeric"><span class="unit">g</span></div>
-      <div class="note2" style="margin-top:0">出品リストに同じ商品が無い行（以前に出した出品）は、SKUの接頭辞で選んだこの重量で推奨売値を出します。表では「既定」と出ます。接頭辞が分からない行はホビー側を使います。</div>
-      <div class="row"><label>最安値の許容差額</label><input type="number" id="syncTol" value="200" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="row"><label>無在庫の上限</label><input type="number" id="syncDropMax" value="20" step="1" min="0" inputmode="numeric"><span class="unit">件</span></div>
-      <div class="row"><label>取り込みの上限</label><input type="number" id="syncLimit" value="3000" step="100" min="100" inputmode="numeric"><span class="unit">件</span></div>
-      <div class="note2" style="margin-top:0">「状況を取り込む」で一度に読む行数です。出品が増えてこの数に届くと一覧が途中で切れるため、切れたときは上に警告を出します（Worker 側の上限は5000件）。</div>
-      <div class="note2" style="margin-top:0">売れてから仕入れる出品（CustomLabel が M-、または行のボタンで印を付けた出品）の上限です。超えると警告を出します。0 で上限なし。</div>
-      <div class="row"><label>相場から下げる額</label><input type="number" id="syncSoldCut" value="0" step="0.5" inputmode="decimal"><span class="unit">$</span></div>
-      <div class="note2" style="margin-top:0">相場が推奨売値に届かない行を「相場に合わせる」ときに、相場からこの額を引いて出します（既定 $0）。損益分岐より下には下げません。</div>
-      <div class="chk" style="margin-top:4px"><input type="checkbox" id="syncSkipAcc" checked><label for="syncSkipAcc" style="flex:1">中古の最安値から「可」を除く</label></div>
-      <div class="note2" style="margin-top:0">コンディション「可」の出品を基準から外し、推奨売値も「可を除く最安値」から計算します。「可」しか無い商品では外しません。</div>
-      <div class="note2" style="margin-top:0">「最安値＋この額」までの出品を最安グループとして数えます。この範囲に1人しかいないときだけ「1人だけ注意」を出します。</div>
-      <div class="chk" style="margin-top:8px"><input type="checkbox" id="syncOnHand" checked><label for="syncOnHand" style="flex:1">名簿を送るとき、FBA在庫が未確認の行に「手元在庫あり」を付ける</label></div>
-      <div class="note2" style="margin-top:0">仕入れてすぐeBayに出し、FBA納品はその後になる運用のためです。印が付いた行はFBAが0でも売り越しの警告を出しません。</div>
-    </div>
-  </section>
   <section id="cfgBoxSp">
     <div class="h">市場別 手数料設定<span style="font-weight:400;color:var(--mute)">（2026年3月時点・要確認）</span></div>
     <div class="body">
@@ -1032,15 +1093,72 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2">手数料は2026年3月時点の第三者まとめ（ツールベンダーのブログ）を基準にしています。Shopeeは年に数回改定するため、Seller Centre の各種手数料ページで実際の率を確認し、この画面で上書きしてください。</div>
     </div>
   </section>
-  <!-- 出品CSVタブの「その他（ときどき使う）」から移したもの（6.46）。
-       ボタンのidと動きは変えていない。 -->
-  <!-- 使い方マニュアル（6.46）。画面から外した説明文はここにまとめる。
-       スマホで読めるよう、各手順は短い箇条書きにする。 -->
+      </div>
+    </details>
+  </section>
   <section>
-    <div class="h">使い方マニュアル</div>
-    <details id="cfgManBox">
-      <summary class="note2" style="margin:0;cursor:pointer;padding:10px 13px">仕入れから出品・値下げまでの流れ</summary>
-      <div class="body" style="padding-top:0">
+    <details class="cfgg" id="cfgPolicyBox" data-cfgg="policy">
+      <summary class="cfggsum">出品の決まり（ポリシー名・発送元）<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="rowv"><label>配送ポリシー名</label><input type="text" id="csvShipProfile" value="W1000"></div>
+      <div class="rowv"><label>再調達用ポリシー名</label><input type="text" id="csvShipProfileRe" value="W2000"><div class="note2">在庫0時の動作が「再調達」の行はこちらで出します。売れてから仕入れるのでハンドリングタイムが長いポリシーを指定してください。</div></div>
+      <div class="rowv"><label>返品ポリシー名</label><input type="text" id="csvRetProfile" value="Returns 30d Buyer Paid"></div>
+      <div class="rowv"><label>支払いポリシー名</label><input type="text" id="csvPayProfile" value="Managed Payments Immediate"></div>
+      <div class="rowv"><label>発送元</label><input type="text" id="csvLocation" value="Tokyo, Japan"></div>
+      <div class="rowv"><label>封筒用の配送ポリシー名</label><input type="text" id="csvShipProfileLoose" placeholder="空なら今までのポリシー"><div class="note2" style="margin-top:2px">フィギュアのみの行をこのポリシーで出します。空のときは即発送／再調達用のこれまでの決まりで出します。</div></div>
+      <div class="note2">ビジネスポリシー名はSeller Hubの表記と一字一句合わせてください。画像（PicURL）はフェーズ3で対応するため、いまは空欄で書き出します。</div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgSyncBox" data-cfgg="sync">
+      <summary class="cfggsum">販売連携の上限と印<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="row"><label>取り込みの上限</label><input type="number" id="syncLimit" value="3000" step="100" min="100" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2" style="margin-top:0">「状況を取り込む」で一度に読む行数です。出品が増えてこの数に届くと一覧が途中で切れるため、切れたときは上に警告を出します（Worker 側の上限は5000件）。</div>
+      <div class="row"><label>無在庫の上限</label><input type="number" id="syncDropMax" value="20" step="1" min="0" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2" style="margin-top:0">売れてから仕入れる出品（CustomLabel が M-、または行のボタンで印を付けた出品）の上限です。超えると警告を出します。0 で上限なし。</div>
+      <div class="chk" style="margin-top:8px"><input type="checkbox" id="syncOnHand" checked><label for="syncOnHand" style="flex:1">名簿を送るとき、FBA在庫が未確認の行に「手元在庫あり」を付ける</label></div>
+      <div class="note2" style="margin-top:0">仕入れてすぐeBayに出し、FBA納品はその後になる運用のためです。印が付いた行はFBAが0でも売り越しの警告を出しません。</div>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgOpsBox" data-cfgg="ops">
+      <summary class="cfggsum">ときどき使う操作<span class="cfggn"></span></summary>
+      <div class="body">
+      <div class="note2" style="margin-top:0">価格の操作（売値の見直し・最低売値・3日ごとの値下げ）は<b>販売連携タブ</b>にまとめてあります。</div>
+      <button class="btn" id="csvTitleRedo" style="width:100%">英題を作り直す（手で編集していない未出品の行）</button>
+      <div class="note2" id="csvRedoNote"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
+        <button class="btn" id="csvDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
+      </div>
+      <div class="note2" id="csvDropNote"></div>
+      <!-- 即発送（W1000）の印を切り替えた出品済みの行のポリシーを直す -->
+      <button class="btn" id="csvShipCsv" style="width:100%;margin-top:8px">配送ポリシー変更CSV</button>
+      <div class="note2" style="margin-top:0">出品はすべて <b>W2000</b>（再調達用）で出します。行の「即発送」をオンにした行だけ <b>W1000</b> です。出品済みの行で印を切り替えたら、このCSVでeBay側のポリシーを直します。</div>
+      <button class="btn" id="csvRevise" style="width:100%;margin-top:8px">数量更新CSV</button>
+      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
+      <!-- ゴミ箱。消した行をすぐには捨てず、ここから元に戻せる。 -->
+      <details id="csvTrashBox" style="margin-top:10px">
+        <summary class="note2" style="margin:0;cursor:pointer" id="csvTrashSum">ゴミ箱（0件）</summary>
+        <div style="padding:6px 0 0">
+          <div class="note2" id="csvTrashNote" style="margin:0 0 6px"></div>
+          <div style="display:flex;gap:8px;margin-bottom:8px">
+            <button class="btn" id="csvTrashAll" style="flex:1 1 0;min-width:0;padding:7px 4px">すべて戻す</button>
+            <button class="btn" id="csvTrashPurge" style="flex:1 1 0;min-width:0;padding:7px 4px">ゴミ箱を空にする</button>
+          </div>
+          <div id="csvTrashList"></div>
+        </div>
+      </details>
+      </div>
+    </details>
+  </section>
+  <section>
+    <details class="cfgg" id="cfgManBox" data-cfgg="man">
+      <summary class="cfggsum">使い方マニュアル<span class="cfggn"></span></summary>
+      <div class="body">
         <div class="man">
           <h4>① せどりすとCSVの取り込み</h4>
           <ul>
@@ -1116,59 +1234,10 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
     </details>
   </section>
-
-  <!-- 接続設定（URL・キー・トークン）。ふだん触らないので畳んでおく。
-       キーが空のときだけ自動で開いて目立たせる（6.46）。 -->
   <section>
-    <div class="h">接続設定</div>
-    <details id="cfgConnBox">
-      <summary class="note2" style="margin:0;cursor:pointer;padding:10px 13px" id="cfgConnSum">URL・キー・トークン（ふだんは触りません）</summary>
-      <div class="body" style="padding-top:0">
-        <div class="note2" style="margin-top:0" id="cfgConnNote">Worker の公開URLとキーです。入れたらこの端末に保存されます。</div>
-      <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
-      <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-      <div class="rowv"><label>画像サーバーURL</label><input type="text" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev"></div>
-      <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
-      <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
-      <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-      </div>
-    </details>
-  </section>
-
-  <section>
-    <div class="h">ときどき使う操作</div>
-    <div class="body">
-      <div class="note2" style="margin-top:0">価格の操作（売値の見直し・最低売値・3日ごとの値下げ）は<b>販売連携タブ</b>にまとめてあります。</div>
-      <button class="btn" id="csvTitleRedo" style="width:100%">英題を作り直す（手で編集していない未出品の行）</button>
-      <div class="note2" id="csvRedoNote"></div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn" id="csvDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
-        <button class="btn" id="csvDropOff" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オフ</button>
-      </div>
-      <div class="note2" id="csvDropNote"></div>
-      <!-- 即発送（W1000）の印を切り替えた出品済みの行のポリシーを直す -->
-      <button class="btn" id="csvShipCsv" style="width:100%;margin-top:8px">配送ポリシー変更CSV</button>
-      <div class="note2" style="margin-top:0">出品はすべて <b>W2000</b>（再調達用）で出します。行の「即発送」をオンにした行だけ <b>W1000</b> です。出品済みの行で印を切り替えたら、このCSVでeBay側のポリシーを直します。</div>
-      <button class="btn" id="csvRevise" style="width:100%;margin-top:8px">数量更新CSV</button>
-      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
-      <!-- ゴミ箱。消した行をすぐには捨てず、ここから元に戻せる。 -->
-      <details id="csvTrashBox" style="margin-top:10px">
-        <summary class="note2" style="margin:0;cursor:pointer" id="csvTrashSum">ゴミ箱（0件）</summary>
-        <div style="padding:6px 0 0">
-          <div class="note2" id="csvTrashNote" style="margin:0 0 6px"></div>
-          <div style="display:flex;gap:8px;margin-bottom:8px">
-            <button class="btn" id="csvTrashAll" style="flex:1 1 0;min-width:0;padding:7px 4px">すべて戻す</button>
-            <button class="btn" id="csvTrashPurge" style="flex:1 1 0;min-width:0;padding:7px 4px">ゴミ箱を空にする</button>
-          </div>
-          <div id="csvTrashList"></div>
-        </div>
-      </details>
-    </div>
-  </section>
-
-  <section>
-    <div class="h">画面</div>
-    <div class="body">
+    <details class="cfgg" id="cfgUiBox" data-cfgg="ui">
+      <summary class="cfggsum">画面（1ページの件数・タブを隠す）<span class="cfggn"></span></summary>
+      <div class="body">
       <div class="note2" style="margin-top:0">使わないタブを隠せます。隠しても中身は消えません。いつでも戻せます。</div>
       <div class="row"><label>一覧の1ページ（出品CSV）</label>
         <select id="csvPerPage" style="flex:0 0 auto">
@@ -1182,7 +1251,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="chk"><input type="checkbox" id="uiHideShopee"><label for="uiHideShopee" style="flex:1">Shopee タブを隠す</label></div>
       <div class="chk"><input type="checkbox" id="uiHideEbay"><label for="uiHideEbay" style="flex:1">eBay タブ（値付け・出品文）を隠す</label></div>
       <div class="note2" style="margin-top:0">出品CSVと販売連携は隠せません（毎日使うため）。隠したタブの設定も、この画面から消えます。</div>
-    </div>
+      </div>
+    </details>
   </section>
 
   <section>
@@ -2217,12 +2287,12 @@ function cfgLineRender(){
   var eb=$('cfgLineEbay');
   if(eb)eb.innerHTML='設定：下限利益 '+esc(g('baseProfit'))+'円／連動率 '
     +esc(g('linkRate'))+'%／売上比 '+esc(g('saleRate'))+'%　為替 '+esc(g('fx'))+'円'+btn;
-  cfgConnRender();          // 接続設定（キーが空なら開いて目立たせる）
+  cfgGrpRender();           // グループの要対応の印（キーが空なら開いて目立たせる）
 }
 /* 接続設定（URL・キー・トークン）は畳んでおくが、**キーが空のときだけ開いて目立たせる**。
    入れ忘れると英題生成・取り込み・写真の送信が動かないため。 */
-function cfgConnRender(){
-  var box=$('cfgConnBox'); if(!box)return;
+/* 接続設定（URL・キー・トークン）で空の欄。入れるまでその機能は動かない。 */
+function cfgConnNeed(){
   var need=[['csvTitleApi','英語タイトル生成のURL'],['csvTitleKey','英語タイトル生成のキー'],
             ['syncApi','pj-sync のURL'],['syncKey','pj-sync のキー'],
             ['csvImgBase','画像サーバーURL'],['csvImgToken','アップロードトークン']]
@@ -2231,21 +2301,108 @@ function cfgConnRender(){
      そちらが入っていれば足りないものには数えない。 */
   if(String(($('csvTitleKey')||{}).value||'').trim())
     need=need.filter(function(x){ return x[0]!=='syncKey'; });
-  var sum=$('cfgConnSum'), note=$('cfgConnNote');
+  return need;
+}
+function cfgConnRender(){
+  var note=$('cfgConnNote'); if(!note)return;
+  var need=cfgConnNeed();
   if(need.length){
-    box.open=true;
-    if(sum){ sum.innerHTML='URL・キー・トークン　<b>'+need.length+'件 未入力</b>';
-             sum.style.color='var(--bad)'; sum.style.fontWeight='800'; }
-    if(note){ note.innerHTML='<b>'+need.map(function(x){ return esc(x[1]); }).join('／')
+    note.innerHTML='<b>'+need.map(function(x){ return esc(x[1]); }).join('／')
       +'</b> が空です。入れるまで、その機能（英題生成・取り込み・写真の送信）は動きません。';
-      note.style.color='var(--bad)'; }
+    note.style.color='var(--bad)';
   }else{
-    if(sum){ sum.textContent='URL・キー・トークン（ふだんは触りません）';
-             sum.style.color=''; sum.style.fontWeight=''; }
-    if(note){ note.textContent='Worker の公開URLとキーです。入れたらこの端末に保存されます。';
-              note.style.color=''; }
+    note.textContent='Worker の公開URLとキーです。入れたらこの端末に保存されます。';
+    note.style.color='';
   }
 }
+/* ================= ⚙設定を使う頻度で並べる（6.50）=================
+   上（よく変える）＝初期から開く／中・下は畳む。見出しをタップで開閉し、
+   開閉はこの端末に保存する（pj:cfggrp:v1）。
+   要対応（キーが空・設定を送っていない）があるグループは、直すまで自動で開く。
+   **値・保存先・動作は変えていない。並び順と見せ方だけ。** */
+var CFG_GRP_KEY='pj:cfggrp:v1';
+var CFG_GRP_DEF={ goal:1, md:1, rv:1, sold:1 };     // 初期から開くグループ
+var cfgGrp={};
+function cfgGrpLoad(){
+  try{ var o=JSON.parse(localStorage.getItem(CFG_GRP_KEY)||'{}');
+       if(o&&typeof o==='object')cfgGrp=o; }catch(e){ cfgGrp={}; }
+  Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details[data-cfgg]'),
+    function(d){
+      var k=d.getAttribute('data-cfgg');
+      d.open=(cfgGrp[k]===undefined)?!!CFG_GRP_DEF[k]:!!cfgGrp[k];
+    });
+}
+function cfgGrpSave(){
+  try{ localStorage.setItem(CFG_GRP_KEY,JSON.stringify(cfgGrp)); }catch(e){}
+}
+document.addEventListener('toggle',function(e){
+  var t=e.target, k=(t&&t.getAttribute)?t.getAttribute('data-cfgg'):'';
+  if(!k)return;
+  /* 要対応で**自動で開いた**ぶんは覚えない（直したら元の畳んだ状態に戻す）。 */
+  if(t.getAttribute('data-cfgauto')){ t.removeAttribute('data-cfgauto'); return; }
+  cfgGrp[k]=t.open?1:0;
+  cfgGrpSave();
+},true);
+/* 要対応の件数。0 なら印を出さない。
+   conn … URL・キーが空／md・rv … 設定（目標）を pj-sync に送っていない行 */
+function cfgGrpNeedOf(){
+  var n={ conn:cfgConnNeed().length, md:0, rv:0 };
+  try{ if(autoMdMode()!=='off')n.md=syncMdNeed().length; }catch(e){}
+  try{ if(autoRvMode()!=='off')n.rv=syncRvNeed().length; }catch(e){}
+  return n;
+}
+function cfgGrpRender(){
+  cfgConnRender();
+  var n=cfgGrpNeedOf();
+  Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details[data-cfgg]'),
+    function(d){
+      var k=d.getAttribute('data-cfgg'), c=Number(n[k]||0);
+      var tag=d.querySelector('.cfggn');
+      if(tag)tag.innerHTML=c?('<b>要対応 '+c+'件</b>'):'';
+      var sum=d.querySelector('summary');
+      if(sum)sum.className=c?'cfggsum cfggbad':'cfggsum';
+      // 直すまで開いて目立たせる（自動で開いたぶんは控えに残さない）
+      if(c&&!d.open){ d.setAttribute('data-cfgauto','1'); d.open=true; }
+    });
+}
+/* 説明文は1行だけにして、残りは「?」で出す（6.50）。
+   中身を書き替える案内（id の付いた note2）は触らない。 */
+var CFG_Q_LEN=42;               // これより長い説明を分ける
+function cfgNotesTrim(){
+  var box=$('tabCfg'); if(!box)return;
+  Array.prototype.forEach.call(box.querySelectorAll('.note2'),function(el){
+    if(el.id)return;                            // 画面が書き替える案内はそのまま
+    if(el.getAttribute('data-q'))return;        // 2度やらない
+    var txt=el.textContent||'';
+    if(txt.length<=CFG_Q_LEN)return;
+    var html=el.innerHTML, i=-1, from=0;
+    /* 最初の「。」で切る。タグの中（属性）の「。」は選ばない。 */
+    for(;;){
+      var k=html.indexOf('。',from);
+      if(k<0)break;
+      var head=html.slice(0,k);
+      if(head.lastIndexOf('<')<=head.lastIndexOf('>')){ i=k; break; }
+      from=k+1;
+    }
+    if(i<0||i+1>=html.length)return;            // 1文だけなら分けない
+    var rest=html.slice(i+1).trim();
+    if(!rest)return;
+    el.setAttribute('data-q','1');
+    el.innerHTML='<span class="cfgq1">'+html.slice(0,i+1)+'</span>'
+      +'<a href="#" class="cfgqb" title="詳しい説明">?</a>'
+      +'<span class="cfgqd" style="display:none">'+rest+'</span>';
+  });
+}
+/* 「?」をタップしたら詳しい説明を出す（もう一度で閉じる）。 */
+document.addEventListener('click',function(e){
+  var t=e.target;
+  if(!t||!t.classList||!t.classList.contains('cfgqb'))return;
+  e.preventDefault();
+  var d=t.parentNode.querySelector('.cfgqd'); if(!d)return;
+  var on=(d.style.display==='none');
+  d.style.display=on?'block':'none';
+  t.textContent=on?'×':'?';
+});
 document.addEventListener('click',function(e){
   var t=e.target;
   if(t&&t.getAttribute&&t.getAttribute('data-cfg'))switchTab('G');
@@ -11578,7 +11735,8 @@ $('addToCsv').onclick=function(){
 };
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
-uiTabsApply(); cfgLineRender(); syncSentLoad(); syncMoreLoad(); detLoad();
+uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
+syncSentLoad(); syncMoreLoad(); detLoad();
 /* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
 $('csvPerPage2').value=$('csvPerPage').value;
 $('syncPerPage2').value=$('syncPerPage').value;
@@ -11605,7 +11763,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v148';   // sw.js の const V と必ず同じ値にする
+var APP_V='v149';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

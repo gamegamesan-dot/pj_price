@@ -95,7 +95,7 @@ ok(cfg.man===false,'★「使い方マニュアル」は畳んでおく（読み
 console.log('\n=== ⚙設定：接続設定は空のときだけ開いて目立たせる ===');
 console.log('   '+cfg.sum+' ／ '+cfg.note);
 ok(cfg.conn===true,'★キーが空のときは開く');
-ok(/6件 未入力/.test(cfg.sum),'★足りない数を出す');
+ok(/要対応 6件/.test(cfg.sum),'★足りない数を出す（グループの見出しに）');
 ok(/英語タイトル生成のURL/.test(cfg.note)&&/動きません/.test(cfg.note),
    '★何が空かと、動かない機能を書く');
 ok(/rgb\(/.test(cfg.red)&&cfg.red!=='rgb(0, 0, 0)','★色を変えて目立たせる');
@@ -115,7 +115,7 @@ const f=await p.evaluate(()=>{
 });
 console.log('   '+JSON.stringify(f));
 ok(f.conn===false,'★ぜんぶ入っていれば畳んだままで始まる');
-ok(/ふだんは触りません/.test(f.sum),'★見出しも元に戻る');
+ok(/接続設定/.test(f.sum)&&!/要対応/.test(f.sum),'★入れたら見出しの印が消える');
 ok(f.ids.every(Boolean),'★URL・キー・トークンの6つは接続設定の中にまとめる');
 
 // pj-sync のキーは空なら英題生成のキーを使う決まりなので、足りない数に入れない
@@ -124,7 +124,7 @@ const one=await p.evaluate(()=>{
   return { sum:$('cfgConnSum').innerText, open:$('cfgConnBox').open };
 });
 console.log('   '+JSON.stringify(one));
-ok(one.open===false&&/ふだんは触りません/.test(one.sum),
+ok(one.open===false&&!/要対応/.test(one.sum),
    '★pj-sync のキーだけ空なら（英題のキーで足りるので）開かない');
 
 console.log('\n=== ⚙設定：使い方マニュアル ===');

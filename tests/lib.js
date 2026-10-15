@@ -78,6 +78,10 @@ async function openCsvBoxes(page){
     });
     Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
       function(d){ d.open=true; });
+    // ⚙設定のグループ（6.50）も開く
+    /* 開いたことを端末に覚えさせない（data-cfgauto はアプリ側の仕組み）。 */
+    Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details'),
+      function(d){ if(!d.open){ d.setAttribute('data-cfgauto','1'); d.open=true; } });
   });
   await page.waitForTimeout(80);
 }
@@ -98,7 +102,11 @@ async function openRowDet(page){
 async function clickCfg(page,sel,back){
   await page.evaluate(()=>{
     switchTab('G');
-    var el=document.getElementById('csvTrashBox'); if(el)el.open=true;
+    /* ⚙設定は使う頻度でグループに畳んである（6.50）。
+       押したいボタンが中にあるので、設定画面の折りたたみは全部開く。 */
+    /* 開いたことを端末に覚えさせない（data-cfgauto はアプリ側の仕組み）。 */
+    Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details'),
+      function(d){ if(!d.open){ d.setAttribute('data-cfgauto','1'); d.open=true; } });
   });
   // 設定画面とボタンが出るのを待ってから押す（遅い端末でも落ちないように）
   await page.waitForSelector('#tabCfg',{state:'visible'});
