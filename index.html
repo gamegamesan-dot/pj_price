@@ -110,6 +110,30 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .lcard{border:1px solid var(--line);border-radius:8px;background:var(--card);
        padding:11px 12px;margin:0 0 16px;box-shadow:0 1px 2px rgba(26,26,26,.06)}
 .lcard:last-child{margin-bottom:0}
+/* ---- 仕入値・売値・利益の帯（6.43 / 6.45）----
+   iPhone の幅（320〜414px）で3列に並べても金額が切れないように：
+   ・省略（…）はしない（overflow:hidden／text-overflow を使わない）
+   ・文字の大きさは幅に合わせて clamp() で自動に下げる（下限 13px）
+   ・それでも入らないときは枠の中で2行に折り返す。
+     金額は .mbnum（white-space:nowrap）なので「¥」と数字は離れない。 */
+.mbbar{display:flex;gap:5px;margin:5px 0 4px;align-items:stretch}
+.mbcell{flex:1 1 0;min-width:0;border:1px solid var(--line);border-radius:3px;
+        padding:3px 5px 4px;background:#fcfbf8;overflow:visible}
+.mblabel,.mbsub{font-size:10.5px;color:var(--mute);margin:0;line-height:1.3;
+        overflow-wrap:anywhere}
+.mbmain{font-size:clamp(13px,4vw,20px);font-weight:800;line-height:1.25;
+        white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
+.mbnum{white-space:nowrap}
+.mbsmall{font-size:11px;font-weight:700;white-space:nowrap}
+/* 桁数が多い金額（¥1,234,567 など）は、もうひと段下げて枠に収める。 */
+.mbmain.mblong{font-size:clamp(11px,3.2vw,17px)}
+.mbmain.mbxlong{font-size:clamp(10px,2.7vw,15px)}
+/* 画面が広いときは今までの大きさ（本文の1.4倍）に戻す */
+@media (min-width:520px){
+  .mbmain{font-size:1.4em}
+  .mbmain.mblong{font-size:1.2em}
+  .mbmain.mbxlong{font-size:1.05em}
+}
 .lhead{font-size:13px;font-weight:700;line-height:1.45;word-break:break-word;
        padding-bottom:7px;margin-bottom:7px;border-bottom:1px solid var(--line)}
 /* 仕入れのたびの手順（①〜⑤）。残りの件数を出し、押すとその場所へ移動する。 */
@@ -4344,15 +4368,21 @@ function csvProfitAt(cost,weight,price,flat){
   });
   return (v===null||v===undefined)?null:Math.round(v);
 }
+/* 金額の桁数に応じて文字の大きさを1段下げるための印。
+   （…）の中（利益率など）は折り返せるので数に入れない。 */
+function mbLenCls(main){
+  var n=String(main||'').replace(/<[^>]*>/g,'')
+    .replace(/[（(][^）)]*[）)]/g,'').replace(/\s/g,'').length;
+  return (n>10)?' mbxlong':((n>8)?' mblong':'');
+}
+/* 帯の1枠。金額は .mbnum で囲んで「¥」と数字を離さない。
+   枠に入らないときは、金額のかたまりごとに2行へ折り返す（省略はしない）。 */
 function mbCell(label,main,sub,col,dim){
-  return '<div style="flex:1 1 0;min-width:0;border:1px solid var(--line);'
-    +'border-radius:3px;padding:3px 6px 4px;background:#fcfbf8">'
-    +'<div class="note2" style="margin:0;font-size:10.5px;line-height:1.3">'+esc(label)+'</div>'
-    +'<div style="font-size:1.4em;font-weight:800;line-height:1.3;white-space:nowrap;'
-    +'overflow:hidden;text-overflow:ellipsis'+(col?(';color:'+col):'')
-    +(dim?';opacity:.7':'')+'">'+main+'</div>'
-    +'<div class="note2" style="margin:0;font-size:10.5px;line-height:1.3;'
-    +'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(sub||'&nbsp;')+'</div>'
+  return '<div class="mbcell">'
+    +'<div class="mblabel">'+esc(label)+'</div>'
+    +'<div class="mbmain'+mbLenCls(main)+'" style="'+(col?('color:'+col+';'):'')
+    +(dim?'opacity:.7':'')+'">'+main+'</div>'
+    +'<div class="mbsub">'+(sub||'&nbsp;')+'</div>'
     +'</div>';
 }
 /* o = { key, cost, costTemp, costUnknown, costNote, price, profit } */
@@ -4368,20 +4398,21 @@ function moneyBarHtml(o){
     else { col='var(--bad)'; note=(prof<0)?'赤字':'下限未満'; }
   }
   var rate=(prof!==null&&cost>0)?(Math.round(prof/cost*1000)/10):null;
-  var small=function(t){ return '<span style="font-size:11px;font-weight:700">'+t+'</span>'; };
-  return '<div data-money="'+esc(o.key||'')+'"'
-    +' style="display:flex;gap:5px;margin:5px 0 4px">'
+  var small=function(t){ return '<span class="mbsmall">'+t+'</span>'; };
+  var num=function(t){ return '<span class="mbnum">'+t+'</span>'; };
+  return '<div data-money="'+esc(o.key||'')+'" class="mbbar">'
     +mbCell('仕入値',
-       o.costUnknown?'<span style="color:var(--bad)">未確定</span>'
-                    :(esc(yen(cost))+(o.costTemp?small('（仮）'):'')),
+       o.costUnknown?num('<span style="color:var(--bad)">未確定</span>')
+                    :(num(esc(yen(cost)))+(o.costTemp?small('（仮）'):'')),
        o.costUnknown?'<span style="color:var(--bad)">仕入値を入れてください</span>'
                     :(o.costTemp?'Amazon基準価格':esc(o.costNote||'')),
        '', !!o.costTemp)
-    +mbCell('売値', price>0?esc(usd(price)):'—',
-       (price>0&&fx>0)?('≈'+esc(yen(Math.round(price*fx/100)*100))):'', '')
+    +mbCell('売値', price>0?num(esc(usd(price))):'—',
+       (price>0&&fx>0)?num('≈'+esc(yen(Math.round(price*fx/100)*100))):'', '')
     +mbCell('利益',
-       (prof===null)?'—':(esc(yen(prof))+(rate===null?'':small('（'+rate.toFixed(1)+'%）'))),
-       (prof===null)?'—':((note?(note+'　'):'')+'目標 '+esc(yen(tgt))), col)
+       (prof===null)?'—':(num(esc(yen(prof)))
+         +(rate===null?'':small('（'+rate.toFixed(1)+'%）'))),
+       (prof===null)?'—':((note?(note+'　'):'')+'目標 '+num(esc(yen(tgt)))), col)
     +'</div>';
 }
 /* 行の帯だけを作り直す（一覧は作り直さない。入力中の欄を消さないため）。 */
@@ -10835,7 +10866,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v143';   // sw.js の const V と必ず同じ値にする
+var APP_V='v144';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

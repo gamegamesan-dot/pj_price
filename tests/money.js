@@ -207,5 +207,76 @@ ok(sb.lo.cells[2].col==='var(--bad)'&&/赤字|下限未満/.test(sb.lo.cells[2].
    '★安い行は赤（赤字・下限未満）');
 ok(/（仮）/.test(sb.amz.cells[0].main)&&sb.amz.cells[0].sub==='Amazon基準価格',
    '★仕入値が分からない行は Amazon基準価格を仮に使う');
+console.log('\n=== iPhone の幅で金額が切れない（320／360／390／414px）===');
+let bad=0, lines2=0;
+for(const w of [320,360,390,414]){
+  await p.setViewportSize({width:w,height:900});
+  const m=await p.evaluate(()=>{
+    /* 6桁の例（¥12,345・−¥1,234・$123.45）と、桁数が多い例（¥1,234,567）、
+       「（仮）」付きの例を並べて、枠からあふれていないかを測る。 */
+    switchTab('D');                      // 見えている状態で測る（高さが0にならないように）
+    $('csvListBox').open=true;
+    const box=$('csvList');
+    box.innerHTML='<div class="lcard">'
+      +moneyBarHtml({key:'w1',cost:12345,price:123.45,profit:-1234})
+      +moneyBarHtml({key:'w2',cost:1234567,price:1234.56,profit:-123456})
+      +moneyBarHtml({key:'w3',cost:10900,costTemp:true,price:116.78,profit:1250})
+      +'</div>';
+    const cells=[];
+    Array.from(box.querySelectorAll('[data-money]')).forEach(bar=>{
+      Array.from(bar.children).forEach(d=>{
+        const el=d.querySelector('.mbmain'), num=el.querySelector('.mbnum');
+        const st=getComputedStyle(el);
+        cells.push({ text:el.textContent,
+          h:Math.round(el.clientHeight), cw:Math.round(el.clientWidth),
+          clip:el.scrollWidth>el.clientWidth+0.5,
+          numOver:num?(num.getBoundingClientRect().width>el.clientWidth+0.5):false,
+          ellipsis:st.textOverflow,
+          numLines:num?Math.round(num.getClientRects().length):0,
+          fs:Math.round(parseFloat(st.fontSize)*10)/10,
+          lines:Math.round(el.clientHeight/parseFloat(st.lineHeight)) });
+      });
+    });
+    return cells;
+  });
+  console.log('   --- '+w+'px ---');
+  m.forEach(c=>console.log('      '+c.text+'　'+c.fs+'px／'+c.lines+'行'
+    +(c.clip?'　切れている':'')+(c.numOver?'　はみ出し':'')));
+  m.forEach(c=>{ if(c.clip||c.numOver||c.ellipsis==='ellipsis'||c.numLines>1)bad++;
+                 if(c.lines>1)lines2++; });
+  ok(m.every(c=>!c.clip&&!c.numOver),'★'+w+'px：枠からあふれない（全桁が見える）');
+  ok(m.every(c=>c.ellipsis!=='ellipsis'),'★'+w+'px：省略（…）を使わない');
+  ok(m.every(c=>c.numLines<=1),'★'+w+'px：金額の途中で改行しない（¥と数字を離さない）');
+  ok(m.every(c=>c.fs>=10),'★'+w+'px：文字の大きさは下限（10px）より小さくしない');
+  ok(m.every(c=>c.h>0&&c.cw>0),'（測れている：高さと幅が0でない）');
+}
+ok(bad===0,'★4つの幅すべてで、切れ・省略・金額の分断が無い');
+ok(lines2>0,'★入らない行は枠の中で2行に折り返している');
+const shrink=await p.evaluate(async()=>{
+  const read=()=>{
+    const el=$('csvList').querySelector('[data-money] .mbmain');
+    return Math.round(parseFloat(getComputedStyle(el).fontSize)*10)/10;
+  };
+  return read();
+});
+console.log('   414px での文字の大きさ: '+shrink+'px');
+await p.setViewportSize({width:320,height:900});
+const small=await p.evaluate(()=>{
+  const el=$('csvList').querySelector('[data-money] .mbmain');
+  return Math.round(parseFloat(getComputedStyle(el).fontSize)*10)/10;
+});
+console.log('   320px での文字の大きさ: '+small+'px');
+ok(small<shrink,'★幅が狭いほど文字を小さくする（自動）');
+ok(small>=13,'★ふつうの桁数では 13px より小さくしない（読みやすさ）');
+const long=await p.evaluate(()=>{
+  const els=Array.from($('csvList').querySelectorAll('[data-money] .mbmain'));
+  const big=els.find(e=>/1,234,567/.test(e.textContent));
+  return { cls:big.className, fs:Math.round(parseFloat(getComputedStyle(big).fontSize)*10)/10 };
+});
+console.log('   桁数が多い金額: '+JSON.stringify(long));
+ok(/mblong|mbxlong/.test(long.cls)&&long.fs<small,
+   '★桁数が多い金額だけ、もうひと段小さくする');
+// 画面の幅を元に戻す
+await p.setViewportSize({width:390,height:900});
 await T.done();
 })();
