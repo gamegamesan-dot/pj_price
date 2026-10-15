@@ -4,7 +4,7 @@
    ・写真0枚の行は書き出さない（前の出品の写真のまま復活させない）
    ・CustomLabel が M- の出品は E- に変える
    ・判定は pj-sync が取り込んだ eBay の出品からだけ見る（出品リストは見ない） */
-const { harness } = require('./lib');
+const { harness, openRowDet } = require('./lib');
 const T = harness('出品CSVタブ：復活と重複の判定');
 const ok = T.ok;
 (async()=>{
@@ -69,8 +69,12 @@ const setup=async(opt)=>await p.evaluate((o)=>{
 },opt||{qty:{ok:true,at:'2026-10-06T09:00:00Z',
   qty:{'110111':{qty:0,price:42.5},'110222':{qty:0,price:30},
        '110444':{qty:0,price:18}},missing:[]}});
-const cardOf=async(w)=>(await p.$$eval('#csvList > div',
-  ds=>ds.map(x=>x.innerText.replace(/\n/g,' | ')))).filter(t=>t.indexOf(w)>=0)[0]||'';
+/* 復活・重複・写真の案内はカードの「計算の詳細」の中（6.48）。開いてから読む。 */
+const cardOf=async(w)=>{
+  await openRowDet(p);
+  return (await p.$$eval('#csvList > div',
+    ds=>ds.map(x=>x.innerText.replace(/\n/g,' | ')))).filter(t=>t.indexOf(w)>=0)[0]||'';
+};
 
 console.log('=== 新規出品（Add）から外れる ===');
 await setup();

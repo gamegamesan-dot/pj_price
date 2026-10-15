@@ -1,5 +1,5 @@
 /* 販売連携タブ：予約済みの内訳の見せ方と、再調達の候補から外すこと（7.23）*/
-const { harness } = require('./lib');
+const { harness, openRowDet } = require('./lib');
 const T = harness('販売連携タブ：予約済みの内訳');
 const ok = T.ok;
 (async()=>{
@@ -59,6 +59,8 @@ await p.waitForFunction(()=>!$('syncLoad').disabled&&$('syncNote').textContent.l
   null,{timeout:8000});
 
 console.log('=== 一覧の内訳表示 ===');
+// FBA在庫の内訳はカードの「計算の詳細」の中（6.48）。開いてから読む
+await openRowDet(p);
 const rows=await p.$$eval('#syncList > div',ds=>ds.map(d=>d.innerText.replace(/\n/g,' | ')));
 const line=(i)=>rows[i].split(' | ').filter(x=>/FBA 販売可能/.test(x)).join('');
 rows.forEach((r,i)=>console.log('   '+i+': '+line(i)));

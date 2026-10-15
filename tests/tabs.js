@@ -3,7 +3,7 @@
    ・出品文は eBay タブの中に入れた（タブは4つ＋⚙設定）
    ・出品CSVの行の「出品文を作る」→ eBay タブの出品文側 →「書き戻す」の往復
    ・各タブの設定が混ざらないこと */
-const { harness } = require('./lib');
+const { harness, openRowDet } = require('./lib');
 const T = harness('タブの並びと eBay タブの中の切り替え');
 const ok = T.ok;
 (async()=>{
@@ -114,6 +114,8 @@ ok(back.titleEn==='Nendoroid Hatsune Miku Japan','★英題が行に書き戻さ
 ok(back.desc>0&&back.cat==='261068','★出品文も行に入り、カテゴリは変わらない');
 ok(/書き戻しました/.test(back.note),'書き戻したと知らせる');
 await p.click('#tabD'); await p.waitForTimeout(300);
+// 英題の欄と「編集済み」の印はカードの「計算の詳細」の中（6.48）
+await openRowDet(p);
 const card=await p.evaluate(()=>({
   text:$('csvList').innerText||'',
   // 英題は textarea の中なので innerText には出ない

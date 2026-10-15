@@ -131,6 +131,14 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .man ul{margin:0;padding-left:1.2em}
 .man li{font-size:12.5px;line-height:1.7;color:var(--ink);margin:0 0 2px}
 .mbsmall{font-size:11px;font-weight:700;white-space:nowrap}
+/* カードの「計算の詳細」（6.48）。カードを短くするため、細かい計算はこの中。
+   初期は閉じる。開けた行は端末に控えるので、次に開いたときも開いている。 */
+.det{margin-top:5px;border-top:1px dashed var(--line)}
+.detsum{list-style:none;cursor:pointer;font-size:11.5px;color:var(--mute);
+        padding:4px 0 2px;user-select:none}
+.detsum::-webkit-details-marker{display:none}
+.detsum::before{content:"\25B8 ";font-size:10px}
+.det[open] .detsum::before{content:"\25BE "}
 /* 桁数が多い金額（¥1,234,567 など）は、もうひと段下げて枠に収める。 */
 .mbmain.mblong{font-size:clamp(11px,3.2vw,17px)}
 .mbmain.mbxlong{font-size:clamp(10px,2.7vw,15px)}
@@ -4567,10 +4575,13 @@ function moneyBarHtml(o){
        '', !!o.costTemp)
     +mbCell('売値', price>0?num(esc(usd(price))):'—',
        (price>0&&fx>0)?num('≈'+esc(yen(Math.round(price*fx/100)*100))):'', '')
+    /* 利益率（「97.2%」）は大きい数字の横に置くと枠からはみ出すので、
+       下の小さい行に移した（6.48）。金額は全桁そのまま出す。 */
     +mbCell('利益',
-       (prof===null)?'—':(num(esc(yen(prof)))
-         +(rate===null?'':small('（'+rate.toFixed(1)+'%）'))),
-       (prof===null)?'—':((note?(note+'　'):'')+'目標 '+num(esc(yen(tgt)))), col)
+       (prof===null)?'—':num(esc(yen(prof))),
+       (prof===null)?'—':((note?(note+'　'):'')
+         +(rate===null?'':('利益率 '+rate.toFixed(1)+'%　'))
+         +'目標 '+num(esc(yen(tgt)))), col)
     +'</div>';
 }
 /* 行の帯だけを作り直す（一覧は作り直さない。入力中の欄を消さないため）。 */
@@ -5709,30 +5720,18 @@ function csvRender(){
     var badge=csvBadgeHtml(r);
     var v=csvVerdict(r);              // 下の「Amazon優先でも出す」ボタンで使う
     var judge=csvJudgeText(r);
-    /* 1商品＝1カード。見出し（日本語名）から各種ボタンまで、すべてこの中に入れる。 */
-    h+='<div class="lcard" data-row="'+r.id+'">'
-      /* 見出しの左に選択のチェック。「選択した行だけ書き出す」で使う。 */
-      +'<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
-      +'<input type="checkbox" data-cpick="'+r.id+'"'+(csvPick[r.id]?' checked':'')
-      +' style="flex:0 0 auto;margin-top:3px">'
-      +'<span style="flex:1 1 0;min-width:0">'+esc(r.titleJa||r.titleEn||'(無題)')+'</span>'
-      +'</div>'
-      /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
-      +'<div data-links="'+r.id+'">'
-      +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn),
-                   isNew:(r.condId===1000),kwManual:csvKwManual(r),
-                   orig:r.titleJa})+'</div>'
+    /* 「計算の詳細」の中身（6.48）。カードを短くするため、
+       検索語・SKU・判定の内訳・写真・仕入値・英題・数量とItemID・
+       値下げや復活の案内はこの折りたたみに入れる。 */
+    var det=''
       +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
       +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
       +' placeholder="検索語（空にすると商品名から作り直します）"'
       +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      /* 仕入値・売値・利益の帯（6.43）。検索語の下・タグの上に出す。 */
-      +csvMoneyBar(r)
       +'<div class="note2" data-sum="'+r.id+'" style="margin-top:2px">'
       +esc(csvRowSummary(r))+'</div>'
-      +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
       +'<div class="note2" data-judge="'+r.id+'" style="margin-top:2px">'+esc(judge)+'</div>'
       +csvPicThumbs(r,'l')
       /* 仕入値（税込・円）。せどりすとの入力間違いをここで直す。
@@ -5750,11 +5749,6 @@ function csvRender(){
       +'<span class="note2" style="margin:0;flex:0 0 auto">円</span>'
       +'<span class="note2" data-coststat="'+r.id+'" style="margin:0;flex:1 1 0;min-width:0'
       +(csvCostLow(r)?';color:var(--bad);font-weight:700':'')+'">'+esc(csvCostStat(r))+'</span></div>'
-      +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
-      +'<span class="note2" style="margin:0;flex:0 0 auto">相場（総額$）</span>'
-      +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
-      +esc(r.sold||'')+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;text-align:right;'
-      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
       +csvTitleBox(r)
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">数量</span>'
@@ -5765,17 +5759,42 @@ function csvRender(){
       +'<input type="text" inputmode="numeric" data-item="'+r.id+'" value="'
       +esc(r.itemId||'')+'" placeholder="結果ファイルで自動入力" style="flex:1 1 0;min-width:0;padding:6px;'
       +'font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      /* ボタン群。写真ボタンは必ず先頭（左端）に置く。
-         カテゴリのプルダウンや原産国ボタンの有無で位置がずれないようにする。 */
-      +'<div data-btns="'+r.id+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'
-      +csvPicBtn(r);
+      /* 出品時の開始価格（Amazon基準から始める行） */
+      +csvStartHtml(r)
+      /* 値下げ（3日ごと）の案内 */
+      +csvMarkHtml(r)
+      /* 配送ポリシーの食い違い */
+      +(csvShipMismatch(r)
+        ? ('<div class="note2" style="margin-top:4px"><span style="color:var(--bad);'
+           +'font-weight:700">ポリシーが印と違います</span>　eBayは '
+           +esc(csvShipMismatch(r))+'、この行の印は '+esc(csvShipProfileFor(r))
+           +'　「配送ポリシー変更CSV」で直せます。</div>')
+        : '')
+      /* 売値の見直しの案内 */
+      +csvReviewHtml(r)
+      /* 既存の出品の復活・重複の案内 */
+      +csvReviveHtml(r)
+      /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
+      +csvCartHtml(r)
+      /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
+      +csvNewHtml(r)+csvCatHtml(r)
+      /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
+      +'<div class="note2" data-picnote="'+r.id+'" style="margin-top:4px"></div>'
+      +((csvPicTarget===r.id&&csvPicFailed.length)
+        ? ('<button class="btn" data-picretry="'+r.id+'" style="padding:5px 8px;font-size:12px;'
+           +'margin-top:4px">失敗分を送り直す（'+csvPicFailed.length+'枚）</button>')
+        : '');
+    /* ボタン群。写真ボタンは必ず先頭（左端）に置く。
+       カテゴリのプルダウンや原産国ボタンの有無で位置がずれないようにする。 */
+    var btns='<div data-btns="'+r.id+'" style="display:flex;gap:6px;flex-wrap:wrap;'
+      +'margin-top:4px">'+csvPicBtn(r);
     /* カテゴリの選択はどの行にも出す。ゲームの行にも出さないと、
        取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
-    h+=csvCatSelect(r);
+    btns+=csvCatSelect(r);
     if(v==='amazon')
-      h+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
+      btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
-    h+=csvOriginBtns(r)
+    btns+=csvOriginBtns(r)
       +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
       /* 箱なしで出す印。ゲームは「カートリッジのみ」、フィギュアは「フィギュアのみ」。
@@ -5819,32 +5838,33 @@ function csvRender(){
            +'">アップロード失敗を消す</button>')
         : '')
       +'<button class="btn" data-del="'+r.id+'" style="padding:5px 8px;font-size:12px">削除</button>'
+      +'</div>';
+    /* 1商品＝1カード。初期表示は 商品名・リンク・帯・バッジ・次にやること・
+       相場の入力・ボタン だけ（6.48）。 */
+    h+='<div class="lcard" data-row="'+r.id+'">'
+      /* 見出しの左に選択のチェック。「選択した行だけ書き出す」で使う。 */
+      +'<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
+      +'<input type="checkbox" data-cpick="'+r.id+'"'+(csvPick[r.id]?' checked':'')
+      +' style="flex:0 0 auto;margin-top:3px">'
+      +'<span style="flex:1 1 0;min-width:0">'+esc(r.titleJa||r.titleEn||'(無題)')+'</span>'
       +'</div>'
-      /* 出品時の開始価格（Amazon基準から始める行） */
-      +csvStartHtml(r)
-      /* 値下げ（3日ごと）の案内 */
-      +csvMarkHtml(r)
-      /* 配送ポリシーの食い違い */
-      +(csvShipMismatch(r)
-        ? ('<div class="note2" style="margin-top:4px"><span style="color:var(--bad);'
-           +'font-weight:700">ポリシーが印と違います</span>　eBayは '
-           +esc(csvShipMismatch(r))+'、この行の印は '+esc(csvShipProfileFor(r))
-           +'　「配送ポリシー変更CSV」で直せます。</div>')
-        : '')
-      /* 売値の見直しの案内 */
-      +csvReviewHtml(r)
-      /* 既存の出品の復活・重複の案内 */
-      +csvReviveHtml(r)
-      /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
-      +csvCartHtml(r)
-      /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
-      +csvNewHtml(r)+csvCatHtml(r)
-      /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
-      +'<div class="note2" data-picnote="'+r.id+'" style="margin-top:4px"></div>'
-      +((csvPicTarget===r.id&&csvPicFailed.length)
-        ? ('<button class="btn" data-picretry="'+r.id+'" style="padding:5px 8px;font-size:12px;'
-           +'margin-top:4px">失敗分を送り直す（'+csvPicFailed.length+'枚）</button>')
-        : '')
+      /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
+      +'<div data-links="'+r.id+'">'
+      +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn),
+                   isNew:(r.condId===1000),kwManual:csvKwManual(r),
+                   orig:r.titleJa})+'</div>'
+      /* 仕入値・売値・利益の帯（6.43）。 */
+      +csvMoneyBar(r)
+      +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
+      /* 次にやること（6.48）。1行だけ出す。 */
+      +csvNextHtml(r)
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
+      +'<span class="note2" style="margin:0;flex:0 0 auto">相場（総額$）</span>'
+      +'<input type="number" step="0.01" inputmode="decimal" data-sold="'+r.id+'" value="'
+      +esc(r.sold||'')+'" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;text-align:right;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+      +btns
+      +detHtml('csv',r.id,det)
       +'</div>';
   });
   if(hidden)h='<div class="note2" style="margin:0 0 6px">絞り込み中：'+shown+'件が対象（'
@@ -6558,6 +6578,63 @@ function csvReviewHtml(r){
     +(v.from==='sent'?'　※いまの売値は最後に書き出した値です（eBayの取り込みがありません）':'')
     +(v.from==='none'?'　※いまの売値が分かりません（eBayの取り込みも書き出しの記録もありません）':'')
     +'</div>';
+}
+/* 出品CSVタブの「次にやること」（6.48）。1行だけ出す。
+   「売値の見直し」はどちらの基準（仕入値／Amazon基準価格）で計算したかも書く。 */
+function csvBasisNote(r){
+  if(csvCostUnknown(r))
+    return '<span style="opacity:.85">基準：<b>未確定</b>（仕入値を入れてください）</span>';
+  if(csvCostIsTemp(r))
+    return '<span style="opacity:.85">基準：<b>Amazon基準価格</b> '
+      +yen(csvAmzBase(r))+'（仮の仕入値）</span>';
+  return '<span style="opacity:.85">基準：仕入値 '+yen(csvCostOf(r))
+    +(csvCostFixed(r)?'（手で直した値）':'（せどりすとCSV）')+'</span>';
+}
+function csvNextHtml(r){
+  // ① アップロードが失敗したままの行（同じ中身では書き出しを止める）
+  if(String(r.uploadErr||'').trim())
+    return nextLine(csvUploadBlocked(r)?'要対応':'前回の失敗','#b00020',
+      esc(String(r.uploadErr).slice(0,80))
+      +(csvUploadBlocked(r)?'　直すまで書き出しません':'　直したので書き出せます'));
+  // ② 不備（英題なし・写真なし・仕入値未確定など）。書き出しから外れる
+  var iss=csvIssues(r);
+  if(iss.length)
+    return nextLine('不備','#b00020',esc(iss.slice(0,2).join('／'))
+      +(iss.length>2?('　ほか'+(iss.length-2)+'件（計算の詳細）'):''));
+  // ③ 出品済みの行：自動反映 → 自動値下げ → 値下げの時期
+  var x=csvSyncItem(r);
+  if(x&&String(x.ebay_item_id||'').trim()){
+    var a=(autoRvMode()!=='off')?syncRvActOf(x):null;
+    if(a)return nextLine(autoRvMode()==='auto'?'自動反映の予定':'確認待ち','#1f5fa0',
+      ((a.kind==='zero')?'見送り → <b>数量0</b>'
+        :(usd(a.from)+' → <b>'+usd(a.to)+'</b>'))+'　'+csvBasisNote(r));
+    if(syncMdTarget(x))
+      return nextLine('次の自動値下げ','#1f6f8a',esc(syncMdDueText(x))+'　'
+        +usd(+x.ebay_price||0)+' → <b>'+usd(syncMarkNext(x))+'</b>'
+        +'（あと'+syncMarkLeft(x)+'回・下限 '+usd(syncMdFloor(x))+'）');
+    if(!syncMarkSkip(x))
+      return nextLine('値下げの時期','#8a6d00',usd(+x.ebay_price||0)+' → <b>'
+        +usd(syncMarkNext(x))+'</b>（値下げCSVで下げます）');
+  }
+  // ④ 売値の見直し（基準つき）
+  var v=csvPriceReview(r);
+  if(v)return nextLine('売値の見直し','#b35c00',
+    ((v.now===null)?('→ <b>'+usd(v.next)+'</b>')
+      :(usd(v.now)+' → <b>'+usd(v.next)+'</b>'))
+    +'（'+esc(v.why)+'）　'+csvBasisNote(r));
+  // ⑤ 仕入れ前の候補（仮の仕入値）。仕入値を入れると判定が出る
+  if(csvVerdict(r)==='pre')
+    return nextLine('仕入れ前の候補','#0b6b8a','仕入値を入れると判定が出ます　'
+      +csvBasisNote(r));
+  // ⑥ 相場が未入力（判定の入口）
+  if(csvVerdict(r)==='none')
+    return nextLine('相場未確認','#666','相場（総額$）を入れると eBay優先／Amazon優先が'
+      +'決まります（未入力でも書き出せます）　'+csvBasisNote(r));
+  // ⑦ まだ出していない行（不備なし）
+  if(!String(r.itemId||'').trim())
+    return nextLine('出品待ち','#1f7a4d','このままCSVに書き出せます（売値 '
+      +usd(csvStartPrice(r)||0)+'）　'+csvBasisNote(r));
+  return '';
 }
 /* 判定のもとは pj-sync が取り込んだ eBay の出品（ItemID・CustomLabel・数量）。
    取り込んでいないと「既存の出品があるか」が分からないので、黙って新規出品にしない。 */
@@ -9301,6 +9378,116 @@ function syncMdPlan(){
              floor:syncMdFloor(r), left:syncMarkLeft(r) };
   });
 }
+/* ================= 「次にやること」を1行で（6.48）=================
+   カードの初期表示には、いちばん手を動かすべきものを**1つだけ**出す。
+   ほかの細かい案内は「計算の詳細」の中に残してある。 */
+function nextTag(t,c){
+  return '<span style="display:inline-block;background:'+c+';color:#fff;'
+    +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">'+esc(t)+'</span>';
+}
+function nextLine(tag,col,body){
+  return '<div class="note2" style="margin-top:3px">'+nextTag(tag,col)+body+'</div>';
+}
+/* 「売値の見直し」がどちらの基準で計算されたかを明記する（6.48）。
+   仕入値が分かる行は**その仕入値**が基準。分からない行は
+   **Amazon最安値を仕入値とみなして**計算している。 */
+function syncBasisNote(r){
+  var rc=syncRecCost(r);
+  if(rc)return '<span style="opacity:.85">基準：'+esc(syncFromName(rc.costFrom))
+    +'の仕入値 '+yen(rc.cost)+'</span>';
+  var am=syncRecommend(r);
+  if(am)return '<span style="opacity:.85">基準：<b>Amazon最安値</b> '
+    +yen(syncBasis(r).low||+r.amazon_lowest||0)+'（仕入値が分かりません）</span>';
+  return '';
+}
+function syncNextHtml(r){
+  // ① 値段の更新に失敗した行。人が直すまで何も進まない
+  if(String(r.revise_err||'').trim())
+    return nextLine('要対応','#b00020','値段の更新に失敗：'
+      +esc(syncErrText(r.revise_err))+'（直し方は計算の詳細）');
+  if(syncRvAlert(r))
+    return nextLine('要対応','#b00020','売値の自動反映が'+Number(r.rv_fail||0)
+      +'回続けて失敗しています');
+  var id=String(r.ebay_item_id||'').trim();
+  if(!id)return '';
+  // ② 売値の自動反映（値上げ・見送りで数量0）の予定
+  var a=(autoRvMode()!=='off')?syncRvActOf(r):null;
+  if(a)return nextLine(autoRvMode()==='auto'?'自動反映の予定':'確認待ち','#1f5fa0',
+    ((a.kind==='zero')
+      ? '見送り → <b>数量0</b>（出品は終了しません）'
+      : (usd(a.from)+' → <b>'+usd(a.to)+'</b>'+(a.loss?'（赤字の解消）':'')))
+    +'　'+syncBasisNote(r));
+  // ③ 次の自動値下げ（pj-sync が下げる行）
+  if(syncMdTarget(r))
+    return nextLine('次の自動値下げ','#1f6f8a',esc(syncMdDueText(r))+'　'
+      +usd(+r.ebay_price||0)+' → <b>'+usd(syncMarkNext(r))+'</b>'
+      +'（あと'+syncMarkLeft(r)+'回・下限 '+usd(syncMdFloor(r))+'）');
+  // ④ 値下げの時期（CSVで下げる行）
+  if(!syncMarkSkip(r))
+    return nextLine('値下げの時期','#8a6d00',usd(+r.ebay_price||0)+' → <b>'
+      +usd(syncMarkNext(r))+'</b>（値下げCSVで下げます）');
+  // ⑤ 売値の見直し（どちらの基準で計算したかも出す）
+  var x=syncPriceReview(r);
+  if(x)return nextLine('売値の見直し','#b35c00',usd(x.now)+' → <b>'+usd(x.next)+'</b>'
+    +'（'+(x.up?'＋':'−')+usd(Math.abs(x.diff))+'・'+x.pct.toFixed(1)+'%）'
+    +'　'+syncBasisNote(r));
+  // ⑥ 相場が未入力（判断の入口）
+  if(!syncSoldGet(r))
+    return nextLine('相場未確認','#666','相場（総額$）を入れると、'
+      +'出す／相場に合わせる／見送りが決まります　'+syncBasisNote(r));
+  return '';
+}
+/* ================= カードの「計算の詳細」（6.48）=================
+   カードに細かい利益計算が並んで縦に長すぎたので、初期表示は
+   「商品名・リンク・仕入値／売値／利益の帯・状態のバッジ・次にやること1行・
+     相場の入力・行のボタン」だけにして、計算はこの折りたたみに入れる。
+   開けた行はこの端末に控える（pj:det:v1）。行のキーは
+   出品CSVタブ＝行ID、販売連携タブ＝ASIN|区分。 */
+var DET_KEY='pj:det:v1';
+var DET_MAX=300;                 // 覚えておく行数の上限（古いものから捨てる）
+var detOpen={ csv:{}, sync:{} };
+function detLoad(){
+  try{
+    var o=JSON.parse(localStorage.getItem(DET_KEY)||'{}');
+    if(o&&typeof o==='object'){
+      detOpen.csv=(o.csv&&typeof o.csv==='object')?o.csv:{};
+      detOpen.sync=(o.sync&&typeof o.sync==='object')?o.sync:{};
+    }
+  }catch(e){ detOpen={ csv:{}, sync:{} }; }
+}
+function detSave(){
+  try{ localStorage.setItem(DET_KEY,JSON.stringify(detOpen)); }catch(e){}
+}
+function detIsOpen(tab,key){
+  var m=detOpen[tab]; return !!(m&&m[String(key)]);
+}
+function detSet(tab,key,on){
+  var m=detOpen[tab]; if(!m)return;
+  var k=String(key);
+  if(on){
+    m[k]=1;
+    // 増え続けないように、古いものから落とす
+    var ks=Object.keys(m);
+    if(ks.length>DET_MAX)ks.slice(0,ks.length-DET_MAX).forEach(function(x){ delete m[x]; });
+  }else delete m[k];
+  detSave();
+}
+/* 折りたたみの外枠。body は中身のHTML。中身が空なら何も出さない。 */
+function detHtml(tab,key,body){
+  if(!String(body||'').trim())return '';
+  return '<details class="det" data-det="'+esc(tab)+'" data-detk="'+esc(key)+'"'
+    +(detIsOpen(tab,key)?' open':'')+'>'
+    +'<summary class="detsum">計算の詳細</summary>'
+    +'<div class="detbody">'+body+'</div></details>';
+}
+/* 開閉を控える。toggle は上に伝わらないので、捕まえる側（capture）で拾う。 */
+document.addEventListener('toggle',function(e){
+  var t=e.target;
+  if(!t||!t.getAttribute||!t.getAttribute('data-det'))return;
+  detSet(t.getAttribute('data-det'),t.getAttribute('data-detk'),t.open);
+  // 英題の欄は閉じているあいだ高さが測れないので、開いたときに合わせ直す
+  if(t.open&&typeof csvTaFitAll==='function')csvTaFitAll();
+},true);
 /* ================= 長いまとめは先頭3件だけ出す（6.46）=================
    販売連携タブの初期表示が長すぎるので、まとめの一覧は**先頭3件**だけ出し、
    「すべて表示（n件）」で開く。開閉はこの端末に保存する。 */
@@ -10367,21 +10554,9 @@ function syncRowHtml(r,key){
     }
     var days=syncDays(r);
     var low=syncBasis(r).low||+r.amazon_lowest||0;
-    /* カードの一番上に商品名を見出しとして置く（選択のチェックは見出しの左）。
-       以下の行とボタンはすべて同じカードの中に入る。 */
-    return '<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
-      +'<input type="checkbox" data-spick="'+esc(key)+'"'+(syncPick[key]?' checked':'')
-      +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:3px">'
-      +'<span style="flex:1 1 0;min-width:0">'+esc(r.title||r.asin)+'</span>'
-      +'</div>'
-      /* 出品CSVタブと同じ、相場を調べるリンク。
-         商品名が英字だけの行（eBayの出品名）は eBay のSold検索も出す。 */
-      +'<div data-slinks="'+esc(key)+'">'
-      +csvLinkBar({asin:r.asin, kw:syncKwOf(r),
-                   en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):'',
-                   isNew:(r.cond==='new'), kwManual:!!String(r.search_kw||'').trim(),
-                   orig:r.title})
-      +'</div>'
+    /* 「計算の詳細」の中身（6.48）。カードを短くするため、
+       SKU・在庫・最安値・推奨売値・Amazon利益などの細かい数字はここへ入れる。 */
+    var det=''
       /* 検索語（出品CSVタブと同じ欄）。直すと D1 に残り、両方のタブで同じになる。 */
       +'<div style="display:flex;gap:6px;align-items:center;margin:3px 0">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
@@ -10389,10 +10564,7 @@ function syncRowHtml(r,key){
       +' placeholder="検索語（空にすると商品名から作り直します）"'
       +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
       +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      /* 仕入値・売値・利益の帯（6.43）。売値は eBay に出ている今の売値。 */
-      +syncMoneyBar(r)
-      +'<div>'
-      +'<div class="note2" style="margin-top:2px">'+badge+esc(r.ebay_sku||'')
+      +'<div class="note2" style="margin-top:2px">'+esc(r.ebay_sku||'')
       +(r.ebay_item_id?('　/　ItemID '+esc(r.ebay_item_id)):'　/　ItemIDなし')
       +'　/　'+esc(r.asin)+'（'+(r.cond==='new'?'新品':'中古')+'）</div>'
       +'<div class="note2" style="margin-top:3px">FBA 販売可能 '+(r.fba_available===null?'—':r.fba_available)
@@ -10406,7 +10578,6 @@ function syncRowHtml(r,key){
       +(low?('　'+syncOfferNote(r)
              +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):'')
       +'</div>'
-      +syncSoldHtml(r,key)
       +'<div class="note2" style="margin-top:2px">'
       +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>（利益 '+yen(rec.profit)+'）'
              +'　最低利益ライン '+usd(rec.floor)+'（利益 '+yen(+$('baseProfit').value||0)+'）'
@@ -10477,10 +10648,33 @@ function syncRowHtml(r,key){
                ? '<span style="color:var(--bad);font-weight:700">　Amazonの出品が無くなりました</span>'
                :''))
            +'</div>')
-        : '')
+        : '');
+    /* カードの一番上に商品名を見出しとして置く（選択のチェックは見出しの左）。
+       以下の行とボタンはすべて同じカードの中に入る。 */
+    return '<div class="lhead" style="display:flex;gap:6px;align-items:flex-start">'
+      +'<input type="checkbox" data-spick="'+esc(key)+'"'+(syncPick[key]?' checked':'')
+      +(r.ebay_item_id?'':' disabled')+' style="flex:0 0 auto;margin-top:3px">'
+      +'<span style="flex:1 1 0;min-width:0">'+esc(r.title||r.asin)+'</span>'
+      +'</div>'
+      /* 出品CSVタブと同じ、相場を調べるリンク。
+         商品名が英字だけの行（eBayの出品名）は eBay のSold検索も出す。 */
+      +'<div data-slinks="'+esc(key)+'">'
+      +csvLinkBar({asin:r.asin, kw:syncKwOf(r),
+                   en:/^[\x20-\x7E]+$/.test(String(r.title||''))?csvEbayKw(r.title):'',
+                   isNew:(r.cond==='new'), kwManual:!!String(r.search_kw||'').trim(),
+                   orig:r.title})
+      +'</div>'
+      /* 仕入値・売値・利益の帯（6.43）。売値は eBay に出ている今の売値。 */
+      +syncMoneyBar(r)
+      +'<div>'
+      +'<div class="note2" data-sbadge="'+esc(key)+'" style="margin-top:2px">'+badge+'</div>'
+      /* 次にやること（6.48）。いちばん手を動かすべきものを1行だけ出す。 */
+      +syncNextHtml(r)
+      +syncSoldHtml(r,key)
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
       +syncRestockingBtn(r,key)+syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)+'</div>'
+      +detHtml('sync',key,det)
       +'</div>';
 }
 /* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
@@ -11299,7 +11493,7 @@ $('addToCsv').onclick=function(){
 };
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
-uiTabsApply(); cfgLineRender(); syncSentLoad(); syncMoreLoad();
+uiTabsApply(); cfgLineRender(); syncSentLoad(); syncMoreLoad(); detLoad();
 /* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
 $('csvPerPage2').value=$('csvPerPage').value;
 $('syncPerPage2').value=$('syncPerPage').value;
@@ -11326,7 +11520,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v146';   // sw.js の const V と必ず同じ値にする
+var APP_V='v147';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

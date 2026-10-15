@@ -76,7 +76,8 @@ ok(b.cells[1].sub==='≈¥'+(Math.round(b.price*160/100)*100).toLocaleString(),
    '★売値の下に円換算を小さく出す');
 ok(b.cells[2].main.indexOf('¥'+b.profit.toLocaleString())===0,
    '★利益は今の計算（手数料・送料・為替込み）の値');
-ok(/（\d+\.\d%）/.test(b.cells[2].main),'★仕入値に対する利益率も出す');
+ok(/利益率 \d+\.\d%/.test(b.cells[2].sub)&&!/%/.test(b.cells[2].main),
+   '★利益率は大きい数字の横ではなく、下の小さい行に出す（6.48・はみ出し防止）');
 ok(b.input===''&&b.ph==='10900（仮）',
    '★仕入値欄は 0 ではなく、仮の値を placeholder で薄く出す');
 

@@ -68,15 +68,26 @@ function harness(title){
            get page(){ return page; } };
 }
 /* 畳んである欄を開く（出品CSVタブの「その他」・一覧、販売連携タブの価格の操作など）。
-   ボタンは畳まれていると Playwright から押せないので、押す前に呼ぶ。 */
+   ボタンは畳まれていると Playwright から押せないので、押す前に呼ぶ。
+   カードの「計算の詳細」（6.48）もここで開く（仕入値・英題・数量の欄が中にある）。 */
 async function openCsvBoxes(page){
   await page.evaluate(()=>{
     ['csvListBox','csvTrashBox','syncPriceBox','syncMoreBox',
      'syncListBox','csvStockBox','csvReviewBox'].forEach(function(id){
       var el=document.getElementById(id); if(el)el.open=true;
     });
+    Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
+      function(d){ d.open=true; });
   });
   await page.waitForTimeout(80);
+}
+/* カードの「計算の詳細」だけを開く（一覧を作り直したあとに呼ぶ）。 */
+async function openRowDet(page){
+  await page.evaluate(()=>{
+    Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
+      function(d){ d.open=true; });
+  });
+  await page.waitForTimeout(60);
 }
 /* ⚙設定に移したボタン（6.46：英題の作り直し・無在庫オンオフ・配送ポリシー変更CSV・
    数量更新CSV・ゴミ箱）を押す。畳んであるタブのボタンは Playwright から押せないので、
@@ -99,4 +110,5 @@ async function clickCfg(page,sel,back){
     await page.waitForTimeout(80);
   }
 }
-module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath, openCsvBoxes, clickCfg };
+module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath, openCsvBoxes,
+                 openRowDet, clickCfg };
