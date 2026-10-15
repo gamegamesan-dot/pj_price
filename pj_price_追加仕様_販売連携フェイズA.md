@@ -3078,6 +3078,87 @@ pj_price（実ブラウザ・automd.js 56項目）
 
 **7.38 は pj_price だけの変更（Worker・D1 の変更は無い）。**
 
+## 7.39 売値の見直し：pj-sync から eBay に直接反映（2026-10-15・sw.js v146・D1 migrate-0018）
+
+**7.37** の自動値下げと対になる仕組み。「売値の見直し」の対象のうち **値上げだけ** を
+Cron（1日1回）で eBay に反映する。画面側の決まりは **6.47**。
+
+### 1. 使う API（許可表に増えたのは1つだけ）
+
+```
+ALLOWED の EBAY_WRITE_CALLS = ["ReviseFixedPriceItem", "ReviseInventoryStatus"]
+```
+
+- **ReviseInventoryStatus**：売値（StartPrice）と数量（Quantity）だけを変えられる。
+  **1回の呼び出しで4件**まで送れるので、件数が多くても呼び出し回数が1/4になる。
+  ベストオファーの金額は変えられないが、上げる方向なので自動拒否額が売値以上に
+  なることはなく、22003 の心配は無い（下げるときは従来どおり ReviseFixedPriceItem）。
+- どちらも `net(..., {write:true})` を付けた呼び出しだけが通る。
+  出品・終了・削除のAPIは通らない（見送りは**数量0**にするだけ）。
+- 行ごとの成否は、応答に返る `InventoryStatus` の ItemID で見る。
+  eBay は全件通ったときだけ `Ack=Success` を返すので、
+  Warning / Failure のときは **返ってきた ItemID に無い行を失敗**として扱う。
+
+### 2. 対象の決め方（`rvSkip` / `rvAct`）
+
+```
+とばす： ItemIDなし／eBayのセール中／数量0／目標が未設定／売値が不明
+         ／推奨売値のほうが低い（下げは自動値下げに任せる）
+         ／差がしきい値（$1 かつ 3%）より小さい／自動値下げの途中（md_done≧1）
+例外　： 赤字（ebay_price < rv_floor）の行は、しきい値も値下げ中も見ずに上げる
+見送り： rv_kind='skip' の行は数量0にする（数量0の行はとばす）
+丸め　： 新しい売値 = min(rv_want, いまの売値 × (1 + 変更幅の上限))
+```
+
+### 3. モードと安全策（設定は `/settings` 経由で pj_price から）
+
+| 設定 | 既定 | 動き |
+| --- | --- | --- |
+| `autoRvMode` | `confirm` | `off` … 何もしない／`confirm` … 予定を `sync_state.rv.plan` に残して Discord に出すだけ（**eBay を1回も呼ばない**）／`auto` … そのまま反映 |
+| `autoRvMax` | 50 | 直近24時間に変えた件数（`rv_log` の `ok=1`）と合わせて上限を超えない。超えたぶんは翌日 |
+| `autoRvPct` | 30 | 1回の変更幅の上限（%） |
+| `csvReviewAbs` / `csvReviewPct` | $1 / 3% | 見直しのしきい値 |
+
+- `POST /sync {kind:'review'}` … 設定どおり（確認モードなら予定だけ）。
+- `POST /sync {kind:'review', approve:true}` … 販売連携タブの「まとめて実行」。
+  確認モードでも、オフでも、**押したときは実行**する（人が承認したので）。
+- Cron は毎日 UTC 18時台（JST 3時台）、`jobMarkdown` の**あと**に回す
+  （下げた直後の売値を見て、赤字になった行だけ上げ直せる）。
+
+### 4. 記録と通知
+
+| 表 | 中身 |
+| --- | --- |
+| `rv_runs` | 1回＝1行。mode（confirm/auto/approve）・picked・changed・zeroed・failed・skipped・capped・note |
+| `rv_log` | 1行＝1回の変更。**変更前後の売値**・kind（up/zero）・ok・理由 |
+| `items.rv_fail` | 連続失敗の回数。3回以上は pj_price が「対応が必要」に出す |
+| `items.rv_done_at` | 最後に反映した時刻 |
+
+- Discord には1回の実行につき1通：確認モードは「変更の予定 n件＋承認の押し方」、
+  実行したときは「上げた○件／数量0○件／失敗○件」と変更前後の売値（先頭10件）。
+- 失敗した行は売値を進めず、理由を `revise_err` に残して**次の回に再試行**する。
+  権限不足（スコープ違い）のエラーは、同じ失敗をくり返さないようその回で打ち切る。
+
+### 5. 再調達中の行
+
+反映した行が `restocking=1` なら、**出し直した売値**（`restock_price`）も新しい売値に
+そろえる。**仕入値の上限**（`restock_max_cost`）は、目標どおり上げられた回だけ
+`rv_max_cost` に入れ替える（変更幅の上限で丸めた回は、その売値に対する上限が
+分からないので**前の値＝安全側**のまま残す）。
+
+### 6. 受け入れの手順
+
+1. `npx wrangler d1 execute pj-sync --remote --file=./migrate-0018-auto-review.sql`
+2. `npx wrangler deploy`（`ALLOWED` に ReviseInventoryStatus が入るのはこのデプロイから）
+3. pj_price の⚙設定で「売値の自動反映」を**確認モード**にし、
+   販売連携タブで「見直しの目標を送る」→ 翌朝の Discord とタブの予定を見る。
+4. 予定が妥当なら「まとめて実行」。問題がなければ「自動実行」に切り替える。
+5. eBay の**在庫切れオプション**（Out of Stock）をオンにしておく
+   （見送りの行を数量0にしたときに出品が終了しないようにするため）。
+
+テストは `tests/autorv.mjs`（70項目）と `tests/autorv.js`（44項目）。
+**Worker のデプロイと D1 の migrate-0018 が必要。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

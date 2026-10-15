@@ -764,6 +764,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
             <div class="note2" id="syncMdList" style="margin:0 0 4px"></div>
             <button class="btn" id="syncMdSend" style="width:100%">自動値下げの設定を送る</button>
           </div>
+          <!-- 売値の自動反映（値上げ）。オフのときは出さない -->
+          <div id="syncRvBar" style="display:none;margin-bottom:8px">
+            <div class="note2" id="syncRvNote" style="margin:0 0 4px"></div>
+            <div class="note2" id="syncRvList" style="margin:0 0 4px"></div>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="syncRvSend" style="flex:1 1 0;min-width:0;padding:9px 4px">見直しの目標を送る</button>
+              <button class="btn" id="syncRvGo" style="flex:1 1 0;min-width:0;padding:9px 4px">まとめて実行</button>
+            </div>
+            <div class="note2" id="syncRvDone" style="margin:2px 0 0"></div>
+          </div>
           <!-- 値下げの時期になった行があるときだけ出す -->
           <div id="syncMarkBar" style="display:none;margin-bottom:8px">
             <button class="btn primary" id="syncMarkRun" style="width:100%">値下げの時期です</button>
@@ -961,6 +971,11 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoMdMax" value="200" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
       <div class="note2" style="margin-top:0" id="csvMarkCfgNote"></div>
       <div class="note2" style="margin-top:2px" id="autoMdCfgNote"></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
+      <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0" id="autoRvCfgNote"></div>
     </div>
   </section>
   <section>
@@ -1466,8 +1481,14 @@ var ADV_SHIP=['csvShipProfile','csvShipProfileRe'];
 /* Amazonの手数料も pj-sync に送る。Amazon同等ライン（Amazonで売ったときと同じ利益に
    なる eBay の売値）の計算に使うので、どの端末でも同じ値で動かす。 */
 var ADV_AMZ=['amzFeeRate','amzFbaFee'];
+/* 自動値下げ（6.39）と売値の自動反映（6.47）の設定。
+   **Worker がこの設定を読んで動く**ので、必ず D1 に送る
+   （v136 では送っていなかったため、画面で「オン」にしても Worker 側は
+   オフのままだった。2026-10-15 に直した）。 */
+var ADV_MD=['autoMdMode','autoMdMax','csvMarkDays'];
+var ADV_RV=['autoRvMode','autoRvMax','autoRvPct','csvReviewAbs','csvReviewPct'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
-function advCsvCfg(){ return ADV_SHIP.concat(ADV_AMZ); }
+function advCsvCfg(){ return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV); }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
            linkRate:String(LINK_RATE_DEFAULT), saleRate:String(SALE_RATE_DEFAULT),
@@ -1486,7 +1507,14 @@ function advApply(o){
   advCsvCfg().forEach(function(id){
     var v=o[id];
     if(v===undefined||v===null||v==='')return;
-    if($(id).value!==String(v)){ $(id).value=String(v); ship=true; hit=true; }
+    var el2=$(id);
+    // 選択肢に無い値（古い版・未知のモード）は捨てて、いまの値のままにする
+    if(el2.tagName==='SELECT'){
+      var ok2=false,j;
+      for(j=0;j<el2.options.length;j++)if(el2.options[j].value===String(v))ok2=true;
+      if(!ok2)return;
+    }
+    if(el2.value!==String(v)){ el2.value=String(v); ship=true; hit=true; }
   });
   if(ship)try{ csvSaveCfg(); }catch(e){}
   ADV_FIELDS.forEach(function(id){
@@ -1504,6 +1532,9 @@ function advApply(o){
 }
 // 変えた時刻を控えて端末に保存し、少し待って pj-sync にも送る
 function advTouch(){ advAt=new Date().toISOString(); save(); advPushLater(); }
+/* 待たずにいま送る。自動値下げ・自動反映の「設定を送る」から呼ぶ
+   （Worker はこの設定でしか動かないので、目標と一緒にそろえる）。 */
+function advSyncNow(){ advAt=new Date().toISOString(); save(); advPush(); }
 function advNote(t){ var el=$('advSyncNote'); if(el)el.textContent=t||''; }
 var advPushT=0;
 function advPushLater(){
@@ -2170,6 +2201,7 @@ function cfgLineRender(){
     +esc(g('syncWeight'))+'g　値下げ '+esc(g('csvMarkDays'))+'日ごとに'
     +esc(g('csvMarkTimes'))+'回（最低$'+esc(g('csvMarkStep'))+'）'
     +'　自動値下げ '+({off:'オフ',plan:'予定だけ',on:'オン'}[g('autoMdMode')]||'オフ')
+    +'　自動反映 '+({off:'オフ',confirm:'確認',auto:'自動'}[g('autoRvMode')]||'オフ')
     +'　開始 '+(g('csvStartMode')==='cost'?'仕入値基準':'Amazon基準')
     +'　見直し $'+esc(g('csvReviewAbs'))+'かつ'
     +esc(g('csvReviewPct'))+'%　Amazon手数料 '+esc(g('amzFeeRate'))+'%＋FBA'
@@ -3652,7 +3684,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 3日ごとの値下げ（間隔・回数・下げ幅の最低）
                  'csvMarkDays','csvMarkTimes','csvMarkStep',
                  // 出品時の開始価格の決め方と、自動値下げ（pj-sync が eBay を直接変える）
-                 'csvStartMode','autoMdMode','autoMdMax'];
+                 'csvStartMode','autoMdMode','autoMdMax',
+                 // 売値の見直しの自動反映（値上げ）
+                 'autoRvMode','autoRvMax','autoRvPct'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -5351,9 +5385,15 @@ $('csvShipCsv').onclick=csvShipRun;
 ['csvMarkDays','csvMarkStep','csvMarkTimes','autoMdMax'].forEach(function(id){
   $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); });
 });
-['csvStartMode','autoMdMode'].forEach(function(id){
+['csvStartMode','autoMdMode','autoRvMode'].forEach(function(id){
   $(id).addEventListener('change',function(){
     csvSaveCfg(); csvRender();
+    if(typeof syncRender==='function'&&syncData)syncRender();
+  });
+});
+['autoRvMax','autoRvPct'].forEach(function(id){
+  $(id).addEventListener('input',function(){
+    csvSaveCfg();
     if(typeof syncRender==='function'&&syncData)syncRender();
   });
 });
@@ -8714,12 +8754,26 @@ function syncRevRows(){
 }
 // 一覧に出す見直しの案内（対象の行だけ）
 function syncRevHtml(r){
-  var x=syncPriceReview(r); if(!x)return '';
-  return '<div class="note2" style="margin-top:2px">'
-    +'<span style="display:inline-block;background:#b35c00;color:#fff;border-radius:2px;'
+  var x=syncPriceReview(r);
+  /* 自動反映（値上げ・見送りで数量0）の予定がある行は、CSVを書き出さなくても
+     pj-sync が変えるので、そのことを行にも出す（6.47）。 */
+  var a=(autoRvMode()!=='off')?syncRvActOf(r):null;
+  if(!x&&!a)return '';
+  var h='<div class="note2" style="margin-top:2px">';
+  if(x)h+='<span style="display:inline-block;background:#b35c00;color:#fff;border-radius:2px;'
     +'padding:1px 5px;font-size:11px">売値の見直し</span>　'
     +usd(x.now)+' → <b>'+usd(x.next)+'</b>（差 '+(x.up?'+':'-')+usd(Math.abs(x.diff))
-    +'・'+x.pct.toFixed(1)+'%／'+esc(syncFromName(x.from))+'）</div>';
+    +'・'+x.pct.toFixed(1)+'%／'+esc(syncFromName(x.from))+'）';
+  if(a)h+=(x?'<br>':'')
+    +'<span style="display:inline-block;background:#1f5fa0;color:#fff;border-radius:2px;'
+    +'padding:1px 5px;font-size:11px">'
+    +((autoRvMode()==='auto')?'自動反映の予定':'確認待ち')+'</span>　'
+    +((a.kind==='zero')
+      ? '見送り → <b>数量0</b>（出品は終了しません）'
+      : (usd(a.from)+' → <b>'+usd(a.to)+'</b>'
+         +(a.capped?('（上限 '+autoRvPct()+'% で丸め・目標 '+usd(a.want)+'）'):'')
+         +(a.loss?'（赤字の解消）':'')));
+  return h+'</div>';
 }
 /* forceAll＝true のときは「見直しが要る行だけ」の絞り込みを使わず、
    選んだ行すべてを見直し価格（上げも下げも）に変える（操作バーのボタン）。 */
@@ -8915,6 +8969,7 @@ function syncMarkHtml(r){
 /* 販売連携タブ上部の帯。値下げの時期の出品があるときだけ出す。 */
 function syncMarkBarRender(){
   syncMdBarRender();
+  syncRvBarRender();        // 売値の自動反映（値上げ）の帯
   var el=$('syncMarkBar'); if(!el)return;
   /* CSVで下げる行だけを数える。自動値下げがオン／予定だけ表示のときは、
      自動値下げが拾う行は外す（押しても二重に下げないため）。 */
@@ -9334,6 +9389,7 @@ function syncMdSend(){
   var items=need.map(function(r){
     return Object.assign({ asin:r.asin, cond:r.cond, title:r.title||'',
                            item_id:r.ebay_item_id||'' }, syncMdPlanOf(r)); });
+  advSyncNow();              // 自動値下げのモード・上限・間隔も D1 にそろえる
   var b=$('syncMdSend');
   b.disabled=true; b.textContent='送っています…';
   var sent=0, bad=0;
@@ -9375,6 +9431,236 @@ $('syncMdNote').addEventListener('click',function(e){
   syncFilterSet('automd');
 });
 
+/* ================= 売値の見直しの自動反映（6.47）=================
+   「売値の見直し」の対象のうち **値上げだけ** を pj-sync が eBay に直接反映する。
+   値下げは3日ごとの自動値下げ（syncMd…）に任せ、最低利益ラインより下げない。
+
+   決めるのはこの画面、変えるのは Worker（式は1か所に保つ）。送るのは4つ。
+     rv_want     … 出すべき売値（相場の判断を優先した値＝syncWantPrice）
+     rv_floor    … 最低利益ライン（syncFloorOf）
+     rv_kind     … 相場の判断（rec／match／none／skip）。skip＝見送り
+     rv_max_cost … その売値での仕入値の上限（再調達の監視に使う）
+   モード
+     off     … 今までどおり価格更新CSVを書き出す
+     confirm … 確認モード。pj-sync は予定を出すだけ。「まとめて実行」で承認する
+     auto    … 自動実行。1日1回そのまま反映する */
+function autoRvMode(){
+  var v=(($('autoRvMode')||{}).value)||'off';
+  return (v==='confirm'||v==='auto')?v:'off';
+}
+function autoRvMax(){
+  var n=+$('autoRvMax').value;
+  return (isFinite(n)&&n>=1)?Math.round(n):50;
+}
+function autoRvPct(){
+  var n=+$('autoRvPct').value;
+  return (isFinite(n)&&n>0)?n:30;
+}
+/* この行の目標。相場（Sold）が入っていれば相場の判断を優先する。 */
+function syncRvTargetOf(r){
+  var rec=syncRecOf(r);
+  var v=rec?soldVerdict(rec,syncSoldItem(r),$('syncSoldCut').value):{kind:'nolow'};
+  // 見送り（相場が最低売値に届かない・赤字）は数量0にする行
+  var kind=(v.kind==='low'||v.kind==='loss')?'skip'
+    :((v.kind==='rec'||v.kind==='match'||v.kind==='none')?v.kind:'');
+  var want=(kind==='skip')?0:syncWantPrice(r);
+  var fl=syncFloorOf(r);
+  var w=syncWeightOf(r);
+  return { rv_kind:kind, rv_want:Math.round((want||0)*100)/100,
+           rv_floor:Math.round((fl.v||0)*100)/100,
+           rv_max_cost:(want>0)?syncMaxCost(want,w.v):0 };
+}
+/* 目標がまだ D1 に入っていない（または変わった）行。「目標を送る」の対象。 */
+function syncRvNeed(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    if(!String(r.ebay_item_id||'').trim())return false;
+    var t=syncRvTargetOf(r);
+    if(!t.rv_kind)return false;                  // 値付けの基準が無い行は送らない
+    if(t.rv_kind==='skip')return String(r.rv_kind||'')!=='skip';
+    var d=function(a,b){ return Math.abs((+a||0)-(+b||0))>=0.01; };
+    return String(r.rv_kind||'')!==t.rv_kind||d(r.rv_want,t.rv_want)
+      ||d(r.rv_floor,t.rv_floor)||d(r.rv_max_cost,t.rv_max_cost);
+  });
+}
+/* この行に何をするか（Worker の rvSkip / rvAct と同じ決まり）。
+   pj-sync の予定が届く前でも画面に出せるように、この端末でも同じ計算をする。 */
+function syncRvActOf(r){
+  if(!String(r.ebay_item_id||'').trim())return null;
+  if(Number(r.ebay_sale||0))return null;                  // eBayのセール中
+  var t=syncRvTargetOf(r);
+  var now=Math.round((+r.ebay_price||0)*100)/100;
+  var qty=syncQtyOf(r);
+  var nm=r.title||r.ebay_sku||r.asin;
+  if(t.rv_kind==='skip')
+    return (qty>0)?{ kind:'zero', from:now, to:0, want:0, capped:false, loss:false,
+                     name:nm, r:r }:null;
+  if(qty===0)return null;                                 // 数量0の出品
+  if(!(t.rv_want>0)||!(now>0))return null;
+  if(t.rv_want<=now+0.001)return null;                    // 下げるのは自動値下げの仕事
+  var loss=(t.rv_floor>0&&now<t.rv_floor-0.001);          // 赤字（最低利益ラインより下）
+  if(!loss){
+    var diff=t.rv_want-now;
+    if(diff<csvRevAbs()||(diff/now*100)<csvRevPct())return null;
+    // 自動値下げの途中の行は上げない（綱引きを防ぐ）。赤字の行だけ例外
+    if(Number(r.md_done||0)>0)return null;
+  }
+  var cap=Math.round(now*(1+autoRvPct()/100)*100)/100;    // 1回の変更幅の上限
+  var to=(t.rv_want>cap)?cap:t.rv_want;
+  if(!(to>now))return null;
+  return { kind:'up', from:now, to:to, want:t.rv_want, capped:(t.rv_want>cap),
+           loss:loss, name:nm, r:r };
+}
+function syncRvPlanLocal(){
+  return ((syncData&&syncData.items)||[]).map(syncRvActOf).filter(Boolean);
+}
+/* 画面に出す予定。pj-sync が確認モードで残した予定があればそれを出す
+   （実際に動くのはそちらなので）。無ければこの端末の計算を出す。 */
+function syncRvPlanRows(){
+  var p=(syncData&&syncData.rv_plan)||null;
+  if(p&&p.rows&&p.rows.length)
+    return { from:'sync', at:String(p.at||''), n:(+p.n||p.rows.length),
+             capped:(+p.capped||0), rows:p.rows };
+  var a=syncRvPlanLocal();
+  return { from:'local', at:'', n:a.length, capped:0,
+           rows:a.map(function(x){
+             return { name:x.name, asin:x.r.asin, cond:x.r.cond, kind:x.kind,
+                      from:x.from, to:x.to, want:x.want, capped:x.capped,
+                      loss:x.loss }; }) };
+}
+// 3回続けて失敗した行（「対応が必要」に出す）
+function syncRvAlert(r){ return Number((r||{}).rv_fail||0)>=3; }
+function syncRvFail3(){
+  return ((syncData&&syncData.items)||[]).filter(syncRvAlert).length;
+}
+function syncRvLine(x){
+  var nm=esc(x.name||x.asin||'');
+  if(x.kind==='zero')return '・'+nm+'：<b>見送り → 数量0</b>（出品は終了しません）';
+  return '・'+nm+'：'+usd(x.from)+' → <b>'+usd(x.to)+'</b>'
+    +(x.capped?('（上限 '+autoRvPct()+'% で丸め・目標 '+usd(x.want)+'）'):'')
+    +(x.loss?'（赤字の解消）':'');
+}
+/* 帯の見せ方。オフのときは出さない。 */
+function syncRvBarRender(){
+  var bar=$('syncRvBar'); if(!bar)return;
+  var mode=autoRvMode();
+  bar.style.display=(mode==='off')?'none':'block';
+  var cfg=$('autoRvCfgNote');
+  if(cfg)cfg.textContent=(mode==='off')
+    ? '自動反映はオフです。価格更新CSVを書き出して eBay にアップロードしてください。'
+    : ((mode==='auto'?'自動実行です。':'確認モードです（「まとめて実行」を押すまで eBay は変わりません）。')
+       +'1日に最大 '+autoRvMax()+'件・1回の変更幅は '+autoRvPct()+'% までです。');
+  if(mode==='off')return;
+  var pl=syncRvPlanRows(), need=syncRvNeed(), f3=syncRvFail3();
+  var last=(syncData&&syncData.rv_last)||null;
+  $('syncRvNote').innerHTML=
+    '<b>'+(mode==='auto'?'売値の自動反映：自動実行':'売値の自動反映：確認モード')+'</b>　'
+    +'変更の予定：'+pl.n+'件'
+    +(pl.from==='sync'
+      ? ('（pj-sync の予定 '+esc(String(pl.at||'').slice(0,16).replace('T',' '))+'）')
+      : '（この端末の計算）')
+    +(pl.capped?('　1日の上限を超えた '+pl.capped+'件は翌日に回ります'):'')
+    +(mode==='confirm'?'　<b>「まとめて実行」を押すまで eBay は変えません</b>':'')
+    +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>（絞り込み「対応が必要」で直してください）'):'')
+    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+            +'・'+({confirm:'確認',auto:'自動',approve:'まとめて実行'}[last.mode]||last.mode)
+            +'）：上げた '+Number(last.changed||0)+'件／数量0 '+Number(last.zeroed||0)
+            +'件／失敗 '+Number(last.failed||0)+'件'
+            +(Number(last.capped||0)?('／翌日に回した '+Number(last.capped)+'件'):'')
+            +'</b>'):'');
+  /* 予定の一覧は先頭3件だけ。「すべて表示（n件）」で開く（6.46 と同じ）。 */
+  $('syncRvList').innerHTML=pl.rows.length
+    ? listMoreHtml('rvplan',pl.rows.map(syncRvLine))
+    : '変える出品はありません（差がしきい値より小さい・下げる行は自動値下げに任せます）。';
+  csvBtnHot('syncRvSend',need.length>0,'見直しの目標を送る'+csvCountBadge(need.length));
+  $('syncRvSend').disabled=!need.length;
+  csvBtnHot('syncRvGo',mode==='confirm'&&pl.n>0,'まとめて実行'+csvCountBadge(pl.n));
+  $('syncRvGo').disabled=!pl.n;
+}
+/* 目標（売値・下限・判断・仕入値の上限）を D1 に送る。
+   これを送るまで pj-sync は何も変えない。設定（モード・上限）も一緒に送る。 */
+function syncRvSend(){
+  var need=syncRvNeed();
+  if(!need.length){ alert('送る行はありません（すべて最新です）。'); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('syncRvDone').textContent='pj-sync のURL・キーを⚙設定に入れてください。'; return;
+  }
+  var items=need.map(function(r){
+    return Object.assign({ asin:r.asin, cond:r.cond, title:r.title||'',
+                           item_id:r.ebay_item_id||'' }, syncRvTargetOf(r)); });
+  advSyncNow();              // モード・上限・変更幅も D1 にそろえる
+  var b=$('syncRvSend');
+  b.disabled=true; b.textContent='送っています…';
+  var sent=0, bad=0;
+  function step(i){
+    if(i>=items.length){
+      if(!bad)need.forEach(function(r){
+        var t=syncRvTargetOf(r);
+        if((+r.rv_want||0)!==t.rv_want)r.rv_fail=0;
+        r.rv_kind=t.rv_kind; r.rv_want=t.rv_want;
+        r.rv_floor=t.rv_floor; r.rv_max_cost=t.rv_max_cost;
+      });
+      syncSaveCache();
+      b.disabled=false;
+      syncRender();
+      $('syncRvDone').textContent=bad
+        ? ('送れませんでした（'+bad+'件）。もう一度押してください。')
+        : ('見直しの目標を '+sent+'件 pj-sync に残しました。'
+           +(autoRvMode()==='auto'?'次の実行（1日1回）から反映します。'
+                                  :'「まとめて実行」で反映できます。'));
+      return;
+    }
+    var part=items.slice(i,i+200);
+    fetch(syncUrl()+'/listings',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({items:part})})
+      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(function(d){ sent+=(d&&d.accepted)||0; })
+      ['catch'](function(){ bad+=part.length; })
+      .then(function(){ step(i+200); });
+  }
+  step(0);
+}
+$('syncRvSend').onclick=syncRvSend;
+/* 確認モードの承認。pj-sync に「いま実行してよい」と伝える。
+   実際に変える値は pj-sync がその場で計算し直す（送った目標と D1 の売値から）。 */
+function syncRvGo(){
+  var pl=syncRvPlanRows();
+  if(!pl.n){ alert('変える出品はありません。'); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('syncRvDone').textContent='pj-sync のURL・キーを⚙設定に入れてください。'; return;
+  }
+  var up=pl.rows.filter(function(x){ return x.kind!=='zero'; }).length;
+  var zero=pl.rows.filter(function(x){ return x.kind==='zero'; }).length;
+  if(!confirm('eBay の売値を pj-sync から変えます（'+pl.n+'件）。\n'
+    +'値上げ '+up+'件／見送りで数量0 '+zero+'件\n'
+    +pl.rows.slice(0,5).map(function(x){
+        return '　・'+(x.name||x.asin)+'：'
+          +((x.kind==='zero')?'見送り → 数量0'
+            :(usd(x.from)+' → '+usd(x.to))); }).join('\n')
+    +(pl.rows.length>5?('\n　…ほか'+(pl.rows.length-5)+'件'):'')+'\n'
+    +'1日に変える上限は '+autoRvMax()+'件・1回の変更幅は '+autoRvPct()+'% までです。\n'
+    +'よろしいですか？'))return;
+  var b=$('syncRvGo');
+  b.disabled=true; b.textContent='実行しています…';
+  $('syncRvDone').textContent='pj-sync が eBay を変えています…';
+  fetch(syncUrl()+'/sync',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({kind:'review',approve:true})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      $('syncRvDone').textContent='上げた '+Number(d.changed||0)+'件／数量0 '
+        +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
+        +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'')
+        +'。「状況を取り込む」で表示を更新してください。';
+    })
+    ['catch'](function(e){
+      $('syncRvDone').textContent='失敗しました：'+e.message;
+    })
+    .then(function(){ b.disabled=false; syncRender(); });
+}
+$('syncRvGo').onclick=syncRvGo;
 /* 値下げ用の Revise CSV。書き出した日を D1 に控え、次の間隔はそこから数える。 */
 function syncMarkRun(){
   var rows=syncMarkCsvRows();
@@ -9618,7 +9904,7 @@ var SYNC_FILTERS=[
     f:function(r){ return true; } },
   { v:'warn',           label:'対応が必要（警告あり）',
     f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r)||syncAmzAlert(r)
-                       ||syncReviseAlert(r); } },
+                       ||syncReviseAlert(r)||syncRvAlert(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
   { v:'restock',        label:'再調達の候補',
@@ -9966,6 +10252,11 @@ function syncWarnBreakRender(){
   var amz=rows.filter(syncAmzAlert).length;
   if(amz){ cw['Amazonでも販売中']=amz; nw+=rows.filter(function(r){
     return syncAmzAlert(r)&&!(r.warnings||[]).length; }).length; }
+  /* 売値の自動反映が3回続けて失敗した行。トークン切れ・写真の大きさ・
+     出品の状態などが原因なので、人が見て直す必要がある。 */
+  var rvF=rows.filter(syncRvAlert).length;
+  if(rvF){ cw['売値の自動反映が3回失敗']=rvF; nw+=rows.filter(function(r){
+    return syncRvAlert(r)&&!(r.warnings||[]).length; }).length; }
   var ks=Object.keys(cw).sort(function(a,b){ return cw[b]-cw[a]; });
   var ns=Object.keys(cn).sort(function(a,b){ return cn[b]-cn[a]; });
   if(!ks.length&&!ns.length){ el.textContent=rows.length?'対応が必要な行はありません。':''; return; }
@@ -10043,6 +10334,11 @@ function syncRowHtml(r,key){
         +(syncReviseAlert(r)?'#b00020':'#8a6d00')+';color:#fff;border-radius:2px;'
         +'padding:1px 5px;font-size:11px;margin-right:4px">'
         +esc(syncErrText(r.revise_err))+'</span>';
+    /* 売値の自動反映が3回続けて失敗した行。人が見て直す必要がある。 */
+    if(syncRvAlert(r))
+      badge+='<span style="display:inline-block;background:#b00020;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">自動反映が'
+        +Number(r.rv_fail||0)+'回失敗</span>';
     /* 予約済みの内訳で見せ方を分ける。納品した直後の正常な状態なので、
        警告ではないことを明示する（移管中だけ・処理中だけも見分けられるようにする）。 */
     if(syncIsFcProc(r)&&Number(r.fba_available||0)===0){
@@ -10555,7 +10851,11 @@ $('syncLoad').onclick=function(){
                  /* 上限で切れたかどうか（Worker が返す）。切れていると件数も警告も
                     一部の行だけになるので、上に警告を出す。 */
                  limit:d.limit||syncLimit(), rows_total:d.rows_total||0,
-                 truncated:!!d.truncated };
+                 truncated:!!d.truncated,
+                 /* 自動値下げ・自動反映の前回の結果と、確認モードの変更予定。
+                    帯に「前回：上げた○件」「変更の予定○件」を出すのに使う。 */
+                 md_last:d.md_last||null, rv_plan:d.rv_plan||null,
+                 rv_last:d.rv_last||null };
       syncSaveCache();
       var run=(syncData.last_runs||[])[0]||{};
       syncSay('取り込みました：'+syncData.items.length+'件'
@@ -11026,7 +11326,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v145';   // sw.js の const V と必ず同じ値にする
+var APP_V='v146';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

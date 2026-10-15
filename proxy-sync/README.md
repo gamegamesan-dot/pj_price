@@ -114,6 +114,14 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0007-restocking.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0008-dropship.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0009-reserved-detail.sql
 npx wrangler d1 execute pj-sync --remote --file=./migrate-0010-cart-hand.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0011-ship-profile.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0012-price-source.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0013-ebay-first.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0014-amazon-new-low.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0015-best-offer.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0016-auto-markdown.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0017-search-kw.sql
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0018-auto-review.sql
 ```
 
 **順番は「D1 を先 → deploy を後」。** 先に deploy すると、新しいコードが
@@ -200,6 +208,8 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | GET | `/runs?limit=20` | 実行ログ（`sync_runs`） |
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
 | POST | `/sync` | 手動実行（`kind=test-notify` は通知テスト）。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
+| POST | `/sync` | 自動値下げ `{"kind":"markdown"}`（設定が `plan` のときは予定だけ） |
+| POST | `/sync` | 売値の見直しの自動反映 `{"kind":"review"}`。`{"kind":"review","approve":true}` は販売連携タブの「まとめて実行」＝確認モードでも実行する |
 
 `kind=orders` の `max` は、その回で明細（`getOrderItems`）を取る注文の数（既定25・最大120）。
 

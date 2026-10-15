@@ -102,6 +102,15 @@ CREATE TABLE IF NOT EXISTS items (
   /* メルカリ・ヤフオクの検索語（手で直したもの）。空は「自動で作る」。
      出品CSVタブと販売連携タブで共通に使う。 */
   search_kw        TEXT,
+  /* 売値の見直しの自動反映（migrate-0018）。pj_price が計算して送る数字。
+     rv_want より上げることはなく、rv_floor より下げることもない。 */
+  rv_want          REAL,                      -- 出すべき売値（$）
+  rv_floor         REAL,                      -- 最低利益ライン（$）
+  rv_kind          TEXT,                      -- 相場の判断 rec/match/none/skip
+  rv_max_cost      INTEGER,                   -- その売値での仕入値の上限（円）
+  rv_at            TEXT,                      -- 目標を受け取った時刻
+  rv_done_at       TEXT,                      -- 最後に eBay へ反映した時刻
+  rv_fail          INTEGER NOT NULL DEFAULT 0,-- 連続失敗の回数（3でお知らせ）
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
@@ -229,3 +238,35 @@ CREATE TABLE IF NOT EXISTS md_runs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_md_runs_at ON md_runs(at);
+
+-- 売値の見直しの自動反映（1日1行が基本）。確認モードの回も残す。
+CREATE TABLE IF NOT EXISTS rv_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  mode       TEXT NOT NULL,                    -- 'confirm' / 'auto' / 'approve'
+  picked     INTEGER NOT NULL DEFAULT 0,
+  changed    INTEGER NOT NULL DEFAULT 0,
+  zeroed     INTEGER NOT NULL DEFAULT 0,
+  failed     INTEGER NOT NULL DEFAULT 0,
+  skipped    INTEGER NOT NULL DEFAULT 0,
+  capped     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rv_runs_at ON rv_runs(at);
+
+-- 1行＝1回の変更（変更前後の売値つき）。
+CREATE TABLE IF NOT EXISTS rv_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  item_id    TEXT,
+  kind       TEXT NOT NULL,                    -- 'up' / 'zero'
+  from_price REAL,
+  to_price   REAL,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  why        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rv_log_at ON rv_log(at);
+CREATE INDEX IF NOT EXISTS idx_rv_log_key ON rv_log(asin, cond, at);

@@ -99,7 +99,11 @@ const COND_CODES = { N: "new", UM: "used", UVG: "used", UG: "used", UA: "used", 
    write:true の行は、呼ぶ側が net(run, url, {write:true, ...}) と明示したときだけ
    通る。ふだんの取り込みから間違って書き込むことはできない。 */
 const EBAY_READ_CALLS = ["GetMyeBaySelling"];
-const EBAY_WRITE_CALLS = ["ReviseFixedPriceItem"];
+/* 書き込みはこの2つだけ。
+   ReviseFixedPriceItem   … 自動値下げ（売値とベストオファーの自動拒否額）
+   ReviseInventoryStatus  … 売値の見直しの自動反映（売値／数量0。4件ずつ送れる）
+   どちらも net(..., {write:true}) を付けた呼び出しだけが通る。 */
+const EBAY_WRITE_CALLS = ["ReviseFixedPriceItem", "ReviseInventoryStatus"];
 const ALLOWED = [
   { m: "POST", re: /^https:\/\/api\.amazon\.com\/auth\/o2\/token$/ },
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/orders\/v0\/orders(\/|\?)/ },
@@ -1130,6 +1134,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at, ebay_sale,
   search_kw,
+  rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   md_step, md_start, md_floor, md_n, md_done,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
@@ -2028,6 +2033,361 @@ async function mdLast(env) {
   } catch (e) { return null; }
 }
 
+/* ================= 売値の見直しの自動反映（7.39）=================
+   いままで「売値の見直し」は価格更新CSVを書き出して File Exchange に
+   アップロードしていた。それを Cron（1日1回）で ReviseInventoryStatus に置き換える。
+
+   何を変えるか（決めるのは pj_price、変えるのは Worker）:
+   ・rv_want  … 出すべき売値（$）。相場（Sold）が入っていればその判断を優先した値。
+   ・rv_floor … 最低利益ライン（$）。これより下げることはしない。
+   ・rv_kind  … 相場の判断（rec／match／none／skip）。skip＝見送り。
+   ・rv_max_cost … rv_want で出したときの仕入値の上限（円）。再調達の監視に使う。
+   Worker は値付けの式を持たない（md_step・restock_max_cost と同じ考え方）。
+
+   安全のための決まり:
+   ・上げるだけ。**値下げは自動値下げ（jobMarkdown）に任せる**。
+   ・'confirm'（確認モード）では eBay を1回も呼ばず、予定を残して Discord に出す。
+     販売連携タブの「まとめて実行」（POST /sync {kind:'review',approve:true}）で実行。
+   ・1日に変える件数の上限（既定50件）と、1回の変更幅の上限（既定30%）。
+   ・見送り（rv_kind='skip'）の行は数量0にする。出品そのものは終わらせない
+     （eBayの「在庫切れオプション」を有効にしておく必要がある）。
+   ・「値下げしない」「一点物」の行も**値上げはする**（赤字を避けるため）。
+   ・自動値下げの途中（md_done≧1）の行は上げない。綱引きになるため。
+     ただし赤字（いまの売値が最低利益ラインより下）の行だけは例外で上げる。
+   ・失敗した行は次の回に再試行し、3回続けて失敗したら「対応が必要」に出す。 */
+const RV_MODES = { off: 1, confirm: 1, auto: 1 };
+const RV_MAX_DEFAULT = 50;         // 1日に変える件数の上限
+const RV_PCT_DEFAULT = 30;         // 1回の変更幅の上限（%）
+const RV_BATCH = 4;                // ReviseInventoryStatus は1回4件まで
+const RV_PICK_LIMIT = 2000;        // 1回に見る行数
+const RV_PLAN_SHOW = 50;           // 予定の一覧に入れる件数
+const RV_FAIL_WARN = 3;            // これだけ続けて失敗したらお知らせにする
+const RV_PLAN_KEY = "rv.plan";     // 確認モードの予定（sync_state）
+const RV_DAY_MS = 24 * 60 * 60 * 1000;
+/* 権限が足りないときのエラー。トークンの取り直しが必要なので、
+   そこで打ち切って通知する（同じ失敗をくり返さない）。 */
+const RV_SCOPE_ERR = MD_SCOPE_ERR;
+
+async function rvSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const num = (k, d, lo, hi) => {
+    const n = Number(st[k]);
+    return (isFinite(n) && n >= lo && n <= hi) ? n : d;
+  };
+  const mode = String(st.autoRvMode || "off");
+  return {
+    mode: RV_MODES[mode] ? mode : "off",
+    max: Math.round(num("autoRvMax", RV_MAX_DEFAULT, 1, 2000)),
+    pct: num("autoRvPct", RV_PCT_DEFAULT, 1, 100),
+    // 見直しのしきい値（金額・割合）は出品CSVタブの設定をそのまま使う
+    abs: num("csvReviewAbs", 1, 0, 1000),
+    th: num("csvReviewPct", 3, 0, 100),
+  };
+}
+// 赤字（いまの売値が最低利益ラインより下）
+function rvLoss(r) {
+  const fl = Number(r.rv_floor || 0), now = Number(r.ebay_price || 0);
+  return fl > 0 && now > 0 && now < fl - 0.001;
+}
+/* 対象にしない理由。空なら対象。 */
+function rvSkip(r, st) {
+  if (!String(r.ebay_item_id || "").trim()) return "出品していません";
+  if (Number(r.ebay_sale || 0)) return "eBayのセール中";
+  const qty = Number(r.ebay_qty || 0);
+  // 見送り（相場が最低売値に届かない行）。数量0にするだけ
+  if (String(r.rv_kind || "") === "skip") return qty > 0 ? "" : "すでに数量0";
+  if (qty <= 0) return "数量0";
+  const want = Number(r.rv_want || 0);
+  if (!(want > 0)) return "目標の売値が未設定";
+  const now = Number(r.ebay_price || 0);
+  if (!(now > 0)) return "売値が分かりません";
+  // 下げる話は自動値下げに任せる（ここでは上げるだけ）
+  if (want <= now + 0.001) return "上げる必要がありません";
+  if (rvLoss(r)) return "";            // 赤字の行はしきい値も値下げ中も見ない
+  const diff = want - now;
+  if (diff < st.abs || (diff / now * 100) < st.th) return "差が小さい";
+  if (Number(r.md_done || 0) > 0) return "自動値下げの途中";
+  return "";
+}
+/* この行に何をするか。null なら何もしない。
+   kind … 'up'（売値を上げる）/ 'zero'（見送りで数量0にする） */
+function rvAct(r, st) {
+  if (rvSkip(r, st)) return null;
+  const now = Math.round(Number(r.ebay_price || 0) * 100) / 100;
+  if (String(r.rv_kind || "") === "zero" || String(r.rv_kind || "") === "skip")
+    return { kind: "zero", from: now, to: 0, want: 0, capped: false, loss: false };
+  const want = Math.round(Number(r.rv_want || 0) * 100) / 100;
+  // 1回の変更幅の上限。超えるぶんは次の回に回す（いきなり大きく動かさない）
+  const cap = Math.round(now * (1 + st.pct / 100) * 100) / 100;
+  const to = (want > cap) ? cap : want;
+  if (!(to > now)) return null;
+  return { kind: "up", from: now, to: to, want: want, capped: want > cap,
+           loss: rvLoss(r), floor: Number(r.rv_floor || 0) };
+}
+/* ReviseInventoryStatus の本文。1回に4件まで入れられる。
+   売値だけ・数量だけを変えられるAPIなので、ベストオファーの金額は触らない
+   （上げる方向なので自動拒否額が売値以上になることはない）。 */
+function invBody(list) {
+  const money = (tag, v) =>
+    "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
+  return '<?xml version="1.0" encoding="utf-8"?>'
+    + '<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + list.map((x) => "<InventoryStatus><ItemID>" + esc(x.item_id) + "</ItemID>"
+        + ((x.kind === "zero") ? "<Quantity>0</Quantity>" : money("StartPrice", x.to))
+        + "</InventoryStatus>").join("")
+    + "</ReviseInventoryStatusRequest>";
+}
+/* 4件ぶんをまとめて eBay に書き込む（唯一の書き込みの2つめ）。
+   どの行が通ったかは、応答に返ってくる InventoryStatus の ItemID で見る。 */
+async function ebayReviseInv(env, run, token, list) {
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    write: true,
+    headers: {
+      "X-EBAY-API-CALL-NAME": "ReviseInventoryStatus",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: invBody(list),
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  const why = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
+               xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 200);
+  const done = {};
+  const re = /<InventoryStatus>([\s\S]*?)<\/InventoryStatus>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const id = xmlTag(m[1], "ItemID");
+    if (id) done[id] = true;
+  }
+  /* eBay は、送った行がすべて通ったときだけ Ack=Success を返す。
+     Warning / Failure のときは「変えられた行の InventoryStatus」だけが返るので、
+     その ItemID に無い行は失敗とみなす（1件だけ失敗した回も取りこぼさない）。 */
+  const okAll = resp.ok && /^Success$/i.test(ack);
+  return {
+    ok: (id) => okAll || !!done[id],
+    status: resp.status, ack: ack || ("HTTP" + resp.status),
+    why: okAll ? "" : (why || ("HTTP " + resp.status)),
+  };
+}
+/* 直近24時間に変えた件数（1日の上限に使う）。
+   確認モードの承認とCronの回をまたいでも、合計で上限を超えないようにする。 */
+async function rvUsedToday(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM rv_log WHERE ok=1 AND at>=?1")
+      .bind(new Date(Date.now() - RV_DAY_MS).toISOString()).first();
+    return Number((r && r.n) || 0);
+  } catch (e) { return 0; }
+}
+async function rvPlanGet(env) {
+  try {
+    const s = await stateGet(env, RV_PLAN_KEY);
+    return s ? JSON.parse(s) : null;
+  } catch (e) { return null; }
+}
+async function rvPlanSet(env, o) {
+  try { await stateSet(env, RV_PLAN_KEY, JSON.stringify(o)).run(); } catch (e) { /* 予定の保存で本処理を落とさない */ }
+}
+/* 連続で失敗している行（3回以上）。お知らせに件数を出す。 */
+async function rvFailN(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM items WHERE COALESCE(rv_fail,0)>=?1")
+      .bind(RV_FAIL_WARN).first();
+    return Number((r && r.n) || 0);
+  } catch (e) { return 0; }
+}
+/* 1日1回の自動反映。approve＝true のときは確認モードでも実行する（承認）。 */
+async function jobReview(env, opt) {
+  const approve = !!(opt && opt.approve);
+  const run = newRun("review");
+  const res = { mode: "off", picked: 0, changed: 0, zeroed: 0, failed: 0, skipped: 0,
+                capped: 0, used: 0, max: RV_MAX_DEFAULT, fail3: 0, plan: [] };
+  try {
+    const st = await rvSettings(env);
+    res.mode = approve ? "approve" : st.mode;
+    res.max = st.max;
+    if (st.mode === "off" && !approve) {
+      run.notes.push("自動反映はオフ（設定「売値の自動反映」を 確認モード / 自動実行 にする）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const q = await env.DB.prepare(
+      `SELECT ${ITEM_COLS} FROM items
+        WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>''
+          AND (COALESCE(rv_want,0)>0 OR rv_kind='skip')
+        ORDER BY COALESCE(rv_at,'') ASC LIMIT ${RV_PICK_LIMIT}`).all();
+    const rows = (q && q.results) || [];
+    const due = [];
+    for (const r of rows) {
+      const a = rvAct(r, st);
+      if (!a) { res.skipped++; continue; }
+      due.push(Object.assign({ r: r, asin: r.asin, cond: r.cond,
+        item_id: String(r.ebay_item_id || ""),
+        name: r.title || r.ebay_sku || r.asin }, a));
+    }
+    res.picked = due.length;
+    res.used = await rvUsedToday(env);
+    const left = Math.max(0, st.max - res.used);
+    const list = due.slice(0, left);
+    res.capped = due.length - list.length;
+    res.plan = list.slice(0, RV_PLAN_SHOW).map((x) => ({
+      asin: x.asin, cond: x.cond, item_id: x.item_id, name: x.name,
+      kind: x.kind, from: x.from, to: x.to, want: x.want,
+      capped: x.capped, loss: x.loss,
+    }));
+    res.fail3 = await rvFailN(env);
+    // 確認モードは eBay を呼ばない。予定を残して Discord に出すだけ
+    if (!approve && st.mode === "confirm") {
+      await rvPlanSet(env, { at: nowIso(), mode: st.mode, n: due.length,
+        capped: res.capped, used: res.used, max: st.max, rows: res.plan });
+      run.notes.push("確認モード：" + res.picked + "件が変更の候補"
+        + (res.capped ? ("（1日の上限 " + st.max + "件を超えた " + res.capped + "件は翌日）") : "")
+        + "／とばした " + res.skipped + "件。eBay は変えていません");
+      await rvLogRun(env, run, st, res);
+      await notify(env, run, rvNotifyText(res, st, ""));
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!list.length) {
+      run.notes.push("変える出品はありません（とばした " + res.skipped + "件"
+        + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : "") + "）");
+      await rvPlanSet(env, { at: nowIso(), mode: res.mode, n: 0, rows: [],
+        used: res.used, max: st.max });
+      await rvLogRun(env, run, st, res);
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const token = await ebayToken(env, run);
+    const at = nowIso();
+    const stmts = [];
+    let scopeErr = "";
+    for (let i = 0; i < list.length; i += RV_BATCH) {
+      const part = list.slice(i, i + RV_BATCH);
+      const v = await ebayReviseInv(env, run, token, part);
+      for (const x of part) {
+        const good = v.ok(x.item_id);
+        if (good) {
+          if (x.kind === "zero") {
+            res.zeroed++;
+            stmts.push(env.DB.prepare(
+              `UPDATE items SET ebay_qty=0, rv_fail=0, rv_done_at=?3,
+                 revise_err=NULL, revise_err_at=NULL, updated_at=?3
+               WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, at));
+          } else {
+            res.changed++;
+            /* 再調達中の行は「出し直した売値」も新しい売値にそろえる。
+               「仕入値の上限」は目標どおりに上げられた回だけ入れ替える
+               （上限で丸めた回は、その売値に対する上限が分からないため
+               前の値＝安全側のまま残す）。 */
+            stmts.push(env.DB.prepare(
+              `UPDATE items SET ebay_price=?3, rv_fail=0, rv_done_at=?4,
+                 restock_price=CASE WHEN restocking=1 THEN ?3 ELSE restock_price END,
+                 restock_max_cost=CASE WHEN restocking=1 AND ?5=1
+                   THEN COALESCE(?6, restock_max_cost) ELSE restock_max_cost END,
+                 revise_err=NULL, revise_err_at=NULL, updated_at=?4
+               WHERE asin=?1 AND cond=?2`)
+              .bind(x.asin, x.cond, x.to, at, x.capped ? 0 : 1,
+                    numOf(x.r, "rv_max_cost")));
+          }
+          stmts.push(rvLogRow(env, at, x, 1,
+            x.capped ? ("上限 " + st.pct + "% で丸めた（目標 $" + x.want.toFixed(2) + "）")
+                     : (x.loss ? "赤字の行" : "")));
+        } else {
+          res.failed++;
+          run.errors++;
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET rv_fail=COALESCE(rv_fail,0)+1, revise_err=?3,
+               revise_err_at=?4, updated_at=?4
+             WHERE asin=?1 AND cond=?2`)
+            .bind(x.asin, x.cond, ("売値の自動反映 " + v.why).slice(0, 300), at));
+          stmts.push(rvLogRow(env, at, x, 0, v.why));
+          if (RV_SCOPE_ERR.test(v.why)) { scopeErr = v.why; break; }
+        }
+      }
+      if (scopeErr) break;
+    }
+    await runBatch(env, run, stmts);
+    res.fail3 = await rvFailN(env);
+    await rvPlanSet(env, { at: nowIso(), mode: res.mode, n: 0, rows: [],
+      used: res.used + res.changed + res.zeroed, max: st.max,
+      ran: { changed: res.changed, zeroed: res.zeroed, failed: res.failed } });
+    run.notes.push("売値の自動反映：上げた " + res.changed + "件／数量0 " + res.zeroed
+      + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
+      + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
+    if (scopeErr)
+      run.notes.push("権限が足りません（eBayのユーザートークンを sell.inventory の"
+        + "スコープで取り直してください）：" + scopeErr);
+    await rvLogRun(env, run, st, res, scopeErr);
+    await notify(env, run, rvNotifyText(res, st, scopeErr));
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 1行ぶんの記録（変更前後の売値つき）。 */
+function rvLogRow(env, at, x, ok, why) {
+  return env.DB.prepare(
+    `INSERT INTO rv_log (at, asin, cond, item_id, kind, from_price, to_price, ok, why)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)`
+  ).bind(at, x.asin, x.cond, x.item_id, x.kind, x.from,
+         (x.kind === "zero") ? null : x.to, ok ? 1 : 0, String(why || "").slice(0, 300));
+}
+/* 実行結果を rv_runs に残す（確認モードの回も残す）。 */
+async function rvLogRun(env, run, st, res, scopeErr) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO rv_runs (at, mode, picked, changed, zeroed, failed, skipped, capped,
+         note, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?1)`
+    ).bind(nowIso(), res.mode, res.picked, res.changed, res.zeroed, res.failed,
+           res.skipped, res.capped,
+           ((scopeErr ? ("権限不足 " + scopeErr + " / ") : "")
+            + "上限 " + st.max + "件・変更幅 " + st.pct + "%・しきい値 $" + st.abs
+            + "かつ" + st.th + "%").slice(0, 500)).run();
+  } catch (e) { /* ログの失敗で本処理を落とさない */ }
+}
+function rvNotifyText(res, st, scopeErr) {
+  const confirm = (res.mode === "confirm");
+  if (confirm && !res.picked) return "";
+  if (!confirm && !res.changed && !res.zeroed && !res.failed) return "";
+  const t = [];
+  if (confirm) {
+    t.push("🔎 売値の見直し（確認モード）：変更の予定 " + res.picked + "件");
+    t.push("販売連携タブの「まとめて実行」を押すと反映します（eBay はまだ変えていません）");
+  } else {
+    t.push("🔁 売値の自動反映"
+      + (res.mode === "approve" ? "（まとめて実行）" : "（自動実行）"));
+    t.push("上げた " + res.changed + "件／見送りで数量0 " + res.zeroed
+      + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件");
+  }
+  if (res.capped)
+    t.push("1日の上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
+  if (res.fail3)
+    t.push("⚠️ " + res.fail3 + "件は " + RV_FAIL_WARN + "回以上続けて失敗しています（対応が必要）");
+  if (scopeErr) t.push("⚠️ 権限が足りません。eBayのユーザートークンを取り直してください");
+  res.plan.slice(0, 10).forEach((x) => {
+    t.push("・" + x.name + "（" + x.asin + "）"
+      + ((x.kind === "zero")
+        ? "：見送り → 数量0"
+        : ("：$" + x.from.toFixed(2) + " → $" + x.to.toFixed(2)
+           + (x.capped ? ("（上限 " + st.pct + "% で丸め・目標 $" + x.want.toFixed(2) + "）") : "")
+           + (x.loss ? "（赤字の解消）" : ""))));
+  });
+  return t.join("\n");
+}
+/* 直近の実行結果（pj_price の画面に出す）。 */
+async function rvLast(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT at, mode, picked, changed, zeroed, failed, skipped, capped, note
+         FROM rv_runs ORDER BY id DESC LIMIT 1`).first();
+    return r || null;
+  } catch (e) { return null; }
+}
+
 /* ---- GET /status ---- */
 /* FBA在庫が1点以上あるか（販売可能・入庫中・予約済みのいずれか）。
    在庫0の過去SKUを数から外すために使う。SQLとJSで同じ条件にしてある。 */
@@ -2461,6 +2821,10 @@ async function statusBody(env, url) {
     errors_recent: ((runs && runs.results) || []).some((r) => r.errors > 0),
     // 自動値下げの直近の実行結果（画面に「前回：下げた○件」と出す）
     md_last: await mdLast(env),
+    /* 売値の見直しの自動反映。確認モードの「変更予定の一覧」と直近の実行結果を
+       画面に出す（承認ボタンはこの予定を見て押す）。 */
+    rv_plan: await rvPlanGet(env),
+    rv_last: await rvLast(env),
     items,
     sold_recent: (sold && sold.results) || [],
     events_recent: (ev && ev.results) || [],
@@ -2622,6 +2986,16 @@ async function putListings(env, body) {
          md_start=COALESCE(?27, md_start),
          /* 相場を調べるときの検索語（手で直したもの）。空文字（''）で消す。 */
          search_kw=CASE WHEN ?28='' THEN NULL ELSE COALESCE(?28, search_kw) END,
+         /* 売値の見直しの自動反映に使う目標（migrate-0018）。
+            pj_price が計算して送る。rv_kind は空文字（''）で消せる。
+            目標の売値が変わったら、連続失敗の回数は0に戻す（新しい挑戦なので）。 */
+         rv_fail=CASE WHEN ?29 IS NOT NULL AND (rv_want IS NULL OR rv_want<>?29)
+                      THEN 0 ELSE rv_fail END,
+         rv_want=COALESCE(?29, rv_want),
+         rv_floor=COALESCE(?30, rv_floor),
+         rv_max_cost=COALESCE(?31, rv_max_cost),
+         rv_kind=CASE WHEN ?32='' THEN NULL ELSE COALESCE(?32, rv_kind) END,
+         rv_at=CASE WHEN ?29 IS NULL AND ?32 IS NULL THEN rv_at ELSE ?8 END,
          /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
          revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
          revise_err_at=CASE WHEN ?23='' THEN NULL
@@ -2656,7 +3030,10 @@ async function putListings(env, body) {
            numOf(x, "md_step"), numOf(x, "md_floor"), numOf(x, "md_n"),
            numOf(x, "md_start"),
            (x.search_kw === undefined || x.search_kw === null)
-             ? null : String(x.search_kw).slice(0, 200)));
+             ? null : String(x.search_kw).slice(0, 200),
+           numOf(x, "rv_want"), numOf(x, "rv_floor"), numOf(x, "rv_max_cost"),
+           (x.rv_kind === undefined || x.rv_kind === null)
+             ? null : String(x.rv_kind).slice(0, 20)));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -2883,6 +3260,10 @@ export default {
         if (kind === "onhand-clean") return json(await jobOnHandClean(env), 200, origin);
         // 自動値下げ。設定が 'plan' のときは eBay を変えず予定だけ返す
         if (kind === "markdown")  return json(await jobMarkdown(env), 200, origin);
+        /* 売値の見直しの自動反映。確認モードでは予定だけ返す。
+           approve:true は販売連携タブの「まとめて実行」＝承認して今すぐ実行。 */
+        if (kind === "review")
+          return json(await jobReview(env, { approve: body.approve === true }), 200, origin);
         if (kind === "test-notify")
           return json(await jobTestNotify(env, body.tag), 200, origin);
         if (kind === "pricing") {
@@ -2911,6 +3292,9 @@ export default {
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
            新しくなっているので、その値で判断できる。 */
         await jobMarkdown(env);
+        /* 売値の見直しの自動反映（上げるだけ）。値下げのあとに回すので、
+           下げた直後の売値を見て判断する（赤字の行だけ上げ直す）。 */
+        await jobReview(env);
       }
     })());
   },
@@ -2926,4 +3310,6 @@ export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, ju
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
                         lowestReqs, lowestKey, restockLowest, restockTrouble,
                         settingsGet, settingsPut,
-                        mdSettings, mdSkip, mdNext, mdBo, reviseBody, jobMarkdown, mdLast };
+                        mdSettings, mdSkip, mdNext, mdBo, reviseBody, jobMarkdown, mdLast,
+                        rvSettings, rvSkip, rvAct, rvLoss, invBody, jobReview, rvLast,
+                        rvPlanGet, rvUsedToday };

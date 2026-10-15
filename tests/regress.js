@@ -72,6 +72,13 @@ console.log('   開き直して同じ設定: '+JSON.stringify(d3));
 ok(d3.price===d1.price,'★同じ設定なら開き直しても同じ推奨売値');
 
 console.log('\n=== ほかのタブの設定は触っていない ===');
+/* 直前の計算の節は欄に値を入れただけ（保存していない）なので、
+   詳細設定を保存し直してから出品CSVタブの設定を触る。
+   見直しのしきい値は pj-sync にも送る欄になった（6.47）ので、
+   触ったときに詳細設定が巻き戻らないことをここで見張る。 */
+await p.click('#tabG'); await p.waitForTimeout(150);
+await p.evaluate(()=>{ $('advBox').open=true; });
+await p.fill('#baseProfit','2200'); await p.waitForTimeout(250);
 await p.click('#tabD'); await p.waitForTimeout(200);
 await p.evaluate(()=>{
   $('csvPackGame').value='25'; $('csvPackGame').dispatchEvent(new Event('input'));
