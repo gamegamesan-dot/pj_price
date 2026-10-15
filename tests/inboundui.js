@@ -99,7 +99,13 @@ ok(ws.length===4&&!ws.some(t=>/入庫中・W2000/.test(t)),
 
 console.log('\n=== 理由ごとの件数 ===');
 await p.selectOption('#syncFilter','all'); await p.waitForTimeout(200);
-const brk=await p.evaluate(()=>$('syncWarnBreak').innerText);
+/* 理由が4つ以上あるときは先頭3つだけ出す（6.46）ので、
+   「すべて表示」を押してから数える。 */
+const brk=await p.evaluate(async()=>{
+  var a=document.querySelector('#syncWarnBreak a[data-more="warn"]');
+  if(a)a.click();
+  return $('syncWarnBreak').innerText;
+});
 console.log('   '+brk.replace(/\n/g,' ／ '));
 ok(/対応が必要 4件/.test(brk),'★対応が必要の合計を出す');
 ['納品待ちで出品中 1件','売り越しの恐れ 1件','予約済みのみ（Amazonで注文済み） 1件',

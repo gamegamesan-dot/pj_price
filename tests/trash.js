@@ -5,7 +5,7 @@
    ・同じSKUの行があるときは戻す前に確認する
    ・30日で自動的に消える／多すぎたら古いものから
    ・写真（R2）は消さない */
-const { harness, openCsvBoxes } = require('./lib');
+const { harness, openCsvBoxes, clickCfg } = require('./lib');
 const T = harness('出品CSVタブ：ゴミ箱');
 const ok = T.ok;
 (async()=>{
@@ -81,7 +81,7 @@ console.log('\n=== 中身がそのまま戻る ===');
 await setup();
 const before=await p.evaluate(()=>JSON.parse(JSON.stringify(csvRowById('b'))));
 await p.click('#csvList button[data-del="b"]'); await p.waitForTimeout(250);
-await p.click('#csvTrashList button[data-undel="b"]'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashList button[data-undel="b"]'); await p.waitForTimeout(300);
 const after=await p.evaluate(()=>JSON.parse(JSON.stringify(csvRowById('b'))));
 const same=JSON.stringify(before)===JSON.stringify(after);
 console.log('   同じ: '+same);
@@ -99,7 +99,7 @@ console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/ゴミ箱に入るので/.test(dlg[0]||''),'★戻せることを確認で伝える');
 console.log('   '+JSON.stringify(await ids())+' / ゴミ箱 '+JSON.stringify(await trash()));
 ok((await ids()).length===0&&(await trash()).length===3,'★3件ともゴミ箱へ');
-await p.click('#csvTrashAll'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashAll'); await p.waitForTimeout(300);
 console.log('   すべて戻す: '+JSON.stringify(await ids()));
 ok((await ids()).join()==='a,b,c','★「すべて戻す」で元の並びのまま戻る');
 
@@ -113,13 +113,13 @@ await p.evaluate(()=>{
   csvList.unshift(r); csvSaveList(); csvRender();
 });
 dlg.length=0; answer=false;                     // 確認で「いいえ」
-await p.click('#csvTrashList button[data-undel="a"]'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashList button[data-undel="a"]'); await p.waitForTimeout(300);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/同じSKUの行がすでに一覧にあります/.test(dlg[0]||''),'★戻す前に確認を出す');
 ok((await trash()).length===1,'★「いいえ」なら戻さない（重複させない）');
 answer=true;
 dlg.length=0;
-await p.click('#csvTrashList button[data-undel="a"]'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashList button[data-undel="a"]'); await p.waitForTimeout(300);
 ok((await ids()).indexOf('a')>=0&&(await trash()).length===0,
    '★「はい」なら戻す（判断は人に任せる）');
 
@@ -127,7 +127,7 @@ console.log('\n=== ゴミ箱から完全に消す ===');
 await setup();
 await p.click('#csvList button[data-del="c"]'); await p.waitForTimeout(250);
 dlg.length=0;
-await p.click('#csvTrashList button[data-tdrop="c"]'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashList button[data-tdrop="c"]'); await p.waitForTimeout(300);
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/もう元に戻せません/.test(dlg[0]||''),'★戻せなくなることを伝える');
 ok(/写真は消しません/.test(dlg[0]||''),'★写真は消さないと伝える');
@@ -138,7 +138,7 @@ await setup();
 await p.click('#csvList button[data-del="a"]'); await p.waitForTimeout(200);
 await p.click('#csvList button[data-del="b"]'); await p.waitForTimeout(200);
 dlg.length=0;
-await p.click('#csvTrashPurge'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashPurge'); await p.waitForTimeout(300);
 ok(/ゴミ箱の 2件を完全に消します/.test(dlg[0]||''),'★件数を出して確認する');
 ok((await trash()).length===0,'★空になる');
 ok((await p.evaluate(()=>window.__del)).length===0,'写真は消さない');
@@ -177,7 +177,7 @@ console.log('   '+JSON.stringify(keep).slice(0,200));
 ok(keep.n===1&&/ゴミ箱（1件）/.test(keep.sum),'★開き直してもゴミ箱に残る');
 ok(/商品b/.test(keep.list)&&/写真 1枚/.test(keep.list)&&/ItemID 110222/.test(keep.list),
    '★中身（写真の枚数・英題・ItemID）が見える');
-await p.click('#csvTrashList button[data-undel="b"]'); await p.waitForTimeout(300);
+await clickCfg(p,'#csvTrashList button[data-undel="b"]'); await p.waitForTimeout(300);
 ok((await ids()).join()==='a,b,c','★開き直したあとでも元の位置に戻せる');
 console.log('\n=== R2に残っている写真から戻す ===');
 await setup();

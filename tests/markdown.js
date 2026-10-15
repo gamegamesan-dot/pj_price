@@ -2,7 +2,7 @@
    ・新しく出すものはすべて W2000。行の「即発送」の印の行だけ W1000
    ・選んだ行を最低売値まで下げる Revise CSV
    ・3日ごとに $1 ずつ値下げ（半自動） */
-const { harness, openCsvBoxes } = require('./lib');
+const { harness, openCsvBoxes, clickCfg } = require('./lib');
 const T = harness('出品CSVタブ：配送ポリシーと値下げ');
 const ok = T.ok;
 (async()=>{
@@ -107,7 +107,7 @@ console.log('   '+JSON.stringify(pend));
 ok(pend.need==='W1000'&&pend.want==='W1000','★出品済みの行は変更の対象になる');
 ok(/配送ポリシー変更CSV（1件）/.test(pend.btn),'★ボタンに件数を出す');
 dlg.length=0; dl.length=0;
-await p.click('#csvShipCsv'); await p.waitForTimeout(400);
+await clickCfg(p,'#csvShipCsv'); await p.waitForTimeout(400);
 let L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L));
 ok(/ShippingProfileName/.test(L[1])&&L[2]==='Revise,110001,W1000',
@@ -119,7 +119,7 @@ ok(after.need===undefined&&after.sent==='W1000'&&!/（/.test(after.btn),
 // オフに戻すと W2000 に戻す CSV
 dlg.length=0; dl.length=0;
 await p.evaluate(()=>{ document.querySelector('#csvList button[data-fast="m1"]').click(); });
-await p.click('#csvShipCsv'); await p.waitForTimeout(400);
+await clickCfg(p,'#csvShipCsv'); await p.waitForTimeout(400);
 L=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   '+JSON.stringify(L));
 ok(L[2]==='Revise,110001,W2000','★オフに戻すと W2000 に戻す CSV が出る');

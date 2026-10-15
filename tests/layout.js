@@ -4,7 +4,7 @@
    ・設定は⚙の1か所。各タブは今の値を1行だけ出す
    ・畳んだ状態・開いた状態の保存
    ・整理しても書き出すCSVの中身と件数は変わらない */
-const { harness, openCsvBoxes } = require('./lib');
+const { harness, openCsvBoxes, clickCfg } = require('./lib');
 const T = harness('画面の整理（出品CSVタブ）');
 const ok = T.ok;
 (async()=>{
@@ -53,8 +53,8 @@ ok(/①取り込み/.test(st.head)&&/⑤結果ファイル/.test(st.head),
    '★画面の上に使い方の案内を出す');
 ok(/①/.test(st.txt[0])&&/リスト 3件/.test(st.txt[0]),'★①に今の件数を出す');
 ok(/書き出せる 1件/.test(st.txt[3]),'★④に書き出せる件数を出す');
-ok(st.go.join()==='csvImportBox,csvGenAll,csvListBox,csvExport,csvResBox',
-   '★押すとその場所へ移動する');
+ok(st.go.join()==='csvImportBtn,csvGenAll,csvListBox,csvExport,csvResBtn',
+   '★押すとその場所へ移動する（取り込みは2つのボタン）');
 // 残りがある手順は目立たせる
 const st2=await p.evaluate(()=>{
   csvRowById('p3').titleEn='';          // 英題なしを1件作る
@@ -66,17 +66,21 @@ const st2=await p.evaluate(()=>{
 console.log('   '+JSON.stringify(st2.txt));
 ok(/残り 1件/.test(st2.txt[1])&&st2.cls[1]==='todo','★残りがある手順は赤くする');
 ok(/確認 1件/.test(st2.txt[2]),'★写真・原産国・カテゴリの残りも数える');
-// 押すとその欄が開く
+// 押すとその欄が開く／そのボタンに移動する
 await setup();
-await p.evaluate(()=>{ $('csvImportBox').open=false; });
-await p.click('#csvSteps button[data-step="csvImportBox"]');
+await p.evaluate(()=>{ $('csvListBox').open=false; });
+await p.click('#csvSteps button[data-step="csvListBox"]');
 await p.waitForTimeout(150);
-ok(await p.evaluate(()=>$('csvImportBox').open===true),'★押すと畳んである欄が開く');
+ok(await p.evaluate(()=>$('csvListBox').open===true),'★押すと畳んである欄が開く');
+await p.click('#csvSteps button[data-step="csvImportBtn"]');
+await p.waitForTimeout(150);
+ok(await p.evaluate(()=>document.activeElement&&document.activeElement.id==='csvImportBtn'),
+   '★ボタンの手順は、そのボタンに移動する');
 
 console.log('\n=== いつも出すボタン ===');
 await setup();
 const vis=async(id)=>await p.isVisible('#'+id);
-for(const id of ['csvExport','csvExportPick','csvGenAll','csvImportBox','csvResBox',
+for(const id of ['csvExport','csvExportPick','csvGenAll','csvImportBtn','csvResBtn',
                  'csvListBox']){
   const v=await vis(id);
   console.log('   '+id+': '+v);
@@ -104,21 +108,47 @@ console.log('   '+JSON.stringify(hot));
 ok(hot.show!=='none'&&/（1件）/.test(hot.label)&&hot.hot,
    '★対象ができたら件数つきで出す');
 
-console.log('\n=== その他に畳む ===');
+console.log('\n=== 取り込みは2つのボタンを1行に並べる（6.46）===');
 await setup();
-const more=await p.evaluate(()=>{
-  const b=$('csvMoreBox');
-  return { open:b.open,
-    has:['csvTitleRedo','csvDropOn','csvDropOff','csvShipCsv','csvRevise',
-         'csvTrashBox','csvClear'].every(id=>b.contains($(id))),
-    last:(function(){ const all=Array.from(b.querySelectorAll('button'));
-      return all[all.length-1].id; })() };
+const imp=await p.evaluate(()=>{
+  const a=$('csvImportBtn'), b=$('csvResBtn');
+  const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+  return { gone:['csvImportBox','csvResBox'].map(id=>!!$(id)),
+    sameRow:Math.abs(ra.top-rb.top)<2, left:ra.left<rb.left,
+    hiddenFiles:[getComputedStyle($('csvFile')).display,
+                 getComputedStyle($('csvResFile')).display],
+    notes:$('tabCsv').innerHTML.indexOf('文字コードCP932')<0 };
 });
-console.log('   '+JSON.stringify(more));
-ok(more.open===false,'★「その他」は畳んである');
-ok(more.has,'★英題を作り直す・無在庫・数量更新CSV・ゴミ箱・リストを空にする が入っている');
-ok(more.last==='csvClear','★「リストを空にする」は一番下');
-ok(!(await vis('csvRevise'))&&!(await vis('csvClear')),'★畳むと中は見えない');
+console.log('   '+JSON.stringify(imp));
+ok(imp.gone.every(x=>x===false),'★折りたたみ（csvImportBox・csvResBox）は無くした');
+ok(imp.sameRow&&imp.left,'★2つのボタンが同じ行に左右で並ぶ');
+ok(imp.hiddenFiles.every(x=>x==='none'),'★ファイル選択は画面に出さない（ボタンから開く）');
+ok(imp.notes,'★欄の説明文は画面から外した（⚙設定の使い方マニュアルへ）');
+
+console.log('\n=== ときどき使う操作は⚙設定に移す（6.46）===');
+const moved=await p.evaluate(()=>{
+  const tab=$('tabCsv'), cfg=$('tabCfg');
+  const ids=['csvTitleRedo','csvDropOn','csvDropOff','csvShipCsv','csvRevise',
+             'csvRevisePrice','csvTrashBox','csvTrashAll','csvTrashPurge'];
+  return { inCfg:ids.every(id=>cfg.contains($(id))),
+    inTab:ids.some(id=>tab.contains($(id))),
+    clearInTab:tab.contains($('csvClear')),
+    moreGone:!$('csvMoreBox'),
+    note:$('csvClear').nextElementSibling.textContent };
+});
+console.log('   '+JSON.stringify(moved));
+ok(moved.moreGone,'★「その他（ときどき使う）」の折りたたみは無くした');
+ok(moved.inCfg&&!moved.inTab,
+   '★英題を作り直す・無在庫・配送ポリシー変更CSV・数量更新CSV・ゴミ箱は⚙設定にある');
+ok(moved.clearInTab,'★「リストを空にする」は出品CSVタブに残す');
+ok(/ときどき使う操作/.test(moved.note),'★ゴミ箱の場所を案内する');
+// 確認ダイアログは維持する
+dlg.length=0;
+await p.evaluate(()=>{ window.__n=csvList.length; });
+await p.click('#csvClear'); await p.waitForTimeout(300);
+console.log('   確認: '+JSON.stringify(dlg[0]));
+ok(dlg.length===1&&/よろしいですか|空にします/.test(dlg[0]||''),
+   '★「リストを空にする」は確認ダイアログを出す');
 
 console.log('\n=== 価格の操作は出品CSVタブに置かない ===');
 const gone=await p.evaluate(()=>['csvPriceCsv','csvFloorCsv','csvMarkRun','csvMarkBar',
@@ -146,17 +176,19 @@ console.log('\n=== 畳んだ状態でも書き出しの中身は変わらない 
 await setup();
 dlg.length=0; dl.length=0;
 await openCsvBoxes(p);
-await p.click('#csvRevise'); await p.waitForTimeout(500);
+// 数量更新CSVは⚙設定に移したので、設定画面を出して押す（動きは変わらない）
+await clickCfg(p,'#csvRevise'); await p.waitForTimeout(500);
 const qOpen=((dl[0]||{}).text||'').trim();
 console.log('   開いた状態: '+JSON.stringify(qOpen.split(/\r\n/)));
 await setup();
 dlg.length=0; dl.length=0;
-await p.evaluate(()=>{ $('csvMoreBox').open=false; $('csvRevise').click(); });
+// ⚙設定に移したあとも同じ中身（一覧を畳んだままでも変わらない）
+await p.evaluate(()=>{ $('csvListBox').open=false; $('csvRevise').click(); });
 await p.waitForTimeout(500);
 const qClosed=((dl[0]||{}).text||'').trim();
 console.log('   畳んだ状態: '+(qOpen===qClosed));
 ok(qOpen===qClosed&&qOpen.split(/\r\n/).length===4,
-   '★数量更新CSVは畳んでいても同じ（3件・同じ中身）');
+   '★数量更新CSVは⚙設定からでも同じ（3件・同じ中身）');
 // 書き出し（カテゴリごと）も同じ
 await setup();
 dlg.length=0; dl.length=0;
@@ -168,19 +200,19 @@ ok(ex.split(/\r\n/).length===3&&/B0CWGXZWNV/.test(ex),
 
 console.log('\n=== 開いた・畳んだ状態は端末に保存する ===');
 await p.evaluate(()=>{
-  $('csvMoreBox').open=true; $('csvMoreBox').dispatchEvent(new Event('toggle'));
+  $('csvListBox').open=true; $('csvListBox').dispatchEvent(new Event('toggle'));
 });
 await p.waitForTimeout(150);
 const ui=await p.evaluate(()=>JSON.parse(localStorage.getItem('pj:ui:v1')||'{}'));
 console.log('   '+JSON.stringify(ui));
-ok(ui.csvMore===true,'★開いた状態を保存する');
+ok(ui.csvList===true,'★開いた状態を保存する');
 await p.reload(); await p.waitForTimeout(500); await p.click('#tabD');
-ok(await p.evaluate(()=>$('csvMoreBox').open)===true,'★開き直しても開いたまま');
+ok(await p.evaluate(()=>$('csvListBox').open)===true,'★開き直しても開いたまま');
 await p.evaluate(()=>{
-  $('csvMoreBox').open=false; $('csvMoreBox').dispatchEvent(new Event('toggle'));
+  $('csvListBox').open=false; $('csvListBox').dispatchEvent(new Event('toggle'));
 });
 await p.waitForTimeout(150);
 await p.reload(); await p.waitForTimeout(500); await p.click('#tabD');
-ok(await p.evaluate(()=>$('csvMoreBox').open)===false,'★畳んだ状態も残る');
+ok(await p.evaluate(()=>$('csvListBox').open)===false,'★畳んだ状態も残る');
 await T.done();
 })();

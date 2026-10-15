@@ -71,11 +71,32 @@ function harness(title){
    ボタンは畳まれていると Playwright から押せないので、押す前に呼ぶ。 */
 async function openCsvBoxes(page){
   await page.evaluate(()=>{
-    ['csvMoreBox','csvListBox','csvTrashBox','syncPriceBox','syncMoreBox',
+    ['csvListBox','csvTrashBox','syncPriceBox','syncMoreBox',
      'syncListBox','csvStockBox','csvReviewBox'].forEach(function(id){
       var el=document.getElementById(id); if(el)el.open=true;
     });
   });
   await page.waitForTimeout(80);
 }
-module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath, openCsvBoxes };
+/* ⚙設定に移したボタン（6.46：英題の作り直し・無在庫オンオフ・配送ポリシー変更CSV・
+   数量更新CSV・ゴミ箱）を押す。畳んであるタブのボタンは Playwright から押せないので、
+   設定画面を出して押し、終わったら元のタブ（既定は出品CSV）に戻す。
+   動きは画面の置き場所が変わっただけで、ボタン自体は今までと同じ。
+   back に false を渡すと設定画面に残る（出品CSVタブに戻ると一覧と結果の文を
+   作り直すので、結果の文を読みたいときはこちらを使う）。 */
+async function clickCfg(page,sel,back){
+  await page.evaluate(()=>{
+    switchTab('G');
+    var el=document.getElementById('csvTrashBox'); if(el)el.open=true;
+  });
+  // 設定画面とボタンが出るのを待ってから押す（遅い端末でも落ちないように）
+  await page.waitForSelector('#tabCfg',{state:'visible'});
+  await page.waitForSelector(sel,{state:'visible'});
+  await page.click(sel);
+  await page.waitForTimeout(120);
+  if(back!==false){
+    await page.evaluate((b)=>{ switchTab(b); },back||'D');
+    await page.waitForTimeout(80);
+  }
+}
+module.exports={ ROOT, PAGE, harness, loadPlaywright, chromePath, openCsvBoxes, clickCfg };

@@ -2,7 +2,7 @@
    ・チェックがあればその行だけ
    ・ItemIDが無い行は除外して理由を出す
    ・「売値の見直しが要る行だけ」と組み合わせると、選んだ中の対象行だけ */
-const { harness, openCsvBoxes } = require('./lib');
+const { harness, openCsvBoxes, clickCfg } = require('./lib');
 const T = harness('出品CSVタブ：更新CSVの選択行');
 const ok = T.ok;
 (async()=>{
@@ -43,6 +43,16 @@ const setupRaw=async()=>await p.evaluate(()=>{
   csvSaveList(); csvRender(); $('csvListBox').open=true;
 });
 const lines=(i)=>(((dl[i]||{}).text)||'').trim().split(/\r\n/).filter(Boolean);
+/* 数量更新CSVは⚙設定に移した（6.46）ので、設定画面を出して押す。
+   結果の文（#csvExportNote）は出品CSVタブに戻ると作り直されるため、戻る前に読む。 */
+let csvNote='';
+const revise=async()=>{
+  await clickCfg(p,'#csvRevise',false);
+  await p.waitForTimeout(500);
+  csvNote=await p.textContent('#csvExportNote');
+  await p.evaluate(()=>{ switchTab('D'); });
+  await p.waitForTimeout(100);
+};
 /* 価格更新CSVは販売連携タブの出品データ（ItemID）で書き出す（6.31）。
    eBayに出ている売値＝いまの推奨売値（差0）から始める。 */
 // 販売連携タブの一覧で ItemID の行を選ぶ
@@ -68,7 +78,7 @@ const withSync=async()=>await p.evaluate(()=>{
 console.log('=== チェックなし：ItemIDのある3件 ===');
 await setup();
 dlg.length=0; dl.length=0;
-await p.click('#csvRevise'); await p.waitForTimeout(500);
+await revise();
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/^数量更新CSVを書き出します。/.test(dlg[0]||''),'確認ダイアログが出る');
 ok(/全件 3件（ItemIDのある行）/.test(dlg[0]||''),'★「全件 n件」と件数で出す');
@@ -79,7 +89,7 @@ let L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===5&&L.slice(2).map(x=>x.split(',')[1]).join()==='110001,110002,110003',
    '★ItemIDのある3件を書き出す');
-ok(/全件が対象です/.test(await p.textContent('#csvExportNote')),'結果にも全件と出す');
+ok(/全件が対象です/.test(csvNote),'結果にも全件と出す');
 
 console.log('\n=== チェックあり：その行だけ ===');
 await setup();
@@ -87,14 +97,14 @@ dlg.length=0; dl.length=0;
 await p.click('#csvList input[data-cpick="r2"]');
 await p.click('#csvList input[data-cpick="r3"]');
 await p.waitForTimeout(200);
-await p.click('#csvRevise'); await p.waitForTimeout(500);
+await revise();
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/選択した 2件のうち 2件/.test(dlg[0]||''),'★「選択した n件」と出す');
 L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===4&&L.slice(2).map(x=>x.split(',')[1]).join()==='110002,110003',
    '★選んだ2件だけを書き出す（全件3件ではない）');
-ok(/一覧で選んだ 2件/.test(await p.textContent('#csvExportNote')),'結果にも選んだ件数');
+ok(/一覧で選んだ 2件/.test(csvNote),'結果にも選んだ件数');
 
 console.log('\n=== 選んだ行に ItemID が無いものが混じるとき ===');
 await setup();
@@ -103,7 +113,7 @@ await p.click('#csvList input[data-cpick="r1"]');
 await p.click('#csvList input[data-cpick="r4"]');
 await p.click('#csvList input[data-cpick="r5"]');
 await p.waitForTimeout(200);
-await p.click('#csvRevise'); await p.waitForTimeout(500);
+await revise();
 console.log('   確認: '+JSON.stringify(dlg[0]));
 ok(/選択した 3件のうち 1件/.test(dlg[0]||''),'★選んだ3件のうち書き出すのは1件と出す');
 ok(/結果ファイルを取り込むか、行のItemID欄に入れてください/.test(dlg[0]||''),
@@ -111,7 +121,7 @@ ok(/結果ファイルを取り込むか、行のItemID欄に入れてくださ�
 L=lines(0);
 console.log('   '+JSON.stringify(L));
 ok(L.length===3&&/,110001,/.test(L[2]),'★ItemIDのある1件だけを書き出す');
-ok(/ItemIDのない 2件は対象外です/.test(await p.textContent('#csvExportNote')),
+ok(/ItemIDのない 2件は対象外です/.test(csvNote),
    '結果にも除外の件数を出す');
 
 console.log('\n=== 選んだ行すべてに ItemID が無いとき ===');
@@ -120,7 +130,7 @@ dlg.length=0; dl.length=0;
 await p.click('#csvList input[data-cpick="r4"]');
 await p.click('#csvList input[data-cpick="r5"]');
 await p.waitForTimeout(200);
-await p.click('#csvRevise'); await p.waitForTimeout(400);
+await revise();
 console.log('   '+JSON.stringify(dlg[0]));
 ok(/選んだ2件には ItemID が入っていません/.test(dlg[0]||''),'★そう知らせる');
 ok(dl.length===0,'★CSVは書き出さない');
@@ -186,7 +196,7 @@ p.removeAllListeners('dialog');
 const dlg2=[]; p.on('dialog',async d=>{ dlg2.push(d.message()); await d.dismiss(); });
 dl.length=0;
 await p.click('#csvList input[data-cpick="r1"]'); await p.waitForTimeout(200);
-await p.click('#csvRevise'); await p.waitForTimeout(500);
+await revise();
 ok(dlg2.length===1&&dl.length===0,'★キャンセルで書き出さない');
 await T.done();
 })();
