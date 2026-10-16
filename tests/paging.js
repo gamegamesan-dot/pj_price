@@ -1,5 +1,5 @@
-/* 一覧のページ分け（6.35・7.31）
-   ・25／50／100件ずつ。初期値25件。タブごとに別に覚える（⚙設定にも同じ項目）
+/* 一覧のページ分け（6.35・7.31・6.51）
+   ・10／25／50／100件ずつ。**初期値10件**。タブごとに別に覚える（⚙設定にも同じ項目）
    ・上と下に「‹ 前へ 1 2 3 … 70 次へ ›」と「全 1,734件中 26〜50件目」
    ・2ページ目から先は押したときに初めて描く
    ・ページ内を全て選択。選択はページを移っても残り、操作は全ページの選択行に効く
@@ -235,5 +235,69 @@ await p.click('#csvExport'); await p.waitForTimeout(800);
 const all=((dl[0]||{}).text||'').trim().split(/\r\n/);
 console.log('   全件の書き出し: '+all.length+'行');
 ok(all.length===2+60,'★全件の書き出しも60件のまま（ページ分けの影響を受けない）');
+console.log('\n=== 1ページの件数：10件を足し、既定を10件にした（6.51）===');
+const perOpt=await p.evaluate(()=>{
+  const opt=(id)=>Array.from($(id).options).map(o=>o.value);
+  return { csv:opt('csvPerPage'), csv2:opt('csvPerPage2'),
+           sync:opt('syncPerPage'), sync2:opt('syncPerPage2'),
+           sizes:PAGE_SIZES.slice(), def:PAGE_DEF };
+});
+console.log('   選択肢: '+JSON.stringify(perOpt));
+ok(perOpt.csv.join()==='10,25,50,100'&&perOpt.sync.join()==='10,25,50,100',
+   '★⚙設定の2つとも 10／25／50／100件');
+ok(perOpt.csv2.join()==='10,25,50,100'&&perOpt.sync2.join()==='10,25,50,100',
+   '★一覧の上の2つとも同じ選択肢');
+ok(perOpt.sizes.join()==='10,25,50,100'&&perOpt.def===10,'★既定は10件');
+/* 保存が無い状態で開き直すと10件。保存があればその値を優先する。 */
+await p.evaluate(()=>{ localStorage.removeItem('pj:csvcfg:v1'); });
+await p.reload(); await p.waitForTimeout(400);
+const perFresh=await p.evaluate(()=>({
+  csv:$('csvPerPage').value, csv2:$('csvPerPage2').value,
+  sync:$('syncPerPage').value, sync2:$('syncPerPage2').value,
+  cper:pagePer('csvPerPage'), sper:pagePer('syncPerPage') }));
+console.log('   はじめて開いたとき: '+JSON.stringify(perFresh));
+ok(perFresh.csv==='10'&&perFresh.sync==='10'&&perFresh.csv2==='10'&&perFresh.sync2==='10',
+   '★★保存が無ければ、2つのタブとも10件で始まる');
+ok(perFresh.cper===10&&perFresh.sper===10,'★ページ分けも10件で計算する');
+const perKept=await p.evaluate(()=>{
+  // 一覧の上で50件を選ぶ（⚙設定側にも同じ値が入る）
+  $('syncPerPage2').value='50';
+  $('syncPerPage2').dispatchEvent(new Event('change'));
+  $('csvPerPage2').value='25';
+  $('csvPerPage2').dispatchEvent(new Event('change'));
+  const o=JSON.parse(localStorage.getItem('pj:csvcfg:v1')||'{}');
+  return { sync:$('syncPerPage').value, csv:$('csvPerPage').value,
+           savedSync:o.syncPerPage, savedCsv:o.csvPerPage };
+});
+console.log('   選び直したあと: '+JSON.stringify(perKept));
+ok(perKept.sync==='50'&&perKept.csv==='25','★一覧で選ぶと⚙設定の値も同じになる');
+ok(perKept.savedSync==='50'&&perKept.savedCsv==='25','★端末に保存する');
+await p.reload(); await p.waitForTimeout(400);
+const perAgain=await p.evaluate(()=>({
+  csv:$('csvPerPage').value, sync:$('syncPerPage').value,
+  csv2:$('csvPerPage2').value, sync2:$('syncPerPage2').value }));
+console.log('   開き直し: '+JSON.stringify(perAgain));
+ok(perAgain.sync==='50'&&perAgain.csv==='25'&&perAgain.sync2==='50'&&perAgain.csv2==='25',
+   '★★保存した値は10件にしない（選んだ値を優先する）');
+/* 件数を変えたら1ページ目に戻す（6.35 からの決まり。10件でも同じ）。 */
+await setup();
+await p.evaluate(()=>{
+  $('syncPerPage2').value='10'; $('syncPerPage2').dispatchEvent(new Event('change'));
+});
+await p.waitForTimeout(150);
+await p.click('#syncPagerTop button[data-spage="2"]');
+await p.waitForTimeout(150);
+let perPg=await bar();
+console.log('   2ページ目: '+perPg.top.slice(0,46)+' / '+perPg.cards+'件');
+ok(perPg.cards===10&&/11〜20件目/.test(perPg.top),'★10件ずつで2ページ目は 11〜20件目');
+await p.evaluate(()=>{
+  $('syncPerPage2').value='25'; $('syncPerPage2').dispatchEvent(new Event('change'));
+});
+await p.waitForTimeout(150);
+perPg=await bar();
+console.log('   25件に変えたあと: '+perPg.top.slice(0,46)+' / '+perPg.cards+'件');
+ok(perPg.cards===25&&/1〜25件目/.test(perPg.top),
+   '★件数を変えたら1ページ目に戻る（全○件中 ○〜○件の出し方は今までどおり）');
+
 await T.done();
 })();

@@ -723,7 +723,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
             <label for="csvPageAll" style="flex:1" id="csvPageAllLabel">このページを全て選択</label>
           </div>
           <select id="csvPerPage2" style="flex:0 0 auto">
-            <option value="25" selected>25件ずつ</option>
+            <option value="10" selected>10件ずつ</option>
+            <option value="25">25件ずつ</option>
             <option value="50">50件ずつ</option>
             <option value="100">100件ずつ</option>
           </select>
@@ -859,7 +860,8 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
           <label for="syncPageAll" style="flex:1" id="syncPageAllLabel">このページを全て選択</label>
         </div>
         <select id="syncPerPage2" style="flex:0 0 auto">
-          <option value="25" selected>25件ずつ</option>
+          <option value="10" selected>10件ずつ</option>
+          <option value="25">25件ずつ</option>
           <option value="50">50件ずつ</option>
           <option value="100">100件ずつ</option>
         </select>
@@ -1241,11 +1243,11 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="note2" style="margin-top:0">使わないタブを隠せます。隠しても中身は消えません。いつでも戻せます。</div>
       <div class="row"><label>一覧の1ページ（出品CSV）</label>
         <select id="csvPerPage" style="flex:0 0 auto">
-          <option value="25" selected>25件</option><option value="50">50件</option><option value="100">100件</option>
+          <option value="10" selected>10件</option><option value="25">25件</option><option value="50">50件</option><option value="100">100件</option>
         </select></div>
       <div class="row"><label>一覧の1ページ（販売連携）</label>
         <select id="syncPerPage" style="flex:0 0 auto">
-          <option value="25" selected>25件</option><option value="50">50件</option><option value="100">100件</option>
+          <option value="10" selected>10件</option><option value="25">25件</option><option value="50">50件</option><option value="100">100件</option>
         </select></div>
       <div class="note2" style="margin-top:0">一覧は1ページずつ出します。2ページ目から先は、押したときに初めて描きます（最初に全部を描かないので、出品が増えても重くなりません）。一覧の上でも選べます。</div>
       <div class="chk"><input type="checkbox" id="uiHideShopee"><label for="uiHideShopee" style="flex:1">Shopee タブを隠す</label></div>
@@ -2110,12 +2112,16 @@ var UI_KEY='pj:ui:v1';
    ・選んだ行はページを移っても残る。操作は全ページの選択行に対して行う
    ・絞り込みを変えたら1ページ目に戻し、見えなくなった行の選択は外す */
 function num(n){ return String(Math.round(+n||0)).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
-var PAGE_SIZES=[25,50,100];
+/* 1ページの件数（6.51）。10件を先頭に足し、**既定は10件**にした
+   （スマホで1件ずつ見るので、25件でもスクロールが長すぎた）。
+   すでに選んで保存している値はそのまま優先される（csvLoadCfg が入れ直す）。 */
+var PAGE_SIZES=[10,25,50,100];
+var PAGE_DEF=10;
 var csvPage=1, syncPage=1;          // いま出しているページ（1始まり）
 var csvPageIds=[], syncPageIds=[];  // いまのページに出している行のキー
 function pagePer(id){
-  var n=+($(id)?$(id).value:25);
-  return (PAGE_SIZES.indexOf(n)>=0)?n:25;
+  var n=+($(id)?$(id).value:PAGE_DEF);
+  return (PAGE_SIZES.indexOf(n)>=0)?n:PAGE_DEF;
 }
 function pageMax(total,per){ return Math.max(1,Math.ceil(total/per)); }
 function pageClamp(page,total,per){
@@ -11763,7 +11769,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v149';   // sw.js の const V と必ず同じ値にする
+var APP_V='v150';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
