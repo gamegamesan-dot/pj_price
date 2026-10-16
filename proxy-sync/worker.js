@@ -15,7 +15,8 @@
  *   どちらからでもASINと新品/中古が取り出せる。
  *
  * Secrets / バインディング（値はリポジトリに書かない。wrangler secret put で登録）:
- *   PJ_ACCESS_KEY            … pj_price から送る共有キー（ヘッダー X-PJ-Key）
+ *   PJ_ACCESS_KEY            … pj_price から送る共有キー（ヘッダー X-PJ-Key・管理者）
+ *   STAFF_KEY                … 作業者用のキー（読み取りと名簿の送信だけ。7.40）
  *   LWA_CLIENT_ID / LWA_CLIENT_SECRET / SPAPI_REFRESH_TOKEN_FE
  *   EBAY_CLIENT_ID / EBAY_CLIENT_SECRET / EBAY_USER_REFRESH_TOKEN
  *   DISCORD_WEBHOOK_URL
@@ -147,15 +148,44 @@ function json(obj, status, origin) {
     headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders(origin) },
   });
 }
-// X-PJ-Key を定数時間で照合する（pj-title と同じ方式）
-function authorized(request, env) {
-  if (!env.PJ_ACCESS_KEY) return false;
-  const a = request.headers.get("X-PJ-Key") || "";
-  const b = env.PJ_ACCESS_KEY;
-  if (a.length !== b.length) return false;
+/* ---- キーの役割（7.40）----
+   admin … PJ_ACCESS_KEY（いままでのキー）。すべて使える。
+   staff … STAFF_KEY（作業者用）。英題生成・写真・取り込み（読み取り）・
+           名簿の送信だけ。**値段を動かす操作は 403**。
+   ''    … どちらとも一致しない（401）。
+   キーは定数時間で照合する（pj-title と同じ方式）。 */
+function eqKey(a, b) {
+  const x = String(a || ""), y = String(b || "");
+  if (!x || !y || x.length !== y.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
   return diff === 0;
+}
+function keyRole(request, env) {
+  const a = request.headers.get("X-PJ-Key") || "";
+  if (eqKey(a, env.PJ_ACCESS_KEY)) return "admin";
+  if (eqKey(a, env.STAFF_KEY)) return "staff";
+  return "";
+}
+function authorized(request, env) { return keyRole(request, env) !== ""; }
+/* 作業者用キーでは送れない項目（値段を動かす設定）。
+   名簿（SKU・ItemID・手元在庫・実重量・仕入値・相場）は送れる。 */
+const STAFF_DENY = ["md_step", "md_floor", "md_n", "md_start",
+                    "rv_want", "rv_floor", "rv_kind", "rv_max_cost"];
+function staffDenyFields(body) {
+  const list = Array.isArray(body && body.items) ? body.items : [];
+  const hit = {};
+  for (const x of list) {
+    if (!x || typeof x !== "object") continue;
+    for (const k of STAFF_DENY)
+      if (Object.prototype.hasOwnProperty.call(x, k) && x[k] !== null
+          && x[k] !== undefined) hit[k] = 1;
+  }
+  return Object.keys(hit);
+}
+function forbidStaff(detail, fields, origin) {
+  return json({ error: "forbidden_for_staff", detail: detail,
+                fields: fields || [] }, 403, origin);
 }
 
 /* ---- 実行ログの入れもの ----
@@ -3196,13 +3226,28 @@ export default {
     if (request.method === "OPTIONS")
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (origin && origin !== ALLOW_ORIGIN) return json({ error: "forbidden_origin" }, 403, origin);
-    if (!authorized(request, env)) return json({ error: "unauthorized" }, 401, origin);
+    const role = keyRole(request, env);
+    if (!role) return json({ error: "unauthorized" }, 401, origin);
+    /* 作業者用キー（STAFF_KEY）でできないこと（7.40）。
+       ・設定の送信（POST /settings）… 自動値下げ・自動反映の設定が入る
+       ・手動実行（POST /sync）… 「まとめて実行」もこれ
+       /listings の中の価格の設定（md_* / rv_*）は、その route で弾く。 */
+    if (role !== "admin" && request.method === "POST"
+        && (url.pathname === "/settings" || url.pathname === "/sync"))
+      return forbidStaff("価格の設定と実行は管理者用のキーが必要です"
+        + "（作業者用キーでできるのは 取り込み・名簿の送信・英題生成・写真です）",
+        [], origin);
     if (!env.DB) return json({ error: "server_misconfigured", detail: "DB" }, 500, origin);
     if (!env.SYNC_CACHE) return json({ error: "server_misconfigured", detail: "SYNC_CACHE" }, 500, origin);
     // 配送ポリシーの名前（pj_price の設定）。判定の前に一度だけ読む
     await shipNamesLoad(env);
 
     try {
+      /* どちらのキーで来ているか（pj_price が画面の出し分けに使う）。
+         秘密は返さない。 */
+      if (request.method === "GET" && url.pathname === "/whoami")
+        return json({ ok: true, role: role, staff_key_set: !!env.STAFF_KEY }, 200, origin);
+
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
 
@@ -3244,6 +3289,14 @@ export default {
       if (request.method === "POST" && url.pathname === "/listings") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        /* 名簿は作業者も送れる。値段を動かす設定（自動値下げの幅・見直しの目標）が
+           混ざっていたら、その回ぜんぶを断る（一部だけ書くと分かりにくいため）。 */
+        if (role !== "admin") {
+          const bad = staffDenyFields(body);
+          if (bad.length)
+            return forbidStaff("価格の設定（自動値下げ・見直しの目標）は"
+              + "管理者用のキーが必要です", bad, origin);
+        }
         return json(await putListings(env, body), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/sync") {
@@ -3302,7 +3355,8 @@ export default {
 
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
-export const __test = { assertReadOnly, parseSku, parseLabel, warnOf, noteOf, judgeRow,
+export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
+                        parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,

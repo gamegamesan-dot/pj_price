@@ -149,7 +149,39 @@ npx wrangler secret put EBAY_CLIENT_ID           # pj-title と同じ値
 npx wrangler secret put EBAY_CLIENT_SECRET       # pj-title と同じ値
 npx wrangler secret put EBAY_USER_REFRESH_TOKEN  # 1-3 で取得
 npx wrangler secret put DISCORD_WEBHOOK_URL      # keepa-hunter とは別チャンネル推奨
+npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・無くても動く）
 ```
+
+### 作業者用のキー（STAFF_KEY・7.40）
+
+知人と pj_price を共有するために、キーを2本にしてある。
+
+| キー | 登録 | できること |
+| --- | --- | --- |
+| `PJ_ACCESS_KEY`（管理者） | これまでどおり | すべて |
+| `STAFF_KEY`（作業者） | `npx wrangler secret put STAFF_KEY` | 下の表のとおり |
+
+```powershell
+npx wrangler secret put STAFF_KEY     # 作業者に渡すキー（管理者のキーとは別の値）
+npx wrangler deploy                   # 登録したらデプロイ
+```
+
+作業者に渡すのは **STAFF_KEY だけ**。pj_price の⚙設定「接続設定」で、
+英題生成のキー・pj-sync のキー・アップロードトークンの3つに同じ値を入れてもらう
+（3つの Worker が同じ STAFF_KEY を受け取る）。
+
+| 操作 | 管理者 | 作業者 |
+| --- | --- | --- |
+| 英題の生成（pj-title） | ○ | ○ |
+| 写真のアップロード・一覧・削除（pj-img） | ○ | ○ |
+| 状況の取り込み（`GET /status` `/runs` `/settings` `/orders/summary`） | ○ | ○ |
+| 名簿の送信（`POST /listings`。実重量・仕入値・相場・手元在庫の印） | ○ | ○ |
+| 最安値・数量・カタログの照会（`POST /lowest` `/cart-qty` `/catalog`） | ○ | ○ |
+| 設定の送信（`POST /settings`。自動値下げ・自動反映の設定） | ○ | **403** |
+| 手動実行（`POST /sync`。「まとめて実行」もこれ） | ○ | **403** |
+| 見直しの目標・自動値下げの設定（`/listings` の `rv_*` `md_*`） | ○ | **403** |
+| どちらのキーか（`GET /whoami`） | ○ | ○ |
+
 
 ### 1-6. デプロイ
 

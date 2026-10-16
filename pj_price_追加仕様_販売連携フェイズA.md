@@ -3159,6 +3159,70 @@ ALLOWED の EBAY_WRITE_CALLS = ["ReviseFixedPriceItem", "ReviseInventoryStatus"]
 テストは `tests/autorv.mjs`（70項目）と `tests/autorv.js`（44項目）。
 **Worker のデプロイと D1 の migrate-0018 が必要。**
 
+## 7.40 作業者用のキー（STAFF_KEY・2026-10-16・sw.js v151）
+
+知人と pj_price を共有するため、Worker のキーを**管理者用と作業者用の2本**にする。
+作業者は出品の作業（英題・写真・取り込み・名簿）ができ、**値段は動かせない**。
+
+### 1. キーと役割
+
+| キー | 置き場所 | 役割 |
+| --- | --- | --- |
+| `PJ_ACCESS_KEY` | pj-title / pj-sync（`X-PJ-Key`） | `admin`。今までどおりすべて |
+| `UPLOAD_TOKEN` | pj-img（`Authorization: Bearer`） | `admin`。今までどおり |
+| **`STAFF_KEY`** | 3つの Worker すべて（同じ値） | `staff`。下の表のとおり |
+
+- 3つの Worker に同じ `keyRole()`／`tokenRole()` を置き、**定数時間**でキーを照合する
+  （`eqKey`：長さが違えば即 false、空は通さない）。
+- `STAFF_KEY` を登録していなければ、これまでとまったく同じ動き（作業者キーは 401）。
+- `PJ_ACCESS_KEY` と同じ値を `STAFF_KEY` に入れた場合は admin が優先される。
+
+### 2. 作業者（staff）でできること・できないこと
+
+| 操作 | admin | staff |
+| --- | --- | --- |
+| 英題の生成（pj-title `/titles` `/figure-titles`） | ○ | ○ |
+| 写真（pj-img `/upload` `/list` `DELETE /i/...`） | ○ | ○ |
+| 取り込み（`GET /status` `/runs` `/settings` `/orders/summary` `/catalog/check`） | ○ | ○ |
+| 照会（`POST /lowest` `/cart-qty` `/catalog`） | ○ | ○ |
+| 名簿の送信（`POST /listings`） | ○ | ○ |
+| 設定の送信（`POST /settings`） | ○ | **403** |
+| 手動実行・まとめて実行（`POST /sync`。`approve` も） | ○ | **403** |
+| `/listings` に価格の設定（`md_step` `md_start` `md_floor` `md_n` `rv_want` `rv_floor` `rv_kind` `rv_max_cost`）が入っている回 | ○ | **403** |
+| どちらのキーか（`GET /whoami`） | ○ | ○ |
+
+```json
+403 { "error":"forbidden_for_staff",
+      "detail":"価格の設定（自動値下げ・見直しの目標）は管理者用のキーが必要です",
+      "fields":["rv_want","rv_floor","rv_kind","rv_max_cost"] }
+```
+
+- 名簿と価格の設定は**同じ `/listings`** を使うので、**価格の項目が1件でも混ざって
+  いたらその回ぜんぶを断る**（一部だけ書くと、どこまで入ったか分からなくなる）。
+  名簿が送る項目（SKU・ItemID・手元在庫の印・実重量・仕入値・相場・値下げの記録）は
+  そのまま通る。
+- `GET /whoami` は `{ok:true, role:'admin'|'staff', staff_key_set:true}` を返す。
+  **キーそのものは返さない**。
+
+### 3. pj_price 側（6.52）
+
+- 起動時と、キーの欄を変えたときに `/whoami` を聞いて役割を控える（`pj:role:v1`）。
+- 作業者のときは `<body class="staff">` を付け、CSS で価格の欄とボタンを隠す。
+- 聞けないとき（オフライン・キー未入力）は今までどおり admin として出す。
+  **最後の砦は Worker（403）** なので、押しても価格は動かない。
+
+### 4. 受け入れの手順
+
+1. `cd proxy-sync && npx wrangler secret put STAFF_KEY`（pj-title・pj-img でも同じ値を登録）
+2. 3つとも `npx wrangler deploy`
+3. 管理者のキーで今までどおり動くことを確認（取り込み・設定の送信・まとめて実行）
+4. 作業者のキーで：取り込み・名簿の送信・英題・写真ができ、
+   設定の送信と「まとめて実行」が 403 になることを確認
+5. 作業者の端末では⚙設定に価格の欄が出ないことを確認（画面にも案内が出る）
+
+テストは `tests/staff.mjs`（40項目・3つの Worker をまとめて見る）。
+**3つの Worker すべてデプロイが必要（D1 の変更は無い）。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

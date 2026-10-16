@@ -34,6 +34,7 @@ npx wrangler kv namespace create TITLE_CACHE
 ```
 cd proxy-title
 npx wrangler secret put PJ_ACCESS_KEY
+npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・英題生成は作業者も使える）
 npx wrangler secret put EBAY_CLIENT_ID
 npx wrangler secret put EBAY_CLIENT_SECRET
 npx wrangler secret put ANTHROPIC_API_KEY
@@ -152,3 +153,10 @@ pj_price 側は既定で**10件ずつ**送る。有料プラン（1,000まで）
 
 `/figure-titles` は10件で**実測35回**。すべてJANなし＋キーワード検索まで行く
 最悪ケースでも48回で、上限50にかなり近い。件数を増やすなら有料プランが要る。
+
+## 作業者用のキー（STAFF_KEY・7.40）
+
+`X-PJ-Key` は **`PJ_ACCESS_KEY`（管理者）か `STAFF_KEY`（作業者）のどちらか**で通る。
+英題の生成は作業者の仕事なので、どちらのキーでも同じように使える
+（違うキー・キー無しは今までどおり 401）。`STAFF_KEY` を登録していなければ、
+これまでと同じ（管理者のキーだけ）。登録・変更したら `npx wrangler deploy` が必要。

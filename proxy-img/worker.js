@@ -51,18 +51,28 @@ function json(obj, status, origin) {
   });
 }
 
-// Authorization: Bearer <token> を定数時間で照合する
-function authorized(request, env) {
-  if (!env.UPLOAD_TOKEN) return false;
-  const h = request.headers.get("Authorization") || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  if (!m) return false;
-  const a = m[1], b = env.UPLOAD_TOKEN;
-  if (a.length !== b.length) return false;
+/* ---- Authorization: Bearer <token> の役割（7.40）----
+   admin … UPLOAD_TOKEN（いままでのトークン）
+   staff … STAFF_KEY（作業者用。写真の仕事は作業者がするので、
+           一覧・アップロード・削除は**どちらでも使える**）
+   ''    … どちらとも一致しない（401）
+   トークンは定数時間で照合する。 */
+function eqKey(a, b) {
+  const x = String(a || ""), y = String(b || "");
+  if (!x || !y || x.length !== y.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
   return diff === 0;
 }
+function tokenRole(request, env) {
+  const h = request.headers.get("Authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  const a = m ? m[1] : "";
+  if (eqKey(a, env.UPLOAD_TOKEN)) return "admin";
+  if (eqKey(a, env.STAFF_KEY)) return "staff";
+  return "";
+}
+function authorized(request, env) { return tokenRole(request, env) !== ""; }
 
 // キーはサーバ側で決める: YYYYMMDD/<uuid>.<ext>
 function makeKey(ext) {
@@ -167,3 +177,6 @@ export default {
     return json({ error: "not_found" }, 404, origin);
   },
 };
+
+/* 受け入れテスト用。本番の動きには関与しない（fetch からは使わない）。 */
+export const __test = { tokenRole, eqKey, authorized };

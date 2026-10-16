@@ -133,6 +133,19 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .mbsmall{font-size:11px;font-weight:700;white-space:nowrap}
 /* カードの「計算の詳細」（6.48）。カードを短くするため、細かい計算はこの中。
    初期は閉じる。開けた行は端末に控えるので、次に開いたときも開いている。 */
+/* 作業者用キー（STAFF_KEY）で使っているときは、価格を変えるところを出さない（6.52）。
+   ほかの処理が display を書き替えても消えたままにするため !important を付ける。
+   最後の砦は Worker 側（403）で、こちらは誤操作を防ぐための見せ方。 */
+.staffonly{display:none}
+body.staff .staffonly{display:block}
+body.staff .cfgprice,
+body.staff #syncPriceBox,            /* 価格の操作（見直し・最低売値・値下げ） */
+body.staff #syncRestockBox,          /* 再調達で出し直すCSV */
+body.staff #syncMarkBar,
+body.staff #syncBarRev,
+body.staff #syncBarFloor,
+body.staff #syncBarMarkBtn,
+body.staff #syncOnHandFix{display:none !important}
 /* ⚙設定を使う頻度で3段に並べる（6.50）。
    上（よく変える）は初期から開き、中・下は畳む。見出しをタップで開閉する。 */
 .cfgband{font-size:11.5px;font-weight:800;color:var(--mute);letter-spacing:.04em;
@@ -766,6 +779,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <div class="warn" id="syncCutWarn" style="display:none;margin-bottom:8px"></div>
       <!-- 無在庫が上限を超えたときの警告（設定の「無在庫の上限」） -->
       <div class="warn" id="syncDropWarn" style="display:none;margin-bottom:8px"></div>
+      <div class="note2 staffonly" style="margin:0 0 6px;color:var(--bad);font-weight:700">作業者用のキーです。取り込み・名簿の送信・英題・写真はできますが、<b>価格を変える操作はできません</b>（管理者に連絡してください）。</div>
       <button class="btn primary" id="syncLoad" style="width:100%">状況を取り込む</button>
       <div class="note2" id="syncNote"></div>
       <!-- 今日やること。押すとその絞り込みになる（0件は薄く出す）。 -->
@@ -882,6 +896,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   <section>
     <div class="h">⚙ 設定</div>
     <div class="body">
+      <div class="note2 staffonly" style="margin-top:0;color:var(--bad);font-weight:700">作業者用のキーで使っています。価格の設定（値付けの目標・自動値下げ・売値の自動反映・相場・手数料）は管理者用のキーが必要なので、この画面には出していません。</div>
       <div class="note2" style="margin-top:0">設定はこの画面にまとめてあります。各タブには<b>いまの値を1行</b>だけ出します。変えた内容はこの端末に自動で保存されます（pj-sync に送るものは「値付けの目標」と配送ポリシー名です）。</div>
       <button class="btn" id="cfgBack" style="width:100%;margin-top:8px">前の画面に戻る</button>
     </div>
@@ -892,7 +907,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
        見出しをタップで開閉。開閉はこの端末に保存する（pj:cfggrp:v1）。
        要対応（キーが空・設定を送っていない）があるグループは自動で開く。 -->
   <div class="cfgband">よく変える<span class="cfgbandn">初期から開いています</span></div>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="advBox" data-cfgg="goal" open>
       <summary class="cfggsum">値付けの目標<span class="cfggn"></span></summary>
       <div class="body">
@@ -913,7 +928,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
     </details>
   </section>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="cfgMdBox" data-cfgg="md" open>
       <summary class="cfggsum">自動値下げ<span class="cfggn"></span></summary>
       <div class="body">
@@ -933,7 +948,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
     </details>
   </section>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="cfgRvBox" data-cfgg="rv" open>
       <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
       <div class="body">
@@ -944,7 +959,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
     </details>
   </section>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="cfgSoldBox" data-cfgg="sold" open>
       <summary class="cfggsum">相場の扱い<span class="cfggn"></span></summary>
       <div class="body">
@@ -961,7 +976,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
   </section>
 
   <div class="cfgband">ときどき変える<span class="cfgbandn">ふだんは畳んでおきます</span></div>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="cfgTuneBox" data-cfgg="tune">
       <summary class="cfggsum">見直しのしきい値・既定重量・梱包<span class="cfggn"></span></summary>
       <div class="body">
@@ -1040,7 +1055,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       </div>
     </details>
   </section>
-  <section>
+  <section class="cfgprice">
     <details class="cfgg" id="cfgFeeBox" data-cfgg="fee">
       <summary class="cfggsum">手数料・為替・関税などの計算の前提<span class="cfggn"></span></summary>
       <div class="body">
@@ -1141,7 +1156,7 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
       <button class="btn" id="csvShipCsv" style="width:100%;margin-top:8px">配送ポリシー変更CSV</button>
       <div class="note2" style="margin-top:0">出品はすべて <b>W2000</b>（再調達用）で出します。行の「即発送」をオンにした行だけ <b>W1000</b> です。出品済みの行で印を切り替えたら、このCSVでeBay側のポリシーを直します。</div>
       <button class="btn" id="csvRevise" style="width:100%;margin-top:8px">数量更新CSV</button>
-      <div class="chk" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
+      <div class="chk cfgprice" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
       <!-- ゴミ箱。消した行をすぐには捨てず、ここから元に戻せる。 -->
       <details id="csvTrashBox" style="margin-top:10px">
         <summary class="note2" style="margin:0;cursor:pointer" id="csvTrashSum">ゴミ箱（0件）</summary>
@@ -1633,6 +1648,8 @@ function advAdopt(d){
 }
 function advPush(){
   if(!syncUrl()||!syncApiKey()||!advAt)return;
+  /* 作業者用のキーでは設定を送れない（Worker が 403）。送らずに端末だけに保存する。 */
+  if(isStaff()){ advNote('この端末だけに保存しました（作業者用のキーです）'); return; }
   fetch(syncUrl()+'/settings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({ at:advAt, settings:advGet() })})
@@ -1659,7 +1676,8 @@ function advPull(){
       if(advAt&&(!at||advAt>at))advPush();                 // 端末のほうが新しい
     })['catch'](function(){});
 }
-function advSyncInit(){ advPull(); }
+/* 開いたときに D1 の設定と突き合わせ、どちらのキーかも聞く（6.52）。 */
+function advSyncInit(){ advPull(); roleCheck(); }
 // 詳細設定と相場入力は触るたびに引き直す。詳細設定は変えた値も保存する。
 ['baseProfit','linkRate','saleRate','usTaxRate','targetMode','soldPrice','soldOrigin']
   .forEach(function(id){
@@ -4066,6 +4084,10 @@ CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(e){
   if(CSV_CFG_SECRET.indexOf(id)>=0&&e&&e.isTrusted&&document.activeElement===this)
     csvSecretKeep(id,String(this.value||'').trim());
   csvSaveCfg(); csvRender(); cfgLineRender(); }); });
+/* キーを入れ替えたら、どちらのキーかを聞き直す（6.52）。 */
+['syncKey','csvTitleKey','syncApi'].forEach(function(id){
+  $(id).addEventListener('change',function(){ roleCheck(); });
+});
 /* 書き出しや別アプリから戻ったときに、空になったキーの欄を入れ直す。 */
 document.addEventListener('visibilitychange',function(){ if(!document.hidden)csvSecretFill(); });
 window.addEventListener('pageshow',csvSecretFill);
@@ -9018,6 +9040,7 @@ function syncRevHtml(r){
 /* forceAll＝true のときは「見直しが要る行だけ」の絞り込みを使わず、
    選んだ行すべてを見直し価格（上げも下げも）に変える（操作バーのボタン）。 */
 function syncRevRun(forceAll){
+  if(roleDenyPrice('syncPriceNote'))return;   // 価格更新CSVも管理者だけ（6.52）
   if(!syncData||!((syncData.items||[]).length)){
     alert('出品データがありません。「状況を取り込む」を押してください。'); return;
   }
@@ -9079,6 +9102,7 @@ $('syncPriceCsv').onclick=function(){ syncRevRun(); };
    仕入値は出品リスト → D1 → Amazon最安値の順に使うので、出品リストに行が
    残っていない古い出品でも下げられる。 */
 function syncFloorRun(){
+  if(roleDenyPrice('syncFloorNote'))return;
   var rows=syncPickRows();
   if(!rows.length){ alert('一覧のチェックで行を選んでください。'); return; }
   var go=[], skip=[];
@@ -9723,6 +9747,7 @@ function syncMdBarRender(){
 }
 /* 値下げ幅・最低売値・回数を D1 に送る。これを送るまで pj-sync は値下げしない。 */
 function syncMdSend(){
+  if(roleDenyPrice('syncMdNote'))return;      // 作業者用のキーでは送れない（6.52）
   var need=syncMdNeed();
   if(!need.length){ alert('送る行はありません（すべて設定済みです）。'); return; }
   var lines=need.slice(0,5).map(function(r){
@@ -9772,6 +9797,50 @@ $('syncMdNote').addEventListener('click',function(e){
   syncFilterSet('automd');
 });
 
+/* ================= 作業者用のキー（6.52 / 7.40）=================
+   知人と pj_price を共有するため、Worker のキーを2本にした。
+     管理者（PJ_ACCESS_KEY・いままでのキー）… すべて使える
+     作業者（STAFF_KEY）… 英題生成・写真・状況の取り込み（読み取り）・名簿の送信
+   作業者のキーでは **価格を動かす操作** が Worker 側で 403 になる
+   （設定の送信・手動実行＝まとめて実行・見直しの目標と自動値下げの設定）。
+   画面でも価格の欄とボタンを出さない（誤操作を防ぐため。最後の砦は Worker）。
+
+   どちらのキーかは pj-sync の /whoami に聞く。分からないときは今までどおり
+   admin として出す（Worker が断るので、できないことはできない）。 */
+var ROLE_KEY='pj:role:v1';
+var syncRole='admin';
+function isStaff(){ return syncRole==='staff'; }
+function roleLoad(){
+  try{ var v=localStorage.getItem(ROLE_KEY);
+       if(v==='staff'||v==='admin')syncRole=v; }catch(e){}
+}
+function roleSave(){ try{ localStorage.setItem(ROLE_KEY,syncRole); }catch(e){} }
+/* 画面の出し分け。body の印だけ付け替える（消す場所は CSS にまとめてある）。 */
+function roleApply(){
+  try{ document.body.classList[isStaff()?'add':'remove']('staff'); }catch(e){}
+}
+/* キーを聞きに行く（起動時と、キーの欄を変えたとき）。 */
+function roleCheck(){
+  if(!syncUrl()||!syncApiKey())return;
+  fetch(syncUrl()+'/whoami',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(d){
+      var r=(d&&(d.role==='staff'||d.role==='admin'))?d.role:'';
+      if(!r||r===syncRole)return;
+      syncRole=r; roleSave(); roleApply();
+      /* 価格の欄を出し入れしたので、いまの値の1行と一覧も作り直す。 */
+      try{ cfgLineRender(); }catch(e){}
+      try{ if(syncData)syncRender(); }catch(e){}
+    })['catch'](function(){});
+}
+/* 価格を動かすボタンの入口で使う。作業者のときは押しても何もしない
+   （ボタン自体は隠しているが、古い画面や履歴から呼ばれても止める）。 */
+function roleDenyPrice(noteId){
+  if(!isStaff())return false;
+  var msg='作業者用のキーでは価格の設定を送れません（管理者用のキーが必要です）。';
+  if(noteId&&$(noteId))$(noteId).textContent=msg; else alert(msg);
+  return true;
+}
 /* ================= pj-sync への送信と、その結果の見方（6.49）=================
    「見直しの目標を送る」で wrangler tail が Ok なのに画面が
    「送れませんでした（433件）」になった。原因は結果の見方が雑だったこと。
@@ -10024,6 +10093,7 @@ function syncRvBarRender(){
 /* 目標（売値・下限・判断・仕入値の上限）を D1 に送る。
    これを送るまで pj-sync は何も変えない。設定（モード・上限）も一緒に送る。 */
 function syncRvSend(){
+  if(roleDenyPrice('syncRvDone'))return;      // 作業者用のキーでは送れない（6.52）
   var need=syncRvNeed();
   if(!need.length){ alert('送る行はありません（すべて最新です）。'); return; }
   csvSecretFill();
@@ -10063,6 +10133,7 @@ $('syncRvSend').onclick=syncRvSend;
 /* 確認モードの承認。pj-sync に「いま実行してよい」と伝える。
    実際に変える値は pj-sync がその場で計算し直す（送った目標と D1 の売値から）。 */
 function syncRvGo(){
+  if(roleDenyPrice('syncRvDone'))return;      // 「まとめて実行」も管理者だけ（6.52）
   var pl=syncRvPlanRows();
   if(!pl.n){ alert('変える出品はありません。'); return; }
   csvSecretFill();
@@ -10097,6 +10168,7 @@ function syncRvGo(){
 $('syncRvGo').onclick=syncRvGo;
 /* 値下げ用の Revise CSV。書き出した日を D1 に控え、次の間隔はそこから数える。 */
 function syncMarkRun(){
+  if(roleDenyPrice('syncMarkNote'))return;
   var rows=syncMarkCsvRows();
   if(!rows.length){
     alert((autoMdMode()!=='off')
@@ -11426,6 +11498,7 @@ function syncRestockBuild(rows){
   return { text:out.join('\r\n')+'\r\n', cols:head.length, ship:ship };
 }
 $('syncRestock').onclick=function(){
+  if(roleDenyPrice('syncRestockNote'))return;   // 価格を変えるので管理者だけ（6.52）
   var rows=(syncData&&syncData.items)||[];
   var pick=rows.filter(function(r){
     return syncPick[r.asin+'|'+r.cond]&&String(r.ebay_item_id||'').trim();
@@ -11741,6 +11814,7 @@ $('addToCsv').onclick=function(){
 };
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+roleLoad(); roleApply();          // 作業者用キーなら価格の欄を出さない（6.52）
 uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
 syncSentLoad(); syncMoreLoad(); detLoad();
 /* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
@@ -11769,7 +11843,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v150';   // sw.js の const V と必ず同じ値にする
+var APP_V='v151';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

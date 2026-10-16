@@ -9,7 +9,8 @@
  * 用途ごとに分け、片方の障害や誤設定をもう片方へ波及させない。
  *
  * Secrets / バインディング（値はリポジトリに書かない。wrangler secret put で登録）:
- *   PJ_ACCESS_KEY           … pj_price から送る共有キー（ヘッダー X-PJ-Key）
+ *   PJ_ACCESS_KEY           … pj_price から送る共有キー（ヘッダー X-PJ-Key・管理者）
+ *   STAFF_KEY               … 作業者用のキー（英題生成は作業者も使える。7.40）
  *   EBAY_CLIENT_ID / EBAY_CLIENT_SECRET
  *   LWA_CLIENT_ID / LWA_CLIENT_SECRET
  *   SPAPI_REFRESH_TOKEN_FE  … 日本（FE）
@@ -166,16 +167,24 @@ function json(obj, status, origin) {
   });
 }
 
-// X-PJ-Key を定数時間で照合する
-function authorized(request, env) {
-  if (!env.PJ_ACCESS_KEY) return false;
-  const a = request.headers.get("X-PJ-Key") || "";
-  const b = env.PJ_ACCESS_KEY;
-  if (a.length !== b.length) return false;
+/* ---- キーの役割（7.40）----
+   admin … PJ_ACCESS_KEY（いままでのキー）／staff … STAFF_KEY（作業者用）。
+   英題の生成は**どちらでも使える**（作業者の仕事なので）。
+   キーは定数時間で照合する。 */
+function eqKey(a, b) {
+  const x = String(a || ""), y = String(b || "");
+  if (!x || !y || x.length !== y.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
   return diff === 0;
 }
+function keyRole(request, env) {
+  const a = request.headers.get("X-PJ-Key") || "";
+  if (eqKey(a, env.PJ_ACCESS_KEY)) return "admin";
+  if (eqKey(a, env.STAFF_KEY)) return "staff";
+  return "";
+}
+function authorized(request, env) { return keyRole(request, env) !== ""; }
 
 /* ---- JAN（EAN-13 / EAN-8）の検証（仕様3.4-1） ---- */
 function validJan(jan) {
@@ -1071,4 +1080,4 @@ export default {
 
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch からは使わない）。 */
-export const __test = { platformsIn, platformKey, filterCandidates };
+export const __test = { platformsIn, platformKey, filterCandidates, keyRole, eqKey };

@@ -50,6 +50,7 @@ openssl rand -base64 32
 ```sh
 cd proxy-img
 npx wrangler secret put UPLOAD_TOKEN
+npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・写真は作業者も送れる）
 # プロンプトに上で作った文字列を貼る
 ```
 
@@ -107,3 +108,11 @@ curl -sS -X DELETE "$BASE/i/20260925/xxxx.jpg" -H "Authorization: Bearer $TOKEN"
 - R2 の無料枠は保存10GB/月・Class A 100万回/月・Class B 1000万回/月。
   長辺1600pxのJPEGなら1枚300KB前後なので、月1,000枚でも0.3GB程度
 - 料金とレート制限は Cloudflare ダッシュボードで確認する。必要なら Rate Limiting ルールを足す
+
+## 作業者用のキー（STAFF_KEY・7.40）
+
+`Authorization: Bearer <token>` は **`UPLOAD_TOKEN`（管理者）か
+`STAFF_KEY`（作業者）のどちらか**で通る。写真の仕事（アップロード・一覧・
+差し替えのための削除）は作業者もするので、3つとも同じように使える
+（違うトークンは今までどおり 401）。`STAFF_KEY` を登録していなければこれまでと同じ。
+登録・変更したら `npx wrangler deploy` が必要。
