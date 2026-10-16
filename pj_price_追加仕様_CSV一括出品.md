@@ -3557,6 +3557,53 @@ syncMigrateHint(detail)
 回帰は44本・1,467項目すべて通った。
 **3つの Worker（pj-title・pj-sync・pj-img）のデプロイと `STAFF_KEY` の登録が必要。**
 
+## 6.53 ホーム画面の名前とアイコン（2026-10-16・sw.js v152）
+
+ホーム画面に「値付け」とだけ出ていて、何のアプリか分からなかった。
+出品ツールだと分かる名前と、独自のアイコンにする。
+
+### 1. 名前
+
+| | v151 まで | v152 |
+| --- | --- | --- |
+| ホーム画面（`short_name`・`apple-mobile-web-app-title`） | 値付け | **PJ出品** |
+| 正式名（manifest の `name`） | eBay 値付け計算機 — Play Japan | **Play Japan 出品ツール** |
+| `<title>` | eBay 値付け計算機 | Play Japan 出品ツール |
+| 画面上部の見出し（`header .t2`） | eBay 値付け計算機 | Play Japan 出品ツール |
+
+小さい見出し（`header .t1`）の `PLAY JAPAN / AKIHABARA` はそのまま。
+
+### 2. アイコン
+
+**値札（プライスタグ）に PJ** の形。色はアプリと同じ3色だけ。
+
+```
+黄色 #f5d400（--label）／縁 #d4b800（--label-edge）／黒 #1b1a17（--ink）
+```
+
+- eBay のロゴ・4色（赤青黄緑）・書体は**使っていない**。外から画像も読まない。
+- 下に `#d4b800` の帯を入れて、アプリのヘッダー（値札の帯）と同じ見え方にした。
+- `maskable`（丸く切られる）ので、中身は中心から**半径40%の中**に収めてある。
+- favicon（32px）は値札の形だと潰れるので、黄色の地に **PJ** だけの別デザイン。
+
+| ファイル | 大きさ | 元 |
+| --- | --- | --- |
+| `icon-512.png` | 512 | `icon-src.svg` |
+| `icon-192.png` | 192 | `icon-src.svg` |
+| `apple-touch-icon.png` | 180 | `icon-src.svg` |
+| `favicon-32.png` | 32 | `icon-src-32.svg` |
+
+- 元のSVGをリポジトリに置き、`node tools/make-icons.js`（Chromium で撮る）で
+  PNG を書き出す。**デザインを変えたときだけ**走らせて、PNGも一緒にコミットする。
+- `<link rel="icon">` と `apple-touch-icon` には `?v=151` を付けて、
+  古いアイコンが残らないようにした。
+- `sw.js` の先読みに `favicon-32.png` を足した（これまで入っていなかった）。
+
+テストは `tests/appname.js`（23項目）。PNG は Node の zlib で読んで、
+大きさと「使っている色が3色だけ」を機械的に確かめている。
+回帰は45本・1,490項目すべて通った。
+**pj_price だけの変更（Worker・D1 の変更は無い）。**
+
 ## 7. API連携（フェーズ2）
 
 ### 実装上の制約

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- pj_price のアプリアイコン（6.53）。
+     色はアプリと同じ 黄色 #f5d400 ／ 黒 #1b1a17 ／ 縁 #d4b800 だけ。
+     形は「値札（プライスタグ）」に PJ の文字。eBay のロゴ・4色・書体は使わない。
+     maskable（丸く切られる）ことを考えて、中身は中心から半径 40% の中に収めてある。
+     PNG は tools/make-icons.js（Chromium）で書き出す。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f5d400"/>
+  <!-- 下の縁。アプリのヘッダー（値札の帯）と同じ見え方にする -->
+  <rect y="470" width="512" height="42" fill="#d4b800"/>
+  <g transform="rotate(-10 256 256)">
+    <!-- 値札。左が尖った形 -->
+    <path d="M212 128 H392 a36 36 0 0 1 36 36 V348 a36 36 0 0 1 -36 36 H212 L96 256 Z"
+          fill="#1b1a17"/>
+    <!-- ひもを通す穴 -->
+    <circle cx="172" cy="256" r="21" fill="#f5d400"/>
+    <!-- 文字。PJ（Play Japan） -->
+    <text x="304" y="258" fill="#f5d400" font-size="150" font-weight="900"
+          letter-spacing="-6" text-anchor="middle" dominant-baseline="central"
+          font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', Arial, Helvetica, sans-serif">PJ</text>
+  </g>
+</svg>

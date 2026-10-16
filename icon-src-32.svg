@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- favicon（32px）用。小さいので値札の形は省き、黄色の地に PJ だけ（6.53）。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f5d400"/>
+  <rect y="446" width="512" height="66" fill="#d4b800"/>
+  <text x="246" y="244" fill="#1b1a17" font-size="285" font-weight="900"
+        letter-spacing="-14" text-anchor="middle" dominant-baseline="central"
+        font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', Arial, Helvetica, sans-serif">PJ</text>
+</svg>

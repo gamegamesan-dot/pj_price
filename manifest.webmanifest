@@ -1,7 +1,7 @@
 {
-  "name": "eBay 値付け計算機 — Play Japan",
-  "short_name": "値付け",
-  "description": "eBay輸出の仕入判断と値付けを、実送料と手数料から即座に計算します。",
+  "name": "Play Japan 出品ツール",
+  "short_name": "PJ出品",
+  "description": "eBay輸出の出品CSVづくりと値付け・販売連携を、実送料と手数料から計算します。",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

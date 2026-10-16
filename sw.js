@@ -1,12 +1,13 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v151';
+const V = 'pj-pricing-v152';
 const ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
-  './apple-touch-icon.png'
+  './apple-touch-icon.png',
+  './favicon-32.png'
 ];
 
 /* 先読みは必ずサーバーから取り直す（cache:'reload'）。
