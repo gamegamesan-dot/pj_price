@@ -643,6 +643,12 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
       <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
+      <!-- 選んだ行の売値の決め方をまとめて入れ替える（6.54） -->
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" id="csvSoldOn" style="flex:1 1 0;min-width:0;padding:9px 4px">選んだ行を相場で出す</button>
+        <button class="btn" id="csvSoldOff" style="flex:1 1 0;min-width:0;padding:9px 4px">目標利益に戻す</button>
+      </div>
+      <div class="note2" style="margin-top:0" id="csvSoldNote">相場（総額$）から送料を引いた値段で出します。相場が未入力の行はそのままです。</div>
       <button class="btn" id="csvGenAll" style="width:100%;margin-top:8px">英題と出品文を一括作成</button>
       <div class="note2" id="csvTitleNote"></div>
       <!-- 対象の行があるときだけ出す（csvGroupsRender が出し入れする）。 -->
@@ -4759,7 +4765,10 @@ function moneyBarHtml(o){
                     :(o.costTemp?'Amazon基準価格':esc(o.costNote||'')),
        '', !!o.costTemp)
     +mbCell('売値', price>0?num(esc(usd(price))):'—',
-       (price>0&&fx>0)?num('≈'+esc(yen(Math.round(price*fx/100)*100))):'', '')
+       (o.priceNote?('<span style="font-weight:700'
+                     +(o.priceBad?';color:var(--bad)':'')+'">'
+                     +esc(o.priceNote)+'</span>　'):'')
+       +((price>0&&fx>0)?num('≈'+esc(yen(Math.round(price*fx/100)*100))):''), '')
     /* 利益率（「97.2%」）は大きい数字の横に置くと枠からはみ出すので、
        下の小さい行に移した（6.48）。金額は全桁そのまま出す。 */
     +mbCell('利益',
@@ -4786,6 +4795,10 @@ function csvMoneyBar(r){
   return moneyBarHtml({ key:r.id, cost:cost, costTemp:csvCostIsTemp(r), costUnknown:unk,
     costNote:(csvCostFixed(r)?'手で直した値':''),
     price:price,
+    /* 「相場」で出す行は、売値の下に出どころを書く（6.54）。
+       最低売値で止めた行は赤で知らせる。 */
+    priceNote:csvSoldMode(r)?(csvSoldStart(r).under?'最低売値':'相場'):'',
+    priceBad:csvSoldMode(r)&&csvSoldStart(r).under,
     profit:unk?null:csvProfitAt(cost,r.weight,price,csvFlatOf(r)) });
 }
 /* 販売連携タブの帯。売値は**eBayに出ている今の売値**。
@@ -5458,7 +5471,47 @@ function csvAmzRecOf(r){
   var p=csvPriceFor(low,r.weight,csvFlatOf(r));
   return +p.price||0;
 }
+/* ================= 相場の値段で出す（6.54）=================
+   行の売値の決め方を「目標利益」（いままで）と「相場」から選べるようにする。
+   相場（総額$）は送料込みの金額なので、**その行の請求送料を引いた商品価格**が売値。
+     売値 ＝ 相場（総額$） − その行の請求送料
+   送料は重量と地帯で変わるので、行の重量（と封筒の固定送料）で計算する。
+   相場が未入力の行は選べない。最低売値（floor）を下回るときは最低売値で出す。 */
+function csvSoldPrice(r){
+  var sold=+(r||{}).sold||0; if(!(sold>0))return 0;
+  var v=csvWithItem(csvCostOf(r),r.weight,function(){
+    return csvWithFlat(csvFlatOf(r),function(){
+      var m=priceModel();
+      return Math.round((sold-m.zoneShipCharge(m.basisZone))*100)/100;
+    });
+  });
+  return (v>0)?v:0;
+}
+// この行の請求送料（相場から引く額）。画面の案内に出す
+function csvShipCharge(r){
+  var v=csvWithItem(csvCostOf(r),(r||{}).weight,function(){
+    return csvWithFlat(csvFlatOf(r),function(){
+      var m=priceModel();
+      return Math.round(m.zoneShipCharge(m.basisZone)*100)/100;
+    });
+  });
+  return v||0;
+}
+// この行は「相場」で出す指定か（相場が入っていないときは選べない）
+function csvSoldMode(r){
+  return String((r||{}).priceMode||'')==='sold'&&csvSoldPrice(r)>0;
+}
+/* 相場で出すときの売値。
+   v … 実際に出す値（最低売値を下回るときは最低売値）
+   raw … 相場から出した値／under … 最低売値を下回ったか */
+function csvSoldStart(r){
+  var raw=csvSoldPrice(r), fl=+r.floor||0;
+  var under=(raw>0&&fl>0&&raw<fl-0.005);
+  return { v:(under?fl:raw), raw:raw, floor:fl, under:under };
+}
 function csvStartPrice(r){
+  /* 「相場」で出す行は、相場から出した売値（最低売値で止める）。 */
+  if(csvSoldMode(r))return Math.round(csvSoldStart(r).v*100)/100;
   var base=+r.price||0, fl=+r.floor||0;
   /* フィギュアのみ（箱なし）は Amazonの箱付きの値段を基準にできない。
      無在庫（M-）は売れてから仕入れるので、これまでどおり仕入値基準で出す。 */
@@ -5534,6 +5587,7 @@ function csvMarkStopToggle(r){
    （Amazon基準で高めから始め、値下げで下げていく行）。 */
 function csvStartHtml(r){
   if(String(r.itemId||'').trim())return '';      // すでに出品済みの行には出さない
+  if(csvSoldMode(r))return '';                   // 相場で出す行は下の案内に任せる（6.54）
   var st=csvStartUp(r); if(!st)return '';
   var fl=+r.floor||0, step=csvMdStepOf(st,fl);
   return '<div class="note2" style="margin-top:4px">'
@@ -5542,6 +5596,23 @@ function csvStartHtml(r){
     +usd(st)+'（Amazon基準）で出し、'+usd(step)+' ずつ下げて最低 '+usd(fl)+' まで'
     +'（'+csvMarkDays()+'日ごと・'+csvMarkTimes()+'回）。推奨売値は '+usd(+r.price||0)
     +' です。</div>';
+}
+/* 「相場」で出す行の案内（6.54）。帯のすぐ下に1行で出す。
+   最低売値を下回ったときは赤で知らせ、最低売値で出すことを書く。 */
+function csvSoldPriceHtml(r){
+  if(!csvSoldMode(r))return '';
+  var o=csvSoldStart(r), G=csvShipCharge(r);
+  if(o.under)
+    return '<div class="note2" style="margin-top:3px;color:var(--bad);font-weight:700">'
+      +'<span style="display:inline-block;background:var(--bad);color:#fff;'
+      +'border-radius:2px;padding:1px 5px;font-size:11px;font-weight:700">相場</span>　'
+      +'相場の売値 '+usd(o.raw)+'（'+usd(+r.sold||0)+' − 送料 '+usd(G)+'）は'
+      +'最低売値 '+usd(o.floor)+' を下回るので、<b>最低売値で出します</b>。</div>';
+  return '<div class="note2" style="margin-top:3px">'
+    +'<span style="display:inline-block;background:#1f6f8a;color:#fff;border-radius:2px;'
+    +'padding:1px 5px;font-size:11px">相場で出す</span>　'
+    +usd(+r.sold||0)+' − 送料 '+usd(G)+' ＝ <b>'+usd(o.v)+'</b>'
+    +'（目標利益なら '+usd(+r.price||0)+'・最低売値 '+usd(o.floor)+'）</div>';
 }
 /* 行に出す値下げの案内。中身は販売連携タブと同じ（syncMarkHtml）。
    取り込みにその出品が無い行には出さない（記録は D1 にあるため）。 */
@@ -6000,6 +6071,17 @@ function csvRender(){
       +'<button class="btn" data-drop="'+r.id+'" style="padding:5px 8px;font-size:12px'
       +(r.dropship?';background:#0b6b8a;color:#fff;border-color:#0b6b8a':'')+'">無在庫：'
       +(r.dropship?'オン':'オフ')+'</button>'
+      /* 売値の決め方（6.54）。相場が未入力の行は「相場」を選べない。 */
+      +(function(){
+         var sold=csvSoldPrice(r), on=csvSoldMode(r);
+         return '<button class="btn" data-pmode="'+r.id+'"'
+           +(sold>0?'':' disabled')+' style="padding:5px 8px;font-size:12px'
+           +(on?';background:#1f6f8a;color:#fff;border-color:#1f6f8a':'')
+           +(sold>0?'':';opacity:.5')+'" title="'
+           +(sold>0?'相場（総額$）から送料を引いた値段で出します'
+                   :'相場（総額$）を入れると選べます')+'">売値：'
+           +(on?'相場':'目標利益')+(sold>0?'':'（相場が未入力）')+'</button>';
+       })()
       /* 即発送（W1000）。手動専用の印。押した行だけ出品用のポリシーで出す。
          出品済みの行は、押すとポリシーを変える Revise CSV の対象になる。 */
       +'<button class="btn" data-fast="'+r.id+'" style="padding:5px 8px;font-size:12px'
@@ -6040,6 +6122,8 @@ function csvRender(){
                    orig:r.titleJa})+'</div>'
       /* 仕入値・売値・利益の帯（6.43）。 */
       +csvMoneyBar(r)
+      /* 相場で出す行の案内（6.54）。売値の出どころなので帯のすぐ下に出す。 */
+      +'<div data-smode="'+r.id+'">'+csvSoldPriceHtml(r)+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
       /* 次にやること（6.48）。1行だけ出す。 */
       +csvNextHtml(r)
@@ -6086,6 +6170,7 @@ $('csvList').addEventListener('click',function(e){
         ||t.getAttribute('data-drop')||t.getAttribute('data-cart')
         ||t.getAttribute('data-loose')
         ||t.getAttribute('data-fast')||t.getAttribute('data-mstop')
+        ||t.getAttribute('data-pmode')
         ||t.getAttribute('data-ccond')
         ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
         ||t.getAttribute('data-uperr');
@@ -6142,6 +6227,12 @@ $('csvList').addEventListener('click',function(e){
     /* 出品済みの行は、eBay 側のポリシーも変える必要がある。
        いま出したい名前を控えておき、「配送ポリシー変更CSV」で書き出す。 */
     if(String(fr.itemId||'').trim())fr.shipNeed=csvShipProfileFor(fr);
+  }
+  else if(t.hasAttribute('data-pmode')){
+    /* 売値の決め方を入れ替える（6.54）。相場が入っていない行は何もしない。 */
+    var pr=csvList[i];
+    if(!(csvSoldPrice(pr)>0))return;
+    pr.priceMode=csvSoldMode(pr)?'target':'sold';
   }
   else if(t.hasAttribute('data-cart'))csvCartToggle(csvList[i]);
   else if(t.hasAttribute('data-loose'))csvLooseToggle(csvList[i]);
@@ -6250,6 +6341,18 @@ $('csvList').addEventListener('input',function(e){
   var jd=document.querySelector('#csvList [data-judge="'+id+'"]');
   if(jd)jd.textContent=csvJudgeText(r);
   csvMoneyRefresh(r);
+  /* 相場で出す行は売値も変わるので、案内とボタンもその場で入れ替える（6.54）。 */
+  var sm=document.querySelector('#csvList [data-smode="'+id+'"]');
+  if(sm)sm.innerHTML=csvSoldPriceHtml(r);
+  var pb=document.querySelector('#csvList [data-pmode="'+id+'"]');
+  if(pb){
+    var canSold=csvSoldPrice(r)>0;
+    pb.disabled=!canSold;
+    pb.style.opacity=canSold?'':'.5';
+    pb.textContent='売値：'+(csvSoldMode(r)?'相場':'目標利益')
+      +(canSold?'':'（相場が未入力）');
+  }
+  csvSoldBtnNote();
   $('csvCount').textContent=csvList.length;
 });
 // テキストエリアで Enter を押しても改行にしない（タイトルは1行）
@@ -7396,7 +7499,66 @@ function csvPickNote(){
        +'。この行だけを書き出します（不備・出品済みの行は同じ決まりで除きます）。')
     : '一覧の各カードの左上のチェックで選びます。';
   csvDropNote();   // 無在庫の一括ボタンの件数も合わせる
+  csvSoldBtnNote();// 「相場で出す」の件数も合わせる（6.54）
 }
+/* 選んだ行の売値の決め方をまとめて入れ替える（6.54）。
+   「相場で出す」は、相場（総額$）が入っている行だけが対象。 */
+function csvSoldIds(on){
+  var go=[], no=[];
+  csvPickIds().forEach(function(id){
+    var r=csvRowById(id); if(!r)return;
+    if(on){
+      if(csvSoldPrice(r)>0&&!csvSoldMode(r))go.push(r);
+      else if(!(csvSoldPrice(r)>0))no.push(r);
+    }else if(csvSoldMode(r))go.push(r);
+  });
+  return { go:go, no:no };
+}
+function csvSoldBtnNote(){
+  var on=csvSoldIds(true), off=csvSoldIds(false);
+  csvBtnHot('csvSoldOn',on.go.length>0,'選んだ行を相場で出す'+csvCountBadge(on.go.length));
+  $('csvSoldOn').disabled=!on.go.length;
+  $('csvSoldOn').style.opacity=on.go.length?'':'.5';
+  $('csvSoldOff').textContent='目標利益に戻す'+csvCountBadge(off.go.length);
+  $('csvSoldOff').disabled=!off.go.length;
+  $('csvSoldOff').style.opacity=off.go.length?'':'.5';
+  var n=csvList.filter(csvSoldMode).length;
+  $('csvSoldNote').textContent='相場（総額$）から送料を引いた値段で出します。'
+    +(on.no.length?('選んだ行のうち '+on.no.length+'件は相場が未入力なので、そのままです。'):'')
+    +(n?('　いま相場で出す行：'+n+'件。'):'');
+}
+function csvSoldRun(on){
+  var x=csvSoldIds(on);
+  if(!x.go.length){
+    alert(on
+      ? ('相場で出せる行がありません。\n'
+         +'一覧のチェックで行を選び、相場（総額$）を入れてください'
+         +(x.no.length?('（選んだ行のうち '+x.no.length+'件は相場が未入力）'):'')+'。')
+      : '目標利益に戻す行がありません（相場で出す指定の行を選んでください）。');
+    return;
+  }
+  var under=on?x.go.filter(function(r){ return csvSoldStart(r).under; }).length:0;
+  var lines=x.go.slice(0,5).map(function(r){
+    var o=csvSoldStart(r);
+    return '　・'+(r.titleJa||r.sku||r.id)+'：'+usd(+csvStartPrice(r)||0)
+      +' → '+usd(on?o.v:(+r.price||0))+(on&&o.under?'（最低売値）':'');
+  });
+  if(!confirm((on?'選んだ行を相場の値段で出します':'選んだ行を目標利益の売値に戻します')
+    +'（'+x.go.length+'件）。\n'+lines.join('\n')
+    +(x.go.length>5?('\n　…ほか'+(x.go.length-5)+'件'):'')+'\n'
+    +(under?('うち '+under+'件は相場が最低売値を下回るので、最低売値で出します。\n'):'')
+    +(on&&x.no.length?('相場が未入力の '+x.no.length+'件はそのままです。\n'):'')
+    +'よろしいですか？'))return;
+  x.go.forEach(function(r){ r.priceMode=on?'sold':'target'; });
+  csvSaveList(); csvRender();
+  $('csvSoldNote').textContent=(on
+    ? ('選んだ '+x.go.length+'件を相場の値段にしました。'
+       +(under?('うち '+under+'件は最低売値で出します。'):''))
+    : ('選んだ '+x.go.length+'件を目標利益の売値に戻しました。'))
+    +'　書き出すCSVの売値もこの値になります。';
+}
+$('csvSoldOn').onclick=function(){ csvSoldRun(true); };
+$('csvSoldOff').onclick=function(){ csvSoldRun(false); };
 /* 選んだ行をまとめて無在庫オン／オフにする。
    出品済み（ItemIDがある）行は、CustomLabel を M- に変えても eBay 側の出品は
    変わらないので対象外にする。そちらは販売連携タブのボタンで印を付ける。 */
@@ -11843,7 +12005,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v152';   // sw.js の const V と必ず同じ値にする
+var APP_V='v153';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
