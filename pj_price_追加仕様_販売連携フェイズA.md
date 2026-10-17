@@ -3223,6 +3223,49 @@ ALLOWED の EBAY_WRITE_CALLS = ["ReviseFixedPriceItem", "ReviseInventoryStatus"]
 テストは `tests/staff.mjs`（40項目・3つの Worker をまとめて見る）。
 **3つの Worker すべてデプロイが必要（D1 の変更は無い）。**
 
+## 7.41 写真を eBay 保管（EPS）にする：調べるための窓口（2026-10-17・sw.js v154）
+
+eBay アプリで価格を直すと**メイン画像だけ**エラーになる。pj-img（R2）の写真が
+Self Hosted 扱いで、Revise のたびにギャラリー画像を取りに来るのが原因と見ている。
+**この版では調べるための窓口だけ**を足す（出品の中身は変えない）。
+
+### 1. 分かったこと（着手前の調査）
+
+- **`UploadSiteHostedPictures`（Trading）は 2026-09-30 に廃止**された。
+  eBay の案内する移行先は **Media API の `createImageFromUrl`**。
+  → 預け先をこちらに変える（許可表にも Trading の写真APIは入れない）。
+- Media API：`POST https://apim.ebay.com/commerce/media/v1_beta/image/create_image_from_url`
+  （HTTPS のURLのみ・成功は **201**・`Location` に `.../image/{image_id}`）。
+  `GET .../image/{image_id}` が **`imageUrl`（i.ebayimg.com）と `expirationDate`** を返す。
+  **出品に使われない画像は期限で消える**（期限切れの取得は 404）。
+- Trading API は OAuth の**スコープを使わない**建て付け（ユーザートークンを
+  `X-EBAY-API-IAF-TOKEN` で渡す）。Media API（REST）は `Authorization: Bearer`。
+  必要スコープは公式に確認できなかったので、**試し打ちの 403 で判断する**。
+
+### 2. 足した窓口（どちらも管理者キーだけ）
+
+| | 中身 |
+| --- | --- |
+| `GET /ebay/item?id=<ItemID>` | GetItem（読み取り）。`PhotoDisplay`・`PictureSource`・`GalleryURL`・`PictureURL`（全枚数）・`ExternalPictureURL` を返し、**1枚目（メイン）とそれ以降を分けて**出す。`main_is_eps` / `rest_all_eps` で「メインだけ自前」かどうかが一目で分かる。元のXMLも1,500字まで付ける |
+| `POST /eps/test {url}` | ① R2 の写真をそのまま取って **状態・Content-Type・リダイレクトの有無・バイト数・縦横（長辺500px以上か）** を返す ② `createImageFromUrl` で預けて `image_id` → `getImage` で **i.ebayimg.com のURLと期限** を返す ③ **403 のときは eBay の本文をそのまま返す**（足りないスコープが分かる） |
+
+- 許可表（`ALLOWED`）に足したのは3つだけ：`GetItem`（Trading の読み取り）、
+  Media API の `create_image_from_url`（**書き込み**・`write:true` 必須）、
+  `getImage`（読み取り）。加えて pj-img の写真URL（`https://…/i/YYYYMMDD/<uuid>.jpg`）を
+  読み取りで取れるようにした。
+- **出品を変える呼び出しは1回もしない**（テストで固定）。
+
+### 3. 次（結果を見てから）
+
+`POST /eps` 本体・CSV 書き出し前の EPS 化・販売連携の「写真を eBay 保管に切り替え」は、
+**GetItem と試し打ちの結果を見てから**作る。確かめる点：
+i.ebayimg.com のURLが **File Exchange の `PicURL`** と
+**`ReviseFixedPriceItem` の `PictureURL`** の両方でそのまま使えるか／
+期限（`expirationDate`）が何日か（CSVを書き出してから出品するまでの猶予として画面に出す）。
+
+テストは `tests/epsdiag.mjs`（36項目）。回帰は47本・1,559項目すべて通った。
+**pj-sync のデプロイが必要（D1 の変更は無い）。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

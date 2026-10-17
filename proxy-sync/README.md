@@ -241,6 +241,8 @@ npx wrangler kv key delete --binding SYNC_CACHE "lwa:fe" --remote
 | POST | `/listings` | pj_price から名簿を登録（SKU・CustomLabel・ItemID・モード・一点物・FBA連動） |
 | POST | `/sync` | 手動実行（`kind=test-notify` は通知テスト）。`{"kind":"orders"\|"inventory"\|"rollcall"\|"sweep"\|"pricing"\|"notify","days":7,"max":25}` |
 | POST | `/sync` | 自動値下げ `{"kind":"markdown"}`（設定が `plan` のときは予定だけ） |
+| GET | `/ebay/item?id=<ItemID>` | **管理者キーのみ**。GetItem の `PictureDetails`（メインとそれ以降）を読む（7.41・読み取りだけ） |
+| POST | `/eps/test` | **管理者キーのみ**。`{"url":"https://…/i/YYYYMMDD/<uuid>.jpg"}` の写真を Media API で eBay に預けてみる（7.41・試し打ち） |
 | POST | `/sync` | 売値の見直しの自動反映 `{"kind":"review"}`。`{"kind":"review","approve":true}` は販売連携タブの「まとめて実行」＝確認モードでも実行する |
 
 `kind=orders` の `max` は、その回で明細（`getOrderItems`）を取る注文の数（既定25・最大120）。
