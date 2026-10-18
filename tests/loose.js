@@ -69,8 +69,9 @@ ok(imp.fig.kind==='loose'&&imp.fig.syncKey==='B0LOOSE001|loose',
 ok(imp.fig.cond===3000&&imp.fig.condName==='Used','★状態は Used（3000）');
 ok(imp.fig.one===false,'★一点物にしない（同じ出品を使い続ける）');
 console.log('   英題: '+imp.titleEn);
-ok(/Loose No Box$/.test(imp.titleEn)&&imp.titleEn.length<=80,
-   '★英題の末尾に Loose No Box が入る（80文字以内）');
+ok(/Loose No Box( Japan Import| Japan| Import)?$/.test(imp.titleEn)
+   &&imp.titleEn.length<=80,
+   '★英題に Loose No Box が入る（産地の語より前・80文字以内）');
 ok(/^Used /.test(imp.titleEn),'英題の先頭は Used');
 console.log('   ConditionDescription: '+imp.cd+' ／ 呼び名: '+imp.name);
 ok(imp.cd==='Figure only (no box)'&&imp.name==='フィギュアのみ',
@@ -102,7 +103,8 @@ console.log('   箱付き: '+JSON.stringify(tog.off));
 console.log('   箱なし: '+JSON.stringify(tog.on));
 ok(tog.off.loose===false&&tog.off.label==='E-B0LOOSE001-U'
    &&tog.off.kind==='used','★箱付きに切り替えると E-<ASIN>-U');
-ok(!/Loose/.test(tog.off.title)&&/Loose No Box$/.test(tog.on.title),
+ok(!/Loose/.test(tog.off.title)
+   &&/Loose No Box( Japan Import| Japan| Import)?$/.test(tog.on.title),
    '★英題の Loose No Box も連動して出し入れされる');
 ok(tog.off.cd===''&&tog.off.cond===3000,'箱付きでも状態は Used（フィギュアの表）');
 ok(tog.off.weight>tog.on.weight,

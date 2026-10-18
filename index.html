@@ -2704,29 +2704,57 @@ function headingTitle(){
   if(isArcade()) return $('aKind').value.trim()||makerName()||'Arcade Parts';
   return FIG_PTYPE;
 }
-// ゲームのタイトル：[Used] [機種] [ソフト名] [Japan Import]
+// ゲームのタイトル：[Used] [機種] [ソフト名] [Cartridge Only] [産地の語]
 // パブリッシャーは入れない（Item Specifics 用の入力欄としてだけ残す）。
-// Japan Import は最後尾に付けるが、80文字を超えるときだけ省く。
 // 書式はここ1か所。出品文タブも出品リストの一括生成も、同じ関数を通す。
 /* cartOnly のときは末尾に Cartridge Only を必ず入れる。
-   80文字を超えるときは Japan Import → ソフト名を短縮 の順に詰める
-   （Cartridge Only は落とさない。何を売っているかが伝わらなくなるため）。 */
+   本体が80文字を超えるときはソフト名を単語の区切りで詰める
+   （Cartridge Only は落とさない。何を売っているかが伝わらなくなるため）。
+   産地の語（Japan Import → Japan）は最後に titleJpTail で付ける（6.57）。 */
+/* 題名の上限（eBay は80文字）。 */
+var TITLE_MAX=80;
+/* 末尾に付ける産地の語（6.57）。組み立てが終わった題名を最後にここへ通す。
+   ・「 Japan Import」が80文字に収まれば付ける
+   ・入らなければ「 Japan」、それも入らなければ何も付けない（本体は削らない）
+   ・すでに Japan がある題名（ゲームの「Japan Ver.」など）には Japan を重ねず、
+     収まるときだけ「 Import」を足す
+   ・Import だけある題名には「 Japan」を足す。両方あるときは何もしない
+   状態の語（Cartridge Only / Loose No Box など）より後ろ＝一番最後に付く。 */
+function titleJpTail(t){
+  var s=String(t||'').trim();
+  if(!s)return { text:'', tail:'', need:false };
+  var jp=/\bjapan(ese)?\b/i.test(s), im=/\bimport(s|ed)?\b/i.test(s);
+  var list=(jp&&im)?[]:(jp?['Import']:(im?['Japan']:['Japan Import','Japan']));
+  for(var i=0;i<list.length;i++){
+    var n=s+' '+list[i];
+    if(n.length<=TITLE_MAX)return { text:n, tail:list[i], need:true };
+  }
+  return { text:s, tail:'', need:list.length>0 };
+}
+/* 産地の語を付けて返す。入らなかったときだけ「省いた」印を残す。 */
+function titleWithJp(body,dropped){
+  var j=titleJpTail(body);
+  if(j.need&&!j.tail)dropped.push('Japan Import');
+  else if(j.tail==='Japan')dropped.push('Import');
+  return { text:j.text, dropped:dropped };
+}
 function gameTitleFrom(used, platform, name, cartOnly){
   var pre=(used?'Used':''), pf=String(platform||'').trim(), nm=String(name||'').trim();
   var cart=cartOnly?CSV_CART_TITLE:'';
-  var join=function(n,jp){ return [pre,pf,n,cart,jp].filter(Boolean).join(' '); };
+  var join=function(n){ return [pre,pf,n,cart].filter(Boolean).join(' '); };
   if(![pre,pf,nm].filter(Boolean).length) return {text:'', dropped:[]};
-  var t=join(nm,'Japan Import');
-  if(t.length<=80) return {text:t, dropped:[]};
-  t=join(nm,'');
-  if(t.length<=80) return {text:t, dropped:['Japan Import']};
-  // ソフト名を単語の区切りで詰める（Cartridge Only が収まるまで）
-  var words=nm.split(/\s+/), short=nm;
-  while(words.length>1){
-    words.pop(); short=words.join(' ');
-    if(join(short,'').length<=80)break;
+  var dropped=[], body=join(nm);
+  /* 本体が入らないときだけソフト名を単語の区切りで詰める。
+     産地の語を入れるために本体を削ることはしない（6.57）。 */
+  if(body.length>TITLE_MAX){
+    var words=nm.split(/\s+/), short=nm;
+    while(words.length>1){
+      words.pop(); short=words.join(' ');
+      if(join(short).length<=TITLE_MAX)break;
+    }
+    body=join(short); dropped.push('ソフト名を短縮');
   }
-  return { text:join(short,''), dropped:['Japan Import','ソフト名を短縮'] };
+  return titleWithJp(body,dropped);
 }
 function buildGameTitle(){
   return gameTitleFrom($('gCond').value==='used', gamePlatform(), $('gTitle').value);
@@ -2734,19 +2762,18 @@ function buildGameTitle(){
 // アーケードパーツのタイトル：
 //   [Used] [メーカー] [型番] [色] [サイズ] [種類] [入数] [Japan Import]
 // 入数は1なら省き、2以上は「8pcs Set」の形。
-// 80文字を超えるときは Japan Import → サイズ の順に省く。
+// 80文字を超えるときはサイズを省き、産地の語（Japan Import → Japan）は
+// 最後に入るぶんだけ付ける（6.57）。
 function buildArcadeTitle(){
   var used=($('aCond').value==='used')?'Used':'';
   var maker=makerName(), model=$('aModel').value.trim();
   var kind=$('aKind').value.trim(), color=$('aColor').value.trim(), size=$('aSize').value.trim();
   var n=Math.round(+$('aQty').value||0), qty=(n>=2)?(n+'pcs Set'):'';
   if(!(maker||model||kind||color||size)) return {text:'', dropped:[]};
-  function join(sz,jp){ return [used,maker,model,color,sz,kind,qty,jp].filter(Boolean).join(' '); }
-  var t=join(size,'Japan Import');
-  if(t.length<=80) return {text:t, dropped:[]};
-  t=join(size,'');
-  if(t.length<=80) return {text:t, dropped:['Japan Import']};
-  return {text:join('',''), dropped:['Japan Import','サイズ']};
+  function join(sz){ return [used,maker,model,color,sz,kind,qty].filter(Boolean).join(' '); }
+  var dropped=[], body=join(size);
+  if(body.length>TITLE_MAX){ body=join(''); dropped.push('サイズ'); }
+  return titleWithJp(body,dropped);                       // 産地の語は最後に付ける（6.57）
 }
 /* フィギュアのタイトル。書式はここ1か所。
    [Used] ブランド 作品名 キャラクター [商品名] 版 スケール 商品ライン Figure
@@ -2757,7 +2784,7 @@ function buildArcadeTitle(){
    80字を超えたときは
      作品名を短縮 → キャラクター名を短縮 → ブランド → 版とスケール
        → 末尾の Figure（商品ラインがあるときだけ） → 商品ライン
-   の順に削る。縮めるほうが落とすより情報が残るので、短縮を先に試す。
+   の順に削る。産地の語（Japan Import → Japan）は最後に titleJpTail で付ける（6.57）。縮めるほうが落とすより情報が残るので、短縮を先に試す。
    商品ライン（Nendoroid / figma / S.H.Figuarts / POP UP PARADE）は
    それ自体でフィギュアと分かるので、末尾の Figure より優先して残す。
    最後の手段で商品ラインを落とすときは、品目が分からなくならないよう Figure を戻す。
@@ -2815,7 +2842,7 @@ function figTitleFrom(used, p, loose){
   if(t.length>80&&st.line){
     st.line=''; tail=tail0; dropped.push('商品ライン'); t=join();   // 品目が消えないよう Figure を戻す
   }
-  return {text:t, dropped:dropped};
+  return titleWithJp(t,dropped);                          // 産地の語は最後に付ける（6.57）
 }
 // 出品文タブの状態欄が中古を指しているか
 function condIsUsed(){ var c=condKey(); return c==='likenew'||c==='used'; }
@@ -12160,7 +12187,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v156';   // sw.js の const V と必ず同じ値にする
+var APP_V='v157';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

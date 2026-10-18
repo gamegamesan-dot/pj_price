@@ -3795,3 +3795,28 @@ eBayアプリで価格を直すと**メイン画像だけ**エラーになる出
 - iPhone（390px）で横にはみ出さないことをテストで固定した。
 
 テストは `tests/cardtop.js`（34項目）。`tests/card.js` と `tests/money.js` も新しい並びに合わせた。
+
+## 6.57 英題の末尾に「Japan / Japan Import」を付ける（2026-10-18・sw.js v157）
+
+英語タイトルを組み立てたあと、**一番最後**に産地の語を付ける。
+ゲーム（`/titles`）・フィギュア（`/figure-titles`）の両方に効く。
+
+1. 「 Japan Import」を付けて **80文字以内**なら「Japan Import」を付ける。
+2. 入らなければ「 Japan」。それも入らなければ**何も付けない**（本体は削らない）。
+3. すでに `Japan` がある題名（ゲームの「Japan Ver.」など）には **Japan を重ねない**。
+   80文字以内に入るときだけ「 Import」を足す（例：`… Nintendo Switch Japan Ver. Import`）。
+   `Import` だけある題名には「 Japan」を足す。両方あるときは何もしない。
+4. 状態の語（`Cartridge Only` / `Loose No Box` / `Figure`）**より後ろ**＝一番最後に付く。
+5. 「編集済み」の行は変えない。生成済みでまだ編集していない行は、再生成で新しい決まりが効く。
+6. 文字数カウンター（80超は赤・72超は黄）は、付けたあとの文字数で出る
+   （`titleEn` 自体に入るため、CSV に書き出す題名も同じ）。
+
+- 実装は `titleJpTail()` と `titleWithJp()` の2つだけ。`gameTitleFrom()`・`figTitleFrom()`・
+  `buildArcadeTitle()`（eBayタブのホビー）の最後で呼ぶ。上限は `TITLE_MAX=80`。
+- **pj-title（Worker）の変更は無い。** KV に残しているのは英語名（`english_name`）と
+  フィギュアの5項目だけで、題名は pj_price 側で組み立てているため、
+  組み立て直すだけで新しい決まりが効く（デプロイ不要）。
+- 付けられなかったときは、これまでと同じく「80文字に収めるため『Japan Import』を省きました」と出す。
+  「Japan」だけ付いたときは『Import』を省いたと出す。
+
+テストは `tests/jptail.js`（21項目）。`tests/loose.js` は末尾の照合を産地の語ぶん緩めた。
