@@ -174,11 +174,15 @@ const ccard=async()=>await p.evaluate(()=>{
   return { text:d.innerText.replace(/\n/g,' | '), open:!!(det&&det.open),
     detText:det?det.querySelector('.detbody').innerText.replace(/\n/g,' | '):'',
     hasSold:!!d.querySelector('[data-sold]'), hasMoney:!!d.querySelector('[data-money]'),
-    costInDet:!!(det&&det.querySelector('[data-cost]')),
     qtyInDet:!!(det&&det.querySelector('[data-qty]')),
     itemInDet:!!(det&&det.querySelector('[data-item]')),
-    enInDet:!!(det&&det.querySelector('[data-ten]')),
-    picInDet:!!(det&&det.querySelector('img')),
+    /* 6.56 で英題・写真・検索語は上に出し、仕入値の欄は
+       「仕入値」の枠タップで出すようにした。 */
+    enUp:!!(d.querySelector('[data-ten]')&&!(det&&det.querySelector('[data-ten]'))),
+    picUp:!!(d.querySelector('img')&&!(det&&det.querySelector('img'))),
+    kwUp:!!(d.querySelector('[data-kw]')&&!(det&&det.querySelector('[data-kw]'))),
+    costShown:!!d.querySelector('[data-cost]'),
+    costTap:!!d.querySelector('[data-costedit]'),
     btns:Array.from(d.querySelectorAll('[data-btns] button')).length };
 });
 let cc=await ccard();
@@ -188,8 +192,11 @@ ok(cc.hasMoney&&cc.hasSold&&cc.btns>0,
    '★帯・相場の入力・行のボタンは初期表示に出す');
 ok(!/ポリシー/.test(cc.text)&&!/しきい値/.test(cc.text),
    '★SKU・ポリシー・判定の内訳は初期表示に出さない');
-ok(cc.costInDet&&cc.qtyInDet&&cc.itemInDet&&cc.enInDet&&cc.picInDet,
-   '★仕入値・数量・ItemID・英題・写真は計算の詳細の中');
+ok(cc.qtyInDet&&cc.itemInDet,'★数量・ItemID は計算の詳細の中');
+ok(cc.enUp&&cc.picUp&&cc.kwUp,
+   '★★英題・写真・検索語は初期表示（計算の詳細の外）に出す（6.56）');
+ok(!cc.costShown&&cc.costTap,
+   '★★仕入値の欄は出さず、「仕入値」の枠タップで出す（6.56）');
 ok(/相場未確認/.test(cc.text)&&/基準：仕入値 ¥1,200（せどりすとCSV）/.test(cc.text),
    '★★「次にやること」と基準（どの仕入値で計算したか）を1行で出す');
 await openRowDet(p);

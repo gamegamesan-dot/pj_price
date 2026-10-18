@@ -4754,8 +4754,8 @@ function mbLenCls(main){
 }
 /* 帯の1枠。金額は .mbnum で囲んで「¥」と数字を離さない。
    枠に入らないときは、金額のかたまりごとに2行へ折り返す（省略はしない）。 */
-function mbCell(label,main,sub,col,dim){
-  return '<div class="mbcell">'
+function mbCell(label,main,sub,col,dim,attr){
+  return '<div class="mbcell"'+(attr||'')+'>'
     +'<div class="mblabel">'+esc(label)+'</div>'
     +'<div class="mbmain'+mbLenCls(main)+'" style="'+(col?('color:'+col+';'):'')
     +(dim?'opacity:.7':'')+'">'+main+'</div>'
@@ -4778,12 +4778,15 @@ function moneyBarHtml(o){
   var small=function(t){ return '<span class="mbsmall">'+t+'</span>'; };
   var num=function(t){ return '<span class="mbnum">'+t+'</span>'; };
   return '<div data-money="'+esc(o.key||'')+'" class="mbbar">'
-    +mbCell('仕入値',
+    /* costEdit が付いている行（出品CSVタブ）は、この枠をタップすると
+       その場で仕入値を直せる（6.56）。 */
+    +mbCell(o.costEdit?'仕入値 ✎':'仕入値',
        o.costUnknown?num('<span style="color:var(--bad)">未確定</span>')
                     :(num(esc(yen(cost)))+(o.costTemp?small('（仮）'):'')),
        o.costUnknown?'<span style="color:var(--bad)">仕入値を入れてください</span>'
                     :(o.costTemp?'Amazon基準価格':esc(o.costNote||'')),
-       '', !!o.costTemp)
+       '', !!o.costTemp,
+       o.costEdit?(' data-costedit="'+esc(o.costEdit)+'" style="cursor:pointer"'):'')
     +mbCell('売値', price>0?num(esc(usd(price))):'—',
        (o.priceNote?('<span style="font-weight:700'
                      +(o.priceBad?';color:var(--bad)':'')+'">'
@@ -4814,6 +4817,7 @@ function csvMoneyBar(r){
   var price=+csvStartPrice(r)||0;
   return moneyBarHtml({ key:r.id, cost:cost, costTemp:csvCostIsTemp(r), costUnknown:unk,
     costNote:(csvCostFixed(r)?'手で直した値':''),
+    costEdit:r.id,                     // 枠をタップで直せる（6.56）
     price:price,
     /* 「相場」で出す行は、売値の下に出どころを書く（6.54）。
        最低売値で止めた行は赤で知らせる。 */
@@ -5256,6 +5260,9 @@ function csvLinkBar(o){
   /* 短くしすぎて見つからないとき用。元の商品名そのままで売り切れを引く。 */
   if(o.orig&&String(o.orig).trim()&&String(o.orig).trim()!==String(o.kw||'').trim())
     h+=a(mercSoldUrl(String(o.orig).trim(),!!o.isNew),'元の名前で検索','#666');
+  /* bare のときは囲みを付けずにボタンだけ返す（6.56）。
+     検索語の欄と同じ並びに入れるため、囲みは呼ぶ側で作る。 */
+  if(o.bare)return h;
   return h?('<div style="display:flex;gap:5px;flex-wrap:wrap;margin:5px 0 2px">'+h+'</div>'):'';
 }
 
@@ -5364,22 +5371,25 @@ function csvFigFields(r){
    押すと行の原産国が確定し、「原産国：既定値」のバッジが消える。
    フィギュア・アーケードだけ（ゲームは Japan 固定）。 */
 var CSV_ORIGINS=['China','Japan','Vietnam'];
-function csvOriginBtns(r){
+/* 原産国の選択（6.56）。カテゴリと同じプルダウンにして隣に並べる。
+   まだ選んでいない行（既定値のまま）は「原産国：既定値」と出し、
+   黄色いバッジと同じ色にして目立たせる（バッジ自体も今までどおり出る）。 */
+function csvOriginSelect(r){
   if(r.cat==='139973')return '';
   var sp=r.specs||{}, cur=String(sp.origin||'').trim();
-  var h='';
+  var def=(!cur||!!sp.originDefault);              // 未選択（既定値のまま）
+  var h='<option value=""'+(def?' selected':'')+'>原産国：既定値'
+    +(cur?('（'+esc(cur)+'）'):'')+'</option>';
   CSV_ORIGINS.forEach(function(v){
-    var on=(cur===v&&!sp.originDefault);
-    h+='<button class="btn" data-orig="'+r.id+'" data-origv="'+esc(v)+'"'
-      +' style="padding:5px 8px;font-size:12px'
-      +(on?';background:var(--good);color:#fff;border-color:var(--good)':'')+'">'+esc(v)+'</button>';
+    h+='<option value="'+esc(v)+'"'+((!def&&cur===v)?' selected':'')+'>原産国：'
+      +esc(v)+'</option>';
   });
-  var other=(cur&&CSV_ORIGINS.indexOf(cur)<0&&!sp.originDefault);
-  h+='<button class="btn" data-orig="'+r.id+'" data-origv="*"'
-    +' style="padding:5px 8px;font-size:12px'
-    +(other?';background:var(--good);color:#fff;border-color:var(--good)':'')+'">'
-    +(other?esc(cur):'その他')+'</button>';
-  return h;
+  var other=(!def&&CSV_ORIGINS.indexOf(cur)<0);
+  h+='<option value="*"'+(other?' selected':'')+'>原産国：'
+    +(other?esc(cur):'その他')+'…</option>';
+  return '<select data-origsel="'+r.id+'" style="flex:0 0 auto;max-width:100%;padding:5px;'
+    +'font-size:12px;border:1px solid '+(def?'#8a6d00':'var(--line)')+';border-radius:2px;'
+    +'background:'+(def?'#fff6d6':'#fcfbf8')+(def?';color:#8a6d00':'')+'">'+h+'</select>';
 }
 // テキストエリアの高さを中身に合わせる（最低の高さは min-height が決める）
 function csvTaFit(el){
@@ -5997,35 +6007,12 @@ function csvRender(){
     var v=csvVerdict(r);              // 下の「Amazon優先でも出す」ボタンで使う
     var judge=csvJudgeText(r);
     /* 「計算の詳細」の中身（6.48）。カードを短くするため、
-       検索語・SKU・判定の内訳・写真・仕入値・英題・数量とItemID・
-       値下げや復活の案内はこの折りたたみに入れる。 */
+       SKU・判定の内訳・数量とItemID・値下げや復活の案内はこの折りたたみに入れる。
+       検索語・写真・英題は上に出し、仕入値の欄は「仕入値」の枠タップに移した（6.56）。 */
     var det=''
-      +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">'
-      +'<span class="note2" style="margin:0;flex:0 0 auto">検索語</span>'
-      +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
-      +' placeholder="検索語（空にすると商品名から作り直します）"'
-      +' style="flex:1 1 0;min-width:0;padding:5px 6px;font-size:12.5px;'
-      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
-      +'<div class="note2" data-sum="'+r.id+'" style="margin-top:2px">'
+      +'<div class="note2" data-sum="'+r.id+'">'
       +esc(csvRowSummary(r))+'</div>'
       +'<div class="note2" data-judge="'+r.id+'" style="margin-top:2px">'+esc(judge)+'</div>'
-      +csvPicThumbs(r,'l')
-      /* 仕入値（税込・円）。せどりすとの入力間違いをここで直す。
-         SKUは変えないので、Amazon側のSKUとは一致したままになる。 */
-      +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
-      +'<span class="note2" style="margin:0;flex:0 0 auto">仕入値</span>'
-      /* 仮の仕入値（仕入れ前の候補）の行は、欄を空にして仮の値を薄く出す
-         （0 と出ていると紛らわしいため）。入れた値は今までどおり優先する。 */
-      +'<input type="number" min="0" step="1" inputmode="numeric" data-cost="'+r.id+'" value="'
-      +esc((+r.cost>0||!r.costTemp)?r.cost:'')+'"'
-      +(csvCostIsTemp(r)?(' placeholder="'+esc(csvAmzBase(r))+'（仮）"'):'')
-      +' style="flex:0 0 84px;min-width:0;padding:6px;font-size:14px;text-align:right;'
-      +'border:1px solid '+(csvCostLow(r)?'var(--bad)':'var(--line)')+';border-radius:2px;'
-      +'background:#fcfbf8">'
-      +'<span class="note2" style="margin:0;flex:0 0 auto">円</span>'
-      +'<span class="note2" data-coststat="'+r.id+'" style="margin:0;flex:1 1 0;min-width:0'
-      +(csvCostLow(r)?';color:var(--bad);font-weight:700':'')+'">'+esc(csvCostStat(r))+'</span></div>'
-      +csvTitleBox(r)
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">数量</span>'
       +'<input type="number" min="0" step="1" inputmode="numeric" data-qty="'+r.id+'" value="'
@@ -6066,12 +6053,12 @@ function csvRender(){
       +'margin-top:4px">'+csvPicBtn(r);
     /* カテゴリの選択はどの行にも出す。ゲームの行にも出さないと、
        取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
-    btns+=csvCatSelect(r);
+    /* カテゴリと原産国は同じ形のプルダウンで並べる（6.56）。 */
+    btns+=csvCatSelect(r)+csvOriginSelect(r);
     if(v==='amazon')
       btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
-    btns+=csvOriginBtns(r)
-      +'<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
+    btns+='<button class="btn" data-one="'+r.id+'" style="padding:5px 8px;font-size:12px">一点物：'
       +(r.oneOff?'オン':'オフ')+'</button>'
       /* 箱なしで出す印。ゲームは「カートリッジのみ」、フィギュアは「フィギュアのみ」。
          どちらも箱付きに戻せる（箱の状態が良いものは箱付きで出すため）。 */
@@ -6135,13 +6122,27 @@ function csvRender(){
       +' style="flex:0 0 auto;margin-top:3px">'
       +'<span style="flex:1 1 0;min-width:0">'+esc(r.titleJa||r.titleEn||'(無題)')+'</span>'
       +'</div>'
-      /* 相場を調べるリンク。見出しのすぐ下に小さく並べる。 */
-      +'<div data-links="'+r.id+'">'
+      /* 英題（6.56）。日本語タイトルのすぐ下に置く。 */
+      +csvTitleBox(r)
+      /* 写真（6.56）。英題の下、検索リンクの上。 */
+      +csvPicThumbs(r,'l')
+      /* 相場を調べるリンクと検索語（6.56）。同じ並びに入れる。
+         検索語を打つとリンクだけ作り直すので、入れ物は分けてある
+         （同じ入れ物に入れると、打っている途中で欄が消える）。 */
+      +'<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:5px 0 2px">'
+      +'<span data-links="'+r.id+'" style="display:contents">'
       +csvLinkBar({asin:r.asin,kw:csvKwOf(r),en:csvEbayKw(r.titleEn),
                    isNew:(r.condId===1000),kwManual:csvKwManual(r),
-                   orig:r.titleJa})+'</div>'
-      /* 仕入値・売値・利益の帯（6.43）。 */
+                   orig:r.titleJa,bare:true})+'</span>'
+      +'<input type="text" data-kw="'+r.id+'" value="'+esc(csvKwOf(r))+'"'
+      +' placeholder="検索語"'
+      +' style="flex:1 1 110px;min-width:88px;padding:5px 6px;font-size:12.5px;'
+      +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8">'
+      +'</div>'
+      /* 仕入値・売値・利益の帯（6.43）。「仕入値」の枠をタップすると
+         下の欄（data-costbox）が開いて、その場で直せる（6.56）。 */
       +csvMoneyBar(r)
+      +'<div data-costbox="'+r.id+'" style="display:none"></div>'
       /* 相場で出す行の案内（6.54）。売値の出どころなので帯のすぐ下に出す。 */
       +'<div data-smode="'+r.id+'">'+csvSoldPriceHtml(r)+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
@@ -6180,6 +6181,39 @@ function csvRender(){
   });
   $('csvLog').innerHTML=lh||'<div class="note2">ログはまだありません。</div>';
 }
+/* 「仕入値」の枠をタップしたら、その場で直せる欄を帯の下に出す（6.56）。
+   帯は仕入値を打つたびに作り直すので、欄は帯の外（data-costbox）に置く。
+   もう一度タップすると閉じる。 */
+function csvCostEditHtml(r){
+  return '<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
+    +'<span class="note2" style="margin:0;flex:0 0 auto">仕入値</span>'
+    /* 仮の仕入値（仕入れ前の候補）の行は、欄を空にして仮の値を薄く出す
+       （0 と出ていると紛らわしいため）。入れた値は今までどおり優先する。 */
+    +'<input type="number" min="0" step="1" inputmode="numeric" data-cost="'+r.id+'" value="'
+    +esc((+r.cost>0||!r.costTemp)?r.cost:'')+'"'
+    +(csvCostIsTemp(r)?(' placeholder="'+esc(csvAmzBase(r))+'（仮）"'):'')
+    +' style="flex:0 0 84px;min-width:0;padding:6px;font-size:14px;text-align:right;'
+    +'border:1px solid '+(csvCostLow(r)?'var(--bad)':'var(--line)')+';border-radius:2px;'
+    +'background:#fcfbf8">'
+    +'<span class="note2" style="margin:0;flex:0 0 auto">円</span>'
+    +'<span class="note2" data-coststat="'+r.id+'" style="margin:0;flex:1 1 0;min-width:0'
+    +(csvCostLow(r)?';color:var(--bad);font-weight:700':'')+'">'
+    +esc(csvCostStat(r))+'</span></div>';
+}
+$('csvList').addEventListener('click',function(e){
+  var t=e.target;
+  while(t&&t!==this&&!(t.getAttribute&&t.getAttribute('data-costedit')))t=t.parentNode;
+  if(!t||t===this)return;
+  var id=t.getAttribute('data-costedit');
+  var box=document.querySelector('#csvList [data-costbox="'+id+'"]');
+  var rc0=csvRowById(id);
+  if(!box||!rc0)return;
+  if(box.innerHTML){ box.innerHTML=''; box.style.display='none'; return; }
+  box.innerHTML=csvCostEditHtml(rc0);
+  box.style.display='';
+  var inp=box.querySelector('[data-cost]');
+  if(inp){ inp.focus(); if(inp.select)inp.select(); }
+});
 $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   /* eBayカタログの候補は「行ID|ePID」を持つので、行IDの照合より先に処理する。 */
@@ -6192,25 +6226,11 @@ $('csvList').addEventListener('click',function(e){
         ||t.getAttribute('data-fast')||t.getAttribute('data-mstop')
         ||t.getAttribute('data-pmode')
         ||t.getAttribute('data-ccond')
-        ||t.getAttribute('data-regen')||t.getAttribute('data-orig')
+        ||t.getAttribute('data-regen')
         ||t.getAttribute('data-uperr');
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
-  if(t.hasAttribute('data-orig')){
-    var ov=t.getAttribute('data-origv');
-    if(ov==='*'){
-      var cur=String((csvList[i].specs||{}).origin||'');
-      var v=prompt('原産国を入力してください（eBayに出る表記）', CSV_ORIGINS.indexOf(cur)<0?cur:'');
-      if(v===null)return;
-      v=String(v).trim(); if(!v)return;
-      ov=v;
-    }
-    var sp=csvList[i].specs=csvList[i].specs||{};
-    // 手で確定した印。以後どの処理でも上書きしない（英題の再生成でも残る）
-    sp.origin=ov; sp.originDefault=false; sp.originManual=true;
-    csvSaveList(); csvRender(); return;
-  }
   if(t.hasAttribute('data-regen')){
     if(!String($('csvTitleApi').value||'').trim()){
       alert('設定の「英語タイトル生成のURL」を入れてください。'); return; }
@@ -6329,7 +6349,7 @@ $('csvList').addEventListener('input',function(e){
     var lb=document.querySelector('#csvList [data-links="'+kid+'"]');
     if(lb)lb.innerHTML=csvLinkBar({asin:rk.asin,kw:csvKwOf(rk),
       en:csvEbayKw(rk.titleEn),isNew:(rk.condId===1000),
-      kwManual:csvKwManual(rk),orig:rk.titleJa});
+      kwManual:csvKwManual(rk),orig:rk.titleJa,bare:true});
     return;
   }
   var cid=t.getAttribute('data-cost');
@@ -6416,6 +6436,25 @@ $('csvList').addEventListener('change',function(e){
     rp.specs=rp.specs||{};
     rp.specs.platform=pk?pk.spec:'';
     csvSaveList(); csvRender(); return;      // 表示が入れ替わるので作り直す
+  }
+  /* 原産国（6.56）。「その他…」は今までどおり入力して決める。
+     「既定値」を選び直したときは何も変えない（確定を取り消す道は作らない）。 */
+  var oid=t.getAttribute('data-origsel');
+  if(oid){
+    var ro=csvRowById(oid); if(!ro)return;
+    var ov=String(t.value||'');
+    if(!ov){ csvRender(); return; }            // 既定値のまま
+    if(ov==='*'){
+      var cur0=String((ro.specs||{}).origin||'');
+      var v=prompt('原産国を入力してください（eBayに出る表記）',
+                   CSV_ORIGINS.indexOf(cur0)<0?cur0:'');
+      if(v===null||!String(v).trim()){ csvRender(); return; }
+      ov=String(v).trim();
+    }
+    var sp=ro.specs=ro.specs||{};
+    // 手で確定した印。以後どの処理でも上書きしない（英題の再生成でも残る）
+    sp.origin=ov; sp.originDefault=false; sp.originManual=true;
+    csvSaveList(); csvRender(); return;
   }
   var cid=t.getAttribute('data-cat');
   if(cid){
@@ -12121,7 +12160,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v155';   // sw.js の const V と必ず同じ値にする
+var APP_V='v156';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

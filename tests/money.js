@@ -52,12 +52,14 @@ const band=async(asin)=>await p.evaluate((a)=>{
     label:d.children[0].textContent, main:d.children[1].textContent,
     sub:d.children[2].textContent, col:d.children[1].style.color,
     dim:d.children[1].style.opacity }));
+  /* 仕入値の欄は「仕入値」の枠をタップすると出る（6.56）。 */
+  if(!card.querySelector('[data-cost]'))card.querySelector('[data-costedit]').click();
+  const ci=card.querySelector('[data-cost]');
   return { cells:cells, text:el.innerText.replace(/\n/g,' | '),
     cost:csvCostOf(r), price:csvStartPrice(r),
     profit:csvProfitAt(csvCostOf(r),r.weight,csvStartPrice(r),csvFlatOf(r)),
     target:Math.round(csvTargetYen(csvCostOf(r))),
-    input:card.querySelector('[data-cost]').value,
-    ph:card.querySelector('[data-cost]').getAttribute('placeholder') };
+    input:ci.value, ph:ci.getAttribute('placeholder') };
 },asin);
 
 console.log('=== 依頼の例（仕入れ前の候補・仮の仕入値）===');
@@ -66,7 +68,8 @@ let b=await band('B0MB00001Z');
 console.log('   '+b.text);
 console.log('   '+JSON.stringify({cost:b.cost,price:b.price,profit:b.profit,
   target:b.target,input:b.input,ph:b.ph}));
-ok(b.cells.length===3&&b.cells.map(c=>c.label).join()==='仕入値,売値,利益',
+ok(b.cells.length===3
+   &&b.cells.map(c=>c.label.replace(' ✎','')).join()==='仕入値,売値,利益',
    '★3つ（仕入値・売値・利益）を横に並べる');
 ok(b.cells[0].main==='¥10,900（仮）','★仕入値は ¥10,900（仮）');
 ok(b.cells[0].sub==='Amazon基準価格','★仮の出どころ（Amazon基準価格）も出す');
