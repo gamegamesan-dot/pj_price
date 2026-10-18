@@ -9931,14 +9931,29 @@ function syncBasisNote(r){
     +yen(syncBasis(r).low||+r.amazon_lowest||0)+'（仕入値が分かりません）</span>';
   return '';
 }
+/* 自動反映が失敗した行の理由（eBay のコードと短い文）。6.58。
+   revise_err は「売値の自動反映 <コード> / <短い文> / <長い文>」の形で入っている。 */
+function syncRvWhy(r){
+  var t=String((r||{}).revise_err||'').replace(/^売値の自動反映\s*/,'').trim();
+  if(!t)return '';
+  var a=t.split(' / ');
+  var code=/^[0-9]{3,9}$/.test(String(a[0]||'').trim())?String(a[0]).trim():'';
+  var short=String((code?a[1]:a[0])||'').trim()||t;
+  return (code?('コード '+code+'：'):'')+short.slice(0,80);
+}
 function syncNextHtml(r){
-  // ① 値段の更新に失敗した行。人が直すまで何も進まない
+  /* ① 3回続けて失敗した行は、eBay のコードと短い文をその場に出す（6.58）。
+     「対応が必要」で絞り込んだときも、同じ理由がカードに出る。 */
+  if(syncRvAlert(r))
+    return nextLine('要対応','#b00020','売値の自動反映が'+Number(r.rv_fail||0)
+      +'回失敗：'+esc(syncRvWhy(r)
+        ||'理由が記録されていません（「状況を取り込む」を押してください）')
+      +(syncErrKind(r.revise_err)==='pic'
+        ? '　長辺500px以上の写真に差し替えてください。':''));
+  // ② 値段の更新に失敗した行。人が直すまで何も進まない
   if(String(r.revise_err||'').trim())
     return nextLine('要対応','#b00020','値段の更新に失敗：'
       +esc(syncErrText(r.revise_err))+'（直し方は計算の詳細）');
-  if(syncRvAlert(r))
-    return nextLine('要対応','#b00020','売値の自動反映が'+Number(r.rv_fail||0)
-      +'回続けて失敗しています');
   var id=String(r.ebay_item_id||'').trim();
   if(!id)return '';
   // ② 売値の自動反映（値上げ・見送りで数量0）の予定
@@ -10390,6 +10405,16 @@ function syncRvAlert(r){ return Number((r||{}).rv_fail||0)>=3; }
 function syncRvFail3(){
   return ((syncData&&syncData.items)||[]).filter(syncRvAlert).length;
 }
+/* pj-sync から受け取った予定が24時間より古いか（6.58）。
+   古い予定のまま「まとめて実行」を押すと、売れた行や値段が変わった行に
+   当たってしまうので、取り込み直すように知らせる。 */
+var RV_PLAN_OLD_MS=24*60*60*1000;
+function syncRvPlanOld(pl){
+  var p=pl||syncRvPlanRows();
+  if(p.from!=='sync')return false;
+  var t=Date.parse(String(p.at||''));
+  return !!t&&(Date.now()-t)>RV_PLAN_OLD_MS;
+}
 function syncRvLine(x){
   var nm=esc(x.name||x.asin||'');
   if(x.kind==='zero')return '・'+nm+'：<b>見送り → 数量0</b>（出品は終了しません）';
@@ -10418,7 +10443,11 @@ function syncRvBarRender(){
       : '（この端末の計算）')
     +(pl.capped?('　1日の上限を超えた '+pl.capped+'件は翌日に回ります'):'')
     +(mode==='confirm'?'　<b>「まとめて実行」を押すまで eBay は変えません</b>':'')
-    +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>（絞り込み「対応が必要」で直してください）'):'')
+    +(syncRvPlanOld(pl)
+      ? ('<br><b style="color:var(--bad)">予定が古いです。'
+         +'状況を取り込むを押してください</b>'):'')
+    +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>（絞り込み「対応が必要」で直してください）'
+          +'　行ごとに eBay の理由を出しています'):'')
     +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
             +'・'+({confirm:'確認',auto:'自動',approve:'まとめて実行'}[last.mode]||last.mode)
             +'）：上げた '+Number(last.changed||0)+'件／数量0 '+Number(last.zeroed||0)
@@ -10499,11 +10528,20 @@ function syncRvGo(){
   b.disabled=true; b.textContent='実行しています…';
   $('syncRvDone').textContent='pj-sync が eBay を変えています…';
   syncJsonPost('/sync',{kind:'review',approve:true},function(d){
-    $('syncRvDone').textContent='上げた '+Number(d.changed||0)+'件／数量0 '
+    var msg='上げた '+Number(d.changed||0)+'件／数量0 '
       +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
-      +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'')
-      +'。「状況を取り込む」で表示を更新してください。';
+      +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'');
+    $('syncRvDone').textContent=msg+'。状況を取り込んでいます…';
     b.disabled=false; syncRender();
+    /* 実行が終わったら自動で取り込み直し、予定の一覧と件数を新しくする（6.58）。
+       失敗した行の理由（eBay のコードと短い文）もここで入ってくる。 */
+    syncLoadRun(function(err){
+      $('syncRvDone').textContent=msg+(err
+        ? ('。状況の取り込みに失敗しました（'+err.message+'）。'
+           +'「状況を取り込む」を押してください。')
+        : '。最新の状況に更新しました。');
+      syncRender();
+    },true);
   },function(why){
     $('syncRvDone').textContent='失敗しました：'+why;
     b.disabled=false; syncRender();
@@ -11694,10 +11732,18 @@ $('syncList').addEventListener('change',function(e){
   pageAllRender('syncPageAll','syncPageAllLabel',syncPageIds,syncPick);
 });
 /* 状況を取り込む（読み取りだけ） */
-$('syncLoad').onclick=function(){
+/* 「状況を取り込む」の中身。「まとめて実行」のあとにも自動で呼ぶ（6.58）ので、
+   ボタンの処理から分けてある。
+   done(err) で終わりを知らせ、quiet のときは alert を出さない。 */
+function syncLoadRun(done,quiet){
+  var fin=function(e){ if(done)done(e||null); };
   var u=syncUrl();
-  if(!u){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
-  if(!syncApiKey()){ alert('設定の「pj-sync のキー」を入れてください。'); return; }
+  var stop=function(m){
+    if(quiet)syncSay(m); else alert(m);
+    fin(new Error(m));
+  };
+  if(!u){ stop('設定の「pj-sync のURL」を入れてください。'); return; }
+  if(!syncApiKey()){ stop('設定の「pj-sync のキー」を入れてください。'); return; }
   var btn=$('syncLoad'); btn.disabled=true; btn.textContent='取り込み中…';
   syncSay('取り込み中…');
   fetch(u+'/status?limit='+syncLimit(),{headers:{'X-PJ-Key':syncKeyReady()}})
@@ -11731,10 +11777,12 @@ $('syncLoad').onclick=function(){
           +'（'+esc(run.kind||'')+'）'):'')
         +(d.errors_recent?'　直近の実行にエラーがあります（/runs を確認）':''));
       syncRender();
+      fin(null);
     })
-    .catch(function(e){ syncSay('取り込みに失敗しました：'+e.message); })
+    .catch(function(e){ syncSay('取り込みに失敗しました：'+e.message); fin(e); })
     .then(function(){ btn.disabled=false; btn.textContent='状況を取り込む'; });
-};
+}
+$('syncLoad').onclick=function(){ syncLoadRun(); };
 /* 出品リストの名簿を送る。手元在庫の印は「FBA在庫が未確認の行」に付ける。 */
 /* 名簿を送る。結果ファイルの取り込みからも呼ぶので、関数にしてある。
    quiet=true のときは出せない理由を alert せず、done に渡して静かに終わる。 */
@@ -12187,7 +12235,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v157';   // sw.js の const V と必ず同じ値にする
+var APP_V='v158';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
