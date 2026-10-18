@@ -31,6 +31,14 @@ database_id = "b12c9007-181f-48a1-8ade-c5aa37ea6f45"
 binding = "SYNC_CACHE"
 id = "cd472c88ad494ad6ade19d0863dd6523"
 
+# 写真の確認用に pj-img を直接呼ぶ（7.42）。
+# 同じアカウントの workers.dev へ普通の fetch をすると Cloudflare が
+# 「error code: 1042」を返して 404 に見えるので、サービスバインディングで渡す。
+# pj-img を先にデプロイしてから pj-sync をデプロイすること。
+[[services]]
+binding = "IMG_SVC"
+service = "pj-img"
+
 # account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
 # 秘密情報ではないが、リポジトリに固定しないでおく。
 # account_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

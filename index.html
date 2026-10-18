@@ -145,6 +145,8 @@ body.staff #syncMarkBar,
 body.staff #syncBarRev,
 body.staff #syncBarFloor,
 body.staff #syncBarMarkBtn,
+body.staff #syncPicsBox,             /* 写真を eBay 保管に切り替え（出品を書き換える） */
+body.staff #syncBarPics,
 body.staff #syncOnHandFix{display:none !important}
 /* ⚙設定を使う頻度で3段に並べる（6.50）。
    上（よく変える）は初期から開き、中・下は畳む。見出しをタップで開閉する。 */
@@ -835,6 +837,23 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
       </details>
 
+      <!-- 写真を eBay 保管（EPS）に切り替える（7.42・管理者だけ）。 -->
+      <details id="syncPicsBox" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer">写真を eBay 保管に切り替え</summary>
+        <div style="padding:6px 0 0">
+          <div class="note2" style="margin:0 0 6px">eBayアプリで価格を直すと<b>メイン画像だけ</b>エラーになる出品を直します。出品に残っている<b>自前ホスト（pj-img）の写真の紐づけ</b>を外し、写真を eBay 保管だけにします。<b>写真以外（価格・数量・タイトル）は送りません。</b>pj-img の写真は消しません（差し替えや再出品に使います）。</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input id="syncPicsId" inputmode="numeric" placeholder="ItemID（例 880025406600）"
+                   style="flex:1 1 0;min-width:0">
+            <button class="btn" id="syncPicsOne" style="flex:0 0 auto;padding:9px 10px">1件お試し</button>
+          </div>
+          <div class="note2" style="margin:4px 0 6px">まず1件で試してください。<b>預け直さない</b>方式でやってみて、それで変わらなければ<b>預け直す</b>方式に自動で切り替えます。どちらで直ったかは結果に出ます。</div>
+          <button class="btn" id="syncPicsBulk" style="width:100%">選んだ行をまとめて切り替え</button>
+          <div class="note2" id="syncPicsNote" style="margin-top:4px"></div>
+          <div class="note2" id="syncPicsRes" style="margin-top:4px"></div>
+        </div>
+      </details>
+
       <!-- 絞り込みが「再調達の候補」のときだけ出す -->
       <div id="syncRestockBox" style="display:none;margin-top:8px">
         <button class="btn" id="syncRestock" style="width:100%">再調達で出し直すCSVを書き出す（選んだ行）</button>
@@ -1308,6 +1327,7 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn" data-sflag="dropship|1" style="flex:1 1 46%;padding:7px 3px;font-size:12px">無在庫 オン</button>
       <button class="btn" data-sflag="dropship|0" style="flex:1 1 46%;padding:7px 3px;font-size:12px">無在庫 オフ</button>
       <button class="btn" id="syncBarRestock" style="flex:1 1 100%;padding:7px 3px;font-size:12px;display:none">再調達で出し直すCSV</button>
+      <button class="btn" id="syncBarPics" style="flex:1 1 100%;padding:7px 3px;font-size:12px">写真を eBay 保管に切り替え</button>
     </div>
   </div>
 </div>
@@ -9573,6 +9593,102 @@ $('syncBarFloor').onclick=function(){ syncFloorRun(); };
 $('syncBarRestock').onclick=function(){ $('syncRestock').click(); };
 
 $('syncBarClear').onclick=function(){ syncPick={}; syncRender(); };
+/* ---- 写真を eBay 保管（EPS）に切り替える（7.42・管理者だけ）----
+   出品に残っている自前ホストの紐づけ（ExternalPictureURL）を外すため、
+   pj-sync が写真だけを ReviseFixedPriceItem で入れ替える。
+   1回に送るのは SYNC_PICS_MAX 件まで（Worker 側の上限と同じ）。 */
+var SYNC_PICS_MAX=5;
+function syncPicsIdsSel(){
+  var seen={}, out=[];
+  syncPickRows().forEach(function(r){
+    var id=String(r.ebay_item_id||'').replace(/[^0-9]/g,'');
+    if(/^[0-9]{9,15}$/.test(id)&&!seen[id]){ seen[id]=1; out.push(id); }
+  });
+  return out;
+}
+/* 1件ぶんの結果。前と後を並べて、どちらの方式で直ったかを出す。 */
+function syncPicsOneHtml(it){
+  var b=it.before||{}, a=it.after||{};
+  var how=it.fixed_by==='already'?'もともと eBay 保管だけでした'
+    :it.fixed_by==='reuse'?'預け直さずに直りました'
+    :it.fixed_by==='fresh'?'預け直して直りました':'直りました';
+  var line=function(t,p){
+    return t+'：写真'+(p.n||0)+'枚／自前ホストの紐づけ '+(p.ext_n||0)+'件'
+      +'／PictureSource '+esc(p.picture_source||'—'); };
+  return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);border-radius:6px">'
+    +'<b>'+esc(it.item_id)+'</b>'+(it.title?('　'+esc(String(it.title).slice(0,40))):'')
+    +'<br>'+line('前',b)
+    +'<br>'+line('後',a)
+    +'<br>'+(it.done?('✅ '+how):('⚠ '+esc(it.error||'直りませんでした')))
+    +(it.expiration?('<br>預け直した写真の期限：'+esc(String(it.expiration).slice(0,10))
+      +'（この出品で使っているので消えません）'):'')
+    +'</div>';
+}
+function syncPicsRun(ids,label){
+  var note=$('syncPicsNote'), res=$('syncPicsRes');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLと管理者キーを⚙設定の「接続設定」に入れてください。';
+    return;
+  }
+  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  var chunks=[], done=0, html='';
+  for(var i=0;i<ids.length;i+=SYNC_PICS_MAX)chunks.push(ids.slice(i,i+SYNC_PICS_MAX));
+  res.innerHTML='';
+  function step(k){
+    if(k>=chunks.length){
+      note.textContent=label+'：'+done+'／'+ids.length+'件を eBay 保管にしました'
+        +(done<ids.length?'（直らなかった行は下の理由を見てください）':'');
+      return;
+    }
+    note.textContent=label+'：送信中…（'+(k*SYNC_PICS_MAX+1)+'〜'
+      +Math.min(ids.length,(k+1)*SYNC_PICS_MAX)+'件目／全'+ids.length+'件）';
+    syncJsonPost('/ebay/pics/switch',
+      { item_ids:chunks[k], mode:'auto', confirm:true },
+      function(d){
+        ((d&&d.items)||[]).forEach(function(it){
+          if(it.done)done++;
+          html+=syncPicsOneHtml(it);
+        });
+        res.innerHTML=html;
+        step(k+1);
+      },
+      function(why){
+        note.textContent=label+'：送れませんでした（'+why+'）。'
+          +'もう一度押すと、まだ切り替わっていない行だけやり直せます。';
+      });
+  }
+  step(0);
+}
+$('syncPicsOne').onclick=function(){
+  var id=String($('syncPicsId').value||'').replace(/[^0-9]/g,'');
+  if(!/^[0-9]{9,15}$/.test(id)){
+    $('syncPicsNote').textContent='ItemID（9〜15桁の数字）を入れてください。';
+    return;
+  }
+  if(!confirm('ItemID '+id+' の写真を eBay 保管に切り替えます。\n'
+    +'・写真以外（価格・数量・タイトル）は送りません\n'
+    +'・pj-img の写真は消しません\nよろしいですか？'))return;
+  syncPicsRun([id],'1件お試し');
+};
+$('syncPicsBulk').onclick=function(){
+  var ids=syncPicsIdsSel();
+  if(!ids.length){
+    $('syncPicsNote').textContent='一覧のチェックで、eBayに出している行（ItemIDがある行）を選んでください。';
+    return;
+  }
+  if(!confirm('選んだ '+ids.length+'件の写真を eBay 保管に切り替えます。\n'
+    +'・写真以外（価格・数量・タイトル）は送りません\n'
+    +'・'+SYNC_PICS_MAX+'件ずつ送ります（途中でやめても、できた分はそのままです）\n'
+    +'・pj-img の写真は消しません\nよろしいですか？'))return;
+  syncPicsRun(ids,'まとめて切り替え');
+};
+$('syncBarPics').onclick=function(){
+  var box=$('syncPicsBox');
+  box.open=true;
+  box.scrollIntoView({block:'start'});
+  $('syncPicsBulk').click();
+};
 /* 「最後に値下げした日」を D1 に送る。送れた行は表示もその場で合わせる
    （次の取り込みを待たずに、同じ行をもう一度書き出さないようにする）。 */
 function syncMarkPost(rows,at,noteId){
@@ -12005,7 +12121,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v154';   // sw.js の const V と必ず同じ値にする
+var APP_V='v155';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

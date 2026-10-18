@@ -134,6 +134,9 @@ const ALLOWED = [
   /* 調べるための読み取り（7.41）。pj-img（R2）の写真をそのまま見る。
      どのホストかは設定で変わるので、https の workers.dev / 自前ドメインだけ許す。 */
   { m: "GET",  re: /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/ },
+  /* 預け直し（7.42）。eBay 自身が持っている写真（EPS）を元画像として
+     Media API に渡すので、i.ebayimg.com も読み取りで見られるようにする。 */
+  { m: "GET",  re: /^https:\/\/i\.ebayimg\.com\// },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
 ];
 
@@ -239,6 +242,14 @@ async function net(run, url, init) {
   const opt = init || {};
   assertReadOnly(url, opt.method || "GET", opt.headers, !!opt.write);
   run.subrequests++;
+  /* fetcher を渡したときは、その Worker（サービスバインディング）に投げる。
+     同じアカウントの workers.dev へ普通の fetch をすると Cloudflare が
+     「error code: 1042」で止めるため、pj-img を見るときだけこちらを使う（7.42）。 */
+  if (opt.fetcher) {
+    const o = Object.assign({}, opt);
+    delete o.fetcher; delete o.write;
+    return opt.fetcher.fetch(url, o);
+  }
   return fetch(url, opt);
 }
 
@@ -2428,16 +2439,25 @@ async function rvLast(env) {
   } catch (e) { return null; }
 }
 
-/* ================= 調べるための窓口（7.41・管理者だけ）=================
-   「アプリで価格を直すとメイン画像だけエラーになる」原因を見るために、
-   **読み取りと試し打ち**だけを足す。出品の中身は変えない。
+/* ================= 写真の預け先（7.41 / 7.42・管理者だけ）=================
+   「アプリで価格を直すとメイン画像だけエラーになる」への対応。
 
-   GET  /ebay/item?id=<ItemID> … GetItem の PictureDetails を見る（読み取り）
-   POST /eps/test {url}        … R2 の写真1枚を eBay に預けてみる（Media API）
+   GET  /ebay/item?id=<ItemID>   … GetItem の PictureDetails を見る（読み取り）
+   POST /eps/test {url}          … 写真1枚を eBay に預けてみる（Media API）
+   POST /ebay/pics/switch {…}    … 出品の写真を eBay 保管（EPS）だけにする
 
-   UploadSiteHostedPictures（Trading）は 2026-09-30 に廃止されたので、
-   預け先は **Media API の createImageFromUrl**（REST・Bearer トークン）。 */
+   調べて分かったこと（7.42）：
+   ・GetItem では 3枚とも i.ebayimg.com になっているのに PictureSource=Vendor で、
+     ExternalPictureURL に **1枚目（ギャラリー画像）の自前URLだけ**が残っていた。
+     これが「メインだけ Revise で失敗する」理由。公式リファレンスどおりの状態。
+   ・ExternalPictureURL は DeletedField では消せない（出品時に入れた項目は消せない）。
+     **写真一式を EPS の URL で入れ替える**しか道がない。
+   ・UploadSiteHostedPictures（Trading）は 2026-09-30 廃止。預け先は
+     **Media API の createImageFromUrl**（REST・Bearer・期限30日）。 */
 const MEDIA_API = "https://apim.ebay.com/commerce/media/v1_beta";
+/* まとめて切り替えるときの1回の上限。1件で最大 14 回ほど外部を呼ぶので、
+   1リクエストが長くなりすぎないように小さくしてある（画面側が小分けに送る）。 */
+const PICS_MAX = 5;
 /* 画像の縦横をバイト列から読む（JPEG の SOF と PNG の IHDR だけ見る）。
    R2 の写真が eBay の下限（長辺500px）を満たしているかをここで確かめる。 */
 function imageSize(buf) {
@@ -2462,11 +2482,14 @@ function imageSize(buf) {
   }
   return { type: "unknown", w: 0, h: 0 };
 }
-/* R2（pj-img）の写真をそのまま取ってみる。
-   メイン画像と2枚目で違いが無いかを、同じ物差しで比べるために使う。 */
-async function probeUrl(run, url) {
+/* 写真をそのまま取ってみる（状態・形式・縦横）。
+   pj-img（R2）の写真は **サービスバインディング（IMG_SVC）** で見る。
+   同じアカウントの workers.dev へ普通の fetch をすると Cloudflare が
+   「error code: 1042」を返して 404 に見えるため（7.42 で判明）。 */
+async function probeUrl(run, url, env) {
   const t0 = Date.now();
-  const resp = await net(run, url, { method: "GET", redirect: "manual" });
+  const svc = (env && env.IMG_SVC && /\/i\/\d{8}\//.test(url)) ? env.IMG_SVC : null;
+  const resp = await net(run, url, { method: "GET", redirect: "manual", fetcher: svc });
   const h = {};
   ["content-type", "content-length", "cache-control", "etag", "location",
    "cf-cache-status", "access-control-allow-origin"].forEach((k) => {
@@ -2479,123 +2502,268 @@ async function probeUrl(run, url) {
     size = imageSize(buf);
   }
   return { url: url, status: resp.status, redirected: !!h.location,
+           via: svc ? "service_binding" : "fetch",
            headers: h, bytes: bytes, width: size.w, height: size.h,
            kind: size.type, long: Math.max(size.w, size.h),
            ok_for_ebay: Math.max(size.w, size.h) >= 500, ms: Date.now() - t0 };
 }
-/* GetItem（読み取り）。PictureDetails を1枚目とそれ以降が比べられる形で返す。 */
+/* GetItem（読み取り）。PictureDetails を1枚目とそれ以降が比べられる形にする。
+   切り替えの前後で2回呼ぶので、run を使い回せるように分けてある。 */
+async function getItemPics(env, run, token, itemId) {
+  const out = { ok: false, item_id: itemId };
+  const body = '<?xml version="1.0" encoding="utf-8"?>'
+    + '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + "<ItemID>" + esc(itemId) + "</ItemID>"
+    + "<DetailLevel>ReturnAll</DetailLevel>"
+    + "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
+    + "</GetItemRequest>";
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetItem",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: body,
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  out.ack = ack || ("HTTP" + resp.status);
+  if (!resp.ok || /^Failure$/i.test(ack)) {
+    out.error = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
+                 xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 300);
+    return out;
+  }
+  const pd = xmlTag(xml, "PictureDetails");
+  const all = (tag, src) => {
+    const re = new RegExp("<" + tag + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + tag + ">", "g");
+    const a = []; let m;
+    while ((m = re.exec(src || ""))) a.push(m[1]);
+    return a;
+  };
+  out.ok = true;
+  out.title = xmlTag(xml, "Title").slice(0, 120);
+  out.listing_status = xmlTag(xmlTag(xml, "SellingStatus"), "ListingStatus");
+  out.pictures = {
+    photo_display: xmlTag(pd, "PhotoDisplay"),
+    picture_source: xmlTag(pd, "PictureSource"),
+    gallery_url: xmlTag(pd, "GalleryURL"),
+    picture_url: all("PictureURL", pd),
+    external_picture_url: all("ExternalPictureURL", pd),
+  };
+  const pics = out.pictures;
+  pics.n = pics.picture_url.length;
+  /* 1枚目（メイン＝ギャラリー画像）とそれ以降を、そのまま並べて見えるようにする。 */
+  pics.main = pics.picture_url[0] || "";
+  pics.rest = pics.picture_url.slice(1);
+  pics.main_is_eps = /(^|\.)ebayimg\.com\//.test(pics.main);
+  pics.rest_all_eps = pics.rest.length > 0
+    && pics.rest.every((u) => /(^|\.)ebayimg\.com\//.test(u));
+  /* 自前ホストの紐づけが残っているか。これが残っている間は
+     アプリの Revise でメイン画像を取り直そうとして失敗する。 */
+  pics.ext_n = pics.external_picture_url.length;
+  pics.all_eps = pics.n > 0 && pics.picture_url.every((u) => /(^|\.)ebayimg\.com\//.test(u));
+  pics.eps_only = pics.all_eps && pics.ext_n === 0;
+  pics.source_eps = /^EPS$/i.test(pics.picture_source || "");
+  pics.raw = String(pd || "").slice(0, 1500);
+  return out;
+}
 async function jobGetItem(env, itemId) {
   const run = newRun("getitem");
-  const out = { ok: false, item_id: itemId };
+  let out = { ok: false, item_id: itemId };
   try {
     const token = await ebayToken(env, run);
-    const body = '<?xml version="1.0" encoding="utf-8"?>'
-      + '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
-      + "<ItemID>" + esc(itemId) + "</ItemID>"
-      + "<DetailLevel>ReturnAll</DetailLevel>"
-      + "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
-      + "</GetItemRequest>";
-    const resp = await net(run, EBAY_API + "/ws/api.dll", {
-      method: "POST",
-      headers: {
-        "X-EBAY-API-CALL-NAME": "GetItem",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
-        "X-EBAY-API-SITEID": "0",
-        "X-EBAY-API-IAF-TOKEN": token,
-        "content-type": "text/xml",
-      },
-      body: body,
-    });
-    const xml = await resp.text();
-    const ack = xmlTag(xml, "Ack");
-    out.ack = ack || ("HTTP" + resp.status);
-    if (!resp.ok || /^Failure$/i.test(ack)) {
-      out.error = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
-                   xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 300);
-      return Object.assign(await saveRun(env, run), out);
-    }
-    const pd = xmlTag(xml, "PictureDetails");
-    const all = (tag, src) => {
-      const re = new RegExp("<" + tag + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + tag + ">", "g");
-      const a = []; let m;
-      while ((m = re.exec(src || ""))) a.push(m[1]);
-      return a;
-    };
-    out.ok = true;
-    out.title = xmlTag(xml, "Title").slice(0, 120);
-    out.listing_status = xmlTag(xmlTag(xml, "SellingStatus"), "ListingStatus");
-    out.pictures = {
-      photo_display: xmlTag(pd, "PhotoDisplay"),
-      picture_source: xmlTag(pd, "PictureSource"),
-      gallery_url: xmlTag(pd, "GalleryURL"),
-      picture_url: all("PictureURL", pd),
-      external_picture_url: all("ExternalPictureURL", pd),
-    };
-    out.pictures.n = out.pictures.picture_url.length;
-    /* 1枚目（メイン＝ギャラリー画像）とそれ以降を、そのまま並べて見えるようにする。 */
-    out.pictures.main = out.pictures.picture_url[0] || "";
-    out.pictures.rest = out.pictures.picture_url.slice(1);
-    out.pictures.main_is_eps = /(^|\.)ebayimg\.com\//.test(out.pictures.main);
-    out.pictures.rest_all_eps = out.pictures.rest.length > 0
-      && out.pictures.rest.every((u) => /(^|\.)ebayimg\.com\//.test(u));
-    out.pictures.raw = String(pd || "").slice(0, 1500);
-    run.notes.push("GetItem " + itemId + "：写真 " + out.pictures.n + "枚");
+    out = Object.assign(out, await getItemPics(env, run, token, itemId));
+    if (out.ok) run.notes.push("GetItem " + itemId + "：写真 " + out.pictures.n + "枚"
+      + (out.pictures.eps_only ? "（eBay 保管だけ）"
+         : ("／自前ホストの紐づけ " + out.pictures.ext_n + "件")));
+    else run.notes.push("GetItem " + itemId + " に失敗：" + (out.error || out.ack));
   } catch (e) {
     out.error = e.message;
     run.errors++;
   }
   return Object.assign(await saveRun(env, run), out);
 }
-/* R2 の写真1枚を eBay（EPS）に預けてみる（Media API の試し打ち）。
-   ・R2 の URL をそのまま見て、状態・形式・縦横を返す
-   ・createImageFromUrl → Location の image_id → getImage で
-     i.ebayimg.com の URL と期限（expirationDate）を取る
-   ・403 のときは、足りないスコープが分かるように本文をそのまま返す */
+/* 写真1枚を eBay（EPS）に預ける（Media API の createImageFromUrl）。
+   元画像は pj-img（R2）の URL でも、eBay 自身の i.ebayimg.com でもよい。
+   ・201 → Location の image_id → getImage で i.ebayimg.com の URL と期限
+   ・401/403 のときは、足りないスコープが分かるように本文をそのまま返す */
+async function epsFromUrl(env, run, token, url) {
+  const out = { ok: false, source: url, eps_url: "", image_id: "", expiration: "" };
+  const cr = await net(run, MEDIA_API + "/image/create_image_from_url", {
+    method: "POST",
+    write: true,
+    headers: {
+      "authorization": "Bearer " + token,
+      "content-type": "application/json",
+      "accept": "application/json",
+    },
+    body: JSON.stringify({ imageUrl: url }),
+  });
+  const crText = await cr.text();
+  out.create = { status: cr.status,
+                 location: cr.headers.get("location") || "",
+                 body: crText.slice(0, 600) };
+  out.status = cr.status;
+  if (cr.status === 403 || cr.status === 401) {
+    out.error = "eBay が " + cr.status + " を返しました（スコープ不足の可能性）";
+    return out;
+  }
+  if (!(cr.status === 201 || cr.status === 200)) {
+    out.error = "createImageFromUrl が " + cr.status;
+    return out;
+  }
+  const id = String(out.create.location || "").split("/").pop();
+  out.image_id = id;
+  if (!id) { out.error = "image_id が返ってきません"; return out; }
+  const g = await net(run, MEDIA_API + "/image/" + encodeURIComponent(id), {
+    headers: { "authorization": "Bearer " + token, "accept": "application/json" },
+  });
+  const gText = await g.text();
+  out.get = { status: g.status, body: gText.slice(0, 600) };
+  let info = null;
+  try { info = JSON.parse(gText); } catch (e) { info = null; }
+  if (info) {
+    out.eps_url = info.imageUrl || "";
+    out.max_dimension_url = info.maxDimensionImageUrl || "";
+    out.expiration = info.expirationDate || "";
+    out.ok = !!out.eps_url;
+  }
+  if (!out.ok && !out.error) out.error = "getImage が " + g.status;
+  return out;
+}
+/* 写真1枚の試し打ち（7.41）。R2 の写真をそのまま見てから預ける。 */
 async function jobEpsTest(env, url) {
   const run = newRun("eps-test");
   const out = { ok: false, source: url };
   try {
-    out.probe = await probeUrl(run, url);
+    out.probe = await probeUrl(run, url, env);
     const token = await ebayToken(env, run);
-    const cr = await net(run, MEDIA_API + "/image/create_image_from_url", {
-      method: "POST",
-      write: true,
-      headers: {
-        "authorization": "Bearer " + token,
-        "content-type": "application/json",
-        "accept": "application/json",
-      },
-      body: JSON.stringify({ imageUrl: url }),
-    });
-    const crText = await cr.text();
-    out.create = { status: cr.status,
-                   location: cr.headers.get("location") || "",
-                   body: crText.slice(0, 600) };
-    if (cr.status === 403 || cr.status === 401) {
-      out.error = "eBay が " + cr.status + " を返しました（スコープ不足の可能性）";
-      return Object.assign(await saveRun(env, run), out);
-    }
-    if (!(cr.status === 201 || cr.status === 200)) {
-      out.error = "createImageFromUrl が " + cr.status;
-      return Object.assign(await saveRun(env, run), out);
-    }
-    const id = String(out.create.location || "").split("/").pop();
-    out.image_id = id;
-    if (!id) { out.error = "image_id が返ってきません"; return Object.assign(await saveRun(env, run), out); }
-    const g = await net(run, MEDIA_API + "/image/" + encodeURIComponent(id), {
-      headers: { "authorization": "Bearer " + token, "accept": "application/json" },
-    });
-    const gText = await g.text();
-    out.get = { status: g.status, body: gText.slice(0, 600) };
-    let info = null;
-    try { info = JSON.parse(gText); } catch (e) { info = null; }
-    if (info) {
-      out.eps_url = info.imageUrl || "";
-      out.max_dimension_url = info.maxDimensionImageUrl || "";
-      out.expiration = info.expirationDate || "";
-      out.ok = !!out.eps_url;
-    }
+    const r = await epsFromUrl(env, run, token, url);
+    out.create = r.create;
+    out.image_id = r.image_id;
+    out.get = r.get;
+    out.eps_url = r.eps_url;
+    out.max_dimension_url = r.max_dimension_url || "";
+    out.expiration = r.expiration;
+    out.ok = r.ok;
+    if (r.error) out.error = r.error;
     run.notes.push("EPS 試し打ち：" + (out.ok ? out.eps_url : ("失敗 " + (out.error || ""))));
+  } catch (e) {
+    out.error = e.message;
+    run.errors++;
+  }
+  return Object.assign(await saveRun(env, run), out);
+}
+/* ReviseFixedPriceItem の本文。**送るのは PictureDetails だけ**。
+   価格・数量・タイトルなどは1つも入れない（間違って出品を書き換えないため）。 */
+function picsBody(itemId, urls) {
+  return '<?xml version="1.0" encoding="utf-8"?>'
+    + '<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + "<Item><ItemID>" + esc(itemId) + "</ItemID>"
+    + "<PictureDetails>"
+    + urls.map((u) => "<PictureURL>" + esc(u) + "</PictureURL>").join("")
+    + "</PictureDetails>"
+    + "</Item></ReviseFixedPriceItemRequest>";
+}
+/* 写真だけを書き換える（write:true を付けた呼び出しだけ通る）。 */
+async function ebayRevisePics(env, run, token, itemId, urls) {
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    write: true,
+    headers: {
+      "X-EBAY-API-CALL-NAME": "ReviseFixedPriceItem",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: picsBody(itemId, urls),
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  const why = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
+               xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 200);
+  const ok = resp.ok && /^(Success|Warning)$/i.test(ack);
+  return { ok, status: resp.status, ack: ack || ("HTTP" + resp.status),
+           why: ok ? "" : (why || ("HTTP " + resp.status)) };
+}
+/* 1回ぶんの切り替え。
+   reuse … いまの i.ebayimg.com の URL をそのまま送り直す（預け直さない）
+   fresh … 1枚ずつ Media API で作り直してから送る（URL が変わる）
+   reuse が効かないことがあるのは、eBay が「同じ写真・同じ並び」を
+   変更と認識しないため（KB 5091 の注意）。 */
+async function picSwitchOnce(env, run, token, itemId, mode) {
+  const t = { mode: mode, done: false, sent: [] };
+  const before = await getItemPics(env, run, token, itemId);
+  t.before = before.pictures || null;
+  t.title = before.title || "";
+  if (!before.ok) { t.error = before.error || ("GetItem が " + before.ack); return t; }
+  const src = before.pictures.picture_url.slice();
+  if (!src.length) { t.error = "この出品には写真がありません"; return t; }
+  if (before.pictures.eps_only) {
+    t.done = true; t.skipped = true; t.after = before.pictures;
+    t.note = "すでに eBay 保管だけになっています";
+    return t;
+  }
+  if (mode === "fresh") {
+    t.eps = [];
+    for (const u of src) {
+      const r = await epsFromUrl(env, run, token, u);
+      t.eps.push({ source: u, ok: r.ok, eps_url: r.eps_url, image_id: r.image_id,
+                   status: r.status, expiration: r.expiration, error: r.error || "" });
+      if (!r.ok) { t.error = "写真を預け直せませんでした：" + (r.error || r.status); return t; }
+      t.sent.push(r.eps_url);
+    }
+    t.expiration = t.eps.length ? t.eps[0].expiration : "";
+  } else {
+    /* 預け直さない。自前ホストの URL が混ざっていたら reuse では直せない
+       （混在は eBay が拒む：Error 20004）。 */
+    if (!before.pictures.all_eps) {
+      t.error = "まだ eBay に取り込まれていない写真があるため、"
+        + "預け直さない方式では切り替えられません";
+      return t;
+    }
+    t.sent = src;
+  }
+  t.revise = await ebayRevisePics(env, run, token, itemId, t.sent);
+  if (!t.revise.ok) {
+    t.error = "ReviseFixedPriceItem が失敗：" + t.revise.why;
+    return t;
+  }
+  const after = await getItemPics(env, run, token, itemId);
+  t.after = after.pictures || null;
+  if (!after.ok) { t.error = "切り替えたあとの GetItem に失敗：" + (after.error || after.ack); return t; }
+  t.done = !!after.pictures.eps_only;
+  return t;
+}
+/* 出品の写真を eBay 保管（EPS）だけにする（7.42）。
+   mode='auto' は reuse を試して、効かなければ fresh に落とす。
+   どちらで直ったかは fixed_by に入れて返す。 */
+async function jobPicSwitch(env, itemId, mode) {
+  const run = newRun("pics-switch");
+  const out = { ok: false, item_id: itemId, mode: mode, done: false, fixed_by: "", tries: [] };
+  try {
+    const token = await ebayToken(env, run);
+    const modes = (mode === "auto") ? ["reuse", "fresh"] : [mode];
+    for (const md of modes) {
+      const t = await picSwitchOnce(env, run, token, itemId, md);
+      out.tries.push(t);
+      out.title = out.title || t.title || "";
+      if (t.error) { out.error = t.error; break; }
+      if (t.done) { out.done = true; out.fixed_by = t.skipped ? "already" : md; break; }
+    }
+    const last = out.tries[out.tries.length - 1] || null;
+    out.before = (out.tries[0] && out.tries[0].before) || null;
+    out.after = (last && last.after) || null;
+    out.expiration = (last && last.expiration) || "";
+    out.ok = out.done;
+    if (!out.done && !out.error)
+      out.error = "切り替えても自前ホストの紐づけが消えませんでした";
+    run.notes.push("写真の切り替え " + itemId + "："
+      + (out.done ? ("できました（" + out.fixed_by + "）") : ("できません：" + out.error)));
   } catch (e) {
     out.error = e.message;
     run.errors++;
@@ -3422,11 +3590,13 @@ export default {
       return forbidStaff("価格の設定と実行は管理者用のキーが必要です"
         + "（作業者用キーでできるのは 取り込み・名簿の送信・英題生成・写真です）",
         [], origin);
-    /* 調べるための窓口（7.41）は管理者だけ。
-       GetItem は出品の中身がそのまま返り、EPS の試し打ちは eBay 側に画像を作る。 */
+    /* 写真の窓口（7.41・7.42）は管理者だけ。
+       GetItem は出品の中身がそのまま返り、預け直しは eBay 側に画像を作り、
+       切り替えは出品の写真を書き換える。 */
     if (role !== "admin"
-        && (url.pathname === "/ebay/item" || url.pathname === "/eps/test"))
-      return forbidStaff("調べるための窓口は管理者用のキーが必要です", [], origin);
+        && (url.pathname === "/ebay/item" || url.pathname === "/eps/test"
+            || url.pathname === "/ebay/pics/switch"))
+      return forbidStaff("写真の窓口は管理者用のキーが必要です", [], origin);
     if (!env.DB) return json({ error: "server_misconfigured", detail: "DB" }, 500, origin);
     if (!env.SYNC_CACHE) return json({ error: "server_misconfigured", detail: "SYNC_CACHE" }, 500, origin);
     // 配送ポリシーの名前（pj_price の設定）。判定の前に一度だけ読む
@@ -3449,11 +3619,45 @@ export default {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         const u = String((body && body.url) || "").trim();
-        if (!/^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u))
+        /* 元画像は pj-img（R2）の写真か、eBay 自身の写真（i.ebayimg.com）だけ。
+           後者は「預け直し」が使えるかを確かめるために許してある（7.42）。 */
+        const okPj = /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
+        const okEbay = /^https:\/\/i\.ebayimg\.com\/[A-Za-z0-9/._$?=&-]+$/.test(u);
+        if (!(okPj || okEbay))
           return json({ error: "bad_url",
-            detail: "pj-img の写真のURL（https://…/i/YYYYMMDD/<uuid>.jpg）を入れてください" },
+            detail: "pj-img の写真のURL（https://…/i/YYYYMMDD/<uuid>.jpg）か、"
+              + "eBay の写真のURL（https://i.ebayimg.com/…）を入れてください" },
             400, origin);
         return json(await jobEpsTest(env, u), 200, origin);
+      }
+      /* 出品の写真を eBay 保管（EPS）だけにする（7.42）。
+         item_id（1件お試し）か item_ids（まとめて・上限 PICS_MAX 件）。
+         2件以上は confirm:true が無いと動かさない（押し間違い防止）。 */
+      if (request.method === "POST" && url.pathname === "/ebay/pics/switch") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        const md = String((body && body.mode) || "auto");
+        const mode = (md === "reuse" || md === "fresh") ? md : "auto";
+        const digits = (v) => String(v == null ? "" : v).replace(/[^0-9]/g, "");
+        const raw = Array.isArray(body && body.item_ids)
+          ? body.item_ids : [(body && body.item_id)];
+        const ids = [];
+        for (const v of raw) {
+          const d = digits(v);
+          if (/^[0-9]{9,15}$/.test(d) && ids.indexOf(d) < 0) ids.push(d);
+        }
+        if (!ids.length) return json({ error: "bad_item_id" }, 400, origin);
+        if (ids.length > PICS_MAX)
+          return json({ error: "too_many", max: PICS_MAX,
+            detail: "1回に送れるのは " + PICS_MAX + "件までです" }, 400, origin);
+        if (ids.length > 1 && body.confirm !== true)
+          return json({ error: "need_confirm",
+            detail: "2件以上は confirm:true を付けてください" }, 400, origin);
+        const items = [];
+        for (const id of ids) items.push(await jobPicSwitch(env, id, mode));
+        return json({ ok: items.every((x) => x.ok), n: items.length, mode: mode,
+                      done: items.filter((x) => x.done).length,
+                      items: items }, 200, origin);
       }
 
       if (request.method === "GET" && url.pathname === "/status")
@@ -3565,6 +3769,7 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         imageSize, jobGetItem, jobEpsTest,
+                        picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,

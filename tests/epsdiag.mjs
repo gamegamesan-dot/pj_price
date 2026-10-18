@@ -5,12 +5,25 @@
    ・許可表：GetItem は読み取りに、Media API の create は書き込み（write:true）に足した
    ・UploadSiteHostedPictures は 2026-09-30 廃止なので使わない（許可表にも入れない） */
 import { harness, makeEnv, get, post, asJson } from './lib.mjs';
+let r2=null;
+const jpegBytes=(w,h)=>{ // 最小限の JPEG（SOF0 に縦横が入る）
+  const b=[0xff,0xd8,0xff,0xc0,0,17,8,(h>>8)&255,h&255,(w>>8)&255,w&255,3,1,0x11,0,2,0x11,1,3,0x11,1];
+  return new Uint8Array(b);
+};
+const jpeg=jpegBytes;
 const T=harness('Worker：写真の調査窓口（GetItem・EPS 試し打ち）');
 const ok=T.ok;
 const m=await import('file://'+process.cwd()+'/proxy-sync/worker.js?eps=1');
 const worker=m.default, W=m.__test;
+let svcCalls=[];
+const jpegRes=()=>new Response(jpegBytes(1600,1200),{status:200,
+  headers:{'content-type':'image/jpeg','etag':'"abc"',
+           'cache-control':'public, max-age=31536000, immutable'}});
+/* pj-img はサービスバインディング（IMG_SVC）で見る。同じアカウントの
+   workers.dev へ普通の fetch をすると Cloudflare が 1042 で止めるため（7.42）。 */
 const env=makeEnv({ STAFF_KEY:'staff-key-123',
-  EBAY_CLIENT_ID:'cid', EBAY_CLIENT_SECRET:'sec', EBAY_USER_REFRESH_TOKEN:'rt' });
+  EBAY_CLIENT_ID:'cid', EBAY_CLIENT_SECRET:'sec', EBAY_USER_REFRESH_TOKEN:'rt',
+  IMG_SVC:{ fetch:async(u)=>{ svcCalls.push(String(u)); return r2||jpegRes(); } } });
 const H=(k)=>({'X-PJ-Key':k,'content-type':'application/json'});
 const req=(path,key,body)=>new Request('https://x'+path,
   body?{method:'POST',headers:H(key),body:JSON.stringify(body)}:{headers:H(key)});
@@ -19,11 +32,7 @@ const PIC='https://pj-img.example.workers.dev/i/20261017/'
   +'0123abcd-4567-89ab-cdef-0123456789ab.jpg';
 
 /* eBay への通信を差し替える。calls に残して、何をどう呼んだかを見る。 */
-let calls=[], epsStatus=201, getBody=null, r2=null;
-const jpeg=(w,h)=>{ // 最小限の JPEG（SOF0 に縦横が入る）
-  const b=[0xff,0xd8,0xff,0xc0,0,17,8,(h>>8)&255,h&255,(w>>8)&255,w&255,3,1,0x11,0,2,0x11,1,3,0x11,1];
-  return new Uint8Array(b);
-};
+let calls=[], epsStatus=201, getBody=null;
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   calls.push({url:url,method:o.method||'GET',headers:o.headers||{},body:o.body||''});
@@ -44,6 +53,8 @@ globalThis.fetch=async(u,i)=>{
       +'</ExternalPictureURL></PictureDetails></Item></GetItemResponse>',
       {status:200,headers:{'content-type':'text/xml'}});
   }
+  if(/^https:\/\/i\.ebayimg\.com\//.test(url)&&(o.method||'GET')==='GET')
+    return jpegRes();
   if(/\/i\/\d{8}\//.test(url)){
     if(r2)return r2;
     return new Response(jpeg(1600,1200),{status:200,
@@ -156,6 +167,24 @@ ok(r.body.image_id==='IMG-123456','★Location から image_id を取る');
 ok(r.body.eps_url.indexOf('i.ebayimg.com')>=0,'★★i.ebayimg.com の URL が返る');
 ok(r.body.expiration==='2026-11-16T01:00:00.000Z','★★期限（expirationDate）も返す');
 ok(!!r.body.max_dimension_url,'★いちばん大きい版のURLも返す');
+
+console.log('\n=== pj-img はサービスバインディングで見る（1042 対策・7.42）===');
+console.log('   via: '+r.body.probe.via+'／IMG_SVC への呼び出し '+svcCalls.length+'件');
+ok(r.body.probe.via==='service_binding',
+   '★★pj-img の写真はサービスバインディング（IMG_SVC）で見る');
+ok(svcCalls.length===1&&!calls.some(c=>/\/i\/\d{8}\//.test(c.url)),
+   '★★同じアカウントの workers.dev へ普通の fetch はしない（error code: 1042 を避ける）');
+
+console.log('\n=== eBay 自身の写真も元画像にできる（預け直しの下調べ）===');
+calls=[]; svcCalls=[];
+const EB='https://i.ebayimg.com/00/s/MTYwMFgxMjAw/z/aaa.jpg?set_id=8800005007';
+let re=await call('/eps/test','k',{url:EB});
+console.log('   '+JSON.stringify({ok:re.body.ok,via:re.body.probe.via,
+  status:re.body.probe.status,eps:re.body.eps_url}));
+ok(re.status===200&&re.body.ok===true,'★★i.ebayimg.com の写真を元画像にして預け直せる');
+ok(re.body.probe.via==='fetch','★eBay の写真は普通の fetch で見る');
+ok(JSON.parse((calls.find(c=>/create_image_from_url/.test(c.url))||{}).body||'{}')
+   .imageUrl===EB,'★元画像のURLをそのまま渡す');
 
 console.log('\n=== スコープが足りないとき（403）===');
 calls=[]; epsStatus=403;

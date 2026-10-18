@@ -3266,6 +3266,63 @@ i.ebayimg.com のURLが **File Exchange の `PicURL`** と
 テストは `tests/epsdiag.mjs`（36項目）。回帰は47本・1,559項目すべて通った。
 **pj-sync のデプロイが必要（D1 の変更は無い）。**
 
+## 7.42 写真を eBay 保管（EPS）に切り替える（2026-10-18・sw.js v155）
+
+7.41 の調べもので分かったこと（ItemID 880025406600 の実測）。
+
+| | 実測 |
+| --- | --- |
+| `PictureURL` | 3枚とも `i.ebayimg.com`（URL の `MTYwMFgxMjAw` は `1600X1200`。**メインも含め3枚とも取り込めている**） |
+| `PictureSource` | `Vendor`（eBay の台帳では「自前ホストの出品」のまま） |
+| `ExternalPictureURL` | **メイン画像の R2 URL だけ1件** |
+
+公式リファレンスどおりの状態で、自前ホスト出品では**ギャラリー画像（1枚目）の元の外部URLだけ**が
+`ExternalPictureURL` に残り、残りは EPS の URL として `PictureURL` に入る。
+つまり **1枚目だけ R2 に紐づいたまま**で、アプリの Revise がそこを取り直して失敗していた。
+R2 側に非対称は無い（3枚とも同じ加工・同じパス・eBay は3枚とも 1600×1200 で取得済み）。
+
+### 1. 直し方
+
+`ExternalPictureURL` は `DeletedField` では消せない（出品時に入れた任意項目は revise で
+削除できない）。**写真一式を EPS の URL で入れ替える**しか道がないので、
+`POST /ebay/pics/switch`（管理者だけ）を足した。
+
+| 方式 | 中身 |
+| --- | --- |
+| `reuse`（預け直さない） | いまの `i.ebayimg.com` の URL をそのまま送り直す。呼び出し3回で済む |
+| `fresh`（預け直す） | 1枚ずつ Media API（`createImageFromUrl`）で作り直してから送る。**URL が変わるので eBay が必ず変更と認識する**。元画像は eBay に今ある写真なので、R2 の記録が無くても預け直せる |
+| `auto`（既定） | `reuse` を試して、紐づけが消えなければ `fresh` に落とす。どちらで直ったかは `fixed_by` に入れて返す |
+
+- `reuse` が空振りしうるのは、eBay が「同じ写真・同じ並び」を変更と認識しないため（KB 5091 の注意）。
+  並びは変えない（1枚目＝メイン画像を入れ替えないため）。
+- **送るのは `PictureDetails` だけ。** 価格・数量・タイトル・`PictureSource`・`ExternalPictureURL` は
+  1つも送らない（テストで固定）。
+- 自前ホストの写真が残っている出品は `reuse` では送らない（混在は `Error 20004` になる）。
+- 前後で `GetItem` を1回ずつ呼び、`before` / `after`（枚数・紐づけの件数・`PictureSource`）を返す。
+- 1回に送れるのは **5件**（`PICS_MAX`）。2件以上は `confirm:true` が必要。
+  画面は5件ずつに小分けして送る。
+- R2（pj-img）の写真は**消さない**（差し替えや再出品に使う）。
+
+### 2. probe を直した（Cloudflare の 1042）
+
+7.41 の `POST /eps/test` が R2 を 404 と報告したのは、**同じアカウントの workers.dev へ
+Worker から fetch するとCloudflare が止める**ため（本文は `error code: 1042`＝17バイト）。
+`[[services]] IMG_SVC → pj-img` のサービスバインディングを足し、pj-img の写真は
+そちら経由で見るようにした（pj-img の配信コードをそのまま通るので、eBay が受け取るものと同じ）。
+`/eps/test` は元画像に `i.ebayimg.com` も使えるようにした（`fresh` 方式の下調べ用）。
+
+### 3. 分かっている制約
+
+- Media API の画像は**30日で期限切れ**（実測：10/17 発行 → `2026-11-16T23:51:55Z`）。
+  出品に使われている画像は消えないので、`fresh` で入れ替えた写真は期限で消えない。
+- 新規出品（File Exchange の `PicURL`）に EPS の URL を入れてよいかは**公式の明記が無い**。
+  PicURL は外部URLとして取り込んで再コピーする仕組みなので、1件で試して `GetItem` で
+  確かめてから決める（A案）。空振りなら、CSV は今のまま R2 の URL で出し、
+  出品後に上の切り替えを1回かける（B案）。
+
+テストは `tests/picswitch.mjs`（36項目）と `tests/picswitch.js`（30項目）。
+**pj-sync のデプロイが必要（`[[services]]` を足したので設定の変更も入る）。D1 の変更は無い。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。
