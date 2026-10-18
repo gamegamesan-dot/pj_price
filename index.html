@@ -847,8 +847,9 @@ body.staff #syncOnHandFix{display:none !important}
                    style="flex:1 1 0;min-width:0">
             <button class="btn" id="syncPicsOne" style="flex:0 0 auto;padding:9px 10px">1件お試し</button>
           </div>
-          <div class="note2" style="margin:4px 0 6px">まず1件で試してください。<b>預け直さない</b>方式でやってみて、それで変わらなければ<b>預け直す</b>方式に自動で切り替えます。どちらで直ったかは結果に出ます。</div>
-          <button class="btn" id="syncPicsBulk" style="width:100%">選んだ行をまとめて切り替え</button>
+          <div class="note2" style="margin:4px 0 6px">写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。</div>
+          <button class="btn" id="syncPicsBulk" style="width:100%" disabled>選んだ行をまとめて切り替え</button>
+          <div class="note2" id="syncPicsGate" style="margin-top:2px"></div>
           <div class="note2" id="syncPicsNote" style="margin-top:4px"></div>
           <div class="note2" id="syncPicsRes" style="margin-top:4px"></div>
         </div>
@@ -9701,12 +9702,33 @@ function syncPicsIdsSel(){
   });
   return out;
 }
-/* 1件ぶんの結果。前と後を並べて、どちらの方式で直ったかを出す。 */
+/* まとめて切り替えは、1件で直ることを確かめるまで押せない（6.60）。
+   880025406600 で「預け直さない」方式が空振りして写真が1枚落ちたため。 */
+var SYNC_PICS_OK='pj:picsok:v1';
+function syncPicsProven(){
+  try{ return localStorage.getItem(SYNC_PICS_OK)==='1'; }catch(e){ return false; }
+}
+function syncPicsProve(){
+  try{ localStorage.setItem(SYNC_PICS_OK,'1'); }catch(e){}
+  syncPicsGate();
+}
+/* まとめての可否と、その理由を画面に出す。 */
+function syncPicsGate(){
+  var b=$('syncPicsBulk'), n=$('syncPicsGate');
+  if(!b)return;
+  var okd=syncPicsProven();
+  b.disabled=!okd;
+  b.style.opacity=okd?'':'.5';
+  if(n)n.textContent=okd
+    ? 'まとめての切り替えが使えます（1件で直ることを確かめました）。'
+    : 'まず「1件お試し」で直ることを確かめてください。'
+      +'確かめるまで、まとめての切り替えは押せません。';
+}
+/* 1件ぶんの結果。前と後（枚数・紐づけ・PictureSource）を並べる。 */
 function syncPicsOneHtml(it){
   var b=it.before||{}, a=it.after||{};
   var how=it.fixed_by==='already'?'もともと eBay 保管だけでした'
-    :it.fixed_by==='reuse'?'預け直さずに直りました'
-    :it.fixed_by==='fresh'?'預け直して直りました':'直りました';
+    :'預け直して直りました';
   var line=function(t,p){
     return t+'：写真'+(p.n||0)+'枚／自前ホストの紐づけ '+(p.ext_n||0)+'件'
       +'／PictureSource '+esc(p.picture_source||'—'); };
@@ -9714,7 +9736,9 @@ function syncPicsOneHtml(it){
     +'<b>'+esc(it.item_id)+'</b>'+(it.title?('　'+esc(String(it.title).slice(0,40))):'')
     +'<br>'+line('前',b)
     +'<br>'+line('後',a)
-    +'<br>'+(it.done?('✅ '+how):('⚠ '+esc(it.error||'直りませんでした')))
+    +'<br>'+(it.done?('✅ '+how)
+      :('<span style="color:var(--bad);font-weight:700">⚠ '
+        +esc(it.error||'直りませんでした')+'</span>'))
     +(it.expiration?('<br>預け直した写真の期限：'+esc(String(it.expiration).slice(0,10))
       +'（この出品で使っているので消えません）'):'')
     +'</div>';
@@ -9738,11 +9762,16 @@ function syncPicsRun(ids,label){
     }
     note.textContent=label+'：送信中…（'+(k*SYNC_PICS_MAX+1)+'〜'
       +Math.min(ids.length,(k+1)*SYNC_PICS_MAX)+'件目／全'+ids.length+'件）';
+    /* 方式は預け直し（fresh）だけ。預け直さない方式は写真が落ちるのでやめた（6.60）。 */
     syncJsonPost('/ebay/pics/switch',
-      { item_ids:chunks[k], mode:'auto', confirm:true },
+      { item_ids:chunks[k], mode:'fresh', confirm:true },
       function(d){
         ((d&&d.items)||[]).forEach(function(it){
-          if(it.done)done++;
+          if(it.done){
+            done++;
+            /* 1件お試しで直ったら、まとめての切り替えを使えるようにする。 */
+            if(ids.length===1&&!it.skipped)syncPicsProve();
+          }
           html+=syncPicsOneHtml(it);
         });
         res.innerHTML=html;
@@ -9762,11 +9791,17 @@ $('syncPicsOne').onclick=function(){
     return;
   }
   if(!confirm('ItemID '+id+' の写真を eBay 保管に切り替えます。\n'
+    +'・写真を1枚ずつ eBay に預け直してから入れ替えます\n'
     +'・写真以外（価格・数量・タイトル）は送りません\n'
+    +'・切り替えたあと写真が減っていたら、そう知らせて止めます\n'
     +'・pj-img の写真は消しません\nよろしいですか？'))return;
   syncPicsRun([id],'1件お試し');
 };
 $('syncPicsBulk').onclick=function(){
+  if(!syncPicsProven()){
+    $('syncPicsNote').textContent='まず「1件お試し」で直ることを確かめてください。';
+    return;
+  }
   var ids=syncPicsIdsSel();
   if(!ids.length){
     $('syncPicsNote').textContent='一覧のチェックで、eBayに出している行（ItemIDがある行）を選んでください。';
@@ -9784,6 +9819,7 @@ $('syncBarPics').onclick=function(){
   box.scrollIntoView({block:'start'});
   $('syncPicsBulk').click();
 };
+syncPicsGate();
 /* 「最後に値下げした日」を D1 に送る。送れた行は表示もその場で合わせる
    （次の取り込みを待たずに、同じ行をもう一度書き出さないようにする）。 */
 function syncMarkPost(rows,at,noteId){
@@ -12275,7 +12311,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v159';   // sw.js の const V と必ず同じ値にする
+var APP_V='v160';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

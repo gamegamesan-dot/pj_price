@@ -2762,44 +2762,40 @@ async function ebayRevisePics(env, run, token, itemId, urls) {
   return { ok, status: resp.status, ack: ack || ("HTTP" + resp.status),
            why: ok ? "" : (why || ("HTTP " + resp.status)) };
 }
-/* 1回ぶんの切り替え。
-   reuse … いまの i.ebayimg.com の URL をそのまま送り直す（預け直さない）
-   fresh … 1枚ずつ Media API で作り直してから送る（URL が変わる）
-   reuse が効かないことがあるのは、eBay が「同じ写真・同じ並び」を
-   変更と認識しないため（KB 5091 の注意）。 */
-async function picSwitchOnce(env, run, token, itemId, mode) {
-  const t = { mode: mode, done: false, sent: [] };
+/* 1回ぶんの切り替え（7.44 で **預け直し（fresh）だけ**にした）。
+   写真を1枚ずつ Media API に預け直し、その URL で PictureDetails を入れ替える。
+
+   「預け直さない（reuse）」はやめた。880025406600 で試したところ、
+   いまの i.ebayimg.com の URL をそのまま送り返すと **1枚目だけ落ちて2枚になり**、
+   出品は自前ホスト扱いのままだった（アプリで足すと Error 20004）。
+   自前ホストの写真の EPS コピーは、入力の PictureURL としては使えないとみられる。
+
+   srcUrls を渡すと、その URL を元画像にして（順番そのまま）作り直す。
+   落ちた写真を元の R2 の URL から戻すときに使う。 */
+async function picSwitchOnce(env, run, token, itemId, srcUrls) {
+  const fix = !!(srcUrls && srcUrls.length);
+  const t = { mode: "fresh", done: false, sent: [], fixed_urls: fix };
   const before = await getItemPics(env, run, token, itemId);
   t.before = before.pictures || null;
   t.title = before.title || "";
   if (!before.ok) { t.error = before.error || ("GetItem が " + before.ack); return t; }
-  const src = before.pictures.picture_url.slice();
+  const src = fix ? srcUrls.slice() : before.pictures.picture_url.slice();
   if (!src.length) { t.error = "この出品には写真がありません"; return t; }
-  if (before.pictures.eps_only) {
+  /* もう eBay 保管だけなら触らない。ただし写真を指定されたとき（戻す作業）は行う。 */
+  if (!fix && before.pictures.eps_only) {
     t.done = true; t.skipped = true; t.after = before.pictures;
     t.note = "すでに eBay 保管だけになっています";
     return t;
   }
-  if (mode === "fresh") {
-    t.eps = [];
-    for (const u of src) {
-      const r = await epsFromUrl(env, run, token, u);
-      t.eps.push({ source: u, ok: r.ok, eps_url: r.eps_url, image_id: r.image_id,
-                   status: r.status, expiration: r.expiration, error: r.error || "" });
-      if (!r.ok) { t.error = "写真を預け直せませんでした：" + (r.error || r.status); return t; }
-      t.sent.push(r.eps_url);
-    }
-    t.expiration = t.eps.length ? t.eps[0].expiration : "";
-  } else {
-    /* 預け直さない。自前ホストの URL が混ざっていたら reuse では直せない
-       （混在は eBay が拒む：Error 20004）。 */
-    if (!before.pictures.all_eps) {
-      t.error = "まだ eBay に取り込まれていない写真があるため、"
-        + "預け直さない方式では切り替えられません";
-      return t;
-    }
-    t.sent = src;
+  t.eps = [];
+  for (const u of src) {
+    const r = await epsFromUrl(env, run, token, u);
+    t.eps.push({ source: u, ok: r.ok, eps_url: r.eps_url, image_id: r.image_id,
+                 status: r.status, expiration: r.expiration, error: r.error || "" });
+    if (!r.ok) { t.error = "写真を預け直せませんでした：" + (r.error || r.status); return t; }
+    t.sent.push(r.eps_url);
   }
+  t.expiration = t.eps.length ? t.eps[0].expiration : "";
   t.revise = await ebayRevisePics(env, run, token, itemId, t.sent);
   if (!t.revise.ok) {
     t.error = "ReviseFixedPriceItem が失敗：" + t.revise.why;
@@ -2808,29 +2804,37 @@ async function picSwitchOnce(env, run, token, itemId, mode) {
   const after = await getItemPics(env, run, token, itemId);
   t.after = after.pictures || null;
   if (!after.ok) { t.error = "切り替えたあとの GetItem に失敗：" + (after.error || after.ack); return t; }
+  t.n_sent = t.sent.length;
+  t.n_before = before.pictures.n;
+  t.n_after = after.pictures.n;
+  /* 送った枚数より減っていたら、eBay が写真を落としている。
+     そのまま「できました」と言わずに止める（7.44）。 */
+  if (t.n_after < t.n_sent || t.n_after < t.n_before) {
+    t.error = "写真が減りました（前 " + t.n_before + "枚・送った " + t.n_sent
+      + "枚 → 後 " + t.n_after + "枚）。eBayアプリで写真を確かめてください";
+    return t;
+  }
   t.done = !!after.pictures.eps_only;
   return t;
 }
-/* 出品の写真を eBay 保管（EPS）だけにする（7.42）。
-   mode='auto' は reuse を試して、効かなければ fresh に落とす。
-   どちらで直ったかは fixed_by に入れて返す。 */
-async function jobPicSwitch(env, itemId, mode) {
+/* 出品の写真を eBay 保管（EPS）だけにする（7.42／7.44）。
+   方式は預け直し（fresh）だけ。urls を渡すと、その写真で入れ替える。 */
+async function jobPicSwitch(env, itemId, urls) {
   const run = newRun("pics-switch");
-  const out = { ok: false, item_id: itemId, mode: mode, done: false, fixed_by: "", tries: [] };
+  const out = { ok: false, item_id: itemId, mode: "fresh", done: false,
+                fixed_by: "", tries: [] };
   try {
     const token = await ebayToken(env, run);
-    const modes = (mode === "auto") ? ["reuse", "fresh"] : [mode];
-    for (const md of modes) {
-      const t = await picSwitchOnce(env, run, token, itemId, md);
-      out.tries.push(t);
-      out.title = out.title || t.title || "";
-      if (t.error) { out.error = t.error; break; }
-      if (t.done) { out.done = true; out.fixed_by = t.skipped ? "already" : md; break; }
-    }
-    const last = out.tries[out.tries.length - 1] || null;
-    out.before = (out.tries[0] && out.tries[0].before) || null;
-    out.after = (last && last.after) || null;
-    out.expiration = (last && last.expiration) || "";
+    const t = await picSwitchOnce(env, run, token, itemId, urls);
+    out.tries.push(t);
+    out.title = t.title || "";
+    if (t.error) out.error = t.error;
+    else if (t.done) { out.done = true; out.fixed_by = t.skipped ? "already" : "fresh"; }
+    out.before = t.before || null;
+    out.after = t.after || null;
+    out.n_before = t.n_before;
+    out.n_after = t.n_after;
+    out.expiration = t.expiration || "";
     out.ok = out.done;
     if (!out.done && !out.error)
       out.error = "切り替えても自前ホストの紐づけが消えませんでした";
@@ -3702,14 +3706,14 @@ export default {
             400, origin);
         return json(await jobEpsTest(env, u), 200, origin);
       }
-      /* 出品の写真を eBay 保管（EPS）だけにする（7.42）。
+      /* 出品の写真を eBay 保管（EPS）だけにする（7.42／7.44）。
          item_id（1件お試し）か item_ids（まとめて・上限 PICS_MAX 件）。
-         2件以上は confirm:true が無いと動かさない（押し間違い防止）。 */
+         2件以上は confirm:true が無いと動かさない（押し間違い防止）。
+         方式は預け直し（fresh）だけ。urls を渡すと、その写真（順番そのまま）で
+         入れ替える（落ちた写真を元の URL から戻すときに使う）。 */
       if (request.method === "POST" && url.pathname === "/ebay/pics/switch") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
-        const md = String((body && body.mode) || "auto");
-        const mode = (md === "reuse" || md === "fresh") ? md : "auto";
         const digits = (v) => String(v == null ? "" : v).replace(/[^0-9]/g, "");
         const raw = Array.isArray(body && body.item_ids)
           ? body.item_ids : [(body && body.item_id)];
@@ -3725,9 +3729,29 @@ export default {
         if (ids.length > 1 && body.confirm !== true)
           return json({ error: "need_confirm",
             detail: "2件以上は confirm:true を付けてください" }, 400, origin);
+        /* 写真を指定して入れ替えるとき（落ちた写真を戻す）。
+           pj-img（R2）か eBay の写真のURLだけ。並べた順がそのまま写真の順になる。 */
+        let urls = null;
+        if (Array.isArray(body && body.urls) && body.urls.length) {
+          if (ids.length > 1)
+            return json({ error: "urls_one_item",
+              detail: "写真を指定できるのは1件のときだけです" }, 400, origin);
+          urls = [];
+          for (const v of body.urls) {
+            const u = String(v || "").trim();
+            const okPj = /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
+            const okEbay = /^https:\/\/i\.ebayimg\.com\/[A-Za-z0-9/._$?=&-]+$/.test(u);
+            if (!(okPj || okEbay))
+              return json({ error: "bad_url",
+                detail: "写真のURLが違います：" + u.slice(0, 120) }, 400, origin);
+            urls.push(u);
+          }
+          if (urls.length > 24)
+            return json({ error: "too_many_pics", detail: "写真は24枚までです" }, 400, origin);
+        }
         const items = [];
-        for (const id of ids) items.push(await jobPicSwitch(env, id, mode));
-        return json({ ok: items.every((x) => x.ok), n: items.length, mode: mode,
+        for (const id of ids) items.push(await jobPicSwitch(env, id, urls));
+        return json({ ok: items.every((x) => x.ok), n: items.length, mode: "fresh",
                       done: items.filter((x) => x.done).length,
                       items: items }, 200, origin);
       }

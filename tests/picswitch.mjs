@@ -1,6 +1,8 @@
 /* Worker：写真を eBay 保管（EPS）に切り替える（7.42）
    ・POST /ebay/pics/switch … 出品の写真を EPS だけにして、自前ホストの紐づけを外す
-   ・mode=auto は「預け直さない（reuse）」→ だめなら「預け直す（fresh）」
+   ・方式は「預け直す（fresh）」だけ（7.44）。預け直さない方式は写真が落ちるのでやめた
+   ・切り替えたあとに写真が減っていたら「写真が減りました」と出して止める
+   ・urls を渡すと、その写真（順番そのまま）で入れ替える（落ちた写真を戻す）
    ・送るのは PictureDetails だけ（価格・数量・タイトルは1つも送らない）
    ・管理者だけ／2件以上は confirm:true／1回 PICS_MAX 件まで */
 import { harness, makeEnv, asJson } from './lib.mjs';
@@ -24,10 +26,11 @@ const call=async(body,key)=>asJson(await worker.fetch(
 const R2='https://pj-img.example.workers.dev/i/20261017/'
   +'9113905f-e34f-44b5-9671-54f525b28e49.jpg';
 const EPS=(n)=>'https://i.ebayimg.com/00/s/MTYwMFgxMjAw/z/old'+n+'/$_1.JPG?set_id=88';
-let calls=[], state=null, reuseWorks=true, reviseAck='Success', newId=0;
+let calls=[], state=null, reuseWorks=true, reviseAck='Success', newId=0, drop=0;
 const reset=(o)=>{
   calls=[]; newId=0; reuseWorks=(o&&'reuseWorks' in o)?o.reuseWorks:true;
   reviseAck=(o&&o.ack)||'Success';
+  drop=(o&&o.drop)||0;
   state={ pics:(o&&o.pics)||[EPS(1),EPS(2),EPS(3)],
           ext:(o&&'ext' in o)?o.ext:[R2],
           source:(o&&o.source)||'Vendor' };
@@ -63,7 +66,11 @@ globalThis.fetch=async(u,i)=>{
         &&sent.every((u,k)=>u===state.pics[k]);
       /* 写真が変わったとき（または eBay が同じURLでも変更と認めたとき）だけ、
          自前ホストの紐づけが消えて EPS 扱いになる。 */
-      if(!same||reuseWorks){ state.pics=sent; state.ext=[]; state.source='EPS'; }
+      if(!same||reuseWorks){
+        /* drop を立てると、eBay が1枚目を落とす（880025406600 で起きたこと）。 */
+        state.pics=drop?sent.slice(drop):sent;
+        state.ext=[]; state.source='EPS';
+      }
       return new Response('<ReviseFixedPriceItemResponse><Ack>Success</Ack>'
         +'</ReviseFixedPriceItemResponse>',{status:200,headers:{'content-type':'text/xml'}});
     }
@@ -103,83 +110,91 @@ ok(!/StartPrice|Quantity|<Title>|ListingDetails|PictureSource|ExternalPictureURL
    '★★価格・数量・タイトル・PictureSource・ExternalPictureURL は送らない');
 ok(W.PICS_MAX===5,'★1回の上限は5件');
 
-console.log('\n=== 預け直さないで直る場合（reuse）===');
+console.log('\n=== 預け直して切り替える（fresh だけ）===');
 reset({});
-let r=await call({item_id:'880025406600',mode:'auto'});
+let r=await call({item_id:'880025406600'});
 const it=r.body.items[0];
 console.log('   前: '+JSON.stringify({n:it.before.n,ext:it.before.ext_n,
   source:it.before.picture_source}));
 console.log('   後: '+JSON.stringify({n:it.after.n,ext:it.after.ext_n,
   source:it.after.picture_source}));
-console.log('   直し方: '+it.fixed_by+'／試した回数 '+it.tries.length
-  +'／預け直し '+creates().length+'件');
+console.log('   直し方: '+it.fixed_by+'／預け直し '+creates().length+'件'
+  +'／送った写真 '+JSON.stringify(it.tries[0].sent));
 ok(r.status===200&&r.body.ok===true&&it.done===true,'★切り替えられた');
-ok(it.fixed_by==='reuse','★★預け直さずに直った（どちらで直ったかが分かる）');
-ok(it.tries.length===1&&creates().length===0,
-   '★★reuse で直ったら Media API は呼ばない');
+ok(it.fixed_by==='fresh'&&r.body.mode==='fresh','★★方式は預け直し（fresh）だけ');
+ok(creates().length===3,'★★写真3枚ぶんを Media API で預け直す');
+ok(it.tries[0].sent.every((u)=>/i\.ebayimg\.com\/.*new/.test(u)),
+   '★★新しい EPS の URL を送る（URL が変わるので eBay が変更と認識する）');
+ok(it.tries.length===1,'★★預け直さない方式は試さない（写真が落ちるため）');
 ok(it.before.ext_n===1&&it.before.picture_source==='Vendor',
    '★前は自前ホストの紐づけが1件（メイン画像）');
 ok(it.after.ext_n===0&&it.after.eps_only===true&&it.after.picture_source==='EPS',
    '★★後は紐づけが消えて eBay 保管だけになる');
-ok(it.after.n===3,'★写真は3枚のまま（並びも変えない）');
-ok(it.after.main===it.before.main,'★★メイン画像は入れ替わらない');
+ok(it.after.n===3&&it.n_before===3&&it.n_after===3,'★枚数は変わらない');
 ok(revises().length===1,'★Revise は1回だけ');
 ok(!/StartPrice|Quantity|<Title>/.test(revises()[0].body),
    '★★実際に送った中身にも価格・数量・タイトルは入らない');
 ok(calls.filter((c)=>c.headers['X-EBAY-API-CALL-NAME']==='GetItem').length===2,
    '★前と後で GetItem を1回ずつ（結果を並べて出せる）');
 
-console.log('\n=== 預け直さないと効かない場合は預け直す（auto → fresh）===');
-reset({reuseWorks:false});
-r=await call({item_id:'880025406600',mode:'auto'});
+console.log('\n=== 写真が減ったら止める（7.44）===');
+reset({drop:1});
+r=await call({item_id:'880025406600'});
 const it2=r.body.items[0];
-console.log('   試した方式: '+it2.tries.map((t)=>t.mode+(t.done?'○':'×')).join(' → '));
-console.log('   預け直し: '+creates().length+'件／新しい写真: '
-  +JSON.stringify(it2.tries[1].sent));
-ok(it2.done===true&&it2.fixed_by==='fresh','★★reuse が効かなければ fresh で直す');
-ok(it2.tries.length===2&&it2.tries[0].done===false,'★reuse を先に試している');
-ok(creates().length===3,'★★写真3枚ぶんを Media API で預け直す');
-ok(it2.tries[1].sent.every((u)=>/i\.ebayimg\.com\/.*new/.test(u)),
-   '★★新しい EPS の URL を送る（URL が変わるので eBay が変更と認識する）');
-ok(it2.tries[1].eps.every((e)=>e.ok&&e.source.indexOf('i.ebayimg.com')>=0),
-   '★元画像は eBay に今ある写真（R2 の記録が無くても預け直せる）');
-ok(it2.expiration==='2026-11-17T00:00:00.000Z','★預けた写真の期限も返す');
-ok(it2.after.ext_n===0&&it2.after.eps_only===true,'★★紐づけが消える');
-ok(revises().length===2,'★Revise は reuse と fresh で1回ずつ');
-ok(!revises().some((c)=>/StartPrice|Quantity|<Title>/.test(c.body)),
-   '★★どちらの Revise にも価格・数量・タイトルは入らない');
+console.log('   '+JSON.stringify({done:it2.done,n_sent:it2.tries[0].n_sent,
+  n_after:it2.n_after,error:it2.error}));
+ok(it2.done===false&&r.body.ok===false,'★★減ったときは「できました」と言わない');
+ok(/写真が減りました/.test(it2.error||''),'★★「写真が減りました」と出す');
+ok(/前 3枚・送った 3枚 → 後 2枚/.test(it2.error||''),'★★枚数も出す');
+
+console.log('\n=== 落ちた写真を元の URL から戻す（7.44）===');
+reset({pics:[EPS(2),EPS(3)],ext:[R2]});   // メインが落ちて2枚になった状態
+r=await call({item_id:'880025406600',urls:[R2,EPS(2),EPS(3)]});
+const it3=r.body.items[0];
+console.log('   送った写真: '+JSON.stringify(it3.tries[0].sent));
+console.log('   元画像: '+JSON.stringify(it3.tries[0].eps.map((e)=>e.source)));
+ok(it3.done===true&&it3.n_before===2&&it3.n_after===3,
+   '★★2枚から3枚に戻せる（増えるのは止めない）');
+ok(it3.tries[0].eps[0].source===R2,'★★1枚目は指定した R2 の URL（メインに戻る）');
+ok(creates().length===3,'★指定した3枚を預け直す');
+ok(it3.after.ext_n===0&&it3.after.picture_source==='EPS','★自前ホストの紐づけも消える');
+r=await call({item_id:'880025406600',urls:['https://example.com/a.jpg']});
+ok(r.status===400&&r.body.error==='bad_url','★関係ないURLは 400');
+r=await call({item_ids:['880025406600','880025406601'],urls:[R2],confirm:true});
+ok(r.status===400&&r.body.error==='urls_one_item','★写真を指定できるのは1件のときだけ');
 
 console.log('\n=== もう eBay 保管だけの出品は触らない ===');
 reset({ext:[],source:'EPS'});
-r=await call({item_id:'880025406600',mode:'auto'});
+r=await call({item_id:'880025406600'});
 console.log('   '+JSON.stringify({done:r.body.items[0].done,
   fixed_by:r.body.items[0].fixed_by,note:r.body.items[0].tries[0].note}));
 ok(r.body.items[0].done===true&&r.body.items[0].fixed_by==='already',
    '★★すでに eBay 保管だけなら「もともと」と返す');
 ok(revises().length===0,'★★出品を書き換えない');
 
-console.log('\n=== 自前ホストの写真が残っている出品 ===');
-reset({pics:[R2,EPS(2)],reuseWorks:false});
-r=await call({item_id:'880025406600',mode:'reuse'});
-console.log('   '+JSON.stringify({done:r.body.items[0].done,error:r.body.items[0].error}));
-ok(r.body.items[0].done===false
-   &&/預け直さない方式では切り替えられません/.test(r.body.items[0].error||''),
-   '★★混在（Error 20004）になる形は reuse では送らない');
-ok(revises().length===0,'★送る前に止める');
+console.log('\n=== 自前ホストの写真が残っている出品も直せる ===');
+reset({pics:[R2,EPS(2)]});
+r=await call({item_id:'880025406600'});
+console.log('   '+JSON.stringify({done:r.body.items[0].done,
+  sent:r.body.items[0].tries[0].sent}));
+ok(r.body.items[0].done===true,'★★R2 の写真もそのまま預け直して切り替えられる');
+ok(r.body.items[0].tries[0].eps[0].source===R2,'★元画像は R2 の写真');
+ok(r.body.items[0].tries[0].sent.every((u)=>/i\.ebayimg\.com/.test(u)),
+   '★★送るのは EPS の URL だけ（混在にしない）');
 
 console.log('\n=== eBay が断ったとき ===');
 reset({ack:'Failure'});
-r=await call({item_id:'880025406600',mode:'reuse'});
+r=await call({item_id:'880025406600'});
 console.log('   '+JSON.stringify({ok:r.body.ok,error:r.body.items[0].error}));
 ok(r.body.ok===false&&/20004|ReviseFixedPriceItem が失敗/.test(r.body.items[0].error||''),
    '★★失敗の理由（エラーコードと文）をそのまま返す');
 
 console.log('\n=== まとめて（確認つき・上限あり）===');
 reset({});
-r=await call({item_ids:['880025406600','880025406601'],mode:'auto',confirm:true});
+r=await call({item_ids:['880025406600','880025406601'],confirm:true});
 console.log('   '+JSON.stringify({n:r.body.n,done:r.body.done}));
 ok(r.status===200&&r.body.n===2&&r.body.done===2,'★2件まとめて切り替えられる');
-r=await call({item_ids:['880025406600','880025406601'],mode:'auto'});
+r=await call({item_ids:['880025406600','880025406601']});
 ok(r.status===400&&r.body.error==='need_confirm',
    '★★2件以上は confirm:true が無いと動かない');
 r=await call({item_ids:['880025406600','880025406601','880025406602',

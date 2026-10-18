@@ -1,6 +1,7 @@
-/* 写真を eBay 保管に切り替える画面（6.55）
+/* 写真を eBay 保管に切り替える画面（6.55／6.60）
    ・販売連携に「写真を eBay 保管に切り替え」を置く（管理者のキーのときだけ）
-   ・ItemID を入れて「1件お試し」→ pj-sync の /ebay/pics/switch に mode=auto で送る
+   ・ItemID を入れて「1件お試し」→ pj-sync の /ebay/pics/switch に mode=fresh で送る
+   ・まとめては、1件で直ることを確かめるまで押せない（6.60）
    ・前と後（写真の枚数・自前ホストの紐づけ・PictureSource）と、
      どちらの方式で直ったかを画面に出す
    ・選んだ行をまとめて切り替えるときは、確認を出してから5件ずつ送る
@@ -25,7 +26,9 @@ const setup=async(role)=>await p.evaluate((role)=>{
   $('syncApi').value='https://pj-sync.example.workers.dev'; $('syncKey').value='k';
   $('fx').value='160'; $('baseProfit').value='1000'; $('linkRate').value='30';
   $('saleRate').value='15'; $('usTaxRate').value='8';
-  window.__posts=[]; window.__fail=0; window.__mode='reuse';
+  window.__posts=[]; window.__fail=0; window.__mode='fresh';
+  try{ localStorage.removeItem('pj:picsok:v1'); }catch(e){}
+  syncPicsGate();
   const real=window.fetch;
   window.fetch=function(u,i){
     const url=String(u), body=(i&&i.body)?JSON.parse(i.body):null;
@@ -35,11 +38,17 @@ const setup=async(role)=>await p.evaluate((role)=>{
     if(/\/ebay\/pics\/switch/.test(url)){
       window.__posts.push(body);
       if(window.__fail)return res({error:'too_many',max:5},400);
-      const fresh=(window.__mode==='fresh');
+      const lost=(window.__mode==='lost');      // 写真が減った回
       const items=(body.item_ids||[]).map(function(id){
+        if(lost)return { ok:false, item_id:id, title:'Satan Gundam SDX Figure',
+          done:false, fixed_by:'', n_before:3, n_after:2,
+          error:'写真が減りました（前 3枚・送った 3枚 → 後 2枚）。'
+            +'eBayアプリで写真を確かめてください',
+          before:{ n:3, ext_n:1, picture_source:'Vendor', eps_only:false },
+          after:{ n:2, ext_n:1, picture_source:'Vendor', eps_only:false } };
         return { ok:true, item_id:id, title:'Satan Gundam SDX Figure',
-          done:true, fixed_by:fresh?'fresh':'reuse',
-          expiration:fresh?'2026-11-17T00:00:00.000Z':'',
+          done:true, fixed_by:'fresh', n_before:3, n_after:3,
+          expiration:'2026-11-17T00:00:00.000Z',
           before:{ n:3, ext_n:1, picture_source:'Vendor', eps_only:false },
           after:{ n:3, ext_n:0, picture_source:'EPS', eps_only:true } };
       });
@@ -81,6 +90,13 @@ ok(await vis('#syncPicsBox')===true,'★★販売連携に「写真を eBay 保�
 ok(await vis('#syncPicsId')===true&&await vis('#syncPicsOne')===true,
    '★ItemID の欄と「1件お試し」のボタンがある');
 ok(await vis('#syncPicsBulk')===true,'★「選んだ行をまとめて切り替え」もある');
+const gate0=await p.evaluate(()=>({dis:$('syncPicsBulk').disabled,
+  note:$('syncPicsGate').textContent, proven:syncPicsProven()}));
+console.log('   '+JSON.stringify(gate0));
+ok(gate0.dis===true&&gate0.proven===false,
+   '★★まとめては、1件で直ることを確かめるまで押せない（6.60）');
+ok(/まず「1件お試し」で直ることを確かめてください/.test(gate0.note),
+   '★押せない理由を書く');
 const sum=await p.evaluate(()=>$('syncPicsBox').querySelector('summary').textContent);
 console.log('   見出し: '+sum);
 const lead=await p.evaluate(()=>$('syncPicsBox').textContent);
@@ -89,7 +105,7 @@ ok(/写真以外（価格・数量・タイトル）は送りません/.test(lea
 ok(/pj-img の写真は消しません/.test(lead),'★★R2 の写真は消さないと書いてある');
 
 console.log('\n=== 1件お試し ===');
-await p.evaluate(()=>{ window.__mode='reuse'; $('syncPicsBox').open=true; });
+await p.evaluate(()=>{ window.__mode='fresh'; $('syncPicsBox').open=true; });
 await p.fill('#syncPicsId','880025406600');
 await p.click('#syncPicsOne');
 await p.waitForTimeout(400);
@@ -99,8 +115,8 @@ console.log('   送った中身: '+JSON.stringify(st.posts));
 console.log('   結果: '+st.res.replace(/\s+/g,' ').trim());
 ok(st.posts.length===1&&st.posts[0].item_ids.join()==='880025406600',
    '★★ItemID を1件だけ送る');
-ok(st.posts[0].mode==='auto',
-   '★★mode=auto（預け直さない→だめなら預け直す）で送る');
+ok(st.posts[0].mode==='fresh',
+   '★★方式は預け直し（fresh）だけで送る（6.60）');
 ok(/よろしいですか/.test(dlg.join('\n')),'★確認を出してから送る');
 ok(/写真以外（価格・数量・タイトル）は送りません/.test(dlg.join('\n')),
    '★★確認の文でも「写真以外は送らない」と伝える');
@@ -108,17 +124,29 @@ ok(/写真3枚/.test(st.res)&&/自前ホストの紐づけ 1件/.test(st.res)
    &&/自前ホストの紐づけ 0件/.test(st.res),
    '★★前と後（写真の枚数・自前ホストの紐づけ）を並べて出す');
 ok(/Vendor/.test(st.res)&&/EPS/.test(st.res),'★★PictureSource の前後も出す');
-ok(/預け直さずに直りました/.test(st.res),'★★どちらの方式で直ったかを出す');
+ok(/預け直して直りました/.test(st.res),'★★預け直して直ったことを出す');
+ok(/期限：2026-11-17/.test(st.res),'★★預け直した写真の期限（30日）を出す');
 ok(/1件お試し：1／1件/.test(st.note),'★できた件数を出す');
+const gate1=await p.evaluate(()=>({dis:$('syncPicsBulk').disabled,
+  note:$('syncPicsGate').textContent,
+  saved:localStorage.getItem('pj:picsok:v1')||''}));
+console.log('   '+JSON.stringify(gate1));
+ok(gate1.dis===false&&gate1.saved==='1',
+   '★★1件で直ったら、まとめても押せるようになる');
+ok(/まとめての切り替えが使えます/.test(gate1.note),'★使えることを書く');
 
-console.log('\n=== 預け直して直ったとき ===');
-await p.evaluate(()=>{ window.__posts=[]; window.__mode='fresh'; });
+console.log('\n=== 写真が減ったとき（6.60）===');
+await p.evaluate(()=>{ window.__posts=[]; window.__mode='lost'; });
 await p.click('#syncPicsOne');
 await p.waitForTimeout(400);
-st=await p.evaluate(()=>({res:$('syncPicsRes').textContent}));
+st=await p.evaluate(()=>({res:$('syncPicsRes').textContent,
+  note:$('syncPicsNote').textContent}));
 console.log('   '+st.res.replace(/\s+/g,' ').trim());
-ok(/預け直して直りました/.test(st.res),'★★預け直したときはそう出す');
-ok(/期限：2026-11-17/.test(st.res),'★★預け直した写真の期限（30日）を出す');
+ok(/写真が減りました/.test(st.res)&&/前 3枚・送った 3枚 → 後 2枚/.test(st.res),
+   '★★「写真が減りました」と枚数を出す');
+ok(!/直りました/.test(st.res),'★★「直りました」とは出さない');
+ok(/1件お試し：0／1件/.test(st.note),'★できた件数には数えない');
+await p.evaluate(()=>{ window.__mode='fresh'; });
 
 console.log('\n=== ItemID の形・確認のキャンセル ===');
 await p.evaluate(()=>{ window.__posts=[]; });
