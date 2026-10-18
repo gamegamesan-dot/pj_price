@@ -4854,6 +4854,32 @@ function csvMoneyBar(r){
 }
 /* 販売連携タブの帯。売値は**eBayに出ている今の売値**。
    仕入値が分からない行は Amazon基準価格を仮に使う（値付けと同じ優先順）。 */
+/* eBayのセール（Promotional Sale／Markdown Manager）の行（6.59）。
+   セール中は値段を変えられない（eBay のエラー 21919248）ので、
+   値上げ・自動値下げの対象から外す。セールが終われば次の取り込みで戻る。
+   ebay_price は **セール後の値段** なので、利益と赤字はそのまま計算してよい。 */
+function syncOnSale(r){ return Number((r||{}).ebay_sale||0)>0; }
+/* 値引き率（セール前の値段が取れたときだけ。取れない出品は 0）。 */
+function syncSaleOff(r){
+  var o=+((r||{}).ebay_sale_orig||0), now=+((r||{}).ebay_price||0);
+  if(!(o>0)||!(now>0)||now>=o)return 0;
+  return Math.round((1-now/o)*100);
+}
+function syncSaleText(r){
+  if(!syncOnSale(r))return '';
+  var o=+(r.ebay_sale_orig||0), off=syncSaleOff(r);
+  var end=String(r.ebay_sale_end||'').slice(0,16).replace('T',' ');
+  return 'eBayのセール中'
+    +((o>0)?('：'+usd(o)+' → '+usd(+r.ebay_price||0)+(off?('（'+off+'%引き）'):''))
+           :'（セール前の値段は取れていません）')
+    +(end?('　'+end+' まで'):'')
+    +'　値上げと自動値下げはお休みします（利益はセール後の値段で計算）';
+}
+function syncSaleHtml(r){
+  if(!syncOnSale(r))return '';
+  return '<div class="note2" style="margin-top:2px">'
+    +'<span style="color:#8a4f00;font-weight:700">'+esc(syncSaleText(r))+'</span></div>';
+}
 function syncMoneyBar(r){
   var c=syncCostOf(r), temp=false;
   if(!(c.v>0)){
@@ -4865,6 +4891,9 @@ function syncMoneyBar(r){
   return moneyBarHtml({ key:r.asin+'|'+r.cond, cost:c.v, costTemp:temp,
     costUnknown:!(c.v>0), costNote:syncFromName(c.from),
     price:price,
+    /* セール中は eBay に出ている値段（CurrentPrice）がセール後の値段なので、
+       そのまま利益を出す。枠には「セール後」と書いて取り違えを防ぐ（6.59）。 */
+    priceNote:syncOnSale(r)?'セール後':'',
     profit:(c.v>0)?csvProfitAt(c.v,w,price,syncFlatOf(r)):null });
 }
 /* 行のバッジ。一覧を作り直さずに1行だけ入れ替えられるよう、ここにまとめる。 */
@@ -10215,6 +10244,8 @@ var SYNC_POST_CHUNK=200;              // 1回に送る件数
 var SYNC_MIGRATE=[
   ['rv_','migrate-0018-auto-review.sql'],
   ['md_','migrate-0016-auto-markdown.sql'],
+  ['ebay_sale_orig','migrate-0019-ebay-sale.sql'],
+  ['ebay_sale_end','migrate-0019-ebay-sale.sql'],
   ['ebay_sale','migrate-0016-auto-markdown.sql'],
   ['search_kw','migrate-0017-search-kw.sql'],
   ['ebay_bo','migrate-0015-best-offer.sql'],
@@ -10530,6 +10561,8 @@ function syncRvGo(){
   syncJsonPost('/sync',{kind:'review',approve:true},function(d){
     var msg='上げた '+Number(d.changed||0)+'件／数量0 '
       +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
+      /* セール中で変えられなかった行は失敗に数えない（6.59）。 */
+      +(Number(d.sale||0)?('／セール中で外した '+Number(d.sale)+'件'):'')
       +(Number(d.capped||0)?('／1日の上限で翌日に回した '+Number(d.capped)+'件'):'');
     $('syncRvDone').textContent=msg+'。状況を取り込んでいます…';
     b.disabled=false; syncRender();
@@ -11237,6 +11270,11 @@ function syncRowHtml(r,key){
         +'padding:1px 5px;font-size:11px;margin-right:4px">'
         +esc(rt.length?rt.join('・'):'FBA受領処理中')+'</span>';
     }
+    /* eBayのセール中（6.59）。値段を変えられないので、ひと目で分かるようにする。 */
+    if(syncOnSale(r))
+      badge+='<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">セール中'
+        +(syncSaleOff(r)?(' '+syncSaleOff(r)+'%引き'):'')+'</span>';
     /* 無在庫の印。売れたら仕入れる行なので、一覧でひと目で分かるようにする。 */
     if(syncIsDropship(r))
       badge+='<span style="display:inline-block;background:#0b6b8a;color:#fff;border-radius:2px;'
@@ -11369,6 +11407,8 @@ function syncRowHtml(r,key){
       +syncMoneyBar(r)
       +'<div>'
       +'<div class="note2" data-sbadge="'+esc(key)+'" style="margin-top:2px">'+badge+'</div>'
+      /* セール中の行は、いくら引かれているかと、いつまでかを出す（6.59）。 */
+      +syncSaleHtml(r)
       /* 次にやること（6.48）。いちばん手を動かすべきものを1行だけ出す。 */
       +syncNextHtml(r)
       +syncSoldHtml(r,key)
@@ -12235,7 +12275,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v158';   // sw.js の const V と必ず同じ値にする
+var APP_V='v159';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

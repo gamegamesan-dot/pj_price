@@ -97,8 +97,12 @@ CREATE TABLE IF NOT EXISTS items (
   md_floor         REAL,                       -- 幅を決めたときの最低売値（$）
   md_n             INTEGER,                    -- 幅を決めたときの回数（既定10）
   md_done          INTEGER NOT NULL DEFAULT 0, -- 自動で下げた回数
-  /* eBayのセール（Markdown Manager）が設定されている出品。1 ならとばす。 */
+  /* eBayのセール（Promotional Sale／Markdown Manager）が設定されている出品。
+     1 なら自動値上げ・自動値下げの対象から外す。セールが終われば次の取り込みで 0 に戻る。
+     ebay_price（CurrentPrice）は**セール後の値段**なので、利益はそのまま計算してよい。 */
   ebay_sale        INTEGER,
+  ebay_sale_orig   REAL,                      -- セール前の値段（$・migrate-0019）
+  ebay_sale_end    TEXT,                      -- セールが終わる時刻（ISO・migrate-0019）
   /* メルカリ・ヤフオクの検索語（手で直したもの）。空は「自動で作る」。
      出品CSVタブと販売連携タブで共通に使う。 */
   search_kw        TEXT,

@@ -3323,6 +3323,47 @@ Worker から fetch するとCloudflare が止める**ため（本文は `error 
 テストは `tests/picswitch.mjs`（36項目）と `tests/picswitch.js`（30項目）。
 **pj-sync のデプロイが必要（`[[services]]` を足したので設定の変更も入る）。D1 の変更は無い。**
 
+## 7.43 eBayのセール中の出品（2026-10-18・sw.js v159）
+
+セール（Promotional Sale／Markdown Manager）中の出品は **eBay が値段の変更を拒む**
+（エラー **21919248**）。これを「失敗」と数えると、人が直しようのない行が
+「3回続けて失敗」に積み上がってしまう。
+
+### 1. 失敗に数えない（4）
+
+- `ReviseInventoryStatus` の応答から**行ごとのエラー**を取り出せるようにした。
+  `Errors` の `ErrorParameters` に入っている ItemID でその行に結び付ける
+  （4件まとめて送るので、取り違えると別の行をセール扱いにしてしまう）。
+  ItemID で引けないときは、その回で失敗したのが1件だけなら全体の理由をその行の理由に使う。
+- 21919248 の行は **`res.sale` に数え、`failed` には足さない**。
+  `ebay_sale=1` を立て、`rv_fail` は増やさず、`revise_err` も残さない。
+  `rv_log` には「セール中のため変えません（21919248）」と記録する。
+- 自動値下げ（`ReviseFixedPriceItem`・1件ずつ）も同じ。値下げの回数も値段も進めない。
+- 印が立っている間は `rvSkip` / `mdSkip` が「eBayのセール中」でとばすので、eBay に送らない（6）。
+
+### 2. セールの中身を取る（5）
+
+`GetMyeBaySelling` の `SellingStatus.PromotionalSaleDetails` から
+**`OriginalPrice`（セール前の値段）** と **`EndTime`（終わる時刻）** を取り、
+`ebay_sale_orig` / `ebay_sale_end` に残す（**migrate-0019**）。
+STP/MAP の `DiscountPriceInfo` が付く出品もセール扱いにする。
+
+- **いまの売値（`CurrentPrice`＝`ebay_price`）はセール後の値段**なので、
+  利益と赤字の判定は今までどおり `ebay_price` で計算すればよい（直す必要は無かった）。
+- `PromotionalSaleDetails` は返らないことがある（eBay 側の仕様変更の報告もある）。
+  取れなかった行は画面に「セール前の値段は取れていません」と出す。
+  値引き率は `1 − いまの値段 ÷ セール前の値段` で出すので、取れた行だけ出る。
+
+### 3. セールが終わったら自動で戻す（4）
+
+`ebay_sale` は `COALESCE` をやめ、ActiveList の取り込みで **そのまま入れ替える**。
+セールが終わった回に 0 に戻り、値上げ・自動値下げの対象へ自動で戻る
+（`ebay_sale_orig` / `ebay_sale_end` も一緒に消す）。
+取り違えて印が立った行も、次の取り込み（毎時）で元に戻る。
+
+テストは `tests/sale.mjs`（22項目）と `tests/saleui.js`（17項目）。
+**pj-sync のデプロイと D1 のマイグレーション（migrate-0019-ebay-sale.sql）が必要。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

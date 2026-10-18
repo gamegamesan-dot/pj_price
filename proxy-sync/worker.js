@@ -939,10 +939,15 @@ async function ebayActive(env, run) {
                  || xmlTag(b, "BestOfferAutoAcceptPrice");
       const boDec = xmlTag(det, "MinimumBestOfferPrice")
                  || xmlTag(b, "MinimumBestOfferPrice");
-      /* eBayのセール（Markdown Manager／Promotional sale）。設定されている出品には
-         DiscountPriceInfo が付く。自動値下げはこの行をとばす（二重に下がるのを防ぐ）。
-         返らない出品もあるので、空のときは「分からない」（null）にする。 */
+      /* eBayのセール（Promotional Sale／Markdown Manager）。6.59。
+         SellingStatus.PromotionalSaleDetails に **セール前の値段（OriginalPrice）**と
+         終わる時刻（EndTime）が入る。CurrentPrice のほうは**セール後の値段**なので、
+         利益と赤字の判定は今までどおり ebay_price で計算してよい。
+         STP/MAP の DiscountPriceInfo が付く出品もセール扱いにする。
+         セールが終わったら 0 に戻す（次の取り込みで自動的に対象へ戻すため）。 */
+      const ps = xmlTag(xmlTag(b, "SellingStatus"), "PromotionalSaleDetails");
       const disc = xmlTag(b, "DiscountPriceInfo");
+      const psOrig = Number(xmlTag(ps, "OriginalPrice") || 0) || 0;
       rows.push({
         itemId: xmlTag(b, "ItemID"),
         sku: xmlTag(b, "SKU"),
@@ -955,7 +960,9 @@ async function ebayActive(env, run) {
         bo: boOn === "" ? null : (/^(true|1)$/i.test(boOn) ? 1 : 0),
         boAccept: boAcc === "" ? null : (Number(boAcc) || 0),
         boDecline: boDec === "" ? null : (Number(boDec) || 0),
-        sale: disc === "" ? null : 1,
+        sale: (ps !== "" || disc !== "") ? 1 : 0,
+        saleOrig: psOrig > 0 ? psOrig : null,
+        saleEnd: xmlTag(ps, "EndTime") || "",
       });
     }
   }
@@ -1183,7 +1190,8 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   fba_available, fba_inbound, fba_reserved,
   fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
-  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at, ebay_sale,
+  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
+  ebay_sale, ebay_sale_orig, ebay_sale_end,
   search_kw,
   rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
@@ -1646,8 +1654,13 @@ async function syncEbayActive(env, run) {
          ebay_bo=COALESCE(?13, ebay_bo),
          ebay_bo_accept=COALESCE(?14, ebay_bo_accept),
          ebay_bo_decline=COALESCE(?15, ebay_bo_decline),
-         -- eBayのセールの有無。返らなかった回で消さないよう NULL はそのまま
-         ebay_sale=COALESCE(?16, ebay_sale),
+         /* eBayのセールの有無。**そのまま入れ替える**（6.59）。
+            セールが終わった回に 0 へ戻すことで、値上げ・値下げの対象に自動で戻る。
+            セール前の値段と終わる時刻は、取れたときだけ入れ替える。 */
+         ebay_sale=?16,
+         ebay_sale_orig=CASE WHEN ?16=1 THEN COALESCE(?17, ebay_sale_orig) ELSE NULL END,
+         ebay_sale_end=CASE WHEN ?16=1 THEN COALESCE(NULLIF(?18,''), ebay_sale_end)
+                            ELSE NULL END,
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
     ).bind(k.asin, k.cond, it.itemId, it.sku, it.qty, it.price, it.currency, runAt, it.title,
@@ -1655,7 +1668,9 @@ async function syncEbayActive(env, run) {
            (it.bo === null || it.bo === undefined) ? null : it.bo,
            (it.boAccept === null || it.boAccept === undefined) ? null : it.boAccept,
            (it.boDecline === null || it.boDecline === undefined) ? null : it.boDecline,
-           (it.sale === null || it.sale === undefined) ? null : it.sale));
+           (it.sale === null || it.sale === undefined) ? 0 : it.sale,
+           (it.saleOrig === null || it.saleOrig === undefined) ? null : it.saleOrig,
+           it.saleEnd || ""));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -1867,6 +1882,10 @@ const MD_PLAN_SHOW = 50;           // 予定の一覧に入れる件数
 /* 権限が足りないときのエラー。トークンの取り直しが必要なので、
    そこで打ち切って通知する（同じ失敗を200件くり返さない）。 */
 const MD_SCOPE_ERR = /scope|insufficient permission|not authorized|21916884|931|932|1.32/i;
+/* eBayのセール中は値段を変えられない（6.59）。これは失敗ではないので数えず、
+   「セール中」の印を立てて、値上げ・自動値下げの対象から一時的に外す。
+   セールが終われば次の取り込み（ActiveList）で印が消え、自動で対象に戻る。 */
+const SALE_ERR = /21919248|promotional sale|markdown/i;
 
 async function mdSettings(env) {
   let st = {};
@@ -1964,7 +1983,7 @@ async function ebayRevise(env, run, token, itemId, price, bo) {
 async function jobMarkdown(env) {
   const run = newRun("markdown");
   const res = { mode: "off", picked: 0, changed: 0, failed: 0, skipped: 0,
-                capped: 0, plan: [] };
+                capped: 0, sale: 0, plan: [] };
   try {
     const st = await mdSettings(env);
     res.mode = st.mode;
@@ -2025,6 +2044,13 @@ async function jobMarkdown(env) {
              revise_err=NULL, revise_err_at=NULL, updated_at=?4
            WHERE asin=?1 AND cond=?2`
         ).bind(r.asin, r.cond, x.next, at, x.bo.min));
+      } else if (SALE_ERR.test(v.why)) {
+        /* セール中の出品。失敗には数えず、印を立てて次回からとばす（6.59）。 */
+        res.sale++;
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET ebay_sale=1, revise_err=NULL, revise_err_at=NULL,
+             updated_at=?3 WHERE asin=?1 AND cond=?2`
+        ).bind(r.asin, r.cond, at));
       } else {
         res.failed++;
         run.errors++;
@@ -2038,6 +2064,7 @@ async function jobMarkdown(env) {
     await runBatch(env, run, stmts);
     run.notes.push("自動値下げ：下げた " + res.changed + "件／失敗 " + res.failed
       + "件／とばした " + res.skipped + "件"
+      + (res.sale ? ("／セール中で外した " + res.sale + "件") : "")
       + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
     if (scopeErr)
       run.notes.push("権限が足りません（eBayのユーザートークンを sell.inventory の"
@@ -2063,9 +2090,10 @@ async function mdLog(env, run, st, res, scopeErr) {
   } catch (e) { /* ログの失敗で本処理を落とさない */ }
 }
 function mdNotifyText(res, st, scopeErr) {
-  if (!res.changed && !res.failed) return "";
+  if (!res.changed && !res.failed && !res.sale) return "";
   const t = ["🏷️ 自動値下げ（" + st.days + "日ごと）",
-    "下げた " + res.changed + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"];
+    "下げた " + res.changed + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
+    + (res.sale ? ("／セール中 " + res.sale + "件") : "")];
   if (res.capped) t.push("上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
   if (scopeErr) t.push("⚠️ 権限が足りません。eBayのユーザートークンを取り直してください");
   res.plan.slice(0, 10).forEach((x) => {
@@ -2208,6 +2236,28 @@ async function ebayReviseInv(env, run, token, list) {
   const ack = xmlTag(xml, "Ack");
   const why = [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage"),
                xmlTag(xml, "LongMessage")].filter(Boolean).join(" / ").slice(0, 200);
+  /* 失敗の理由を**行ごと**に取り出す（6.59）。1回に4件送るので、
+     どの出品のエラーかが分からないと「セール中」の行を取り違える。
+     Errors の ErrorParameters に ItemID が入っていればその行の理由にする。 */
+  const errs = [];
+  const reErr = /<Errors>([\s\S]*?)<\/Errors>/g;
+  let mE;
+  while ((mE = reErr.exec(xml))) {
+    const eb = mE[1];
+    const ids = [];
+    const reP = /<ErrorParameters[^>]*>([\s\S]*?)<\/ErrorParameters>/g;
+    let mP;
+    while ((mP = reP.exec(eb))) {
+      const v = xmlTag(mP[1], "Value");
+      if (/^[0-9]{9,15}$/.test(v)) ids.push(v);
+    }
+    errs.push({
+      code: xmlTag(eb, "ErrorCode"),
+      why: [xmlTag(eb, "ErrorCode"), xmlTag(eb, "ShortMessage"),
+            xmlTag(eb, "LongMessage")].filter(Boolean).join(" / ").slice(0, 200),
+      ids: ids,
+    });
+  }
   const done = {};
   const re = /<InventoryStatus>([\s\S]*?)<\/InventoryStatus>/g;
   let m;
@@ -2223,6 +2273,9 @@ async function ebayReviseInv(env, run, token, list) {
     ok: (id) => okAll || !!done[id],
     status: resp.status, ack: ack || ("HTTP" + resp.status),
     why: okAll ? "" : (why || ("HTTP " + resp.status)),
+    /* その出品あてのエラー。ItemID で引けないときは null（呼ぶ側で全体の理由を使う）。 */
+    errFor: (id) => errs.find((e) => e.ids.indexOf(String(id)) >= 0) || null,
+    errs: errs,
   };
 }
 /* 直近24時間に変えた件数（1日の上限に使う）。
@@ -2258,7 +2311,7 @@ async function jobReview(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("review");
   const res = { mode: "off", picked: 0, changed: 0, zeroed: 0, failed: 0, skipped: 0,
-                capped: 0, used: 0, max: RV_MAX_DEFAULT, fail3: 0, plan: [] };
+                capped: 0, sale: 0, used: 0, max: RV_MAX_DEFAULT, fail3: 0, plan: [] };
   try {
     const st = await rvSettings(env);
     res.mode = approve ? "approve" : st.mode;
@@ -2347,15 +2400,32 @@ async function jobReview(env, opt) {
             x.capped ? ("上限 " + st.pct + "% で丸めた（目標 $" + x.want.toFixed(2) + "）")
                      : (x.loss ? "赤字の行" : "")));
         } else {
+          /* その行あてのエラー。ItemID で引けないときは、
+             この回で失敗したのが1件だけなら全体の理由をその行の理由として使う。 */
+          const bad = part.filter((y) => !v.ok(y.item_id));
+          const one = v.errFor(x.item_id)
+                   || ((bad.length === 1) ? { code: "", why: v.why } : null);
+          const reason = (one && one.why) || v.why;
+          if (one && SALE_ERR.test(one.why || one.code || "")) {
+            /* セール中の出品。失敗には数えず、印を立てて対象から外す（6.59）。
+               連続失敗の回数も増やさない（人が直すものではないため）。 */
+            res.sale++;
+            stmts.push(env.DB.prepare(
+              `UPDATE items SET ebay_sale=1, rv_fail=0, revise_err=NULL,
+                 revise_err_at=NULL, updated_at=?3
+               WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, at));
+            stmts.push(rvLogRow(env, at, x, 0, "セール中のため変えません（21919248）"));
+            continue;
+          }
           res.failed++;
           run.errors++;
           stmts.push(env.DB.prepare(
             `UPDATE items SET rv_fail=COALESCE(rv_fail,0)+1, revise_err=?3,
                revise_err_at=?4, updated_at=?4
              WHERE asin=?1 AND cond=?2`)
-            .bind(x.asin, x.cond, ("売値の自動反映 " + v.why).slice(0, 300), at));
-          stmts.push(rvLogRow(env, at, x, 0, v.why));
-          if (RV_SCOPE_ERR.test(v.why)) { scopeErr = v.why; break; }
+            .bind(x.asin, x.cond, ("売値の自動反映 " + reason).slice(0, 300), at));
+          stmts.push(rvLogRow(env, at, x, 0, reason));
+          if (RV_SCOPE_ERR.test(reason)) { scopeErr = reason; break; }
         }
       }
       if (scopeErr) break;
@@ -2367,6 +2437,7 @@ async function jobReview(env, opt) {
       ran: { changed: res.changed, zeroed: res.zeroed, failed: res.failed } });
     run.notes.push("売値の自動反映：上げた " + res.changed + "件／数量0 " + res.zeroed
       + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
+      + (res.sale ? ("／セール中で外した " + res.sale + "件") : "")
       + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
     if (scopeErr)
       run.notes.push("権限が足りません（eBayのユーザートークンを sell.inventory の"
@@ -2412,7 +2483,8 @@ function rvNotifyText(res, st, scopeErr) {
     t.push("🔁 売値の自動反映"
       + (res.mode === "approve" ? "（まとめて実行）" : "（自動実行）"));
     t.push("上げた " + res.changed + "件／見送りで数量0 " + res.zeroed
-      + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件");
+      + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
+      + (res.sale ? ("／セール中 " + res.sale + "件") : ""));
   }
   if (res.capped)
     t.push("1日の上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
@@ -3769,6 +3841,7 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         imageSize, jobGetItem, jobEpsTest,
+                        newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
