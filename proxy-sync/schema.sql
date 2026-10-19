@@ -131,6 +131,18 @@ CREATE TABLE IF NOT EXISTS items (
   rv_at            TEXT,                      -- 目標を受け取った時刻
   rv_done_at       TEXT,                      -- 最後に eBay へ反映した時刻
   rv_fail          INTEGER NOT NULL DEFAULT 0,-- 連続失敗の回数（3でお知らせ）
+  /* 再調達中の売値の追従（migrate-0022）。restocking=1 の行だけ、
+     Amazon最安値の動きに合わせて上げも下げも自動で反映する。
+     rk_want（目標の売値）は pj_price が計算して送る。 */
+  rk_want          REAL,                      -- 目標の売値（$）
+  rk_floor         REAL,                      -- 最低売値（$）。これより下げない
+  rk_low           REAL,                      -- 基準にした Amazon最安値（円）
+  rk_n             INTEGER,                   -- 最安グループの人数（2人未満は下げを保留）
+  rk_max_cost      INTEGER,                   -- その売値での仕入値の上限（円）
+  rk_want_at       TEXT,                      -- 目標を受け取った時刻（24時間で古い）
+  rk_at            TEXT,                      -- 予定を立てた時刻
+  rk_done_at       TEXT,                      -- 反映した時刻
+  rk_fail          INTEGER NOT NULL DEFAULT 0,-- 連続失敗の回数
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
@@ -322,3 +334,36 @@ CREATE TABLE IF NOT EXISTS pb_log (
 );
 CREATE INDEX IF NOT EXISTS idx_pb_log_at ON pb_log(at);
 CREATE INDEX IF NOT EXISTS idx_pb_log_key ON pb_log(asin, cond, at);
+
+/* 再調達中の売値の追従の記録（migrate-0022）。 */
+CREATE TABLE IF NOT EXISTS rk_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  mode       TEXT NOT NULL,
+  picked     INTEGER NOT NULL DEFAULT 0,
+  up         INTEGER NOT NULL DEFAULT 0,
+  down       INTEGER NOT NULL DEFAULT 0,
+  zeroed     INTEGER NOT NULL DEFAULT 0,
+  failed     INTEGER NOT NULL DEFAULT 0,
+  skipped    INTEGER NOT NULL DEFAULT 0,
+  held       INTEGER NOT NULL DEFAULT 0,
+  capped     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rk_runs_at ON rk_runs(at);
+CREATE TABLE IF NOT EXISTS rk_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  item_id    TEXT,
+  kind       TEXT NOT NULL,
+  from_price REAL,
+  to_price   REAL,
+  low        REAL,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  why        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rk_log_at ON rk_log(at);
+CREATE INDEX IF NOT EXISTS idx_rk_log_key ON rk_log(asin, cond, at);

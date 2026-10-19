@@ -3521,6 +3521,91 @@ fresh で 880025406600 を試したところ、`ReviseFixedPriceItem` が **2191
 テストは `tests/phaseb.mjs`（54項目）と `tests/phasebui.js`（29項目）。
 **pj-sync のデプロイと D1 のマイグレーション（migrate-0021-phase-b.sql）が必要。**
 
+## 7.48 再調達中の売値を Amazon最安値に追従させる（2026-10-19・sw.js v170）
+
+画面側の決まりは「CSV一括出品」6.70。ここには**Worker に実装したもの**を残す。
+
+### なぜ別の仕組みにしたか
+
+再調達中（`restocking=1`）の行は「売れてから Amazon で買い直す」ので、
+**Amazon最安値が上がった瞬間に赤字が確定する**。これまでは
+`jobReview`（売値の見直しの自動反映・7.39）に乗せていたが、そちらは
+**値上げだけ・既定が確認モード・1回30%までの丸め**という歯止めを持っているため、
+「再調達で赤字」の警告が出たまま**確認待ちで止まって**いた。
+下がったときに追従する仕組みも無かった。
+
+そこで `rvSkip()` に
+`if (isRestocking(r)) return "再調達中（売値の追従が見ます）"` を足して
+**`jobReview` の対象から外し**、この行だけを `jobRkPrice` が見るようにした
+（同じ行を2つの仕組みが動かさないため）。
+
+### 設定（`ui.settings` の `autoRkMode`）
+
+| 値 | 動き |
+| --- | --- |
+| `auto`（既定） | Cron が**承認なしで**反映する |
+| `confirm` | 予定を残して Discord に出すだけ。`POST /sync {kind:'restockprice',approve:true}` で実行 |
+
+### `rkTarget(r)` — 何をするか
+
+返すのは `{ kind, from, to, want, under, held, why }`。`kind` は
+`'up'`／`'down'`／`'zero'`／`''`（とばす）。
+
+対象外にする順（空の `kind` と理由を返す）:
+再調達中でない → 出品していない → **eBayのセール中** → **一点物** → **無在庫** →
+売値が分からない → **Amazon最安値が未取得** → **24時間より古い**。
+
+そのあと:
+
+1. 新しく見にいけたのに最安値が出ない（`restockLowest(r)` が 0、または
+   `amazon_offers=0`）＝**Amazonの在庫が消えた**。買い直せないので
+   `kind='zero'`（eBay の数量を0にする）。すでに数量0なら何もしない。
+2. 数量0の行はとばす。`rk_want` が無い／`rk_want_at` が24時間より古い行もとばす。
+3. `to = rk_want`。**下げる方向**のときだけ:
+   - **最安グループ（`rk_n`）が2人未満**なら `held=true` で**下げを保留**
+     （上げる方向は保留しない）。
+   - `rk_floor` より下なら `to = rk_floor`、`under=true`。
+4. 差が **$1未満 かつ 3%未満**ならとばす（`RK_ABS=1` / `RK_PCT=3`）。
+   **1回の変更幅の丸めはしない**（赤字は一度で解消する）。
+
+### `jobRkPrice(env, {approve})`
+
+- 対象は `scope='ebay' AND restocking=1 AND ebay_item_id<>''` を
+  `rk_at` の古い順に `RK_PICK_LIMIT=400` 件まで。
+- **1日 `RK_MAX=30` 件**（`rk_log` の直近24時間の成功数で数える）。
+  超えた分は `capped` として翌日に回す。
+- 実行：**ベストオファーのある出品**（`ebay_bo=1`）は1件ずつ
+  `ReviseFixedPriceItem`（`rkBo()` で `MinimumBestOfferPrice` を
+  **最低売値、無ければ売値の1セント下**に。自動承諾額は新しい売値以上の行だけ下げる。
+  **数量は送らない**）。それ以外は `ReviseInventoryStatus` を
+  `RK_BATCH=4` 件ずつ（売値だけ／数量0だけ）。
+- 通った行：`ebay_price` と **`restock_price`・`restock_max_cost` もそろえる**
+  （そろえないと `restockTrouble()` の「再調達で赤字」が消えない）。
+  `rk_fail=0`、`rk_done_at`、`revise_err` を消す。
+- 失敗した行：`rk_fail+1`、`revise_err='再調達中の売値 …'`。
+  **セール中のエラー（21919248）は失敗に数えず** `ebay_sale=1` を立てて外す（6.59 と同じ）。
+  権限不足（`RV_SCOPE_ERR`）はその場で打ち切って知らせる。
+- 記録：`rk_runs`（まとめ）と `rk_log`（1行ごと・前後の売値とそのときの最安値）。
+  予定は `sync_state` の `rk.plan`。`GET /status` が `rk_plan` と `rk_last` を返す。
+- 通知：Discord に「上げた n件／下げた n件／数量0 n件／失敗 n件」と、
+  保留・上限・在庫消滅・連続失敗の件数、先頭10件の明細。
+
+### Cron
+
+日次（`DAILY_UTC_HOUR`）の `jobDaily`（最安値の取り直し）→ `jobMarkdown` →
+`jobReview` のあとに `jobRkPrice` を回す。**最安値を取り直した直後の値**で判断する。
+目標（`rk_want`）は pj_price が送るので、**1日1回はアプリで「状況を取り込む」を押す**
+必要がある（24時間を超えた目標は使わない）。
+
+### `POST /listings` で受け取る項目
+
+`rk_want`／`rk_floor`／`rk_low`／`rk_n`／`rk_max_cost`。
+受け取ると `rk_want_at` に時刻を入れ、`rk_want` が変わった行は `rk_fail` を0に戻す。
+**`STAFF_DENY` に入れたので作業者用のキーでは送れない**（403・D1 には1件も書かない）。
+
+テストは `tests/rkprice.mjs`（63項目）。
+**D1（`migrate-0022-restock-price.sql`）とデプロイが必要。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

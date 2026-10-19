@@ -301,19 +301,22 @@ ok(res.failed===1&&calls.length===1,'★最初の失敗で打ち切る（同じ�
 ok(/権限が足りません/.test(notes[0]||''),'★トークンの取り直しを知らせる');
 ack='Success'; errText=''; fail={};
 
-console.log('\n=== 再調達中の行は「出し直した売値」と「仕入値の上限」もそろえる ===');
+/* 再調達中の行は「再調達中の売値の追従」（7.48）が上げも下げも見るので、
+   こちらの対象から外れた（v169 までは確認待ちで止まっていた）。
+   売値と仕入値の上限をそろえる動きは tests/rkprice.mjs に移した。 */
+console.log('\n=== 再調達中の行はこの仕組みでは触らない ===');
 await wipe();
 await seed('B0RVF00001',{restocking:1,restock_price:20,restock_max_cost:2500,
   rv_want:25,rv_max_cost:3800});
-await seed('B0RVF00002',{restocking:1,restock_price:20,restock_max_cost:2500,
-  rv_want:40,rv_max_cost:7000});      // 30%の上限で丸める行
+calls=[];
 res=await rv();
-const f1=await row('B0RVF00001'), f2=await row('B0RVF00002');
-console.log('   '+JSON.stringify({f1:f1,f2:f2}));
-ok(f1.ebay_price===25&&f1.restock_price===25&&f1.restock_max_cost===3800,
-   '★目標どおり上げた行は、売値と仕入値の上限を新しい値にする');
-ok(f2.ebay_price===26&&f2.restock_price===26&&f2.restock_max_cost===2500,
-   '★上限で丸めた行は売値だけ直し、仕入値の上限は前の値（安全側）のまま');
+const f1=await row('B0RVF00001');
+console.log('   '+JSON.stringify({f1:f1,changed:res.changed,skipped:res.skipped,
+  calls:calls.length}));
+ok(res.changed===0&&res.skipped===1&&calls.length===0,
+   '★★再調達中の行は選ばず、eBay も呼ばない');
+ok(f1.ebay_price===20&&f1.restock_price===20&&f1.restock_max_cost===2500,
+   '★★売値も上限もそのまま（追従のほうが直す）');
 
 console.log('\n=== 目標は pj_price から受け取る（POST /listings）===');
 await wipe();
