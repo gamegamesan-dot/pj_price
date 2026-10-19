@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS items (
   ebay_sale        INTEGER,
   ebay_sale_orig   REAL,                      -- セール前の値段（$・migrate-0019）
   ebay_sale_end    TEXT,                      -- セールが終わる時刻（ISO・migrate-0019）
+  /* 写真を eBay 保管（EPS）に切り替えた印（migrate-0020）。
+     1 なら切り替え済みで、二度切り替えない。まだ 0 の出品は Vendor のまま。 */
+  pics_eps         INTEGER NOT NULL DEFAULT 0,
+  pics_eps_at      TEXT,                      -- 切り替えた時刻
+  pics_n           INTEGER,                   -- 切り替え後の写真の枚数
   /* メルカリ・ヤフオクの検索語（手で直したもの）。空は「自動で作る」。
      出品CSVタブと販売連携タブで共通に使う。 */
   search_kw        TEXT,

@@ -847,7 +847,7 @@ body.staff #syncOnHandFix{display:none !important}
                    style="flex:1 1 0;min-width:0">
             <button class="btn" id="syncPicsOne" style="flex:0 0 auto;padding:9px 10px">1件お試し</button>
           </div>
-          <div class="note2" style="margin:4px 0 6px">写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。</div>
+          <div class="note2" style="margin:4px 0 6px">写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。元は<b>出品リストの写真（1枚目がメイン）</b>を使い、残っていない行は今の eBay の写真を作り直します。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。切り替えた行には「eBay 保管済み」の印が付き、二度切り替えません。</div>
           <button class="btn" id="syncPicsBulk" style="width:100%" disabled>選んだ行をまとめて切り替え</button>
           <div class="note2" id="syncPicsGate" style="margin-top:2px"></div>
           <div class="note2" id="syncPicsNote" style="margin-top:4px"></div>
@@ -9693,13 +9693,18 @@ $('syncBarClear').onclick=function(){ syncPick={}; syncRender(); };
    出品に残っている自前ホストの紐づけ（ExternalPictureURL）を外すため、
    pj-sync が写真だけを ReviseFixedPriceItem で入れ替える。
    1回に送るのは SYNC_PICS_MAX 件まで（Worker 側の上限と同じ）。 */
-var SYNC_PICS_MAX=5;
+var SYNC_PICS_MAX=10;
 function syncPicsIdsSel(){
-  var seen={}, out=[];
+  var seen={}, out=[], done=0;
   syncPickRows().forEach(function(r){
     var id=String(r.ebay_item_id||'').replace(/[^0-9]/g,'');
-    if(/^[0-9]{9,15}$/.test(id)&&!seen[id]){ seen[id]=1; out.push(id); }
+    if(!/^[0-9]{9,15}$/.test(id)||seen[id])return;
+    seen[id]=1;
+    // 切り替え済みの行はとばす（二度切り替えない・6.62）
+    if(syncPicsDone(r)){ done++; return; }
+    out.push(id);
   });
+  out.skipDone=done;
   return out;
 }
 /* まとめて切り替えは、1件で直ることを確かめるまで押せない（6.60）。
@@ -9716,13 +9721,24 @@ function syncPicsProve(){
 function syncPicsGate(){
   var b=$('syncPicsBulk'), n=$('syncPicsGate');
   if(!b)return;
-  var okd=syncPicsProven();
+  var okd=syncPicsProven(), need=syncPicsNeedN();
   b.disabled=!okd;
   b.style.opacity=okd?'':'.5';
-  if(n)n.textContent=okd
+  if(n)n.textContent=(okd
     ? 'まとめての切り替えが使えます（1件で直ることを確かめました）。'
     : 'まず「1件お試し」で直ることを確かめてください。'
-      +'確かめるまで、まとめての切り替えは押せません。';
+      +'確かめるまで、まとめての切り替えは押せません。')
+    +(need?('　切り替えが必要：'+need+'件（絞り込み「写真の切り替えが必要」で選べます）'):'');
+}
+/* まだ eBay 保管にしていない出品（6.62）。pj-img で出した出品は PictureSource=Vendor
+   のままなので、切り替え済みの印（pics_eps）が無い出品中の行がそのまま候補になる。 */
+function syncPicsDone(r){ return Number((r||{}).pics_eps||0)>0; }
+function syncPicsNeed(r){
+  return !!String((r||{}).ebay_item_id||'').trim()
+    && syncQtyOf(r)>0 && !syncPicsDone(r);
+}
+function syncPicsNeedN(){
+  return ((syncData&&syncData.items)||[]).filter(syncPicsNeed).length;
 }
 /* その出品の写真が出品リスト（この端末）に残っていれば、その URL を使う（6.61）。
    eBay の写真を元画像にすると小さい版を取り込むことがあるので、
@@ -9755,6 +9771,10 @@ function syncPicsOneHtml(it){
     +'<br>'+(it.done?('✅ '+how)
       :('<span style="color:var(--bad);font-weight:700">⚠ '
         +esc(it.error||'直りませんでした')+'</span>'))
+    +(Number(it.missing||0)
+      ? ('<br><span style="color:#8a6d00;font-weight:700">写真が抜けていました（eBay '
+         +Number(it.missing)+'枚／元 '+Number(it.restore||0)+'枚）→ '
+         +Number(it.restore||0)+'枚に戻しました</span>') : '')
     +(((it.tries||[])[0]||{}).fixed_urls
       ? '<br>pj-img の元の写真から作り直しました' : '')
     +(it.expiration?('<br>預け直した写真の期限：'+esc(String(it.expiration).slice(0,10))
@@ -9832,10 +9852,15 @@ $('syncPicsBulk').onclick=function(){
   }
   var ids=syncPicsIdsSel();
   if(!ids.length){
-    $('syncPicsNote').textContent='一覧のチェックで、eBayに出している行（ItemIDがある行）を選んでください。';
+    $('syncPicsNote').textContent=ids.skipDone
+      ? ('選んだ行はすべて切り替え済みです（'+ids.skipDone+'件）。')
+      : '一覧のチェックで、eBayに出している行（ItemIDがある行）を選んでください。';
     return;
   }
   if(!confirm('選んだ '+ids.length+'件の写真を eBay 保管に切り替えます。\n'
+    +(ids.skipDone?('（切り替え済みの '+ids.skipDone+'件はとばします）\n'):'')
+    +'・出品リストに写真が残っている行は、その写真（1枚目がメイン）で入れ替えます\n'
+    +'・残っていない行は、いまの eBay の写真を作り直すだけです（写真は足しません）\n'
     +'・写真以外（価格・数量・タイトル）は送りません\n'
     +'・'+SYNC_PICS_MAX+'件ずつ送ります（途中でやめても、できた分はそのままです）\n'
     +'・pj-img の写真は消しません\nよろしいですか？'))return;
@@ -10308,6 +10333,8 @@ var SYNC_POST_CHUNK=200;              // 1回に送る件数
 var SYNC_MIGRATE=[
   ['rv_','migrate-0018-auto-review.sql'],
   ['md_','migrate-0016-auto-markdown.sql'],
+  ['pics_eps','migrate-0020-pics-eps.sql'],
+  ['pics_n','migrate-0020-pics-eps.sql'],
   ['ebay_sale_orig','migrate-0019-ebay-sale.sql'],
   ['ebay_sale_end','migrate-0019-ebay-sale.sql'],
   ['ebay_sale','migrate-0016-auto-markdown.sql'],
@@ -10892,6 +10919,10 @@ var SYNC_FILTERS=[
                        ||syncReviseAlert(r)||syncRvAlert(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
+  /* 写真の切り替えが必要な行（6.62）。pj-img で出した出品は PictureSource=Vendor
+     のままなので、切り替え済みの印が無い出品中の行を出す。 */
+  { v:'picsneed',       label:'写真の切り替えが必要',
+    f:function(r){ return syncPicsNeed(r); } },
   { v:'restock',        label:'再調達の候補',
     f:function(r){ return syncIsRestock(r); } },
   { v:'restocking',     label:'再調達中',
@@ -11334,6 +11365,11 @@ function syncRowHtml(r,key){
         +'padding:1px 5px;font-size:11px;margin-right:4px">'
         +esc(rt.length?rt.join('・'):'FBA受領処理中')+'</span>';
     }
+    /* 写真を eBay 保管に切り替えた行（6.62）。二度切り替えないための目印。 */
+    if(syncPicsDone(r))
+      badge+='<span style="display:inline-block;background:#2f6fb0;color:#fff;border-radius:2px;'
+        +'padding:1px 5px;font-size:11px;margin-right:4px">eBay 保管済み'
+        +(Number(r.pics_n||0)?(' '+Number(r.pics_n)+'枚'):'')+'</span>';
     /* eBayのセール中（6.59）。値段を変えられないので、ひと目で分かるようにする。 */
     if(syncOnSale(r))
       badge+='<span style="display:inline-block;background:#8a4f00;color:#fff;border-radius:2px;'
@@ -12339,7 +12375,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v161';   // sw.js の const V と必ず同じ値にする
+var APP_V='v162';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -1192,6 +1192,7 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
   ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
   ebay_sale, ebay_sale_orig, ebay_sale_end,
+  pics_eps, pics_eps_at, pics_n,
   search_kw,
   rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
@@ -2527,9 +2528,10 @@ async function rvLast(env) {
    ・UploadSiteHostedPictures（Trading）は 2026-09-30 廃止。預け先は
      **Media API の createImageFromUrl**（REST・Bearer・期限30日）。 */
 const MEDIA_API = "https://apim.ebay.com/commerce/media/v1_beta";
-/* まとめて切り替えるときの1回の上限。1件で最大 14 回ほど外部を呼ぶので、
-   1リクエストが長くなりすぎないように小さくしてある（画面側が小分けに送る）。 */
-const PICS_MAX = 5;
+/* まとめて切り替えるときの1回の上限（7.46 で 10件にした）。
+   1件で 写真の枚数×2＋3 回ほど外部を呼ぶので、1リクエストが長くなりすぎない範囲。
+   画面側はこの数ずつに小分けして送る。 */
+const PICS_MAX = 10;
 /* 画像の縦横をバイト列から読む（JPEG の SOF と PNG の IHDR だけ見る）。
    R2 の写真が eBay の下限（長辺500px）を満たしているかをここで確かめる。 */
 function imageSize(buf) {
@@ -2811,6 +2813,12 @@ async function picSwitchOnce(env, run, token, itemId, srcUrls) {
   if (!before.ok) { t.error = before.error || ("GetItem が " + before.ack); return t; }
   const src = fix ? srcUrls.slice() : before.pictures.picture_url.slice();
   if (!src.length) { t.error = "この出品には写真がありません"; return t; }
+  /* 手元の写真のほうが多い＝eBay から写真が抜けている（7.46）。
+     自前ホストの出品をアプリで保存すると、表示されていない写真が落ちることがある。 */
+  if (fix && src.length > before.pictures.n) {
+    t.missing = before.pictures.n;
+    t.restore = src.length;
+  }
   /* もう eBay 保管だけなら触らない。ただし写真を指定されたとき（戻す作業）は行う。 */
   if (!fix && before.pictures.eps_only) {
     t.done = true; t.skipped = true; t.after = before.pictures;
@@ -2874,7 +2882,17 @@ async function jobPicSwitch(env, itemId, urls) {
     out.n_before = t.n_before;
     out.n_after = t.n_after;
     out.expiration = t.expiration || "";
+    out.missing = t.missing || 0;
+    out.restore = t.restore || 0;
     out.ok = out.done;
+    /* 通った出品には「eBay 保管済み」の印を付け、二度切り替えないようにする（7.46）。 */
+    if (out.done) {
+      const n = (t.after && t.after.n) || 0;
+      await env.DB.prepare(
+        `UPDATE items SET pics_eps=1, pics_eps_at=?2, pics_n=?3, updated_at=?2
+         WHERE ebay_item_id=?1`).bind(String(itemId), nowIso(), n).run();
+      out.pics_eps = 1;
+    }
     if (!out.done && !out.error)
       out.error = "切り替えても自前ホストの紐づけが消えませんでした";
     run.notes.push("写真の切り替え " + itemId + "："

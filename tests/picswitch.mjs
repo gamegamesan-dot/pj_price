@@ -121,7 +121,7 @@ ok(/<PictureDetails><PictureURL>https:\/\/i\.ebayimg\.com\/a\.jpg<\/PictureURL>/
 ok(!/StartPrice|Quantity|<Title>|ListingDetails|PictureSource|ExternalPictureURL/
    .test(body),
    '★★価格・数量・タイトル・PictureSource・ExternalPictureURL は送らない');
-ok(W.PICS_MAX===5,'★1回の上限は5件');
+ok(W.PICS_MAX===10,'★1回の上限は10件');
 
 console.log('\n=== 預け直して切り替える（fresh だけ）===');
 reset({});
@@ -237,6 +237,35 @@ console.log('   '+JSON.stringify({ok:r.body.ok,error:r.body.items[0].error}));
 ok(r.body.ok===false&&/20004|ReviseFixedPriceItem が失敗/.test(r.body.items[0].error||''),
    '★★失敗の理由（エラーコードと文）をそのまま返す');
 
+console.log('\n=== 切り替えた出品に「eBay 保管済み」の印を付ける（7.46）===');
+await env.DB.prepare(`INSERT INTO items (asin,cond,scope,ebay_item_id,ebay_qty,
+  updated_at) VALUES ('B0PSW00001','used','ebay','880025406600',1,'2026-10-19T00:00:00Z')`)
+  .run();
+reset({});
+r=await call({item_id:'880025406600'});
+let mark=await env.DB.prepare(
+  `SELECT pics_eps,pics_eps_at,pics_n FROM items WHERE asin='B0PSW00001'`).first();
+console.log('   '+JSON.stringify(mark)+'／返し: '+r.body.items[0].pics_eps);
+ok(Number(mark.pics_eps)===1&&Number(mark.pics_n)===3&&!!mark.pics_eps_at,
+   '★★通った出品には印と枚数を残す（二度切り替えない）');
+ok(r.body.items[0].pics_eps===1,'★結果にも印を返す');
+reset({ack:'Failure'});
+await env.DB.prepare(`UPDATE items SET pics_eps=0 WHERE asin='B0PSW00001'`).run();
+r=await call({item_id:'880025406600'});
+mark=await env.DB.prepare(
+  `SELECT pics_eps FROM items WHERE asin='B0PSW00001'`).first();
+ok(Number(mark.pics_eps)===0,'★★失敗したときは印を付けない');
+
+console.log('\n=== 写真が抜けているとき（7.46）===');
+reset({pics:[EPS(2),EPS(3)],ext:[R2]});     // eBay は2枚、手元は3枚
+r=await call({item_id:'880025406600',urls:[R2,EPS(2),EPS(3)]});
+const ms=r.body.items[0];
+console.log('   '+JSON.stringify({missing:ms.missing,restore:ms.restore,
+  n_before:ms.n_before,n_after:ms.n_after}));
+ok(ms.missing===2&&ms.restore===3,
+   '★★「eBay 2枚／元 3枚」と分かる形で返す');
+ok(ms.done===true&&ms.n_after===3,'★★手元の全枚数で戻せる');
+
 console.log('\n=== まとめて（確認つき・上限あり）===');
 reset({});
 r=await call({item_ids:['880025406600','880025406601'],confirm:true});
@@ -246,9 +275,11 @@ r=await call({item_ids:['880025406600','880025406601']});
 ok(r.status===400&&r.body.error==='need_confirm',
    '★★2件以上は confirm:true が無いと動かない');
 r=await call({item_ids:['880025406600','880025406601','880025406602',
-                        '880025406603','880025406604','880025406605'],confirm:true});
-ok(r.status===400&&r.body.error==='too_many'&&r.body.max===5,
-   '★★1回6件以上は 400（上限5件）');
+                        '880025406603','880025406604','880025406605',
+                        '880025406606','880025406607','880025406608',
+                        '880025406609','880025406610'],confirm:true});
+ok(r.status===400&&r.body.error==='too_many'&&r.body.max===10,
+   '★★1回11件以上は 400（上限10件）');
 reset({});
 r=await call({item_ids:['880025406600','880025406600'],confirm:true});
 ok(r.body.n===1,'★同じ ItemID は1回だけ');

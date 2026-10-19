@@ -5,7 +5,8 @@
    ・まとめては、1件で直ることを確かめるまで押せない（6.60）
    ・前と後（写真の枚数・自前ホストの紐づけ・PictureSource）と、
      どちらの方式で直ったかを画面に出す
-   ・選んだ行をまとめて切り替えるときは、確認を出してから5件ずつ送る
+   ・選んだ行をまとめて切り替えるときは、確認を出してから10件ずつ送る
+   ・切り替え済み（eBay 保管済み）の行はとばす（6.62）
    ・ItemID が無い行はとばす。送れなかったときは理由を出す */
 const { harness } = require('./lib');
 const T = harness('写真を eBay 保管に切り替え（画面）');
@@ -194,7 +195,7 @@ cancel=false;
 st=await p.evaluate(()=>({posts:window.__posts}));
 ok(st.posts.length===0,'★★確認で「いいえ」なら送らない');
 
-console.log('\n=== 選んだ行をまとめて（5件ずつ・ItemID のある行だけ）===');
+console.log('\n=== 選んだ行をまとめて（10件ずつ・ItemID のある行だけ）===');
 dlg=[];
 await p.evaluate(()=>{ window.__posts=[]; window.__mode='reuse';
   syncPick={}; syncRender();
@@ -213,21 +214,48 @@ ok(/2件の写真を eBay 保管に切り替えます/.test(dlg.join('\n')),
    '★★まとめて実行は件数を出して確認する');
 ok(/まとめて切り替え：2／2件/.test(st.note),'★できた件数を出す');
 
-console.log('\n=== 6件選んだら5件＋1件に分ける ===');
+console.log('\n=== 10件を超えたら分けて送る ===');
 await p.evaluate(()=>{ window.__posts=[]; syncPick={};
-  ['B0PIC00001','B0PIC00002','B0PIC00004','B0PIC00005','B0PIC00006','B0PIC00007']
-    .forEach(function(a){ syncPick[a+'|used']=true; });
+  /* 11件になるように行を足す（ItemID は連番）。 */
+  const base=syncData.items[0];
+  for(var i=8;i<=13;i++){
+    const a='B0PIC000'+(i<10?('0'+i):i);
+    syncData.items.push(Object.assign({},base,{asin:a,
+      ebay_sku:'E-'+a+'-U',ebay_item_id:'8800254066'+(10+i)}));
+  }
+  syncData.items.forEach(function(r){
+    if(String(r.ebay_item_id||'').trim())syncPick[r.asin+'|used']=true; });
   syncRender(); $('syncPicsBox').open=true; });
 await p.click('#syncPicsBulk');
-await p.waitForTimeout(900);
+await p.waitForTimeout(1200);
 st=await p.evaluate(()=>({posts:window.__posts,note:$('syncPicsNote').textContent,
   res:$('syncPicsRes').textContent}));
 console.log('   '+JSON.stringify(st.posts.map(x=>x.item_ids.length))+'／'+st.note);
-ok(st.posts.length===2&&st.posts[0].item_ids.length===5
-   &&st.posts[1].item_ids.length===1,
-   '★★1回5件までに分けて送る（Worker の上限と同じ）');
-ok(/まとめて切り替え：6／6件/.test(st.note),'★全部の件数で数える');
-ok((st.res.match(/880025406/g)||[]).length===6,'★★6件ぶんの結果を並べて出す');
+ok(st.posts.length===2&&st.posts[0].item_ids.length===10
+   &&st.posts[1].item_ids.length===2,
+   '★★1回10件までに分けて送る（Worker の上限と同じ）');
+ok(/まとめて切り替え：12／12件/.test(st.note),'★全部の件数で数える');
+
+console.log('\n=== 切り替え済みの行はとばす（6.62）===');
+const mark=await p.evaluate(()=>{
+  syncData.items.forEach(function(r){ r.pics_eps=0; });
+  const a=syncData.items[0], b=syncData.items[1];
+  a.pics_eps=1; a.pics_n=3;
+  syncPick={}; syncPick[a.asin+'|used']=true; syncPick[b.asin+'|used']=true;
+  syncRender();
+  const ids=syncPicsIdsSel();
+  const d=document.querySelector('#syncList [data-srow="'+a.asin+'|used"]');
+  return { ids:ids.slice(), skip:ids.skipDone,
+    need:syncPicsNeedN(), done:syncPicsDone(a), badge:d?d.innerText:'',
+    gate:$('syncPicsGate').textContent,
+    filter:syncFilterBy('picsneed').f(a)+'/'+syncFilterBy('picsneed').f(b) };
+});
+console.log('   '+JSON.stringify(mark));
+ok(mark.ids.length===1&&mark.skip===1,
+   '★★切り替え済みの行はとばす（二度切り替えない）');
+ok(/eBay 保管済み 3枚/.test(mark.badge),'★★「eBay 保管済み」の印を出す');
+ok(mark.filter==='false/true','★★絞り込み「写真の切り替えが必要」は未切り替えだけ');
+ok(/切り替えが必要：/.test(mark.gate)&&mark.need>0,'★★必要な件数を出す');
 
 console.log('\n=== 選んでいないとき・送れなかったとき ===');
 await p.evaluate(()=>{ window.__posts=[]; syncPick={}; syncRender();
