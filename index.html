@@ -10206,12 +10206,19 @@ function syncNextHtml(r){
   if(pbMode()!=='off'){
     var pa=syncPbActOf(r);
     if(pa&&pa.kind==='restock'){
-      var prec=syncRecommend(r);
+      var pw=pa.want||syncPbWant(r);
       return nextLine(pbRestockMode()==='auto'?'再調達の予定':'再調達の承認待ち','#1f5fa0',
-        '数量0にしてから <b>'+usd(+r.ebay_price||0)+' → '
-        +(prec?('<b>'+usd(prec.price)+'</b>'):'—')+'</b> で出し直します　'
-        +syncBasisNote(r));
+        '数量0にしてから <b>'+usd(+r.ebay_price||0)+' → '+usd(pw.price)
+        +'</b> で出し直します　'+syncPbLowNote(r)
+        +(pw.warn?('　<span style="color:var(--bad);font-weight:700">値下げになります（−'
+          +pw.down+'%）</span>'):'')
+        +(pw.under?'　<span style="color:var(--bad)">最低売値で止めました</span>':''));
     }
+    /* 再調達にしたいが、Amazon最安値が無い・古い行（6.68）。数量0だけにする。 */
+    if(pa&&pa.kind==='nolow')
+      return nextLine('数量0の予定','#8a6d00',
+        'FBAで売れました。<b>'+esc(pa.why)+'</b>なので再調達の予定に載せません'
+        +'（数量0にします。最安値が入れば次の取り込みで予定に載ります）');
     if(pa&&pa.kind==='zero')
       return nextLine(pbMode()==='on'?'数量0にします':'数量0の予定','#8a6d00',
         'FBAで売れました（'+esc(pa.why)+'）。'
@@ -10604,6 +10611,44 @@ function autoRvMode(){
 /* ---- フェイズB：FBAで売れた行の予定（6.66）----
    Worker の pbTarget と同じ決まりで、画面にも予定を出す。
    実行は pj-sync（Cron）が行うので、ここは表示と承認だけ。 */
+/* 再調達の売値は **Amazon最安値（送料込み・中古は可を除く）を仕入値とみなした推奨売値**
+   で出す（6.68）。保存済みの仕入値は使わない（それは「いくらで仕入れたか」であって、
+   これから買い直す値段ではないため）。 */
+var PB_LOW_MS=24*60*60*1000;         // Amazon最安値の鮮度
+var PB_DOWN_WARN=20;                 // これ以上の値下げになるときは警告（%）
+function syncPbLow(r){
+  var b=syncBasis(r), low=b.low||+((r||{}).amazon_lowest||0)||0;
+  var at=String((r||{}).amazon_lowest_at||'');
+  var t=Date.parse(at);
+  return { low:low, at:at, fresh:!!t&&(Date.now()-t)<=PB_LOW_MS, has:low>0,
+           useNew:b.useNew };
+}
+/* 再調達で出す売値。出せないときは ok:false と理由を返す。 */
+function syncPbWant(r){
+  var lo=syncPbLow(r);
+  if(!lo.has)return { ok:false, why:'Amazon最安値が未取得', low:lo };
+  if(!lo.fresh)return { ok:false, why:'Amazon最安値が古い（24時間超）', low:lo };
+  var rec=syncRecommend(r);          // Amazon最安値を仕入値とみなした推奨売値
+  if(!rec)return { ok:false, why:'推奨売値を計算できません', low:lo };
+  var now=+((r||{}).ebay_price||0)||0;
+  var price=rec.price, under=false, down=0;
+  if(now>0&&price<now){
+    down=Math.round((1-price/now)*100);
+    // 値下げになるときでも、最低売値（下限利益）より下げない
+    if(price<rec.floor){ price=rec.floor; under=true; down=Math.round((1-price/now)*100); }
+  }
+  return { ok:true, price:Math.round(price*100)/100, floor:rec.floor, low:lo,
+           down:down, under:under, warn:(down>=PB_DOWN_WARN), rec:rec };
+}
+/* 予定に出す「Amazon最安値 ¥x,xxx（取得日時）」。 */
+function syncPbLowNote(r){
+  var lo=syncPbLow(r);
+  if(!lo.has)return '<span style="color:var(--bad)">Amazon最安値が未取得</span>';
+  return '<span style="opacity:.85">基準：<b>Amazon最安値'+(lo.useNew?'（新品）':'')
+    +'</b> '+yen(lo.low)
+    +(lo.at?('（'+esc(lo.at.slice(5,16).replace('T',' '))+'）'):'')
+    +(lo.fresh?'':'<span style="color:var(--bad)">・24時間より古い</span>')+'</span>';
+}
 function syncPbSkipOf(r){ return Number((r||{}).pb_skip||0)>0; }
 function syncPbFailOf(r){ return Number((r||{}).pb_fail||0)>=3; }
 function syncPbActOf(r){
@@ -10628,8 +10673,12 @@ function syncPbActOf(r){
   }
   var wantRestock=(String(r.mode||'')==='restock');
   var oneOff=!!Number(r.one_off||0), known=!!Number(r.one_off_known||0);
-  if(wantRestock&&!oneOff&&known)
-    return { kind:'restock', why:'再調達の予定' };
+  if(wantRestock&&!oneOff&&known){
+    /* 再調達の売値が出せない行は予定に載せない（6.68）。数量0にはする。 */
+    var w=syncPbWant(r);
+    if(!w.ok)return { kind:'nolow', why:w.why, want:w };
+    return { kind:'restock', why:'再調達の予定', want:w };
+  }
   if(wantRestock)
     return { kind:'zero', why:oneOff?'一点物なので寝かせる'
                                     :'一点物かどうかが未確定なので寝かせる' };
@@ -10767,13 +10816,15 @@ function syncPbBarRender(){
   bar.style.display=(mode==='off')?'none':'block';
   if(mode==='off')return;
   var zero=syncPbRows('zero'), rest=syncPbRows('restock');
-  var unk=syncPbRows('unknown');
+  var unk=syncPbRows('unknown'), nolow=syncPbRows('nolow');
   var plan=(syncData&&syncData.pb_plan)||null;
   var last=(syncData&&syncData.pb_last)||null;
   var noMode=syncPbNoMode();
   $('syncPbNote').innerHTML=
     '<b>フェイズB：'+(mode==='on'?'オン':'予定だけ表示')+'</b>　'
-    +'数量0の予定 '+zero.length+'件／再調達の予定 '+rest.length+'件'
+    +'数量0の予定 '+(zero.length+nolow.length)+'件／再調達の予定 '+rest.length+'件'
+    +(nolow.length?('（<span style="color:var(--bad)">Amazon最安値が未取得・古い '
+      +nolow.length+'件</span>）'):'')
     +(unk.length?('／内訳不明 '+unk.length+'件'):'')
     +(mode==='plan'?'　<b>eBay はまだ変えません</b>':'')
     +'　<span style="opacity:.8">再調達は'
@@ -10787,15 +10838,21 @@ function syncPbBarRender(){
       +Number(last.zeroed||0)+'件／再調達 '+Number(last.restocked||0)+'件／失敗 '
       +Number(last.failed||0)+'件'):'');
   var line=function(r){
-    var a=syncPbActOf(r), rec=syncRecommend(r);
-    return esc(r.title||r.asin)+'：'
-      +((a.kind==='restock')
-        ? ('数量0 → 再調達（'+usd(+r.ebay_price||0)+' → '
-           +(rec?usd(rec.price):'—')+'）')
-        : (a.kind==='unknown' ? '予約済みの内訳を待っています'
-                              : ('数量を0にします（'+esc(a.why)+'）')));
+    var a=syncPbActOf(r);
+    if(a.kind==='restock'){
+      var w=a.want||syncPbWant(r);
+      return esc(r.title||r.asin)+'：数量0 → 再調達（'+usd(+r.ebay_price||0)+' → '
+        +usd(w.price)+'）　'+syncPbLowNote(r)
+        +(w.warn?('　<span style="color:var(--bad);font-weight:700">値下げになります（−'
+          +w.down+'%）</span>'):'');
+    }
+    if(a.kind==='nolow')
+      return esc(r.title||r.asin)+'：数量0（<span style="color:var(--bad)">'
+        +esc(a.why)+'</span>なので再調達しません）';
+    if(a.kind==='unknown')return esc(r.title||r.asin)+'：予約済みの内訳を待っています';
+    return esc(r.title||r.asin)+'：数量を0にします（'+esc(a.why)+'）';
   };
-  var all=rest.concat(zero).concat(unk);
+  var all=rest.concat(nolow).concat(zero).concat(unk);
   $('syncPbList').innerHTML=all.length
     ? listMoreHtml('pbplan',all.map(line))
     : 'FBAで売れて対応が要る出品はありません。';
@@ -10817,9 +10874,10 @@ function syncPbGo(){
     +'・売値を推奨売値に直して、数量を1に戻します\n'
     +'・目標の売値が古い・最安グループが2人未満・下限利益を割る行は、数量0のままにします\n'
     +rows.slice(0,5).map(function(r){
-        var rec=syncRecommend(r);
-        return '　・'+(r.title||r.asin)+'：'+usd(+r.ebay_price||0)+' → '
-          +(rec?usd(rec.price):'—'); }).join('\n')
+        var w=syncPbWant(r);
+        return '　・'+(r.title||r.asin)+'：'+usd(+r.ebay_price||0)+' → '+usd(w.price)
+          +'（Amazon最安値 '+yen(w.low.low)+'）'
+          +(w.warn?('　値下げになります（−'+w.down+'%）'):''); }).join('\n')
     +(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
     +'よろしいですか？'))return;
   var b=$('syncPbGo');
@@ -10852,14 +10910,18 @@ function syncPbPost(done){
   if(isStaff()){ fin(); return; }
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){ fin(); return; }
-  var rows=syncPbRows('restock').filter(function(r){ return !!syncRecommend(r); });
+  /* Amazon最安値が取れている行だけ送る（6.68）。売値も同じ計算で出す。 */
+  var rows=syncPbRows('restock');
   if(!rows.length){ fin(); return; }
-  var items=rows.slice(0,200).map(function(r){
-    var rec=syncRecommend(r);
-    return { asin:r.asin, cond:r.cond, title:r.title||'',
-             pb_want:Math.round(rec.price*100)/100,
-             pb_max_cost:syncMaxCost(rec.price,syncWeightOf(r).v) };
+  var items=[];
+  rows.slice(0,200).forEach(function(r){
+    var w=syncPbWant(r);
+    if(!w.ok)return;
+    items.push({ asin:r.asin, cond:r.cond, title:r.title||'',
+                 pb_want:w.price,
+                 pb_max_cost:syncMaxCost(w.price,syncWeightOf(r).v) });
   });
+  if(!items.length){ fin(); return; }
   syncJsonPost('/listings',{items:items},function(){ fin(); },function(){ fin(); });
 }
 function syncRvBarRender(){
@@ -12763,7 +12825,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v167';   // sw.js の const V と必ず同じ値にする
+var APP_V='v168';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
