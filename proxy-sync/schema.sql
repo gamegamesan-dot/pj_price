@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS items (
   pics_eps         INTEGER NOT NULL DEFAULT 0,
   pics_eps_at      TEXT,                      -- 切り替えた時刻
   pics_n           INTEGER,                   -- 切り替え後の写真の枚数
+  /* フェイズB（migrate-0021）。FBAで売れたら数量0にし、再調達の行は予定に載せる。
+     pb_want（再調達の売値）は pj_price が計算して送る。 */
+  pb_act           TEXT,                      -- 'zero' / 'restock' / 'unknown'
+  pb_why           TEXT,
+  pb_at            TEXT,
+  pb_done_at       TEXT,
+  pb_fail          INTEGER NOT NULL DEFAULT 0,
+  pb_skip          INTEGER NOT NULL DEFAULT 0,
+  pb_want          REAL,
+  pb_max_cost      INTEGER,
+  pb_want_at       TEXT,
   /* メルカリ・ヤフオクの検索語（手で直したもの）。空は「自動で作る」。
      出品CSVタブと販売連携タブで共通に使う。 */
   search_kw        TEXT,
@@ -279,3 +290,35 @@ CREATE TABLE IF NOT EXISTS rv_log (
 );
 CREATE INDEX IF NOT EXISTS idx_rv_log_at ON rv_log(at);
 CREATE INDEX IF NOT EXISTS idx_rv_log_key ON rv_log(asin, cond, at);
+
+/* フェイズBの実行の記録（migrate-0021）。 */
+CREATE TABLE IF NOT EXISTS pb_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  mode       TEXT NOT NULL,
+  picked     INTEGER NOT NULL DEFAULT 0,
+  zeroed     INTEGER NOT NULL DEFAULT 0,
+  restocked  INTEGER NOT NULL DEFAULT 0,
+  failed     INTEGER NOT NULL DEFAULT 0,
+  skipped    INTEGER NOT NULL DEFAULT 0,
+  capped     INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pb_runs_at ON pb_runs(at);
+CREATE TABLE IF NOT EXISTS pb_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  item_id    TEXT,
+  kind       TEXT NOT NULL,
+  from_qty   INTEGER,
+  to_qty     INTEGER,
+  from_price REAL,
+  to_price   REAL,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  why        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pb_log_at ON pb_log(at);
+CREATE INDEX IF NOT EXISTS idx_pb_log_key ON pb_log(asin, cond, at);

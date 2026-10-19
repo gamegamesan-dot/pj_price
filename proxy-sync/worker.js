@@ -184,7 +184,9 @@ function authorized(request, env) { return keyRole(request, env) !== ""; }
 /* 作業者用キーでは送れない項目（値段を動かす設定）。
    名簿（SKU・ItemID・手元在庫・実重量・仕入値・相場）は送れる。 */
 const STAFF_DENY = ["md_step", "md_floor", "md_n", "md_start",
-                    "rv_want", "rv_floor", "rv_kind", "rv_max_cost"];
+                    "rv_want", "rv_floor", "rv_kind", "rv_max_cost",
+                    // フェイズB（7.47）。再調達の売値と「今回は動かさない」も管理者だけ
+                    "pb_want", "pb_max_cost", "pb_skip"];
 function staffDenyFields(body) {
   const list = Array.isArray(body && body.items) ? body.items : [];
   const hit = {};
@@ -1193,6 +1195,8 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
   ebay_sale, ebay_sale_orig, ebay_sale_end,
   pics_eps, pics_eps_at, pics_n,
+  pb_act, pb_why, pb_at, pb_done_at, pb_fail, pb_skip,
+  pb_want, pb_max_cost, pb_want_at,
   search_kw,
   rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
@@ -1945,7 +1949,7 @@ function mdBo(r, next) {
   return { min: min > 0 ? min : 0, acc: (acc0 > 0 && acc0 >= next) ? cap : 0 };
 }
 /* ReviseFixedPriceItem の本文。売値とベストオファーの金額を一度に変える。 */
-function reviseBody(itemId, price, bo) {
+function reviseBody(itemId, price, bo, qty) {
   const money = (tag, v) =>
     "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
   const det = [];
@@ -1955,11 +1959,15 @@ function reviseBody(itemId, price, bo) {
     + '<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
     + "<Item><ItemID>" + esc(itemId) + "</ItemID>"
     + money("StartPrice", price)
+    /* 数量は**フェイズBの再調達のときだけ**送る（7.47）。
+       ほかの処理では数量を増やさない。 */
+    + ((qty === null || qty === undefined) ? ""
+       : ("<Quantity>" + Math.max(0, Math.round(qty)) + "</Quantity>"))
     + (det.length ? ("<ListingDetails>" + det.join("") + "</ListingDetails>") : "")
     + "</Item></ReviseFixedPriceItemRequest>";
 }
 /* eBay に売値を書き込む（唯一の書き込み。write:true を付けた呼び出しだけ通る）。 */
-async function ebayRevise(env, run, token, itemId, price, bo) {
+async function ebayRevise(env, run, token, itemId, price, bo, qty) {
   const resp = await net(run, EBAY_API + "/ws/api.dll", {
     method: "POST",
     write: true,
@@ -1970,7 +1978,7 @@ async function ebayRevise(env, run, token, itemId, price, bo) {
       "X-EBAY-API-IAF-TOKEN": token,
       "content-type": "text/xml",
     },
-    body: reviseBody(itemId, price, bo),
+    body: reviseBody(itemId, price, bo, qty),
   });
   const xml = await resp.text();
   const ack = xmlTag(xml, "Ack");
@@ -2211,11 +2219,20 @@ function rvAct(r, st) {
 function invBody(list) {
   const money = (tag, v) =>
     "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
+  /* kind='zero'      … 数量0（売り越しを止める）
+     kind='restock'   … 売値と数量を1回で変える（フェイズBの再調達・7.47）
+     それ以外         … 売値だけ（売値の自動反映） */
+  const one = (x) => {
+    if (x.kind === "zero") return "<Quantity>0</Quantity>";
+    if (x.kind === "restock")
+      return money("StartPrice", x.to) + "<Quantity>" + Math.max(0, Math.round(x.qty || 1))
+        + "</Quantity>";
+    return money("StartPrice", x.to);
+  };
   return '<?xml version="1.0" encoding="utf-8"?>'
     + '<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
     + list.map((x) => "<InventoryStatus><ItemID>" + esc(x.item_id) + "</ItemID>"
-        + ((x.kind === "zero") ? "<Quantity>0</Quantity>" : money("StartPrice", x.to))
-        + "</InventoryStatus>").join("")
+        + one(x) + "</InventoryStatus>").join("")
     + "</ReviseInventoryStatusRequest>";
 }
 /* 4件ぶんをまとめて eBay に書き込む（唯一の書き込みの2つめ）。
@@ -2512,6 +2529,426 @@ async function rvLast(env) {
   } catch (e) { return null; }
 }
 
+/* ================= フェイズB：FBAで売れたら eBay を直す（7.47）=================
+   FBAで売れて販売可能が0になった出品が、eBayで数量1のまま残ると売り越しになる。
+   **まず全部を数量0にして**売り越しを止め、「在庫0時の動作」が再調達の行だけ
+   そのあと「売値を変えて数量を1に戻す」。承認待ちのあいだ古い売値で売れないようにする。
+
+   ・数量を増やすのは、この再調達の実行のときだけ（ほかの処理では増やさない）
+   ・再調達の売値（pb_want）は pj_price が計算して送る（Worker は値付けの式を持たない）
+   ・書き込みの前に GetItem で今の数量・売値を確かめ、判定時と違えば実行しない
+   ・数量0の直後にも GetItem で ListingStatus を見て、Active のままかを確かめる
+     （Out-of-stock control が効いていないと出品が終了してしまうため） */
+const PB_MODES = { off: 1, plan: 1, on: 1 };
+const PB_RESTOCK_MODES = { confirm: 1, auto: 1 };
+const PB_ZERO_MAX = 20;                      // 1回に数量0にする上限
+const PB_RESTOCK_MAX = 30;                   // 1日に再調達する上限
+const PB_FAIL_WARN = 3;                      // 続けて失敗したら自動処理から外す
+const PB_WANT_MS = 24 * 60 * 60 * 1000;      // 再調達の売値の鮮度／内訳不明の猶予
+const PB_PICK_LIMIT = 400;                   // 判定で見る行数
+const PB_BATCH = 4;                          // ReviseInventoryStatus は4件ずつ
+const PB_OK_NOTIFY_MS = 55 * 60 * 1000;      // 成功の通知は1時間に1回まで
+const PB_PLAN_SHOW = 20;                     // 画面・通知に出す予定の件数
+
+async function pbSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const mode = String(st.pbMode || "plan");
+  const rs = String(st.pbRestock || "confirm");
+  return { mode: PB_MODES[mode] ? mode : "plan",
+           restock: PB_RESTOCK_MODES[rs] ? rs : "confirm" };
+}
+/* 対象にするか（2章）。
+   act='zero'    … 数量0にするだけ（寝かせる／終了／一点物／未設定）
+   act='restock' … 数量0にしたうえで再調達の予定に載せる
+   act='unknown' … 予約済みの内訳が分からない（24時間たったら知らせる）
+   act=''        … 対象外（why に理由） */
+function pbTarget(r) {
+  const no = (why) => ({ act: "", why: why });
+  if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
+  if (Number(r.ebay_qty || 0) < 1) return no("すでに数量0");
+  if (Number(r.pb_skip || 0)) return no("今回は動かさない");
+  if (Number(r.pb_fail || 0) >= PB_FAIL_WARN) return no("続けて失敗（対応が必要）");
+  if (Number(r.on_hand || 0)) return no("手元在庫あり");
+  if (isCart(r)) return no("手元から発送（-C／-L）");
+  if (isDropship(r)) return no("無在庫");
+  if (isRestocking(r)) return no("再調達中");
+  if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
+  if (r.fba_seen_at == null) return no("FBAの記録がありません");
+  if (Number(r.fba_available || 0) > 0) return no("FBA在庫あり");
+  if (Number(r.fba_inbound || 0) > 0) return no("納品待ち");
+  const rv = Number(r.fba_reserved || 0);
+  if (rv > 0) {
+    if (isFcProcessing(r)) return no("FBA受領処理中・FC移管中");
+    if (!resSold(r)) return { act: "unknown", why: "予約済み（内訳不明）" };
+  }
+  /* ここまで来たら「FBAで売れた」。まず数量0にする。 */
+  const wantRestock = String(r.mode || "") === "restock";
+  const oneOff = !!Number(r.one_off || 0);
+  const known = !!Number(r.one_off_known || 0);
+  if (wantRestock && !oneOff && known)
+    return { act: "restock", why: "再調達の予定" };
+  if (wantRestock && (oneOff || !known))
+    return { act: "zero", why: oneOff ? "一点物なので寝かせる"
+                                      : "一点物かどうかが未確定なので寝かせる" };
+  return { act: "zero", why: (String(r.mode || "") === "end") ? "終了の指定（数量0）"
+                                                             : "寝かせる" };
+}
+/* 再調達を実行できるか。できないときは理由を返す（数量0のまま）。 */
+function pbRestockWhy(r) {
+  const want = Number(r.pb_want || 0);
+  if (!(want > 0)) return "目標の売値が届いていません（pj_price で取り込み直してください）";
+  const t = Date.parse(String(r.pb_want_at || ""));
+  if (!t || (Date.now() - t) > PB_WANT_MS) return "目標の売値が古いです（24時間以上前）";
+  if (Number(r.amazon_offers || 0) < 2) return "最安グループが2人未満";
+  if (restockLowest(r) <= 0) return "Amazonに出品がありません";
+  const max = Number(r.pb_max_cost || r.restock_max_cost || 0);
+  if (max > 0 && restockLowest(r) > max) return "いまの最安値では下限利益を割ります";
+  return "";
+}
+/* 軽い GetItem（数量・売値・出品の状態だけ）。書き込みの前後の確かめに使う。 */
+async function pbGetItem(env, run, token, itemId) {
+  const body = '<?xml version="1.0" encoding="utf-8"?>'
+    + '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + "<ItemID>" + esc(itemId) + "</ItemID>"
+    + "<DetailLevel>ReturnAll</DetailLevel>"
+    + "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
+    + "</GetItemRequest>";
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetItem",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: body,
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  if (!resp.ok || /^Failure$/i.test(ack)) {
+    return { ok: false,
+      why: [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage")]
+             .filter(Boolean).join(" / ").slice(0, 200) || ("HTTP " + resp.status) };
+  }
+  const ss = xmlTag(xml, "SellingStatus");
+  const qty = Number(xmlTag(xml, "Quantity") || 0);
+  const sold = Number(xmlTag(ss, "QuantitySold") || 0);
+  return { ok: true,
+           status: xmlTag(ss, "ListingStatus"),
+           qty: Math.max(0, qty - sold),
+           price: Number(xmlTag(ss, "CurrentPrice") || 0) };
+}
+/* 1行ぶんの記録。 */
+function pbLogRow(env, at, r, kind, ok, why, o) {
+  return env.DB.prepare(
+    `INSERT INTO pb_log (at, asin, cond, item_id, kind, from_qty, to_qty,
+       from_price, to_price, ok, why) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)`
+  ).bind(at, r.asin, r.cond, String(r.ebay_item_id || ""), kind,
+         (o && o.fromQty !== undefined) ? o.fromQty : null,
+         (o && o.toQty !== undefined) ? o.toQty : null,
+         (o && o.fromPrice !== undefined) ? o.fromPrice : null,
+         (o && o.toPrice !== undefined) ? o.toPrice : null,
+         ok ? 1 : 0, String(why || "").slice(0, 300));
+}
+async function pbLogRun(env, run, st, res) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO pb_runs (at, mode, picked, zeroed, restocked, failed, skipped,
+         capped, note, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?1)`
+    ).bind(nowIso(), res.mode, res.picked, res.zeroed, res.restocked, res.failed,
+           res.skipped, res.capped,
+           ("再調達の実行方法 " + st.restock + "／数量0は1回 " + PB_ZERO_MAX
+            + "件・再調達は1日 " + PB_RESTOCK_MAX + "件").slice(0, 500)).run();
+  } catch (e) { run.notes.push("pb_runs に残せません：" + e.message); }
+}
+/* 直近の結果（画面に出す）。 */
+async function pbLast(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT at, mode, picked, zeroed, restocked, failed, skipped, capped
+         FROM pb_runs ORDER BY at DESC LIMIT 1`).first();
+    return r || null;
+  } catch (e) { return null; }
+}
+/* 今日すでに再調達した件数（1日の上限に使う）。 */
+async function pbUsedToday(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM pb_log
+        WHERE kind='restock' AND ok=1 AND at>=?1`).bind(dayKey() + "T00:00:00Z").first();
+    return Number((r && r.n) || 0);
+  } catch (e) { return 0; }
+}
+/* 予定の一覧（画面に出す）。数量0と再調達を分けて返す。 */
+async function pbPlan(env) {
+  try {
+    const q = await env.DB.prepare(
+      `SELECT asin, cond, title, ebay_item_id, ebay_qty, ebay_price, pb_act, pb_why,
+              pb_at, pb_want, pb_fail
+         FROM items WHERE COALESCE(pb_act,'')<>'' ORDER BY COALESCE(pb_at,'') DESC
+         LIMIT ${PB_PLAN_SHOW * 3}`).all();
+    const rows = (q && q.results) || [];
+    return {
+      zero: rows.filter((x) => x.pb_act === "zero").length,
+      restock: rows.filter((x) => x.pb_act === "restock").length,
+      unknown: rows.filter((x) => x.pb_act === "unknown").length,
+      rows: rows.slice(0, PB_PLAN_SHOW),
+    };
+  } catch (e) { return null; }
+}
+function pbNotifyText(res, st) {
+  const t = [];
+  if (res.mode === "plan") {
+    if (!res.picked && !res.unknown_old) return "";
+    t.push("📦 FBAで売れた（予定だけ表示）：数量0にする予定 " + res.zero_plan
+      + "件／再調達の予定 " + res.restock_plan + "件");
+    t.push("eBay はまだ変えていません。⚙設定の「FBAで売れたときの動作」をオンにすると実行します");
+  } else {
+    if (!res.zeroed && !res.restocked && !res.failed && !res.unknown_old) return "";
+    t.push("📦 FBAで売れた：数量0 " + res.zeroed + "件／再調達 " + res.restocked
+      + "件／失敗 " + res.failed + "件"
+      + (res.capped ? ("／上限で次回に回した " + res.capped + "件") : ""));
+  }
+  if (res.ended) t.push("⚠️ " + res.ended + "件は出品が終了しました（Out-of-stock control を確認してください）");
+  if (res.unknown_old)
+    t.push("⚠️ " + res.unknown_old + "件は予約済みの内訳が24時間以上分かりません（対応が必要）");
+  res.plan.slice(0, 10).forEach((x) => {
+    t.push("・" + x.title + "：" + x.text);
+  });
+  return t.join("\n");
+}
+/* 成功の通知は1時間に1回まで（失敗はそのつど）。 */
+async function pbNotify(env, run, res, st, text) {
+  if (!text) return;
+  if (res.failed || res.unknown_old) { await notify(env, run, text); return; }
+  try {
+    const last = await stateGet(env, "pb.okat");
+    const t = Date.parse(String(last || ""));
+    if (t && (Date.now() - t) < PB_OK_NOTIFY_MS) return;
+    await notify(env, run, text);
+    await stateSet(env, "pb.okat", nowIso()).run();
+  } catch (e) { await notify(env, run, text); }
+}
+/* フェイズBの本体。opt.approve で「再調達をまとめて実行」。 */
+async function jobPhaseB(env, opt) {
+  const approve = !!(opt && opt.approve);
+  const run = newRun("phaseb");
+  const res = { mode: "off", restock_mode: "confirm", picked: 0, zero_plan: 0,
+                restock_plan: 0, zeroed: 0, restocked: 0, failed: 0, skipped: 0,
+                capped: 0, unknown: 0, unknown_old: 0, ended: 0, used: 0,
+                plan: [] };
+  try {
+    const st = await pbSettings(env);
+    res.mode = st.mode;
+    res.restock_mode = st.restock;
+    if (st.mode === "off") {
+      run.notes.push("フェイズBはオフ（⚙設定「FBAで売れたときの動作」）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const at = nowIso();
+    const q = await env.DB.prepare(
+      `SELECT ${ITEM_COLS} FROM items
+        WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND COALESCE(ebay_qty,0)>=1
+        ORDER BY COALESCE(pb_at,'') ASC LIMIT ${PB_PICK_LIMIT}`).all();
+    const rows = (q && q.results) || [];
+    const due = [], stmts = [];
+    for (const r of rows) {
+      const t = pbTarget(r);
+      if (t.act === "unknown") {
+        res.unknown++;
+        /* 内訳が分からない行。いつから分からないかを残し、24時間たったら知らせる。 */
+        const since = Date.parse(String(r.pb_at || "")) || 0;
+        if (r.pb_act !== "unknown" || !since)
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET pb_act='unknown', pb_why=?3, pb_at=?4, updated_at=?4
+              WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, t.why, at));
+        else if ((Date.now() - since) > PB_WANT_MS) {
+          res.unknown_old++;
+          res.plan.push({ title: r.title || r.asin,
+            text: "予約済みの内訳が24時間以上分かりません（対応が必要）" });
+        }
+        continue;
+      }
+      if (!t.act) {
+        res.skipped++;
+        /* 対象でなくなった行の予定は消す（内訳が分かった・在庫が戻ったなど）。 */
+        if (String(r.pb_act || "") && r.pb_act !== "restock")
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET pb_act=NULL, pb_why=?3, updated_at=?4
+              WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, t.why, at));
+        continue;
+      }
+      due.push({ r, act: t.act, why: t.why });
+    }
+    res.picked = due.length;
+    const list = due.slice(0, PB_ZERO_MAX);
+    res.capped = due.length - list.length;
+    res.zero_plan = list.filter((x) => x.act === "zero").length;
+    res.restock_plan = list.filter((x) => x.act === "restock").length;
+    /* 予定を残す（画面と通知に出す）。 */
+    for (const x of list) {
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET pb_act=?3, pb_why=?4, pb_at=?5, updated_at=?5
+          WHERE asin=?1 AND cond=?2`).bind(x.r.asin, x.r.cond, x.act, x.why, at));
+      if (res.plan.length < PB_PLAN_SHOW)
+        res.plan.push({ title: x.r.title || x.r.asin,
+          text: (x.act === "restock")
+            ? ("数量0にして再調達の予定（" + x.why + "）")
+            : ("数量を0にします（" + x.why + "）") });
+    }
+    await runBatch(env, run, stmts);
+    if (st.mode === "plan") {
+      run.notes.push("フェイズB（予定だけ表示）：数量0の予定 " + res.zero_plan
+        + "件／再調達の予定 " + res.restock_plan + "件／とばした " + res.skipped + "件"
+        + (res.capped ? ("／上限で次回に回した " + res.capped + "件") : ""));
+      await pbLogRun(env, run, st, res);
+      await pbNotify(env, run, res, st, pbNotifyText(res, st));
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* ---- ここから実行（数量0）---- */
+    const token = await ebayToken(env, run);
+    const go = [], done = [];
+    for (const x of list) {
+      const cur = await pbGetItem(env, run, token, x.r.ebay_item_id);
+      if (!cur.ok) {
+        res.failed++; run.errors++;
+        done.push(pbFailStmt(env, x.r, at, "いまの出品を確かめられません：" + cur.why));
+        continue;
+      }
+      /* 判定したときと数量・売値が違う行は触らない（二重処理と上書きを防ぐ）。 */
+      if (cur.qty !== Number(x.r.ebay_qty || 0)
+          || Math.abs(cur.price - Number(x.r.ebay_price || 0)) > 0.005) {
+        res.skipped++;
+        done.push(env.DB.prepare(
+          `UPDATE items SET pb_why='eBay の数量か売値が変わっています（次回に判定し直します）',
+             updated_at=?3 WHERE asin=?1 AND cond=?2`).bind(x.r.asin, x.r.cond, at));
+        continue;
+      }
+      go.push(Object.assign({}, x, { item_id: String(x.r.ebay_item_id), kind: "zero" }));
+    }
+    for (let i = 0; i < go.length; i += PB_BATCH) {
+      const part = go.slice(i, i + PB_BATCH);
+      const v = await ebayReviseInv(env, run, token, part);
+      for (const x of part) {
+        if (!v.ok(x.item_id)) {
+          const e = v.errFor(x.item_id);
+          const why = (e && e.why) || v.why;
+          res.failed++; run.errors++;
+          done.push(pbFailStmt(env, x.r, at, "数量0にできません：" + why));
+          done.push(pbLogRow(env, at, x.r, "zero", 0, why,
+            { fromQty: Number(x.r.ebay_qty || 0), toQty: 0 }));
+          continue;
+        }
+        res.zeroed++;
+        /* 数量0の直後に、出品が残っているか（Out-of-stock control）を確かめる。 */
+        const after = await pbGetItem(env, run, token, x.item_id);
+        let note = "";
+        if (after.ok && !/^Active$/i.test(String(after.status || ""))) {
+          res.ended++;
+          note = "出品が終了しました（Out-of-stock control を確認してください）";
+          res.plan.push({ title: x.r.title || x.r.asin, text: note });
+        }
+        done.push(env.DB.prepare(
+          `UPDATE items SET ebay_qty=0, pb_act=?3, pb_why=?4, pb_done_at=?5, pb_fail=0,
+             updated_at=?5 WHERE asin=?1 AND cond=?2`)
+          .bind(x.r.asin, x.r.cond, (x.act === "restock") ? "restock" : null,
+                note || x.why, at));
+        done.push(pbLogRow(env, at, x.r, "zero", 1, note || x.why,
+          { fromQty: Number(x.r.ebay_qty || 0), toQty: 0 }));
+      }
+    }
+    await runBatch(env, run, done);
+    /* ---- 再調達（承認か自動のときだけ）---- */
+    if (st.restock === "auto" || approve) {
+      res.used = await pbUsedToday(env);
+      const left = Math.max(0, PB_RESTOCK_MAX - res.used);
+      if (left > 0) {
+        const q2 = await env.DB.prepare(
+          `SELECT ${ITEM_COLS} FROM items
+            WHERE pb_act='restock' AND COALESCE(ebay_qty,0)=0
+              AND COALESCE(pb_skip,0)=0 AND COALESCE(pb_fail,0)<${PB_FAIL_WARN}
+            ORDER BY COALESCE(pb_at,'') ASC LIMIT ${left}`).all();
+        const rs = (q2 && q2.results) || [];
+        const st2 = [];
+        for (const r of rs) {
+          const why = pbRestockWhy(r);
+          if (why) {
+            st2.push(env.DB.prepare(
+              `UPDATE items SET pb_why=?3, updated_at=?4 WHERE asin=?1 AND cond=?2`)
+              .bind(r.asin, r.cond, "再調達しません：" + why, at));
+            res.plan.push({ title: r.title || r.asin,
+              text: "再調達しません（" + why + "）→ 数量0のままです" });
+            continue;
+          }
+          const want = Math.round(Number(r.pb_want || 0) * 100) / 100;
+          const cur = await pbGetItem(env, run, token, r.ebay_item_id);
+          if (!cur.ok || cur.qty !== 0) {
+            res.skipped++;
+            st2.push(env.DB.prepare(
+              `UPDATE items SET pb_why=?3, updated_at=?4 WHERE asin=?1 AND cond=?2`)
+              .bind(r.asin, r.cond,
+                cur.ok ? "eBay の数量が0ではありません（次回に判定し直します）"
+                       : ("いまの出品を確かめられません：" + cur.why), at));
+            continue;
+          }
+          /* 自動拒否額を使っている出品は ReviseFixedPriceItem（価格＋数量＋ベストオファー）。
+             それ以外は ReviseInventoryStatus で価格と数量を1回で送る。 */
+          let ok = false, bad = "";
+          if (Number(r.ebay_bo || 0)) {
+            const v2 = await ebayRevise(env, run, token, r.ebay_item_id, want,
+                                        mdBo(r, want), 1);
+            ok = v2.ok; bad = v2.why;
+          } else {
+            const v2 = await ebayReviseInv(env, run, token,
+              [{ item_id: String(r.ebay_item_id), kind: "restock", to: want, qty: 1 }]);
+            ok = v2.ok(String(r.ebay_item_id));
+            bad = ok ? "" : ((v2.errFor(String(r.ebay_item_id)) || {}).why || v2.why);
+          }
+          if (!ok) {
+            res.failed++; run.errors++;
+            st2.push(pbFailStmt(env, r, at, "再調達にできません：" + bad));
+            st2.push(pbLogRow(env, at, r, "restock", 0, bad,
+              { fromQty: 0, toQty: 1, fromPrice: Number(r.ebay_price || 0), toPrice: want }));
+            continue;
+          }
+          res.restocked++;
+          st2.push(env.DB.prepare(
+            `UPDATE items SET ebay_qty=1, ebay_price=?3, restocking=1, restock_at=?4,
+               restock_price=?3, restock_max_cost=COALESCE(?5, restock_max_cost),
+               pb_act=NULL, pb_why='再調達にしました', pb_done_at=?4, pb_fail=0,
+               updated_at=?4 WHERE asin=?1 AND cond=?2`)
+            .bind(r.asin, r.cond, want, at, numOf(r, "pb_max_cost")));
+          st2.push(pbLogRow(env, at, r, "restock", 1, "",
+            { fromQty: 0, toQty: 1, fromPrice: Number(r.ebay_price || 0), toPrice: want }));
+          res.plan.push({ title: r.title || r.asin,
+            text: "再調達にしました（$" + Number(r.ebay_price || 0).toFixed(2)
+              + " → $" + want.toFixed(2) + "・数量1）" });
+        }
+        await runBatch(env, run, st2);
+      }
+    }
+    run.notes.push("フェイズB：数量0 " + res.zeroed + "件／再調達 " + res.restocked
+      + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
+      + (res.capped ? ("／上限で次回に回した " + res.capped + "件") : "")
+      + (res.ended ? ("／出品が終了した " + res.ended + "件") : ""));
+    await pbLogRun(env, run, st, res);
+    await pbNotify(env, run, res, st, pbNotifyText(res, st));
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 失敗を残す（3回続けたら自動処理から外す）。 */
+function pbFailStmt(env, r, at, why) {
+  return env.DB.prepare(
+    `UPDATE items SET pb_fail=COALESCE(pb_fail,0)+1, pb_why=?3, revise_err=?3,
+       revise_err_at=?4, updated_at=?4 WHERE asin=?1 AND cond=?2`)
+    .bind(r.asin, r.cond, String(why || "").slice(0, 300), at);
+}
+
 /* ================= 写真の預け先（7.41 / 7.42・管理者だけ）=================
    「アプリで価格を直すとメイン画像だけエラーになる」への対応。
 
@@ -2619,7 +3056,17 @@ async function getItemPics(env, run, token, itemId) {
   };
   out.ok = true;
   out.title = xmlTag(xml, "Title").slice(0, 120);
-  out.listing_status = xmlTag(xmlTag(xml, "SellingStatus"), "ListingStatus");
+  const ss0 = xmlTag(xml, "SellingStatus");
+  out.listing_status = xmlTag(ss0, "ListingStatus");
+  /* 数量・売値も返す（7.47。数量0にしたあと、出品が残っているかを確かめる）。 */
+  const qty0 = Number(xmlTag(xml, "Quantity") || 0);
+  const sold0 = Number(xmlTag(ss0, "QuantitySold") || 0);
+  out.quantity = qty0;
+  out.quantity_sold = sold0;
+  out.qty_available = Math.max(0, qty0 - sold0);
+  out.price = Number(xmlTag(ss0, "CurrentPrice") || 0);
+  out.currency = xmlAttr(ss0, "CurrentPrice", "currencyID") || "USD";
+  out.active = /^Active$/i.test(String(out.listing_status || ""));
   out.pictures = {
     photo_display: xmlTag(pd, "PhotoDisplay"),
     picture_source: xmlTag(pd, "PictureSource"),
@@ -3343,6 +3790,8 @@ async function statusBody(env, url) {
     md_last: await mdLast(env),
     /* 売値の見直しの自動反映。確認モードの「変更予定の一覧」と直近の実行結果を
        画面に出す（承認ボタンはこの予定を見て押す）。 */
+    pb_plan: await pbPlan(env),
+    pb_last: await pbLast(env),
     rv_plan: await rvPlanGet(env),
     rv_last: await rvLast(env),
     items,
@@ -3516,6 +3965,15 @@ async function putListings(env, body) {
          rv_max_cost=COALESCE(?31, rv_max_cost),
          rv_kind=CASE WHEN ?32='' THEN NULL ELSE COALESCE(?32, rv_kind) END,
          rv_at=CASE WHEN ?29 IS NULL AND ?32 IS NULL THEN rv_at ELSE ?8 END,
+         /* フェイズBの再調達の売値（migrate-0021）。pj_price が計算して送る。
+            新しい値が来たら受け取った時刻も入れ替える（24時間で古いとみなす）。
+            pb_skip（今回は動かさない）は 0/1 で送る。 */
+         pb_want=COALESCE(?33, pb_want),
+         pb_max_cost=COALESCE(?34, pb_max_cost),
+         pb_want_at=CASE WHEN ?33 IS NULL THEN pb_want_at ELSE ?8 END,
+         pb_skip=COALESCE(?35, pb_skip),
+         /* 「今回は動かさない」を外したら、続けて失敗した回数も0に戻す。 */
+         pb_fail=CASE WHEN ?35=0 THEN 0 ELSE pb_fail END,
          /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
          revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
          revise_err_at=CASE WHEN ?23='' THEN NULL
@@ -3553,7 +4011,8 @@ async function putListings(env, body) {
              ? null : String(x.search_kw).slice(0, 200),
            numOf(x, "rv_want"), numOf(x, "rv_floor"), numOf(x, "rv_max_cost"),
            (x.rv_kind === undefined || x.rv_kind === null)
-             ? null : String(x.rv_kind).slice(0, 20)));
+             ? null : String(x.rv_kind).slice(0, 20),
+           numOf(x, "pb_want"), numOf(x, "pb_max_cost"), flagOf(x, "pb_skip")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -3886,6 +4345,10 @@ export default {
            approve:true は販売連携タブの「まとめて実行」＝承認して今すぐ実行。 */
         if (kind === "review")
           return json(await jobReview(env, { approve: body.approve === true }), 200, origin);
+        /* フェイズB（FBAで売れたら数量0・再調達）。7.47。
+           approve:true は販売連携タブの「再調達をまとめて実行」。 */
+        if (kind === "phaseb")
+          return json(await jobPhaseB(env, { approve: body.approve === true }), 200, origin);
         if (kind === "test-notify")
           return json(await jobTestNotify(env, body.tag), 200, origin);
         if (kind === "pricing") {
@@ -3905,10 +4368,16 @@ export default {
   async scheduled(event, env, ctx) {
     const cron = String(event.cron || "");
     ctx.waitUntil(shipNamesLoad(env));      // 配送ポリシーの名前を読んでおく
-    if (cron.indexOf("*/15") === 0) { ctx.waitUntil(jobOrders(env, 0)); return; }
+    /* 15分ごと：注文の取り込み → フェイズB（FBAで売れた行の数量0）。 */
+    if (cron.indexOf("*/15") === 0) {
+      ctx.waitUntil((async () => { await jobOrders(env, 0); await jobPhaseB(env, {}); })());
+      return;
+    }
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
     ctx.waitUntil((async () => {
       await jobHourly(env);
+      /* 在庫の取り込みのあとにも判定する（7.47）。 */
+      await jobPhaseB(env, {});
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -3939,4 +4408,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         settingsGet, settingsPut,
                         mdSettings, mdSkip, mdNext, mdBo, reviseBody, jobMarkdown, mdLast,
                         rvSettings, rvSkip, rvAct, rvLoss, invBody, jobReview, rvLast,
+                        pbSettings, pbTarget, pbRestockWhy, jobPhaseB, pbPlan, pbLast,
+                        PB_ZERO_MAX, PB_RESTOCK_MAX,
                         rvPlanGet, rvUsedToday };

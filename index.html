@@ -147,6 +147,8 @@ body.staff #syncBarFloor,
 body.staff #syncBarMarkBtn,
 body.staff #syncPicsBox,             /* 写真を eBay 保管に切り替え（出品を書き換える） */
 body.staff #syncBarPics,
+body.staff #syncPbBar,                /* フェイズB（価格と在庫を動かす） */
+body.staff .pbonly,
 body.staff #syncOnHandFix{display:none !important}
 /* ⚙設定を使う頻度で3段に並べる（6.50）。
    上（よく変える）は初期から開き、中・下は畳む。見出しをタップで開閉する。 */
@@ -815,6 +817,13 @@ body.staff #syncOnHandFix{display:none !important}
             <div class="note2" id="syncMdList" style="margin:0 0 4px"></div>
             <button class="btn" id="syncMdSend" style="width:100%">自動値下げの設定を送る</button>
           </div>
+          <!-- フェイズB：FBAで売れた行の予定（6.66）。オフのときは出さない -->
+          <div id="syncPbBar" style="display:none;margin-bottom:8px">
+            <div class="note2" id="syncPbNote" style="margin:0 0 4px"></div>
+            <div class="note2" id="syncPbList" style="margin:0 0 4px"></div>
+            <button class="btn" id="syncPbGo" style="width:100%">再調達をまとめて実行</button>
+            <div class="note2" id="syncPbDone" style="margin:2px 0 0"></div>
+          </div>
           <!-- 売値の自動反映（値上げ）。オフのときは出さない -->
           <div id="syncRvBar" style="display:none;margin-bottom:8px">
             <div class="note2" id="syncRvNote" style="margin:0 0 4px"></div>
@@ -978,6 +987,8 @@ body.staff #syncOnHandFix{display:none !important}
     <details class="cfgg" id="cfgRvBox" data-cfgg="rv" open>
       <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
       <div class="body">
+      <div class="rowv cfgprice"><label>FBAで売れたときの動作（フェイズB）</label><select id="pbMode"><option value="off">オフ（今までどおり通知だけ）</option><option value="plan" selected>予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay の数量を0にする）</option></select><div class="note2" style="margin-top:2px">FBAで売れて販売可能が0になった出品を、pj-sync が<b>まず数量0</b>にして売り越しを止めます（出品は残ります。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。「在庫0時：再調達」の行は数量0にしたうえで<b>再調達の予定</b>に載せ、下の設定に従って売値を直して数量を1に戻します。<b>まず「予定だけ表示」で1〜2日ようすを見てから</b>オンにしてください。</div></div>
+      <div class="rowv cfgprice"><label>再調達の実行方法</label><select id="pbRestock"><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync がそのまま実行）</option></select><div class="note2" style="margin-top:2px">再調達は<b>売値をAmazon最安値基準の推奨売値に直して数量を1に戻す</b>操作です。目標の売値は pj_price が計算して送ります（24時間より古い・最安グループが2人未満・下限利益を割るときは、数量0のままにして理由を出します）。</div></div>
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
       <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
@@ -1609,8 +1620,12 @@ var ADV_AMZ=['amzFeeRate','amzFbaFee'];
    オフのままだった。2026-10-15 に直した）。 */
 var ADV_MD=['autoMdMode','autoMdMax','csvMarkDays'];
 var ADV_RV=['autoRvMode','autoRvMax','autoRvPct','csvReviewAbs','csvReviewPct'];
+/* フェイズB（FBAで売れたら数量0・再調達）。Worker が読む設定（7.47）。 */
+var ADV_PB=['pbMode','pbRestock'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
-function advCsvCfg(){ return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV); }
+function advCsvCfg(){
+  return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB);
+}
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
            linkRate:String(LINK_RATE_DEFAULT), saleRate:String(SALE_RATE_DEFAULT),
@@ -3929,7 +3944,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 出品時の開始価格の決め方と、自動値下げ（pj-sync が eBay を直接変える）
                  'csvStartMode','autoMdMode','autoMdMax',
                  // 売値の見直しの自動反映（値上げ）
-                 'autoRvMode','autoRvMax','autoRvPct'];
+                 'autoRvMode','autoRvMax','autoRvPct',
+                 // フェイズB（FBAで売れたときの動作・再調達の実行方法）
+                 'pbMode','pbRestock'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -5739,7 +5756,7 @@ $('csvShipCsv').onclick=csvShipRun;
 ['csvMarkDays','csvMarkStep','csvMarkTimes','autoMdMax'].forEach(function(id){
   $(id).addEventListener('input',function(){ csvSaveCfg(); csvRender(); });
 });
-['csvStartMode','autoMdMode','autoRvMode'].forEach(function(id){
+['csvStartMode','autoMdMode','autoRvMode','pbMode','pbRestock'].forEach(function(id){
   $(id).addEventListener('change',function(){
     csvSaveCfg(); csvRender();
     if(typeof syncRender==='function'&&syncData)syncRender();
@@ -9511,6 +9528,7 @@ function syncMarkHtml(r){
 /* 販売連携タブ上部の帯。値下げの時期の出品があるときだけ出す。 */
 function syncMarkBarRender(){
   syncMdBarRender();
+  syncPbBarRender();        // フェイズB：FBAで売れた行の予定（6.66）
   syncRvBarRender();        // 売値の自動反映（値上げ）の帯
   syncPicsGate();           // 写真の切り替え：使える／必要な件数（6.64）
   var el=$('syncMarkBar'); if(!el)return;
@@ -9977,6 +9995,7 @@ $('syncPicsBulk').onclick=function(){
     +'・pj-img の写真は消しません\nよろしいですか？'))return;
   syncPicsRun(ids,'まとめて切り替え');
 };
+$('syncPbGo').onclick=function(){ syncPbGo(); };
 $('syncBarPics').onclick=function(){
   var box=$('syncPicsBox');
   box.open=true;
@@ -10183,11 +10202,30 @@ function syncNextHtml(r){
   if(String(r.revise_err||'').trim())
     return nextLine('要対応','#b00020','値段の更新に失敗：'
       +esc(syncErrText(r.revise_err))+'（直し方は計算の詳細）');
-  /* ③ 写真の切り替えに失敗した行（6.63）。手動でやり直せる。 */
+  /* ③ FBAで売れた行の予定（6.66）。数量0・再調達・内訳待ち。 */
+  if(pbMode()!=='off'){
+    var pa=syncPbActOf(r);
+    if(pa&&pa.kind==='restock'){
+      var prec=syncRecommend(r);
+      return nextLine(pbRestockMode()==='auto'?'再調達の予定':'再調達の承認待ち','#1f5fa0',
+        '数量0にしてから <b>'+usd(+r.ebay_price||0)+' → '
+        +(prec?('<b>'+usd(prec.price)+'</b>'):'—')+'</b> で出し直します　'
+        +syncBasisNote(r));
+    }
+    if(pa&&pa.kind==='zero')
+      return nextLine(pbMode()==='on'?'数量0にします':'数量0の予定','#8a6d00',
+        'FBAで売れました（'+esc(pa.why)+'）。'
+        +(pbMode()==='on'?'次の取り込みのときに pj-sync が数量を0にします'
+                         :'⚙設定の「FBAで売れたときの動作」をオンにすると実行します'));
+    if(pa&&pa.kind==='unknown')
+      return nextLine('内訳待ち','#8a6d00',
+        '予約済みの内訳が分かるまで待ちます（24時間たっても分からなければ知らせます）');
+  }
+  /* ④ 写真の切り替えに失敗した行（6.63）。手動でやり直せる。 */
   if(syncPicsErrOf(r))
     return nextLine('要対応','#b00020','写真の切り替えに失敗：'+esc(syncPicsErrOf(r))
       +'　「写真を eBay 保管に切り替え」に ItemID を入れてやり直せます');
-  /* ④ 切り替え待ちの新しい出品（6.63）。終わるまで写真を触らないでもらう。 */
+  /* ⑤ 切り替え待ちの新しい出品（6.63）。終わるまで写真を触らないでもらう。 */
   if(syncPicsNeed(r)&&syncPicsNew(r))
     return nextLine('写真の切り替え待ち','#8a4f00',
       '次の「状況を取り込む」で eBay 保管に切り替えます。'
@@ -10563,6 +10601,63 @@ function autoRvMode(){
   var v=(($('autoRvMode')||{}).value)||'off';
   return (v==='confirm'||v==='auto')?v:'off';
 }
+/* ---- フェイズB：FBAで売れた行の予定（6.66）----
+   Worker の pbTarget と同じ決まりで、画面にも予定を出す。
+   実行は pj-sync（Cron）が行うので、ここは表示と承認だけ。 */
+function syncPbSkipOf(r){ return Number((r||{}).pb_skip||0)>0; }
+function syncPbFailOf(r){ return Number((r||{}).pb_fail||0)>=3; }
+function syncPbActOf(r){
+  if(!r)return null;
+  if(!String(r.ebay_item_id||'').trim())return null;
+  if(syncQtyOf(r)<1&&String(r.pb_act||'')!=='restock')return null;
+  if(syncPbSkipOf(r))return null;
+  if(syncPbFailOf(r))return null;
+  if(Number(r.on_hand||0))return null;
+  // 手元から発送する行（-C／-L）は FBA の在庫で判断しない
+  if(['cart','loose'].indexOf(String(r.cond||''))>=0)return null;
+  if(syncIsDropship(r))return null;
+  if(syncIsRestocking(r))return null;
+  if(syncOnSale(r))return null;
+  if(r.fba_seen_at==null)return null;
+  if(Number(r.fba_available||0)>0)return null;
+  if(Number(r.fba_inbound||0)>0)return null;
+  var rv=Number(r.fba_reserved||0);
+  if(rv>0){
+    if(syncIsFcProc(r))return null;
+    if(!syncResSold(r))return { kind:'unknown', why:'予約済み（内訳不明）' };
+  }
+  var wantRestock=(String(r.mode||'')==='restock');
+  var oneOff=!!Number(r.one_off||0), known=!!Number(r.one_off_known||0);
+  if(wantRestock&&!oneOff&&known)
+    return { kind:'restock', why:'再調達の予定' };
+  if(wantRestock)
+    return { kind:'zero', why:oneOff?'一点物なので寝かせる'
+                                    :'一点物かどうかが未確定なので寝かせる' };
+  return { kind:'zero', why:(String(r.mode||'')==='end')?'終了の指定（数量0）'
+             :(String(r.mode||'')?'寝かせる':'在庫0時の動作が未設定なので寝かせる') };
+}
+function syncPbRows(kind){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    var a=syncPbActOf(r);
+    return !!a&&(!kind||a.kind===kind);
+  });
+}
+/* 在庫0時の動作が未設定の行（画面に件数を出す）。 */
+function syncPbNoMode(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    return !!String(r.ebay_item_id||'').trim()&&syncQtyOf(r)>0
+      &&!String(r.mode||'').trim();
+  }).length;
+}
+/* フェイズB（7.47／6.66）。FBAで売れたときに eBay の数量を0にするかどうか。 */
+function pbMode(){
+  var v=(($('pbMode')||{}).value)||'plan';
+  return (v==='off'||v==='on')?v:'plan';
+}
+function pbRestockMode(){
+  var v=(($('pbRestock')||{}).value)||'confirm';
+  return (v==='auto')?'auto':'confirm';
+}
 function autoRvMax(){
   var n=+$('autoRvMax').value;
   return (isFinite(n)&&n>=1)?Math.round(n):50;
@@ -10665,6 +10760,108 @@ function syncRvLine(x){
     +(x.loss?'（赤字の解消）':'');
 }
 /* 帯の見せ方。オフのときは出さない。 */
+/* フェイズBの帯（6.66）。予定の件数と、再調達の承認ボタンを出す。 */
+function syncPbBarRender(){
+  var bar=$('syncPbBar'); if(!bar)return;
+  var mode=pbMode();
+  bar.style.display=(mode==='off')?'none':'block';
+  if(mode==='off')return;
+  var zero=syncPbRows('zero'), rest=syncPbRows('restock');
+  var unk=syncPbRows('unknown');
+  var plan=(syncData&&syncData.pb_plan)||null;
+  var last=(syncData&&syncData.pb_last)||null;
+  var noMode=syncPbNoMode();
+  $('syncPbNote').innerHTML=
+    '<b>フェイズB：'+(mode==='on'?'オン':'予定だけ表示')+'</b>　'
+    +'数量0の予定 '+zero.length+'件／再調達の予定 '+rest.length+'件'
+    +(unk.length?('／内訳不明 '+unk.length+'件'):'')
+    +(mode==='plan'?'　<b>eBay はまだ変えません</b>':'')
+    +'　<span style="opacity:.8">再調達は'
+    +(pbRestockMode()==='auto'?'自動実行':'確認モード（まとめて実行で承認）')+'</span>'
+    +(noMode?('<br><b>在庫0時の動作が未設定：'+noMode+'件</b>'
+      +'（行の「在庫0時」ボタンで決められます。未設定は「寝かせる」扱いです）'):'')
+    +(plan&&plan.unknown?('<br>pj-sync の予定：数量0 '+Number(plan.zero||0)
+      +'件／再調達 '+Number(plan.restock||0)+'件／内訳不明 '+Number(plan.unknown||0)+'件'):'')
+    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+      +'・'+({plan:'予定だけ',on:'オン'}[last.mode]||last.mode)+'）：数量0 '
+      +Number(last.zeroed||0)+'件／再調達 '+Number(last.restocked||0)+'件／失敗 '
+      +Number(last.failed||0)+'件'):'');
+  var line=function(r){
+    var a=syncPbActOf(r), rec=syncRecommend(r);
+    return esc(r.title||r.asin)+'：'
+      +((a.kind==='restock')
+        ? ('数量0 → 再調達（'+usd(+r.ebay_price||0)+' → '
+           +(rec?usd(rec.price):'—')+'）')
+        : (a.kind==='unknown' ? '予約済みの内訳を待っています'
+                              : ('数量を0にします（'+esc(a.why)+'）')));
+  };
+  var all=rest.concat(zero).concat(unk);
+  $('syncPbList').innerHTML=all.length
+    ? listMoreHtml('pbplan',all.map(line))
+    : 'FBAで売れて対応が要る出品はありません。';
+  csvBtnHot('syncPbGo',pbRestockMode()==='confirm'&&rest.length>0,
+    '再調達をまとめて実行'+csvCountBadge(rest.length));
+  $('syncPbGo').disabled=!(pbRestockMode()==='confirm'&&rest.length>0);
+  $('syncPbGo').style.display=(pbRestockMode()==='confirm')?'':'none';
+}
+/* 「再調達をまとめて実行」（確認画面つき・管理者だけ）。 */
+function syncPbGo(){
+  if(roleDenyPrice('syncPbDone'))return;
+  var rows=syncPbRows('restock');
+  if(!rows.length){ alert('再調達の予定はありません。'); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('syncPbDone').textContent='pj-sync のURL・キーを⚙設定に入れてください。'; return;
+  }
+  if(!confirm('再調達の予定 '+rows.length+'件を実行します。\n'
+    +'・売値を推奨売値に直して、数量を1に戻します\n'
+    +'・目標の売値が古い・最安グループが2人未満・下限利益を割る行は、数量0のままにします\n'
+    +rows.slice(0,5).map(function(r){
+        var rec=syncRecommend(r);
+        return '　・'+(r.title||r.asin)+'：'+usd(+r.ebay_price||0)+' → '
+          +(rec?usd(rec.price):'—'); }).join('\n')
+    +(rows.length>5?('\n　…ほか'+(rows.length-5)+'件'):'')+'\n'
+    +'よろしいですか？'))return;
+  var b=$('syncPbGo');
+  b.disabled=true; b.textContent='実行しています…';
+  $('syncPbDone').textContent='pj-sync が eBay を直しています…';
+  /* 目標の売値を先に送ってから実行する（24時間より古いと実行されないため）。 */
+  syncPbPost(function(){
+    syncJsonPost('/sync',{kind:'phaseb',approve:true},function(d){
+      var msg='数量0 '+Number(d.zeroed||0)+'件／再調達 '+Number(d.restocked||0)
+        +'件／失敗 '+Number(d.failed||0)+'件';
+      $('syncPbDone').textContent=msg+'。状況を取り込んでいます…';
+      b.disabled=false; syncRender();
+      syncLoadRun(function(err){
+        $('syncPbDone').textContent=msg+(err
+          ? ('。状況の取り込みに失敗しました（'+err.message+'）。'
+             +'「状況を取り込む」を押してください。')
+          : '。最新の状況に更新しました。');
+        syncRender();
+      },true);
+    },function(why){
+      $('syncPbDone').textContent='失敗しました：'+why;
+      b.disabled=false; syncRender();
+    });
+  });
+}
+/* 再調達の目標（推奨売値と仕入値の上限）を pj-sync に送る（6.66）。
+   Worker は値付けの式を持たないので、pj_price が計算して送る。 */
+function syncPbPost(done){
+  var fin=function(){ if(done)done(); };
+  if(isStaff()){ fin(); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ fin(); return; }
+  var rows=syncPbRows('restock').filter(function(r){ return !!syncRecommend(r); });
+  if(!rows.length){ fin(); return; }
+  var items=rows.slice(0,200).map(function(r){
+    var rec=syncRecommend(r);
+    return { asin:r.asin, cond:r.cond, title:r.title||'',
+             pb_want:Math.round(rec.price*100)/100,
+             pb_max_cost:syncMaxCost(rec.price,syncWeightOf(r).v) };
+  });
+  syncJsonPost('/listings',{items:items},function(){ fin(); },function(){ fin(); });
+}
 function syncRvBarRender(){
   var bar=$('syncRvBar'); if(!bar)return;
   var mode=autoRvMode();
@@ -11039,6 +11236,9 @@ var SYNC_FILTERS=[
                        ||syncReviseAlert(r)||syncRvAlert(r)||!!syncPicsErrOf(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
+  /* FBAで売れた（対応予定）。フェイズBが数量0・再調達にする行（6.66）。 */
+  { v:'pbplan',         label:'FBAで売れた（対応予定）',
+    f:function(r){ return !!syncPbActOf(r); } },
   /* 写真の切り替えが必要な行（6.62）。pj-img で出した出品は PictureSource=Vendor
      のままなので、切り替え済みの印が無い出品中の行を出す。 */
   { v:'picsneed',       label:'写真の切り替えが必要',
@@ -11292,6 +11492,31 @@ function syncEbayFirstBtn(r,key){
 }
 /* 行の「値下げしない」の印。3日ごとの値下げから外す（記録は D1）。
    出品している行だけに出す。 */
+/* 在庫0時の動作（6.66）。押すたびに 寝かせる → 再調達 → 終了 と回る。
+   /listings は前から mode を受け取るので、Worker の変更は要らない。 */
+var SYNC_ZERO_ACTS=['hold','restock','end'];
+var SYNC_ZERO_NAME={ hold:'寝かせる', restock:'再調達', end:'終了' };
+function syncZeroActOf(r){
+  var v=String((r||{}).mode||'');
+  return (SYNC_ZERO_ACTS.indexOf(v)>=0)?v:'';
+}
+function syncZeroActBtn(r,key){
+  if(!String(r.ebay_item_id||'').trim())return '';
+  var v=syncZeroActOf(r);
+  return '<button class="btn pbonly" data-szero="'+esc(key)+'"'
+    +' style="padding:5px 8px;font-size:12px'
+    +(v?'':';background:#8a6d00;color:#fff;border-color:#8a6d00')+'">在庫0時：'
+    +(v?esc(SYNC_ZERO_NAME[v]):'未設定')+'</button>';
+}
+/* 今回は動かさない（フェイズBの対象から外す印）。 */
+function syncPbSkipBtn(r,key){
+  if(!String(r.ebay_item_id||'').trim())return '';
+  var on=syncPbSkipOf(r);
+  return '<button class="btn pbonly" data-spbskip="'+esc(key)+'"'
+    +' style="padding:5px 8px;font-size:12px'
+    +(on?';background:#666;color:#fff;border-color:#666':'')+'">'
+    +(on?'動かさない（解除する）':'今回は動かさない')+'</button>';
+}
 function syncMarkStopBtn(r,key){
   if(!String(r.ebay_item_id||'').trim())return '';
   var on=syncMarkStopOf(r);
@@ -11638,7 +11863,8 @@ function syncRowHtml(r,key){
       +syncSoldHtml(r,key)
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
-      +syncRestockingBtn(r,key)+syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)+'</div>'
+      +syncRestockingBtn(r,key)+syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)
+      +syncZeroActBtn(r,key)+syncPbSkipBtn(r,key)+'</div>'
       +detHtml('sync',key,det)
       +'</div>';
 }
@@ -11841,6 +12067,30 @@ $('syncPerPage').addEventListener('change',function(){ syncPerApply(this.value);
    ほかの項目（モード・一点物・FBA連動）は Worker 側でそのまま残る。 */
 /* 行の印（手元在庫・一点物）を入れ替える。送るのは ASIN＋新品/中古 と、
    その印だけ。ほかの項目は Worker 側でそのまま残る。 */
+/* 在庫0時の動作を pj-sync に送る（6.66）。 */
+function syncModeSend(t,r,want){
+  var u=syncUrl();
+  if(!syncKeyReady('syncFixNote'))return;
+  var back=t.textContent;
+  t.disabled=true; t.textContent='送信中…';
+  fetch(u+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:[{asin:r.asin, cond:r.cond, title:r.title||'',
+                                 mode:want}]})})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
+      r.mode=want;
+      syncSaveCache();
+      $('syncFixNote').textContent='在庫0時の動作を「'+SYNC_ZERO_NAME[want]+'」にしました：'
+        +(r.title||r.asin)+'　（'+r.asin+'）';
+      syncRender();
+    })
+    .catch(function(e){
+      t.disabled=false; t.textContent=back;
+      $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
+    });
+}
 function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
   if(!syncKeyReady('syncFixNote'))return;
@@ -11856,6 +12106,7 @@ function syncFlagSend(t,r,field,want,label){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r[field]=want?1:0;
       if(field==='one_off')r.one_off_known=1;
+      if(field==='pb_skip'&&!want)r.pb_fail=0;   // 外したら失敗の回数も戻る（6.66）
       syncSaveCache();
       $('syncFixNote').textContent=label+'を'+(want?'オン':'オフ')+'にしました：'
         +(r.title||r.asin)+'　（'+r.asin+'）';
@@ -11912,7 +12163,8 @@ $('syncList').addEventListener('click',function(e){
   var kh=t.getAttribute('data-sonhand'), ko=t.getAttribute('data-soneoff');
   var kr=t.getAttribute('data-srestock'), kd=t.getAttribute('data-sdrop');
   var km=t.getAttribute('data-smstop'), kf=t.getAttribute('data-sefirst');
-  var key=kh||ko||kr||kd||km||kf; if(!key)return;
+  var kz=t.getAttribute('data-szero'), kp=t.getAttribute('data-spbskip');
+  var key=kh||ko||kr||kd||km||kf||kz||kp; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
   if(!r)return;
@@ -11952,6 +12204,20 @@ $('syncList').addEventListener('click',function(e){
   }else if(kf){
     /* eBay優先。Amazonの方が得でも、その行だけ下限を引き上げない。 */
     syncFlagSend(t,r,'ebay_first',!syncEbayFirst(r),'eBay優先');
+  }else if(kz){
+    /* 在庫0時の動作（6.66）。未設定 → 寝かせる → 再調達 → 終了 の順に回す。 */
+    if(roleDenyPrice('syncFixNote'))return;
+    var cur=syncZeroActOf(r);
+    var next=SYNC_ZERO_ACTS[(SYNC_ZERO_ACTS.indexOf(cur)+1)%SYNC_ZERO_ACTS.length];
+    if(next==='restock'&&Number(r.one_off||0)){
+      alert('一点物の行は再調達にできません（寝かせる／終了にしてください）。');
+      return;
+    }
+    syncModeSend(t,r,next);
+  }else if(kp){
+    /* 今回は動かさない（フェイズBの対象から外す）。 */
+    if(roleDenyPrice('syncFixNote'))return;
+    syncFlagSend(t,r,'pb_skip',!syncPbSkipOf(r),'今回は動かさない');
   }else{
     syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
   }
@@ -12041,8 +12307,9 @@ function syncLoadRun(done,quiet){
           +'（'+esc(run.kind||'')+'）'):'')
         +(d.errors_recent?'　直近の実行にエラーがあります（/runs を確認）':''));
       syncRender();
-      /* 新しい出品の写真を、ここで1回だけ eBay 保管に切り替える（6.63）。 */
-      syncPicsAutoRun(function(){ fin(null); });
+      /* 新しい出品の写真を、ここで1回だけ eBay 保管に切り替える（6.63）。
+         そのあと、フェイズBの再調達の目標を送る（6.66）。 */
+      syncPicsAutoRun(function(){ syncPbPost(function(){ fin(null); }); });
     })
     .catch(function(e){ syncSay('取り込みに失敗しました：'+e.message); fin(e); })
     .then(function(){ btn.disabled=false; btn.textContent='状況を取り込む'; });
@@ -12500,7 +12767,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v165';   // sw.js の const V と必ず同じ値にする
+var APP_V='v166';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
