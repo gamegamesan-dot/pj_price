@@ -847,7 +847,7 @@ body.staff #syncOnHandFix{display:none !important}
                    style="flex:1 1 0;min-width:0">
             <button class="btn" id="syncPicsOne" style="flex:0 0 auto;padding:9px 10px">1件お試し</button>
           </div>
-          <div class="note2" style="margin:4px 0 6px">写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。元は<b>出品リストの写真（1枚目がメイン）</b>を使い、残っていない行は今の eBay の写真を作り直します。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。切り替えた行には「eBay 保管済み」の印が付き、二度切り替えません。</div>
+          <div class="note2" style="margin:4px 0 6px"><b>ItemID を入れるだけ</b>で使えます（出品リストに行が無くてもかまいません）。新しい出品は「状況を取り込む」のときに自動で切り替わるので、ふつうは押さなくて大丈夫です。写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。元は<b>出品リストの写真（1枚目がメイン）</b>を使い、残っていない行は今の eBay の写真を作り直します。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。切り替えた行には「eBay 保管済み」の印が付き、二度切り替えません。</div>
           <button class="btn" id="syncPicsBulk" style="width:100%" disabled>選んだ行をまとめて切り替え</button>
           <div class="note2" id="syncPicsGate" style="margin-top:2px"></div>
           <div class="note2" id="syncPicsNote" style="margin-top:4px"></div>
@@ -9730,6 +9730,36 @@ function syncPicsGate(){
       +'確かめるまで、まとめての切り替えは押せません。')
     +(need?('　切り替えが必要：'+need+'件（絞り込み「写真の切り替えが必要」で選べます）'):'');
 }
+/* 取り込んだあとに自動で切り替える新しい出品（6.63・B案）。
+   出品CSVは今までどおり R2 の URL で出し、**取り込みのときに1回だけ**
+   写真を eBay 保管へ切り替える。対象は出品から24時間以内・未切り替えの行だけ。 */
+var PICS_NEW_MS=24*60*60*1000;
+var PICS_ERR_KEY='pj:picserr:v1';
+var syncPicsErrs={};
+try{ syncPicsErrs=JSON.parse(localStorage.getItem(PICS_ERR_KEY)||'{}')||{}; }catch(e){}
+function syncPicsErrSave(){
+  try{ localStorage.setItem(PICS_ERR_KEY,JSON.stringify(syncPicsErrs)); }catch(e){}
+}
+function syncPicsKey(r){ return String((r||{}).asin||'')+'|'+String((r||{}).cond||''); }
+/* 切り替えに失敗した理由（「対応が必要」に出す）。切り替え済みの行には出さない。 */
+function syncPicsErrOf(r){
+  if(!r||syncPicsDone(r))return '';
+  var e=syncPicsErrs[syncPicsKey(r)];
+  return e?String(e.why||''):'';
+}
+function syncPicsErrSet(r,why){
+  syncPicsErrs[syncPicsKey(r)]={ at:new Date().toISOString(), why:String(why||'').slice(0,200) };
+  syncPicsErrSave();
+}
+function syncPicsErrClear(r){
+  var k=syncPicsKey(r);
+  if(syncPicsErrs[k]){ delete syncPicsErrs[k]; syncPicsErrSave(); }
+}
+/* 出品してから24時間以内か（自動で切り替える新しい出品）。 */
+function syncPicsNew(r){
+  var t=Date.parse(String((r||{}).ebay_start||''));
+  return !!t&&(Date.now()-t)<=PICS_NEW_MS;
+}
 /* まだ eBay 保管にしていない出品（6.62）。pj-img で出した出品は PictureSource=Vendor
    のままなので、切り替え済みの印（pics_eps）が無い出品中の行がそのまま候補になる。 */
 function syncPicsDone(r){ return Number((r||{}).pics_eps||0)>0; }
@@ -9831,6 +9861,50 @@ function syncPicsRun(ids,label){
       });
   }
   step(0);
+}
+/* 取り込みのあと、新しい出品だけ自動で切り替える（6.63）。
+   ・出品から24時間以内・未切り替えの行だけ。1回の取り込みで最大 SYNC_PICS_MAX 件
+   ・写真の元は出品リストの写真（r.pics）。無ければ今の eBay の写真を作り直すだけ
+   ・前後の枚数を比べて減ったら止める仕組み（7.44）はそのまま使う
+   ・失敗した行は理由を控え、「対応が必要」に出す（手動でやり直せる） */
+function syncPicsAutoRows(){
+  return ((syncData&&syncData.items)||[]).filter(function(r){
+    return syncPicsNeed(r)&&syncPicsNew(r);
+  }).slice(0,SYNC_PICS_MAX);
+}
+function syncPicsAutoRun(done){
+  var fin=function(){ if(done)done(); };
+  csvSecretFill();
+  if(isStaff()||!syncUrl()||!syncApiKey()){ fin(); return; }
+  var rows=syncPicsAutoRows();
+  if(!rows.length){ fin(); return; }
+  var note=$('syncPicsNote'), i=0, okN=0, ngN=0;
+  function step(){
+    if(i>=rows.length){
+      note.textContent='新しい出品の写真を eBay 保管にしました：'+okN+'件'
+        +(ngN?('／できなかった '+ngN+'件（絞り込み「対応が必要」に理由を出しています）'):'');
+      syncSaveCache(); syncRender(); fin(); return;
+    }
+    var r=rows[i++], id=String(r.ebay_item_id||'').replace(/[^0-9]/g,'');
+    var urls=syncPicsUrlsFor(id);
+    var body={ item_ids:[id], mode:'fresh', confirm:true };
+    if(urls.length)body.urls=urls;
+    note.textContent='新しい出品の写真を eBay 保管に切り替えています…（'+i+'／'+rows.length+'件）';
+    syncJsonPost('/ebay/pics/switch',body,function(d){
+      var it=((d&&d.items)||[])[0]||{};
+      if(it.done){
+        okN++;
+        r.pics_eps=1;
+        r.pics_n=(it.after&&it.after.n)||0;
+        syncPicsErrClear(r);
+      }else{
+        ngN++;
+        syncPicsErrSet(r,it.error||'切り替えられませんでした');
+      }
+      step();
+    },function(why){ ngN++; syncPicsErrSet(r,why); step(); });
+  }
+  step();
 }
 $('syncPicsOne').onclick=function(){
   var id=String($('syncPicsId').value||'').replace(/[^0-9]/g,'');
@@ -10072,6 +10146,15 @@ function syncNextHtml(r){
   if(String(r.revise_err||'').trim())
     return nextLine('要対応','#b00020','値段の更新に失敗：'
       +esc(syncErrText(r.revise_err))+'（直し方は計算の詳細）');
+  /* ③ 写真の切り替えに失敗した行（6.63）。手動でやり直せる。 */
+  if(syncPicsErrOf(r))
+    return nextLine('要対応','#b00020','写真の切り替えに失敗：'+esc(syncPicsErrOf(r))
+      +'　「写真を eBay 保管に切り替え」に ItemID を入れてやり直せます');
+  /* ④ 切り替え待ちの新しい出品（6.63）。終わるまで写真を触らないでもらう。 */
+  if(syncPicsNeed(r)&&syncPicsNew(r))
+    return nextLine('写真の切り替え待ち','#8a4f00',
+      '次の「状況を取り込む」で eBay 保管に切り替えます。'
+      +'それまで <b>eBayアプリで写真を触らないでください</b>');
   var id=String(r.ebay_item_id||'').trim();
   if(!id)return '';
   // ② 売値の自動反映（値上げ・見送りで数量0）の予定
@@ -10916,7 +10999,7 @@ var SYNC_FILTERS=[
     f:function(r){ return true; } },
   { v:'warn',           label:'対応が必要（警告あり）',
     f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r)||syncAmzAlert(r)
-                       ||syncReviseAlert(r)||syncRvAlert(r); } },
+                       ||syncReviseAlert(r)||syncRvAlert(r)||!!syncPicsErrOf(r); } },
   /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
      一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
   /* 写真の切り替えが必要な行（6.62）。pj-img で出した出品は PictureSource=Vendor
@@ -11273,6 +11356,10 @@ function syncWarnBreakRender(){
   var rvF=rows.filter(syncRvAlert).length;
   if(rvF){ cw['売値の自動反映が3回失敗']=rvF; nw+=rows.filter(function(r){
     return syncRvAlert(r)&&!(r.warnings||[]).length; }).length; }
+  /* 写真の切り替えに失敗した行（6.63）。手動でやり直せる。 */
+  var pcE=rows.filter(function(r){ return !!syncPicsErrOf(r); }).length;
+  if(pcE){ cw['写真の切り替えに失敗']=pcE; nw+=rows.filter(function(r){
+    return !!syncPicsErrOf(r)&&!(r.warnings||[]).length; }).length; }
   var ks=Object.keys(cw).sort(function(a,b){ return cw[b]-cw[a]; });
   var ns=Object.keys(cn).sort(function(a,b){ return cn[b]-cn[a]; });
   if(!ks.length&&!ns.length){ el.textContent=rows.length?'対応が必要な行はありません。':''; return; }
@@ -11917,7 +12004,8 @@ function syncLoadRun(done,quiet){
           +'（'+esc(run.kind||'')+'）'):'')
         +(d.errors_recent?'　直近の実行にエラーがあります（/runs を確認）':''));
       syncRender();
-      fin(null);
+      /* 新しい出品の写真を、ここで1回だけ eBay 保管に切り替える（6.63）。 */
+      syncPicsAutoRun(function(){ fin(null); });
     })
     .catch(function(e){ syncSay('取り込みに失敗しました：'+e.message); fin(e); })
     .then(function(){ btn.disabled=false; btn.textContent='状況を取り込む'; });
@@ -12375,7 +12463,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v162';   // sw.js の const V と必ず同じ値にする
+var APP_V='v163';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
