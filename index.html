@@ -9613,21 +9613,25 @@ function syncMarkBarRender(){
     : '販売連携タブで「状況を取り込む」を押すと、値下げの時期の件数が出ます。';
 }
 /* ================= 今日やること（販売連携の入口）=================
-   対応が必要／値下げの時期／再調達の候補／FBA納品の判断 を並べ、
-   押すとその絞り込みにする。0件の項目は薄く出す（押せば中身は見られる）。 */
-var SYNC_TODO=[
-  { v:'warn',     t:'対応が必要' },
-  { v:'markdown', t:'値下げの時期' },
-  { v:'restock',  t:'再調達の候補' },
-  { v:'on_hand',  t:'FBA納品の判断' }
-];
+   対応が必要／FBAで売れた／値下げ／FBA納品の判断 を並べ、
+   押すとその絞り込みにする。0件の項目は薄く出す（押せば中身は見られる）。
+   並びは絞り込みの整理（6.71）に合わせてある。 */
+function syncTodoList(){
+  return [
+    { v:'warn',    t:'対応が必要' },
+    { v:'pbplan',  t:'FBAで売れた' },
+    (autoMdMode()==='off') ? { v:'markdown', t:'値下げの時期' }
+                           : { v:'automd',   t:'自動値下げの予定' },
+    { v:'on_hand', t:'FBA納品の判断' }
+  ];
+}
 function syncTodoRender(){
   var el=$('syncTodo'); if(!el)return;
   var rows=(syncData&&syncData.items)||[];
   if(!rows.length){ el.innerHTML=''; el.style.display='none'; return; }
   el.style.display='';
   var now=$('syncFilter')?$('syncFilter').value:'all', h='';
-  SYNC_TODO.forEach(function(x){
+  syncTodoList().forEach(function(x){
     var ff=syncFilterBy(x.v).f, n=0;
     rows.forEach(function(r){ if(ff(r))n++; });
     h+='<button type="button" data-todo="'+x.v+'" class="'+(n?'hit':'zero')
@@ -9643,8 +9647,15 @@ $('syncTodo').addEventListener('click',function(e){
 /* 絞り込みを切り替えて、一覧を開いて先頭から見せる。
    「今日やること」と「一覧で見る」から使う。 */
 function syncFilterSet(v){
-  $('syncFilter').value=v;
-  if($('syncFilter').value!==v)return;     // 選択肢がまだ無いときは何もしない
+  var sel=$('syncFilter');
+  if(!syncFilterHas(v))return;
+  /* 0件で隠れている項目でも、押されたら選べるようにする（6.71）。
+     このあとの syncRender() が「いま選んでいる項目」として残す。 */
+  if(!sel.querySelector('option[value="'+v+'"]'))
+    sel.insertAdjacentHTML('beforeend','<optgroup label="選んだ項目">'
+      +'<option value="'+esc(v)+'">'+esc(syncFilterBy(v).label)+'（0）</option></optgroup>');
+  sel.value=v;
+  if(sel.value!==v)return;                 // 選択肢がまだ無いときは何もしない
   $('syncListBox').open=true;
   syncPage=1; syncPickPrune();             // 1ページ目から。見えない行の選択は外す
   syncRender();
@@ -9659,9 +9670,10 @@ function syncBarRender(){
   var off=syncPickOff();
   $('syncBarN').textContent='選択 '+n+'件'
     +(off?('（他のページ '+off+'件を含む）'):'');
-  // 再調達CSVは「再調達の候補」を見ているときだけ
+  /* 再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ
+     （「再調達の候補」はそこにまとめた・6.71）。 */
   $('syncBarRestock').style.display=
-    ($('syncFilter').value==='restock')?'':'none';
+    ($('syncFilter').value==='pbplan')?'':'none';
 }
 /* 選んだ行の印をまとめて付け外しする。
    その行に付けられない印はとばし、何件とばしたかを出す。 */
@@ -11627,23 +11639,30 @@ function syncDays(r){
    5 FBA納品の判断（手元在庫。送る候補と送らない行はバッジで見分ける）／
    6 eBay出品の候補（FBA在庫あり・eBay未出品）
    それぞれの件数を選択肢に出す（例「対応が必要（3）」）。 */
+/* ================= 一覧の絞り込み（6.71）=================
+   数が増えて紛らわしくなったので、次の決まりで整理した。
+   ・重なっているものはまとめ先に含める（「値下げの時期」→「自動値下げの予定」、
+     「再調達の候補」→「FBAで売れた（対応予定）」）
+   ・0件の項目はプルダウンに出さない（「すべて」「対応が必要」といま選んでいる
+     項目だけは必ず出す）
+   ・見出し（optgroup）で「毎日見る／出品／価格／状態」に分ける
+   hide() を持つ項目は、その条件に当たるとき一覧に出さない。 */
 var SYNC_FILTERS=[
   { v:'all',            label:'すべて',
     f:function(r){ return true; } },
   { v:'warn',           label:'対応が必要（警告あり）',
     f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r)||syncAmzAlert(r)
                        ||syncReviseAlert(r)||syncRvAlert(r)||!!syncPicsErrOf(r); } },
-  /* 再調達の候補：eBayに出ていて、FBAの販売可能が0（売り越しの恐れ・予約済みのみ）で、
-     一点物でない行。一点物かどうかが分からない行も候補に入れる（表示で知らせる）。 */
-  /* FBAで売れた（対応予定）。フェイズBが数量0・再調達にする行（6.66）。 */
+  /* FBAで売れた（対応予定）。フェイズBが数量0・再調達にする行（6.66）と、
+     「再調達の候補」（eBayに出ていてFBAの販売可能が0・一点物でない行）を
+     ここにまとめた（6.71）。どちらも「FBAで売れたあとどうするか」の話なので。 */
   { v:'pbplan',         label:'FBAで売れた（対応予定）',
-    f:function(r){ return !!syncPbActOf(r); } },
-  /* 写真の切り替えが必要な行（6.62）。pj-img で出した出品は PictureSource=Vendor
-     のままなので、切り替え済みの印が無い出品中の行を出す。 */
-  { v:'picsneed',       label:'写真の切り替えが必要',
+    f:function(r){ return !!syncPbActOf(r)||syncIsRestock(r); } },
+  /* まだ eBay 保管（EPS）に切り替えていない行（6.62）。全件の切り替えが済んだ
+     いまは、**元の写真が小さくて切り替えられなかった行**だけが残るので、
+     名前を「写真が小さい（要撮り直し）」にした（6.71）。 */
+  { v:'picsneed',       label:'写真が小さい（要撮り直し）',
     f:function(r){ return syncPicsNeed(r); } },
-  { v:'restock',        label:'再調達の候補',
-    f:function(r){ return syncIsRestock(r); } },
   { v:'restocking',     label:'再調達中',
     f:function(r){ return syncIsRestocking(r); } },
   /* 無在庫：売れてから仕入れる出品。件数は上限の見張りに使う。 */
@@ -11655,28 +11674,55 @@ var SYNC_FILTERS=[
     f:function(r){ return !!Number(r.on_hand||0); } },
   { v:'fba_not_listed', label:'eBay出品の候補',
     f:function(r){ return r.state==='fba_not_listed'; } },
-  /* 価格の操作。いま値下げの時期の出品と、売値の見直しが要る出品。 */
+  /* 値下げの時期（手動の値下げCSV用）。自動値下げがオンのときは
+     「自動値下げの予定」に含めるので出さない（6.71）。 */
   { v:'markdown',       label:'値下げの時期',
+    hide:function(){ return autoMdMode()!=='off'; },
     f:function(r){ return syncMarkDue(r); } },
   /* 自動値下げ（pj-sync が eBay を直接下げる）の対象になっている出品。
+     「値下げの時期」の行もここに含める（6.71）。
      この絞り込みのときだけ、次の自動値下げ日が近い順に並べ替える。 */
   { v:'automd',         label:'自動値下げの予定',
-    f:function(r){ return syncMdTarget(r); } },
+    f:function(r){ return syncMdTarget(r)||syncMarkDue(r); } },
   { v:'review',         label:'売値の見直し',
     f:function(r){ return !!syncPriceReview(r); } }
 ];
+/* プルダウンの並び（見出しつき）。ここに書いていない項目は出さない。 */
+var SYNC_FILTER_GROUPS=[
+  { t:'毎日見る', v:['all','warn','pbplan','on_hand'] },
+  { t:'出品',     v:['fba_not_listed','picsneed'] },
+  { t:'価格',     v:['markdown','automd','review'] },
+  { t:'状態',     v:['restocking','dropship'] }
+];
+// 0件でも必ず出す項目
+var SYNC_FILTER_KEEP={ all:1, warn:1 };
 function syncFilterBy(v){
   for(var i=0;i<SYNC_FILTERS.length;i++)if(SYNC_FILTERS[i].v===v)return SYNC_FILTERS[i];
   return SYNC_FILTERS[0];
 }
+function syncFilterHas(v){
+  for(var i=0;i<SYNC_FILTERS.length;i++)if(SYNC_FILTERS[i].v===v)return true;
+  return false;
+}
 function syncMatch(r){ return syncFilterBy($('syncFilter').value).f(r); }
-// 選択肢を件数つきで作り直す。いま選んでいる項目は保つ。
+/* 選択肢を見出しつき・件数つきで作り直す。いま選んでいる項目は保つ。
+   削除した絞り込み（restock／markdown など）が選ばれていた端末は
+   「すべて」に戻す（6.71）。 */
 function syncFilterOpts(){
-  var sel=$('syncFilter'), now=sel.value||'all', rows=(syncData&&syncData.items)||[], h='';
-  SYNC_FILTERS.forEach(function(x){
-    var n=0;
-    rows.forEach(function(r){ if(x.f(r))n++; });
-    h+='<option value="'+x.v+'">'+esc(x.label)+'（'+n+'）</option>';
+  var sel=$('syncFilter'), now=sel.value||'all';
+  var rows=(syncData&&syncData.items)||[], h='';
+  SYNC_FILTER_GROUPS.forEach(function(g){
+    var body='';
+    g.v.forEach(function(v){
+      if(!syncFilterHas(v))return;
+      var x=syncFilterBy(v);
+      if(x.hide&&x.hide())return;        // 条件に合わないときは出さない
+      var n=0;
+      rows.forEach(function(r){ if(x.f(r))n++; });
+      if(!n&&!SYNC_FILTER_KEEP[v]&&v!==now)return;      // 0件は出さない
+      body+='<option value="'+esc(v)+'">'+esc(x.label)+'（'+n+'）</option>';
+    });
+    if(body)h+='<optgroup label="'+esc(g.t)+'">'+body+'</optgroup>';
   });
   sel.innerHTML=h;
   sel.value=now;
@@ -12300,17 +12346,19 @@ function syncRender(){
   syncCutWarnRender();              // 取り込みが上限で切れていないか
   syncMarkBarRender();              // 値下げの時期の帯（価格の欄を自動で開く）
   syncTodoRender();                 // 今日やること
-  /* 再調達CSVは「再調達の候補」を見ているときだけ出す（ふだんは隠す）。 */
+  /* 再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ出す（6.71）。 */
   $('syncRestockBox').style.display=
-    (($('syncFilter').value==='restock')&&(syncData&&(syncData.items||[]).length))
+    (($('syncFilter').value==='pbplan')&&(syncData&&(syncData.items||[]).length))
       ? 'block' : 'none';
   var rows=(syncData&&syncData.items)||[], h='', shown=0;
   var keep=rows.filter(syncMatch);
   /* 「自動値下げの予定」は日付の近い順（今日の行が先）。
+     自動値下げの対象でない行（値下げの時期だけ来ている行・6.71）は最後に回す。
      ほかの絞り込みは取り込んだ順のまま。 */
   if($('syncFilter').value==='automd')
     keep=keep.slice().sort(function(a,b){
-      return (syncMdDueAt(a)||0)-(syncMdDueAt(b)||0); });
+      var x=syncMdDueAt(a), y=syncMdDueAt(b);
+      return ((x===null)?Infinity:x)-((y===null)?Infinity:y); });
   shown=keep.length;
   var sPer=pagePer('syncPerPage');
   syncPage=pageClamp(syncPage,shown,sPer);
@@ -13479,7 +13527,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v170';   // sw.js の const V と必ず同じ値にする
+var APP_V='v171';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

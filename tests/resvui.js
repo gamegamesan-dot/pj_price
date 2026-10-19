@@ -96,12 +96,19 @@ console.log('   '+JSON.stringify(cols.filter(Boolean)));
 ok(/rgb\(102, 102, 102\)/.test(cols[3]),'★内訳不明の印は赤ではない（灰色）');
 ok(/rgb\(176, 0, 32\)/.test(cols[1]),'注文済みの印は赤のまま');
 
-console.log('\n=== 再調達の候補 ===');
+/* 6.71 で「再調達の候補」は「FBAで売れた（対応予定）」にまとめた。
+   対象の決まり（syncIsRestock）は変えていないので、件数で見張る。 */
+console.log('\n=== 再調達の候補（FBAで売れた（対応予定）にまとめた）===');
 const opts=await p.$$eval('#syncFilter option',os=>os.map(o=>o.value+':'+o.textContent));
-console.log('   '+JSON.stringify(opts.filter(o=>/restock:|warn:/.test(o))));
-ok(opts.some(o=>/^restock:再調達の候補（1）/.test(o)),'★候補は売れた行の1件だけ');
-await p.selectOption('#syncFilter','restock'); await p.waitForTimeout(200);
-const rs=await p.$$eval('#syncList > div',ds=>ds.map(d=>d.innerText.split('\n')[0]));
+console.log('   '+JSON.stringify(opts.filter(o=>/pbplan:|warn:/.test(o))));
+const nRe=await p.evaluate(()=>syncData.items.filter(syncIsRestock).length);
+ok(nRe===1,'★候補は売れた行の1件だけ');
+ok(!opts.some(o=>/^restock:/.test(o)),'★★「再調達の候補」は一覧に出さない');
+ok(opts.some(o=>/^pbplan:FBAで売れた（対応予定）/.test(o)),
+   '★★「FBAで売れた（対応予定）」に含める');
+/* 候補の中身は syncIsRestock で直接見る（絞り込みはまとめ先に入っている）。 */
+const rs=await p.evaluate(()=>syncData.items.filter(syncIsRestock)
+  .map(r=>String(r.title||'')));
 console.log('   '+JSON.stringify(rs));
 ok(rs.length===1&&/本当に売れた/.test(rs[0]),'★売れた行だけが候補');
 ok(!rs.some(t=>/納品した直後|FC移管|内訳をまだ|内訳が足りない/.test(t)),

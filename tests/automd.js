@@ -263,8 +263,10 @@ console.log('   選択肢: '+JSON.stringify(pl.opt.filter(x=>/自動値下げ|�
 console.log('   対象: '+JSON.stringify(pl.target));
 console.log('   件数: '+JSON.stringify(pl.count));
 console.log('   予定: '+JSON.stringify(pl.plan));
-ok(pl.has&&pl.opt.some(x=>/^自動値下げの予定（3）$/.test(x)),
-   '★絞り込みに「自動値下げの予定（3件）」が出る');
+/* 6.71 で「値下げの時期」をここにまとめたので、自動値下げの対象3件＋
+   値下げの時期だけ来ている1件（B0PLAN00004）の4件になる。 */
+ok(pl.has&&pl.opt.some(x=>/^自動値下げの予定（4）$/.test(x)),
+   '★★絞り込みに「自動値下げの予定（4件）」が出る（値下げの時期も含む）');
 ok(pl.target.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003',
    '★幅が未設定・値下げしない・セール中の行は対象にしない');
 ok(pl.count.n===3&&pl.count.today===1&&pl.count.soon===3,
@@ -284,8 +286,8 @@ const order=await p.evaluate(()=>({
     .map(d=>d.textContent).find(x=>/B0PLAN00002/.test(x))||'')
       .replace(/\s+/g,' ') }));
 console.log('   並び: '+JSON.stringify(order.rows));
-ok(order.rows.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003',
-   '★一覧も次の自動値下げ日が近い順');
+ok(order.rows.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003,B0PLAN00004',
+   '★★一覧も次の自動値下げ日が近い順（対象でない行は最後）');
 const line=(order.txt.match(/次の自動値下げ[^。]*/)||[''])[0];
 console.log('   行: '+line);
 ok(/次の自動値下げ/.test(order.txt),'★行に「次の自動値下げ」を出す');
@@ -341,8 +343,11 @@ console.log('   '+JSON.stringify(bar));
 ok(bar.csvN===2&&/値下げの時期です（2件）/.test(bar.btn),
    '★オフのときは値下げの時期の2件すべてがCSVの対象');
 ok(bar.bar==='none','★自動値下げの帯は出さない');
-ok(bar.opt.some(x=>/^自動値下げの予定（3）$/.test(x)),
+ok(bar.opt.some(x=>/^自動値下げの予定（4）$/.test(x)),
    '★絞り込みは残す（オフでも、どの行が対象になるかは見られる）');
+/* オフのときだけ「値下げの時期」も出す（6.71）。 */
+ok(bar.opt.some(x=>/^値下げの時期（2）$/.test(x)),
+   '★★自動値下げがオフのときは「値下げの時期」も出す');
 
 console.log('\n=== オンのときに値下げCSVを押すと、まず確認を出す ===');
 await planSetup('on');

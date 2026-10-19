@@ -56,15 +56,16 @@ await p.click('#syncLoad');
 await p.waitForFunction(()=>!$('syncLoad').disabled&&$('syncNote').textContent.length>0,
   null,{timeout:8000});
 
-console.log('=== 再調達の候補 ===');
+/* 6.71 で「再調達の候補」は「FBAで売れた（対応予定）」にまとめた。
+   対象の決まり（syncIsRestock）は変えていないので、そちらで見張る。 */
+console.log('=== 再調達の候補（FBAで売れた（対応予定）にまとめた）===');
 const opts=await p.$$eval('#syncFilter option',os=>os.map(o=>o.value+':'+o.textContent));
-console.log('   '+JSON.stringify(opts.filter(o=>/restock:|warn:/.test(o))));
-ok(opts.some(o=>/^restock:再調達の候補（2）/.test(o)),
-   '★候補は2件（入庫中の2件は入らない）');
-await p.selectOption('#syncFilter','restock'); await p.waitForTimeout(200);
-const rs=await p.$$eval('#syncList > div',ds=>ds.map(d=>d.innerText.split('\n')[0]));
+console.log('   '+JSON.stringify(opts.filter(o=>/pbplan:|warn:/.test(o))));
+const rs=await p.evaluate(()=>syncData.items.filter(syncIsRestock)
+  .map(r=>String(r.title||'')));
 console.log('   '+JSON.stringify(rs));
-ok(rs.length===2&&!rs.some(t=>/入庫中/.test(t)),'★入庫中の行は候補に出ない');
+ok(rs.length===2,'★候補は2件（入庫中の2件は入らない）');
+ok(!rs.some(t=>/入庫中/.test(t)),'★入庫中の行は候補に出ない');
 const flags=await p.evaluate(()=>((syncData&&syncData.items)||[]).map(r=>
   r.asin+':'+(syncIsRestock(r)?1:0)));
 console.log('   '+JSON.stringify(flags));

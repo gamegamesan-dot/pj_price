@@ -4,7 +4,7 @@
    ・名簿を送る／手元在庫の印／無在庫は「その他」へ
    ・結果ファイルを取り込んだら名簿を自動で送る
    ・行を選んだときだけ画面の下に操作バー
-   ・再調達CSVは絞り込みが「再調達の候補」のときだけ
+   ・再調達CSVは絞り込みが「FBAで売れた（対応予定）」のときだけ（6.71）
    ・使わないタブを隠す */
 const { harness, openCsvBoxes } = require('./lib');
 const T = harness('画面の整理（販売連携タブ・⚙設定）');
@@ -55,25 +55,36 @@ const todo=await p.evaluate(()=>{
     return syncData.items.filter(ff).length; };
   return { n:b.length, txt:b.map(x=>x.textContent.replace(/\s+/g,' ')),
     cls:b.map(x=>x.className),
-    same:['warn','markdown','restock','on_hand'].map(v=>v+':'+f(v)),
+    same:['warn','pbplan','automd','on_hand'].map(v=>v+':'+f(v)),
     head:$('syncTodo').previousElementSibling.textContent.replace(/\s+/g,' ') };
 });
 console.log('   '+JSON.stringify(todo.txt)+' / '+JSON.stringify(todo.same));
-ok(todo.n===4,'★対応が必要・値下げの時期・再調達の候補・FBA納品の判断 の4つ');
+ok(todo.n===4,'★対応が必要・FBAで売れた・値下げ・FBA納品の判断 の4つ');
 ok(/毎日/.test(todo.head)&&/3日ごと/.test(todo.head)&&/ときどき/.test(todo.head),
    '★画面の上に使い方の案内を出す');
-ok(todo.txt[0]==='対応が必要1'&&todo.txt[2]==='再調達の候補1',
-   '★絞り込みと同じ件数を出す');
-ok(todo.cls[1].indexOf('zero')>=0,'★0件の項目は薄く出す');
+/* 6.71 で「再調達の候補」は「FBAで売れた（対応予定）」にまとめ、
+   自動値下げがオンのときは「自動値下げの予定」を出す。 */
+ok(todo.txt[0]==='対応が必要1'&&todo.txt[1]==='FBAで売れた1',
+   '★★絞り込みと同じ件数を出す');
+ok(/値下げの時期/.test(todo.txt[2]),
+   '★★自動値下げがオフのときは「値下げの時期」');
+const todo2=await p.evaluate(()=>{
+  $('autoMdMode').value='on'; syncRender();
+  return Array.from(document.querySelectorAll('#syncTodo button'))
+    .map(x=>x.getAttribute('data-todo')); });
+console.log('   自動値下げオン：'+JSON.stringify(todo2));
+ok(todo2[2]==='automd','★★自動値下げがオンなら「自動値下げの予定」に替える');
+await p.evaluate(()=>{ $('autoMdMode').value='off'; syncRender(); });
+ok(todo.cls[2].indexOf('zero')>=0,'★0件の項目は薄く出す');
 ok(todo.cls[0].indexOf('hit')>=0,'★1件以上ある項目は目立たせる');
 // 押すとその絞り込みになる
-await p.click('#syncTodo button[data-todo="restock"]');
+await p.click('#syncTodo button[data-todo="pbplan"]');
 await p.waitForTimeout(150);
 const picked=await p.evaluate(()=>({ v:$('syncFilter').value,
   shown:$('syncList').textContent.indexOf('B0TIDY0001')>=0,
-  on:document.querySelector('#syncTodo button[data-todo="restock"]').className }));
+  on:document.querySelector('#syncTodo button[data-todo="pbplan"]').className }));
 console.log('   '+JSON.stringify(picked));
-ok(picked.v==='restock'&&picked.shown,'★押すとその絞り込みになる');
+ok(picked.v==='pbplan'&&picked.shown,'★押すとその絞り込みになる');
 ok(/on/.test(picked.on),'★いま見ている項目が分かる');
 
 console.log('\n=== 件数の説明文は「詳しい数字」に畳む ===');
@@ -135,10 +146,11 @@ console.log('   '+JSON.stringify(bar));
 ok(bar.show!=='none'&&/選択 1件/.test(bar.n),'★選ぶと画面の下に出る');
 ok(bar.btn.join('|')==='見直し価格にする|最低売値まで下げる|印を付ける ▾|選択解除',
    '★バーは4つ（見直し価格・最低売値・印を付ける・選択解除）');
-ok(bar.restock==='none','★再調達CSVは「再調達の候補」を見ているときだけ');
+ok(bar.restock==='none',
+   '★再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ');
 const rst=await p.evaluate(()=>{
   $('syncBarMarkBtn').click();            // 印の欄を開く（再調達CSVはこの中）
-  $('syncFilter').value='restock'; syncRender();
+  syncFilterSet('pbplan');
   const cb=document.querySelector('#syncList input[data-spick]');
   cb.checked=true; cb.dispatchEvent(new Event('change',{bubbles:true}));
   return { bar:$('syncBarRestock').style.display,
@@ -146,7 +158,7 @@ const rst=await p.evaluate(()=>{
 });
 console.log('   '+JSON.stringify(rst));
 ok(rst.bar!=='none'&&rst.box==='block',
-   '★「再調達の候補」のときだけ再調達CSVを出す');
+   '★★「FBAで売れた（対応予定）」のときだけ再調達CSVを出す');
 // 選択解除
 await p.click('#syncBarClear'); await p.waitForTimeout(150);
 ok(await p.evaluate(()=>getComputedStyle($('syncBar')).display)==='none',

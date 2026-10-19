@@ -70,12 +70,10 @@ const view=async()=>await p.evaluate(()=>{
   const cfgNote=vis('#tabCfg .staffonly');
   const price=vis('.cfgprice');
   const revPrice=vis('#csvRevisePrice');
-  /* 再調達CSVは絞り込みが「再調達の候補」のときだけ出る欄なので、
-     そこに合わせたうえで（作業者では出ないことを）見る。 */
+  /* 再調達CSVは絞り込みが「FBAで売れた（対応予定）」のときだけ出る欄なので
+     （6.71）、そこに合わせたうえで（作業者では出ないことを）見る。 */
   switchTab('E');
-  if($('syncFilter').querySelector('option[value="restock"]'))
-    $('syncFilter').value='restock';
-  syncRender();
+  syncFilterSet('pbplan');
   const restock=vis('#syncRestockBox');
   if($('syncFilter').querySelector('option[value="all"]'))$('syncFilter').value='all';
   syncRender();
