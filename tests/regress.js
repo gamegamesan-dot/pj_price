@@ -1,5 +1,6 @@
 /* 回帰：設定の保存・タブの開閉・価格計算が壊れていないか。
-   1品ごとの値（仕入値・重量・請求送料・広告料率）は保存しない決まりと、
+   1品ごとの値（仕入値・重量・請求送料）は保存しない決まりと、
+   広告料率は**設定として保存する**（6.73 で直した）ことと、
    推奨売値の決まり（利益＝円式の目標）をここで見張る。 */
 const { harness, ROOT } = require('./lib');
 const T = harness('回帰：保存とタブ・価格計算');
@@ -32,16 +33,20 @@ await p.waitForTimeout(250);
 const raw=await p.evaluate(()=>JSON.parse(localStorage.getItem('pj:pricing:v1')||'{}'));
 console.log('   保存の中身: '+JSON.stringify(Object.keys(raw).filter(k=>
   /cost|weight|adRate|shipCharge|baseProfit|linkRate/.test(k))));
-ok(raw.cost===undefined&&raw.weight===undefined&&raw.shipCharge===undefined
-   &&raw.adRate===undefined,'★仕入値・重量・請求送料・広告料率は保存しない（1品ごとの値）');
+ok(raw.cost===undefined&&raw.weight===undefined&&raw.shipCharge===undefined,
+   '★仕入値・重量・請求送料は保存しない（1品ごとの値）');
+/* 広告料率は値付けの式に入る設定なので保存する（6.73）。
+   以前は保存から外していて、開き直すと5.0%に戻っていた。 */
+ok(raw.adRate==='7.5','★★広告料率は設定として保存する（6.73）');
 ok(raw.baseProfit==='2200','★詳細設定だけ保存する');
 await p.reload(); await p.waitForTimeout(400);
 const after=await p.evaluate(()=>({cost:$('cost').value,weight:$('weight').value,
   adRate:$('adRate').value,base:$('baseProfit').value}));
 console.log('   開き直し: '+JSON.stringify(after));
 // HTML の既定値（仕入500・重量400）に戻り、打った値は残らない
-ok(after.cost==='500'&&after.weight==='400'&&after.adRate==='5.0',
-   '★開き直すと1品ごとの値はHTMLの既定値・広告料率は5%');
+ok(after.cost==='500'&&after.weight==='400',
+   '★開き直すと1品ごとの値はHTMLの既定値に戻る');
+ok(after.adRate==='7.5','★★広告料率は開き直しても残る（6.73）');
 ok(after.base==='2200','★詳細設定は残る');
 
 console.log('\n=== 価格の計算は変わっていない ===');

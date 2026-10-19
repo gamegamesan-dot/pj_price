@@ -4275,3 +4275,64 @@ Worker 側（7.49）で、**再調達中の行とフェイズBの対象行の Am
 - **価格を動かす話なので作業者のキーでは出さない**（CSS の `.cfgprice`）。
 
 テストは `tests/hotwarn.js`（12項目）。Worker のデプロイが必要（D1 の変更は無い）。
+
+## 6.73 値付けの設定をすべて pj-sync に送る（2026-10-19・sw.js v173）
+
+**B段**（「状況を取り込む」なしで自動の処理を動かす、の2段目）。
+Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
+ぜんぶ pj-sync（`ui.settings`）に送る**ようにした。
+式そのものの切り出し（`shared/pricing.js`）は次の段（C）で行う。
+
+### これまで
+
+送っていたのは**目標の決め方の5項目だけ**
+（`targetMode` `baseProfit` `linkRate` `saleRate` `usTaxRate`）と、
+Worker が読む運転モード（配送ポリシー名・Amazon手数料・自動値下げ・
+自動反映・フェイズB・再調達中の売値）だった。
+**手数料・為替・既定重量・梱包マージンなどは端末の `localStorage` にしか無く**、
+Worker からは見えなかった。
+
+### 足した25項目
+
+| 束 | 項目 |
+| --- | --- |
+| `ADV_CALC`（値付け計算機の数値欄） | `fx` `fxc` `fee` `intlFee` `adRate` `feeTax` `fixed` `pack` |
+| `ADV_CHECK`（チェック欄・真偽値で送る） | `dutyShip` `taxRefund` `stampDisc` `syncSkipAcc` `csvReviewZero` |
+| `ADV_PRICE`（出品CSV・販売連携タブの数値欄） | `csvPackGame` `csvPackFig` `csvWeightCart` `csvWeightLoose` `syncWeight` `syncWeightGame` `csvShipLoose` `csvLooseAmz` `syncTol` `syncSoldCut` `csvMarkStep` `csvMarkTimes` |
+
+- **1品ごとの値（`cost` `weight` `shipCharge`）は送らない**。
+- チェック欄は `true` / `false` で送る（文字の `''` と `'false'` を取り違えないため）。
+- 触ると `advTouch()` が走り、**800ms 待ってまとめて送る**（既存の仕組みに乗せた）。
+- 受け取ったら欄に入れ、**端末にも保存する**
+  （計算機は `pj:pricing:v1`、出品CSV側は `pj:csvcfg:v1`）。
+- 端末と D1 で違うときは**あとから変えたほう**（`at` が新しいほう）を使う。今までと同じ。
+- 送る量は25項目増えるが、`SETTINGS_MAX = 8000` 文字に十分収まる。
+
+### あわせて直した不具合：広告料率（`adRate`）が保存されない
+
+`save()` が `delete o.adRate` で**保存から外して**いて、さらに `load()` の最後で
+`$('adRate').value = AD_RATE_DEFAULT` と**既定値に戻して**いた。
+このため広告料率を変えても**開き直すと5.0%に戻り**、端末ごとに推奨売値が
+変わる余地があった。1品ごとに変える値ではないので、ほかの手数料と同じ扱いにした
+（保存する／`load()` で戻さない／pj-sync にも送る）。
+保存が無い端末は HTML の初期値（5.0）のままになる。
+
+### ⚙設定に「pj-sync が使う為替」を出した
+
+Worker も自分で為替を取るようになった（7.50）ので、**どちらの値で計算されるか**を
+確かめられるようにした。為替の欄の下に出す（**価格の話なので作業者には出さない**）。
+
+> pj-sync が使う為替：**1ドル=157.23円**（自動取得）　10-19 12:00　この端末は 160円・1.7%ちがいます
+
+- `GET /fx` を読む。`from` は 自動取得／控え／古い控え／この設定の値／既定値。
+- 端末の値と **1%以上ちがうときは赤で注意**。
+- `from` が `default`（pj-sync が自動取得できていない）ときは赤で知らせる。
+- 「pj-sync の為替を見る」ボタンで `?force=1` で取り直せる。
+- 開いたときにも1回出す（控えがあれば外へは問い合わせない）。
+- **端末が自動取得した為替は pj-sync に送らない**。送ると、アプリを開くたびに
+  その端末の設定ぜんぶが「いちばん新しい」ことになって、
+  ほかの端末で変えた設定を上書きしてしまう。D1 の `fx` は手で入れたときだけ入る
+  **非常用の値**（上の 4 番目）で、ふだんは Worker が自分で取った値を使う。
+
+テストは `tests/advsync.js`（32項目）と `tests/fx.mjs`（28項目・Worker側）。
+**pj-sync のデプロイが必要。D1 の変更は無い。**

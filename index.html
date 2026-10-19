@@ -1129,7 +1129,12 @@ body.staff #syncOnHandFix{display:none !important}
       <div id="ebayOnly">
       <div class="row"><label>為替レート</label><input type="number" id="fx" value="160" step="0.1" inputmode="decimal"><span class="unit">円</span></div>
       <div class="note2" id="fxNote"></div>
-      <button class="btn" id="resetFx" style="display:none;margin:6px 0 10px">為替を自動取得に戻す</button>
+      <!-- pj-sync（Worker）が値付けに使っている為替（6.73）。見比べられるように出す -->
+      <div class="note2 cfgprice" id="fxSyncNote" style="margin:2px 0 0"></div>
+      <div style="display:flex;gap:8px;margin:6px 0 10px">
+        <button class="btn" id="resetFx" style="display:none;flex:1 1 0;min-width:0">為替を自動取得に戻す</button>
+        <button class="btn cfgprice" id="fxSyncGet" style="flex:0 0 auto;padding:9px 10px">pj-sync の為替を見る</button>
+      </div>
       <div class="rowv"><label>eBayセラー名</label><input type="text" id="ebaySeller" placeholder="playjapan_store"><div class="note2">自店の出品を検索するときに使います。ストアURL ebay.com/usr/<b>○○</b> の○○の部分。</div></div>
       <div class="row"><label>eBay 落札手数料</label><input type="number" id="fee" value="13.6" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
       <div class="row"><label>国際手数料</label><input type="number" id="intlFee" value="1.35" step="0.05" inputmode="decimal"><span class="unit">%</span></div>
@@ -1537,9 +1542,15 @@ function redraw(){ try{ calc(); buildListing(); buildShopee(); }finally{ save();
 FIELDS.forEach(function(id){$(id).addEventListener('input',function(){
   if(id==='weight'||id==='zone')suggestShip();
   redraw();
+  /* 値付けの式に入る設定は pj-sync にも送る（6.73）。
+     ADV_CALC / ADV_CHECK は下で定義するので、あるときだけ呼ぶ。 */
+  try{ if(ADV_CALC.indexOf(id)>=0)advTouch(); }catch(e){}
 });});
 // 設定セクションは全タブ共通なので、価格側を触ったときも出品前チェックを引き直す。
-CHECKS.forEach(function(id){$(id).addEventListener('change',redraw);});
+CHECKS.forEach(function(id){$(id).addEventListener('change',function(){
+  redraw();
+  try{ if(ADV_CHECK.indexOf(id)>=0)advTouch(); }catch(e){}
+});});
 /* ---- 為替の自動取得 ----
    無料APIから USD/JPY を取り、設定の為替に反映する。
    ・手入力で上書きしたらそちらを優先し、自動取得では書き換えない
@@ -1585,6 +1596,38 @@ $('fx').addEventListener('input',function(){
   setFxNote('手入力の値を使用中（自動取得はしません）');
   $('resetFx').style.display='inline-block';
 });
+/* pj-sync（Worker）が値付けに使っている為替を見る（6.73／7.50）。
+   Worker は自分で open.er-api.com → api.frankfurter.app から取り、6時間 KV に控える。
+   **Worker が取った値が正**で、ここに出すのは確かめるため。
+   force を付けると取り直す。 */
+function fxSyncShow(force){
+  var el=$('fxSyncNote'); if(!el)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ el.textContent=''; return; }
+  el.textContent='pj-sync の為替を見ています…';
+  fetch(syncUrl()+'/fx'+(force?'?force=1':''),{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(d){
+      var n=+((d||{}).rate)||0;
+      if(!(n>0)){ el.textContent='pj-sync の為替が取れません。'; return; }
+      var from={ api:'自動取得', cache:'控え', stale:'古い控え',
+                 settings:'この設定の値', 'default':'既定値' }[String(d.from||'')]||d.from||'';
+      var dev=+$('fx').value||0;
+      var diff=(dev>0)?Math.abs(n-dev)/dev*100:0;
+      el.innerHTML='pj-sync が使う為替：<b>1ドル='+n+'円</b>'
+        +(from?('（'+esc(from)+'）'):'')
+        +(d.at?('　'+esc(String(d.at).slice(0,16).replace('T',' '))):'')
+        +(dev>0?('　この端末は '+dev+'円'
+          +(diff>=1?('<span style="color:var(--bad);font-weight:700">・'
+                     +diff.toFixed(1)+'%ちがいます</span>'):'（ほぼ同じ）')):'')
+        +((String(d.from||'')==='default')
+          ? '<br><span style="color:var(--bad)">pj-sync が自動取得できていません'
+            +'（既定値で計算します）</span>' : '');
+    })['catch'](function(e){
+      el.textContent='pj-sync の為替が取れません：'+e.message;
+    });
+}
+$('fxSyncGet').onclick=function(){ fxSyncShow(true); };
 $('useRec').onclick=function(){
   // 相場欄は総額で入れる欄なので、推奨売値そのものではなく総額を入れる。
   $('soldPrice').value=lastRecTotal.toFixed(2);
@@ -1659,9 +1702,23 @@ var ADV_RV=['autoRvMode','autoRvMax','autoRvPct','csvReviewAbs','csvReviewPct'];
 /* フェイズB（FBAで売れたら数量0・再調達）。Worker が読む設定（7.47）。 */
 /* 再調達中の売値の追従（6.70／7.48）。Worker が読む設定。 */
 var ADV_PB=['pbMode','pbRestock','autoRkMode'];
+/* ---- 値付けの式が使う設定（6.73）----
+   Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
+   ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
+   手数料・為替・既定重量・梱包マージンなどは端末の localStorage にしか無かった。
+   ・ADV_CALC  … 値付け計算機の数値欄（FIELDS のうち、1品ごとでない設定）
+   ・ADV_CHECK … 値付けに入るチェック欄（真偽値なので別に扱う）
+   ・ADV_PRICE … 出品CSV・販売連携タブの、値付けに入る数値欄
+   1品ごとの値（cost・weight・shipCharge）は送らない。 */
+var ADV_CALC=['fx','fxc','fee','intlFee','adRate','feeTax','fixed','pack'];
+var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero'];
+var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
+               'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
+               'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
 function advCsvCfg(){
-  return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB);
+  return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
+    .concat(ADV_PRICE);
 }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
@@ -1671,7 +1728,10 @@ function advDefaults(){
 var advAt='';          // 詳細設定を最後に変えた時刻（ISO）。D1 との突き合わせに使う
 function advGet(){
   var o={};
-  ADV_FIELDS.concat(advCsvCfg()).forEach(function(id){ o[id]=String($(id).value); });
+  ADV_FIELDS.concat(ADV_CALC).concat(advCsvCfg())
+    .forEach(function(id){ o[id]=String($(id).value); });
+  // チェック欄は真偽値で送る（文字の '' と 'false' を取り違えないため）
+  ADV_CHECK.forEach(function(id){ o[id]=!!$(id).checked; });
   return o;
 }
 /* 受け取った値を欄に入れる。選択肢に無い値（古い版の設定）は捨てて既定のままにする。 */
@@ -1690,8 +1750,7 @@ function advApply(o){
     }
     if(el2.value!==String(v)){ el2.value=String(v); ship=true; hit=true; }
   });
-  if(ship)try{ csvSaveCfg(); }catch(e){}
-  ADV_FIELDS.forEach(function(id){
+  ADV_FIELDS.concat(ADV_CALC).forEach(function(id){
     var v=o[id];
     if(v===undefined||v===null||v==='')return;
     var el=$(id);
@@ -1700,8 +1759,16 @@ function advApply(o){
       for(i=0;i<el.options.length;i++)if(el.options[i].value===String(v))ok=true;
       if(!ok)return;
     }
-    el.value=String(v); hit=true;
+    if(el.value!==String(v)){ el.value=String(v); hit=true; }
   });
+  /* チェック欄。真偽値で来たものだけ入れる（古い版は項目が無い）。 */
+  ADV_CHECK.forEach(function(id){
+    var v=o[id];
+    if(typeof v!=='boolean')return;
+    var el=$(id);
+    if(el.checked!==v){ el.checked=v; hit=true; ship=true; }
+  });
+  if(ship)try{ csvSaveCfg(); }catch(e){}
   return hit;
 }
 // 変えた時刻を控えて端末に保存し、少し待って pj-sync にも送る
@@ -1756,7 +1823,11 @@ function advPull(){
     })['catch'](function(){});
 }
 /* 開いたときに D1 の設定と突き合わせ、どちらのキーかも聞く（6.52）。 */
-function advSyncInit(){ advPull(); roleCheck(); }
+function advSyncInit(){
+  advPull(); roleCheck();
+  /* pj-sync が使っている為替も出す（6.73）。控えがあれば外へは問い合わせない。 */
+  try{ fxSyncShow(false); }catch(e){}
+}
 // 詳細設定と相場入力は触るたびに引き直す。詳細設定は変えた値も保存する。
 ['baseProfit','linkRate','saleRate','usTaxRate','targetMode','soldPrice','soldOrigin']
   .forEach(function(id){
@@ -1874,7 +1945,7 @@ const ZONE3_TAX=10;
 const FEE_RATE_DEFAULT=13.6;    // 落札手数料（Toys & Hobbies）
 const INTL_FEE_DEFAULT=1.35;    // 国際手数料（全仕向地）
 const FEE_TAX_DEFAULT=10;       // 手数料合計にかかる日本の消費税
-const AD_RATE_DEFAULT=5.0;      // 広告料率。商品ごとに変更でき、0なら広告なし
+const AD_RATE_DEFAULT=5.0;      // 広告料率の初期値。設定として端末と pj-sync に保存する（6.73）
 const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
 const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
 // 切手を額面より安く買って支払う場合の原価率。
@@ -2294,8 +2365,10 @@ function save(){
     // 仕入・重量・売値と同じく、請求送料も1品ごとの値なので保存しない。
     // 手入力での上書き状態(shipEdited)も持ち越さず、開き直すと既定値から始める。
     // 目標利益は設定値から毎回計算するので保存しない。
-    // 広告料率も商品ごとに決める値なので保存しない（開き直すと既定の5%から始める）。
-    delete o.cost;delete o.weight;delete o.shipCharge;delete o.adRate;
+    /* 広告料率（adRate）は**保存する**（6.73）。値付けの式に入る設定なので、
+       開き直すと既定の5%に戻っていた（端末ごとに推奨売値が変わる原因）。
+       1品ごとに変える値ではないので、ほかの手数料と同じ扱いにする。 */
+    delete o.cost;delete o.weight;delete o.shipCharge;
     // 詳細設定（目標の決め方）は保存する。変えた時刻も一緒に持ち、D1 と突き合わせる
     ADV_FIELDS.forEach(function(id){ o[id]=$(id).value; });
     o.advAt=advAt;
@@ -2329,7 +2402,9 @@ function load(){
   $('resetFx').style.display=fxEdited?'inline-block':'none';
   // 関税・通関手数料は定数（実測）。保存値に関わらず%欄の表示を固定（計算にも使わない）。
   $('duty').value=(US_DUTY_RATE*100).toFixed(2);
-  $('adRate').value=AD_RATE_DEFAULT.toFixed(1);
+  /* 広告料率は保存した値をそのまま使う（6.73）。
+     ここで既定値に戻していたため、保存しても開き直すと5.0%に戻っていた。
+     保存が無い端末は HTML の初期値（5.0）のままになる。 */
   $('stampDiscLabel').textContent='切手'+STAMP_OFF_PCT+'%割引で支払う';
   suggestShip();
   updateFigNote();
@@ -4202,7 +4277,8 @@ window.addEventListener('pageshow',csvSecretFill);
 window.addEventListener('focus',csvSecretFill);
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('csvPriceChangedOnly').addEventListener('change',csvSaveCfg);
-$('csvReviewZero').addEventListener('change',function(){ csvSaveCfg(); csvRender(); });
+$('csvReviewZero').addEventListener('change',function(){
+  csvSaveCfg(); csvRender(); advTouch(); });     // 値付けに入るので送る（6.73）
 /* 配送ポリシーの名前を変えたら pj-sync にも送る（Workerの判定に使うため）。 */
 advCsvCfg().forEach(function(id){
   $(id).addEventListener('input',function(){ advTouch(); });
@@ -4216,7 +4292,8 @@ $('syncOnHand').addEventListener('change',csvSaveCfg);
 ['uiHideShopee','uiHideEbay'].forEach(function(id){
   $(id).addEventListener('change',function(){ csvSaveCfg(); uiTabsApply(); });
 });
-$('syncSkipAcc').addEventListener('change',function(){ csvSaveCfg(); syncRender(); });
+$('syncSkipAcc').addEventListener('change',function(){
+  csvSaveCfg(); syncRender(); advTouch(); });    // 値付けに入るので送る（6.73）
 // 登録カテゴリを書き換えたら、出品文タブの選択肢も作り直す
 $('csvCatCustom').addEventListener('input',csvAddCatOpts);
 // 入力が終わった時点で、欄の表示からも前後の空白を消す
@@ -13549,7 +13626,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v172';   // sw.js の const V と必ず同じ値にする
+var APP_V='v173';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -143,6 +143,10 @@ const ALLOWED = [
   /* 預け直し（7.42）。eBay 自身が持っている写真（EPS）を元画像として
      Media API に渡すので、i.ebayimg.com も読み取りで見られるようにする。 */
   { m: "GET",  re: /^https:\/\/i\.ebayimg\.com\// },
+  /* 為替レート（7.50）。pj_price と同じ2つの公開APIを、読み取りで見る。
+     どちらも鍵が要らず、1ドル=円だけを返す。 */
+  { m: "GET",  re: /^https:\/\/open\.er-api\.com\/v6\/latest\/USD$/ },
+  { m: "GET",  re: /^https:\/\/api\.frankfurter\.app\/latest\?from=USD&to=JPY$/ },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
 ];
 
@@ -990,6 +994,76 @@ async function notify(env, run, text) {
   });
   if (!resp.ok) { run.errors++; run.notes.push("discord -> " + resp.status); return false; }
   return true;
+}
+
+/* ---- 為替レート（1ドル=円・7.50）----
+   これまで為替は pj_price（ブラウザ）だけが取っていたので、Worker が自分で
+   値付けするには使えなかった。同じ2つの公開APIから Worker も取り、KV に控える。
+
+   使う順番:
+     1. KV の控えが新しい（FX_TTL_MS 以内）ならそれ
+     2. APIから取り直して KV に入れる（取れたほうを採る）
+     3. 取れなければ KV の古い控え（無いよりましなので使う）
+     4. それも無ければ ⚙設定の fx（端末が送った値）
+     5. それも無ければ FX_DEFAULT
+   「Worker が取った値を正とする」決まりなので、2 が成功したらそれを使う。 */
+const FX_KEY = "fx.usdjpy";
+const FX_MIN = 50, FX_MAX = 500;        // 明らかにおかしい応答を弾く（pj_price と同じ）
+const FX_DEFAULT = 160;
+/* 控えの寿命。値付けに直接入る数字なので1日は粗い。6時間ごとに取り直す
+   （毎時の Cron なので外部への問い合わせは1日4回まで）。 */
+const FX_TTL_MS = 6 * 60 * 60 * 1000;
+const FX_SRCS = [
+  { url: "https://open.er-api.com/v6/latest/USD",
+    pick: (d) => ({ rate: d && d.rates && d.rates.JPY,
+      at: (d && d.time_last_update_unix)
+        ? new Date(d.time_last_update_unix * 1000).toISOString() : nowIso() }) },
+  { url: "https://api.frankfurter.app/latest?from=USD&to=JPY",
+    pick: (d) => ({ rate: d && d.rates && d.rates.JPY,
+      at: (d && d.date) ? (d.date + "T00:00:00.000Z") : nowIso() }) },
+];
+function fxOk(v) {
+  const n = Number(v);
+  return isFinite(n) && n >= FX_MIN && n <= FX_MAX;
+}
+async function fxCached(env) {
+  try {
+    const t = await env.SYNC_CACHE.get(FX_KEY);
+    const o = t ? JSON.parse(t) : null;
+    return (o && fxOk(o.rate)) ? o : null;
+  } catch (e) { return null; }
+}
+async function fxGet(env, run, force) {
+  const old = await fxCached(env);
+  if (!force && old) {
+    const age = Date.now() - Date.parse(String(old.got_at || old.at || ""));
+    if (isFinite(age) && age >= 0 && age < FX_TTL_MS)
+      return { rate: Number(old.rate), at: old.at, src: old.src, from: "cache" };
+  }
+  for (const sv of FX_SRCS) {
+    let d = null;
+    try {
+      const resp = await net(run, sv.url, { method: "GET" });
+      if (!resp.ok) { run.notes.push("fx " + sv.url + " -> " + resp.status); continue; }
+      d = await resp.json();
+    } catch (e) { run.notes.push("fx_error " + e.message); continue; }
+    let g = null;
+    try { g = sv.pick(d); } catch (e) { g = null; }
+    if (!g || !fxOk(g.rate)) continue;
+    const rate = Math.round(Number(g.rate) * 100) / 100;
+    const o = { rate: rate, at: g.at, src: sv.url, got_at: nowIso() };
+    try { await env.SYNC_CACHE.put(FX_KEY, JSON.stringify(o)); } catch (e) { /* 控えに失敗しても使う */ }
+    return { rate: rate, at: o.at, src: o.src, from: "api" };
+  }
+  // 取れなかったとき。古い控え → ⚙設定 → 既定値
+  if (old) return { rate: Number(old.rate), at: old.at, src: old.src, from: "stale" };
+  try {
+    const st = (await settingsGet(env)).settings || {};
+    if (fxOk(st.fx))
+      return { rate: Math.round(Number(st.fx) * 100) / 100, at: "", src: "ui.settings",
+               from: "settings" };
+  } catch (e) { /* 設定が読めなくても既定値で続ける */ }
+  return { rate: FX_DEFAULT, at: "", src: "", from: "default" };
 }
 
 /* ---- D1 ---- */
@@ -4254,6 +4328,9 @@ async function statusBody(env, url) {
     rk_last: await rkLast(env),
     /* 3時間ごとの最安値（7.49）。取り切れなかった件数を画面に出す。 */
     hot_pricing: await pricingHotLast(env),
+    /* Worker が使っている為替（7.50）。画面の⚙設定に出して見比べられるようにする。
+       ここでは控えだけを見る（/status で外に問い合わせない）。 */
+    fx: await fxCached(env),
     items,
     sold_recent: (sold && sold.results) || [],
     events_recent: (ev && ev.results) || [],
@@ -4757,6 +4834,18 @@ export default {
       if (request.method === "GET" && url.pathname === "/status")
         return json(await statusBody(env, url), 200, origin);
 
+      /* Worker が使う為替（7.50）。?force=1 で取り直す。
+         値付けに直接入る数字なので、画面から確かめられるようにしておく。 */
+      if (request.method === "GET" && url.pathname === "/fx") {
+        const run = newRun("fx");
+        const force = url.searchParams.get("force") === "1";
+        let fx = null;
+        try { fx = await fxGet(env, run, force); }
+        catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+        return json(Object.assign({ ok: !!fx, ttl_ms: FX_TTL_MS,
+          min: FX_MIN, max: FX_MAX, note: run.notes.join(" / ") }, fx || {}),
+          200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/settings")
         return json(await settingsGet(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/settings") {
@@ -4896,6 +4985,7 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
+                        fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
