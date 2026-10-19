@@ -11470,13 +11470,13 @@ function syncOnHandBtn(r,key){
      数量を0にした・通常の出品に戻した行で押す。
    再調達の候補 … 「再調達中にする」。以前に手で出し直した行（CSVを書き出す前に
      eBay側を直してしまった行）に印を付けるために使う。いまのeBay売値を基準にする。 */
+/* 再調達中の印は、「再調達で出し直すCSV」の書き出しとフェイズBの再調達で自動で付く。
+   手で付けるとフェイズBの対象から外れ、今の売値のまま eBay に残ってしまうので、
+   **「再調達中にする」は出さない**（6.67）。解除だけ残す。 */
 function syncRestockingBtn(r,key){
   if(syncIsRestocking(r))
     return '<button class="btn" data-srestock="'+esc(key)+'" style="padding:5px 8px;'
       +'font-size:12px;background:#1f7a4d;color:#fff;border-color:#1f7a4d">再調達中 解除</button>';
-  if(syncIsRestock(r)&&(+r.ebay_price||0))
-    return '<button class="btn" data-srestock="'+esc(key)+'" '
-      +'style="padding:5px 8px;font-size:12px">再調達中にする</button>';
   return '';
 }
 /* 行の「eBay優先」の印。Amazon同等ラインでの引き上げをやめる（記録は D1）。
@@ -12083,7 +12083,11 @@ function syncModeSend(t,r,want){
       r.mode=want;
       syncSaveCache();
       $('syncFixNote').textContent='在庫0時の動作を「'+SYNC_ZERO_NAME[want]+'」にしました：'
-        +(r.title||r.asin)+'　（'+r.asin+'）';
+        +(r.title||r.asin)+'　（'+r.asin+'）'
+        /* 再調達にしたときは、何が起きるかを1行で添える（6.67）。 */
+        +((want==='restock')
+          ? '　FBAで売れたら数量0 → 承認すると推奨売値で再出品します'
+          : '');
       syncRender();
     })
     .catch(function(e){
@@ -12185,19 +12189,11 @@ $('syncList').addEventListener('click',function(e){
     }
     syncFlagSend(t,r,'dropship',dOn,'無在庫');
   }else if(kr){
-    if(syncIsRestocking(r)){
-      if(!confirm('再調達中を解除します（通常の出品に戻します）。\n'
-        +'「売り越しの恐れ」などの警告が再び出るようになります。よろしいですか？'))return;
-      syncRestockingSend(t,r,false,'再調達中を解除しました');
-    }else{
-      var w0=(syncRecommend(r)&&syncRecommend(r).weight)||syncDefWeight(r);
-      var mx=syncMaxCost(+r.ebay_price||0,w0);
-      if(!confirm('この行を「再調達中」にします（eBay側は変えません）。\n'
-        +'いまのeBay売値 '+usd(+r.ebay_price||0)+' を基準に、仕入値の上限を '+yen(mx)+' として'
-        +'見張ります。\nAmazonの最安値がこれを超えたら「再調達で赤字」の通知が出ます。\n'
-        +'よろしいですか？'))return;
-      syncRestockingSend(t,r,true,'再調達中にしました');
-    }
+    /* 解除だけ（6.67）。印を付けるのは CSV の書き出しとフェイズBの再調達。 */
+    if(!syncIsRestocking(r))return;
+    if(!confirm('再調達中を解除します（通常の出品に戻します）。\n'
+      +'「売り越しの恐れ」などの警告が再び出るようになります。よろしいですか？'))return;
+    syncRestockingSend(t,r,false,'再調達中を解除しました');
   }else if(km){
     /* 値下げしない の印。3日ごとの値下げの対象から外す（eBay側は変えない）。 */
     syncFlagSend(t,r,'mark_stop',!syncMarkStopOf(r),'値下げしない');
@@ -12767,7 +12763,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v166';   // sw.js の const V と必ず同じ値にする
+var APP_V='v167';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

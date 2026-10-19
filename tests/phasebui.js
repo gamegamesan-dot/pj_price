@@ -139,6 +139,41 @@ st=await p.evaluate(()=>({posts:window.__posts,dlg:1}));
 ok(st.posts.length===0&&/一点物の行は再調達にできません/.test(dlg.join('\n')),
    '★★一点物の行は再調達にしない');
 
+console.log('\n=== 「再調達中にする」は出さない（6.67）===');
+const rb=await p.evaluate(()=>{
+  const a=syncData.items.find(x=>x.asin==='B0PBU00002');
+  a.restocking=0; a.fba_available=0; a.ebay_price=30;
+  const b=syncData.items.find(x=>x.asin==='B0PBU00004');
+  b.restocking=1;                       // すでに再調達中の行
+  syncRender();
+  const btn=(asin)=>{
+    const d=document.querySelector('#syncList [data-srow="'+asin+'|used"]');
+    const x=d?d.querySelector('[data-srestock]'):null;
+    return x?x.textContent:'';
+  };
+  const d4=document.querySelector('#syncList [data-srow="B0PBU00004|used"]');
+  return { plain:btn('B0PBU00002'), on:btn('B0PBU00004'),
+    badge:d4?d4.querySelector('[data-sbadge]').innerText:'' };
+});
+console.log('   '+JSON.stringify(rb));
+ok(rb.plain==='','★★ふつうの行に「再調達中にする」を出さない');
+ok(/再調達中 解除/.test(rb.on),'★★印が付いている行だけ「解除」を出す');
+ok(/再調達中/.test(rb.badge),'★印が付いている行のバッジは今までどおり');
+await p.evaluate(()=>{
+  (syncData.items.find(x=>x.asin==='B0PBU00004')||{}).restocking=0; syncRender(); });
+
+console.log('\n=== 「在庫0時：再調達」にしたときの補足（6.67）===');
+await p.evaluate(()=>{
+  const r=syncData.items.find(x=>x.asin==='B0PBU00001');
+  r.one_off=0; r.mode='hold'; syncRender(); window.__posts=[];
+});
+await p.click('#syncList [data-srow="B0PBU00001|used"] [data-szero]');
+await p.waitForTimeout(400);
+const rn=await p.evaluate(()=>$('syncFixNote').textContent);
+console.log('   '+rn);
+ok(/FBAで売れたら数量0 → 承認すると推奨売値で再出品します/.test(rn),
+   '★★再調達にしたときは何が起きるかを添える');
+
 console.log('\n=== 今回は動かさない ===');
 await setup({mode:'plan'});
 await p.waitForTimeout(200);
