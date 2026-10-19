@@ -1,6 +1,7 @@
 /* 写真を eBay 保管に切り替える画面（6.55／6.60）
    ・販売連携に「写真を eBay 保管に切り替え」を置く（管理者のキーのときだけ）
    ・ItemID を入れて「1件お試し」→ pj-sync の /ebay/pics/switch に mode=fresh で送る
+   ・出品リストに元の写真（pj-img）が残っていれば、その URL を指定して送る（6.61）
    ・まとめては、1件で直ることを確かめるまで押せない（6.60）
    ・前と後（写真の枚数・自前ホストの紐づけ・PictureSource）と、
      どちらの方式で直ったかを画面に出す
@@ -134,6 +135,36 @@ console.log('   '+JSON.stringify(gate1));
 ok(gate1.dis===false&&gate1.saved==='1',
    '★★1件で直ったら、まとめても押せるようになる');
 ok(/まとめての切り替えが使えます/.test(gate1.note),'★使えることを書く');
+
+console.log('\n=== 出品リストに元の写真が残っていれば、それを使う（6.61）===');
+await p.evaluate(()=>{
+  window.__posts=[]; window.__mode='fresh';
+  csvList=[{id:'p1',src:'sedori',sku:'toy-20261017-UG-B0PIC00001-7980',
+    asin:'B0PIC00001',jan:'4900001',titleJa:'テスト',titleEn:'Test Item',
+    cat:'261068',catFixed:true,condId:3000,cost:7980,qty:1,weight:700,
+    itemId:'880025406600',
+    pics:[{url:'https://pj-img.example.workers.dev/i/20261017/'
+            +'9113905f-e34f-44b5-9671-54f525b28e49.jpg',key:'k1'},
+          {url:'https://pj-img.example.workers.dev/i/20261017/'
+            +'0123abcd-4567-89ab-cdef-0123456789ab.jpg',key:'k2'}],
+    specs:{},zeroAct:'hold',fba:true,oneOff:false,sold:'',amzLow:'',dropship:false,
+    titleStatus:'',titleCands:[],titleNote:'',titleManual:false}];
+  csvSaveList();
+});
+await p.click('#syncPicsOne');
+await p.waitForTimeout(400);
+st=await p.evaluate(()=>({posts:window.__posts,res:$('syncPicsRes').textContent}));
+console.log('   送った中身: '+JSON.stringify(st.posts));
+ok((st.posts[0].urls||[]).length===2
+   &&st.posts[0].urls[0].indexOf('9113905f')>=0,
+   '★★出品リストの写真（pj-img）の URL を、並び順そのまま送る');
+ok(st.posts[0].item_ids.join()==='880025406600'&&st.posts[0].mode==='fresh',
+   '★1件ずつ送る（写真を指定できるのは1件のときだけ）');
+await p.evaluate(()=>{ csvList=[]; csvSaveList(); window.__posts=[]; });
+await p.click('#syncPicsOne');
+await p.waitForTimeout(400);
+st=await p.evaluate(()=>({posts:window.__posts}));
+ok(!st.posts[0].urls,'★★出品リストに無い行は写真を指定しない（eBay の写真を使う）');
 
 console.log('\n=== 写真が減ったとき（6.60）===');
 await p.evaluate(()=>{ window.__posts=[]; window.__mode='lost'; });

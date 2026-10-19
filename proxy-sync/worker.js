@@ -2658,12 +2658,36 @@ async function jobGetItem(env, itemId) {
   }
   return Object.assign(await saveRun(env, run), out);
 }
+/* eBay の写真を元画像にするときは、**いちばん大きい版（$_57.JPG）**に直してから渡す（7.45）。
+   $_1.JPG のままだと Media API が小さい版（400×300）を取り込んでしまい、
+   出品に使うときに 21919137（長辺500px未満）で弾かれる。 */
+function epsMaxUrl(u) {
+  const s = String(u || "");
+  if (!/^https:\/\/i\.ebayimg\.com\//.test(s)) return s;
+  return s.replace(/\/\$_\d+\.(jpe?g|png|webp)(\?|$)/i,
+                   (m0, ext, tail) => "/$_57." + ext + tail);
+}
+/* i.ebayimg.com の URL から大きさを読む（/s/<base64> が「幅X高さ」）。
+   例 MTYwMFgxMjAw → 1600X1200、NDAwWDMwMA== → 400X300。 */
+function epsSize(u) {
+  /* /s/ と次の / の間だけを見る（base64 に / が入ることがあるので [^/]+ は使わず、
+     区切りで切り出してから中身を確かめる）。 */
+  const m = /\/s\/([^/]+)\//.exec(String(u || ""));
+  if (!m) return { w: 0, h: 0 };
+  let t = "";
+  try { t = atob(m[1].replace(/-/g, "+").replace(/_/g, "/")); } catch (e) { return { w: 0, h: 0 }; }
+  const d = /^(\d+)X(\d+)$/i.exec(String(t).trim());
+  return d ? { w: Number(d[1]), h: Number(d[2]) } : { w: 0, h: 0 };
+}
 /* 写真1枚を eBay（EPS）に預ける（Media API の createImageFromUrl）。
    元画像は pj-img（R2）の URL でも、eBay 自身の i.ebayimg.com でもよい。
    ・201 → Location の image_id → getImage で i.ebayimg.com の URL と期限
    ・401/403 のときは、足りないスコープが分かるように本文をそのまま返す */
 async function epsFromUrl(env, run, token, url) {
-  const out = { ok: false, source: url, eps_url: "", image_id: "", expiration: "" };
+  const src = epsMaxUrl(url);
+  const out = { ok: false, source: src, source_in: url,
+                eps_url: "", image_id: "", expiration: "",
+                w: 0, h: 0, long: 0, ok_for_ebay: false };
   const cr = await net(run, MEDIA_API + "/image/create_image_from_url", {
     method: "POST",
     write: true,
@@ -2672,7 +2696,7 @@ async function epsFromUrl(env, run, token, url) {
       "content-type": "application/json",
       "accept": "application/json",
     },
-    body: JSON.stringify({ imageUrl: url }),
+    body: JSON.stringify({ imageUrl: src }),
   });
   const crText = await cr.text();
   out.create = { status: cr.status,
@@ -2701,6 +2725,12 @@ async function epsFromUrl(env, run, token, url) {
     out.eps_url = info.imageUrl || "";
     out.max_dimension_url = info.maxDimensionImageUrl || "";
     out.expiration = info.expirationDate || "";
+    /* 預かった写真の大きさ（URL から読む）。長辺500px未満だと
+       出品に使えない（21919137）ので、呼ぶ側で止める（7.45）。 */
+    const sz = epsSize(out.eps_url);
+    out.w = sz.w; out.h = sz.h;
+    out.long = Math.max(sz.w, sz.h);
+    out.ok_for_ebay = !(out.long > 0 && out.long < 500);
     out.ok = !!out.eps_url;
   }
   if (!out.ok && !out.error) out.error = "getImage が " + g.status;
@@ -2790,9 +2820,18 @@ async function picSwitchOnce(env, run, token, itemId, srcUrls) {
   t.eps = [];
   for (const u of src) {
     const r = await epsFromUrl(env, run, token, u);
-    t.eps.push({ source: u, ok: r.ok, eps_url: r.eps_url, image_id: r.image_id,
-                 status: r.status, expiration: r.expiration, error: r.error || "" });
+    t.eps.push({ source: r.source, source_in: u, ok: r.ok, eps_url: r.eps_url,
+                 image_id: r.image_id, status: r.status, expiration: r.expiration,
+                 w: r.w, h: r.h, long: r.long, ok_for_ebay: r.ok_for_ebay,
+                 error: r.error || "" });
     if (!r.ok) { t.error = "写真を預け直せませんでした：" + (r.error || r.status); return t; }
+    /* 預かった写真が小さくなっていたら、出品に使えない（21919137）。
+       Revise は送らずにここで止める（7.45）。 */
+    if (!r.ok_for_ebay) {
+      t.error = "写真が小さくなりました（" + r.w + "×" + r.h + "・長辺500px未満）。"
+        + "元の写真（pj-img）のURLを指定してやり直してください";
+      return t;
+    }
     t.sent.push(r.eps_url);
   }
   t.expiration = t.eps.length ? t.eps[0].expiration : "";
@@ -3867,6 +3906,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
+                        epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
                         isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,

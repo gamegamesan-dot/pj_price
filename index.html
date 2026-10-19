@@ -9724,6 +9724,22 @@ function syncPicsGate(){
     : 'まず「1件お試し」で直ることを確かめてください。'
       +'確かめるまで、まとめての切り替えは押せません。';
 }
+/* その出品の写真が出品リスト（この端末）に残っていれば、その URL を使う（6.61）。
+   eBay の写真を元画像にすると小さい版を取り込むことがあるので、
+   pj-img（R2）の元の写真があればそちらを優先する。 */
+function syncPicsUrlsFor(id){
+  var want=String(id||'').replace(/[^0-9]/g,''), out=[];
+  if(!want)return out;
+  (csvList||[]).forEach(function(r){
+    if(out.length)return;
+    if(String(r.itemId||'').replace(/[^0-9]/g,'')!==want)return;
+    out=(r.pics||[]).map(function(p){ return String((p&&p.url)||''); })
+      .filter(function(u){
+        return /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
+      }).slice(0,24);
+  });
+  return out;
+}
 /* 1件ぶんの結果。前と後（枚数・紐づけ・PictureSource）を並べる。 */
 function syncPicsOneHtml(it){
   var b=it.before||{}, a=it.after||{};
@@ -9739,6 +9755,8 @@ function syncPicsOneHtml(it){
     +'<br>'+(it.done?('✅ '+how)
       :('<span style="color:var(--bad);font-weight:700">⚠ '
         +esc(it.error||'直りませんでした')+'</span>'))
+    +(((it.tries||[])[0]||{}).fixed_urls
+      ? '<br>pj-img の元の写真から作り直しました' : '')
     +(it.expiration?('<br>預け直した写真の期限：'+esc(String(it.expiration).slice(0,10))
       +'（この出品で使っているので消えません）'):'')
     +'</div>';
@@ -9751,20 +9769,30 @@ function syncPicsRun(ids,label){
     return;
   }
   if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
-  var chunks=[], done=0, html='';
-  for(var i=0;i<ids.length;i+=SYNC_PICS_MAX)chunks.push(ids.slice(i,i+SYNC_PICS_MAX));
+  /* 出品リストに元の写真が残っている行は、その写真を指定して1件ずつ送る（6.61）。
+     残っていない行は今までどおり SYNC_PICS_MAX 件ずつまとめて送る。 */
+  var jobs=[], plain=[], done=0, sent=0, html='';
+  ids.forEach(function(id){
+    var u=syncPicsUrlsFor(id);
+    if(u.length)jobs.push({ ids:[id], urls:u }); else plain.push(id);
+  });
+  for(var i=0;i<plain.length;i+=SYNC_PICS_MAX)
+    jobs.push({ ids:plain.slice(i,i+SYNC_PICS_MAX), urls:null });
   res.innerHTML='';
   function step(k){
-    if(k>=chunks.length){
+    if(k>=jobs.length){
       note.textContent=label+'：'+done+'／'+ids.length+'件を eBay 保管にしました'
         +(done<ids.length?'（直らなかった行は下の理由を見てください）':'');
       return;
     }
-    note.textContent=label+'：送信中…（'+(k*SYNC_PICS_MAX+1)+'〜'
-      +Math.min(ids.length,(k+1)*SYNC_PICS_MAX)+'件目／全'+ids.length+'件）';
+    var job=jobs[k], body={ item_ids:job.ids, mode:'fresh', confirm:true };
+    if(job.urls)body.urls=job.urls;
+    note.textContent=label+'：送信中…（'+(sent+1)+'〜'+(sent+job.ids.length)
+      +'件目／全'+ids.length+'件）'
+      +(job.urls?'　pj-img の元の写真を使います':'');
+    sent+=job.ids.length;
     /* 方式は預け直し（fresh）だけ。預け直さない方式は写真が落ちるのでやめた（6.60）。 */
-    syncJsonPost('/ebay/pics/switch',
-      { item_ids:chunks[k], mode:'fresh', confirm:true },
+    syncJsonPost('/ebay/pics/switch', body,
       function(d){
         ((d&&d.items)||[]).forEach(function(it){
           if(it.done){
@@ -12311,7 +12339,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v160';   // sw.js の const V と必ず同じ値にする
+var APP_V='v161';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

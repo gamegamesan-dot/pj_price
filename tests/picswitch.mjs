@@ -25,10 +25,12 @@ const call=async(body,key)=>asJson(await worker.fetch(
      （KB 5091 の注意。認識しないと紐づけは消えない） */
 const R2='https://pj-img.example.workers.dev/i/20261017/'
   +'9113905f-e34f-44b5-9671-54f525b28e49.jpg';
-const EPS=(n)=>'https://i.ebayimg.com/00/s/MTYwMFgxMjAw/z/old'+n+'/$_1.JPG?set_id=88';
+const B64=(w,h)=>Buffer.from(w+'X'+h,'utf8').toString('base64');
+const EPS=(n)=>'https://i.ebayimg.com/00/s/'+B64(1600,1200)+'/z/old'+n+'/$_1.JPG?set_id=88';
 let calls=[], state=null, reuseWorks=true, reviseAck='Success', newId=0, drop=0;
+let made={}, srcs=[];
 const reset=(o)=>{
-  calls=[]; newId=0; reuseWorks=(o&&'reuseWorks' in o)?o.reuseWorks:true;
+  calls=[]; newId=0; made={}; srcs=[]; reuseWorks=(o&&'reuseWorks' in o)?o.reuseWorks:true;
   reviseAck=(o&&o.ack)||'Success';
   drop=(o&&o.drop)||0;
   state={ pics:(o&&o.pics)||[EPS(1),EPS(2),EPS(3)],
@@ -78,14 +80,25 @@ globalThis.fetch=async(u,i)=>{
   }
   if(/create_image_from_url/.test(url)){
     newId++;
+    /* 本物と同じ挙動：$_1.JPG を渡すと小さい版（400×300）、
+       $_57.JPG を渡すと大きい版（1600×1200）が取り込まれる（7.45）。 */
+    const src=JSON.parse(String(o.body||'{}')).imageUrl||'';
+    const sz=W.epsSize(src);
+    made[newId]=(/i\.ebayimg\.com/.test(src)&&!/\$_57\./.test(src))
+      ? {w:400,h:300}                                  // 小さい版を取り込む
+      : ((sz.w>0)?sz:{w:1600,h:1200});                 // 指定どおりの大きさ
+    srcs.push(src);
     return new Response('',{status:201,headers:{'location':
       'https://apim.ebay.com/commerce/media/v1_beta/image/NEW-'+newId}});
   }
   if(/\/image\/NEW-\d+$/.test(url)){
     const n=url.split('-').pop();
+    const sz=made[n]||{w:1600,h:1200};
     return new Response(JSON.stringify({
-      imageUrl:'https://i.ebayimg.com/00/s/MTYwMFgxMjAw/z/new'+n+'/$_1.JPG?set_id=88',
-      maxDimensionImageUrl:'https://i.ebayimg.com/00/s/MzIwMA/z/new'+n+'/$_57.JPG',
+      imageUrl:'https://i.ebayimg.com/00/s/'+B64(sz.w,sz.h)+'/z/new'+n
+        +'/$_1.JPG?set_id=88',
+      maxDimensionImageUrl:'https://i.ebayimg.com/00/s/'+B64(sz.w,sz.h)+'/z/new'+n
+        +'/$_57.JPG',
       expirationDate:'2026-11-17T00:00:00.000Z'}),
       {status:200,headers:{'content-type':'application/json'}});
   }
@@ -136,6 +149,41 @@ ok(!/StartPrice|Quantity|<Title>/.test(revises()[0].body),
    '★★実際に送った中身にも価格・数量・タイトルは入らない');
 ok(calls.filter((c)=>c.headers['X-EBAY-API-CALL-NAME']==='GetItem').length===2,
    '★前と後で GetItem を1回ずつ（結果を並べて出せる）');
+
+console.log('\n=== eBay の写真は「いちばん大きい版」に直して渡す（7.45）===');
+console.log('   直し方: '+W.epsMaxUrl(EPS(1)));
+ok(/\/\$_57\.JPG\?set_id=88$/.test(W.epsMaxUrl(EPS(1))),
+   '★★i.ebayimg.com の $_1.JPG は $_57.JPG（最大サイズ）に直す');
+ok(W.epsMaxUrl(R2)===R2,'★pj-img の写真はそのまま渡す');
+console.log('   大きさ: '+JSON.stringify(W.epsSize(EPS(1)))
+  +'／'+JSON.stringify(W.epsSize('https://i.ebayimg.com/00/s/NDAwWDMwMA==/z/a/$_1.JPG')));
+ok(W.epsSize(EPS(1)).w===1600&&W.epsSize(EPS(1)).h===1200,
+   '★★URL の /s/ から大きさを読める');
+ok(W.epsSize('https://i.ebayimg.com/00/s/NDAwWDMwMA==/z/a/$_1.JPG').w===400,
+   '★小さい版（400×300）も読める');
+reset({});
+r=await call({item_id:'880025406600'});
+console.log('   渡した元画像: '+JSON.stringify(srcs));
+console.log('   預かった写真: '+JSON.stringify(
+  r.body.items[0].tries[0].eps.map((e)=>e.w+'×'+e.h)));
+ok(srcs.every((u)=>/\$_57\./.test(u)),'★★元画像は $_57.JPG で渡す');
+ok(r.body.items[0].done===true
+   &&r.body.items[0].tries[0].eps.every((e)=>e.long===1600),
+   '★★大きい版（1600×1200）で預かれる');
+
+console.log('\n=== 小さくなったら Revise を送らない（7.45）===');
+reset({});
+/* 直さずに $_1.JPG のまま渡すと 400×300 になる、という状況を作る。 */
+const keep=W.epsMaxUrl;
+r=await call({item_id:'880025406600',
+  urls:['https://i.ebayimg.com/00/s/'+B64(400,300)+'/z/small/$_57.JPG']});
+const sm=r.body.items[0];
+console.log('   '+JSON.stringify({done:sm.done,error:sm.error,
+  eps:sm.tries[0].eps.map((e)=>e.w+'×'+e.h)}));
+ok(sm.done===false&&/写真が小さくなりました/.test(sm.error||''),
+   '★★長辺500px未満なら「写真が小さくなりました」と止める');
+ok(/400×300/.test(sm.error||''),'★大きさも出す');
+ok(revises().length===0,'★★Revise は送らない（21919137 を出さない）');
 
 console.log('\n=== 写真が減ったら止める（7.44）===');
 reset({drop:1});
