@@ -788,6 +788,8 @@ body.staff #syncOnHandFix{display:none !important}
     <div class="body">
       <!-- 取り込みが上限で切れたときの警告（設定の「取り込みの上限」） -->
       <div class="warn" id="syncCutWarn" style="display:none;margin-bottom:8px"></div>
+      <!-- 3時間ごとの最安値が上限で取り切れていないときの警告（6.72） -->
+      <div class="warn cfgprice" id="syncHotWarn" style="display:none;margin-bottom:8px"></div>
       <!-- 無在庫が上限を超えたときの警告（設定の「無在庫の上限」） -->
       <div class="warn" id="syncDropWarn" style="display:none;margin-bottom:8px"></div>
       <div class="note2 staffonly" style="margin:0 0 6px;color:var(--bad);font-weight:700">作業者用のキーです。取り込み・名簿の送信・英題・写真はできますが、<b>価格を変える操作はできません</b>（管理者に連絡してください）。</div>
@@ -8934,6 +8936,23 @@ function syncCutWarnRender(){
     +'。設定の「取り込みの上限」を増やしてから、もう一度「状況を取り込む」を押してください'
     +'（切れていると件数・警告・価格の操作が一部の行だけになります）。';
 }
+/* 3時間ごとの最安値（6.72／Worker は 7.49）。
+   再調達中とフェイズBの対象だけを3時間ごとに取り直している。
+   上限（既定40件）で取り切れなかった回があれば、その件数をここに出す
+   （上限を上げる判断に使う）。 */
+function syncHotWarnRender(){
+  var el=$('syncHotWarn'); if(!el)return;
+  var h=(syncData&&syncData.hot_pricing)||null;
+  if(!h||!Number(h.left||0)){ el.style.display='none'; el.textContent=''; return; }
+  el.style.display='';
+  el.textContent='Amazon最安値（3時間ごと）が上限で取り切れていません：'
+    +'対象 '+Number(h.picked||0)+'件のうち '+Number(h.rows||0)+'件だけ取り直しました'
+    +'（上限 '+Number(h.max||0)+'件）。取り切れなかった '+Number(h.left||0)
+    +'件は次の回に回ります'
+    +(h.at?('　前回 '+String(h.at).slice(0,16).replace('T',' ')):'')
+    +'。再調達中とフェイズBの対象が増えているので、上限（PRICING_HOT_MAX）を'
+    +'上げてください。';
+}
 /* 相場（総額$）を D1 にも残す。出品リストを空にしても、ほかの端末からでも
    同じ相場で値付けできるようにする。失敗しても端末の入力は残る。 */
 function syncSoldPost(r,v){
@@ -12344,6 +12363,7 @@ function syncRender(){
     : '「状況を取り込む」を押してください';
   syncDropWarn();
   syncCutWarnRender();              // 取り込みが上限で切れていないか
+  syncHotWarnRender();              // 3時間ごとの最安値が取り切れているか（6.72）
   syncMarkBarRender();              // 値下げの時期の帯（価格の欄を自動で開く）
   syncTodoRender();                 // 今日やること
   /* 再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ出す（6.71）。 */
@@ -13054,7 +13074,9 @@ function syncLoadRun(done,quiet){
                  md_last:d.md_last||null, rv_plan:d.rv_plan||null,
                  rv_last:d.rv_last||null,
                  /* 再調達中の売値の追従（6.70）。帯の予定と前回の結果。 */
-                 rk_plan:d.rk_plan||null, rk_last:d.rk_last||null };
+                 rk_plan:d.rk_plan||null, rk_last:d.rk_last||null,
+                 /* 3時間ごとの最安値（6.72）。取り切れなかった件数を出す。 */
+                 hot_pricing:d.hot_pricing||null };
       syncSaveCache();
       var run=(syncData.last_runs||[])[0]||{};
       syncSay('取り込みました：'+syncData.items.length+'件'
@@ -13527,7 +13549,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v171';   // sw.js の const V と必ず同じ値にする
+var APP_V='v172';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

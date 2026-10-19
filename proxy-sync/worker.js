@@ -55,6 +55,12 @@ const ROLLCALL_MAX_CALLS = 40;     // 1回の実行で名指し照会する上�
 const SWEEP_PAGES = 20;            // 全件スイープで1回に進めるページ数
 const PRICING_BATCH = 20;          // getItemOffersBatch は1回20件まで
 const PRICING_MAX_CALLS = 6;       // 0.1回/秒なので1回の実行では6回（120件）まで
+/* 3時間ごとに取り直す行の上限（7.49）。再調達中とフェイズBの対象だけを見る。
+   1行につき最大2件（その行の状態＋新品）要求するので、40行＝最大80件＝4回。
+   0.1回/秒なので1回の実行で約42秒かかる。 */
+const PRICING_HOT_MAX = 40;
+const PRICING_HOT_KEY = "pricing.hot";       // 前回の結果（sync_state）
+const PRICING_HOT_WARN_MS = 24 * 60 * 60 * 1000;  // 取り切れない知らせの間隔
 /* GetMyeBaySelling の1ページ件数。OutputSelector を外して全項目を受けるので、
    1回の応答が大きくなりすぎないよう200→100にしてある（解析のCPUも半分になる）。 */
 const EBAY_PAGE = 100;
@@ -1734,6 +1740,95 @@ async function syncPricing(env, run) {
   await runBatch(env, run, stmts);
   run.notes.push("最安値 " + stmts.length + "件");
   return stmts.length;
+}
+
+/* ---- 3時間ごとの最安値（7.49）----
+   再調達中の行とフェイズBの対象行は、Amazon最安値が動くと利益がそのまま動く。
+   日次（syncPricing）は1回60行なので、出品が1,500行あると一周に25日かかり、
+   「最安値が24時間より古い」で自動の反映（7.48）やフェイズBの再調達（7.47）が
+   動かなかった。この2種類だけを3時間ごとに取り直す。
+   上限（PRICING_HOT_MAX）を超えた回は、取り切れなかった件数を
+   画面（/status の hot_pricing）と Discord に出す。 */
+function pricingHotWhere() {
+  /* 再調達中、またはフェイズBが見る行（FBAの販売可能が0・出品中・
+     手元在庫／無在庫／一点物でない）。pbTarget の細かい条件（予約済みの内訳・
+     入庫中・セール中）まではここで見ない（少し広めに取るだけなので害がない）。 */
+  return `scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND ebay_qty>0
+            AND (restocking=1
+                 OR (COALESCE(fba_available,-1)=0
+                     AND COALESCE(on_hand,0)=0
+                     AND COALESCE(dropship,0)=0
+                     AND COALESCE(one_off,0)=0))`;
+}
+async function syncPricingHot(env, run) {
+  const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0 };
+  /* 全体の件数を先に数える（上限で取り切れなかった件数を出すため）。 */
+  try {
+    const c = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE ${pricingHotWhere()}`).first();
+    res.picked = Number((c && c.n) || 0);
+  } catch (e) { run.notes.push("3時間ごとの最安値：件数が数えられません " + e.message); }
+  if (!res.picked) return res;
+  const q = await env.DB.prepare(
+    /* 最安値が古い行（まだ一度も取っていない行を含む）から順に取る。 */
+    `SELECT asin, cond FROM items WHERE ${pricingHotWhere()}
+       ORDER BY amazon_lowest_at IS NOT NULL, amazon_lowest_at
+       LIMIT ?1`).bind(PRICING_HOT_MAX).all();
+  const keys = (q && q.results) || [];
+  res.rows = keys.length;
+  res.left = Math.max(0, res.picked - res.rows);
+  if (!keys.length) return res;
+  const low = await amazonLowest(env, run, lowestReqs(keys));
+  const at = nowIso();
+  const stmts = [];
+  for (const k of keys) {
+    const v = low[lowestKey(k)];
+    if (v) stmts.push(env.DB.prepare(
+      `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
+         amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
+       WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, v.low, v.lowN, v.total, at,
+         JSON.stringify(v.offers || [])));
+    // 中古の行には「新品の最安値」も入れる（新品のほうが安ければ値付けの基準になる）
+    if (k.cond !== "new") {
+      const vn = low[k.asin + "|new"];
+      if (vn) stmts.push(env.DB.prepare(
+        `UPDATE items SET amazon_new_low=?3, amazon_new_n=?4, amazon_new_at=?5,
+           updated_at=?5 WHERE asin=?1 AND cond=?2`)
+        .bind(k.asin, k.cond, vn.low, vn.lowN, at));
+    }
+  }
+  await runBatch(env, run, stmts);
+  res.wrote = stmts.length;
+  run.notes.push("3時間ごとの最安値：対象 " + res.picked + "件のうち " + res.rows
+    + "件を取り直し（書き込み " + res.wrote + "件）"
+    + (res.left ? ("／上限 " + PRICING_HOT_MAX + "件で取り切れなかった " + res.left + "件は次回")
+                : ""));
+  /* 結果を残す（画面の帯と、次回の知らせの間隔に使う）。 */
+  let prev = null;
+  try { const t = await stateGet(env, PRICING_HOT_KEY); prev = t ? JSON.parse(t) : null; }
+  catch (e) { prev = null; }
+  const warnAt = (res.left && (!prev || !prev.warn_at
+                   || (Date.now() - Date.parse(prev.warn_at) > PRICING_HOT_WARN_MS)))
+    ? at : ((prev && prev.warn_at) || "");
+  try {
+    await stateSet(env, PRICING_HOT_KEY, JSON.stringify({
+      at: at, picked: res.picked, rows: res.rows, left: res.left,
+      max: PRICING_HOT_MAX, wrote: res.wrote, warn_at: warnAt })).run();
+  } catch (e) { /* 控えの失敗で本処理を落とさない */ }
+  // 取り切れなかったときだけ知らせる（同じ知らせは24時間に1回まで）
+  if (res.left && warnAt === at)
+    await notify(env, run, "⏱️ Amazon最安値（3時間ごと）：対象 " + res.picked
+      + "件のうち " + res.rows + "件しか取り直せませんでした（上限 " + PRICING_HOT_MAX
+      + "件）。\n取り切れなかった " + res.left
+      + "件は次の回に回ります。対象が増えているので、上限を上げてください"
+      + "（再調達中とフェイズBの対象の合計）。");
+  return res;
+}
+async function pricingHotLast(env) {
+  try {
+    const t = await stateGet(env, PRICING_HOT_KEY);
+    return t ? JSON.parse(t) : null;
+  } catch (e) { return null; }
 }
 
 /* 日次。未対応付けの件数だけ通知する（中身は一覧で見る）。
@@ -4157,6 +4252,8 @@ async function statusBody(env, url) {
     /* 再調達中の売値の追従（7.48）。予定と前回の結果を画面の帯に出す。 */
     rk_plan: await rkPlanGet(env),
     rk_last: await rkLast(env),
+    /* 3時間ごとの最安値（7.49）。取り切れなかった件数を画面に出す。 */
+    hot_pricing: await pricingHotLast(env),
     items,
     sold_recent: (sold && sold.results) || [],
     events_recent: (ev && ev.results) || [],
@@ -4742,6 +4839,14 @@ export default {
           catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
           return json(await saveRun(env, run), 200, origin);
         }
+        /* 3時間ごとの最安値を手で回す（7.49）。ふだんは Cron が回す。 */
+        if (kind === "pricing-hot") {
+          const run = newRun("pricing");
+          let hot = null;
+          try { hot = await syncPricingHot(env, run); }
+          catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+          return json(Object.assign(await saveRun(env, run), { hot: hot }), 200, origin);
+        }
         return json({ error: "bad_kind" }, 400, origin);
       }
     } catch (e) {
@@ -4761,6 +4866,14 @@ export default {
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
     ctx.waitUntil((async () => {
       await jobHourly(env);
+      /* 3時間ごとに、再調達中とフェイズBの対象の最安値を取り直す（7.49）。
+         このあとのフェイズBと売値の追従が、新しい最安値で判断できる。 */
+      if (new Date().getUTCHours() % 3 === 0) {
+        const run = newRun("pricing");
+        try { await syncPricingHot(env, run); }
+        catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
+        await saveRun(env, run);
+      }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
@@ -4782,7 +4895,7 @@ export default {
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
-                        rkTarget, rkBo,
+                        rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
