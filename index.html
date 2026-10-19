@@ -795,6 +795,19 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 今日やること。押すとその絞り込みになる（0件は薄く出す）。 -->
       <div class="note2" style="margin:8px 0 0"><b>毎日</b>　状況を取り込む → 対応が必要を確認 → 発送　／　<b>3日ごと</b>　値下げの時期 → CSV → アップロード　／　<b>ときどき</b>　再調達の候補・FBA納品の判断・売値の見直し</div>
       <div class="todo" id="syncTodo"></div>
+      <!-- 操作の履歴（6.69）。押した印を新しい順に出し、1件ずつ戻せる。 -->
+      <details id="syncHistBox" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer" id="syncHistSum">操作の履歴</summary>
+        <div style="padding:6px 0 0">
+          <div class="note2" style="margin:0 0 4px">この端末で押した<b>印</b>（販売連携・出品CSVの行ボタン）の履歴です（直近50件）。eBay の価格・数量・写真に送った変更は戻せません。</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn" id="syncHistUndo" style="flex:1 1 0;min-width:0;padding:9px 4px">1つ戻す</button>
+            <button class="btn" id="syncHistClear" style="flex:0 0 auto;padding:9px 10px">履歴を消す</button>
+          </div>
+          <div class="note2" id="syncHistNote" style="margin:4px 0 0"></div>
+          <div id="syncHistList" style="margin-top:4px"></div>
+        </div>
+      </details>
       <details id="syncNumBox" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">詳しい数字</summary>
         <div style="padding:6px 0 0">
@@ -1345,6 +1358,15 @@ body.staff #syncOnHandFix{display:none !important}
 </div>
 
   <!-- 消した直後に数秒だけ出る帯。押せばその場で戻せる。 -->
+<!-- 行の印を押した直後に出る帯（6.69）。数秒だけ出て、押せば元に戻せる。 -->
+<div id="syncUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:61;
+     background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
+     align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
+  <span id="syncUndoText" style="flex:1 1 0;min-width:0"></span>
+  <button class="btn" id="syncUndoBtn" style="flex:0 0 auto;padding:6px 10px;font-size:13px">元に戻す</button>
+  <button class="btn" id="syncUndoClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
+</div>
+
 <div id="csvUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;
      background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
      align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
@@ -6305,6 +6327,8 @@ $('csvList').addEventListener('click',function(e){
   if(!id)return;
   var i=-1; csvList.forEach(function(r,k){ if(r.id===id)i=k; });
   if(i<0)return;
+  /* 押し間違いを戻せるように、印を押す前の値を控えておく（6.69）。 */
+  var uf=csvUndoField(t), ufWas=uf?csvUndoVal(csvList[i],uf):null;
   if(t.hasAttribute('data-regen')){
     if(!String($('csvTitleApi').value||'').trim()){
       alert('設定の「英語タイトル生成のURL」を入れてください。'); return; }
@@ -6360,6 +6384,11 @@ $('csvList').addEventListener('click',function(e){
     var seq=['hold','restock','end'];
     csvList[i].zeroAct=seq[(seq.indexOf(csvList[i].zeroAct)+1)%3];
   }
+  if(uf&&!syncUndoSame(ufWas,csvUndoVal(csvList[i],uf)))
+    syncUndoPush({ scope:'csv', field:uf,
+      items:[{ id:csvList[i].id,
+               title:csvList[i].titleJa||csvList[i].sku||csvList[i].id,
+               from:ufWas, to:csvUndoVal(csvList[i],uf) }] });
   csvSaveList(); csvRender();
 });
 // 相場を入れた時点で判定が確定する。入力中は行を作り直さず、判定の行だけ書き換える。
@@ -9531,6 +9560,7 @@ function syncMarkBarRender(){
   syncPbBarRender();        // フェイズB：FBAで売れた行の予定（6.66）
   syncRvBarRender();        // 売値の自動反映（値上げ）の帯
   syncPicsGate();           // 写真の切り替え：使える／必要な件数（6.64）
+  syncHistRender();         // 操作の履歴（6.69）
   var el=$('syncMarkBar'); if(!el)return;
   /* CSVで下げる行だけを数える。自動値下げがオン／予定だけ表示のときは、
      自動値下げが拾う行は外す（押しても二重に下げないため）。 */
@@ -9652,12 +9682,19 @@ function syncFlagBulk(field,want){
     +(same?('すでにその状態の '+same+'件は送りません。\n'):'')
     +(skip?(skip+'件は付けられないためとばします（'+why+'）。\n'):'')
     +'よろしいですか？'))return;
+  /* まとめて付けた印も1回の操作として戻せるようにする（6.69）。 */
+  var undoItems=go.map(function(r){
+    return { asin:r.asin, cond:r.cond, title:r.title||r.asin,
+             from:(Number(r[field]||0)?1:0), to:(want?1:0) };
+  });
   /* 先に画面を進めてから送る（送れなくても手元の表示は合う）。
      一点物は「人が決めた」印も一緒に立てる（Worker 側と同じ決まり）。 */
   go.forEach(function(r){
     r[field]=want?1:0;
     if(field==='one_off')r.one_off_known=1;
   });
+  if(SYNC_UNDO_FIELDS[field]&&undoItems.length)
+    syncUndoPush({ field:field, items:undoItems });
   syncMemoClear(); syncSaveCache(); syncRender();
   var note=$('syncFixNote');
   csvSecretFill();
@@ -9881,6 +9918,10 @@ function syncPicsRun(ids,label){
   res.innerHTML='';
   function step(k){
     if(k>=jobs.length){
+      /* 写真の入れ替えは eBay への変更。戻せないことを履歴に残す（6.69）。 */
+      if(done)syncUndoPush({ noundo:true,
+        label:'写真を eBay 保管に切り替え（'+done+'件）',
+        items:[{ asin:'', cond:'', title:label }] });
       note.textContent=label+'：'+done+'／'+ids.length+'件を eBay 保管にしました'
         +(done<ids.length?'（直らなかった行は下の理由を見てください）':'');
       return;
@@ -10888,6 +10929,10 @@ function syncPbGo(){
     syncJsonPost('/sync',{kind:'phaseb',approve:true},function(d){
       var msg='数量0 '+Number(d.zeroed||0)+'件／再調達 '+Number(d.restocked||0)
         +'件／失敗 '+Number(d.failed||0)+'件';
+      /* eBay を変えた操作。戻せないことが分かるように履歴に残す（6.69）。 */
+      syncUndoPush({ noundo:true, label:'再調達をまとめて実行（'+msg+'）',
+        items:rows.map(function(r){
+          return { asin:r.asin, cond:r.cond, title:r.title||r.asin }; }) });
       $('syncPbDone').textContent=msg+'。状況を取り込んでいます…';
       b.disabled=false; syncRender();
       syncLoadRun(function(err){
@@ -11029,6 +11074,10 @@ function syncRvGo(){
   b.disabled=true; b.textContent='実行しています…';
   $('syncRvDone').textContent='pj-sync が eBay を変えています…';
   syncJsonPost('/sync',{kind:'review',approve:true},function(d){
+    /* eBay を変えた操作。戻せないことが分かるように履歴に残す（6.69）。 */
+    syncUndoPush({ noundo:true, label:'売値の見直しをまとめて実行',
+      items:pl.rows.map(function(x){
+        return { asin:x.asin, cond:x.cond, title:x.name||x.asin }; }) });
     var msg='上げた '+Number(d.changed||0)+'件／数量0 '
       +Number(d.zeroed||0)+'件／失敗 '+Number(d.failed||0)+'件'
       /* セール中で変えられなかった行は失敗に数えない（6.59）。 */
@@ -12129,10 +12178,303 @@ $('syncPerPage').addEventListener('change',function(){ syncPerApply(this.value);
    ほかの項目（モード・一点物・FBA連動）は Worker 側でそのまま残る。 */
 /* 行の印（手元在庫・一点物）を入れ替える。送るのは ASIN＋新品/中古 と、
    その印だけ。ほかの項目は Worker 側でそのまま残る。 */
+/* ================= 行の印の取り消し（6.69）=================
+   押した印は、押した直後の帯（数秒）と「操作の履歴」から元に戻せる。
+   ・戻すのは **印（D1 の設定値）だけ**。eBay に送った価格・数量・写真は戻さない
+   ・戻す前に、いまの値が「押したあとの値」のままかを確かめる。
+     ほかの処理や別の端末で変わっていたら上書きせずに知らせる
+   ・作業者のキーでも、自分が押した印は戻せる（送れない項目はサーバーが弾く） */
+var SYNC_UNDO_KEY='pj:undo:v1';
+var SYNC_UNDO_MAX=50;            // 残す件数
+var SYNC_UNDO_MS=9000;           // 帯を出しておく時間
+var syncUndoList=[];
+try{ var u0=JSON.parse(localStorage.getItem(SYNC_UNDO_KEY)||'[]');
+     syncUndoList=Array.isArray(u0)?u0:[]; }catch(e){ syncUndoList=[]; }
+function syncUndoSave(){
+  try{ localStorage.setItem(SYNC_UNDO_KEY,
+    JSON.stringify(syncUndoList.slice(0,SYNC_UNDO_MAX))); }catch(e){}
+}
+/* 印の名前と、値の読み書き。ここに無い項目は履歴に出さない。 */
+var SYNC_UNDO_FIELDS={
+  on_hand:{ t:'手元在庫', kind:'flag' },
+  one_off:{ t:'一点物', kind:'flag' },
+  dropship:{ t:'無在庫', kind:'flag' },
+  mark_stop:{ t:'値下げしない', kind:'flag' },
+  ebay_first:{ t:'eBay優先', kind:'flag' },
+  pb_skip:{ t:'今回は動かさない', kind:'flag' },
+  restocking:{ t:'再調達中', kind:'flag' },
+  mode:{ t:'在庫0時', kind:'text' }
+};
+/* 出品CSVの行の印。こちらは記録がこの端末（csvList）にある
+   （「値下げしない」だけは D1 にも記録があるので、戻すときに送り直す）。 */
+var CSV_UNDO_FIELDS={
+  fba:{ t:'手元在庫', kind:'flag' },
+  forceEbay:{ t:'eBay優先', kind:'flag' },
+  oneOff:{ t:'一点物', kind:'flag' },
+  dropship:{ t:'無在庫', kind:'flag' },
+  markStop:{ t:'値下げしない', kind:'flag' },
+  fastShip:{ t:'発送が早い', kind:'flag' },
+  zeroAct:{ t:'在庫0時', kind:'text' }
+};
+var CSV_UNDO_ATTR={ 'data-fba':'fba', 'data-force':'forceEbay', 'data-one':'oneOff',
+  'data-drop':'dropship', 'data-mstop':'markStop', 'data-fast':'fastShip',
+  'data-zero':'zeroAct' };
+function syncUndoDefs(scope){
+  return (scope==='csv')?CSV_UNDO_FIELDS:SYNC_UNDO_FIELDS;
+}
+function syncUndoName(scope,f){ return (syncUndoDefs(scope)[f]||{}).t||f; }
+function syncUndoVal(scope,f,v){
+  if((syncUndoDefs(scope)[f]||{}).kind==='text')
+    return SYNC_ZERO_NAME[String(v||'')]||'未設定';
+  return Number(v||0)?'オン':'オフ';
+}
+function syncUndoNow(r,f){
+  if(!r)return null;
+  if(f==='mode')return String(r.mode||'');
+  return Number(r[f]||0)?1:0;
+}
+function csvUndoField(t){
+  var f='';
+  for(var k in CSV_UNDO_ATTR)if(t.hasAttribute&&t.hasAttribute(k))f=CSV_UNDO_ATTR[k];
+  return f;
+}
+function csvUndoVal(r,f){
+  if(!r)return null;
+  if((CSV_UNDO_FIELDS[f]||{}).kind==='text')return String(r[f]||'');
+  return r[f]?1:0;
+}
+function syncUndoSame(a,b){ return String(a==null?'':a)===String(b==null?'':b); }
+/* 履歴に1件足す（kind:'flag'／'text'／'bulk'／'ebay'）。 */
+function syncUndoPush(o){
+  var e={ id:'u'+Date.now()+'-'+Math.round(Math.random()*1000),
+          at:new Date().toISOString(), scope:o.scope||'sync',
+          field:o.field||'', label:o.label||'',
+          items:(o.items||[]).map(function(x){
+            return { id:x.id, asin:x.asin, cond:x.cond, title:x.title||'',
+                     from:x.from, to:x.to, extra:x.extra||null }; }),
+          noundo:!!o.noundo, done:false };
+  syncUndoList.unshift(e);
+  syncUndoList=syncUndoList.slice(0,SYNC_UNDO_MAX);
+  syncUndoSave();
+  if(!e.noundo)syncUndoBar(e);
+  syncHistRender();
+  return e;
+}
+function syncUndoText(e){
+  var n=e.items.length;
+  if(e.noundo)return (e.label||'eBay への変更')+'（'+n+'件）';
+  var first=e.items[0]||{};
+  var head=(n>1)?((first.title||first.asin||'')+' ほか'+(n-1)+'件')
+                :(first.title||first.asin||'');
+  return head+'：'+syncUndoName(e.scope,e.field)+' '
+    +syncUndoVal(e.scope,e.field,first.from)+'→'
+    +syncUndoVal(e.scope,e.field,first.to)
+    +((e.scope==='csv')?'（出品CSV）':'');
+}
+/* 押した直後の帯。数秒で消える（押せば元に戻す）。 */
+var syncUndoTimer=null;
+function syncUndoBar(e){
+  var bar=$('syncUndoBar'); if(!bar)return;
+  $('syncUndoText').textContent=syncUndoText(e);
+  bar.setAttribute('data-undo',e.id);
+  bar.style.display='flex';
+  if(syncUndoTimer)clearTimeout(syncUndoTimer);
+  syncUndoTimer=setTimeout(function(){ syncUndoHide(); },SYNC_UNDO_MS);
+}
+function syncUndoHide(){
+  var bar=$('syncUndoBar'); if(!bar)return;
+  bar.style.display='none'; bar.removeAttribute('data-undo');
+  if(syncUndoTimer){ clearTimeout(syncUndoTimer); syncUndoTimer=null; }
+}
+/* 取り消しの実行。いまの値が「押したあとの値」でない行は上書きしない。 */
+function syncUndoRun(id,note){
+  var el=note&&$(note);
+  var e=null;
+  syncUndoList.forEach(function(x){ if(x.id===id)e=x; });
+  if(!e)return;
+  if(e.noundo){
+    if(el)el.textContent='この操作は eBay への変更なので戻せません。';
+    return;
+  }
+  if(e.done){ if(el)el.textContent='この操作はもう戻しています。'; return; }
+  if(e.scope==='csv'){ csvUndoApply(e,el); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    if(el)el.textContent='pj-sync のURL・キーを⚙設定に入れてください。'; return;
+  }
+  var go=[], moved=[];
+  e.items.forEach(function(x){
+    var r=syncRowBy(x.asin+'|'+x.cond);
+    if(!r){ moved.push(x.title||x.asin); return; }
+    /* 戻す前に、いまの値を確かめる（自動処理や別の端末で変わっていたら触らない）。 */
+    if(!syncUndoSame(syncUndoNow(r,e.field),x.to)){ moved.push(x.title||x.asin); return; }
+    go.push({ r:r, x:x });
+  });
+  if(!go.length){
+    if(el)el.textContent='その後に変更されています（'+moved.length+'件）。戻しませんでした。';
+    return;
+  }
+  var items=go.map(function(g){
+    var o={ asin:g.r.asin, cond:g.r.cond, title:g.r.title||'' };
+    o[e.field]=(e.field==='mode')?String(g.x.from||'')
+                                 :(Number(g.x.from||0)?true:false);
+    /* 再調達中を戻すときは、一緒に消えた上限・売値も戻す。 */
+    if(g.x.extra)for(var kx in g.x.extra)o[kx]=g.x.extra[kx];
+    return o;
+  });
+  if(el)el.textContent='戻しています…';
+  syncJsonPost('/listings',{items:items},function(){
+    go.forEach(function(g){
+      if(e.field==='mode')g.r.mode=String(g.x.from||'');
+      else g.r[e.field]=Number(g.x.from||0)?1:0;
+      if(e.field==='pb_skip'&&!Number(g.x.from||0))g.r.pb_fail=0;
+      if(g.x.extra)for(var kx in g.x.extra)g.r[kx]=g.x.extra[kx];
+    });
+    e.done=true; syncUndoSave();
+    syncSaveCache(); syncUndoHide(); syncRender();
+    if(el)el.textContent='戻しました：'+syncUndoName('sync',e.field)+' '+go.length+'件'
+      +(moved.length?('／その後に変更されていた '+moved.length+'件はそのままです'):'');
+  },function(why){
+    if(el)el.textContent='戻せませんでした：'+why;
+  });
+}
+/* 出品CSVの印を戻す。記録はこの端末なので、pj-sync のURL・キーは要らない
+   （「値下げしない」だけは D1 にも送る＝同じ切り替えの道を通す）。 */
+function csvUndoApply(e,el){
+  var go=[], moved=[];
+  e.items.forEach(function(x){
+    var r=csvRowById(x.id);
+    if(!r){ moved.push(x.title||x.id); return; }
+    /* 戻す前に、いまの値を確かめる（別の操作で変わっていたら触らない）。 */
+    if(!syncUndoSame(csvUndoVal(r,e.field),x.to)){ moved.push(x.title||x.id); return; }
+    go.push({ r:r, x:x });
+  });
+  if(!go.length){
+    if(el)el.textContent='その後に変更されています（'+moved.length+'件）。戻しませんでした。';
+    return;
+  }
+  go.forEach(function(g){
+    if((CSV_UNDO_FIELDS[e.field]||{}).kind==='text'){
+      g.r[e.field]=String(g.x.from||''); return;
+    }
+    var want=Number(g.x.from||0)?true:false;
+    if(e.field==='markStop'){
+      if(!!csvMarkStopOf(g.r)!==want)csvMarkStopToggle(g.r);
+      return;
+    }
+    g.r[e.field]=want;
+    /* 発送が早いは eBay のポリシーも変わるので、出し直す名前を控え直す。 */
+    if(e.field==='fastShip'&&String(g.r.itemId||'').trim())
+      g.r.shipNeed=csvShipProfileFor(g.r);
+  });
+  e.done=true; syncUndoSave();
+  csvSaveList(); csvRender(); syncUndoHide(); syncHistRender();
+  if(el)el.textContent='戻しました：'+syncUndoName('csv',e.field)+' '+go.length+'件'
+    +(moved.length?('／その後に変更されていた '+moved.length+'件はそのままです'):'');
+}
+/* 履歴の一覧。新しい順に出す。 */
+function syncHistRender(){
+  var box=$('syncHistList'); if(!box)return;
+  var sum=$('syncHistSum');
+  var left=syncUndoList.filter(function(e){ return !e.done&&!e.noundo; }).length;
+  if(sum)sum.textContent='操作の履歴'+(left?('（戻せる '+left+'件）'):'');
+  if(!syncUndoList.length){
+    box.innerHTML='<div class="note2">まだありません。</div>';
+    return;
+  }
+  var h='';
+  syncUndoList.forEach(function(e){
+    var first=e.items[0]||{};
+    var show=(e.scope==='csv')
+      ? (first.id?('csv:'+first.id):'')
+      : (first.asin?('sync:'+first.asin+'|'+first.cond):'');
+    h+='<div style="border-top:1px solid var(--line);padding:5px 0;font-size:12px">'
+      +'<span style="opacity:.7">'+esc(String(e.at||'').slice(5,16).replace('T',' '))
+      +'</span>　'+esc(syncUndoText(e))
+      +(e.noundo
+        ? '<br><span style="color:var(--bad)">eBay への変更は戻せません</span>'
+        : (e.done?'<br><span style="opacity:.7">戻し済み</span>':''))
+      +'<div style="display:flex;gap:6px;margin-top:3px">'
+      +((e.noundo||e.done)?''
+        :('<button class="btn" data-undo="'+esc(e.id)+'" style="padding:4px 8px;'
+          +'font-size:12px">戻す</button>'))
+      +(show
+        ? ('<button class="btn" data-ushow="'+esc(show)+'"'
+           +' style="padding:4px 8px;font-size:12px">この商品を表示</button>')
+        : '')
+      +'</div></div>';
+  });
+  box.innerHTML=h;
+}
+/* 絞り込みに関係なく、その行を出す（6.69）。 */
+function syncHistShow(key){
+  $('syncFilter').value='all';
+  syncPage=1; syncRender();
+  /* 一覧と同じ並び（絞り込み「すべて」）で何番目かを見て、そのページを出す。 */
+  var per=pagePer('syncPerPage'), i=-1;
+  ((syncData&&syncData.items)||[]).filter(syncMatch).forEach(function(r,k){
+    if(r.asin+'|'+r.cond===key)i=k; });
+  if(i<0){ $('syncHistNote').textContent='この商品は一覧にありません（取り込み直してください）。'; return; }
+  syncPage=Math.floor(i/per)+1;
+  syncRender();
+  var el=document.querySelector('#syncList [data-srow="'+key+'"]');
+  if(el){
+    el.scrollIntoView({block:'center'});
+    el.style.outline='2px solid var(--good)';
+    setTimeout(function(){ el.style.outline=''; },2500);
+  }
+}
+/* 絞り込みに関係なく、出品CSVのその行を出す（6.69）。 */
+function csvHistShow(id){
+  var r=csvRowById(id);
+  if(!r){ $('syncHistNote').textContent='この行は出品CSVにありません（消したあとです）。'; return; }
+  switchTab('D');
+  $('csvFilter').value='all';
+  csvPage=1; csvRender();
+  /* 一覧と同じ並び（絞り込み「すべて」）で何番目かを見て、そのページを出す。 */
+  var per=pagePer('csvPerPage'), i=-1;
+  csvSorted().filter(csvMatchFilter).forEach(function(x,k){ if(x.id===id)i=k; });
+  if(i<0){ $('syncHistNote').textContent='この行は一覧にありません。'; return; }
+  csvPage=Math.floor(i/per)+1;
+  csvRender();
+  var el=document.querySelector('#csvList [data-row="'+id+'"]');
+  if(el){
+    el.scrollIntoView({block:'center'});
+    el.style.outline='2px solid var(--good)';
+    setTimeout(function(){ el.style.outline=''; },2500);
+  }
+}
+$('syncUndoBtn').onclick=function(){
+  var id=$('syncUndoBar').getAttribute('data-undo');
+  if(id)syncUndoRun(id,'syncFixNote');
+};
+$('syncUndoClose').onclick=syncUndoHide;
+$('syncHistUndo').onclick=function(){
+  var e=null;
+  syncUndoList.forEach(function(x){ if(!e&&!x.done&&!x.noundo)e=x; });
+  if(!e){ $('syncHistNote').textContent='戻せる操作がありません。'; return; }
+  syncUndoRun(e.id,'syncHistNote');
+};
+$('syncHistClear').onclick=function(){
+  if(!confirm('操作の履歴を消します（eBay や印は変わりません）。よろしいですか？'))return;
+  syncUndoList=[]; syncUndoSave(); syncHistRender();
+  $('syncHistNote').textContent='履歴を消しました。';
+};
+$('syncHistList').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var id=t.getAttribute('data-undo');
+  if(id){ syncUndoRun(id,'syncHistNote'); return; }
+  var k=t.getAttribute('data-ushow');
+  if(k){
+    if(k.indexOf('csv:')===0)csvHistShow(k.slice(4));
+    else syncHistShow(k.slice(5));
+  }
+});
 /* 在庫0時の動作を pj-sync に送る（6.66）。 */
 function syncModeSend(t,r,want){
   var u=syncUrl();
   if(!syncKeyReady('syncFixNote'))return;
+  var wasMode=String(r.mode||'');         // 押す前の値（6.69）
   var back=t.textContent;
   t.disabled=true; t.textContent='送信中…';
   fetch(u+'/listings',{method:'POST',
@@ -12144,6 +12486,9 @@ function syncModeSend(t,r,want){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r.mode=want;
       syncSaveCache();
+      syncUndoPush({ field:'mode',
+        items:[{ asin:r.asin, cond:r.cond, title:r.title||r.asin,
+                 from:wasMode, to:want }] });
       $('syncFixNote').textContent='在庫0時の動作を「'+SYNC_ZERO_NAME[want]+'」にしました：'
         +(r.title||r.asin)+'　（'+r.asin+'）'
         /* 再調達にしたときは、何が起きるかを1行で添える（6.67）。 */
@@ -12160,6 +12505,7 @@ function syncModeSend(t,r,want){
 function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
   if(!syncKeyReady('syncFixNote'))return;
+  var was=syncUndoNow(r,field);          // 押す前の値（6.69）
   var body={asin:r.asin, cond:r.cond, title:r.title||''};
   body[field]=want;
   var back=t.textContent;
@@ -12176,6 +12522,11 @@ function syncFlagSend(t,r,field,want,label){
       syncSaveCache();
       $('syncFixNote').textContent=label+'を'+(want?'オン':'オフ')+'にしました：'
         +(r.title||r.asin)+'　（'+r.asin+'）';
+      /* 押し間違いを戻せるように、履歴に残して帯を出す（6.69）。 */
+      if(SYNC_UNDO_FIELDS[field])
+        syncUndoPush({ field:field,
+          items:[{ asin:r.asin, cond:r.cond, title:r.title||r.asin,
+                   from:was, to:(want?1:0) }] });
       syncRender();
     })
     .catch(function(e){
@@ -12188,6 +12539,11 @@ function syncFlagSend(t,r,field,want,label){
    出品リストの mode（在庫0のときの動作）には触らない。 */
 function syncRestockingSend(t,r,on,label){
   if(!syncKeyReady('syncFixNote'))return;
+  var wasR=Number(r.restocking||0)?1:0;   // 押す前の値（6.69）
+  /* 印を下ろすと Worker 側で上限・売値も消えるので、戻せるように控えておく。 */
+  var wasX={ restock_price:+r.restock_price||0,
+             restock_max_cost:+r.restock_max_cost||0,
+             restock_skip_acc:Number(r.restock_skip_acc||0)?1:0 };
   var back=t.textContent;
   var body={asin:r.asin, cond:r.cond, title:r.title||'', restocking:on};
   if(on){
@@ -12217,6 +12573,9 @@ function syncRestockingSend(t,r,on,label){
       }
       syncSaveCache();
       $('syncFixNote').textContent=label+'：'+(r.title||r.asin)+'　（'+r.asin+'）';
+      syncUndoPush({ field:'restocking',
+        items:[{ asin:r.asin, cond:r.cond, title:r.title||r.asin,
+                 from:wasR, to:(on?1:0), extra:(on?null:wasX) }] });
       syncRender();
     })
     .catch(function(e){
@@ -12825,7 +13184,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v168';   // sw.js の const V と必ず同じ値にする
+var APP_V='v169';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

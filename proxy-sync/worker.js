@@ -3921,7 +3921,9 @@ async function putListings(env, body) {
     }
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope || "unknown", String(x.title || "")));
     stmts.push(env.DB.prepare(
-      `UPDATE items SET mode=COALESCE(?3, mode),
+      /* 在庫0時の動作。空文字（''）を送ると「未設定」に戻す
+         （行ボタンの押し間違いを戻す＝6.69 で使う）。 */
+      `UPDATE items SET mode=CASE WHEN ?3='' THEN NULL ELSE COALESCE(?3, mode) END,
          one_off=COALESCE(?4, one_off),
          -- 一点物の指定が来たら「人が決めた」印も立てる
          one_off_known=CASE WHEN ?4 IS NULL THEN one_off_known ELSE 1 END,
@@ -3992,7 +3994,8 @@ async function putListings(env, body) {
          restock_skip_acc=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?12, restock_skip_acc) END,
          updated_at=?8
        WHERE asin=?1 AND cond=?2`
-    ).bind(k.asin, k.cond, x.mode ? String(x.mode) : null,
+    ).bind(k.asin, k.cond,
+           (x.mode === "") ? "" : (x.mode ? String(x.mode) : null),
            flagOf(x, "one_off"), flagOf(x, "fba_link"),
            String(x.item_id || ""), label, nowIso(), flagOf(x, "on_hand"),
            numOf(x, "restock_price"), numOf(x, "restock_max_cost"),

@@ -73,7 +73,7 @@ function harness(title){
 async function openCsvBoxes(page){
   await page.evaluate(()=>{
     ['csvListBox','csvTrashBox','syncPriceBox','syncMoreBox',
-     'syncListBox','csvStockBox','csvReviewBox'].forEach(function(id){
+     'syncListBox','csvStockBox','csvReviewBox','syncHistBox'].forEach(function(id){
       var el=document.getElementById(id); if(el)el.open=true;
     });
     Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
