@@ -198,6 +198,8 @@ ok(st.posts.length===0,'★★確認で「いいえ」なら送らない');
 console.log('\n=== 選んだ行をまとめて（10件ずつ・ItemID のある行だけ）===');
 dlg=[];
 await p.evaluate(()=>{ window.__posts=[]; window.__mode='reuse';
+  /* 前の節で付いた「eBay 保管済み」の印を外してから測る（6.64）。 */
+  syncData.items.forEach(function(r){ r.pics_eps=0; r.pics_n=null; });
   syncPick={}; syncRender();
   ['B0PIC00001','B0PIC00002','B0PIC00003'].forEach(function(a){
     syncPick[a+'|used']=true; });
@@ -216,6 +218,7 @@ ok(/まとめて切り替え：2／2件/.test(st.note),'★できた件数を出
 
 console.log('\n=== 10件を超えたら分けて送る ===');
 await p.evaluate(()=>{ window.__posts=[]; syncPick={};
+  syncData.items.forEach(function(r){ r.pics_eps=0; r.pics_n=null; });
   /* 11件になるように行を足す（ItemID は連番）。 */
   const base=syncData.items[0];
   for(var i=8;i<=13;i++){
@@ -256,6 +259,42 @@ ok(mark.ids.length===1&&mark.skip===1,
 ok(/eBay 保管済み 3枚/.test(mark.badge),'★★「eBay 保管済み」の印を出す');
 ok(mark.filter==='false/true','★★絞り込み「写真の切り替えが必要」は未切り替えだけ');
 ok(/切り替えが必要：/.test(mark.gate)&&mark.need>0,'★★必要な件数を出す');
+
+console.log('\n=== 切り替えたら「切り替えが必要」の件数も減る（6.64）===');
+const before=await p.evaluate(()=>{
+  syncData.items.forEach(function(r){ r.pics_eps=0; r.pics_n=null;
+    r.ebay_qty=1; r.ebay_start=new Date(Date.now()-48*3600000).toISOString(); });
+  syncPick={}; syncRender();
+  return { need:syncPicsNeedN(), gate:$('syncPicsGate').textContent,
+    list:syncData.items.filter(syncPicsNeed).length };
+});
+console.log('   前: '+JSON.stringify(before));
+ok(before.need===before.list&&/切り替えが必要：/.test(before.gate),
+   '★切り替える前は、必要な件数を出している');
+await p.evaluate(()=>{
+  window.__posts=[]; window.__mode='fresh';
+  syncPick={};
+  syncPick[syncData.items[0].asin+'|used']=true;
+  syncPick[syncData.items[1].asin+'|used']=true;
+  syncRender(); $('syncPicsBox').open=true;
+});
+await p.click('#syncPicsBulk');
+await p.waitForTimeout(600);
+const after=await p.evaluate(()=>{
+  const a=syncData.items[0];
+  const d=document.querySelector('#syncList [data-srow="'+a.asin+'|used"]');
+  return { need:syncPicsNeedN(), gate:$('syncPicsGate').textContent,
+    list:syncData.items.filter(syncPicsNeed).length,
+    eps:Number(a.pics_eps||0), badge:d?d.innerText:'' };
+});
+console.log('   後: '+JSON.stringify({need:after.need,list:after.list,eps:after.eps}));
+console.log('   '+after.gate);
+ok(after.need===before.need-2,'★★切り替えた2件ぶん、件数が減る');
+ok(after.need===after.list,'★★件数と一覧の数が合う');
+ok(after.eps===1&&/eBay 保管済み/.test(after.badge),
+   '★★切り替えた行にその場で印が付く');
+ok(after.gate.indexOf('切り替えが必要：'+after.need+'件')>=0,
+   '★★欄の「切り替えが必要：n件」も新しくなる');
 
 console.log('\n=== 選んでいないとき・送れなかったとき ===');
 await p.evaluate(()=>{ window.__posts=[]; syncPick={}; syncRender();

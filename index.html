@@ -9512,6 +9512,7 @@ function syncMarkHtml(r){
 function syncMarkBarRender(){
   syncMdBarRender();
   syncRvBarRender();        // 売値の自動反映（値上げ）の帯
+  syncPicsGate();           // 写真の切り替え：使える／必要な件数（6.64）
   var el=$('syncMarkBar'); if(!el)return;
   /* CSVで下げる行だけを数える。自動値下げがオン／予定だけ表示のときは、
      自動値下げが拾う行は外す（押しても二重に下げないため）。 */
@@ -9755,6 +9756,31 @@ function syncPicsErrClear(r){
   var k=syncPicsKey(r);
   if(syncPicsErrs[k]){ delete syncPicsErrs[k]; syncPicsErrSave(); }
 }
+/* 切り替えが通った行を、その場で「eBay 保管済み」にする（6.64）。
+   これをしないと、絞り込みの一覧からは消えるのに
+   「切り替えが必要：n件」の数だけ古いままになる。 */
+function syncPicsMark(it){
+  var id=String((it&&it.item_id)||'').replace(/[^0-9]/g,'');
+  if(!id)return null;
+  var hit=null;
+  ((syncData&&syncData.items)||[]).forEach(function(r){
+    if(String(r.ebay_item_id||'').replace(/[^0-9]/g,'')===id)hit=r;
+  });
+  if(!hit)return null;
+  hit.pics_eps=1;
+  hit.pics_n=((it.after&&it.after.n)||hit.pics_n||0);
+  syncPicsErrClear(hit);
+  return hit;
+}
+/* 切り替えられなかった行の理由を控える（「対応が必要」に出す）。 */
+function syncPicsMarkNg(it,why){
+  var id=String((it&&it.item_id)||'').replace(/[^0-9]/g,'');
+  if(!id)return;
+  ((syncData&&syncData.items)||[]).forEach(function(r){
+    if(String(r.ebay_item_id||'').replace(/[^0-9]/g,'')===id)
+      syncPicsErrSet(r,why||(it&&it.error)||'切り替えられませんでした');
+  });
+}
 /* 出品してから24時間以内か（自動で切り替える新しい出品）。 */
 function syncPicsNew(r){
   var t=Date.parse(String((r||{}).ebay_start||''));
@@ -9847,12 +9873,18 @@ function syncPicsRun(ids,label){
         ((d&&d.items)||[]).forEach(function(it){
           if(it.done){
             done++;
+            /* 行にも印を付ける。件数と一覧が食い違わないように（6.64）。 */
+            syncPicsMark(it);
             /* 1件お試しで直ったら、まとめての切り替えを使えるようにする。 */
             if(ids.length===1&&!it.skipped)syncPicsProve();
+          }else{
+            syncPicsMarkNg(it);
           }
           html+=syncPicsOneHtml(it);
         });
         res.innerHTML=html;
+        /* 一覧・絞り込みの件数・「切り替えが必要：n件」をそろえ直す（6.64）。 */
+        syncSaveCache(); syncRender();
         step(k+1);
       },
       function(why){
@@ -9894,9 +9926,8 @@ function syncPicsAutoRun(done){
       var it=((d&&d.items)||[])[0]||{};
       if(it.done){
         okN++;
-        r.pics_eps=1;
-        r.pics_n=(it.after&&it.after.n)||0;
-        syncPicsErrClear(r);
+        if(!syncPicsMark(it)){ r.pics_eps=1; r.pics_n=(it.after&&it.after.n)||0;
+                               syncPicsErrClear(r); }
       }else{
         ngN++;
         syncPicsErrSet(r,it.error||'切り替えられませんでした');
@@ -12463,7 +12494,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v163';   // sw.js の const V と必ず同じ値にする
+var APP_V='v164';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
