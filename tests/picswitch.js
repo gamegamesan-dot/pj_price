@@ -40,6 +40,14 @@ const setup=async(role)=>await p.evaluate((role)=>{
     if(/\/ebay\/pics\/switch/.test(url)){
       window.__posts.push(body);
       if(window.__fail)return res({error:'too_many',max:5},400);
+      const small=(window.__mode==='small');    // 小さくて送らなかった回
+      if(small)return res({ ok:false, n:1, mode:'fresh', done:0, items:[
+        { ok:false, item_id:(body.item_ids||[])[0], title:'Satan Gundam SDX Figure',
+          done:false, fixed_by:'', changed:false, n_before:3,
+          error:'写真が小さくなりました（400×300・長辺500px未満）。'
+            +'元の写真（pj-img）のURLを指定してやり直してください',
+          before:{ n:3, ext_n:1, picture_source:'Vendor', eps_only:false },
+          after:null }]});
       const lost=(window.__mode==='lost');      // 写真が減った回
       const items=(body.item_ids||[]).map(function(id){
         if(lost)return { ok:false, item_id:id, title:'Satan Gundam SDX Figure',
@@ -259,6 +267,19 @@ ok(mark.ids.length===1&&mark.skip===1,
 ok(/eBay 保管済み 3枚/.test(mark.badge),'★★「eBay 保管済み」の印を出す');
 ok(mark.filter==='false/true','★★絞り込み「写真の切り替えが必要」は未切り替えだけ');
 ok(/切り替えが必要：/.test(mark.gate)&&mark.need>0,'★★必要な件数を出す');
+
+console.log('\n=== 送る前に止めた行の見せ方（6.65）===');
+await p.evaluate(()=>{ window.__posts=[]; window.__mode='small'; });
+await p.click('#syncPicsOne');
+await p.waitForTimeout(400);
+st=await p.evaluate(()=>({res:$('syncPicsRes').textContent}));
+console.log('   '+st.res.replace(/\s+/g,' ').trim());
+ok(/送っていません（出品は変わっていません）/.test(st.res),
+   '★★止めた行は「送っていません（出品は変わっていません）」と出す');
+ok(!/後：写真0枚/.test(st.res),'★★「後：写真0枚」とは出さない');
+ok(/写真が小さくなりました/.test(st.res),'★止めた理由はそのまま出す');
+ok(/前：写真3枚/.test(st.res),'★前の枚数は出す');
+await p.evaluate(()=>{ window.__mode='fresh'; });
 
 console.log('\n=== 切り替えたら「切り替えが必要」の件数も減る（6.64）===');
 const before=await p.evaluate(()=>{

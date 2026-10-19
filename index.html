@@ -9820,10 +9820,16 @@ function syncPicsOneHtml(it){
   var line=function(t,p){
     return t+'：写真'+(p.n||0)+'枚／自前ホストの紐づけ '+(p.ext_n||0)+'件'
       +'／PictureSource '+esc(p.picture_source||'—'); };
+  /* 送る前に止めた行は「後：写真0枚」ではなく、出品が変わっていないことを出す（6.65）。 */
+  var after=(a&&a.n!==undefined&&a.n!==null)
+    ? line('後',a)
+    : (it.changed
+       ? '後：eBay には送りましたが、確かめられませんでした（取り込み直してください）'
+       : '後：<b>送っていません（出品は変わっていません）</b>');
   return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);border-radius:6px">'
     +'<b>'+esc(it.item_id)+'</b>'+(it.title?('　'+esc(String(it.title).slice(0,40))):'')
     +'<br>'+line('前',b)
-    +'<br>'+line('後',a)
+    +'<br>'+after
     +'<br>'+(it.done?('✅ '+how)
       :('<span style="color:var(--bad);font-weight:700">⚠ '
         +esc(it.error||'直りませんでした')+'</span>'))
@@ -12494,7 +12500,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v164';   // sw.js の const V と必ず同じ値にする
+var APP_V='v165';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

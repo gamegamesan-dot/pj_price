@@ -2848,6 +2848,9 @@ async function picSwitchOnce(env, run, token, itemId, srcUrls) {
     t.error = "ReviseFixedPriceItem が失敗：" + t.revise.why;
     return t;
   }
+  /* ここから先は eBay に送ってある（出品が変わっている）。
+     画面が「送っていません」と出さないための印（6.65）。 */
+  t.changed = true;
   const after = await getItemPics(env, run, token, itemId);
   t.after = after.pictures || null;
   if (!after.ok) { t.error = "切り替えたあとの GetItem に失敗：" + (after.error || after.ack); return t; }
@@ -2884,6 +2887,7 @@ async function jobPicSwitch(env, itemId, urls) {
     out.expiration = t.expiration || "";
     out.missing = t.missing || 0;
     out.restore = t.restore || 0;
+    out.changed = !!t.changed;
     out.ok = out.done;
     /* 通った出品には「eBay 保管済み」の印を付け、二度切り替えないようにする（7.46）。 */
     if (out.done) {

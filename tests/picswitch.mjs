@@ -144,6 +144,7 @@ ok(it.before.ext_n===1&&it.before.picture_source==='Vendor',
 ok(it.after.ext_n===0&&it.after.eps_only===true&&it.after.picture_source==='EPS',
    '★★後は紐づけが消えて eBay 保管だけになる');
 ok(it.after.n===3&&it.n_before===3&&it.n_after===3,'★枚数は変わらない');
+ok(r.body.items[0].changed===true,'★送ったときは「送った」と分かる形で返す');
 ok(revises().length===1,'★Revise は1回だけ');
 ok(!/StartPrice|Quantity|<Title>/.test(revises()[0].body),
    '★★実際に送った中身にも価格・数量・タイトルは入らない');
@@ -182,6 +183,8 @@ console.log('   '+JSON.stringify({done:sm.done,error:sm.error,
   eps:sm.tries[0].eps.map((e)=>e.w+'×'+e.h)}));
 ok(sm.done===false&&/写真が小さくなりました/.test(sm.error||''),
    '★★長辺500px未満なら「写真が小さくなりました」と止める');
+ok(r.body.items[0].changed===false&&!r.body.items[0].after,
+   '★★eBay に送っていないことが分かる形で返す（画面で「送っていません」と出す）');
 ok(/400×300/.test(sm.error||''),'★大きさも出す');
 ok(revises().length===0,'★★Revise は送らない（21919137 を出さない）');
 
