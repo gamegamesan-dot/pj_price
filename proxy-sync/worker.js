@@ -29,6 +29,11 @@
  *   POST /sync      … 手動実行（kind: orders / inventory / rollcall / sweep / pricing / notify）
  */
 
+/* 値付けの式。pj_price（index.html）と**同じファイル**を読む（C段・2026-10-20）。
+   式はあちらだけにあり、ここでは PRICING 越しに呼ぶ。
+   wrangler（esbuild）が module.exports を取り込むので、import でそのまま使える。 */
+import PRICING from "../shared/pricing.js";
+
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
 const SP_HOST = "https://sellingpartnerapi-fe.amazon.com";
@@ -1065,6 +1070,30 @@ async function fxGet(env, run, force) {
   } catch (e) { /* 設定が読めなくても既定値で続ける */ }
   return { rate: FX_DEFAULT, at: "", src: "", from: "default" };
 }
+
+/* ---- 値付けの設定（7.51）----
+   pj_price が /settings に送った値（6.73）と、Worker が自分で取った為替（7.50）から
+   shared/pricing.js に渡す「設定オブジェクト」を作る。
+   広告料率は**「自動処理の広告料率」（autoAdRate・既定6%）**を使う。
+   eBayタブの adRate はその場の計算用なので送られてこない（6.74）。 */
+async function pricingSettings(env, run) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  let fx = null;
+  try { fx = await fxGet(env, run || newRun("fx"), false); } catch (e) { fx = null; }
+  const S = PRICING.settings({
+    fx: (fx && fx.rate) || st.fx,
+    fxc: st.fxc, fee: st.fee, intlFee: st.intlFee,
+    adRate: (st.autoAdRate === undefined || st.autoAdRate === null || st.autoAdRate === "")
+      ? AUTO_AD_DEFAULT : st.autoAdRate,
+    feeTax: st.feeTax, fixed: st.fixed, pack: st.pack, shipCharge: st.shipCharge,
+    usTaxRate: st.usTaxRate, baseProfit: st.baseProfit, linkRate: st.linkRate,
+    saleRate: st.saleRate, targetMode: st.targetMode,
+    dutyShip: st.dutyShip, taxRefund: st.taxRefund, stampDisc: st.stampDisc,
+  });
+  return { S: S, st: st, fx: fx };
+}
+const AUTO_AD_DEFAULT = 6;         // 自動処理の広告料率の既定（画面と同じ）
 
 /* ---- D1 ---- */
 async function stateGet(env, k) {
@@ -4846,6 +4875,24 @@ export default {
           min: FX_MIN, max: FX_MAX, note: run.notes.join(" / ") }, fx || {}),
           200, origin);
       }
+      /* 値付けの式が Worker 側でも同じ金額を出すかを確かめる窓口（7.51）。
+         ?cost=&weight=&flat= で直接計算する。出品の中身は変えない。 */
+      if (request.method === "GET" && url.pathname === "/pricing") {
+        const run = newRun("pricing");
+        const ps = await pricingSettings(env, run);
+        const num = (k, d) => {
+          const n = Number(url.searchParams.get(k));
+          return isFinite(n) ? n : d;
+        };
+        const cost = num("cost", 0), weight = num("weight", 0), flat = num("flat", 0);
+        return json({ ok: true, version: PRICING.VERSION,
+          settings: ps.S, fx: ps.fx,
+          auto_ad_rate: ps.S.adRate,        // %（自動処理の広告料率）
+          price: PRICING.priceFor(ps.S, cost, weight, flat),
+          target: PRICING.autoTarget(ps.S, cost),
+          max_cost: PRICING.maxCost(ps.S, num("price", 0), weight, flat),
+          in: { cost: cost, weight: weight, flat: flat } }, 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/settings")
         return json(await settingsGet(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/settings") {
@@ -4986,6 +5033,7 @@ export default {
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
+                        PRICING, pricingSettings, AUTO_AD_DEFAULT,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,

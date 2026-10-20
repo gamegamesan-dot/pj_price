@@ -4336,3 +4336,122 @@ Worker も自分で為替を取るようになった（7.50）ので、**どち�
 
 テストは `tests/advsync.js`（32項目）と `tests/fx.mjs`（28項目・Worker側）。
 **pj-sync のデプロイが必要。D1 の変更は無い。**
+
+## 6.74 広告料率を「その場の計算用」と「自動処理用」に分ける（2026-10-20・sw.js v174）
+
+eBayタブの「広告料率」は **0% と 5% を切り替えて見比べる**ために使う欄で、
+そのたびに自動処理の売値が動いてしまうのは困る。そこで2つに分けた。
+
+| 欄 | 置き場所 | 使う所 | pj-sync に送る |
+| --- | --- | --- | --- |
+| `adRate` 広告料率 | eBayタブ（値付け計算機） | **その場の計算だけ**（画面の明細・利益） | **送らない** |
+| `autoAdRate` **自動処理の広告料率** | ⚙設定（既定 **6%**） | 自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達、および**出品CSV・販売連携タブの推奨売値・最低売値・利益の表示** | **送る（これだけ）** |
+
+- 画面の中では設定オブジェクトを2つ作る。
+  `calcSettings()` … 計算機用（`adRate` は欄の値）。`priceModel()` が使う。
+  `pricingSettings()` … 自動処理・一覧用（`adRate` は `autoAdRate()`）。
+  `priceModelFor()` `csvPriceFor()` `csvPriceForProfit()` `syncMaxCost()` `autoTarget()` が使う。
+- `adRate` は**端末には保存する**（6.73 で直したまま）。送らないだけ。
+- Worker 側も `autoAdRate` を読む。送られてこなければ 6%（`AUTO_AD_DEFAULT`）。
+
+### 5% → 6% で金額がどれくらい変わるか（実測）
+
+切り出す前の版（v174 の1つ前）で、設定6組 × 1品50通りを 5% と 6% で測った差。
+
+| | 平均 | 最大 | 最小 |
+| --- | --- | --- | --- |
+| 推奨売値 | **+2.43%** | +3.09% | +1.42% |
+| 最低売値 | **+2.21%** | +3.16% | +1.42% |
+
+例（既定の設定）
+
+| 仕入値 | 重量 | 推奨売値 5%→6% | 最低売値 5%→6% |
+| --- | --- | --- | --- |
+| ¥1,200 | 150g | $30.28 → **$31.16**（+2.91%） | $26.59 → $27.40 |
+| ¥3,980 | 345g | $71.59 → **$73.27**（+2.35%） | $59.36 → $60.81 |
+| ¥9,000 | 345g | $138.42 → **$141.40**（+2.15%） | $110.77 → $113.21 |
+| ¥3,980 | 2,100g | $163.83 → **$168.47**（+2.83%） | $133.81 → $136.70 |
+
+**仕入値が安い行ほど上がり幅が大きい**（売値に対する手数料の重みが相対的に大きいため）。
+
+テストは `tests/pricing.js` に含めてある。
+
+## 6.75 値付けの式を shared/pricing.js に切り出す（2026-10-20・sw.js v174）
+
+**C段**。値付けの式が index.html の中にしか無く、しかも
+**すべて `$('fx')` のように画面の欄を直接読んでいた**ため、
+Worker からは使えなかった（D段で Worker が自分で目標を計算するのに必要）。
+
+### やったこと
+
+**`shared/pricing.js`（新規・約290行）に式を1か所だけ置いた。**
+index.html と pj-sync（Worker）が**同じこのファイル**を読む。
+
+```
+ブラウザ … <script src="./shared/pricing.js"></script>（inline script より前）
+Worker   … import PRICING from "../shared/pricing.js"
+テスト   … require / import
+```
+
+末尾で `globalThis.PJ_PRICING` と `module.exports` の両方に入れているので、
+素のスクリプトでも `import` でも読める（この repo にビルド工程が無いため）。
+
+**移したもの**
+
+| 中身 |
+| --- |
+| 送料表（`AIR` / `EMS` / `EMS_W`）と `airRate` `emsRate` `faceShip` |
+| 地帯・関税・切手の定数（`ZONES` `USA_ZONE` `ASIA_ZONE` `SHIP_ZONES` `ZONE3_TAX` `US_DUTY_RATE` `US_DUTY_FIXED_JPY` `STAMP_DISCOUNT` `AIRPACKET_MAX`） |
+| `ceil2` `round2` `feeBreak` |
+| `settings()`（画面の欄・D1 の設定を計算に使える形にそろえる。足りない項目は `DEFAULTS`） |
+| `autoTarget()` `model()`（＝旧 `priceModel`）`priceFor()`（＝旧 `csvPriceFor`）`priceForProfit()` `maxCost()`（＝旧 `syncMaxCost`） |
+
+**index.html に残したもの**（薄いつなぎ）
+
+- `pricingSettings()` / `calcSettings()` … 画面の欄から設定オブジェクトを作る（6.74）
+- `priceModel()` … 計算機用。`PJP.model(calcSettings(), {cost,weight,flat,target})`
+- `priceModelFor(cost,weight,flat,target)` … 行ごと用。**新しく足した**
+- `csvPriceFor` / `csvPriceForProfit` / `autoTarget` / `syncMaxCost` … 中身を1行にした
+- 定数は `PJ_PRICING.C` から読む（`const ZONES=PJC.ZONES;` など）
+- **呼び出し側（約70か所）は関数名を変えていないので触っていない**
+
+**廃止したもの：`csvWithItem`**
+「商品欄（`$('cost')` / `$('weight')`）を一時的に書き換えて `priceModel()` を呼び、
+必ず元に戻す」という仕掛けだった。仕入値・重量を引数で渡せるようになったので要らない。
+`csvSoldProfit` `csvEbayLine` `csvProfitAt` `csvSoldItemOf` `csvSoldPrice`
+`csvShipCharge` `csvNewSoldItem` `syncSoldItem` の8か所を `priceModelFor()` に直した。
+
+### 金額が変わっていないことの確かめ方
+
+切り出す**前**（v173）に `tests/_baseline.js` で金額を記録し、
+`tests/pricing-baseline.json`（約500KB）に入れてある。
+広告料率は 6%（6.74 の既定）にそろえて記録したので、
+**6% にした分の変化と、切り出した分の変化が混ざらない**。
+
+- 設定**6組**（既定／ぜんぶ変更／円式／売上比／還付のみ／切手のみ）
+  × 1品**50通り**（仕入値6段 × 重量8段 ＋ 封筒2件）＝ **300件**
+- 販売連携**14行**（仕入値なし／あり／新品／`-C`／`-L`／ホビー／新品が安い／
+  可を除く／相場あり／相場が低い／再調達中／Amazon在庫なし／フェイズB／下げる追従）
+- 見比べるのは 推奨売値・最低売値・損益分岐・採用した基準地帯・目標・
+  Amazon同等ライン・地帯ごとの係数と入金・関税・送料・手数料、
+  および Amazon基準・仕入値の上限・見直しの目標・自動値下げの設定・
+  再調達の売値・追従の目標。**金額は1セント単位、小数は 1e-9 まで一致**。
+
+結果は **300件・14行ともすべて一致**（`tests/pricing.js` 22項目、
+Worker 側は `tests/pricing.mjs` 21項目）。
+
+### 見つかった旧版の不具合（切り出しで直った）
+
+**封筒の送料（フィギュアのみ・`csvShipLoose`）が、価格モデルを受け取ったあとに
+消えていた。** 旧 `priceModel()` が返す `zoneCost(z)` は
+**グローバルの `PRICE_FLAT` を見ていた**ため、`csvWithFlat()` を抜けたあとに
+その関数を呼ぶと封筒の送料が 0 に戻り、**重量の表の送料（200gで第1地帯820円・
+第4地帯1,410円）で計算**されていた。
+
+- 推奨売値・最低売値そのものは `csvWithFlat()` の中で出していたので**正しかった**。
+  画面に出る金額に影響は無かった。
+- 式を切り出したときに `flat` を引数で閉じ込めたので直った。
+  いまはどの地帯でも封筒の送料（例320円）を使う。
+
+テストは `tests/pricing.js`（22項目）。
+基準を取り直すときは `node tests/_baseline.js`。

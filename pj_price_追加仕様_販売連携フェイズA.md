@@ -3728,6 +3728,61 @@ Worker 側にも為替が必要になる。
 テストは `tests/fx.mjs`（28項目）。
 **pj-sync のデプロイが必要。D1 の変更は無い。**
 
+## 7.51 Worker も shared/pricing.js の式を使う（2026-10-20・sw.js v174）
+
+画面側の決まりは「CSV一括出品」6.75／6.74。ここには**Worker に入れたもの**を残す。
+
+### 読み込み
+
+```js
+import PRICING from "../shared/pricing.js";
+```
+
+`shared/pricing.js` は末尾で `module.exports` と `globalThis.PJ_PRICING` の
+両方に入れているので、wrangler（esbuild）が CommonJS として取り込める。
+**この repo にビルド工程が無い**ので、素の `<script src>` でも `import` でも
+読める形にしてある。
+
+> デプロイで `../shared/pricing.js` が解決できなければ、ファイルを
+> `proxy-sync/pricing.js` に移し、index.html 側の `<script src>` も
+> そちらに向ける（式が1か所であることは変わらない）。
+
+### `pricingSettings(env, run)`
+
+`/settings`（`ui.settings`）に pj_price が送った値（6.73）と、
+Worker が自分で取った為替（7.50）から、`PRICING.settings()` に渡す
+「設定オブジェクト」を作る。
+
+- **為替は Worker が取った値を正とする**（設定の `fx` は使わない。
+  `fxGet()` が取れなかったときだけ、その中で設定値まで落ちる）。
+- **広告料率は `autoAdRate`（自動処理の広告料率・既定 `AUTO_AD_DEFAULT = 6`）**。
+  eBayタブの `adRate` は送られてこないし、来ても使わない（6.74）。
+- 足りない項目は `PRICING.DEFAULTS`。
+
+### `GET /pricing`（確かめるための窓口）
+
+`?cost=&weight=&flat=&price=` で、その場で計算して返す。出品の中身は変えない。
+
+```json
+{ "ok": true, "version": "1.0.0",
+  "settings": { … }, "fx": { "rate": 160, "from": "api" },
+  "auto_ad_rate": 6,
+  "price": { "price": 73.27, "floor": 60.81, "be": 50.37, "zone": 4, "profit": 2194.08 },
+  "target": 2194, "max_cost": 4903 }
+```
+
+**読み取りだけなので作業者のキーでも見られる。**
+画面の金額と見比べて、両方が同じ式で動いていることを確かめるのに使う。
+
+### この段ではまだ目標を計算しない
+
+C段は「式が両方から読めるようになる」ところまで。
+`rkTarget` / `pbTarget` / `rvAct` / `jobMarkdown` が目標を自分で計算するのは **D段**。
+いまはまだ pj_price が送った `rk_want` / `pb_want` / `rv_want` / `md_*` を使う。
+
+テストは `tests/pricing.mjs`（21項目）。
+**pj-sync のデプロイが必要。D1 の変更は無い。**
+
 ## 11. 作業の進め方
 1. 9章の確認結果を報告して止まる。
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。

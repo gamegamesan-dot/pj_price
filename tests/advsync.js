@@ -44,8 +44,9 @@ console.log('=== 値付けの式が使う設定をぜんぶ送る ===');
 await setup({});
 let g=await got();
 console.log('   項目数: '+Object.keys(g).length);
+/* eBayタブの広告料率（adRate）は送らない。自動処理の広告料率（autoAdRate）を送る（6.74）。 */
 const want=['targetMode','baseProfit','linkRate','saleRate','usTaxRate',
-  'fx','fxc','fee','intlFee','adRate','feeTax','fixed','pack',
+  'fx','fxc','fee','intlFee','autoAdRate','feeTax','fixed','pack',
   'dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero',
   'csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
   'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
@@ -54,7 +55,8 @@ const miss=want.filter(function(k){ return !(k in g); });
 console.log('   足りない: '+JSON.stringify(miss));
 ok(miss.length===0,'★★値付けの式が読む設定がぜんぶ入っている');
 ok(g.fx==='160'&&g.fee==='13.6'&&g.fixed==='0.40','★★手数料・為替を送る');
-ok(g.adRate==='5.0','★★広告料率も送る');
+ok(g.autoAdRate==='6','★★自動処理の広告料率を送る（既定6%）');
+ok(!('adRate' in g),'★★eBayタブの広告料率は送らない（その場の計算用・6.74）');
 ok(g.pack==='150'&&g.csvPackGame==='60'&&g.csvPackFig==='250','★梱包費とマージン');
 ok(g.syncWeight==='400'&&g.syncWeightGame==='150'&&g.csvWeightCart==='50'
    &&g.csvWeightLoose==='200','★既定重量');
@@ -94,8 +96,11 @@ ok(put.length===1&&put[0].settings.syncTol==='300',
    '★★販売連携タブの設定を触っても送る');
 
 console.log('=== 受け取ったら欄に入れる ===');
-await setup({get:{ok:true,at:'2026-10-19T23:00:00Z',settings:{
-  fx:'151.40',fee:'14.5',adRate:'7.5',pack:'200',
+/* D1 のほうが新しいときだけ採り込むので、時刻は「いまより新しい」値にする
+   （固定の日付にすると、その日を過ぎたテストが落ちる）。 */
+const FUTURE=new Date(Date.now()+3600000).toISOString();
+await setup({get:{ok:true,at:FUTURE,settings:{
+  fx:'151.40',fee:'14.5',autoAdRate:'7.5',pack:'200',
   dutyShip:true,syncSkipAcc:false,csvReviewZero:true,
   syncWeight:'450',csvMarkStep:'2',syncTol:'250',
   targetMode:'auto',baseProfit:'1200',linkRate:'30',saleRate:'15',usTaxRate:'8'}}});
@@ -103,7 +108,7 @@ let adopt=await p.evaluate(()=>{
   return new Promise(function(done){
     advPull();
     setTimeout(function(){ done({ fx:$('fx').value, fee:$('fee').value,
-      adRate:$('adRate').value, pack:$('pack').value,
+      adRate:$('autoAdRate').value, pack:$('pack').value,
       dutyShip:$('dutyShip').checked, skip:$('syncSkipAcc').checked,
       zero:$('csvReviewZero').checked, w:$('syncWeight').value,
       step:$('csvMarkStep').value, tol:$('syncTol').value,
@@ -115,7 +120,7 @@ let adopt=await p.evaluate(()=>{
 console.log('   '+JSON.stringify({fx:adopt.fx,fee:adopt.fee,adRate:adopt.adRate,
   dutyShip:adopt.dutyShip,skip:adopt.skip,zero:adopt.zero,w:adopt.w}));
 ok(adopt.fx==='151.40'&&adopt.fee==='14.5'&&adopt.pack==='200','★★数値欄に入る');
-ok(adopt.adRate==='7.5','★★広告料率も入る');
+ok(adopt.adRate==='7.5','★★自動処理の広告料率も入る');
 ok(adopt.dutyShip===true&&adopt.skip===false&&adopt.zero===true,
    '★★チェック欄にも入る');
 ok(adopt.w==='450'&&adopt.step==='2'&&adopt.tol==='250','★★販売連携側の設定も入る');
@@ -124,6 +129,7 @@ console.log('   端末の保存: csvcfg syncWeight='+adopt.cfg.syncWeight
   +' / ui fee='+adopt.ui.fee+' / ui dutyShip='+adopt.ui.dutyShip);
 ok(adopt.cfg.syncWeight==='450'&&adopt.cfg.syncSkipAcc===false,
    '★★受け取った値を端末（csvcfg）にも保存する');
+ok(adopt.cfg.autoAdRate==='7.5','★★自動処理の広告料率も端末に保存する');
 ok(adopt.ui.fee==='14.5'&&adopt.ui.dutyShip===true,
    '★★端末（ui）にも保存する');
 

@@ -36,7 +36,9 @@ const setup=async()=>{
       // ② ベストオファーを使っていない
       it('B0BO000002',{ebay_bo:0,ebay_bo_decline:null}),
       // ③ 自動承諾が新しい売値以上
-      it('B0BO000003',{ebay_bo:1,ebay_bo_accept:22.50,ebay_bo_decline:10})]};
+      /* 自動承諾額を**新しい売値よりはっきり上**にしておく（下げる対象になる行）。
+         広告料率が変わると新しい売値も動くので、ぎりぎりの値にしない。 */
+      it('B0BO000003',{ebay_bo:1,ebay_bo_accept:60,ebay_bo_decline:10})]};
     csvList=[]; csvSaveList(); syncPick={}; syncSent={};
     switchTab('E'); syncRender();
   },DAY);

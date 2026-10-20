@@ -1018,6 +1018,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
       <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="row cfgprice"><label>自動処理の広告料率</label><input type="number" id="autoAdRate" value="6" step="0.5" min="0" max="100" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2 cfgprice" style="margin:0 0 8px">自動の処理（<b>自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達</b>）と、<b>出品CSV・販売連携タブの推奨売値・最低売値・利益の表示</b>は、この料率で計算します。<b>pj-sync に送るのはこの値だけ</b>です。eBayタブの「広告料率」はその場の計算用（0%と見比べるときなどに使い、pj-sync には送りません）。</div>
       <div class="rowv cfgprice"><label>再調達中の売値</label><select id="autoRkMode"><option value="auto" selected>自動で更新する（承認なし）</option><option value="confirm">確認してから（予定を出すだけ）</option></select><div class="note2" style="margin-top:2px">再調達中の行は「売れてから Amazon で買い直す」ので、<b>Amazon最安値が動くと利益がそのまま動きます</b>。この行だけは <b>上げも下げも</b> pj-sync が自動で eBay に反映します（上の「売値の自動反映」の対象からは外れます）。売値は<b>Amazon最安値（送料込み・中古は可を除く）を仕入値とみなした推奨売値</b>で、保存済みの仕入値は使いません。上げは赤字を解消する値段まで一度で上げ、下げは<b>最低売値より下げません</b>。差が $1未満かつ3%未満のときは更新しません。最安値が24時間より古い行は触らず、<b>最安グループが2人未満のときは下げを保留</b>します。Amazonの在庫が消えた行は<b>数量0</b>にして知らせます。1日30件まで。</div></div>
       <div class="note2" style="margin-top:0" id="autoRvCfgNote"></div>
       </div>
@@ -1402,22 +1404,18 @@ body.staff #syncOnHandFix{display:none !important}
   </footer>
 </div>
 
+<!-- 値付けの式。index.html と pj-sync（Worker）が同じこのファイルを読む（C段）。
+     下の <script> より**前**に読み込む（PJ_PRICING を使うため）。 -->
+<script src="./shared/pricing.js"></script>
 <script>
-const AIR={
- 1:[720,820,920,1020,1120,1220,1320,1420,1520,1620,1720,1820,1920,2020,2120,2220,2320,2420,2520,2620],
- 2:[750,870,990,1110,1230,1350,1470,1590,1710,1830,1950,2070,2190,2310,2430,2550,2670,2790,2910,3030],
- 3:[880,1060,1240,1420,1600,1780,1960,2140,2320,2500,2680,2860,3040,3220,3400,3580,3760,3940,4120,4300],
- 4:[1200,1410,1620,1830,2040,2250,2460,2670,2880,3090,3300,3510,3720,3930,4140,4350,4560,4770,4980,5190],
- 5:[920,1180,1440,1700,1960,2220,2480,2740,3000,3260,3520,3780,4040,4300,4560,4820,5080,5340,5600,5860]
-};
-const EMS_W=[500,600,700,800,900,1000,1250,1500,1750,2000,2500,3000,3500,4000,4500,5000];
-const EMS={
- 1:[1450,1600,1750,1900,2050,2200,2500,2800,3100,3400,3900,4400,4900,5400,5900,6400],
- 2:[1900,2150,2400,2650,2900,3150,3500,3850,4200,4550,5150,5750,6350,6950,7550,8150],
- 3:[3150,3400,3650,3900,4150,4400,5000,5550,6150,6700,7750,8800,9850,10900,11950,13000],
- 4:[3900,4180,4460,4740,5020,5300,5990,6600,7290,7900,9100,10300,11500,12700,13900,15100],
- 5:[3600,3900,4200,4500,4800,5100,5850,6600,7350,8100,9600,11100,12600,14100,15600,17100]
-};
+/* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
+   index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
+   ここからは PJ_PRICING 越しに呼ぶ。送料表・地帯・関税・切手割引の定数も同じ。
+   読み込みに失敗したら、画面が白くなる前にそれが分かるようにしておく。 */
+if(typeof PJ_PRICING==='undefined')
+  throw new Error('shared/pricing.js が読み込めていません（値付けの式）');
+var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
+const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
 const POLICY_NAME='W1000';
 // 請求送料（米国向け）の既定値。W1000 に合わせた固定額で、手入力で上書きできる。
@@ -1426,8 +1424,8 @@ const SHIP_CHARGE_EMS=35;       // 梱包後2000g超（EMS）
 
 // 仕向地セレクタの値。売値はアジア基準で決め、米国の関税と送料差は別建てで回収する。
 // ASIA_ZONE は Zone1（中国・韓国・台湾）より料金が高いので、これで建てれば Zone1 も賄える。
-const USA_ZONE=4;
-const ASIA_ZONE=2;
+const USA_ZONE=PJ_PRICING.C.USA_ZONE;
+const ASIA_ZONE=PJ_PRICING.C.ASIA_ZONE;
 
 /* フィギュア製品ラインごとの商品重量（梱包前・1個あたり）。
    2026-09-11 実測値。品目により前後する。
@@ -1499,28 +1497,15 @@ const GROUP_PLAT={
 };
 // 梱包後重量 = 商品重量×1.3 と 商品重量+200g の大きい方。
 const packedW=w=>Math.max(Math.round(w*1.3),w+200);
-const AIRPACKET_MAX=2000;   // 国際エアパケットの上限（梱包後）
+const AIRPACKET_MAX=PJ_PRICING.C.AIRPACKET_MAX;   // 国際エアパケットの上限（梱包後）
 
 const $=id=>document.getElementById(id);
 const yen=n=>(n<0?'\u2212':'')+'\u00A5'+Math.abs(Math.round(n)).toLocaleString();
 const usd=n=>'$'+n.toFixed(2);
-// 浮動小数の誤差で 31.34 が 31.35 に切り上がるのを防ぐ（微小桁を先に丸めてから切り上げ）。
-const ceil2=v=>Math.ceil(Math.round(v*1e6)/1e4)/100;
-const round2=v=>Math.round(v*100)/100;
-/* eBayは手数料を行ごとにセント単位で課金し、消費税はその小計にかかる。
-   明細と1セント単位で合わせたいので、ここでも行ごとに丸めてから合計する。
-   手数料ベース＝(商品代＋請求送料)×(1＋現地税率) で、広告料も同じベースにかかる。 */
-function feeBreak(item,ship,tax,ad,fixedUsd,feeRate,intlRate,feeTax){
-  var base=round2((item+ship)*(1+tax));
-  var f1=round2(base*feeRate), f2=round2(base*intlRate), f3=round2(base*ad);
-  var sub=round2(f1+f2+f3+fixedUsd), t=round2(sub*feeTax);
-  return {base:base,fee:f1,intl:f2,ad:f3,fixed:fixedUsd,sub:sub,tax:t,total:round2(sub+t)};
-}
-const airRate=(w,z)=>(w<=0||w>2000||!AIR[z])?null:AIR[z][Math.ceil(w/100)-1];
-const emsRate=(w,z)=>{if(!EMS[z])return null;for(let i=0;i<EMS_W.length;i++)if(w<=EMS_W[i])return EMS[z][i];return null;};
+// 丸め・手数料の内訳・郵便料金。式は shared/pricing.js
+const ceil2=PJP.ceil2, round2=PJP.round2, feeBreak=PJP.feeBreak;
+const airRate=PJP.airRate, emsRate=PJP.emsRate, faceShip=PJP.faceShip;
 const policyLabel=w=>POLICY_NAME+(w>AIRPACKET_MAX?'（EMS必須）':'');
-// その重量・仕向地の郵便料金（額面）。2kg超はエアパケット不可なのでEMSを見る。
-const faceShip=(w,z)=>{const air=airRate(w,z);return air!==null?air:(emsRate(w,z)||0);};
 
 (function(){let h='';for(let i=0;i<78;i++)h+='<i style="width:'+(Math.random()<.3?3:1)+'px"></i>';$('bc').innerHTML=h;})();
 
@@ -1656,7 +1641,7 @@ const TARGET_MODE_DEFAULT='auto'; // 自動（高い方）
 
 // 仕入は税込の入力値をそのまま使う。税抜換算は原価側だけの話なのでここでは効かせない。
 function autoTarget(){
-  return (+$('baseProfit').value||0)+(+$('cost').value||0)*((+$('linkRate').value||0)/100);
+  return PJP.autoTarget(pricingSettings(),+$('cost').value||0);
 }
 function targetBreakdown(){
   return '円式の目標 '+yen(autoTarget())+' ＝ '+(+$('baseProfit').value||0).toLocaleString()
@@ -1710,11 +1695,14 @@ var ADV_PB=['pbMode','pbRestock','autoRkMode'];
    ・ADV_CHECK … 値付けに入るチェック欄（真偽値なので別に扱う）
    ・ADV_PRICE … 出品CSV・販売連携タブの、値付けに入る数値欄
    1品ごとの値（cost・weight・shipCharge）は送らない。 */
-var ADV_CALC=['fx','fxc','fee','intlFee','adRate','feeTax','fixed','pack'];
+/* eBayタブの広告料率（adRate）は**送らない**（その場の計算用・6.74）。
+   自動処理が使う広告料率は autoAdRate で、こちらを送る。 */
+var ADV_CALC=['fx','fxc','fee','intlFee','feeTax','fixed','pack'];
 var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero'];
 var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
                'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
-               'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes'];
+               'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes',
+               'autoAdRate'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
@@ -1934,28 +1922,28 @@ function updateFigNote(){
 //   → us_duty(円) = 申告額(円) × 0.1374 + 562   （検算 5,000→1,249 / 10,000→1,936）
 /* 仕向地は国際エアパケットの地帯区分に合わせる。
    第5地帯（中南米・アフリカ）とヨーロッパは発送除外のため選択肢に出さない。 */
-const ZONES=[1,2,3,4];
+const ZONES=PJC.ZONES;
 const ZONE_LABEL={1:'第1地帯（中国・韓国・台湾）',2:'第2地帯（アジア）',
                   3:'第3地帯（オセアニア・カナダ・メキシコ・中近東）',4:'第4地帯（米国）'};
 const ZONE_SHORT={1:'第1',2:'第2',3:'第3',4:'第4'};
-const SHIP_ZONES={3:true,4:true};   // 請求送料を別建てする地帯（第1・第2は送料無料）
+const SHIP_ZONES=PJC.SHIP_ZONES;    // 請求送料を別建てする地帯（第1・第2は送料無料）
 // 現地税率。第3は豪州GST（2026-09-15 実売で確認）、第4は設定の想定税率を使う。
-const ZONE3_TAX=10;
+const ZONE3_TAX=PJC.ZONE3_TAX;
 // eBay手数料。2026-09-15 豪州向け実売（24-15157-02426）の明細に合わせた実測値。
 const FEE_RATE_DEFAULT=13.6;    // 落札手数料（Toys & Hobbies）
 const INTL_FEE_DEFAULT=1.35;    // 国際手数料（全仕向地）
 const FEE_TAX_DEFAULT=10;       // 手数料合計にかかる日本の消費税
 const AD_RATE_DEFAULT=5.0;      // 広告料率の初期値。設定として端末と pj-sync に保存する（6.73）
-const US_DUTY_RATE=0.1374;        // 申告額に対する率（関税12.5% + 通関手数料の変動分1.24%）
-const US_DUTY_FIXED_JPY=562;      // 通関手数料の固定分（円）
+const US_DUTY_RATE=PJC.US_DUTY_RATE;      // 申告額に対する率（関税12.5%＋通関手数料1.24%）
+const US_DUTY_FIXED_JPY=PJC.US_DUTY_FIXED_JPY;   // 通関手数料の固定分（円）
 // 切手を額面より安く買って支払う場合の原価率。
 // 2026-09-11 アクセスチケットの実勢。額面により11〜13%
 //   （500円=87%、300/270/180/140/100円=88%）。主力の構成から12%引きを採用。
 // バイヤーへの請求送料は額面のままで、この割引は自社の原価計算にだけ効く。
 // 実効率が変わったらこの定数だけ直せば、チェックボックスのラベルと
 // 明細の表示もここから生成されるので追従する。
-const STAMP_DISCOUNT=0.88;
-const STAMP_OFF_PCT=Math.round((1-STAMP_DISCOUNT)*100);   // 表示用の割引率（%）
+const STAMP_DISCOUNT=PJC.STAMP_DISCOUNT;
+const STAMP_OFF_PCT=PJC.STAMP_OFF_PCT;    // 表示用の割引率（%）
 
 /* ---- 価格モデル（calc() と出品前チェックで共有する） ----
    地帯ごとの前提と、売値Pに対する損益をここだけで決める。式を2か所に持たない。 */
@@ -1969,75 +1957,53 @@ function csvWithFlat(yen,fn){
   PRICE_FLAT=+yen||0;
   try{ return fn(); } finally{ PRICE_FLAT=old; }
 }
+/* 画面の欄から「設定オブジェクト」を作る（C段）。
+   値付けの式が読む設定はここに集める。1品ごとの値（仕入値・重量・封筒の送料）は
+   式を呼ぶときの引数で渡す。 */
+/* 自動処理の広告料率（⚙設定・既定6%）。
+   eBayタブの「広告料率」は**その場の計算用**で、0%と5%を切り替えて使う。
+   自動の処理と一覧の推奨売値は、切り替えに引っぱられないようこちらを使う。
+   pj-sync に送るのもこちらだけ（6.74）。 */
+var AUTO_AD_DEFAULT=6;
+function autoAdRate(){
+  var n=+(($('autoAdRate')||{}).value);
+  return (isFinite(n)&&n>=0&&n<=100)?n:AUTO_AD_DEFAULT;
+}
+function pricingBase(){
+  return { fx:$('fx').value, fxc:$('fxc').value, fee:$('fee').value,
+    intlFee:$('intlFee').value, feeTax:$('feeTax').value,
+    fixed:$('fixed').value, pack:$('pack').value, shipCharge:$('shipCharge').value,
+    usTaxRate:$('usTaxRate').value, baseProfit:$('baseProfit').value,
+    linkRate:$('linkRate').value, saleRate:$('saleRate').value,
+    targetMode:$('targetMode').value,
+    dutyShip:$('dutyShip').checked, taxRefund:$('taxRefund').checked,
+    stampDisc:$('stampDisc').checked };
+}
+/* 自動の処理・出品CSV・販売連携が使う設定（広告料率は「自動処理の広告料率」）。 */
+function pricingSettings(){
+  var o=pricingBase(); o.adRate=autoAdRate();
+  return PJP.settings(o);
+}
+/* 計算機（eBayタブ）が使う設定（広告料率はその場の欄）。 */
+function calcSettings(){
+  var o=pricingBase(); o.adRate=$('adRate').value;
+  return PJP.settings(o);
+}
+/* 1品ごとの仕入値・重量・封筒の送料で価格モデルを作る（C段）。
+   以前の csvWithItem（商品欄を一時的に差し替える仕掛け）の置き換え。
+   **画面の欄には触らない**。出品CSV・販売連携の行の計算はこれを使う
+   （広告料率は「自動処理の広告料率」＝pricingSettings のほう）。 */
+function priceModelFor(cost,weight,flat,target){
+  return PJP.model(pricingSettings(),
+    { cost:+cost||0, weight:+weight||0, flat:+flat||0, target:target });
+}
+/* 価格モデル。式は shared/pricing.js の model()。
+   商品欄（仕入値・重量）と PRICE_FLAT をそのまま渡す。
+   **こちらは計算機（eBayタブ）用**なので、広告料率は計算機の欄を使う。 */
 function priceModel(targetOverride){
-  var C0=+$('cost').value||0,w=+$('weight').value||0,K=+$('pack').value||0;
-  var R=+$('fx').value||1,x=(+$('fxc').value||0)/100;
-  var fRate=(+$('fee').value||0)/100, iRate=(+$('intlFee').value||0)/100;
-  var adRate=(+$('adRate').value||0)/100, fTax=(+$('feeTax').value||0)/100;
-  var F0=+$('fixed').value||0;                     // 固定手数料（ドル）
-  var dShip=$('dutyShip').checked,refund=$('taxRefund').checked;
-  var C=refund?C0/1.1:C0;
-  var stamp=$('stampDisc').checked;
-  var Gset=+$('shipCharge').value||0;              // 請求送料（別建てする地帯で使う）
-
-  function zoneTax(z){ return z===USA_ZONE?((+$('usTaxRate').value||0)/100):(z===3?ZONE3_TAX/100:0); }
-  function zoneShipCharge(z){ return SHIP_ZONES[z]?Gset:0; }
-  /* 送料（こちらの実費）。PRICE_FLAT が入っているあいだは、重量と地帯の表を使わず
-     その額（円）で固定する。フィギュアのみ（箱なし）を封筒で送るときに使う。 */
-  function zoneCost(z){
-    if(PRICE_FLAT>0)return PRICE_FLAT;
-    var fc=faceShip(w,z); return stamp?fc*STAMP_DISCOUNT:fc;
-  }
-  // 売値Pに対する係数。profit = P*den − rest（円）。
-  // netUSD = (P+G)*u − (1+消費税)*固定手数料、入金は netUSD*R*(1−為替入金コスト)。
-  function zoneCoef(z){
-    var t=zoneTax(z), u=1-(1+fTax)*(1+t)*(fRate+iRate+adRate);
-    var dr=(z===USA_ZONE)?US_DUTY_RATE:0, dFix=(z===USA_ZONE)?US_DUTY_FIXED_JPY:0;
-    var G=zoneShipCharge(z), net=R*(1-x);
-    return { den: net*u-R*dr,
-             rest: (1+fTax)*F0*net - G*net*u + (dShip?G*R*dr:0) + dFix + C + K + zoneCost(z),
-             u:u, t:t, G:G, dr:dr, dFix:dFix };
-  }
-  // 実際の損益は手数料をセント丸めして出す（eBayの明細と1円単位で合わせるため）。
-  function zoneProfit(P,z){
-    var G=zoneShipCharge(z), t=zoneTax(z);
-    var fb=feeBreak(P,G,t,adRate,F0,fRate,iRate,fTax);
-    var recv=(P+G-fb.total)*R;                    // 正味入金（円）
-    var duty=(z===USA_ZONE)?((P*R+(dShip?G*R:0))*US_DUTY_RATE+US_DUTY_FIXED_JPY):0;
-    return { fb:fb, recv:recv, fx:recv*x, duty:duty, ship:zoneCost(z),
-             profit: recv-recv*x-duty-C-K-zoneCost(z) };
-  }
-
-  var baseP=+$('baseProfit').value||0;
-  var tgtMode=$('targetMode').value;
-  var Tyen=(targetOverride===undefined||targetOverride===null)?autoTarget():targetOverride;
-  var q=(+$('saleRate').value||0)/100;
-  // 地帯ごとに必要な売値を出し、いちばん高い地帯を基準にする（＝利益がいちばん薄い地帯）。
-  var cand={}, basisZone=ZONES[0], pRec=0, basis='', rateUnreachable=false;
-  ZONES.forEach(function(z){
-    var c=zoneCoef(z), den=c.den, rest=c.rest;
-    var dnRate=den-q*R;
-    var pYen=den>0?(Tyen+rest)/den:0;
-    var pRate=dnRate>0?rest/dnRate:0;
-    var pRateFloor=den>0?(baseP+rest)/den:0;
-    var un=!(dnRate>0), pz, bs;
-    if(tgtMode==='yen'){ pz=pYen; bs='採用：円式'; }
-    else if(tgtMode==='rate'){ pz=un?pRateFloor:Math.max(pRate,pRateFloor);
-      bs='採用：売上比'+(+$('saleRate').value||0)+'%'; }
-    else{ pz=Math.max(pYen,un?0:pRate);
-      bs=(!un&&pRate>pYen)?('採用：売上比'+(+$('saleRate').value||0)+'%'):'採用：円式'; }
-    cand[z]={p:pz,basis:bs,coef:c,unreach:un};
-    if(pz>pRec){ pRec=pz; basisZone=z; basis=bs; rateUnreachable=un; }
-  });
-  if(!basis){ basis=cand[basisZone].basis; rateUnreachable=cand[basisZone].unreach; }
-  var cB=cand[basisZone].coef;
-  return { C0:C0,w:w,K:K,R:R,x:x,fRate:fRate,iRate:iRate,adRate:adRate,fTax:fTax,F0:F0,
-           dShip:dShip,refund:refund,C:C,stamp:stamp,baseP:baseP,
-           zoneTax:zoneTax, zoneShipCharge:zoneShipCharge, zoneCost:zoneCost,
-           zoneCoef:zoneCoef, zoneProfit:zoneProfit,
-           basisZone:basisZone, pRec:pRec, basis:basis, rateUnreachable:rateUnreachable,
-           denB:cB.den, restB:cB.rest,
-           floor: cB.den>0?(baseP+cB.rest)/cB.den:0 };
+  return PJP.model(calcSettings(), {
+    cost:+$('cost').value||0, weight:+$('weight').value||0,
+    flat:PRICE_FLAT, target:targetOverride });
 }
 
 function calc(){
@@ -4058,7 +4024,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 売値の見直しの自動反映（値上げ）
                  'autoRvMode','autoRvMax','autoRvPct',
                  // フェイズB（FBAで売れたときの動作・再調達の実行方法）
-                 'pbMode','pbRestock','autoRkMode'];
+                 'pbMode','pbRestock','autoRkMode',
+                 // 自動処理の広告料率（6.74）
+                 'autoAdRate'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4472,27 +4440,16 @@ function csvCatFromLine(r){
   }
   return '';
 }
-// 取り込んだ仕入原価と重量を、既存のeBay価格計算にそのまま通す。
-// 商品欄を一時的に差し替えて priceModel() を呼び、必ず元へ戻す。
-function csvWithItem(cost,weight,fn){
-  var c0=$('cost').value, w0=$('weight').value;
-  try{ $('cost').value=cost; $('weight').value=weight; return fn(); }
-  catch(e){ return null; }
-  finally{ $('cost').value=c0; $('weight').value=w0; }
-}
+/* 以前ここにあった csvWithItem（商品欄を一時的に差し替えて priceModel を呼ぶ
+   仕掛け）は、式を shared/pricing.js に出したときに廃止した（C段）。
+   いまは仕入値・重量を引数で渡すので、画面の欄を書き換えない。 */
 /* price … 推奨売値
    floor … 基準地帯の利益が「下限利益」（設定・既定1,000円）ちょうどになる売値
             ＝最低利益ライン。Best Offer の自動拒否ラインにも使っている
    be    … 基準地帯の利益が0になる売値 ＝ 損益分岐 */
 function csvPriceFor(cost,weight,flat){
-  return csvWithItem(cost,weight,function(){
-    return csvWithFlat(flat,function(){
-      var m=priceModel();
-      return { price:ceil2(m.pRec), floor:ceil2(m.floor),
-               be:ceil2(m.denB>0?(m.restB/m.denB):0), zone:m.basisZone,
-               profit:m.zoneProfit(ceil2(m.pRec),m.basisZone).profit };
-    });
-  })||{price:0,floor:0,be:0,zone:0,profit:0};
+  try{ return PJP.priceFor(pricingSettings(),cost,weight,flat); }
+  catch(e){ return {price:0,floor:0,be:0,zone:0,profit:0}; }
 }
 /* 封筒で送る行（フィギュアのみ）の送料。⚙設定で入れる。0 なら今までの送料表。 */
 function csvShipLoose(){ var n=+$('csvShipLoose').value; return (isFinite(n)&&n>0)?n:0; }
@@ -4503,17 +4460,8 @@ function csvFlatOf(r){ return (r&&r.looseOnly)?csvShipLoose():0; }
    合わせる。係数は priceModel のものをそのまま使う（式を2か所に持たない）。
    「Amazonで売ったときと同じ利益になる eBay の売値」を出すのに使う。 */
 function csvPriceForProfit(cost,weight,yen,flat){
-  if(!(yen>0))return 0;
-  return csvWithItem(cost,weight,function(){
-    return csvWithFlat(flat,function(){
-      var m=priceModel(), best=0;
-      ZONES.forEach(function(z){
-        var c=m.zoneCoef(z);
-        if(c.den>0)best=Math.max(best,(yen+c.rest)/c.den);
-      });
-      return ceil2(best);
-    });
-  })||0;
+  try{ return PJP.priceForProfit(pricingSettings(),cost,weight,yen,flat); }
+  catch(e){ return 0; }
 }
 // 梱包マージンはeBayカテゴリ別。フィギュアは箱があるぶん重い。
 function csvPackMarginFor(cat){
@@ -4552,22 +4500,18 @@ function csvThreshold(r){
 // 相場（商品代＋請求送料の総額）で売ったときの利益。基準地帯で計上する。
 function csvSoldProfit(r){
   var sold=+r.sold||0; if(!(sold>0))return null;
-  return csvWithItem(csvCostOf(r),r.weight,function(){
-    var m=priceModel();
-    var G=m.zoneShipCharge(m.basisZone);
-    if(sold<=G)return null;                        // 送料以下は誤入力
-    return m.zoneProfit(sold-G,m.basisZone).profit;
-  });
+  var m=priceModelFor(csvCostOf(r),r.weight,0);
+  var G=m.zoneShipCharge(m.basisZone);
+  if(sold<=G)return null;                          // 送料以下は誤入力
+  return m.zoneProfit(sold-G,m.basisZone).profit;
 }
 // eBay優先ライン＝目標利益にしきい値利益を渡して逆算した推奨売値の総額（USD）。
 // 既存の逆算ロジックをそのまま使う（新しい式は作らない）。
 function csvEbayLine(r){
   if(csvNoLine(r))return null;        // 仕入れ前の候補はラインを出さない
   var th=csvThreshold(r).v;
-  return csvWithItem(csvCostOf(r),r.weight,function(){
-    var m=priceModel(th);
-    return Math.round((ceil2(m.pRec)+ceil2(m.zoneShipCharge(m.basisZone)))*100)/100;
-  });
+  var m=priceModelFor(csvCostOf(r),r.weight,0,th);
+  return Math.round((ceil2(m.pRec)+ceil2(m.zoneShipCharge(m.basisZone)))*100)/100;
 }
 /* 仕入れ前の候補（M-・仮の仕入値）の行は、**eBay優先ライン・Amazon同等ライン・
    相場の判定（eBay優先／Amazon優先）を出さない**。
@@ -4896,12 +4840,8 @@ function csvTargetYen(cost){
 function csvProfitAt(cost,weight,price,flat){
   var p=+price||0;
   if(!(p>0))return null;
-  var v=csvWithItem(cost,weight,function(){
-    return csvWithFlat(flat,function(){
-      var m=priceModel();
-      return m.zoneProfit(p,m.basisZone).profit;
-    });
-  });
+  var m=priceModelFor(cost,weight,flat);
+  var v=m.zoneProfit(p,m.basisZone).profit;
   return (v===null||v===undefined)?null:Math.round(v);
 }
 /* 金額の桁数に応じて文字の大きさを1段下げるための印。
@@ -5134,10 +5074,8 @@ function csvRecOf(r){
 // 相場（総額$）→ 商品代（$）。販売連携・無在庫（新品）と同じ決まり
 function csvSoldItemOf(r){
   var sold=+r.sold||0; if(!(sold>0))return null;
-  return csvWithItem(+r.cost||0,+r.weight||0,function(){
-    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
-    return (sold<=G)?null:Math.round((sold-G)*100)/100;
-  });
+  var m=priceModelFor(+r.cost||0,+r.weight||0,0), G=m.zoneShipCharge(m.basisZone);
+  return (sold<=G)?null:Math.round((sold-G)*100)/100;
 }
 /* いまの設定で出すべき売値。相場が入っていれば soldVerdict の判定に従う
    （見送り＝利益不足・赤字の行は 0 を返し、見直しの対象にしない）。 */
@@ -5697,23 +5635,14 @@ function csvAmzRecOf(r){
    相場が未入力の行は選べない。最低売値（floor）を下回るときは最低売値で出す。 */
 function csvSoldPrice(r){
   var sold=+(r||{}).sold||0; if(!(sold>0))return 0;
-  var v=csvWithItem(csvCostOf(r),r.weight,function(){
-    return csvWithFlat(csvFlatOf(r),function(){
-      var m=priceModel();
-      return Math.round((sold-m.zoneShipCharge(m.basisZone))*100)/100;
-    });
-  });
+  var m=priceModelFor(csvCostOf(r),r.weight,csvFlatOf(r));
+  var v=Math.round((sold-m.zoneShipCharge(m.basisZone))*100)/100;
   return (v>0)?v:0;
 }
 // この行の請求送料（相場から引く額）。画面の案内に出す
 function csvShipCharge(r){
-  var v=csvWithItem(csvCostOf(r),(r||{}).weight,function(){
-    return csvWithFlat(csvFlatOf(r),function(){
-      var m=priceModel();
-      return Math.round(m.zoneShipCharge(m.basisZone)*100)/100;
-    });
-  });
-  return v||0;
+  var m=priceModelFor(csvCostOf(r),(r||{}).weight,csvFlatOf(r));
+  return Math.round(m.zoneShipCharge(m.basisZone)*100)/100||0;
 }
 // この行は「相場」で出す指定か（相場が入っていないときは選べない）
 function csvSoldMode(r){
@@ -5876,6 +5805,12 @@ $('csvShipCsv').onclick=csvShipRun;
     csvSaveCfg(); csvRender();
     if(typeof syncRender==='function'&&syncData)syncRender();
   });
+});
+/* 自動処理の広告料率（6.74）。推奨売値・最低売値が変わるので一覧も引き直す。 */
+$('autoAdRate').addEventListener('input',function(){
+  csvSaveCfg(); syncMemoClear(); csvRender();
+  if(typeof syncRender==='function'&&syncData)syncRender();
+  advTouch();
 });
 ['autoRvMax','autoRvPct'].forEach(function(id){
   $(id).addEventListener('input',function(){
@@ -7928,10 +7863,8 @@ function csvNewRec(r){
 function csvNewSoldItem(r){
   var sold=+r.sold||0; if(!(sold>0))return null;
   var low=csvNewLow(r); if(!low)return null;
-  return csvWithItem(low,+r.weight||0,function(){
-    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
-    return (sold<=G)?null:Math.round((sold-G)*100)/100;
-  });
+  var m=priceModelFor(low,+r.weight||0,0), G=m.zoneShipCharge(m.basisZone);
+  return (sold<=G)?null:Math.round((sold-G)*100)/100;
 }
 // 判断は販売連携の再調達と同じ soldVerdict（しきい値の帯も「相場から下げる額」も共通）
 function csvNewVerdict(r){
@@ -11618,10 +11551,8 @@ function syncSoldItem(r){
   var o=syncSoldGet(r); if(!o)return null;
   var w=syncWeightOf(r).v;
   var cost=syncCostOf(r).v||syncBasis(r).low||+r.amazon_lowest||0;
-  return csvWithItem(cost,w,function(){
-    var m=priceModel(), G=m.zoneShipCharge(m.basisZone);
-    return (+o.v<=G)?null:Math.round((+o.v-G)*100)/100;
-  });
+  var m=priceModelFor(cost,w,0), G=m.zoneShipCharge(m.basisZone);
+  return (+o.v<=G)?null:Math.round((+o.v-G)*100)/100;
 }
 /* 相場と推奨売値・最低利益ライン・損益分岐を比べた判断。
    kind … 'rec'   相場 ≥ 推奨売値     → 推奨売値で出す
@@ -11978,15 +11909,7 @@ function syncRestockTrouble(r){
    計算式（為替・手数料・重量）は設定で変わるので、Workerには数字だけを送る。
    損益分岐は仕入値が上がるほど上がるので、上限を二分法で探す。 */
 function syncMaxCost(price,weight){
-  var px=+price||0; if(!px)return 0;
-  if(csvPriceFor(1,weight).be>px)return 0;          // 1円でも赤字（設定が合っていない）
-  var lo=1, hi=2;
-  while(hi<5000000&&csvPriceFor(hi,weight).be<=px)hi*=2;
-  for(var i=0;i<40&&hi-lo>1;i++){
-    var mid=Math.floor((lo+hi)/2);
-    if(csvPriceFor(mid,weight).be<=px)lo=mid; else hi=mid;
-  }
-  return lo;
+  return PJP.maxCost(pricingSettings(),price,weight,0);
 }
 function syncRestockN(){
   return ((syncData&&syncData.items)||[]).filter(syncIsRestock).length;
@@ -13626,7 +13549,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v173';   // sw.js の const V と必ず同じ値にする
+var APP_V='v174';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
