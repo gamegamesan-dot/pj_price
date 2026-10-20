@@ -78,9 +78,33 @@
     taxRefund: false,   // 仕入の消費税を還付とみなす
     stampDisc: false    // 切手割引で支払う
   };
+  /* 行ごとの目標（D段）で使う設定。名前は画面の欄・D1 の設定と同じにしてある。 */
+  var ROW_DEFAULTS = {
+    syncTol: 200,          // 最安グループの許容差（円）
+    syncSkipAcc: true,     // 中古の最安値から「可」を除く
+    csvLooseAmz: 80,       // 箱なし（-L）はAmazon最安値のこの割合を基準にする（%）
+    syncWeight: 400,       // 既定重量（ホビー・g）
+    syncWeightGame: 150,   // 既定重量（ゲーム・g）
+    csvWeightCart: 50,     // 既定重量（カートリッジのみ・g）
+    csvWeightLoose: 200,   // 既定重量（フィギュアのみ・g）
+    csvShipLoose: 0,       // 封筒の送料（円。0 なら重量の表を使う）
+    syncSoldCut: 0,        // 相場に合わせるとき、相場から下げる額（$）
+    csvReviewAbs: 1,       // 見直しのしきい値（$）
+    csvReviewPct: 3,       // 見直しのしきい値（%）
+    csvReviewZero: false,  // 数量0の出品も見直しの対象にする
+    csvMarkStep: 1,        // 1回の値下げ幅の最低（$）
+    csvMarkTimes: 10,      // 値下げの回数
+    amzFeeRate: 15,        // Amazon販売手数料（%）
+    amzFbaFee: 400         // FBA配送代行手数料（円）
+  };
   var NUM_KEYS = ["fx", "fxc", "fee", "intlFee", "adRate", "feeTax", "fixed", "pack",
-                  "shipCharge", "usTaxRate", "baseProfit", "linkRate", "saleRate"];
-  var BOOL_KEYS = ["dutyShip", "taxRefund", "stampDisc"];
+                  "shipCharge", "usTaxRate", "baseProfit", "linkRate", "saleRate",
+                  "syncTol", "csvLooseAmz", "syncWeight", "syncWeightGame",
+                  "csvWeightCart", "csvWeightLoose", "csvShipLoose", "syncSoldCut",
+                  "csvReviewAbs", "csvReviewPct", "csvMarkStep", "csvMarkTimes",
+                  "amzFeeRate", "amzFbaFee"];
+  var BOOL_KEYS = ["dutyShip", "taxRefund", "stampDisc",
+                   "syncSkipAcc", "csvReviewZero"];
   var MODES = { auto: 1, yen: 1, rate: 1 };
   function numOr(v, d) {
     var n = Number(v);
@@ -96,8 +120,11 @@
      足りない項目は DEFAULTS を使う。 */
   function settings(o) {
     var src = o || {}, s = {};
-    NUM_KEYS.forEach(function (k) { s[k] = numOr(src[k], DEFAULTS[k]); });
-    BOOL_KEYS.forEach(function (k) { s[k] = boolOf(src[k], DEFAULTS[k]); });
+    var D = {}, k2;
+    for (k2 in DEFAULTS) D[k2] = DEFAULTS[k2];
+    for (k2 in ROW_DEFAULTS) D[k2] = ROW_DEFAULTS[k2];
+    NUM_KEYS.forEach(function (k) { s[k] = numOr(src[k], D[k]); });
+    BOOL_KEYS.forEach(function (k) { s[k] = boolOf(src[k], D[k]); });
     var m = String(src.targetMode || "");
     s.targetMode = MODES[m] ? m : DEFAULTS.targetMode;
     return s;
@@ -265,14 +292,283 @@
     return lo;
   }
 
+  /* ================= 行ごとの目標（D段）=================
+     r は D1 の items の行（そのままの形）。
+     over は出品リスト（端末にしか無い）の行から来る上書き（{cost,weight}）。
+     Worker は over を渡さない。 */
+  /* Amazonの出品の状態（SubCondition）。実データは小文字で返る。
+     綴りの違い（very_good / VeryGood / verygood）も同じものとして扱う。 */
+  var SUBCOND = { "new": 1, mint: 1, verygood: 1, good: 1, acceptable: 1,
+                  refurbished: 1, collectible: 1, club: 1, oem: 1, used: 1 };
+  function condKey(c) { return String(c || "").toLowerCase().replace(/[^a-z]/g, ""); }
+  function condKnown(c) { return !!SUBCOND[condKey(c)]; }
+  function isAcceptable(c) { return condKey(c) === "acceptable"; }
+  function offersOf(r) {
+    try {
+      var a = JSON.parse((r && r.amazon_offers_json) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch (e) { return []; }
+  }
+  /* 値付けの基準にする Amazon最安値。
+     ・設定「中古の最安値から『可』を除く」がオンなら、中古の基準から「可」を外す
+       （「可」しか無い／状態がまったく分からないときは外さない）
+     ・中古・カートリッジのみの行は、**新品のほうが安ければ新品**を基準にする
+     ・フィギュアのみ（箱なし）は係数（既定80%）で割り引く */
+  function basis(S, r) {
+    var all = offersOf(r);
+    var tol = S.syncTol;
+    var list = all, skipped = false;
+    if (S.syncSkipAcc && r.cond !== "new" && all.length) {
+      var keep = all.filter(function (o) { return !isAcceptable(o.c); });
+      var known = all.filter(function (o) { return condKnown(o.c); });
+      if (keep.length && known.length) { list = keep; skipped = (keep.length < all.length); }
+    }
+    var lowAll = Number(r.amazon_lowest) || (all.length ? (Number(all[0].p) || 0) : 0);
+    var low = list.length ? (Number(list[0].p) || 0) : lowAll;
+    var near = list.filter(function (o) { return (Number(o.p) || 0) <= low + tol; });
+    var usedLow = low, nw = Number(r.amazon_new_low) || 0, useNew = false;
+    if (r.cond !== "new" && nw > 0 && (!low || nw < low)) {
+      useNew = true; low = nw;
+      if (!lowAll || nw < lowAll) lowAll = nw;
+      near = [];                 // 新品側の明細は持っていない（人数は newN で数える）
+      skipped = false;           // 「可を除く」は中古の話
+    }
+    var looseCut = false;
+    if (String(r.cond || "") === "loose" && low > 0) {
+      var k = S.csvLooseAmz;
+      if (!(k > 0 && k <= 100)) k = ROW_DEFAULTS.csvLooseAmz;
+      low = Math.round(low * k / 100); looseCut = true;
+    }
+    return { low: low, lowAll: lowAll, list: list, near: near, tol: tol,
+             skipped: skipped, hasList: all.length > 0,
+             useNew: useNew, usedLow: usedLow, newLow: nw,
+             newN: Number(r.amazon_new_n || 0), looseCut: looseCut };
+  }
+  // 最安グループの人数（新品を基準にした行は新品側の人数で数える）
+  function nearN(S, r) {
+    var b = basis(S, r);
+    if (b.useNew) return b.newN;
+    if (b.hasList) return b.near.length || 0;
+    return Number(r.amazon_lowest_n || 0);
+  }
+  function defWeight(S, r) {
+    var c = String((r && r.cond) || "");
+    if (c === "cart") return S.csvWeightCart;     // 箱がないぶん軽い
+    if (c === "loose") return S.csvWeightLoose;   // 封筒。既定値は梱包込み
+    return (String((r && r.prefix) || "").toLowerCase() === "game")
+      ? S.syncWeightGame : S.syncWeight;
+  }
+  /* 実重量。from … 'list'＝出品リスト／'d1'＝D1に残した実測／'def'＝既定重量 */
+  function weightOf(S, r, over) {
+    if (over && Number(over.weight) > 0) return { v: Number(over.weight), from: "list" };
+    if (Number(r.weight_g) > 0) return { v: Number(r.weight_g), from: "d1" };
+    return { v: defWeight(S, r), from: "def" };
+  }
+  // 封筒で送る行（フィギュアのみ）の送料
+  function flatOf(S, r) {
+    return (String((r && r.cond) || "") === "loose") ? (S.csvShipLoose || 0) : 0;
+  }
+  /* 仕入値（円）。list → d1 → せどりすとSKU の順。
+     再調達中・無在庫の行は、売れてから Amazon で仕入れ直すので 0（＝Amazon最安値基準）。 */
+  function costOf(S, r, over) {
+    if (Number(r.restocking || 0) || Number(r.dropship || 0)) return { v: 0, from: "" };
+    if (over && Number(over.cost) > 0) return { v: Number(over.cost), from: "list" };
+    if (Number(r.cost_yen) > 0) return { v: Number(r.cost_yen), from: "d1" };
+    if (Number(r.sku_cost) > 0) return { v: Math.round(Number(r.sku_cost)), from: "sku" };
+    return { v: 0, from: "" };
+  }
+  // Amazon最安値を仕入値とみなした推奨売値
+  function recommend(S, r, over) {
+    var low = basis(S, r).low || Number(r.amazon_lowest) || 0;
+    if (!low) return null;
+    var wo = weightOf(S, r, over);
+    var p = priceFor(S, low, wo.v, flatOf(S, r));
+    return { price: p.price, floor: p.floor, be: p.be, profit: p.profit,
+             weight: wo.v, weightFrom: wo.from, weightDefault: (wo.from === "def") };
+  }
+  // 分かっている仕入値から出した推奨売値
+  function recCost(S, r, over) {
+    var c = costOf(S, r, over);
+    if (!(c.v > 0)) return null;
+    var w = weightOf(S, r, over);
+    var p = priceFor(S, c.v, w.v, flatOf(S, r));
+    if (!(p && p.price > 0)) return null;
+    return { price: p.price, floor: p.floor, be: p.be, profit: p.profit,
+             cost: c.v, costFrom: c.from, weight: w.v, weightFrom: w.from,
+             weightDefault: (w.from === "def") };
+  }
+  /* 値付けの基準。仕入値が分かればそれ、分からなければ Amazon最安値を仕入値とみなす。 */
+  function recOf(S, r, over) { return recCost(S, r, over) || recommend(S, r, over); }
+  /* Amazonで売ったときの利益（円）。分からない行は null。 */
+  function amzProfit(S, r, over) {
+    var low = basis(S, r).low || Number(r.amazon_lowest) || 0;
+    if (!(low > 0)) return null;
+    var c = costOf(S, r, over);
+    if (!(c.v > 0)) return null;
+    return Math.round(low * (1 - S.amzFeeRate / 100) - S.amzFbaFee - c.v);
+  }
+  /* Amazon同等ライン（Amazonで売ったときと同じ利益になる eBay の売値）。
+     「eBay優先」の行と、箱なし（Amazonでは売れない）の行では使わない。 */
+  function amzLine(S, r, over) {
+    if (Number(r.ebay_first || 0)) return null;
+    if (String(r.cond || "") === "loose") return null;
+    var p = amzProfit(S, r, over);
+    if (p === null) return null;
+    if (p <= (S.baseProfit || 0)) return null;   // 下限利益以下なら今までどおり
+    var v = priceForProfit(S, costOf(S, r, over).v, weightOf(S, r, over).v, p,
+                           flatOf(S, r));
+    return (v > 0) ? { profit: p, price: v } : null;
+  }
+  /* 最低売値（下限利益のライン）。from … 'list'/'d1'/'sku'/'amazon' */
+  function floorOf(S, r, over) {
+    var rc = recCost(S, r, over), o;
+    if (rc) o = { v: rc.floor, from: rc.costFrom };
+    else {
+      var am = recommend(S, r, over);
+      o = am ? { v: am.floor, from: "amazon" } : { v: 0, from: "" };
+    }
+    var a = amzLine(S, r, over);
+    if (a && a.price > o.v) { o.v = a.price; o.amz = true; }
+    return o;
+  }
+  /* 相場（総額$）→ 商品代（$）。請求送料を引く。 */
+  function soldItem(S, r, over, soldUsd) {
+    var v = (soldUsd === undefined || soldUsd === null)
+      ? Number(r.sold_usd || 0) : Number(soldUsd || 0);
+    if (!(v > 0)) return null;
+    var w = weightOf(S, r, over).v;
+    var cost = costOf(S, r, over).v || basis(S, r).low || Number(r.amazon_lowest) || 0;
+    var m = model(S, { cost: cost, weight: w, flat: 0 });
+    var G = m.zoneShipCharge(m.basisZone);
+    return (v <= G) ? null : Math.round((v - G) * 100) / 100;
+  }
+  /* 相場と推奨売値・最低利益ライン・損益分岐を比べた判断。
+     rec   相場 ≥ 推奨売値            → 推奨売値で出す
+     match 最低利益ライン ≤ 相場      → 相場に合わせる（相場 − 下げる額。損益分岐で止める）
+     low   損益分岐 ≤ 相場            → 見送り（利益不足）
+     loss  相場 < 損益分岐            → 見送り（赤字）
+     none  相場未入力                 → 推奨売値を使う
+     nolow Amazon最安値が未取得       → 判断できない */
+  function soldVerdict(rec, item, cut) {
+    if (!rec) return { kind: "nolow", price: 0, rec: null, sold: null };
+    if (item === null || item === undefined)
+      return { kind: "none", price: rec.price, rec: rec, sold: null };
+    if (item >= rec.price) return { kind: "rec", price: rec.price, rec: rec, sold: item };
+    if (item >= rec.floor) {
+      var c = Number(cut);
+      if (!(c >= 0)) c = 0;
+      var p = Math.round((item - c) * 100) / 100, floored = false;
+      if (p < rec.be) { p = rec.be; floored = true; }
+      return { kind: "match", price: p, rec: rec, sold: item, cut: c, floored: floored };
+    }
+    if (item >= rec.be) return { kind: "low", price: 0, rec: rec, sold: item };
+    return { kind: "loss", price: 0, rec: rec, sold: item };
+  }
+  /* いまの設定で出すべき売値。見送り（利益不足・赤字）の行は 0。 */
+  function wantPrice(S, r, over, soldUsd) {
+    var rec = recOf(S, r, over);
+    if (!rec) return 0;
+    var v = soldVerdict(rec, soldItem(S, r, over, soldUsd), S.syncSoldCut);
+    var p = 0;
+    if (v.kind === "rec" || v.kind === "match") p = v.price;
+    else if (v.kind === "none") p = rec.price;
+    if (!(p > 0)) return 0;
+    // Amazonで売ったほうが得な行は、その利益に並ぶところまで上げる
+    var a = amzLine(S, r, over);
+    return (a && a.price > p) ? a.price : p;
+  }
+  /* ---- 自動処理に渡す目標 ---- */
+  // 1回の値下げ幅。下限までを回数で割り、最低幅より小さくならないようにする
+  function mdStep(S, start, floor) {
+    var st = Number(start) || 0, f = Number(floor) || 0;
+    var n = S.csvMarkTimes, min = S.csvMarkStep;
+    if (!(st > 0) || !(f > 0) || !(st > f)) return min;
+    var v = Math.ceil((st - f) / n * 100) / 100;
+    return (v < min) ? min : v;
+  }
+  /* 売値の見直しの自動反映に渡す目標（rv_*）。 */
+  function rvTarget(S, r, over, soldUsd) {
+    var rec = recOf(S, r, over);
+    var v = soldVerdict(rec, soldItem(S, r, over, soldUsd), S.syncSoldCut);
+    var kind = (v.kind === "low" || v.kind === "loss") ? "skip"
+      : ((v.kind === "rec" || v.kind === "match" || v.kind === "none") ? v.kind : "");
+    var want = (kind === "skip") ? 0 : wantPrice(S, r, over, soldUsd);
+    var fl = floorOf(S, r, over);
+    var w = weightOf(S, r, over);
+    return { rv_kind: kind, rv_want: Math.round((want || 0) * 100) / 100,
+             rv_floor: Math.round((fl.v || 0) * 100) / 100,
+             rv_max_cost: (want > 0) ? maxCost(S, want, w.v, 0) : 0 };
+  }
+  /* 自動値下げに渡す設定（md_*）。決められない行は null。 */
+  function mdPlan(S, r, over) {
+    var now = Number(r.ebay_price) || 0, fl = floorOf(S, r, over).v;
+    if (!(now > 0) || !(fl > 0) || !(now > fl)) return null;
+    return { md_start: Math.round(now * 100) / 100,
+             md_floor: Math.round(fl * 100) / 100,
+             md_step: mdStep(S, now, fl), md_n: S.csvMarkTimes };
+  }
+  /* 再調達（フェイズB）と、再調達中の売値の追従に渡す目標。
+     どちらも **Amazon最安値を仕入値とみなした推奨売値**で、保存済みの仕入値は使わない。
+     low … { low, at, fresh, has }（鮮度は呼ぶ側が now を渡して決める） */
+  var LOW_MS = 24 * 60 * 60 * 1000;      // Amazon最安値・目標の鮮度
+  function lowOf(S, r, now) {
+    var b = basis(S, r);
+    var low = b.low || Number(r.amazon_lowest || 0) || 0;
+    var at = String(r.amazon_lowest_at || "");
+    var t = Date.parse(at);
+    var n = (now === undefined || now === null) ? Date.now() : now;
+    return { low: low, at: at, fresh: !!t && (n - t) <= LOW_MS, has: low > 0,
+             useNew: b.useNew };
+  }
+  /* 再調達で出す売値。出せないときは ok:false と理由を返す。 */
+  function pbWant(S, r, now) {
+    var lo = lowOf(S, r, now);
+    if (!lo.has) return { ok: false, why: "Amazon最安値が未取得", low: lo };
+    if (!lo.fresh) return { ok: false, why: "Amazon最安値が古い（24時間超）", low: lo };
+    var rec = recommend(S, r);        // 仕入値は使わず Amazon最安値基準
+    if (!rec) return { ok: false, why: "推奨売値を計算できません", low: lo };
+    var cur = Number(r.ebay_price || 0) || 0;
+    var price = rec.price, under = false, down = 0;
+    if (cur > 0 && price < cur) {
+      down = Math.round((1 - price / cur) * 100);
+      if (price < rec.floor) { price = rec.floor; under = true;
+        down = Math.round((1 - price / cur) * 100); }
+    }
+    return { ok: true, price: Math.round(price * 100) / 100, floor: rec.floor,
+             low: lo, down: down, under: under, rec: rec,
+             max_cost: maxCost(S, price, weightOf(S, r).v, 0) };
+  }
+  /* 再調達中の売値の追従に渡す目標（rk_*）。最安値が取れていない行は null。 */
+  function rkWant(S, r) {
+    var lo = lowOf(S, r);
+    if (!lo.has) return null;
+    var rec = recommend(S, r);
+    if (!rec) return null;
+    return { rk_want: Math.round(rec.price * 100) / 100,
+             rk_floor: Math.round((rec.floor || 0) * 100) / 100,
+             rk_low: lo.low, rk_n: nearN(S, r),
+             rk_max_cost: maxCost(S, rec.price, weightOf(S, r).v, 0) };
+  }
+
   var API = {
-    VERSION: "1.0.0",
-    C: C, DEFAULTS: DEFAULTS,
+    VERSION: "2.0.0",
+    C: C, DEFAULTS: DEFAULTS, ROW_DEFAULTS: ROW_DEFAULTS,
     settings: settings,
     ceil2: ceil2, round2: round2, feeBreak: feeBreak,
     airRate: airRate, emsRate: emsRate, faceShip: faceShip,
     autoTarget: autoTarget, model: model,
-    priceFor: priceFor, priceForProfit: priceForProfit, maxCost: maxCost
+    priceFor: priceFor, priceForProfit: priceForProfit, maxCost: maxCost,
+    /* 行ごとの目標（D段） */
+    LOW_MS: LOW_MS,
+    offersOf: offersOf, condKey: condKey, condKnown: condKnown,
+    isAcceptable: isAcceptable,
+    basis: basis, nearN: nearN, defWeight: defWeight, weightOf: weightOf,
+    flatOf: flatOf, costOf: costOf,
+    recommend: recommend, recCost: recCost, recOf: recOf,
+    amzProfit: amzProfit, amzLine: amzLine, floorOf: floorOf,
+    soldItem: soldItem, soldVerdict: soldVerdict, wantPrice: wantPrice,
+    mdStep: mdStep, rvTarget: rvTarget, mdPlan: mdPlan,
+    lowOf: lowOf, pbWant: pbWant, rkWant: rkWant
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   if (typeof globalThis !== "undefined") globalThis.PJ_PRICING = API;

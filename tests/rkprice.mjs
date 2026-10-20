@@ -144,12 +144,30 @@ ok(res.up===1&&res.skipped===2,'★★未取得・24時間より古い行は触�
 ok((await row('B0RKD00001')).ebay_price===84.36
    &&(await row('B0RKD00002')).ebay_price===84.36,'★売値はそのまま');
 
-console.log('\n=== 目標が古い行は触らない ===');
-await wipe();
+/* 7.52 から、目標が古い／未設定の行は **Worker が自分で計算する**。
+   「目標の売値が古い」で止まるのは、30分以内に pj_price から来た値が無く、
+   かつ Worker も計算できない行（Amazon最安値が無い行）だけになった。 */
+console.log('\n=== 目標が古い・未設定の行は Worker が自分で計算する（7.52）===');
+await wipe(); calls=[];
 await seed('B0RKE00001',{rk_want_at:ago(DAY+60000)});
 await seed('B0RKE00002',{rk_want:null,rk_want_at:null});
 res=await rk();
-ok(res.up===0&&res.skipped===2,'★★目標が24時間より古い／未設定の行はとばす');
+const e1=await env.DB.prepare(
+  "SELECT rk_want,rk_floor,rk_low,rk_n,rk_max_cost,rk_want_at FROM items WHERE asin=?1")
+  .bind('B0RKE00002').first();
+console.log('   '+JSON.stringify({up:res.up,down:res.down,skipped:res.skipped})
+  +' / 自分で計算: '+JSON.stringify(e1));
+ok(e1.rk_want>0&&e1.rk_floor>0,'★★目標が無かった行にも目標が入る');
+ok(e1.rk_low===5000,'★★基準にした Amazon最安値も残す');
+ok(!!e1.rk_want_at,'★★自分で計算した時刻を入れる');
+ok(res.up+res.down===2,'★★2行とも反映の対象になる（もう止まらない）');
+// Amazon最安値が無い行は、Worker でも計算できないので今までどおり止まる
+await wipe(); calls=[];
+await seed('B0RKE00003',{rk_want:null,rk_want_at:null,
+  amazon_lowest:0,amazon_offers:0});
+res=await rk();
+console.log('   最安値なし: '+JSON.stringify({zeroed:res.zeroed,skipped:res.skipped}));
+ok(res.up===0&&res.down===0,'★★Amazon最安値が無い行は売値を動かさない');
 
 console.log('\n=== 最安グループが2人未満のとき ===');
 await wipe(); calls=[]; notes=[];

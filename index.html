@@ -1977,7 +1977,17 @@ function pricingBase(){
     linkRate:$('linkRate').value, saleRate:$('saleRate').value,
     targetMode:$('targetMode').value,
     dutyShip:$('dutyShip').checked, taxRefund:$('taxRefund').checked,
-    stampDisc:$('stampDisc').checked };
+    stampDisc:$('stampDisc').checked,
+    /* 行ごとの目標で使う設定（D段）。名前は D1 の設定と同じにしてある。 */
+    syncTol:$('syncTol').value, syncSkipAcc:$('syncSkipAcc').checked,
+    csvLooseAmz:$('csvLooseAmz').value,
+    syncWeight:$('syncWeight').value, syncWeightGame:$('syncWeightGame').value,
+    csvWeightCart:$('csvWeightCart').value, csvWeightLoose:$('csvWeightLoose').value,
+    csvShipLoose:$('csvShipLoose').value, syncSoldCut:$('syncSoldCut').value,
+    csvReviewAbs:$('csvReviewAbs').value, csvReviewPct:$('csvReviewPct').value,
+    csvReviewZero:$('csvReviewZero').checked,
+    csvMarkStep:$('csvMarkStep').value, csvMarkTimes:$('csvMarkTimes').value,
+    amzFeeRate:$('amzFeeRate').value, amzFbaFee:$('amzFbaFee').value };
 }
 /* 自動の処理・出品CSV・販売連携が使う設定（広告料率は「自動処理の広告料率」）。 */
 function pricingSettings(){
@@ -5677,10 +5687,7 @@ function csvStartUp(r){
 /* 1回の値下げ幅。（開始価格 − 最低売値）÷ 回数。
    最低は⚙設定「1回の下げ幅（最低）」（既定 $1）。 */
 function csvMdStepOf(start,floor){
-  var s=+start||0, f=+floor||0, n=csvMarkTimes(), min=csvMarkStep();
-  if(!(s>0)||!(f>0)||!(s>f))return min;
-  var v=Math.ceil((s-f)/n*100)/100;
-  return (v<min)?min:v;
+  return PJP.mdStep(pricingSettings(),start,floor);
 }
 // 行の自動値下げの設定（D1 に送る値）。幅を決められない行は null
 function csvMdPlanOf(r){
@@ -9012,28 +9019,12 @@ function syncCsvRowFor(r){
    重量は出品リストの同じ商品から取り、無ければ設定の既定重量を使う。 */
 /* 出品リストに同じ商品が無い行の既定重量。SKUの接頭辞で振り分ける。
    接頭辞が分からない行はホビー側（重いほう）を使う＝安全側。 */
-function syncDefWeight(r){
-  // カートリッジのみは箱がないぶん軽い
-  if(String(r.cond||'')==='cart')return +$('csvWeightCart').value||50;
-  // フィギュアのみ（箱なし・封筒）。既定値は梱包込み
-  if(String(r.cond||'')==='loose')return +$('csvWeightLoose').value||200;
-  var pf=String(r.prefix||'').toLowerCase();
-  if(pf==='game')return +$('syncWeightGame').value||150;
-  return +$('syncWeight').value||400;
-}
+function syncDefWeight(r){ return PJP.defWeight(pricingSettings(),r); }
 function syncRecommend(r){
   return syncMemoGet(r,'rec',function(){ return syncRecommendCalc(r); });
 }
 function syncRecommendCalc(r){
-  // 「可」を除く設定のときは、その最安値を仕入値とみなす
-  var low=syncBasis(r).low||+r.amazon_lowest||0;
-  if(!low)return null;
-  /* 重量は「出品リストの行 → D1 に残した実測 → 既定重量」の順（syncWeightOf）。
-     出品リストを空にしても、D1 に実測が残っていればそれを使う。 */
-  var wo=syncWeightOf(r);
-  var p=csvPriceFor(low, wo.v, syncFlatOf(r));
-  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
-           weight:wo.v, weightFrom:wo.from, weightDefault:(wo.from==='def') };
+  return PJP.recommend(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* ================= 価格の操作（販売連携の出品データで動かす）=================
    価格の元データは「出品リストの同じ行 → D1 に残した値 → 既定値」の順に使う。
@@ -9042,10 +9033,7 @@ function syncRecommendCalc(r){
    しきい値・間隔・下げ幅の設定は出品CSVタブのものをそのまま使う（設定は1か所）。 */
 /* 実重量。from … 'list'＝出品リスト／'d1'＝D1に残した実測／'def'＝既定重量 */
 function syncWeightOf(r){
-  var row=syncCsvRowFor(r);
-  if(row&&+row.weight>0)return { v:+row.weight, from:'list' };
-  if(+r.weight_g>0)return { v:+r.weight_g, from:'d1' };
-  return { v:syncDefWeight(r), from:'def' };
+  return PJP.weightOf(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* 仕入値（円・手直し後）。次の順に使う。
      list … 出品リストの同じ行
@@ -9054,15 +9042,7 @@ function syncWeightOf(r){
              同じASIN・同じ区分に複数あるときはいちばん高い値）
    どれも無い行は 0（Amazon最安値を仕入値とみなすほうに回す）。 */
 function syncCostOf(r){
-  /* 再調達中・無在庫の行は、売れてから Amazon で仕入れ直す。
-     もとの仕入値（手元にあったときの値）で下限を出すと、いまの最安値が上がって
-     いたときに赤字になる。これらの行は必ず Amazon最安値を仕入値とみなす。 */
-  if(Number(r.restocking||0)||syncIsDropship(r))return { v:0, from:'' };
-  var row=syncCsvRowFor(r);
-  if(row&&+row.cost>0)return { v:+row.cost, from:'list' };
-  if(+r.cost_yen>0)return { v:+r.cost_yen, from:'d1' };
-  if(+r.sku_cost>0)return { v:Math.round(+r.sku_cost), from:'sku' };
-  return { v:0, from:'' };
+  return PJP.costOf(pricingSettings(),r,syncCsvRowFor(r));
 }
 // 一覧に出す重量の出どころ。「520g（実測）」「150g（既定）」
 function syncWeightNote(r){
@@ -9075,17 +9055,9 @@ function syncRecCost(r){
   return syncMemoGet(r,'cost',function(){ return syncRecCostCalc(r); });
 }
 // 封筒で送る行（フィギュアのみ）は、送料を⚙設定の固定額で計算する
-function syncFlatOf(r){
-  return (String((r||{}).cond||'')==='loose')?csvShipLoose():0;
-}
+function syncFlatOf(r){ return PJP.flatOf(pricingSettings(),r); }
 function syncRecCostCalc(r){
-  var c=syncCostOf(r); if(!(c.v>0))return null;
-  var w=syncWeightOf(r);
-  var p=csvPriceFor(c.v,w.v,syncFlatOf(r));
-  if(!(p&&p.price>0))return null;
-  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
-           cost:c.v, costFrom:c.from, weight:w.v, weightFrom:w.from,
-           weightDefault:(w.from==='def') };
+  return PJP.recCost(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* 値付けの基準。仕入値が分かればそれ、分からなければ Amazon最安値を仕入値とみなす
    （出品リストに行が残っていない古い出品でも値付けを動かせるようにする）。 */
@@ -9094,16 +9066,8 @@ function syncRecOf(r){ return syncRecCost(r)||syncRecommend(r); }
    見送り（利益不足・赤字）の行は 0 を返し、見直し・値下げの対象にしない。
    出品CSVタブの csvWantPrice と同じ決まり。 */
 function syncWantPrice(r){
-  var rec=syncRecOf(r); if(!rec)return 0;
-  var v=soldVerdict(rec,syncSoldItem(r),$('syncSoldCut').value);
-  var p=0;
-  if(v.kind==='rec'||v.kind==='match')p=v.price;
-  else if(v.kind==='none')p=rec.price;
-  if(!(p>0))return 0;
-  /* Amazonで売ったほうが得な行は、その利益に並ぶところまで上げる
-     （相場に合わせる判定より、こちらを優先する）。 */
-  var a=syncAmzLine(r);
-  return (a&&a.price>p)?a.price:p;
+  var o=syncSoldGet(r);
+  return PJP.wantPrice(pricingSettings(),r,syncCsvRowFor(r),o?o.v:0);
 }
 /* ================= Amazonの方が得なときの下限（Amazon同等ライン）=================
    仕入値基準で下限を出すと、安く仕入れた商品ほど eBay の売値が下がる。
@@ -9120,10 +9084,7 @@ function amzFbaFee(){ var n=+$('amzFbaFee').value; return (isFinite(n)&&n>=0)?n:
 function syncEbayFirst(r){ return !!Number(r.ebay_first||0); }
 /* Amazonで売ったときの利益（円）。分からない行は null。 */
 function syncAmzProfit(r){
-  var low=syncBasis(r).low||+r.amazon_lowest||0;
-  if(!(low>0))return null;
-  var c=syncCostOf(r); if(!(c.v>0))return null;
-  return Math.round(low*(1-amzFeeRate())-amzFbaFee()-c.v);
+  return PJP.amzProfit(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* Amazon同等ライン。効かない行は null。
    { profit:Amazon利益（円）, price:同じ利益になる eBay 売値（$） } */
@@ -9131,29 +9092,12 @@ function syncAmzLine(r){
   return syncMemoGet(r,'amz',function(){ return syncAmzLineCalc(r); });
 }
 function syncAmzLineCalc(r){
-  if(syncEbayFirst(r))return null;              // この行は使わない
-  /* フィギュアのみ（箱なし）は手元にある現物を売る行で、Amazonでは箱付きとして
-     売れない。Amazon同等ライン（Amazonの方が得）は使わない。 */
-  if(String(r.cond||'')==='loose')return null;
-  var p=syncAmzProfit(r);
-  if(p===null)return null;
-  var base=+$('baseProfit').value||0;
-  if(p<=base)return null;                       // Amazonの利益が下限利益以下なら今までどおり
-  var v=csvPriceForProfit(syncCostOf(r).v,syncWeightOf(r).v,p,syncFlatOf(r));
-  return (v>0)?{ profit:p, price:v }:null;
+  return PJP.amzLine(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* 最低売値（下限利益のライン）。from … 'list'／'d1'／'sku'／'amazon'
    Amazon同等ラインのほうが高ければ、そちらまで引き上げる（amz:true）。 */
 function syncFloorOf(r){
-  var rc=syncRecCost(r), o;
-  if(rc)o={ v:rc.floor, from:rc.costFrom };
-  else{
-    var am=syncRecommend(r);
-    o=am?{ v:am.floor, from:'amazon' }:{ v:0, from:'' };
-  }
-  var a=syncAmzLine(r);
-  if(a&&a.price>o.v){ o.v=a.price; o.amz=true; }
-  return o;
+  return PJP.floorOf(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* Amazon同等ラインが効いている行（下限・推奨売値を引き上げている行）か。 */
 function syncAmzBetter(r){
@@ -10165,10 +10109,7 @@ function syncMdStep(r){
 }
 // 行の自動値下げの設定（D1 に送る値）。決められない行は null
 function syncMdPlanOf(r){
-  var now=+r.ebay_price||0, fl=syncFloorOf(r).v;
-  if(!(now>0)||!(fl>0)||!(now>fl))return null;
-  return { md_start:Math.round(now*100)/100, md_floor:Math.round(fl*100)/100,
-           md_step:csvMdStepOf(now,fl), md_n:csvMarkTimes() };
+  return PJP.mdPlan(pricingSettings(),r,syncCsvRowFor(r));
 }
 /* 自動値下げが拾う行（pj-sync が選ぶのと同じ条件）。
    値下げ幅（md_step）と下限（md_floor）が入っていて、とばす理由が無い行。
@@ -10734,31 +10675,14 @@ function autoRvMode(){
 /* 再調達の売値は **Amazon最安値（送料込み・中古は可を除く）を仕入値とみなした推奨売値**
    で出す（6.68）。保存済みの仕入値は使わない（それは「いくらで仕入れたか」であって、
    これから買い直す値段ではないため）。 */
-var PB_LOW_MS=24*60*60*1000;         // Amazon最安値の鮮度
+var PB_LOW_MS=PJP.LOW_MS;            // Amazon最安値の鮮度（shared/pricing.js）
 var PB_DOWN_WARN=20;                 // これ以上の値下げになるときは警告（%）
-function syncPbLow(r){
-  var b=syncBasis(r), low=b.low||+((r||{}).amazon_lowest||0)||0;
-  var at=String((r||{}).amazon_lowest_at||'');
-  var t=Date.parse(at);
-  return { low:low, at:at, fresh:!!t&&(Date.now()-t)<=PB_LOW_MS, has:low>0,
-           useNew:b.useNew };
-}
+function syncPbLow(r){ return PJP.lowOf(pricingSettings(),r); }
 /* 再調達で出す売値。出せないときは ok:false と理由を返す。 */
 function syncPbWant(r){
-  var lo=syncPbLow(r);
-  if(!lo.has)return { ok:false, why:'Amazon最安値が未取得', low:lo };
-  if(!lo.fresh)return { ok:false, why:'Amazon最安値が古い（24時間超）', low:lo };
-  var rec=syncRecommend(r);          // Amazon最安値を仕入値とみなした推奨売値
-  if(!rec)return { ok:false, why:'推奨売値を計算できません', low:lo };
-  var now=+((r||{}).ebay_price||0)||0;
-  var price=rec.price, under=false, down=0;
-  if(now>0&&price<now){
-    down=Math.round((1-price/now)*100);
-    // 値下げになるときでも、最低売値（下限利益）より下げない
-    if(price<rec.floor){ price=rec.floor; under=true; down=Math.round((1-price/now)*100); }
-  }
-  return { ok:true, price:Math.round(price*100)/100, floor:rec.floor, low:lo,
-           down:down, under:under, warn:(down>=PB_DOWN_WARN), rec:rec };
+  var w=PJP.pbWant(pricingSettings(),r);
+  if(w.ok)w.warn=(w.down>=PB_DOWN_WARN);
+  return w;
 }
 /* 予定に出す「Amazon最安値 ¥x,xxx（取得日時）」。 */
 function syncPbLowNote(r){
@@ -10837,17 +10761,8 @@ function autoRvPct(){
 }
 /* この行の目標。相場（Sold）が入っていれば相場の判断を優先する。 */
 function syncRvTargetOf(r){
-  var rec=syncRecOf(r);
-  var v=rec?soldVerdict(rec,syncSoldItem(r),$('syncSoldCut').value):{kind:'nolow'};
-  // 見送り（相場が最低売値に届かない・赤字）は数量0にする行
-  var kind=(v.kind==='low'||v.kind==='loss')?'skip'
-    :((v.kind==='rec'||v.kind==='match'||v.kind==='none')?v.kind:'');
-  var want=(kind==='skip')?0:syncWantPrice(r);
-  var fl=syncFloorOf(r);
-  var w=syncWeightOf(r);
-  return { rv_kind:kind, rv_want:Math.round((want||0)*100)/100,
-           rv_floor:Math.round((fl.v||0)*100)/100,
-           rv_max_cost:(want>0)?syncMaxCost(want,w.v):0 };
+  var o=syncSoldGet(r);
+  return PJP.rvTarget(pricingSettings(),r,syncCsvRowFor(r),o?o.v:0);
 }
 /* 目標がまだ D1 に入っていない（または変わった）行。「目標を送る」の対象。 */
 function syncRvNeed(){
@@ -11066,12 +10981,7 @@ function autoRkMode(){
   return (v==='confirm')?'confirm':'auto';
 }
 /* 最安グループの人数。新品を基準にした行は新品側の人数で数える（syncOfferNote と同じ）。 */
-function syncRkOffers(r){
-  var b=syncBasis(r);
-  if(b.useNew)return Number(b.newN||0);
-  if(b.hasList)return b.near.length||0;
-  return Number(r.amazon_lowest_n||0);
-}
+function syncRkOffers(r){ return PJP.nearN(pricingSettings(),r); }
 /* この行に何をするか（Worker の rkTarget と同じ決まり）。
    kind … 'up'／'down'／'zero'（Amazonの在庫なし）／''（とばす） */
 function syncRkTargetOf(r){
@@ -11127,16 +11037,7 @@ function syncRkNeed(){
   });
 }
 /* 送る中身。最安値が取れていない行は送らない（null）。 */
-function syncRkWantOf(r){
-  var lo=syncPbLow(r);
-  if(!lo.has)return null;
-  var rec=syncRecommend(r);
-  if(!rec)return null;
-  return { rk_want:Math.round(rec.price*100)/100,
-           rk_floor:Math.round((+rec.floor||0)*100)/100,
-           rk_low:lo.low, rk_n:syncRkOffers(r),
-           rk_max_cost:syncMaxCost(rec.price,syncWeightOf(r).v) };
-}
+function syncRkWantOf(r){ return PJP.rkWant(pricingSettings(),r); }
 /* 取り込みのあとに、再調達中の行の目標をまとめて送る（6.70）。 */
 function syncRkPost(done){
   var fin=function(){ if(done)done(); };
@@ -11548,11 +11449,8 @@ function syncSoldAt(o){
 }
 // 相場（総額$）→ 商品代（$）。送料以下の値は誤入力として扱わない。
 function syncSoldItem(r){
-  var o=syncSoldGet(r); if(!o)return null;
-  var w=syncWeightOf(r).v;
-  var cost=syncCostOf(r).v||syncBasis(r).low||+r.amazon_lowest||0;
-  var m=priceModelFor(cost,w,0), G=m.zoneShipCharge(m.basisZone);
-  return (+o.v<=G)?null:Math.round((+o.v-G)*100)/100;
+  var o=syncSoldGet(r);
+  return PJP.soldItem(pricingSettings(),r,syncCsvRowFor(r),o?o.v:0);
 }
 /* 相場と推奨売値・最低利益ライン・損益分岐を比べた判断。
    kind … 'rec'   相場 ≥ 推奨売値     → 推奨売値で出す
@@ -11565,19 +11463,7 @@ function syncSoldItem(r){
    損益分岐より下がるときは損益分岐で止める（赤字で出さないため）。 */
 /* 判断の中身はここ1か所。推奨売値（rec）と相場の商品代（item）を比べるだけなので、
    販売連携タブの再調達と、出品CSVタブの無在庫（新品）の両方から同じものを使う。 */
-function soldVerdict(rec,item,cut){
-  if(!rec)return { kind:'nolow', price:0, rec:null, sold:null };
-  if(item===null||item===undefined)return { kind:'none', price:rec.price, rec:rec, sold:null };
-  if(item>=rec.price)return { kind:'rec', price:rec.price, rec:rec, sold:item };
-  if(item>=rec.floor){
-    var c=+cut; if(isNaN(c)||c<0)c=0;
-    var p=Math.round((item-c)*100)/100, floored=false;
-    if(p<rec.be){ p=rec.be; floored=true; }
-    return { kind:'match', price:p, rec:rec, sold:item, cut:c, floored:floored };
-  }
-  if(item>=rec.be)return { kind:'low', price:0, rec:rec, sold:item };
-  return { kind:'loss', price:0, rec:rec, sold:item };
-}
+function soldVerdict(rec,item,cut){ return PJP.soldVerdict(rec,item,cut); }
 function syncVerdict(r){
   return soldVerdict(syncRecommend(r), syncSoldItem(r), $('syncSoldCut').value);
 }
@@ -11762,57 +11648,17 @@ function syncFilterOpts(){
 var SYNC_SUBCOND={ new:'新品', mint:'ほぼ新品', verygood:'非常に良い', good:'良い',
                    acceptable:'可', refurbished:'再生品', collectible:'コレクター',
                    club:'クラブ', oem:'OEM', used:'中古' };
-function syncCondKey(c){ return String(c||'').toLowerCase().replace(/[^a-z]/g,''); }
+function syncCondKey(c){ return PJP.condKey(c); }
 function syncCondName(c){ return SYNC_SUBCOND[syncCondKey(c)]||''; }
-function syncIsAcceptable(c){ return syncCondKey(c)==='acceptable'; }
-function syncOffers(r){
-  try{
-    var a=JSON.parse(r.amazon_offers_json||'[]');
-    return Array.isArray(a)?a:[];
-  }catch(e){ return []; }
-}
+function syncIsAcceptable(c){ return PJP.isAcceptable(c); }
+function syncOffers(r){ return PJP.offersOf(r); }
 /* 推奨売値と最安グループの基準を決める。
    設定「中古の最安値から『可』を除く」（既定オン）がオンのときは、中古の基準から
    「可」の出品を外す。「可」しか無い（または状態がまったく分からない）ときは外さない。 */
 function syncBasis(r){
   return syncMemoGet(r,'basis',function(){ return syncBasisCalc(r); });
 }
-function syncBasisCalc(r){
-  var all=syncOffers(r);
-  var tol=+$('syncTol').value; if(isNaN(tol)||tol<0)tol=200;
-  var list=all, skipped=false;
-  if($('syncSkipAcc').checked&&r.cond!=='new'&&all.length){
-    var keep=all.filter(function(o){ return !syncIsAcceptable(o.c); });
-    var known=all.filter(function(o){ return !!syncCondName(o.c); });
-    if(keep.length&&known.length){ list=keep; skipped=(keep.length<all.length); }
-  }
-  var lowAll=+r.amazon_lowest||(all.length?(+all[0].p||0):0);
-  var low=list.length?(+list[0].p||0):lowAll;
-  var near=list.filter(function(o){ return (+o.p||0)<=low+tol; });
-  /* 中古（-U）・カートリッジのみ（-C）の行は、**新品のほうが安ければ新品**を
-     基準にする。新品が ¥6,280 で買えるなら、中古が ¥9,719 で売れる前提は
-     成り立たないため（どちらも送料込みの総額で比べる）。
-     新品の最安値が取れていない行は、これまでどおり中古の最安値を使う。 */
-  var usedLow=low, nw=+r.amazon_new_low||0, useNew=false;
-  if(r.cond!=='new'&&nw>0&&(!low||nw<low)){
-    useNew=true; low=nw;
-    if(!lowAll||nw<lowAll)lowAll=nw;
-    near=[];                      // 新品側の明細は持っていない（人数は newN で数える）
-    skipped=false;                // 「可を除く」は中古の話なので、新品基準では出さない
-  }
-  /* フィギュアのみ（箱なし）は、Amazonの中古（箱付き）と同じ値段では売れない。
-     ⚙設定の係数（既定80%）で割り引いた額を基準にする。 */
-  var looseCut=false;
-  if(String(r.cond||'')==='loose'&&low>0){
-    var k=+$('csvLooseAmz').value;
-    if(!isFinite(k)||k<=0||k>100)k=80;
-    low=Math.round(low*k/100); looseCut=true;
-  }
-  return { low:low, lowAll:lowAll, list:list, near:near, tol:tol,
-           skipped:skipped, hasList:all.length>0,
-           useNew:useNew, usedLow:usedLow, newLow:nw,
-           newN:Number(r.amazon_new_n||0), looseCut:looseCut };
-}
+function syncBasisCalc(r){ return PJP.basis(pricingSettings(),r); }
 /* 最安値の見出しの文字列。「可」を除いたときは、その最安値の状態（良い など）と
    全体の最安値も添えて、何を基準にしているかが分かるようにする。 */
 function syncLowLabel(r){
@@ -13549,7 +13395,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v174';   // sw.js の const V と必ず同じ値にする
+var APP_V='v175';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

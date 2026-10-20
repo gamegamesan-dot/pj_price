@@ -4455,3 +4455,44 @@ Worker 側は `tests/pricing.mjs` 21項目）。
 
 テストは `tests/pricing.js`（22項目）。
 基準を取り直すときは `node tests/_baseline.js`。
+
+## 6.76 行ごとの目標の式も shared/pricing.js へ（2026-10-20・sw.js v175）
+
+**D段**の画面側。C段（6.75）で移したのは「仕入値と重量から売値を出す」ところまでで、
+**行ごとの目標を組む式はまだ index.html の中にあった**。Worker が自分で計算するには
+こちらも1か所にまとめる必要がある。
+
+### 移した式（約210行）
+
+| shared/pricing.js | 元の名前 | 中身 |
+| --- | --- | --- |
+| `offersOf` `condKey` `isAcceptable` | 同名 | Amazonの出品明細の読み取り |
+| `basis(S,r)` | `syncBasisCalc` | 値付けの基準にする最安値（可を除く・新品優先・箱なし係数） |
+| `nearN(S,r)` | `syncRkOffers` | 最安グループの人数 |
+| `defWeight` `weightOf` `flatOf` | 同名 | 重量（出品リスト → D1 → 既定）と封筒の送料 |
+| `costOf(S,r,over)` | `syncCostOf` | 仕入値（再調達中・無在庫は0＝Amazon基準） |
+| `recommend` `recCost` `recOf` | `syncRecommendCalc` ほか | 推奨売値 |
+| `amzProfit` `amzLine` | 同名 | Amazon同等ライン |
+| `floorOf` | `syncFloorOf` | 最低売値 |
+| `soldItem` `soldVerdict` `wantPrice` | 同名 | 相場の判定と出すべき売値 |
+| `mdStep` `mdPlan` | `csvMdStepOf` `syncMdPlanOf` | 自動値下げの幅・下限・回数 |
+| `rvTarget` | `syncRvTargetOf` | 売値の見直しの目標 |
+| `lowOf` `pbWant` | `syncPbLow` `syncPbWant` | 再調達の売値（最安値の鮮度つき） |
+| `rkWant` | `syncRkWantOf` | 再調達中の売値の追従の目標 |
+
+### 出品リストの扱い
+
+仕入値と重量は「**出品リストの行 → D1 → 既定値**」の順で使う。
+出品リストは端末にしか無いので、**`over`（`{cost,weight}`）という引数**で渡す形にした。
+画面は `syncCsvRowFor(r)` を渡し、**Worker は渡さない**（D1 の値と既定重量だけで計算する）。
+
+### 設定が16項目増えた
+
+`settings()` に `ROW_DEFAULTS` を足した（`syncTol` `syncSkipAcc` `csvLooseAmz`
+`syncWeight` `syncWeightGame` `csvWeightCart` `csvWeightLoose` `csvShipLoose`
+`syncSoldCut` `csvReviewAbs` `csvReviewPct` `csvReviewZero` `csvMarkStep`
+`csvMarkTimes` `amzFeeRate` `amzFbaFee`）。名前は画面の欄・D1 の設定と同じにしてある。
+すべて 6.73 で pj-sync に送るようにした項目なので、Worker 側も同じ値で動く。
+
+金額が変わっていないことは `tests/pricing.js`（切り出す前 v173 の基準と300件＋14行）で
+確かめている。**すべて一致**。

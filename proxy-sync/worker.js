@@ -1315,7 +1315,20 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   md_step, md_start, md_floor, md_n, md_done,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, amazon_new_low, amazon_new_n, amazon_new_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
-  updated_at`;
+  updated_at,
+  /* せどりすとSKU から引く2つ。items の列ではないが**値付けに使う**ので
+     ITEM_COLS に入れて、どの処理からも同じ値が見えるようにする（7.52）。
+     prefix（game / hobby …）は既定重量の振り分け、
+     sku_cost は D1 に仕入値が無い行の値付けの基準。 */
+  (SELECT s.prefix FROM skus s
+    WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix,
+  /* 同じASIN・同じ区分に複数の個体があるときは**いちばん高い仕入値**
+     （安いほうで出すと赤字になりうるため）。箱なし（cart / loose）の出品は、
+     個体のSKUが中古なのでそちらも見る。 */
+  (SELECT MAX(s3.cost) FROM skus s3
+    WHERE s3.asin=items.asin AND s3.cost>0
+      AND (s3.cond=items.cond
+           OR (items.cond IN ('cart','loose') AND s3.cond='used'))) AS sku_cost`;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -2210,7 +2223,10 @@ async function jobMarkdown(env) {
        FROM items
        WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>''
        ORDER BY COALESCE(mark_at,'') ASC LIMIT ${MD_PICK_LIMIT}`).all();
-    const rows = (q && q.results) || [];
+    /* 目標（値下げ幅・下限）を自分で計算して埋める（7.52）。
+       pj_price が30分以内に送った値はそのまま使う。 */
+    const self0 = await selfFill(env, run, (q && q.results) || []);
+    const rows = self0.rows;
     const due = [];
     for (const r of rows) {
       if (mdSkip(r, st, cutoff)) { res.skipped++; continue; }
@@ -2542,12 +2558,13 @@ async function jobReview(env, opt) {
       run.notes.push("自動反映はオフ（設定「売値の自動反映」を 確認モード / 自動実行 にする）");
       return Object.assign(await saveRun(env, run), res);
     }
+    /* 目標が入っていない行も見る（Worker が自分で計算するため・7.52）。 */
     const q = await env.DB.prepare(
       `SELECT ${ITEM_COLS} FROM items
         WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>''
-          AND (COALESCE(rv_want,0)>0 OR rv_kind='skip')
         ORDER BY COALESCE(rv_at,'') ASC LIMIT ${RV_PICK_LIMIT}`).all();
-    const rows = (q && q.results) || [];
+    const selfR = await selfFill(env, run, (q && q.results) || []);
+    const rows = selfR.rows;
     const due = [];
     for (const r of rows) {
       const a = rvAct(r, st);
@@ -2924,12 +2941,14 @@ async function rkFailN(env) {
   } catch (e) { return 0; }
 }
 /* 予定の一覧（画面に出す。確認モードでなくても、次に何が起きるかが見える）。 */
-async function rkPlanRows(env) {
+async function rkPlanRows(env, run) {
   const q = await env.DB.prepare(
     `SELECT ${ITEM_COLS} FROM items
       WHERE scope='ebay' AND restocking=1 AND COALESCE(ebay_item_id,'')<>''
       ORDER BY COALESCE(rk_at,'') ASC LIMIT ${RK_PICK_LIMIT}`).all();
-  const rows = (q && q.results) || [];
+  /* 目標（rk_want など）を自分で計算して埋める（7.52）。 */
+  const self0 = await selfFill(env, run || newRun("rk"), (q && q.results) || []);
+  const rows = self0.rows;
   const due = [], hold = [];
   let skipped = 0;
   for (const r of rows) {
@@ -2956,7 +2975,7 @@ async function jobRkPrice(env, opt) {
   try {
     const st = await rkSettings(env);
     res.mode = approve ? "approve" : st.mode;
-    const pick = await rkPlanRows(env);
+    const pick = await rkPlanRows(env, run);
     res.picked = pick.due.length;
     res.held = pick.hold.length;
     res.skipped = pick.skipped;
@@ -3085,6 +3104,107 @@ async function jobRkPrice(env, opt) {
     run.notes.push("例外 " + e.message);
   }
   return Object.assign(await saveRun(env, run), res);
+}
+
+/* ================= 目標を Worker が自分で計算する（7.52）=================
+   これまで、自動の処理が使う目標（rk_want・pb_want・rv_want・md_*）は
+   **pj_price が計算して D1 に送った値**だけだった。式が index.html の中にしか
+   無かったためで、1日1回アプリを開いて「状況を取り込む」を押す必要があった。
+
+   C段（7.51）で式を shared/pricing.js に出したので、Worker も
+   **D1 にある仕入値・重量・Amazon最安値と ⚙設定の値から自分で計算**できる。
+
+   どちらを使うか
+   ・pj_price が送った目標が **WANT_FRESH_MS（30分）以内**なら、そちらを使う
+     （画面で押した直後の操作が Worker に上書きされないようにする）
+   ・それ以外は Worker が自分で計算した値を使う
+   計算した値は D1 にも書き戻す（画面と帯に同じ数字が出るように）。
+   出品リスト（端末にしか無い仕入値・重量）は Worker からは見えないので、
+   D1 の値（cost_yen / weight_g / sku_cost）と既定重量だけで計算する。 */
+const WANT_FRESH_MS = 30 * 60 * 1000;
+const SELF_WRITE_MAX = 300;          // 1回に書き戻す行数の上限
+
+function wantFresh(at, now) {
+  const t = Date.parse(String(at || ""));
+  if (!t) return false;
+  const d = now - t;
+  return d >= -WANT_FRESH_MS && d <= WANT_FRESH_MS;
+}
+/* 行に目標を埋めた**写し**を返す（元の行は変えない）。
+   fresh が true の項目は pj_price の値をそのまま残す。
+   diff には、D1 に書き戻すべき項目だけを入れる。 */
+function selfTargets(S, r, now) {
+  const out = Object.assign({}, r);
+  const diff = {};
+  const n = (now === undefined || now === null) ? Date.now() : now;
+  const set = (k, v) => {
+    if (v === null || v === undefined) return;
+    const was = (r[k] === null || r[k] === undefined) ? null : Number(r[k]);
+    out[k] = v;
+    if (typeof v === "number") {
+      if (was === null || Math.abs(was - v) >= 0.01) diff[k] = v;
+    } else if (String(r[k] || "") !== String(v)) diff[k] = v;
+  };
+  /* 再調達中の売値の追従（rk_*）。 */
+  if (!wantFresh(r.rk_want_at, n)) {
+    const rk = PRICING.rkWant(S, r);
+    if (rk) {
+      set("rk_want", rk.rk_want); set("rk_floor", rk.rk_floor);
+      set("rk_low", rk.rk_low); set("rk_n", rk.rk_n);
+      set("rk_max_cost", rk.rk_max_cost);
+      // 自分で計算した目標は「いま受け取った」ものとして扱う
+      out.rk_want_at = nowIso();
+    }
+  }
+  /* フェイズBの再調達（pb_*）。 */
+  if (!wantFresh(r.pb_want_at, n)) {
+    const pb = PRICING.pbWant(S, r, n);
+    if (pb.ok) {
+      set("pb_want", pb.price); set("pb_max_cost", pb.max_cost);
+      out.pb_want_at = nowIso();
+    }
+  }
+  /* 売値の見直しの自動反映（rv_*）。 */
+  if (!wantFresh(r.rv_at, n)) {
+    const rv = PRICING.rvTarget(S, r);
+    if (rv && rv.rv_kind) {
+      set("rv_kind", rv.rv_kind); set("rv_want", rv.rv_want);
+      set("rv_floor", rv.rv_floor); set("rv_max_cost", rv.rv_max_cost);
+      out.rv_at = nowIso();
+    }
+  }
+  /* 自動値下げ（md_*）。md_start は進んでいる回数（md_done）を0に戻してしまうので、
+     **すでに入っている行では書き換えない**（値下げの途中を巻き戻さないため）。 */
+  const md = PRICING.mdPlan(S, r);
+  if (md) {
+    set("md_floor", md.md_floor); set("md_step", md.md_step); set("md_n", md.md_n);
+    if (!(Number(r.md_start) > 0)) set("md_start", md.md_start);
+  }
+  return { r: out, diff: diff };
+}
+/* 行をまとめて埋める。書き戻しは呼ぶ側の run でまとめて流す。 */
+async function selfFill(env, run, rows, now) {
+  const ps = await pricingSettings(env, run);
+  const out = [], stmts = [];
+  const at = nowIso();
+  for (const r of rows) {
+    const t = selfTargets(ps.S, r, now);
+    out.push(t.r);
+    const ks = Object.keys(t.diff);
+    if (!ks.length || stmts.length >= SELF_WRITE_MAX) continue;
+    /* 変わった項目だけを書く。鮮度の時刻も一緒に入れる。 */
+    const sets = ks.map((k, i) => k + "=?" + (i + 4));
+    if (ks.some((k) => k.indexOf("rk_") === 0)) sets.push("rk_want_at=?3");
+    if (ks.some((k) => k.indexOf("pb_") === 0)) sets.push("pb_want_at=?3");
+    if (ks.some((k) => k.indexOf("rv_") === 0)) sets.push("rv_at=?3");
+    stmts.push(env.DB.prepare(
+      `UPDATE items SET ${sets.join(", ")}, updated_at=?3 WHERE asin=?1 AND cond=?2`)
+      .bind(r.asin, r.cond, at, ...ks.map((k) => t.diff[k])));
+  }
+  if (stmts.length) await runBatch(env, run, stmts);
+  run.notes.push("目標を自分で計算：" + rows.length + "行／書き戻し " + stmts.length + "行"
+    + "（広告料率 " + ps.S.adRate + "%・為替 " + ps.S.fx + "円）");
+  return { rows: out, wrote: stmts.length, S: ps.S, fx: ps.fx };
 }
 
 /* ================= フェイズB：FBAで売れたら eBay を直す（7.47）=================
@@ -3310,7 +3430,10 @@ async function jobPhaseB(env, opt) {
       `SELECT ${ITEM_COLS} FROM items
         WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND COALESCE(ebay_qty,0)>=1
         ORDER BY COALESCE(pb_at,'') ASC LIMIT ${PB_PICK_LIMIT}`).all();
-    const rows = (q && q.results) || [];
+    /* 再調達の売値（pb_want）を自分で計算して埋める（7.52）。
+       pj_price が30分以内に送った値はそのまま使う。 */
+    const selfP = await selfFill(env, run, (q && q.results) || []);
+    const rows = selfP.rows;
     const due = [], stmts = [];
     for (const r of rows) {
       const t = pbTarget(r);
@@ -4223,21 +4346,9 @@ async function statusBody(env, url) {
       -- 最後に eBay で売れた日時。pj_price の「値下げ中の行が売れたら止める」に使う
       (SELECT MAX(o2.ordered_at) FROM orders o2
         WHERE o2.channel='ebay' AND o2.asin=items.asin AND o2.cond=items.cond)
-        AS ebay_sold_at,
-      -- せどりすとSKUの接頭辞（game / hobby / toy …）。既定重量の振り分けに使う
-      (SELECT s.prefix FROM skus s
-        WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix,
-      /* せどりすとSKU の末尾の仕入値（game-20261006-UA-B0DX747PD2-4030 → 4030）。
-         D1 に仕入値（cost_yen）が無い行の値付けの基準に使う。
-         同じASIN・同じ区分に複数の個体があるときは **いちばん高い仕入値**
-         （安いほうで出すと赤字になりうるため）。
-         箱なし（cond='cart' / 'loose'）の出品は、個体のSKUが中古（used）なので
-         そちらも見る（箱付き中古の仕入値のほうが高く出るので安全側）。 */
-      (SELECT MAX(s3.cost) FROM skus s3
-        WHERE s3.asin=items.asin AND s3.cost>0
-          AND (s3.cond=items.cond
-               OR (items.cond IN ('cart','loose') AND s3.cond='used')))
-        AS sku_cost
+        AS ebay_sold_at
+      /* prefix と sku_cost（せどりすとSKU から引く2つ）は ITEM_COLS に
+         入っている。値付けに使うので、どの処理からも同じ値が見える（7.52）。 */
     FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;
@@ -5034,6 +5145,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,
+                        selfTargets, selfFill, wantFresh, WANT_FRESH_MS,
+                        SELF_WRITE_MAX, ITEM_COLS,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
