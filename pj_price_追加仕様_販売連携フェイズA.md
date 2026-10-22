@@ -4070,3 +4070,81 @@ WHERE sold_keep=1 AND sk_done_at IS NULL
 ```
 
 テストは `tests/soldkeep.mjs`（67件）と `tests/soldkeepui.js`（画面72件）。
+
+## 7.55 SELECT は読む列だけにする（D1 の100列・2026-10-22・sw.js v178）
+
+v176 のデプロイ後、「状況を取り込む」が次のエラーで失敗した。
+
+```
+HTTP 500 server_error
+D1_ERROR: too many columns in result set: SQLITE_ERROR
+```
+
+### 原因
+
+D1 は**1つの結果に100列まで**しか返せない。
+
+| | 列数 |
+| --- | --- |
+| `items` の実列 | **100列**（`migrate-0023` で88→100） |
+| `ITEM_COLS` の結果列 | **102列**（全列＋`prefix`・`sku_cost` の副問い合わせ2つ） |
+| `GET /status` | **104列**（上に `ebay_sold`・`ebay_sold_at` を足していた） |
+
+`ITEM_COLS` は「items の全列を並べる」形だったので、
+**`migrate-0023` で12列足した時点で上限を超えた**。
+`ITEM_COLS` を使う問い合わせは**すべて**失敗していた。
+
+| 失敗していた場所 | 列数 | いつ動く |
+| --- | --- | --- |
+| `GET /status`（状況を取り込む） | 104 | 画面から |
+| `itemsByKeys` → `jobOrders` の状態イベント・`jobHourly` | 102 | `*/15`・毎時 |
+| `restockWatch`（再調達の見張り） | 102 | 毎時 |
+| `jobMarkdown`（自動値下げ） | 103 | 日次 |
+| `jobReview`（売値の自動反映） | 102 | 日次 |
+| `rkPlanRows` → `jobRkPrice`（再調達中の売値） | 102 | 日次 |
+| `skPlanRows` → `jobSoldKeep`（売れた値段で再出品） | 102 | `*/15`・毎時 |
+| `jobPhaseB`（数量0・再調達／再調達の確認） | 102 | `*/15`・毎時 |
+
+落ちていなかったのは、列を絞って引いている処理だけ
+（`syncPricingHot` と `syncPricing` は `SELECT asin, cond`、
+`/status` の件数は `COUNT(*)` の14列、注文の取り込み自体は `orders` の列）。
+つまり **eBay/FBA の取り込みと最安値の取得は動いていたが、
+そこから先の「判断して eBay を変える処理」が全部止まっていた**。
+
+### 直し方
+
+`SELECT` は**読む列だけ**にして、2つに分けた。
+
+| | 列数 | 中身 |
+| --- | --- | --- |
+| `ITEM_COLS` | 81 | 自動処理（Cron のジョブ）と `shared/pricing.js` が読む列 |
+| `STATUS_COLS` | 84 | `/status` が画面に返す列（画面と `shared/pricing.js` が読む列） |
+
+`prefix` と `sku_cost` の副問い合わせは `SKU_COLS` にまとめて両方に足す。
+
+- `/status` は `STATUS_COLS` を使う（＋`ebay_sold`・`ebay_sold_at` で **86列**）。
+  自動処理だけが読む列（`fba_link` `pb_at` `pb_want` `pb_max_cost` `pb_want_at`
+  `rv_at` `updated_at`）は画面に返さない。
+- `jobMarkdown` は `ITEM_COLS`＋`ebay_sold_at` で **82列**。
+- **書くだけの列は並べない**（SQL の `SET` や `WHERE` は結果の列数に関係しない）。
+  外したのは11列：`ebay_currency` `ebay_seen_at` `amazon_new_at`
+  `pics_eps_at` `pb_why` `pb_done_at` `rv_done_at` `rk_at` `rk_done_at` `sk_at`
+  `sk_done_at`。
+- `ebay_bo_decline` は画面の JS では読んでいないが、ベストオファーの設定を
+  そろえて返す決まりなので `STATUS_COLS` に残した
+  （`tests/pricesrc.mjs` が固定している。自動処理は読まないので `ITEM_COLS` には無い）。
+
+### テスト（`tests/d1cols.mjs`）
+
+列が増えても上限に当たらないよう、2つを固定した。
+
+1. **列数が上限より十分少ないこと。** `D1_COLS_WARN = 90`（上限100に10列の余裕）。
+   実際に使う形（`ITEM_COLS` / `＋ebay_sold_at` / `/status`）を
+   `schema.sql` を読み込んだ SQLite で組み立てて数える。
+   さらに `worker.js` の `SELECT` を**全部**（35本）当てはめて数え、
+   90列を超えるものが1本も無いことを見る。
+2. **読む列が落ちていないこと。** `shared/pricing.js`・`index.html`・`worker.js` が
+   行から読む列名（`r.col` / `x["col"]`）を数え上げ、それぞれのリストに
+   入っていることを確かめる。外した12列がどこからも読まれていないことも見る。
+
+列を足すと①で落ち、読む列を消すと②で落ちる。

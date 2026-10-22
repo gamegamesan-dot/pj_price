@@ -1300,30 +1300,31 @@ function stateEvents(env, rows) {
   return out;
 }
 // 一覧の1行を作るための共通SELECT
-const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
-  ebay_currency, ebay_seen_at, ebay_start, ebay_ship_profile,
-  fba_available, fba_inbound, fba_reserved,
-  fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
-  mode, one_off, one_off_known, fba_link, on_hand, restocking, dropship, hand_qty,
-  ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err, revise_err_at,
-  ebay_sale, ebay_sale_orig, ebay_sale_end,
-  pics_eps, pics_eps_at, pics_n,
-  pb_act, pb_why, pb_at, pb_done_at, pb_fail, pb_skip,
-  pb_want, pb_max_cost, pb_want_at,
-  search_kw,
-  rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
-  rk_want, rk_floor, rk_low, rk_n, rk_max_cost, rk_want_at, rk_at, rk_done_at, rk_fail,
-  sold_keep, sold_price, sold_kept_at, sk_act, sk_why, sk_at, sk_done_at, sk_fail,
-  mw_low, mw_low_at, mw_n, mw_stock,
-  weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
-  md_step, md_start, md_floor, md_n, md_done,
-  amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
-  amazon_lowest_at, amazon_new_low, amazon_new_n, amazon_new_at, restock_at, restock_price, restock_max_cost, restock_skip_acc,
-  updated_at,
-  /* せどりすとSKU から引く2つ。items の列ではないが**値付けに使う**ので
-     ITEM_COLS に入れて、どの処理からも同じ値が見えるようにする（7.52）。
-     prefix（game / hobby …）は既定重量の振り分け、
-     sku_cost は D1 に仕入値が無い行の値付けの基準。 */
+/* ================= SELECT で読む列（7.55）=================
+   D1 は1つの結果に **100列**までしか返せない。超えると
+   「too many columns in result set: SQLITE_ERROR」で問い合わせ全体が失敗する。
+   items は migrate-0023 で100列になったので、全列を並べた SELECT は
+   （副問い合わせを足した時点で）必ずこの上限を超える。
+   実際に v176 では /status と Cron のジョブがまとめて落ちた。
+
+   そこで **読む列だけ**を並べる。2つに分けてある。
+
+     ITEM_COLS   … 自動処理（Cron のジョブ）と値付けの式が読む列
+     STATUS_COLS … /status が画面に返す列（画面と値付けの式が読む列）
+
+   列を足すときは、読む側（shared/pricing.js・index.html・このファイル）で
+   使う名前と同じにすること。**書くだけの列は入れない**
+   （SQL の SET や WHERE は SELECT の列数に関係しない）。
+   tests/d1cols.mjs が「列数が上限より十分少ないこと」と
+   「読む列が落ちていないこと」の両方を見張る。 */
+const D1_MAX_COLS = 100;        // D1 が1つの結果に返せる列数
+const D1_COLS_WARN = 90;        // ここを超えたらテストが落ちる（余裕を残すため）
+
+/* せどりすとSKU から引く2つ。items の列ではないが**値付けに使う**ので
+   どちらのリストにも足して、どの処理からも同じ値が見えるようにする（7.52）。
+   prefix（game / hobby …）は既定重量の振り分け、
+   sku_cost は D1 に仕入値が無い行の値付けの基準。 */
+const SKU_COLS = `
   (SELECT s.prefix FROM skus s
     WHERE s.asin=items.asin AND s.cond=items.cond AND s.prefix<>'' LIMIT 1) AS prefix,
   /* 同じASIN・同じ区分に複数の個体があるときは**いちばん高い仕入値**
@@ -1333,6 +1334,43 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
     WHERE s3.asin=items.asin AND s3.cost>0
       AND (s3.cond=items.cond
            OR (items.cond IN ('cart','loose') AND s3.cond='used'))) AS sku_cost`;
+
+/* 自動処理（jobOrders・jobHourly・jobMarkdown・jobReview・jobPhaseB・
+   jobRkPrice・jobSoldKeep・selfTargets）と shared/pricing.js が読む列。 */
+const ITEM_COLS = `
+  asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
+  ebay_ship_profile, ebay_bo, ebay_bo_accept, revise_err, fba_available,
+  fba_inbound, fba_reserved, fba_res_cust, fba_res_trans, fba_res_proc,
+  fba_seen_at, mode, one_off, one_off_known, fba_link, on_hand, amazon_lowest,
+  amazon_lowest_n, amazon_offers, amazon_offers_json, amazon_lowest_at,
+  amazon_new_low, amazon_new_n, restocking, restock_price, restock_max_cost,
+  restock_skip_acc, dropship, hand_qty, weight_g, cost_yen, sold_usd,
+  ebay_first, mark_at, mark_stop, md_step, md_start, md_floor, md_n, md_done,
+  ebay_sale, pics_eps, pb_act, pb_at, pb_fail, pb_skip, pb_want, pb_max_cost,
+  pb_want_at, search_kw, rv_want, rv_floor, rv_kind, rv_max_cost, rv_at,
+  rk_want, rk_floor, rk_low, rk_n, rk_max_cost, rk_want_at, sold_keep,
+  sold_price, sk_act, sk_why, sk_fail, mw_low, mw_low_at, mw_n, mw_stock,
+  updated_at,` + SKU_COLS;
+
+/* /status が画面に返す列。画面（index.html）と shared/pricing.js が読む列だけ。
+   自動処理だけが読む列（fba_link・pb_at・pb_want・pb_max_cost・pb_want_at・
+   rv_at・updated_at）は返さない。
+   ebay_bo_decline は画面の JS では読んでいないが、ベストオファーの設定を
+   そろえて返す決まりなので入れてある（tests/pricesrc.mjs が固定している）。 */
+const STATUS_COLS = `
+  asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
+  ebay_start, ebay_ship_profile, ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err,
+  revise_err_at, fba_available, fba_inbound, fba_reserved, fba_res_cust,
+  fba_res_trans, fba_res_proc, fba_seen_at, mode, one_off, one_off_known,
+  on_hand, amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
+  amazon_lowest_at, amazon_new_low, amazon_new_n, restocking, restock_at,
+  restock_price, restock_max_cost, restock_skip_acc, dropship, hand_qty,
+  weight_g, cost_yen, sold_usd, ebay_first, mark_at, mark_stop, md_step,
+  md_start, md_floor, md_n, md_done, ebay_sale, ebay_sale_orig, ebay_sale_end,
+  pics_eps, pics_n, pb_act, pb_fail, pb_skip, search_kw, rv_want, rv_floor,
+  rv_kind, rv_max_cost, rv_fail, rk_want, rk_floor, rk_low, rk_n, rk_max_cost,
+  rk_want_at, rk_fail, sold_keep, sold_price, sold_kept_at, sk_act, sk_why,
+  sk_fail, mw_low, mw_low_at, mw_n, mw_stock,` + SKU_COLS;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
    重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
@@ -4668,7 +4706,9 @@ async function statusBody(env, url) {
   /* eBayでの販売実績（直近180日）。手元在庫の行を
      「eBayで売れた（FBAに送らない）」と「未販売（FBAに送る候補）」に分けるために使う。 */
   const soldSince = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
-  const sql = `SELECT ${ITEM_COLS},
+  /* 画面が読む列だけ（STATUS_COLS・7.55）。全列を並べると D1 の100列を超えて
+     「too many columns in result set」で /status ごと落ちる。 */
+  const sql = `SELECT ${STATUS_COLS},
       (SELECT COALESCE(SUM(qty),0) FROM orders o
         WHERE o.channel='ebay' AND o.asin=items.asin AND o.cond=items.cond
           AND o.ordered_at>=?${bind.length + 1}) AS ebay_sold,
@@ -4676,8 +4716,6 @@ async function statusBody(env, url) {
       (SELECT MAX(o2.ordered_at) FROM orders o2
         WHERE o2.channel='ebay' AND o2.asin=items.asin AND o2.cond=items.cond)
         AS ebay_sold_at
-      /* prefix と sku_cost（せどりすとSKU から引く2つ）は ITEM_COLS に
-         入っている。値付けに使うので、どの処理からも同じ値が見える（7.52）。 */
     FROM items`
     + (where.length ? " WHERE " + where.join(" AND ") : "")
     + " ORDER BY updated_at DESC LIMIT " + limit;
@@ -5503,7 +5541,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         skSettings, skPlanRows, jobSoldKeep, SK_MAX, SK_FAIL_WARN,
                         skStampOff,
                         selfTargets, selfFill, wantFresh, WANT_FRESH_MS,
-                        SELF_WRITE_MAX, ITEM_COLS,
+                        SELF_WRITE_MAX, ITEM_COLS, STATUS_COLS, SKU_COLS,
+                        D1_MAX_COLS, D1_COLS_WARN,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
