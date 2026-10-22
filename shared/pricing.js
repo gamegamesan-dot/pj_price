@@ -609,6 +609,24 @@
      数量0になった行を**同じ値段のまま**数量1に戻す。
      返り値 { act:'relist'|'', why, price, hand, buy, max } */
   var SK_FAIL_WARN = 3;                  // 続けてこの回数失敗したら自動処理から外す
+  /* 「売れた値段で保つ」対象にしない行。**ここ1か所だけで決める**。
+     印を立てる側（Worker の jobOrders）と、再出品の判定（下の skRelist）の
+     両方がこれを読む。
+
+     ・一点物 … 売れたら在庫が無い。数量0になった時点で値下げも値上げも
+       止まっている（mdSkip が先に「一点物」を返す）ので、印に意味がない。
+       立てると絞り込み「対応が必要」に並ぶだけになる
+     ・無在庫 … いまは対象外（売れてから仕入れる運用で、「要仕入れ」の通知で
+       回している）。**マッチングワールドの取引を始めたら、下の dropship の
+       1行を消すだけで対象に戻る。ほかに手を入れる場所は無い**
+
+     一点物かどうかが**未確定**（one_off_known=0）の行は印を立てる。
+     「一点物か確認してください」と出して、人に決めてもらうため。 */
+  function skKeepOff(r) {
+    if (Number((r || {}).one_off || 0)) return "一点物";
+    if (Number((r || {}).dropship || 0)) return "無在庫（いまは対象外）";
+    return "";
+  }
   function skRelist(S, r, now) {
     var no = function (why) { return { act: "", why: why }; };
     if (!Number(r.sold_keep || 0)) return no("売れた値段で保つ印がありません");
@@ -616,11 +634,10 @@
     if (Number(r.ebay_qty || 0) > 0) return no("数量があります");
     var price = Math.round((Number(r.sold_price || 0) || 0) * 100) / 100;
     if (!(price > 0)) return no("売れた値段が分かりません");
-    if (Number(r.one_off || 0)) return no("一点物");
-    if (!Number(r.one_off_known || 0)) return no("一点物かどうかが未確定");
-    /* 無在庫は「売れてから仕入れる」運用で、売れたら要仕入れの通知で回している。
-       いまは対象外（マッチングワールドを始めたらここを開ける）。 */
-    if (Number(r.dropship || 0)) return no("無在庫（いまは対象外）");
+    /* 一点物・無在庫は skKeepOff が決める（印を立てる側と同じ1か所）。 */
+    var off = skKeepOff(r);
+    if (off) return no(off);
+    if (!Number(r.one_off_known || 0)) return no("一点物か確認してください");
     if (Number(r.restocking || 0)) return no("再調達中（売値の追従が見ます）");
     if (String(r.pb_act || "") === "restock") return no("フェイズBの再調達の予定です");
     if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
@@ -649,7 +666,7 @@
   }
 
   var API = {
-    VERSION: "3.0.0",
+    VERSION: "3.1.0",
     C: C, DEFAULTS: DEFAULTS, ROW_DEFAULTS: ROW_DEFAULTS,
     settings: settings,
     ceil2: ceil2, round2: round2, feeBreak: feeBreak,
@@ -669,7 +686,8 @@
     lowOf: lowOf, pbWant: pbWant, rkWant: rkWant,
     /* 仕入れ先と、売れた値段での再出品 */
     BUY_MS: BUY_MS, SK_FAIL_WARN: SK_FAIL_WARN,
-    buyAmazon: buyAmazon, buyMw: buyMw, buySource: buySource, skRelist: skRelist
+    buyAmazon: buyAmazon, buyMw: buyMw, buySource: buySource,
+    skKeepOff: skKeepOff, skRelist: skRelist
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   if (typeof globalThis !== "undefined") globalThis.PJ_PRICING = API;

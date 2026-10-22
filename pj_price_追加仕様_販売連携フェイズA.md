@@ -4003,3 +4003,70 @@ md_done=CASE WHEN ?41=0 THEN 0 ... END,
 - すでに印が立っている行・出品していない行・売値が分からない行
 
 テストは `tests/soldkeep.mjs`（58件）と `tests/soldkeepui.js`（画面71件）。
+
+## 7.54 一点物・無在庫には印を立てない（2026-10-22・sw.js v177）
+
+7.53 で `jobOrders` が**売れた明細すべて**に `sold_keep` を立てていた。
+そのため一点物が売れるたびに、絞り込み「対応が必要」に
+「売れた値段で保っています／再出品できません：一点物」として並んでいた。
+
+一点物は数量0になった時点で値下げも値上げも止まっている（`mdSkip` が先に
+「一点物」を返す）ので、**印そのものに意味がない**。根元で立てないようにした。
+
+### 判定は1か所（`shared/pricing.js` の `skKeepOff`）
+
+```js
+function skKeepOff(r) {
+  if (Number(r.one_off || 0)) return "一点物";
+  if (Number(r.dropship || 0)) return "無在庫（いまは対象外）";
+  return "";
+}
+```
+
+印を立てる側（`jobOrders` → `skStampOff`）と、再出品の判定（`skRelist`）が
+**同じこれを読む**。`skRelist` にあった `one_off` / `dropship` の2行は
+`skKeepOff` に寄せた。
+
+**マッチングワールドの取引を始めたら、`skKeepOff` の `dropship` の1行を消すだけで
+無在庫が対象に戻る。ほかに手を入れる場所は無い。**
+
+### 一点物かどうかが未確定の行は立てる
+
+`one_off_known=0` の行は**今までどおり印を立てる**。
+再出品の理由を「一点物かどうかが未確定」から
+**「一点物か確認してください」**に変えて、人に決めてもらう形にした。
+この行は絞り込み「対応が必要」に出る（出てほしい行なので）。
+
+### `skStampOff`（Worker 側）
+
+```js
+function skStampOff(row, line) {
+  const r = row || {};
+  return PRICING.skKeepOff({
+    one_off: r.one_off, one_off_known: r.one_off_known,
+    dropship: Number(r.dropship || 0) || ((line && line.dropship) ? 1 : 0) });
+}
+```
+
+無在庫は SKU のラベルからも分かるので、`items` にまだ行が無い**初回の販売**でも
+拾えるように D1 の値と重ねて渡す。ここは値を集めるだけで、
+「何を外すか」は決めていない（決めているのは `skKeepOff` だけ）。
+
+`jobOrders` は印を立てる前に、初めて見た明細の行の
+`one_off` / `one_off_known` / `dropship` を40件ずつ引いて `skStampOff` に渡す。
+外した行は `run.notes` に `sk_skip <asin>|<cond> <理由>` として残す。
+
+### すでに立ってしまった印
+
+v176 を動かしていた間に一点物・無在庫の行に印が立っていれば、
+一度だけ外す（`sk_done_at IS NULL` の行だけ。すでに再出品した行は eBay の数量が
+戻っているので印も残す）。
+
+```sql
+UPDATE items SET sold_keep=0, sold_price=NULL, sold_kept_at=NULL,
+  sk_act=NULL, sk_why=NULL, sk_fail=0
+WHERE sold_keep=1 AND sk_done_at IS NULL
+  AND (COALESCE(one_off,0)=1 OR COALESCE(dropship,0)=1);
+```
+
+テストは `tests/soldkeep.mjs`（67件）と `tests/soldkeepui.js`（画面72件）。

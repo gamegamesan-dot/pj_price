@@ -1483,14 +1483,32 @@ async function syncOrders(env, run, days, maxItems) {
   /* 売れた値段で保つ（7.53）。初めて見た明細の行だけ、**そのときの出品価格**を
      控えて印を立てる。落札額（orders.amount）はベストオファーで値引きされた額
      なので使わない（それを保つと値段が下がり続ける）。
-     再出品の予定（sk_act）と連続失敗（sk_fail）は、売れ直したので作り直す。 */
-  for (const x of soldE) {
-    if (!fresh[x.orderId + "|" + x.line]) continue;
-    estmts.push(env.DB.prepare(
-      `UPDATE items SET sold_keep=1,
-         sold_price=CASE WHEN COALESCE(ebay_price,0)>0 THEN ebay_price ELSE sold_price END,
-         sold_kept_at=?3, sk_act=NULL, sk_why=NULL, sk_fail=0, updated_at=?4
-       WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, x.at || nowIso(), nowIso()));
+     再出品の予定（sk_act）と連続失敗（sk_fail）は、売れ直したので作り直す。
+
+     一点物・無在庫には立てない（7.54）。立てるかどうかは skStampOff ＝
+     shared/pricing.js の skKeepOff に1か所だけ。 */
+  {
+    const freshE = soldE.filter((x) => fresh[x.orderId + "|" + x.line]);
+    const flg = {};
+    for (let i = 0; i < freshE.length; i += 40) {
+      const part = freshE.slice(i, i + 40);
+      const where = part.map(() => "(asin=? AND cond=?)").join(" OR ");
+      const bind = [];
+      for (const q of part) bind.push(q.asin, q.cond);
+      const got = await env.DB.prepare(
+        `SELECT asin, cond, one_off, one_off_known, dropship FROM items
+          WHERE ${where}`).bind(...bind).all();
+      for (const r of (got && got.results) || []) flg[r.asin + "|" + r.cond] = r;
+    }
+    for (const x of freshE) {
+      const off = skStampOff(flg[x.asin + "|" + x.cond], x);
+      if (off) { run.notes.push("sk_skip " + x.asin + "|" + x.cond + " " + off); continue; }
+      estmts.push(env.DB.prepare(
+        `UPDATE items SET sold_keep=1,
+           sold_price=CASE WHEN COALESCE(ebay_price,0)>0 THEN ebay_price ELSE sold_price END,
+           sold_kept_at=?3, sk_act=NULL, sk_why=NULL, sk_fail=0, updated_at=?4
+         WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, x.at || nowIso(), nowIso()));
+    }
   }
   await runBatch(env, run, estmts);
 
@@ -3234,6 +3252,18 @@ async function selfFill(env, run, rows, now) {
   run.notes.push("目標を自分で計算：" + rows.length + "行／書き戻し " + stmts.length + "行"
     + "（広告料率 " + ps.S.adRate + "%・為替 " + ps.S.fx + "円）");
   return { rows: out, wrote: stmts.length, S: ps.S, fx: ps.fx };
+}
+
+/* 「売れた値段で保つ」印を立てるか（7.54）。判定は shared/pricing.js の
+   skKeepOff に1か所だけ置いてある（再出品の判定 skRelist と同じものを読む）。
+   無在庫は SKU のラベルからも分かるので、items にまだ行が無い初回の販売でも
+   拾えるように、D1 の値と重ねて渡す（ここは値を集めるだけで、
+   「何を外すか」は決めていない）。 */
+function skStampOff(row, line) {
+  const r = row || {};
+  return PRICING.skKeepOff({
+    one_off: r.one_off, one_off_known: r.one_off_known,
+    dropship: Number(r.dropship || 0) || ((line && line.dropship) ? 1 : 0) });
 }
 
 /* ================= 売れた値段で再出品する（7.53）=================
@@ -5471,6 +5501,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,
                         skSettings, skPlanRows, jobSoldKeep, SK_MAX, SK_FAIL_WARN,
+                        skStampOff,
                         selfTargets, selfFill, wantFresh, WANT_FRESH_MS,
                         SELF_WRITE_MAX, ITEM_COLS,
                         imageSize, jobGetItem, jobEpsTest,

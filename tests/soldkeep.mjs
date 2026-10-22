@@ -193,6 +193,28 @@ console.log('   '+stk.sk_why);
 ok(stk.ebay_qty===0&&/下限利益を割ります/.test(stk.sk_why||''),
    '★★手持ちが無く仕入れ値が高い行は数量0のまま、理由を残す');
 
+console.log('\n=== 印を立てない行（7.54・一点物と無在庫）===');
+/* 判定は shared/pricing.js の skKeepOff に1か所だけ。
+   印を立てる側（jobOrders）と再出品の判定（skRelist）が同じものを読む。 */
+ok(PRICING.skKeepOff({ one_off: 1 })==='一点物','★★一点物は印を立てない');
+ok(PRICING.skKeepOff({ dropship: 1 })==='無在庫（いまは対象外）',
+   '★★無在庫は印を立てない（いまは対象外）');
+ok(PRICING.skKeepOff({ one_off_known: 0 })==='',
+   '★★一点物かどうかが未確定の行は**印を立てる**（人に決めてもらう）');
+ok(PRICING.skKeepOff({})===''&&PRICING.skKeepOff(null)==='',
+   '★ふつうの行は立てる');
+/* jobOrders から呼ぶ形。items にまだ行が無い初回の販売でも、
+   SKU のラベルの無在庫を拾えること。 */
+ok(W.skStampOff({ one_off: 1, one_off_known: 1 }, {})==='一点物',
+   '★★D1 の一点物を見る');
+ok(W.skStampOff({ dropship: 1 }, {})==='無在庫（いまは対象外）','★★D1 の無在庫を見る');
+ok(W.skStampOff(null, { dropship: true })==='無在庫（いまは対象外）',
+   '★★行が無い初回の販売でも、SKU の無在庫を拾う');
+ok(W.skStampOff(null, {})===''&&W.skStampOff({ one_off_known: 0 }, {})==='',
+   '★★ふつうの行と未確定の行は立てる');
+console.log('   '+JSON.stringify([W.skStampOff({one_off:1},{}),
+  W.skStampOff(null,{dropship:true}),W.skStampOff({one_off_known:0},{})]));
+
 console.log('\n=== 対象外 ===');
 await wipe(); calls=[];
 await seed('B0SK000030',{one_off:1});
@@ -209,9 +231,12 @@ res=await sk();
 console.log('   '+JSON.stringify({picked:res.picked,skipped:res.skipped,
   calls:calls.length}));
 ok(res.picked===0&&calls.length===0,'★★どれも再出品しない（eBay も呼ばない）');
-const w30=await row('B0SK000030'), w32=await row('B0SK000032');
+const w30=await row('B0SK000030'), w31=await row('B0SK000031'),
+      w32=await row('B0SK000032');
 ok(w30.sk_why==='一点物'&&w32.sk_why==='無在庫（いまは対象外）',
    '★★理由を行に残す');
+ok(w31.sk_why==='一点物か確認してください',
+   '★★未確定の行は「一点物か確認してください」と出す（7.54）');
 
 console.log('\n=== 仕入れ値の鮮度と在庫 ===');
 await wipe();

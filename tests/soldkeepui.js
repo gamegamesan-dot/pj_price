@@ -69,7 +69,10 @@ const setup=async(o)=>await p.evaluate((o)=>{
       amazon_offers_json:'[{"p":90000,"c":"good"}]'}),  // 手持ちで出せる
     it('B0SKU00003',{amazon_lowest:90000,
       amazon_offers_json:'[{"p":90000,"c":"good"}]'}),  // 赤字 → 出せない
+    /* 一点物の行。v177 からは印そのものを立てないが（7.54）、それより前に
+       立った行が残っていても理由を出せること。 */
     it('B0SKU00004',{one_off:1}),                       // 一点物 → 出せない
+    it('B0SKU00007',{one_off_known:0}),                 // 未確定 → 人に決めてもらう
     it('B0SKU00005',{ebay_qty:2,mark_at:null,md_done:0}), // 2点以上・値下げ停止だけ
     it('B0SKU00006',{sold_keep:0,sold_price:null,sold_kept_at:null,
       ebay_qty:1,md_done:0})                            // 保っていない（比べる用）
@@ -150,11 +153,11 @@ let v=await view();
 console.log('   '+v.note.replace(/\n/g,' / '));
 console.log('   '+v.list.replace(/\n/g,' / '));
 ok(v.bar!=='none','★保っている行があれば帯を出す');
-ok(/売れた値段で保っている：5件/.test(v.note),'★★保っている件数を出す');
+ok(/売れた値段で保っている：6件/.test(v.note),'★★保っている件数を出す');
 ok(/再出品は確認してから/.test(v.note),'★★いまの設定を出す');
 ok(v.n===2&&v.from==='local','★★出せる2件だけが予定に入る');
 ok(/「まとめて再出品」を押すまで eBay は変えません/.test(v.note),'★★そう書く');
-ok(/2件は数量0のまま再出品できません/.test(v.note),'★★出せない件数を出す');
+ok(/3件は数量0のまま再出品できません/.test(v.note),'★★出せない件数を出す');
 ok(/B0SKU00002の商品/.test(v.list)&&/手持ちの在庫/.test(v.list),
    '★★手持ちで出せる行はそう書く');
 ok(/B0SKU00001の商品/.test(v.list)&&/仕入 ¥3,000/.test(v.list),
@@ -175,12 +178,17 @@ ok(/下限利益を割ります/.test(t3),'★★理由を行に出す');
 ok(/90,000/.test(t3),'★いまの仕入れ値を出す');
 let t4=await rowText('B0SKU00004|used');
 ok(/一点物/.test(t4),'★★一点物は対象外と出す');
+let t7=await rowText('B0SKU00007|used');
+console.log('   '+t7.replace(/\n/g,' / ').slice(0,200));
+ok(/一点物か確認してください/.test(t7),
+   '★★一点物かどうかが未確定の行は「一点物か確認してください」と出す（7.54）');
 let warn=await p.evaluate(()=>{
   $('syncFilter').value='warn'; syncRender();
   return Array.from(document.querySelectorAll('#syncList [data-srow]'))
     .map(function(e){ return e.getAttribute('data-srow'); }); });
 console.log('   対応が必要：'+JSON.stringify(warn));
-ok(warn.indexOf('B0SKU00003|used')>=0&&warn.indexOf('B0SKU00004|used')>=0,
+ok(warn.indexOf('B0SKU00003|used')>=0&&warn.indexOf('B0SKU00004|used')>=0
+   &&warn.indexOf('B0SKU00007|used')>=0,
    '★★数量0のまま出せない行は「対応が必要」に入る');
 ok(warn.indexOf('B0SKU00001|used')<0,'★★出せる行は入らない');
 ok(warn.indexOf('B0SKU00005|used')<0,'★数量がある行は入らない');
