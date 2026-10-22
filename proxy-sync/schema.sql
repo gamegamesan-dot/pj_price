@@ -143,6 +143,22 @@ CREATE TABLE IF NOT EXISTS items (
   rk_at            TEXT,                      -- 予定を立てた時刻
   rk_done_at       TEXT,                      -- 反映した時刻
   rk_fail          INTEGER NOT NULL DEFAULT 0,-- 連続失敗の回数
+  /* 売れた値段で保ち、同じ値段で再出品する（migrate-0023）。
+     値下げの途中で売れたら、その値段が「売れる値段」だと分かったということ
+     なので、それ以上下げない（値上げもしない）。 */
+  sold_keep        INTEGER NOT NULL DEFAULT 0,-- 売れた値段で保つ
+  sold_price       REAL,                      -- 売れた時点の出品価格（$）
+  sold_kept_at     TEXT,                      -- 売れた日時（eBayの注文）
+  sk_act           TEXT,                      -- 再出品の予定 'relist'
+  sk_why           TEXT,                      -- できない理由
+  sk_at            TEXT,                      -- 判定した時刻
+  sk_done_at       TEXT,                      -- 再出品した時刻
+  sk_fail          INTEGER NOT NULL DEFAULT 0,-- 連続失敗の回数
+  /* 仕入れ先（将来のマッチングワールド）。buySource() が見る形だけ用意してある。 */
+  mw_low           REAL,                      -- 仕入れ値（円・送料込み）
+  mw_low_at        TEXT,                      -- その取得日時
+  mw_n             INTEGER,                   -- 同じ値段の出品者数（相当）
+  mw_stock         INTEGER,                   -- 在庫 1=あり／0=なし／NULL=不明
   updated_at       TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
@@ -367,3 +383,34 @@ CREATE TABLE IF NOT EXISTS rk_log (
 );
 CREATE INDEX IF NOT EXISTS idx_rk_log_at ON rk_log(at);
 CREATE INDEX IF NOT EXISTS idx_rk_log_key ON rk_log(asin, cond, at);
+
+/* 売れた値段での再出品の記録（migrate-0023）。 */
+CREATE TABLE IF NOT EXISTS sk_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  mode       TEXT NOT NULL,
+  picked     INTEGER NOT NULL DEFAULT 0,
+  relisted   INTEGER NOT NULL DEFAULT 0,
+  failed     INTEGER NOT NULL DEFAULT 0,
+  skipped    INTEGER NOT NULL DEFAULT 0,
+  capped     INTEGER NOT NULL DEFAULT 0,
+  ended      INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sk_runs_at ON sk_runs(at);
+CREATE TABLE IF NOT EXISTS sk_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  item_id    TEXT,
+  kind       TEXT NOT NULL,
+  price      REAL,
+  buy_low    REAL,
+  buy_src    TEXT,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  why        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sk_log_at ON sk_log(at);
+CREATE INDEX IF NOT EXISTS idx_sk_log_key ON sk_log(asin, cond, at);

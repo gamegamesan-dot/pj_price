@@ -203,7 +203,9 @@ const STAFF_DENY = ["md_step", "md_floor", "md_n", "md_start",
                     // フェイズB（7.47）。再調達の売値と「今回は動かさない」も管理者だけ
                     "pb_want", "pb_max_cost", "pb_skip",
                     // 再調達中の売値の追従（7.48）
-                    "rk_want", "rk_floor", "rk_low", "rk_n", "rk_max_cost"];
+                    "rk_want", "rk_floor", "rk_low", "rk_n", "rk_max_cost",
+                    // 売れた値段で保つ印（7.53）。値下げの再開は値段を動かす操作
+                    "sold_keep"];
 function staffDenyFields(body) {
   const list = Array.isArray(body && body.items) ? body.items : [];
   const hit = {};
@@ -1311,6 +1313,8 @@ const ITEM_COLS = `asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, e
   search_kw,
   rv_want, rv_floor, rv_kind, rv_max_cost, rv_at, rv_done_at, rv_fail,
   rk_want, rk_floor, rk_low, rk_n, rk_max_cost, rk_want_at, rk_at, rk_done_at, rk_fail,
+  sold_keep, sold_price, sold_kept_at, sk_act, sk_why, sk_at, sk_done_at, sk_fail,
+  mw_low, mw_low_at, mw_n, mw_stock,
   weight_g, cost_yen, sold_usd, mark_at, mark_stop, ebay_first,
   md_step, md_start, md_floor, md_n, md_done,
   amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
@@ -1443,7 +1447,7 @@ async function syncOrders(env, run, days, maxItems) {
         estmts.push(itemSeed(env, k.asin, k.cond, k.scope, ""));
         keys.push({ asin: k.asin, cond: k.cond });
         soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId,
-                     qty: Number(li.qty || 0),
+                     qty: Number(li.qty || 0), at: o.at || "",
                      shipBy: li.shipBy || "", dropship: !!k.dropship });
       } else {
         /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
@@ -1457,10 +1461,11 @@ async function syncOrders(env, run, days, maxItems) {
   /* カートリッジのみの手元在庫を減らすのは「初めて見た明細」だけ。
      eBayの注文は lastmodifieddate で引くので、状態が変わると同じ注文が何度も返る。
      orders に既にある (order_id, line_id) は数えない。 */
+  /* いまは「カートリッジのみの手元在庫を減らす」と「売れた値段で保つ印を立てる」
+     （7.53）の2つで使うので、**全部の行**について初めて見た明細かを調べる。 */
   const fresh = {};
   {
-    const pairs = soldE.filter((x) => isCart(x))
-      .map((x) => ({ o: x.orderId, l: x.line }));
+    const pairs = soldE.map((x) => ({ o: x.orderId, l: x.line }));
     const known = {};
     for (let i = 0; i < pairs.length; i += 40) {
       const part = pairs.slice(i, i + 40);
@@ -1473,7 +1478,19 @@ async function syncOrders(env, run, days, maxItems) {
       for (const x of (got && got.results) || []) known[x.order_id + "|" + x.line_id] = 1;
     }
     for (const x of soldE)
-      if (isCart(x)) fresh[x.orderId + "|" + x.line] = !known[x.orderId + "|" + x.line];
+      fresh[x.orderId + "|" + x.line] = !known[x.orderId + "|" + x.line];
+  }
+  /* 売れた値段で保つ（7.53）。初めて見た明細の行だけ、**そのときの出品価格**を
+     控えて印を立てる。落札額（orders.amount）はベストオファーで値引きされた額
+     なので使わない（それを保つと値段が下がり続ける）。
+     再出品の予定（sk_act）と連続失敗（sk_fail）は、売れ直したので作り直す。 */
+  for (const x of soldE) {
+    if (!fresh[x.orderId + "|" + x.line]) continue;
+    estmts.push(env.DB.prepare(
+      `UPDATE items SET sold_keep=1,
+         sold_price=CASE WHEN COALESCE(ebay_price,0)>0 THEN ebay_price ELSE sold_price END,
+         sold_kept_at=?3, sk_act=NULL, sk_why=NULL, sk_fail=0, updated_at=?4
+       WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, x.at || nowIso(), nowIso()));
   }
   await runBatch(env, run, estmts);
 
@@ -2130,6 +2147,11 @@ function mdSkip(r, st, cutoff) {
   if (Number(r.restocking || 0)) return "再調達中";
   if (Number(r.ebay_sale || 0)) return "eBayのセール中";
   if (Number(r.ebay_qty || 0) <= 0) return "数量0";
+  /* 売れたら、その値段が「売れる値段」だと分かったということなので下げない（7.53）。
+     sold_keep は eBay で売れたときに立てる。
+     下の mark/sold の比べ方は、印を立てる前（v175以前）に売れた行のための保険。
+     こちらだけだと **一度も値下げしていない行（mark_at が空）が止まらなかった**。 */
+  if (Number(r.sold_keep || 0)) return "売れた値段で保っています";
   const mark = String(r.mark_at || "");
   const sold = String(r.ebay_sold_at || "");
   if (mark && sold && sold > mark) return "売れたので値下げ停止";
@@ -2399,6 +2421,10 @@ function rvLoss(r) {
 function rvSkip(r, st) {
   if (!String(r.ebay_item_id || "").trim()) return "出品していません";
   if (Number(r.ebay_sale || 0)) return "eBayのセール中";
+  /* 売れた値段で保っている行は**値上げもしない**（7.53）。
+     これまでは値下げだけ止めていたので、Amazon最安値が上がると
+     売れた値段より上に引き上げられていた。 */
+  if (Number(r.sold_keep || 0)) return "売れた値段で保っています";
   /* 再調達中の行は「再調達中の売値の追従」（7.48）が上げも下げも見る。
      こちらで触ると同じ行を2つの仕組みが動かすことになるので外す。 */
   if (isRestocking(r)) return "再調達中（売値の追従が見ます）";
@@ -2441,12 +2467,15 @@ function invBody(list) {
     "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
   /* kind='zero'      … 数量0（売り越しを止める）
      kind='restock'   … 売値と数量を1回で変える（フェイズBの再調達・7.47）
+     kind='relist'    … **数量だけ**1に戻す（売れた値段で再出品・7.53。売値は送らない）
      それ以外         … 売値だけ（売値の自動反映） */
   const one = (x) => {
     if (x.kind === "zero") return "<Quantity>0</Quantity>";
     if (x.kind === "restock")
       return money("StartPrice", x.to) + "<Quantity>" + Math.max(0, Math.round(x.qty || 1))
         + "</Quantity>";
+    if (x.kind === "relist")
+      return "<Quantity>" + Math.max(1, Math.round(x.qty || 1)) + "</Quantity>";
     return money("StartPrice", x.to);
   };
   return '<?xml version="1.0" encoding="utf-8"?>'
@@ -3207,12 +3236,282 @@ async function selfFill(env, run, rows, now) {
   return { rows: out, wrote: stmts.length, S: ps.S, fx: ps.fx };
 }
 
+/* ================= 売れた値段で再出品する（7.53）=================
+   自動値下げで下げている途中に売れた行は、**その値段が「売れる値段」だと
+   分かった**ということ。だから
+   ・それ以上下げない（mdSkip）／値上げもしない（rvSkip）
+   ・売れて数量0になった行は、**同じ値段のまま数量1に戻す**
+   を行う。判定（条件）は shared/pricing.js の skRelist に1か所だけ置いてある
+   （画面と同じ決まりで動かすため）。
+
+   歯止めはフェイズBの再調達（7.47）と同じ:
+   ・1日 SK_MAX 件まで（再調達とは**別枠**）
+   ・対象は sk_act='relist' かつ数量0の行だけ（二重実行の防止）
+   ・書き込みの前に GetItem で数量0を確かめ、違えば次回に回す
+   ・書き込みの後に GetItem で Active を確かめる（出品が終了していないか）
+   ・続けて3回失敗した行は自動処理から外す
+   ・数量を増やすのは、この再出品と再調達のときだけ */
+const SK_MODES = { confirm: 1, auto: 1 };
+const SK_MAX = 30;                       // 1日に再出品する上限（再調達とは別枠）
+const SK_BATCH = RV_BATCH;               // ReviseInventoryStatus は1回4件まで
+const SK_PICK_LIMIT = 400;               // 判定で見る行数
+const SK_PLAN_SHOW = 20;                 // 画面・通知に出す予定の件数
+const SK_FAIL_WARN = 3;
+const SK_PLAN_KEY = "sk.plan";
+
+async function skSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const mode = String(st.autoSkMode || "confirm");
+  return { mode: SK_MODES[mode] ? mode : "confirm" };
+}
+async function skUsedToday(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM sk_log WHERE kind='relist' AND ok=1 AND at>=?1`)
+      .bind(dayKey() + "T00:00:00Z").first();
+    return Number((r && r.n) || 0);
+  } catch (e) { return 0; }
+}
+async function skPlanGet(env) {
+  try {
+    const t = await stateGet(env, SK_PLAN_KEY);
+    return t ? JSON.parse(t) : null;
+  } catch (e) { return null; }
+}
+async function skPlanSet(env, o) {
+  try { await stateSet(env, SK_PLAN_KEY, JSON.stringify(o)).run(); } catch (e) { /* 予定の保存で本処理を落とさない */ }
+}
+async function skLast(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT at, mode, picked, relisted, failed, skipped, capped, ended
+         FROM sk_runs ORDER BY id DESC LIMIT 1`).first();
+    return r || null;
+  } catch (e) { return null; }
+}
+function skLogRow(env, at, r, a, ok, why) {
+  return env.DB.prepare(
+    `INSERT INTO sk_log (at, asin, cond, item_id, kind, price, buy_low, buy_src, ok, why)
+     VALUES (?1,?2,?3,?4,'relist',?5,?6,?7,?8,?9)`
+  ).bind(at, r.asin, r.cond, String(r.ebay_item_id || ""),
+         (a && a.price) || null,
+         (a && a.buy && a.buy.low) || null,
+         (a && a.hand) ? "hand" : ((a && a.buy && a.buy.src) || ""),
+         ok ? 1 : 0, String(why || "").slice(0, 300));
+}
+async function skLogRun(env, run, res, scopeErr) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sk_runs (at, mode, picked, relisted, failed, skipped, capped, ended,
+         note, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?1)`
+    ).bind(nowIso(), res.mode, res.picked, res.relisted, res.failed, res.skipped,
+           res.capped, res.ended,
+           ((scopeErr ? ("権限不足 " + scopeErr + " / ") : "")
+            + "1日 " + SK_MAX + "件（再調達とは別枠）").slice(0, 500)).run();
+  } catch (e) { run.notes.push("sk_runs に残せません：" + e.message); }
+}
+async function skFailN(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE COALESCE(sk_fail,0)>=?1`)
+      .bind(SK_FAIL_WARN).first();
+    return Number((r && r.n) || 0);
+  } catch (e) { return 0; }
+}
+function skNotifyText(res) {
+  const plan = (res.mode === "confirm");
+  if (plan && !res.picked) return "";
+  if (!plan && !res.relisted && !res.failed) return "";
+  const t = [];
+  if (plan) {
+    t.push("🔁 売れた値段で再出品（確認してから）：予定 " + res.picked + "件");
+    t.push("販売連携タブの「売れた値段でまとめて再出品」を押すと実行します"
+      + "（eBay はまだ変えていません）");
+  } else {
+    t.push("🔁 売れた値段で再出品しました"
+      + (res.mode === "approve" ? "（まとめて実行）" : "（自動）"));
+    t.push("再出品 " + res.relisted + "件／失敗 " + res.failed + "件／とばした "
+      + res.skipped + "件");
+  }
+  if (res.capped)
+    t.push("1日の上限 " + SK_MAX + "件を超えた " + res.capped + "件は翌日に回しました");
+  if (res.ended)
+    t.push("⚠️ " + res.ended + "件は出品が終了していました"
+      + "（Out-of-stock control を確認してください）");
+  if (res.fail3)
+    t.push("⚠️ " + res.fail3 + "件は " + SK_FAIL_WARN + "回以上続けて失敗しています");
+  res.plan.slice(0, 10).forEach((x) => {
+    t.push("・" + x.name + "（" + x.asin + "）：$" + Number(x.price).toFixed(2)
+      + " で数量1に戻す"
+      + (x.hand ? "（手持ちの在庫）"
+                : (x.buy_low ? ("（仕入 " + Math.round(x.buy_low) + "円・上限 "
+                                + x.max + "円）") : "")));
+  });
+  return t.join("\n");
+}
+/* 予定を立てる。できない行は理由を sk_why に残して「対応が必要」に出す。 */
+async function skPlanRows(env, run) {
+  const ps = await pricingSettings(env, run);
+  const q = await env.DB.prepare(
+    `SELECT ${ITEM_COLS} FROM items
+      WHERE sold_keep=1 AND COALESCE(ebay_qty,0)=0 AND COALESCE(ebay_item_id,'')<>''
+      ORDER BY COALESCE(sk_at,'') ASC LIMIT ${SK_PICK_LIMIT}`).all();
+  const rows = (q && q.results) || [];
+  const at = nowIso();
+  const due = [], stmts = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const a = PRICING.skRelist(ps.S, r);
+    if (a.act !== "relist") {
+      skipped++;
+      /* 理由が変わったときだけ書く（毎回同じ値を書かない）。 */
+      if (String(r.sk_why || "") !== a.why || String(r.sk_act || "") === "relist")
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET sk_act=NULL, sk_why=?3, sk_at=?4, updated_at=?4
+           WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, a.why, at));
+      continue;
+    }
+    due.push(Object.assign({ r: r, asin: r.asin, cond: r.cond,
+      item_id: String(r.ebay_item_id || ""),
+      name: r.title || r.ebay_sku || r.asin }, a));
+    if (String(r.sk_act || "") !== "relist" || String(r.sk_why || "") !== a.why)
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET sk_act='relist', sk_why=?3, sk_at=?4, updated_at=?4
+         WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, a.why, at));
+  }
+  if (stmts.length) await runBatch(env, run, stmts);
+  return { due: due, skipped: skipped, total: rows.length, S: ps.S };
+}
+/* 売れた値段での再出品。approve＝true のときは「確認してから」でも実行する。 */
+async function jobSoldKeep(env, opt) {
+  const approve = !!(opt && opt.approve);
+  const run = newRun("soldkeep");
+  const res = { mode: "confirm", picked: 0, relisted: 0, failed: 0, skipped: 0,
+                capped: 0, ended: 0, used: 0, max: SK_MAX, fail3: 0, plan: [] };
+  try {
+    const st = await skSettings(env);
+    res.mode = approve ? "approve" : st.mode;
+    const pick = await skPlanRows(env, run);
+    res.picked = pick.due.length;
+    res.skipped = pick.skipped;
+    res.used = await skUsedToday(env);
+    const left = Math.max(0, SK_MAX - res.used);
+    const list = pick.due.slice(0, left);
+    res.capped = pick.due.length - list.length;
+    res.plan = list.slice(0, SK_PLAN_SHOW).map((x) => ({
+      asin: x.asin, cond: x.cond, item_id: x.item_id, name: x.name,
+      price: x.price, hand: !!x.hand, max: x.max || 0,
+      buy_low: (x.buy && x.buy.low) || 0, buy_src: x.hand ? "hand"
+        : ((x.buy && x.buy.src) || ""), why: x.why }));
+    res.fail3 = await skFailN(env);
+    const planRow = { at: nowIso(), mode: res.mode, n: pick.due.length,
+      capped: res.capped, skipped: res.skipped, used: res.used, max: SK_MAX,
+      rows: res.plan };
+    // 「確認してから」のときは eBay を1回も呼ばない
+    if (!approve && st.mode === "confirm") {
+      await skPlanSet(env, planRow);
+      run.notes.push("確認してから：" + res.picked + "件が再出品の候補／とばした "
+        + res.skipped + "件。eBay は変えていません");
+      await skLogRun(env, run, res, "");
+      await notify(env, run, skNotifyText(res));
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!list.length) {
+      run.notes.push("再出品する出品はありません（とばした " + res.skipped + "件"
+        + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : "") + "）");
+      await skPlanSet(env, Object.assign({}, planRow, { n: 0, rows: [] }));
+      await skLogRun(env, run, res, "");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const token = await ebayToken(env, run);
+    const at = nowIso();
+    const stmts = [];
+    let scopeErr = "";
+    for (const x of list) {
+      /* ① 書き込みの前に、本当に数量0かを確かめる（二重に戻さない）。 */
+      const cur = await pbGetItem(env, run, token, x.item_id);
+      if (!cur.ok || Number(cur.qty || 0) !== 0) {
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET sk_why=?3, sk_at=?4, updated_at=?4
+           WHERE asin=?1 AND cond=?2`)
+          .bind(x.asin, x.cond,
+            cur.ok ? "eBay の数量が0ではありません（次回に判定し直します）"
+                   : ("いまの出品を確かめられません：" + cur.why), at));
+        continue;
+      }
+      /* ② 数量だけ1に戻す（売値は送らない＝売れた値段のまま）。
+         ベストオファーのある出品も、売値を変えないので金額の整合は崩れない。 */
+      const v = await ebayReviseInv(env, run, token,
+        [{ item_id: x.item_id, kind: "relist", qty: 1 }]);
+      const ok = v.ok(x.item_id);
+      if (!ok) {
+        const one = v.errFor(x.item_id);
+        const why = (one && one.why) || v.why;
+        if (SALE_ERR.test(why || "")) {
+          /* セール中の出品。失敗には数えず、印を立てて対象から外す（6.59 と同じ）。 */
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET ebay_sale=1, sk_fail=0, sk_act=NULL,
+               sk_why='eBayのセール中のため再出品しません', sk_at=?3, updated_at=?3
+             WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, at));
+          stmts.push(skLogRow(env, at, x.r, x, 0, "セール中（21919248）"));
+          continue;
+        }
+        res.failed++; run.errors++;
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET sk_fail=COALESCE(sk_fail,0)+1, sk_why=?3, sk_at=?4,
+             revise_err=?5, revise_err_at=?4, updated_at=?4
+           WHERE asin=?1 AND cond=?2`)
+          .bind(x.asin, x.cond, ("再出品できません：" + why).slice(0, 300), at,
+                ("売れた値段での再出品 " + why).slice(0, 300)));
+        stmts.push(skLogRow(env, at, x.r, x, 0, why));
+        if (RV_SCOPE_ERR.test(why)) { scopeErr = why; break; }
+        continue;
+      }
+      /* ③ 書き込みの後に、出品が Active のままかを確かめる。 */
+      res.relisted++;
+      const after = await pbGetItem(env, run, token, x.item_id);
+      let note = "";
+      if (after.ok && !/^Active$/i.test(String(after.status || ""))) {
+        res.ended++;
+        note = "出品が終了していました（Out-of-stock control を確認してください）";
+      }
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET ebay_qty=1, sk_act=NULL, sk_why=?3, sk_done_at=?4,
+           sk_fail=0, revise_err=NULL, revise_err_at=NULL, updated_at=?4
+         WHERE asin=?1 AND cond=?2`)
+        .bind(x.asin, x.cond, note || ("売れた値段 $" + x.price.toFixed(2)
+          + " で再出品しました"), at));
+      stmts.push(skLogRow(env, at, x.r, x, 1, note || x.why));
+    }
+    await runBatch(env, run, stmts);
+    res.fail3 = await skFailN(env);
+    await skPlanSet(env, Object.assign({}, planRow, { n: 0, rows: [],
+      used: res.used + res.relisted,
+      ran: { relisted: res.relisted, failed: res.failed, ended: res.ended } }));
+    run.notes.push("売れた値段で再出品：" + res.relisted + "件／失敗 " + res.failed
+      + "件／とばした " + res.skipped + "件"
+      + (res.ended ? ("／出品が終了していた " + res.ended + "件") : "")
+      + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
+    if (scopeErr)
+      run.notes.push("権限が足りません（eBayのユーザートークンを取り直してください）："
+        + scopeErr);
+    await skLogRun(env, run, res, scopeErr);
+    await notify(env, run, skNotifyText(res));
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
 /* ================= フェイズB：FBAで売れたら eBay を直す（7.47）=================
    FBAで売れて販売可能が0になった出品が、eBayで数量1のまま残ると売り越しになる。
    **まず全部を数量0にして**売り越しを止め、「在庫0時の動作」が再調達の行だけ
    そのあと「売値を変えて数量を1に戻す」。承認待ちのあいだ古い売値で売れないようにする。
 
-   ・数量を増やすのは、この再調達の実行のときだけ（ほかの処理では増やさない）
+   ・数量を増やすのは、この再調達の実行と「売れた値段での再出品」（7.53）のときだけ
+     （ほかの処理では増やさない）
    ・再調達の売値（pb_want）は pj_price が計算して送る（Worker は値付けの式を持たない）
    ・書き込みの前に GetItem で今の数量・売値を確かめ、判定時と違えば実行しない
    ・数量0の直後にも GetItem で ListingStatus を見て、Active のままかを確かめる
@@ -4468,6 +4767,9 @@ async function statusBody(env, url) {
     rk_last: await rkLast(env),
     /* 3時間ごとの最安値（7.49）。取り切れなかった件数を画面に出す。 */
     hot_pricing: await pricingHotLast(env),
+    /* 売れた値段での再出品（7.53）。予定と前回の結果を画面の帯に出す。 */
+    sk_plan: await skPlanGet(env),
+    sk_last: await skLast(env),
     /* Worker が使っている為替（7.50）。画面の⚙設定に出して見比べられるようにする。
        ここでは控えだけを見る（/status で外に問い合わせない）。 */
     fx: await fxCached(env),
@@ -4618,7 +4920,9 @@ async function putListings(env, body) {
          sold_usd=COALESCE(?19, sold_usd),
          /* 3日ごとの値下げの記録。空文字（''）を送ると消す
             （アップロードが Failure だったときに、進めた記録を戻すため）。 */
-         mark_at=CASE WHEN ?20='' THEN NULL ELSE COALESCE(?20, mark_at) END,
+         /* 売れた値段で保つ印を 0 にした（値下げの再開・7.53）ときも消す。 */
+         mark_at=CASE WHEN ?41=0 THEN NULL
+                      WHEN ?20='' THEN NULL ELSE COALESCE(?20, mark_at) END,
          mark_stop=COALESCE(?21, mark_stop),
          -- eBay優先の印（Amazon同等ラインでの引き上げをやめる行）
          ebay_first=COALESCE(?22, ebay_first),
@@ -4629,7 +4933,8 @@ async function putListings(env, body) {
          md_step=COALESCE(?24, md_step),
          md_floor=COALESCE(?25, md_floor),
          md_n=COALESCE(?26, md_n),
-         md_done=CASE WHEN ?27 IS NOT NULL AND (md_start IS NULL OR md_start<>?27)
+         md_done=CASE WHEN ?41=0 THEN 0
+                      WHEN ?27 IS NOT NULL AND (md_start IS NULL OR md_start<>?27)
                       THEN 0 ELSE md_done END,
          md_start=COALESCE(?27, md_start),
          /* 相場を調べるときの検索語（手で直したもの）。空文字（''）で消す。 */
@@ -4664,6 +4969,13 @@ async function putListings(env, body) {
          rk_want_at=CASE WHEN ?36 IS NULL THEN rk_want_at ELSE ?8 END,
          /* 「今回は動かさない」を外したら、続けて失敗した回数も0に戻す。 */
          pb_fail=CASE WHEN ?35=0 THEN 0 ELSE pb_fail END,
+         /* 売れた値段で保つ印（7.53）。0 を送ると「値下げを再開」になるので、
+            最後に値下げした日（mark_at）と進めた回数（md_done）も消す
+            ＝売れた値段から、同じ幅で数え直す。 */
+         sold_keep=COALESCE(?41, sold_keep),
+         sk_act=CASE WHEN ?41=0 THEN NULL ELSE sk_act END,
+         sk_why=CASE WHEN ?41=0 THEN NULL ELSE sk_why END,
+         sk_fail=CASE WHEN ?41=0 THEN 0 ELSE sk_fail END,
          /* アップロード結果の失敗の理由。空文字（''）で消す（直ったとき）。 */
          revise_err=CASE WHEN ?23='' THEN NULL ELSE COALESCE(?23, revise_err) END,
          revise_err_at=CASE WHEN ?23='' THEN NULL
@@ -4707,7 +5019,7 @@ async function putListings(env, body) {
            numOf(x, "rk_want"), numOf(x, "rk_floor"), numOf(x, "rk_low"),
            (x.rk_n === null || x.rk_n === undefined) ? null
              : Math.max(0, Math.round(Number(x.rk_n) || 0)),
-           numOf(x, "rk_max_cost")));
+           numOf(x, "rk_max_cost"), flagOf(x, "sold_keep")));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -5074,6 +5386,11 @@ export default {
            approve:true は販売連携タブの「再調達をまとめて実行」。 */
         if (kind === "phaseb")
           return json(await jobPhaseB(env, { approve: body.approve === true }), 200, origin);
+        /* 売れた値段での再出品（7.53）。既定は「確認してから」。
+           approve:true は販売連携タブの「売れた値段でまとめて再出品」。 */
+        if (kind === "soldkeep")
+          return json(await jobSoldKeep(env, { approve: body.approve === true }),
+            200, origin);
         /* 再調達中の売値の追従（7.48）。既定は自動なので、ふだんは Cron が回す。
            approve:true は「確認してから」のときの手動実行。 */
         if (kind === "restockprice")
@@ -5107,7 +5424,14 @@ export default {
     ctx.waitUntil(shipNamesLoad(env));      // 配送ポリシーの名前を読んでおく
     /* 15分ごと：注文の取り込み → フェイズB（FBAで売れた行の数量0）。 */
     if (cron.indexOf("*/15") === 0) {
-      ctx.waitUntil((async () => { await jobOrders(env, 0); await jobPhaseB(env, {}); })());
+      ctx.waitUntil((async () => {
+        await jobOrders(env, 0);
+        await jobPhaseB(env, {});
+        /* 売れた値段での再出品（7.53）。注文を取り込んだ直後に判定するので、
+           売れてすぐ（15分以内）に数量が戻る。
+           「確認してから」のときは予定を立てるだけ。 */
+        await jobSoldKeep(env, {});
+      })());
       return;
     }
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
@@ -5123,6 +5447,7 @@ export default {
       }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
+      await jobSoldKeep(env, {});        // 売れた値段での再出品（7.53）
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -5145,6 +5470,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,
+                        skSettings, skPlanRows, jobSoldKeep, SK_MAX, SK_FAIL_WARN,
                         selfTargets, selfFill, wantFresh, WANT_FRESH_MS,
                         SELF_WRITE_MAX, ITEM_COLS,
                         imageSize, jobGetItem, jobEpsTest,

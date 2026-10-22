@@ -103,7 +103,9 @@ const out=await p.evaluate((o)=>{
     sold_usd:null,amazon_lowest:9000,amazon_offers:3,
     amazon_offers_json:'[{"p":9000,"c":"good"},{"p":9100,"c":"verygood"}]',
     amazon_new_low:null,amazon_new_n:0,
-    amazon_lowest_at:'2026-10-19T12:00:00Z',
+    /* 鮮度の判定（lowOf・24時間）に効くので、日付は固定しない。
+       固定するとその日を越えた翌日から pbWant が「古い」に落ちる。 */
+    amazon_lowest_at:new Date(Date.now()-3600000).toISOString(),
     warnings:[],notes:[],state:'ok'},x||{});
   const items=[
     it('B0BASE0001'),                                             // 仕入値なし

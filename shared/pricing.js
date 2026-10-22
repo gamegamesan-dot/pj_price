@@ -95,7 +95,8 @@
     csvMarkStep: 1,        // 1回の値下げ幅の最低（$）
     csvMarkTimes: 10,      // 値下げの回数
     amzFeeRate: 15,        // Amazon販売手数料（%）
-    amzFbaFee: 400         // FBA配送代行手数料（円）
+    amzFbaFee: 400,        // FBA配送代行手数料（円）
+    buySrc: "auto"         // 仕入れ先 auto / amazon / mw（いまは Amazon だけ）
   };
   var NUM_KEYS = ["fx", "fxc", "fee", "intlFee", "adRate", "feeTax", "fixed", "pack",
                   "shipCharge", "usTaxRate", "baseProfit", "linkRate", "saleRate",
@@ -106,6 +107,7 @@
   var BOOL_KEYS = ["dutyShip", "taxRefund", "stampDisc",
                    "syncSkipAcc", "csvReviewZero"];
   var MODES = { auto: 1, yen: 1, rate: 1 };
+  var BUY_SRCS_OK = { auto: 1, amazon: 1, mw: 1 };   // 仕入れ先の選び方
   function numOr(v, d) {
     var n = Number(v);
     return (v === "" || v === null || v === undefined || !isFinite(n)) ? d : n;
@@ -127,6 +129,8 @@
     BOOL_KEYS.forEach(function (k) { s[k] = boolOf(src[k], D[k]); });
     var m = String(src.targetMode || "");
     s.targetMode = MODES[m] ? m : DEFAULTS.targetMode;
+    var bs = String(src.buySrc || "");
+    s.buySrc = BUY_SRCS_OK[bs] ? bs : ROW_DEFAULTS.buySrc;
     return s;
   }
 
@@ -550,8 +554,102 @@
              rk_max_cost: maxCost(S, rec.price, weightOf(S, r).v, 0) };
   }
 
+  /* ================= 仕入れ先（差し替えられる作り）=================
+     「売れたあとに買い直せるか」を1か所で決める。
+     いまは Amazon最安値だけ。マッチングワールドを始めるときは
+     mw_low / mw_low_at / mw_n / mw_stock を埋める取り込みを1本書き、
+     ここの分岐を1つ足すだけで切り替わる（呼ぶ側は変えない）。
+
+     S.buySrc … 'auto'（既定・取れているうちの安いほう）/ 'amazon' / 'mw'
+     返り値
+       low   … 仕入れ値（円・送料込み）
+       at    … その値の取得日時
+       fresh … BUY_MS（24時間）以内か
+       has   … 値が取れているか
+       n     … 同じ値段の出品者数（相当）。1人だけの安値を避ける判定に使う
+       stock … 仕入れ先に在庫があるか true / false / null（分からない）
+       src   … 'amazon' / 'mw' */
+  var BUY_MS = LOW_MS;                   // 仕入れ値の鮮度（Amazon最安値と同じ24時間）
+  var BUY_SRCS = { auto: 1, amazon: 1, mw: 1 };
+  function buyAmazon(S, r, now) {
+    var lo = lowOf(S, r, now);
+    /* Amazon は「最安値が出ない＝出品が無い」で在庫なしと見る。
+       まだ一度も取っていない行は分からない（null）。 */
+    var stock = lo.at ? (lo.has && Number(r.amazon_offers || 0) > 0) : null;
+    return { low: lo.low, at: lo.at, fresh: lo.fresh, has: lo.has,
+             n: nearN(S, r), stock: stock, src: "amazon" };
+  }
+  function buyMw(S, r, now) {
+    var low = Number(r.mw_low || 0) || 0;
+    var at = String(r.mw_low_at || "");
+    var t = Date.parse(at);
+    var n = (now === undefined || now === null) ? Date.now() : now;
+    var st = r.mw_stock;
+    return { low: low, at: at, fresh: !!t && (n - t) <= BUY_MS, has: low > 0,
+             n: Number(r.mw_n || 0),
+             stock: (st === null || st === undefined) ? null : !!Number(st),
+             src: "mw" };
+  }
+  function buySource(S, r, now) {
+    var want = BUY_SRCS[String(S.buySrc || "")] ? String(S.buySrc) : "auto";
+    var a = buyAmazon(S, r, now), m = buyMw(S, r, now);
+    if (want === "amazon") return a;
+    if (want === "mw") return m;
+    /* auto … 使えるもの（取れていて新しい）のうち安いほう。
+       どちらも使えなければ、取れているほう（理由を出すため）。 */
+    var aOk = a.has && a.fresh, mOk = m.has && m.fresh;
+    if (aOk && mOk) return (m.low < a.low) ? m : a;
+    if (aOk) return a;
+    if (mOk) return m;
+    return a.has ? a : (m.has ? m : a);
+  }
+
+  /* ================= 売れた値段での再出品 =================
+     値下げの途中で売れた行は、その値段が「売れる値段」だと分かったということ。
+     数量0になった行を**同じ値段のまま**数量1に戻す。
+     返り値 { act:'relist'|'', why, price, hand, buy, max } */
+  var SK_FAIL_WARN = 3;                  // 続けてこの回数失敗したら自動処理から外す
+  function skRelist(S, r, now) {
+    var no = function (why) { return { act: "", why: why }; };
+    if (!Number(r.sold_keep || 0)) return no("売れた値段で保つ印がありません");
+    if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
+    if (Number(r.ebay_qty || 0) > 0) return no("数量があります");
+    var price = Math.round((Number(r.sold_price || 0) || 0) * 100) / 100;
+    if (!(price > 0)) return no("売れた値段が分かりません");
+    if (Number(r.one_off || 0)) return no("一点物");
+    if (!Number(r.one_off_known || 0)) return no("一点物かどうかが未確定");
+    /* 無在庫は「売れてから仕入れる」運用で、売れたら要仕入れの通知で回している。
+       いまは対象外（マッチングワールドを始めたらここを開ける）。 */
+    if (Number(r.dropship || 0)) return no("無在庫（いまは対象外）");
+    if (Number(r.restocking || 0)) return no("再調達中（売値の追従が見ます）");
+    if (String(r.pb_act || "") === "restock") return no("フェイズBの再調達の予定です");
+    if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
+    if (Number(r.pb_skip || 0)) return no("今回は動かさない");
+    if (Number(r.sk_fail || 0) >= SK_FAIL_WARN) return no("続けて失敗（対応が必要）");
+    /* ① FBA在庫・手元在庫があれば、それで出せる（仕入れ値は見ない）。 */
+    var hand = Number(r.fba_available || 0) > 0 || Number(r.on_hand || 0)
+      || Number(r.hand_qty || 0) > 0;
+    if (hand)
+      return { act: "relist", why: "手持ちの在庫で出せます", price: price,
+               hand: true, buy: null, max: 0 };
+    /* ② 無ければ仕入れ直す前提。いまの仕入れ値で、売れた値段でも下限利益が残るか。 */
+    var b = buySource(S, r, now);
+    /* 在庫なしを先に見る。取りに行って最安値が出なかった行（at はあるが low が0）は
+       「未取得」ではなく「在庫がありません」。 */
+    if (b.stock === false) return no("仕入れ先に在庫がありません");
+    if (!b.has) return no("仕入れ値が未取得");
+    if (!b.fresh) return no("仕入れ値が古い（24時間超）");
+    var max = maxCost(S, price, weightOf(S, r).v, flatOf(S, r));
+    if (!(max > 0)) return no("売れた値段では下限利益を確保できません");
+    if (b.low > max)
+      return no("いまの仕入れ値では下限利益を割ります（仕入 " + Math.round(b.low)
+        + "円 ＞ 上限 " + max + "円）");
+    return { act: "relist", why: "仕入れ直して出せます", price: price,
+             hand: false, buy: b, max: max };
+  }
+
   var API = {
-    VERSION: "2.0.0",
+    VERSION: "3.0.0",
     C: C, DEFAULTS: DEFAULTS, ROW_DEFAULTS: ROW_DEFAULTS,
     settings: settings,
     ceil2: ceil2, round2: round2, feeBreak: feeBreak,
@@ -568,7 +666,10 @@
     amzProfit: amzProfit, amzLine: amzLine, floorOf: floorOf,
     soldItem: soldItem, soldVerdict: soldVerdict, wantPrice: wantPrice,
     mdStep: mdStep, rvTarget: rvTarget, mdPlan: mdPlan,
-    lowOf: lowOf, pbWant: pbWant, rkWant: rkWant
+    lowOf: lowOf, pbWant: pbWant, rkWant: rkWant,
+    /* 仕入れ先と、売れた値段での再出品 */
+    BUY_MS: BUY_MS, SK_FAIL_WARN: SK_FAIL_WARN,
+    buyAmazon: buyAmazon, buyMw: buyMw, buySource: buySource, skRelist: skRelist
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   if (typeof globalThis !== "undefined") globalThis.PJ_PRICING = API;

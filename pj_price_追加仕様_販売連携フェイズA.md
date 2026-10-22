@@ -3866,3 +3866,125 @@ C段（7.51）と 6.76 で式を `shared/pricing.js` に出したので、Worker
 2. カジの判断（ロール申請、プラン、トークン取得）を受けて、Worker と D1 を実装する。必要なシークレットと `wrangler` コマンドの一覧を出す。
 3. カジがデプロイしたら、10章の受け入れテストを行う。
 4. pj_price に「販売連携」タブを追加し、sw.js のバージョンを上げて main に push する。
+
+## 7.53 売れた値段で保ち、同じ値段で再出品する（2026-10-22・sw.js v176）
+
+自動値下げの途中で売れた行は、**その値段が「売れる値段」だと分かった**ということ。
+その値段で止め、数量0になった行は条件を満たすときだけ **同じ値段のまま数量1に戻す**。
+
+画面側は 6.77。判定の式は `shared/pricing.js` の `skRelist()` に1か所だけ置いた
+（画面と Worker が同じ式を読む。6.75 と同じ作り）。
+
+### D1（`migrate-0023-sold-keep.sql`）
+
+| 列 | 中身 |
+| --- | --- |
+| `sold_keep` | 売れた値段で保つ印（0/1） |
+| `sold_price` | **保つのは出品価格**（落札額ではない）。売れた時点の `ebay_price` |
+| `sold_kept_at` | 売れた日時（注文の日時） |
+| `sk_act` / `sk_why` / `sk_at` | 再出品の予定（`relist` / 空）・理由・立てた日時 |
+| `sk_done_at` | 実際に数量を戻した日時 |
+| `sk_fail` | 続けて失敗した回数（3回で自動処理から外す） |
+| `mw_low` / `mw_low_at` / `mw_n` / `mw_stock` | マッチングワールドの仕入れ値（いまは空。6.77 の `buySource` 用） |
+
+テーブルは2つ足した。
+
+- `sk_runs` … 1回ぶんの実行（`mode` `picked` `relisted` `failed` `skipped` `capped` `ended`）
+- `sk_log` … 行ごとの記録（`asin` `cond` `item_id` `kind` `price` `buy_low` `buy_src` `ok` `why`）
+  1日の上限は `sk_log` の `ok=1` の件数で数える。
+
+### 印を立てるのは `jobOrders`
+
+eBay の注文を取り込むところ（`jobOrders`）で、**初めて見た明細だけ**印を立てる。
+
+```sql
+UPDATE items SET sold_keep=1,
+  sold_price=CASE WHEN COALESCE(ebay_price,0)>0 THEN ebay_price ELSE sold_price END,
+  sold_kept_at=?3, sk_act=NULL, sk_why=NULL, sk_fail=0, updated_at=?4
+WHERE asin=?1 AND cond=?2
+```
+
+`sold_price` は**そのときの出品価格**。注文の落札額ではない（送料や Best Offer で
+下がった額を「売れる値段」とは呼べないため）。
+2回目以降の取り込みで同じ明細を見ても上書きしない（`fresh` の判定は
+これまでカート在庫を減らすときに使っていたものを、売れた行すべてに広げた）。
+
+### 止まるところ（6.77 の穴①②）
+
+| 関数 | 足した1行 |
+| --- | --- |
+| `mdSkip`（自動値下げ） | `if (Number(r.sold_keep)) return "売れた値段で保っています";` |
+| `rvSkip`（売値の自動反映） | 同じ。**値上げも止まる** |
+
+`mdSkip` に元からあった `mark_at` と `ebay_sold_at` の比べ方は、
+v175 以前に売れた行のための保険として残してある
+（`mark_at` が空の行は比べられず、**一度も値下げしていない行が止まらなかった**）。
+
+### 再出品の判定（`shared/pricing.js` の `skRelist`）
+
+上から順に見て、ひとつでも引っかかれば出さない（理由を `sk_why` に残す）。
+
+| 見るもの | 出さない理由 |
+| --- | --- |
+| `sold_keep` / `ebay_item_id` / `ebay_qty>0` / `sold_price>0` | 印なし・未出品・数量あり・値段が分からない |
+| `one_off` / `one_off_known` | 一点物・一点物かどうかが未確定 |
+| `dropship` | 無在庫（いまは対象外） |
+| `restocking` / `pb_act='restock'` | 再調達中（売値の追従が見る）・フェイズBの再調達の予定 |
+| `ebay_sale` / `pb_skip` | eBayのセール中・今回は動かさない |
+| `sk_fail>=3` | 続けて失敗（対応が必要） |
+
+ここまで通ったら在庫を見る。
+
+1. **`fba_available>0` / `on_hand` / `hand_qty>0` のどれかがあれば、仕入れ値は見ない**
+   （手持ちで出せる）。
+2. 無ければ仕入れ直す前提。`buySource()` の仕入れ値で、
+   **売れた値段でも下限利益が残るか**を `maxCost()` で見る。
+   - 在庫なし（取りに行って最安値が出なかった）→ 出さない
+   - 未取得・24時間より古い → 出さない
+   - `buy.low > maxCost` → 出さない（「仕入 90,000円 ＞ 上限 4,572円」）
+
+### 実行（`jobSoldKeep`）
+
+| 決めごと | 値 |
+| --- | --- |
+| `autoSkMode` | `confirm`（既定・予定だけ）／`auto`（承認なしで実行） |
+| 1日の上限 `SK_MAX` | **30件**。再調達（フェイズB）とは**別枠**で、それぞれ30件 |
+| 1回に送る数 `SK_BATCH` | `RV_BATCH` と同じ |
+| 続けて失敗 `SK_FAIL_WARN` | 3回で自動処理から外す |
+
+流れはフェイズBと同じ。
+
+1. 候補を拾い（`SK_PICK_LIMIT=400`）、`skRelist` で判定して `sk_act` / `sk_why` を残す。
+2. `confirm` のときは **ここで止める**（eBay は呼ばない）。予定は KV（`sk.plan`）に置き、
+   `/status.sk_plan` で画面に出す。画面の「まとめて再出品」が
+   `POST /sync {kind:'soldkeep',approve:true}` を送ってきたら実行する。
+3. **書き込み前に `GetItem`**。数量が0でなければ戻さない（二重実行の防止）。
+4. `ReviseInventoryStatus` に **`<Quantity>1</Quantity>` だけ**送る。
+   **売値は送らない**（売れた値段のまま）。
+5. **書き込み後に `GetItem`**。出品が終了していたら `ended` として通知する。
+6. 成功 → `ebay_qty=1`・`sk_act` を消す・`sk_done_at`・`sk_fail=0`。
+   失敗 → `sk_fail` を1つ増やし、理由を `sk_why` に残す。
+   **セール中のエラー（`SALE_ERR`）は失敗に数えず**、`ebay_sale=1` を立てて対象から外す。
+
+Cron は `*/15`（`jobOrders` → `jobPhaseB` のあと）と毎時に回す。
+
+### 値下げを再開する（`POST /listings {sold_keep:false}`）
+
+印を外すと同時に、**`mark_at` を空に・`md_done` を0に戻す**。
+
+```sql
+mark_at=CASE WHEN ?41=0 THEN NULL ... END,
+md_done=CASE WHEN ?41=0 THEN 0 ... END,
+```
+
+つまり **売れた値段から、同じ幅で下げ直す**（それまでの回数は数え直し）。
+`sk_act` / `sk_why` / `sk_fail` も消す。
+`sold_keep` は `STAFF_DENY` に入れたので、作業者のキーでは 403。
+
+### 仕入れ先（マッチングワールド）
+
+`buySource()` が `stock`（仕入れ先に在庫があるか `true`/`false`/`null`）を持つ。
+`mw_low` / `mw_low_at` / `mw_n` / `mw_stock` を埋める取り込みを1本書けば、
+`'auto'` が取れているうちの安いほうを選ぶ。詳しくは 6.77。
+
+テストは `tests/soldkeep.mjs`（58件）と `tests/soldkeepui.js`（画面71件）。
