@@ -4682,6 +4682,7 @@ function csvImport(text){
       forceEbay:false,
       oneOff:(cart||loose||preBuy)?false:CSV_ONEOFF.test(title), pics:[],
       amzLow:'', amzLowAt:'', itemId:'', uploadErr:'', sold:'',
+      picsEps:0, picsErr:'',
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
       specs:{ scale:csvScaleFrom(title), height:csvHeightFrom(title),
               // 「SW版」のように表に無い書き方は csvGameHint で補う
@@ -4988,6 +4989,41 @@ function syncMoneyBar(r){
     profit:(c.v>0)?csvProfitAt(c.v,w,price,syncFlatOf(r)):null });
 }
 /* 行のバッジ。一覧を作り直さずに1行だけ入れ替えられるよう、ここにまとめる。 */
+/* ---- 出品CSVタブの「写真の切り替え待ち」と「写真が抜けています」（6.79）----
+   この端末の印（picsEps）を先に見る。アップロード結果を取り込んだ直後に
+   切り替えるので、「状況を取り込む」を待たずに消える。 */
+function csvPicsDone(r){
+  if(Number((r||{}).picsEps||0))return true;
+  var x=csvSyncItem(r);
+  return !!(x&&Number(x.pics_eps||0));
+}
+function csvPicsWait(r){
+  return !!String((r||{}).itemId||'').trim()
+    && ((r.pics||[]).length>0) && !csvPicsDone(r);
+}
+/* eBay の写真の枚数（pj-sync が控えた値）が、この行の写真より少ない。 */
+function csvPicsGone(r){
+  var x=csvSyncItem(r);
+  var n=Number((x||{}).pics_n||0), m=(r.pics||[]).length;
+  if(!(n>0)||!(m>0)||n>=m)return null;
+  return { n:n, m:m };
+}
+function csvPicsWaitHtml(r){
+  var g=csvPicsGone(r);
+  if(g)
+    return '<div class="note2" style="margin-top:4px;color:var(--bad);font-weight:700">'
+      +'⚠ 写真が抜けています（eBay '+g.n+'枚／この行 '+g.m+'枚）</div>'
+      +'<div class="note2" style="margin-top:1px">販売連携タブの'
+      +'「写真を eBay 保管に切り替え」でこの行を選ぶと、'+g.m+'枚に戻します。</div>';
+  if(String((r||{}).picsErr||'').trim())
+    return '<div class="note2" style="margin-top:4px;color:var(--bad);font-weight:700">'
+      +'⚠ '+PICS_WAIT_MSG+'</div>'
+      +'<div class="note2" style="margin-top:1px">切り替えに失敗しました：'
+      +esc(String(r.picsErr).slice(0,120))
+      +'　販売連携タブの「写真を eBay 保管に切り替え」でやり直せます。</div>';
+  if(!csvPicsWait(r))return '';
+  return picsWaitHtml('「アップロード結果を取り込む」で切り替えます。');
+}
 function csvBadgeHtml(r){
   var iss=csvIssues(r), badge='';
   var b=function(t,c){ return '<span style="display:inline-block;background:'+c
@@ -5011,6 +5047,10 @@ function csvBadgeHtml(r){
   if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
   if(!r.jan)badge+=b('JANなし','#8a6d00');
   if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
+  /* 写真の切り替え（6.79）。済むまでは eBayアプリで編集してはいけない。 */
+  if(csvPicsGone(r))badge+=b('写真が抜けています','var(--bad)');
+  else if(csvPicsWait(r)||String(r.picsErr||'').trim())
+    badge+=b('写真の切り替え待ち','var(--bad)');
   if((r.specs||{}).originDefault)badge+=b('原産国：既定値','#8a6d00');
   if(r.condId!==1000)badge+=b('中古・要撮影','var(--mute)');
   if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
@@ -5064,6 +5104,10 @@ function csvNotes(r){
   if(csvVerdict(r)==='none')a.push('相場未確認');
   if(csvVerdict(r)==='pre')a.push('仕入れ前の候補（相場の判定とラインは出しません）');
   if(csvUploadFixed(r))a.push('前回アップロード失敗（直したので書き出せます）：'+r.uploadErr);
+  /* 写真の切り替え（6.79）。書き出しは止めないが、気づいてほしいこと。 */
+  var pg=csvPicsGone(r);
+  if(pg)a.push('写真が抜けています（eBay '+pg.n+'枚／この行 '+pg.m+'枚）');
+  else if(csvPicsWait(r))a.push(PICS_WAIT_MSG);
   // 65文字を超える Item Specifics は書き出しで短くなる。どの項目かを出す
   var lg=csvSpecLong(r);
   if(lg.length)a.push(lg.join('・')+' を短縮しました');
@@ -6286,6 +6330,9 @@ function csvRender(){
       /* 相場で出す行の案内（6.54）。売値の出どころなので帯のすぐ下に出す。 */
       +'<div data-smode="'+r.id+'">'+csvSoldPriceHtml(r)+'</div>'
       +'<div data-badge="'+r.id+'" style="margin-top:4px">'+badge+'</div>'
+      /* 写真の切り替え待ち・写真の抜け（6.79）。「次にやること」は1行だけなので、
+         押し出されて見えなくならないように手前で必ず出す。 */
+      +csvPicsWaitHtml(r)
       /* 次にやること（6.48）。1行だけ出す。 */
       +csvNextHtml(r)
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:5px">'
@@ -8376,6 +8423,9 @@ function csvResImport(text){
       iWn=col('warningmessage','warning'),
       iCd=col('errorcode','code'), iLn=col('linenumber');
   var ok=0, warnN=0, ng=0, miss=0, logged=0, notes=[], rev=0, revNg=0, post=[];
+  /* この取り込みで ItemID が入った行（6.79）。
+     ここで写真の切り替えまで済ませてしまう（「状況を取り込む」を待たない）。 */
+  var fresh=[];
   for(var m=hi+1;m<rows.length;m++){
     var r=rows[m]; if(!r)continue;
     var st=String((iSt>=0?r[iSt]:'')||'').trim();
@@ -8394,7 +8444,13 @@ function csvResImport(text){
       /* 値段を変える Revise の結果（CustomLabel が無く ItemID だけ）。
          出品データ（販売連携）側で扱い、出品リストの照合には回さない。 */
       if(!label&&syncResApply(item,true,'',post)){ rev++; continue; }
-      if(hit){ hit.itemId=item; hit.uploadErr=''; hit.uploadErrSig=''; }
+      if(hit){
+        hit.itemId=item; hit.uploadErr=''; hit.uploadErrSig='';
+        /* 出し直し（同じ行に新しい ItemID）なら、切り替えの印も消す。 */
+        hit.picsEps=0; hit.picsErr='';
+        if((hit.pics||[]).length&&!fresh.some(function(x){ return x.id===item; }))
+          fresh.push({ id:item, row:hit });
+      }
       else { miss++; notes.push((line?('行'+line+'：'):'')+'CustomLabel「'+label+'」'
         +csvLabelWhy(label)+'。ItemID '+item
         +' は行の「ItemID」欄に手で入れられます'); }
@@ -8428,7 +8484,7 @@ function csvResImport(text){
   csvSaveList(); csvSaveLog();
   syncResPost(post,'csvResResult');
   return { ok:ok, warnN:warnN, ng:ng, miss:miss, logged:logged, notes:notes,
-           rev:rev, revNg:revNg };
+           rev:rev, revNg:revNg, fresh:fresh };
 }
 $('csvResFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
@@ -8460,6 +8516,10 @@ $('csvResFile').addEventListener('change',function(){
       syncPushRun(function(d){
         box.textContent+='\n名簿を pj-sync に送りました：'+(d.sent||0)+'件'
           +(d.failed?('／失敗 '+d.failed+'件'):'');
+        /* 名簿を送ったあと、**その場で**写真を eBay 保管に切り替える（6.79）。
+           「状況を取り込む」を待つと、その間に eBayアプリで編集されて
+           メイン画像が抜ける（2026-10-22 に再発）。 */
+        csvResPicsRun(r.fresh||[],box);
       },true);
     }
   };
@@ -8467,6 +8527,65 @@ $('csvResFile').addEventListener('change',function(){
   this.value='';
 });
 
+/* 出したばかりの出品の写真を、その場で eBay 保管に切り替える（6.79）。
+   ・対象は「この取り込みで ItemID が入った行」で、写真が残っている行だけ
+   ・行ごとに違う写真を渡すので、Worker の items:[{item_id,urls}] で1回にまとめる
+     （1件ずつ投げると Discord も1件ずつ届く）
+   ・notify:true・fresh:true を付けて、Discord に「出品しました」と
+     「切り替えが済むまで eBayアプリで編集しないでください」を出してもらう
+   ・PICS_MAX 件ずつに分けて送る。失敗した行は理由を行に残し、赤で出す */
+var CSV_PICS_MAX=10;
+function csvResPicsRun(fresh,box){
+  var rows=(fresh||[]).filter(function(x){
+    return x&&x.row&&(x.row.pics||[]).length&&picsUrlsOf(x.row).length; });
+  if(!rows.length){
+    if((fresh||[]).length)
+      box.textContent+='\n写真の切り替え：元の写真（pj-img）が残っていないので、'
+        +'「状況を取り込む」のときに切り替えます。';
+    return;
+  }
+  csvSecretFill();
+  if(isStaff()||!syncUrl()||!syncApiKey()){
+    box.textContent+='\n写真の切り替え：管理者用のキーが要ります（切り替え待ちのままです）。';
+    return;
+  }
+  var parts=[];
+  for(var i=0;i<rows.length;i+=CSV_PICS_MAX)parts.push(rows.slice(i,i+CSV_PICS_MAX));
+  var okN=0, ngN=0, pi=0;
+  box.textContent+='\n写真を eBay 保管に切り替えています…（'+rows.length+'件）';
+  function step(){
+    if(pi>=parts.length){
+      box.textContent+='\n写真の切り替え：できた '+okN+'件'
+        +(ngN?('／できなかった '+ngN+'件（行に理由を出しました。'
+               +'販売連携タブの「写真を eBay 保管に切り替え」でやり直せます）')
+             :'　これで eBayアプリで編集しても大丈夫です');
+      csvSaveList(); csvRender();
+      return;
+    }
+    var part=parts[pi++];
+    syncJsonPost('/ebay/pics/switch',{
+      items:part.map(function(x){
+        return { item_id:x.id, urls:picsUrlsOf(x.row) }; }),
+      mode:'fresh', confirm:true, notify:true, fresh:true
+    },function(d){
+      var got={};
+      ((d&&d.items)||[]).forEach(function(it){
+        got[String(it.item_id||'').replace(/[^0-9]/g,'')]=it; });
+      part.forEach(function(x){
+        var it=got[x.id]||{};
+        if(it.done){ okN++; x.row.picsEps=1; x.row.picsErr=''; }
+        else { ngN++; x.row.picsEps=0;
+               x.row.picsErr=String(it.error||'切り替えられませんでした').slice(0,200); }
+      });
+      step();
+    },function(why){
+      part.forEach(function(x){ ngN++; x.row.picsEps=0;
+        x.row.picsErr=String(why||'').slice(0,200); });
+      step();
+    });
+  }
+  step();
+}
 /* ---- 英語タイトルの一括生成（Worker pj-title）----
    ゲームは /titles（english_name だけ）、フィギュアは /figure-titles（5項目）。
    タイトルの組み立ては gameTitleFrom() / figTitleFrom() が行う
@@ -9850,6 +9969,39 @@ function syncPicsMarkNg(it,why){
       syncPicsErrSet(r,why||(it&&it.error)||'切り替えられませんでした');
   });
 }
+/* ---- 写真の切り替え待ちと、写真の抜け（6.79／Worker は 7.57）----
+   自前ホスト（pj-img）の写真で出した出品を eBayアプリで保存すると、
+   **メイン画像が抜ける**。切り替え（eBay 保管＝EPS）が済むまでは触らせない。
+   2026-10-22 の出品で再発したので、赤で出して気づけるようにした。 */
+/* その ItemID の出品リストの行（この端末）。写真の枚数の元になる。 */
+function picsCsvRowFor(id){
+  var want=String(id||'').replace(/[^0-9]/g,'');
+  if(!want)return null;
+  var hit=null;
+  (csvList||[]).forEach(function(x){
+    if(!hit&&String(x.itemId||'').replace(/[^0-9]/g,'')===want)hit=x; });
+  return hit;
+}
+/* 出品リストの行の写真URL（pj-img（R2）の形だけ）。Worker が受け取れる形。 */
+function picsUrlsOf(r){
+  return ((r&&r.pics)||[]).map(function(p){ return String((p&&p.url)||''); })
+    .filter(function(u){
+      return /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
+    }).slice(0,24);
+}
+function picsCsvN(id){
+  var r=picsCsvRowFor(id);
+  return r?((r.pics||[]).length):0;
+}
+var PICS_WAIT_MSG='写真の切り替え待ち：eBayアプリで編集しないでください';
+/* 赤で出す注意。切り替えが済むまで出す（24時間の縛りは付けない）。 */
+function picsWaitHtml(why){
+  return '<div class="note2" style="margin-top:4px;color:var(--bad);font-weight:700">'
+    +'⚠ '+PICS_WAIT_MSG+'</div>'
+    +'<div class="note2" style="margin-top:1px">'
+    +'自前ホストの写真のまま eBayアプリで保存すると、メイン画像が抜けます。'
+    +esc(why||'')+'</div>';
+}
 /* 出品してから24時間以内か（自動で切り替える新しい出品）。 */
 function syncPicsNew(r){
   var t=Date.parse(String((r||{}).ebay_start||''));
@@ -9865,6 +10017,35 @@ function syncPicsNeed(r){
 function syncPicsNeedN(){
   return ((syncData&&syncData.items)||[]).filter(syncPicsNeed).length;
 }
+/* 行カードに出す「写真の切り替え待ち」（6.79）。
+   「次にやること」は1行だけなので、ほかの予定に押し出されて見えないことがあった。
+   こちらは切り替えが済むまで**必ず**出す。 */
+function syncPicsWaitHtml(r){
+  if(!syncPicsNeed(r))return '';
+  if(syncPicsErrOf(r))return '';        // 失敗の理由は「対応が必要」側で出す
+  return picsWaitHtml(syncPicsNew(r)
+    ? '出品したばかりの行です。「アップロード結果を取り込む」か「状況を取り込む」で切り替わります。'
+    : '「写真を eBay 保管に切り替え」で切り替えてください。');
+}
+/* eBay の写真の枚数が、出品リストの写真の枚数より少ない行（6.79）。
+   アプリで編集して写真が落ちた行を見つけるため。
+   eBay の枚数（pics_n）は、切り替えたときか GetItem で見たときの値。 */
+function syncPicsGoneOf(r){
+  var id=String((r||{}).ebay_item_id||'').replace(/[^0-9]/g,'');
+  if(!id)return null;
+  var n=Number((r||{}).pics_n||0), m=picsCsvN(id);
+  if(!(n>0)||!(m>0)||n>=m)return null;
+  return { n:n, m:m, at:String((r||{}).pics_eps_at||'') };
+}
+function syncPicsGoneHtml(r){
+  var g=syncPicsGoneOf(r);
+  if(!g)return '';
+  return '<div class="note2" style="margin-top:4px;color:var(--bad);font-weight:700">'
+    +'⚠ 写真が抜けています（eBay '+g.n+'枚／出品リスト '+g.m+'枚'
+    +(g.at?('・'+esc(g.at.slice(0,16).replace('T',' '))+'に確認'):'')+'）</div>'
+    +'<div class="note2" style="margin-top:1px">'
+    +'「写真を eBay 保管に切り替え」でこの行を選ぶと、出品リストの '+g.m+'枚に戻します。</div>';
+}
 /* その出品の写真が出品リスト（この端末）に残っていれば、その URL を使う（6.61）。
    eBay の写真を元画像にすると小さい版を取り込むことがあるので、
    pj-img（R2）の元の写真があればそちらを優先する。 */
@@ -9874,10 +10055,7 @@ function syncPicsUrlsFor(id){
   (csvList||[]).forEach(function(r){
     if(out.length)return;
     if(String(r.itemId||'').replace(/[^0-9]/g,'')!==want)return;
-    out=(r.pics||[]).map(function(p){ return String((p&&p.url)||''); })
-      .filter(function(u){
-        return /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
-      }).slice(0,24);
+    out=picsUrlsOf(r);
   });
   return out;
 }
@@ -10286,9 +10464,9 @@ function syncNextHtml(r){
       +'　「写真を eBay 保管に切り替え」に ItemID を入れてやり直せます');
   /* ⑤ 切り替え待ちの新しい出品（6.63）。終わるまで写真を触らないでもらう。 */
   if(syncPicsNeed(r)&&syncPicsNew(r))
-    return nextLine('写真の切り替え待ち','#8a4f00',
-      '次の「状況を取り込む」で eBay 保管に切り替えます。'
-      +'それまで <b>eBayアプリで写真を触らないでください</b>');
+    return nextLine('写真の切り替え待ち','#b00020',
+      '「アップロード結果を取り込む」か「状況を取り込む」で eBay 保管に切り替えます。'
+      +'それまで <b>eBayアプリで編集しないでください</b>（メイン画像が抜けます）');
   var id=String(r.ebay_item_id||'').trim();
   if(!id)return '';
   /* ⑥ 再調達中の売値の追従（6.70）。この行は「売値の自動反映」ではなく
@@ -11761,7 +11939,9 @@ var SYNC_FILTERS=[
     f:function(r){ return (r.warnings||[]).length>0||syncSoldAlert(r)||syncAmzAlert(r)
                        ||syncReviseAlert(r)||syncRvAlert(r)||!!syncPicsErrOf(r)
                        /* 売れた値段で保っているのに在庫を補充できない行（6.77） */
-                       ||syncSkStuckOf(r); } },
+                       ||syncSkStuckOf(r)
+                       /* eBay の写真が出品リストより少ない行（6.79） */
+                       ||!!syncPicsGoneOf(r); } },
   /* FBAで売れた（対応予定）。フェイズBが数量0・再調達にする行（6.66）と、
      「再調達の候補」（eBayに出ていてFBAの販売可能が0・一点物でない行）を
      ここにまとめた（6.71）。どちらも「FBAで売れたあとどうするか」の話なので。 */
@@ -12165,6 +12345,11 @@ function syncRowHtml(r,key){
         +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">'
         +esc(t)+'</span>';
     }).join('');
+    /* 写真が抜けている行（6.79）。赤いバッジで一覧からも分かるようにする。 */
+    if(syncPicsGoneOf(r))
+      badge+='<span style="display:inline-block;background:#b00020;color:#fff;'
+        +'border-radius:2px;padding:1px 5px;font-size:11px;margin-right:4px">'
+        +'写真が抜けています</span>';
     var sold=Number(r.ebay_sold||0);
     if(Number(r.on_hand||0)){
       badge+='<span style="display:inline-block;background:#2f6fb0;color:#fff;'
@@ -12335,6 +12520,7 @@ function syncRowHtml(r,key){
            +'</div>')
         : '')
       +syncRevHtml(r)
+      +syncPicsWaitHtml(r)+syncPicsGoneHtml(r)
       +syncSoldKeepHtml(r)      // 売れた値段で保っています（6.77）
       +syncMarkHtml(r)
       /* 次の自動値下げ（日付・新しい売値・残り回数・下限） */
@@ -13608,7 +13794,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v179';   // sw.js の const V と必ず同じ値にする
+var APP_V='v180';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

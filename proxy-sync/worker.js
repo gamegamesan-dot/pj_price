@@ -1356,7 +1356,8 @@ const ITEM_COLS = `
    自動処理だけが読む列（fba_link・pb_at・pb_want・pb_max_cost・pb_want_at・
    rv_at・updated_at）は返さない。
    ebay_bo_decline は画面の JS では読んでいないが、ベストオファーの設定を
-   そろえて返す決まりなので入れてある（tests/pricesrc.mjs が固定している）。 */
+   そろえて返す決まりなので入れてある（tests/pricesrc.mjs が固定している）。
+   pics_eps_at は「写真が抜けています」の判定で、枚数をいつ確かめたかを出すのに使う。 */
 const STATUS_COLS = `
   asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
   ebay_start, ebay_ship_profile, ebay_bo, ebay_bo_accept, ebay_bo_decline, revise_err,
@@ -1367,7 +1368,7 @@ const STATUS_COLS = `
   restock_price, restock_max_cost, restock_skip_acc, dropship, hand_qty,
   weight_g, cost_yen, sold_usd, ebay_first, mark_at, mark_stop, md_step,
   md_start, md_floor, md_n, md_done, ebay_sale, ebay_sale_orig, ebay_sale_end,
-  pics_eps, pics_n, pb_act, pb_fail, pb_skip, search_kw, rv_want, rv_floor,
+  pics_eps, pics_eps_at, pics_n, pb_act, pb_fail, pb_skip, search_kw, rv_want, rv_floor,
   rv_kind, rv_max_cost, rv_fail, rk_want, rk_floor, rk_low, rk_n, rk_max_cost,
   rk_want_at, rk_fail, sold_keep, sold_price, sold_kept_at, sk_act, sk_why,
   sk_fail, mw_low, mw_low_at, mw_n, mw_stock,` + SKU_COLS;
@@ -4145,6 +4146,19 @@ async function jobGetItem(env, itemId) {
   try {
     const token = await ebayToken(env, run);
     out = Object.assign(out, await getItemPics(env, run, token, itemId));
+    /* 見に行ったついでに、いまの写真の枚数を控える（7.57）。
+       画面は「eBay の枚数 < 出品リストの枚数」で「写真が抜けています」を出すので、
+       ここが新しいほど見つけやすくなる。eBay 保管だけになっていれば印も付ける。 */
+    if (out.ok) {
+      try {
+        await env.DB.prepare(
+          `UPDATE items SET pics_n=?2, pics_eps=CASE WHEN ?3=1 THEN 1 ELSE pics_eps END,
+             pics_eps_at=CASE WHEN ?3=1 THEN ?4 ELSE pics_eps_at END, updated_at=?4
+           WHERE ebay_item_id=?1`)
+          .bind(String(itemId), Number(out.pictures.n || 0),
+                out.pictures.eps_only ? 1 : 0, nowIso()).run();
+      } catch (e) { run.notes.push("写真の枚数を控えられません：" + e.message); }
+    }
     if (out.ok) run.notes.push("GetItem " + itemId + "：写真 " + out.pictures.n + "枚"
       + (out.pictures.eps_only ? "（eBay 保管だけ）"
          : ("／自前ホストの紐づけ " + out.pictures.ext_n + "件")));
@@ -4258,6 +4272,39 @@ async function jobEpsTest(env, url) {
 }
 /* ReviseFixedPriceItem の本文。**送るのは PictureDetails だけ**。
    価格・数量・タイトルなどは1つも入れない（間違って出品を書き換えないため）。 */
+/* 写真の元にできる URL（pj-img（R2）か eBay 自身の写真）。1か所で決める。 */
+function picsUrlOk(u) {
+  const s0 = String(u || "").trim();
+  return /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(s0)
+    || /^https:\/\/i\.ebayimg\.com\/[A-Za-z0-9/._$?=&-]+$/.test(s0);
+}
+/* Discord に出す文（7.57）。出品した直後（fresh）は「出品しました」の形にする。
+   **切り替えが済むまで eBayアプリで編集しないでください**を必ず入れる
+   （編集するとメイン画像が抜ける。2026-10-22 に再発）。 */
+function picsNotifyText(items, fresh) {
+  const list = items || [];
+  if (!list.length) return "";
+  const ok = list.filter((x) => x.done);
+  const ng = list.filter((x) => !x.done);
+  const t = [];
+  t.push((fresh ? "🆕 出品しました（" : "🖼 写真の切り替え（")
+    + list.length + "件）：写真を eBay 保管に切り替えました " + ok.length + "件"
+    + (ng.length ? ("／できなかった " + ng.length + "件") : ""));
+  for (const x of ok.slice(0, PICS_MAX))
+    t.push("✅ " + (x.title ? String(x.title).slice(0, 40) : x.item_id)
+      + "（" + x.item_id + "・写真 " + Number(x.n_after || 0) + "枚）"
+      + (Number(x.missing || 0)
+         ? ("　⚠ 写真が抜けていたので " + Number(x.restore || 0) + "枚に戻しました") : ""));
+  for (const x of ng.slice(0, PICS_MAX))
+    t.push("⚠️ " + (x.title ? String(x.title).slice(0, 40) : x.item_id)
+      + "（" + x.item_id + "）：" + String(x.error || "切り替えられませんでした").slice(0, 120));
+  if (ng.length)
+    t.push("できなかった分は**まだ切り替え待ち**です。"
+      + "販売連携タブの「写真を eBay 保管に切り替え」でやり直してください");
+  t.push("⚠️ 切り替えが済むまで **eBayアプリで編集しないでください**"
+    + "（自前ホストの写真のまま保存すると、メイン画像が抜けます）");
+  return t.join("\n");
+}
 function picsBody(itemId, urls) {
   return '<?xml version="1.0" encoding="utf-8"?>'
     + '<ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
@@ -5317,13 +5364,43 @@ export default {
           const d = digits(v);
           if (/^[0-9]{9,15}$/.test(d) && ids.indexOf(d) < 0) ids.push(d);
         }
-        if (!ids.length) return json({ error: "bad_item_id" }, 400, origin);
-        if (ids.length > PICS_MAX)
-          return json({ error: "too_many", max: PICS_MAX,
-            detail: "1回に送れるのは " + PICS_MAX + "件までです" }, 400, origin);
-        if (ids.length > 1 && body.confirm !== true)
-          return json({ error: "need_confirm",
-            detail: "2件以上は confirm:true を付けてください" }, 400, origin);
+        /* items:[{item_id,urls}] … **行ごとに違う写真**を1回で送る形（7.57）。
+           出品CSVの「アップロード結果を取り込む」から、出したばかりの出品を
+           まとめて切り替えるのに使う（1件ずつ投げると Discord も1件ずつになる）。 */
+        const batch = [];
+        if (Array.isArray(body && body.items) && body.items.length) {
+          if (body.items.length > PICS_MAX)
+            return json({ error: "too_many", max: PICS_MAX,
+              detail: "1回に送れるのは " + PICS_MAX + "件までです" }, 400, origin);
+          if (body.items.length > 1 && body.confirm !== true)
+            return json({ error: "need_confirm",
+              detail: "2件以上は confirm:true を付けてください" }, 400, origin);
+          for (const it of body.items) {
+            const d = digits(it && it.item_id);
+            if (!/^[0-9]{9,15}$/.test(d)) return json({ error: "bad_item_id" }, 400, origin);
+            const us = [];
+            for (const v of ((it && it.urls) || [])) {
+              const u = String(v || "").trim();
+              if (!picsUrlOk(u))
+                return json({ error: "bad_url",
+                  detail: "写真のURLが違います：" + u.slice(0, 120) }, 400, origin);
+              us.push(u);
+            }
+            if (us.length > 24)
+              return json({ error: "too_many_pics", detail: "写真は24枚までです" }, 400, origin);
+            if (!batch.some((x) => x.id === d))
+              batch.push({ id: d, urls: us.length ? us : null });
+          }
+        }
+        if (!ids.length && !batch.length) return json({ error: "bad_item_id" }, 400, origin);
+        if (!batch.length) {
+          if (ids.length > PICS_MAX)
+            return json({ error: "too_many", max: PICS_MAX,
+              detail: "1回に送れるのは " + PICS_MAX + "件までです" }, 400, origin);
+          if (ids.length > 1 && body.confirm !== true)
+            return json({ error: "need_confirm",
+              detail: "2件以上は confirm:true を付けてください" }, 400, origin);
+        }
         /* 写真を指定して入れ替えるとき（落ちた写真を戻す）。
            pj-img（R2）か eBay の写真のURLだけ。並べた順がそのまま写真の順になる。 */
         let urls = null;
@@ -5334,9 +5411,7 @@ export default {
           urls = [];
           for (const v of body.urls) {
             const u = String(v || "").trim();
-            const okPj = /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u);
-            const okEbay = /^https:\/\/i\.ebayimg\.com\/[A-Za-z0-9/._$?=&-]+$/.test(u);
-            if (!(okPj || okEbay))
+            if (!picsUrlOk(u))
               return json({ error: "bad_url",
                 detail: "写真のURLが違います：" + u.slice(0, 120) }, 400, origin);
             urls.push(u);
@@ -5345,7 +5420,16 @@ export default {
             return json({ error: "too_many_pics", detail: "写真は24枚までです" }, 400, origin);
         }
         const items = [];
-        for (const id of ids) items.push(await jobPicSwitch(env, id, urls));
+        if (batch.length)
+          for (const b of batch) items.push(await jobPicSwitch(env, b.id, b.urls));
+        else
+          for (const id of ids) items.push(await jobPicSwitch(env, id, urls));
+        /* 出品した直後の切り替えは Discord にも出す（7.57）。
+           済むまでは eBayアプリで編集してはいけないので、その注意を必ず添える。 */
+        if (body.notify === true) {
+          const run2 = newRun("pics-notify");
+          await notify(env, run2, picsNotifyText(items, body.fresh === true));
+        }
         return json({ ok: items.every((x) => x.ok), n: items.length, mode: "fresh",
                       done: items.filter((x) => x.done).length,
                       items: items }, 200, origin);
@@ -5546,6 +5630,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         imageSize, jobGetItem, jobEpsTest,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
+                        picsUrlOk, picsNotifyText,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,

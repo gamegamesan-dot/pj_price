@@ -28,9 +28,9 @@ const R2='https://pj-img.example.workers.dev/i/20261017/'
 const B64=(w,h)=>Buffer.from(w+'X'+h,'utf8').toString('base64');
 const EPS=(n)=>'https://i.ebayimg.com/00/s/'+B64(1600,1200)+'/z/old'+n+'/$_1.JPG?set_id=88';
 let calls=[], state=null, reuseWorks=true, reviseAck='Success', newId=0, drop=0;
-let made={}, srcs=[];
+let made={}, srcs=[], notes=[];
 const reset=(o)=>{
-  calls=[]; newId=0; made={}; srcs=[]; reuseWorks=(o&&'reuseWorks' in o)?o.reuseWorks:true;
+  calls=[]; newId=0; made={}; srcs=[]; notes=[]; reuseWorks=(o&&'reuseWorks' in o)?o.reuseWorks:true;
   reviseAck=(o&&o.ack)||'Success';
   drop=(o&&o.drop)||0;
   state={ pics:(o&&o.pics)||[EPS(1),EPS(2),EPS(3)],
@@ -105,7 +105,8 @@ globalThis.fetch=async(u,i)=>{
   if(/^https:\/\/i\.ebayimg\.com\//.test(url))
     return new Response(new Uint8Array([0xff,0xd8]),{status:200,
       headers:{'content-type':'image/jpeg'}});
-  if(/discord/.test(url))return new Response('',{status:204});
+  if(/discord/.test(url)){ notes.push(JSON.parse(String(o.body||'{}')).content||'');
+    return new Response(null,{status:204}); }
   throw new Error('想定外の通信: '+url);
 };
 const revises=()=>calls.filter((c)=>/ws\/api\.dll/.test(c.url)
@@ -298,5 +299,82 @@ reset({});
 r=await call({item_id:'880025406600'},'staff-key-123');
 ok(revises().length===0&&creates().length===0,
    '★★作業者キーのときは eBay を1回も呼ばない');
+
+console.log('\n=== 行ごとに写真を渡して1回で送る（items・7.57）===');
+reset({});
+r=await call({items:[{item_id:'880000000001',urls:[R2]},
+                     {item_id:'880000000002',urls:[R2]}],confirm:true});
+console.log('   '+JSON.stringify({n:r.body.n,done:r.body.done,
+  ids:(r.body.items||[]).map((x)=>x.item_id)}));
+ok(r.status===200&&r.body.n===2,'★★1回の呼び出しで2件');
+ok(revises().length===2,'★★出品ごとに Revise を送る');
+ok((r.body.items||[])[0].item_id==='880000000001'
+   &&(r.body.items||[])[1].item_id==='880000000002','★★結果も出品ごとに返す');
+reset({});
+r=await call({items:[{item_id:'880000000001',urls:[R2]},
+                     {item_id:'880000000002',urls:[R2]}]});
+ok(r.status===400&&r.body.error==='need_confirm','★2件以上は confirm が要る');
+r=await call({items:[{item_id:'880000000001',urls:['https://example.com/a.jpg']}]});
+ok(r.status===400&&r.body.error==='bad_url','★★写真のURLの形は items でも確かめる');
+r=await call({items:[{item_id:'abc',urls:[R2]}]});
+ok(r.status===400&&r.body.error==='bad_item_id','★ItemID の形も確かめる');
+r=await call({items:new Array(11).fill(0).map((_,i)=>
+  ({item_id:'88000000001'+i,urls:[R2]})),confirm:true});
+ok(r.status===400&&r.body.error==='too_many','★★上限は items でも10件');
+ok(W.picsUrlOk(R2)&&W.picsUrlOk(EPS(1))
+   &&!W.picsUrlOk('https://example.com/a.jpg'),
+   '★★使える写真のURLの決まりは1か所（picsUrlOk）');
+
+console.log('\n=== Discord（notify）===');
+reset({});
+r=await call({items:[{item_id:'880000000001'}],
+              confirm:true,notify:true,fresh:true});
+console.log('   '+(notes[0]||'').split('\n').join(' / '));
+ok(r.body.done===1,'★写真を指定しなければ、いまの写真を作り直す');
+ok(notes.length===1,'★★1回の呼び出しで1通だけ');
+ok(/🆕 出品しました（1件）/.test(notes[0]||''),'★★「出品しました」で出す');
+ok(/eBayアプリで編集しないでください/.test(notes[0]||''),
+   '★★「eBayアプリで編集しないでください」を必ず入れる');
+ok(/メイン画像が抜けます/.test(notes[0]||''),'★★何が起きるかも書く');
+reset({});
+r=await call({items:[{item_id:'880000000001'}],confirm:true});
+ok(notes.length===0,'★★notify が無ければ出さない');
+/* 切り替えられなかったとき（まだ編集してはいけない）。 */
+reset({ack:'Failure'});
+r=await call({items:[{item_id:'880000000001',urls:[R2]}],
+              confirm:true,notify:true,fresh:true});
+console.log('   '+(notes[0]||'').split('\n').join(' / '));
+ok(/できなかった 1件/.test(notes[0]||''),'★★できなかった件数を出す');
+ok(/まだ\*\*切り替え待ち\*\*/.test(notes[0]||'')
+   ||/まだ.*切り替え待ち/.test(notes[0]||''),'★★まだ待ちだと書く');
+ok(/eBayアプリで編集しないでください/.test(notes[0]||''),'★注意は必ず付く');
+/* 文だけを直に見る（picsNotifyText）。 */
+const txt=W.picsNotifyText([{item_id:'1',done:true,title:'T',n_after:3,
+  missing:2,restore:3}],true);
+console.log('   '+txt.split('\n').join(' / '));
+ok(/写真が抜けていたので 3枚に戻しました/.test(txt),'★★戻した枚数も出す');
+ok(W.picsNotifyText([],true)==='','★0件なら何も出さない');
+
+console.log('\n=== GetItem でも写真の枚数を控える（7.57）===');
+reset({});
+await env.DB.prepare(`INSERT INTO items (asin,cond,scope,title,ebay_item_id,
+  ebay_qty,pics_eps,pics_n,updated_at) VALUES ('B0PIC00001','used','ebay','x',
+  '880000000009',1,0,NULL,'2026-10-01T00:00:00Z')`).run();
+let g=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=880000000009',{headers:H('k')}),env));
+let row=await env.DB.prepare(
+  `SELECT pics_n,pics_eps,substr(pics_eps_at,1,10) AS at FROM items
+    WHERE asin='B0PIC00001'`).first();
+console.log('   '+JSON.stringify({n:g.body.pictures&&g.body.pictures.n,row:row}));
+ok(g.status===200&&g.body.ok===true,'★GetItem が通る');
+ok(Number(row.pics_n)===3,'★★いまの写真の枚数を D1 に控える');
+ok(Number(row.pics_eps)===0,'★自前ホストのままなら印は付けない');
+reset({ext:[],source:'EPS'});
+await worker.fetch(new Request('https://x/ebay/item?id=880000000009',
+  {headers:H('k')}),env);
+row=await env.DB.prepare(
+  `SELECT pics_n,pics_eps,pics_eps_at FROM items WHERE asin='B0PIC00001'`).first();
+ok(Number(row.pics_eps)===1&&!!row.pics_eps_at,
+   '★★eBay 保管だけになっていれば印と日時も付ける');
 
 T.done();
