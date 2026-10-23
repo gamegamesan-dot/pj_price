@@ -1,4 +1,4 @@
-/* Worker：売れた値段で保ち、同じ値段で再出品する（7.53）
+/* Worker：売れた値段で保ち、同じ値段で在庫補充する（7.53・7.56）
    ・eBay で売れたら sold_keep を立て、そのときの**出品価格**を控える
      （落札額は使わない）。初めて見た明細だけ
    ・自動値下げは止まる（一度も値下げしていない行も止まる＝穴①）
@@ -12,7 +12,7 @@
    ・値下げの再開（sold_keep=0）で mark_at と md_done が消える */
 import { harness, loadWorker, makeEnv, get, post, asJson } from './lib.mjs';
 import PRICING from '../shared/pricing.js';
-const T=harness('Worker：売れた値段で再出品');
+const T=harness('Worker：売れた値段での在庫補充');
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('soldkeep');
 const env=makeEnv({ STAFF_KEY:'staff-key-123' });
@@ -146,7 +146,7 @@ ok(W.rvSkip(i1,st0)==='売れた値段で保っています','★★売値の自
 ok(W.rvSkip(Object.assign({},i1b,{rv_want:99,ebay_qty:1}),st0)!=='売れた値段で保っています',
    '★印が無ければ今までどおり');
 
-console.log('\n=== 数量0の行を同じ値段で再出品 ===');
+console.log('\n=== 数量0の行を同じ値段のまま数量1に戻す（在庫補充）===');
 await wipe(); calls=[]; notes=[];
 await seed('B0SK000010');
 await put({ autoSkMode:'auto', fx:'160', fee:'13.6', autoAdRate:'6',
@@ -156,7 +156,7 @@ let res=await sk();
 let a=await row('B0SK000010');
 console.log('   '+JSON.stringify({mode:res.mode,relisted:res.relisted,row:a}));
 console.log('   送った: '+calls.map((c)=>c.name).join(','));
-ok(res.mode==='auto'&&res.relisted===1,'★★自動で再出品する');
+ok(res.mode==='auto'&&res.relisted===1,'★★自動で在庫補充する');
 ok(a.ebay_qty===1,'★★数量が1に戻る');
 ok(a.ebay_price===52.16,'★★売値は変えない（売れた値段のまま）');
 ok(calls.filter((c)=>c.name==='ReviseInventoryStatus').length===1,
@@ -167,7 +167,7 @@ ok(/<Quantity>1<\/Quantity>/.test(bd)&&!/StartPrice/.test(bd),
 ok(calls.filter((c)=>c.name==='GetItem').length===2,
    '★★書き込みの前と後に GetItem で確かめる');
 ok(a.sk_done_at&&!a.sk_act,'★実行した時刻を残し、予定を消す');
-ok(/再出品/.test(notes[0]||''),'★Discord に出す');
+ok(/在庫補充/.test(notes[0]||''),'★★Discord も「在庫補充」と書く');
 const lg=await env.DB.prepare(
   `SELECT price,buy_low,buy_src,ok FROM sk_log WHERE asin='B0SK000010'`).first();
 console.log('   記録: '+JSON.stringify(lg));
@@ -195,7 +195,7 @@ ok(stk.ebay_qty===0&&/下限利益を割ります/.test(stk.sk_why||''),
 
 console.log('\n=== 印を立てない行（7.54・一点物と無在庫）===');
 /* 判定は shared/pricing.js の skKeepOff に1か所だけ。
-   印を立てる側（jobOrders）と再出品の判定（skRelist）が同じものを読む。 */
+   印を立てる側（jobOrders）と在庫補充の判定（skRelist）が同じものを読む。 */
 ok(PRICING.skKeepOff({ one_off: 1 })==='一点物','★★一点物は印を立てない');
 ok(PRICING.skKeepOff({ dropship: 1 })==='無在庫（いまは対象外）',
    '★★無在庫は印を立てない（いまは対象外）');
@@ -230,7 +230,7 @@ await seed('B0SK000039',{sold_price:0});           // 値段が分からない
 res=await sk();
 console.log('   '+JSON.stringify({picked:res.picked,skipped:res.skipped,
   calls:calls.length}));
-ok(res.picked===0&&calls.length===0,'★★どれも再出品しない（eBay も呼ばない）');
+ok(res.picked===0&&calls.length===0,'★★どれも補充しない（eBay も呼ばない）');
 const w30=await row('B0SK000030'), w31=await row('B0SK000031'),
       w32=await row('B0SK000032');
 ok(w30.sk_why==='一点物'&&w32.sk_why==='無在庫（いまは対象外）',
@@ -285,7 +285,7 @@ const f70=await row('B0SK000070'), f71=await row('B0SK000071');
 console.log('   '+JSON.stringify({relisted:res.relisted,failed:res.failed,
   fail:f70.sk_fail,why:f70.sk_why}));
 ok(res.failed===1&&res.relisted===1,'★失敗した行だけ数える');
-ok(f70.sk_fail===1&&/再出品できません/.test(f70.sk_why||''),'★★理由と回数を残す');
+ok(f70.sk_fail===1&&/在庫を補充できません/.test(f70.sk_why||''),'★★理由と回数を残す');
 ok(f71.ebay_qty===1,'★通った行はそのまま戻る');
 fail={}; errText='';
 res=await sk();

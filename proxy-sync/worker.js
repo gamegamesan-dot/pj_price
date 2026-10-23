@@ -1521,7 +1521,7 @@ async function syncOrders(env, run, days, maxItems) {
   /* 売れた値段で保つ（7.53）。初めて見た明細の行だけ、**そのときの出品価格**を
      控えて印を立てる。落札額（orders.amount）はベストオファーで値引きされた額
      なので使わない（それを保つと値段が下がり続ける）。
-     再出品の予定（sk_act）と連続失敗（sk_fail）は、売れ直したので作り直す。
+     在庫補充の予定（sk_act）と連続失敗（sk_fail）は、売れ直したので作り直す。
 
      一点物・無在庫には立てない（7.54）。立てるかどうかは skStampOff ＝
      shared/pricing.js の skKeepOff に1か所だけ。 */
@@ -2523,7 +2523,7 @@ function invBody(list) {
     "<" + tag + ' currencyID="USD">' + Number(v).toFixed(2) + "</" + tag + ">";
   /* kind='zero'      … 数量0（売り越しを止める）
      kind='restock'   … 売値と数量を1回で変える（フェイズBの再調達・7.47）
-     kind='relist'    … **数量だけ**1に戻す（売れた値段で再出品・7.53。売値は送らない）
+     kind='relist'    … **数量だけ**1に戻す（在庫補充・7.53。売値は送らない）
      それ以外         … 売値だけ（売値の自動反映） */
   const one = (x) => {
     if (x.kind === "zero") return "<Quantity>0</Quantity>";
@@ -3293,7 +3293,7 @@ async function selfFill(env, run, rows, now) {
 }
 
 /* 「売れた値段で保つ」印を立てるか（7.54）。判定は shared/pricing.js の
-   skKeepOff に1か所だけ置いてある（再出品の判定 skRelist と同じものを読む）。
+   skKeepOff に1か所だけ置いてある（在庫補充の判定 skRelist と同じものを読む）。
    無在庫は SKU のラベルからも分かるので、items にまだ行が無い初回の販売でも
    拾えるように、D1 の値と重ねて渡す（ここは値を集めるだけで、
    「何を外すか」は決めていない）。 */
@@ -3304,7 +3304,7 @@ function skStampOff(row, line) {
     dropship: Number(r.dropship || 0) || ((line && line.dropship) ? 1 : 0) });
 }
 
-/* ================= 売れた値段で再出品する（7.53）=================
+/* ================= 売れた値段で在庫補充する（7.53／7.56）=================
    自動値下げで下げている途中に売れた行は、**その値段が「売れる値段」だと
    分かった**ということ。だから
    ・それ以上下げない（mdSkip）／値上げもしない（rvSkip）
@@ -3318,9 +3318,9 @@ function skStampOff(row, line) {
    ・書き込みの前に GetItem で数量0を確かめ、違えば次回に回す
    ・書き込みの後に GetItem で Active を確かめる（出品が終了していないか）
    ・続けて3回失敗した行は自動処理から外す
-   ・数量を増やすのは、この再出品と再調達のときだけ */
+   ・数量を増やすのは、この在庫補充と再調達のときだけ */
 const SK_MODES = { confirm: 1, auto: 1 };
-const SK_MAX = 30;                       // 1日に再出品する上限（再調達とは別枠）
+const SK_MAX = 30;                       // 1日に在庫補充する上限（再調達とは別枠）
 const SK_BATCH = RV_BATCH;               // ReviseInventoryStatus は1回4件まで
 const SK_PICK_LIMIT = 400;               // 判定で見る行数
 const SK_PLAN_SHOW = 20;                 // 画面・通知に出す予定の件数
@@ -3393,13 +3393,13 @@ function skNotifyText(res) {
   if (!plan && !res.relisted && !res.failed) return "";
   const t = [];
   if (plan) {
-    t.push("🔁 売れた値段で再出品（確認してから）：予定 " + res.picked + "件");
-    t.push("販売連携タブの「売れた値段でまとめて再出品」を押すと実行します"
+    t.push("🔁 在庫補充（数量を1に戻す・確認してから）：予定 " + res.picked + "件");
+    t.push("販売連携タブの「在庫補充（数量を1に戻す）」を押すと実行します"
       + "（eBay はまだ変えていません）");
   } else {
-    t.push("🔁 売れた値段で再出品しました"
+    t.push("🔁 在庫補充しました（売れた値段のまま数量を1に戻した）"
       + (res.mode === "approve" ? "（まとめて実行）" : "（自動）"));
-    t.push("再出品 " + res.relisted + "件／失敗 " + res.failed + "件／とばした "
+    t.push("補充 " + res.relisted + "件／失敗 " + res.failed + "件／とばした "
       + res.skipped + "件");
   }
   if (res.capped)
@@ -3451,7 +3451,7 @@ async function skPlanRows(env, run) {
   if (stmts.length) await runBatch(env, run, stmts);
   return { due: due, skipped: skipped, total: rows.length, S: ps.S };
 }
-/* 売れた値段での再出品。approve＝true のときは「確認してから」でも実行する。 */
+/* 在庫補充（数量を1に戻す）。approve＝true のときは「確認してから」でも実行する。 */
 async function jobSoldKeep(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("soldkeep");
@@ -3479,14 +3479,14 @@ async function jobSoldKeep(env, opt) {
     // 「確認してから」のときは eBay を1回も呼ばない
     if (!approve && st.mode === "confirm") {
       await skPlanSet(env, planRow);
-      run.notes.push("確認してから：" + res.picked + "件が再出品の候補／とばした "
+      run.notes.push("確認してから：" + res.picked + "件が在庫補充の候補／とばした "
         + res.skipped + "件。eBay は変えていません");
       await skLogRun(env, run, res, "");
       await notify(env, run, skNotifyText(res));
       return Object.assign(await saveRun(env, run), res);
     }
     if (!list.length) {
-      run.notes.push("再出品する出品はありません（とばした " + res.skipped + "件"
+      run.notes.push("在庫を補充する出品はありません（とばした " + res.skipped + "件"
         + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : "") + "）");
       await skPlanSet(env, Object.assign({}, planRow, { n: 0, rows: [] }));
       await skLogRun(env, run, res, "");
@@ -3520,7 +3520,7 @@ async function jobSoldKeep(env, opt) {
           /* セール中の出品。失敗には数えず、印を立てて対象から外す（6.59 と同じ）。 */
           stmts.push(env.DB.prepare(
             `UPDATE items SET ebay_sale=1, sk_fail=0, sk_act=NULL,
-               sk_why='eBayのセール中のため再出品しません', sk_at=?3, updated_at=?3
+               sk_why='eBayのセール中のため在庫を補充しません', sk_at=?3, updated_at=?3
              WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, at));
           stmts.push(skLogRow(env, at, x.r, x, 0, "セール中（21919248）"));
           continue;
@@ -3530,8 +3530,8 @@ async function jobSoldKeep(env, opt) {
           `UPDATE items SET sk_fail=COALESCE(sk_fail,0)+1, sk_why=?3, sk_at=?4,
              revise_err=?5, revise_err_at=?4, updated_at=?4
            WHERE asin=?1 AND cond=?2`)
-          .bind(x.asin, x.cond, ("再出品できません：" + why).slice(0, 300), at,
-                ("売れた値段での再出品 " + why).slice(0, 300)));
+          .bind(x.asin, x.cond, ("在庫を補充できません：" + why).slice(0, 300), at,
+                ("在庫補充（数量を1に戻す） " + why).slice(0, 300)));
         stmts.push(skLogRow(env, at, x.r, x, 0, why));
         if (RV_SCOPE_ERR.test(why)) { scopeErr = why; break; }
         continue;
@@ -3549,7 +3549,7 @@ async function jobSoldKeep(env, opt) {
            sk_fail=0, revise_err=NULL, revise_err_at=NULL, updated_at=?4
          WHERE asin=?1 AND cond=?2`)
         .bind(x.asin, x.cond, note || ("売れた値段 $" + x.price.toFixed(2)
-          + " で再出品しました"), at));
+          + " のまま数量を1に戻しました"), at));
       stmts.push(skLogRow(env, at, x.r, x, 1, note || x.why));
     }
     await runBatch(env, run, stmts);
@@ -3557,7 +3557,7 @@ async function jobSoldKeep(env, opt) {
     await skPlanSet(env, Object.assign({}, planRow, { n: 0, rows: [],
       used: res.used + res.relisted,
       ran: { relisted: res.relisted, failed: res.failed, ended: res.ended } }));
-    run.notes.push("売れた値段で再出品：" + res.relisted + "件／失敗 " + res.failed
+    run.notes.push("在庫補充：" + res.relisted + "件／失敗 " + res.failed
       + "件／とばした " + res.skipped + "件"
       + (res.ended ? ("／出品が終了していた " + res.ended + "件") : "")
       + (res.capped ? ("／上限で翌日に回した " + res.capped + "件") : ""));
@@ -3578,7 +3578,7 @@ async function jobSoldKeep(env, opt) {
    **まず全部を数量0にして**売り越しを止め、「在庫0時の動作」が再調達の行だけ
    そのあと「売値を変えて数量を1に戻す」。承認待ちのあいだ古い売値で売れないようにする。
 
-   ・数量を増やすのは、この再調達の実行と「売れた値段での再出品」（7.53）のときだけ
+   ・数量を増やすのは、この再調達の実行と「在庫補充（数量を1に戻す）」（7.53）のときだけ
      （ほかの処理では増やさない）
    ・再調達の売値（pb_want）は pj_price が計算して送る（Worker は値付けの式を持たない）
    ・書き込みの前に GetItem で今の数量・売値を確かめ、判定時と違えば実行しない
@@ -4835,7 +4835,7 @@ async function statusBody(env, url) {
     rk_last: await rkLast(env),
     /* 3時間ごとの最安値（7.49）。取り切れなかった件数を画面に出す。 */
     hot_pricing: await pricingHotLast(env),
-    /* 売れた値段での再出品（7.53）。予定と前回の結果を画面の帯に出す。 */
+    /* 在庫補充（数量を1に戻す）（7.53）。予定と前回の結果を画面の帯に出す。 */
     sk_plan: await skPlanGet(env),
     sk_last: await skLast(env),
     /* Worker が使っている為替（7.50）。画面の⚙設定に出して見比べられるようにする。
@@ -4997,7 +4997,7 @@ async function putListings(env, body) {
          /* 自動値下げの値下げ幅。出品時と「自動値下げを有効にした時点」に送る。
             いちど入ったら、送られてこないかぎりそのまま（途中で変えない）。
             md_start が新しい値で来たら、回数（md_done）を0に戻す
-            （再出品・値上げのあとは下げ直しを最初からやる）。 */
+            （在庫補充・値上げのあとは下げ直しを最初からやる）。 */
          md_step=COALESCE(?24, md_step),
          md_floor=COALESCE(?25, md_floor),
          md_n=COALESCE(?26, md_n),
@@ -5454,8 +5454,8 @@ export default {
            approve:true は販売連携タブの「再調達をまとめて実行」。 */
         if (kind === "phaseb")
           return json(await jobPhaseB(env, { approve: body.approve === true }), 200, origin);
-        /* 売れた値段での再出品（7.53）。既定は「確認してから」。
-           approve:true は販売連携タブの「売れた値段でまとめて再出品」。 */
+        /* 在庫補充（数量を1に戻す）（7.53）。既定は「確認してから」。
+           approve:true は販売連携タブの「在庫補充（数量を1に戻す）」。 */
         if (kind === "soldkeep")
           return json(await jobSoldKeep(env, { approve: body.approve === true }),
             200, origin);
@@ -5495,7 +5495,7 @@ export default {
       ctx.waitUntil((async () => {
         await jobOrders(env, 0);
         await jobPhaseB(env, {});
-        /* 売れた値段での再出品（7.53）。注文を取り込んだ直後に判定するので、
+        /* 在庫補充（数量を1に戻す）（7.53）。注文を取り込んだ直後に判定するので、
            売れてすぐ（15分以内）に数量が戻る。
            「確認してから」のときは予定を立てるだけ。 */
         await jobSoldKeep(env, {});
@@ -5515,7 +5515,7 @@ export default {
       }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
-      await jobSoldKeep(env, {});        // 売れた値段での再出品（7.53）
+      await jobSoldKeep(env, {});        // 在庫補充（数量を1に戻す）（7.53）
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が

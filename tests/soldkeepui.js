@@ -1,15 +1,15 @@
-/* 販売連携：売れた値段で保ち、同じ値段で再出品する（6.77）
+/* 販売連携：売れた値段で保ち、同じ値段で在庫補充する（6.77・6.78）
    ・行に「売れた値段で保っています（$xx.xx・○月○日に売れた）」
    ・自動値下げが止まる（一度も値下げしていない行も止まる＝穴①）
    ・売値の自動反映の値上げも止まる（穴②）
    ・「値下げを再開」ボタン（確認つき・操作の履歴に残る＝穴③）
-   ・帯に「保っている n件／再出品の予定 n件／前回の結果」
-   ・再出品できない行は「対応が必要」に出て、理由を行に出す
+   ・帯に「保っている n件／在庫補充の予定 n件／前回の結果」
+   ・在庫を補充できない行は「対応が必要」に出て、理由を行に出す
    ・「確認してから」では kind=soldkeep を approve で送る（戻せない履歴）
-   ・⚙設定「売れたあとの再出品：確認してから（既定）／自動で実行」
+   ・⚙設定「売れたあとの在庫補充：確認してから（既定）／自動で実行」
    ・作業者のキーでは帯を出さない・値下げを再開できない */
 const { harness, openCsvBoxes, clickCfg } = require('./lib');
-const T = harness('販売連携：売れた値段で再出品');
+const T = harness('販売連携：売れた値段での在庫補充');
 const ok = T.ok;
 (async()=>{
 const p=await T.open();
@@ -154,24 +154,26 @@ console.log('   '+v.note.replace(/\n/g,' / '));
 console.log('   '+v.list.replace(/\n/g,' / '));
 ok(v.bar!=='none','★保っている行があれば帯を出す');
 ok(/売れた値段で保っている：6件/.test(v.note),'★★保っている件数を出す');
-ok(/再出品は確認してから/.test(v.note),'★★いまの設定を出す');
+ok(/在庫補充は確認してから/.test(v.note),'★★いまの設定を出す');
 ok(v.n===2&&v.from==='local','★★出せる2件だけが予定に入る');
-ok(/「まとめて再出品」を押すまで eBay は変えません/.test(v.note),'★★そう書く');
-ok(/3件は数量0のまま再出品できません/.test(v.note),'★★出せない件数を出す');
+ok(/「在庫補充」を押すまで eBay は変えません/.test(v.note),'★★そう書く');
+ok(/3件は数量0のまま在庫を補充できません/.test(v.note),'★★補充できない件数を出す');
 ok(/B0SKU00002の商品/.test(v.list)&&/手持ちの在庫/.test(v.list),
    '★★手持ちで出せる行はそう書く');
 ok(/B0SKU00001の商品/.test(v.list)&&/仕入 ¥3,000/.test(v.list),
    '★★仕入れ直す行は仕入れ値と上限を出す');
-ok(v.goShow!=='none'&&!v.goDis&&/まとめて再出品/.test(v.goText),
-   '★★「まとめて再出品」を出す');
+ok(v.goShow!=='none'&&!v.goDis&&/在庫補充（数量を1に戻す）/.test(v.goText),
+   '★★ボタンは「在庫補充（数量を1に戻す）」（出品し直すわけではないので）');
 ok(/2/.test(v.goText),'★ボタンに件数を出す');
+ok(!/再出品/.test(v.goText)&&!/再出品/.test(v.note)&&!/再出品/.test(v.list),
+   '★★帯もボタンも一覧も「再出品」と書かない（6.78）');
 
 console.log('=== 売値は変えない・数量だけ戻す（予定の中身）===');
 console.log('   '+JSON.stringify(v.rows[0]));
 ok(v.rows[0].price===52.16,'★★売れた値段のまま（下げた今の売値ではない）');
 ok(v.rows.every(function(x){ return !('to' in x); }),'★売値を動かす予定は持たない');
 
-console.log('=== 再出品できない行は「対応が必要」に出る ===');
+console.log('=== 在庫を補充できない行は「対応が必要」に出る ===');
 let t3=await rowText('B0SKU00003|used');
 console.log('   '+t3.replace(/\n/g,' / ').slice(0,260));
 ok(/下限利益を割ります/.test(t3),'★★理由を行に出す');
@@ -193,7 +195,7 @@ ok(warn.indexOf('B0SKU00003|used')>=0&&warn.indexOf('B0SKU00004|used')>=0
 ok(warn.indexOf('B0SKU00001|used')<0,'★★出せる行は入らない');
 ok(warn.indexOf('B0SKU00005|used')<0,'★数量がある行は入らない');
 
-console.log('=== まとめて再出品 ===');
+console.log('=== まとめて在庫補充 ===');
 await setup({});
 await openCsvBoxes(p);
 dlg=[];
@@ -203,14 +205,15 @@ v=await view();
 console.log('   確認：'+(dlg[0]||'').replace(/\n/g,' / ').slice(0,200));
 console.log('   送った：'+JSON.stringify(v.sync));
 console.log('   '+v.done);
-ok(dlg.length===1&&/数量を1に戻します（2件）/.test(dlg[0]),'★★確認画面に件数を出す');
+ok(dlg.length===1&&/数量を 0→1 に戻します（2件）/.test(dlg[0]),
+   '★★確認画面に件数を出す');
 ok(/売値は変えません/.test(dlg[0]),'★★売値は変えないと書く');
 ok(/1日に戻す上限は 30件/.test(dlg[0]),'★★1日の上限を書く');
 ok(v.sync.length===1&&v.sync[0].kind==='soldkeep'&&v.sync[0].approve===true,
    '★★kind=soldkeep を approve で送る');
-ok(/再出品 2件/.test(v.done),'★結果を出す');
+ok(/補充 2件/.test(v.done),'★結果を出す');
 let hist=await p.evaluate(()=>$('syncHistList').innerText);
-ok(/売れた値段でまとめて再出品/.test(hist)&&/eBay への変更は戻せません/.test(hist),
+ok(/在庫補充（数量を1に戻す）/.test(hist)&&/eBay への変更は戻せません/.test(hist),
    '★★操作の履歴に「戻せません」として残す');
 
 console.log('=== 確認でやめたら送らない ===');
@@ -227,9 +230,9 @@ await setup({mode:'auto'});
 await openCsvBoxes(p);
 v=await view();
 console.log('   '+v.note.replace(/\n/g,' / '));
-ok(/再出品は自動で実行/.test(v.note),'★★いまの設定を出す');
+ok(/在庫補充は自動で実行/.test(v.note),'★★いまの設定を出す');
 ok(/承認なしで数量を1に戻します/.test(v.note),'★★承認なしであることを書く');
-ok(v.goShow==='none','★★自動のときは「まとめて再出品」を出さない');
+ok(v.goShow==='none','★★自動のときは「在庫補充」のボタンを出さない');
 
 console.log('=== 値下げを再開する（穴③）===');
 await setup({});
@@ -280,7 +283,7 @@ await setup({last:{at:'2026-10-21T05:00:00Z',mode:'auto',picked:3,relisted:2,
   failed:0,ended:1,capped:0},
   plan:{at:'2026-10-21T06:00:00Z',n:1,capped:3,rows:[
     {asin:'B0SKU00001',cond:'used',name:'サクラ大戦（通常版）',price:52.16,
-     hand:false,max:4572,buy_low:3000,buy_src:'amazon',why:'仕入れ直して出せます'}]}});
+     hand:false,max:4572,buy_low:3000,buy_src:'amazon',why:'仕入れ直して補充できます'}]}});
 await openCsvBoxes(p);
 v=await view();
 console.log('   '+v.note.replace(/\n/g,' / '));
@@ -289,7 +292,7 @@ ok(v.from==='sync'&&v.n===1,'★★pj-sync の予定があればそれを出す'
 ok(/pj-sync の予定 2026-10-21 06:00/.test(v.note),'★いつの予定かを出す');
 ok(/サクラ大戦（通常版）/.test(v.list)&&/\$52\.16/.test(v.list),'★★中身を出す');
 ok(/1日の上限 30件を超えた 3件は翌日/.test(v.note),'★★上限を超えた件数を出す');
-ok(/前回/.test(v.note)&&/再出品 2件/.test(v.note)
+ok(/前回/.test(v.note)&&/補充 2件/.test(v.note)
    &&/出品が終了していた 1件/.test(v.note),'★★前回の結果を出す');
 
 console.log('=== 3回続けて失敗した行 ===');
@@ -308,13 +311,23 @@ await setup({});
 let cfg=await p.evaluate(()=>{
   switchTab('G');
   const s=$('autoSkMode');
+  const row=s.closest('.rowv');
   return { v:s.value, opts:Array.from(s.options).map(function(o){ return o.value; }),
            txt:Array.from(s.options).map(function(o){ return o.text; }).join(' / '),
+           label:(row.querySelector('label')||{}).textContent||'',
+           note:(row.querySelector('.note2')||{}).textContent||'',
            adv:ADV_PB.indexOf('autoSkMode')>=0,
            csv:CSV_CFG_IDS.indexOf('autoSkMode')>=0 };
 });
-console.log('   '+JSON.stringify(cfg));
+console.log('   '+JSON.stringify({v:cfg.v,label:cfg.label,opts:cfg.opts}));
 ok(cfg.opts.join(',')==='confirm,auto','★★確認してから／自動で実行');
+/* 「再出品」ではなく「在庫補充」。実際の動きは同じ出品の数量を 0→1 に
+   戻すだけで、新しく出品し直すわけではない（6.78）。 */
+ok(cfg.label==='売れたあとの在庫補充','★★⚙設定の名前は「売れたあとの在庫補充」');
+ok(/同じ出品の数量を 0→1 に戻します/.test(cfg.note),'★★何が起きるかを書く');
+ok(/新しく出品し直すわけではない/.test(cfg.note),
+   '★★出品し直すわけではないと書く');
+ok(!/再出品/.test(cfg.label)&&!/再出品/.test(cfg.note),'★★「再出品」と書かない');
 ok(/確認してから/.test(cfg.txt)&&/自動/.test(cfg.txt),'★表示も日本語');
 ok(cfg.adv,'★★⚙設定として pj-sync に送る（Worker も同じ設定で動く）');
 ok(cfg.csv,'★この端末にも保存する');

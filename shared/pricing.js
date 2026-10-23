@@ -604,13 +604,14 @@
     return a.has ? a : (m.has ? m : a);
   }
 
-  /* ================= 売れた値段での再出品 =================
+  /* ================= 売れた値段での在庫補充（数量を1に戻す）=================
      値下げの途中で売れた行は、その値段が「売れる値段」だと分かったということ。
-     数量0になった行を**同じ値段のまま**数量1に戻す。
+     数量0になった行を**同じ値段のまま**数量1に戻す（新しく出品し直すのではなく、
+     同じ出品の数量を 0→1 にするだけ）。
      返り値 { act:'relist'|'', why, price, hand, buy, max } */
   var SK_FAIL_WARN = 3;                  // 続けてこの回数失敗したら自動処理から外す
   /* 「売れた値段で保つ」対象にしない行。**ここ1か所だけで決める**。
-     印を立てる側（Worker の jobOrders）と、再出品の判定（下の skRelist）の
+     印を立てる側（Worker の jobOrders）と、在庫補充の判定（下の skRelist）の
      両方がこれを読む。
 
      ・一点物 … 売れたら在庫が無い。数量0になった時点で値下げも値上げも
@@ -643,11 +644,11 @@
     if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
     if (Number(r.pb_skip || 0)) return no("今回は動かさない");
     if (Number(r.sk_fail || 0) >= SK_FAIL_WARN) return no("続けて失敗（対応が必要）");
-    /* ① FBA在庫・手元在庫があれば、それで出せる（仕入れ値は見ない）。 */
+    /* ① FBA在庫・手元在庫があれば、それで補充できる（仕入れ値は見ない）。 */
     var hand = Number(r.fba_available || 0) > 0 || Number(r.on_hand || 0)
       || Number(r.hand_qty || 0) > 0;
     if (hand)
-      return { act: "relist", why: "手持ちの在庫で出せます", price: price,
+      return { act: "relist", why: "手持ちの在庫で補充できます", price: price,
                hand: true, buy: null, max: 0 };
     /* ② 無ければ仕入れ直す前提。いまの仕入れ値で、売れた値段でも下限利益が残るか。 */
     var b = buySource(S, r, now);
@@ -661,7 +662,7 @@
     if (b.low > max)
       return no("いまの仕入れ値では下限利益を割ります（仕入 " + Math.round(b.low)
         + "円 ＞ 上限 " + max + "円）");
-    return { act: "relist", why: "仕入れ直して出せます", price: price,
+    return { act: "relist", why: "仕入れ直して補充できます", price: price,
              hand: false, buy: b, max: max };
   }
 
@@ -684,7 +685,7 @@
     soldItem: soldItem, soldVerdict: soldVerdict, wantPrice: wantPrice,
     mdStep: mdStep, rvTarget: rvTarget, mdPlan: mdPlan,
     lowOf: lowOf, pbWant: pbWant, rkWant: rkWant,
-    /* 仕入れ先と、売れた値段での再出品 */
+    /* 仕入れ先と、売れた値段での在庫補充 */
     BUY_MS: BUY_MS, SK_FAIL_WARN: SK_FAIL_WARN,
     buyAmazon: buyAmazon, buyMw: buyMw, buySource: buySource,
     skKeepOff: skKeepOff, skRelist: skRelist
