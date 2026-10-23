@@ -800,7 +800,7 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" style="margin:8px 0 0"><b>毎日</b>　状況を取り込む → 対応が必要を確認 → 発送　／　<b>3日ごと</b>　値下げの時期 → CSV → アップロード　／　<b>ときどき</b>　再調達の候補・FBA納品の判断・売値の見直し</div>
       <div class="todo" id="syncTodo"></div>
       <!-- 操作の履歴（6.69）。押した印を新しい順に出し、1件ずつ戻せる。 -->
-      <details id="syncHistBox" style="margin-top:8px">
+      <details id="syncHistBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer" id="syncHistSum">操作の履歴</summary>
         <div style="padding:6px 0 0">
           <div class="note2" style="margin:0 0 4px">この端末で押した<b>印</b>（販売連携・出品CSVの行ボタン）の履歴です（直近50件）。eBay の価格・数量・写真に送った変更は戻せません。</div>
@@ -812,7 +812,7 @@ body.staff #syncOnHandFix{display:none !important}
           <div id="syncHistList" style="margin-top:4px"></div>
         </div>
       </details>
-      <details id="syncNumBox" style="margin-top:8px">
+      <details id="syncNumBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">詳しい数字</summary>
         <div style="padding:6px 0 0">
           <div class="big" style="padding:0 0 10px;border:0">
@@ -824,7 +824,7 @@ body.staff #syncOnHandFix{display:none !important}
       </details>
 
       <!-- 価格の操作。値下げの時期が来ていれば自動で開く。 -->
-      <details id="syncPriceBox" style="margin-top:8px">
+      <details id="syncPriceBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer" id="syncPriceSum">価格の操作</summary>
         <div style="padding:6px 0 0">
           <div class="note2" style="margin:0 0 6px">実重量・仕入値・相場は出品CSVの書き出し・名簿送信のときに pj-sync に残してあるので、<b>出品リストを空にしても</b>ここで値付けを動かせます。</div>
@@ -881,7 +881,7 @@ body.staff #syncOnHandFix{display:none !important}
       </details>
 
       <!-- 写真を eBay 保管（EPS）に切り替える（7.42・管理者だけ）。 -->
-      <details id="syncPicsBox" style="margin-top:8px">
+      <details id="syncPicsBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">写真を eBay 保管に切り替え</summary>
         <div style="padding:6px 0 0">
           <div class="note2" style="margin:0 0 6px">eBayアプリで価格を直すと<b>メイン画像だけ</b>エラーになる出品を直します。出品に残っている<b>自前ホスト（pj-img）の写真の紐づけ</b>を外し、写真を eBay 保管だけにします。<b>写真以外（価格・数量・タイトル）は送りません。</b>pj-img の写真は消しません（差し替えや再出品に使います）。</div>
@@ -904,7 +904,7 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="syncRestockNote"></div>
       </div>
 
-      <details id="syncMoreBox" style="margin-top:8px">
+      <details id="syncMoreBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">その他（ときどき使う）</summary>
         <div style="padding:6px 0 0">
           <button class="btn" id="syncPush" style="width:100%">出品リストの名簿を送る（手元在庫の印つき）</button>
@@ -924,7 +924,7 @@ body.staff #syncOnHandFix{display:none !important}
     </div>
   </section>
 
-  <details id="syncListBox" open>
+  <details id="syncListBox" data-box="1" open>
     <summary style="padding:11px 13px;font-size:13px;font-weight:700;cursor:pointer">一覧</summary>
     <div class="body" style="padding-top:0">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
@@ -9705,7 +9705,9 @@ function syncMarkBarRender(){
      （人が閉じたあとでも、次に作り直すときにまた開く＝見落とさないため）。 */
   var box=$('syncPriceBox');
   if(box){
-    if(nAll)box.open=true;
+    /* 人が一度でも開閉したら、その判断を優先する（6.80）。
+       閉じていても見出しに件数を赤で出すので、見落としはしない。 */
+    if(nAll&&!boxKnown('syncPriceBox'))boxQuietOpen(box,true);
     $('syncPriceSum').textContent='価格の操作'+(nAll?('　値下げの時期 '+nAll+'件'):'');
     $('syncPriceSum').style.color=nAll?'var(--bad)':'';
     $('syncPriceSum').style.fontWeight=nAll?'800':'';
@@ -10570,6 +10572,48 @@ document.addEventListener('toggle',function(e){
   // 英題の欄は閉じているあいだ高さが測れないので、開いたときに合わせ直す
   if(t.open&&typeof csvTaFitAll==='function')csvTaFitAll();
 },true);
+/* ================= 折りたたみ（details）の開閉を覚える（6.80）=================
+   販売連携タブは、行のチェックや印のボタンのたびに syncRender() が走る。
+   そのとき「価格の操作」などが勝手に開いた状態に戻って使いづらかったので、
+   **data-box を付けた details の開閉をこの端末に保存**して、
+   描き直したあとも、アプリを開き直したあとも同じ状態にする。
+
+   既定（まだ一度も開閉していないとき）は HTML の open 属性のまま。
+   「価格の操作」は値下げの時期が来ていれば自動で開くが、
+   一度でも人が開閉したらその判断を優先する（下の syncMarkBarRender）。 */
+var BOX_KEY='pj:boxopen:v1';
+var boxOpen={};
+try{ var b0=JSON.parse(localStorage.getItem(BOX_KEY)||'{}');
+     boxOpen=(b0&&typeof b0==='object')?b0:{}; }catch(e){ boxOpen={}; }
+function boxSave(){
+  try{ localStorage.setItem(BOX_KEY,JSON.stringify(boxOpen)); }catch(e){}
+}
+// 人が一度でも開閉したか（していなければ既定のふるまいに任せる）
+function boxKnown(id){
+  return Object.prototype.hasOwnProperty.call(boxOpen,String(id||''));
+}
+function boxIsOpen(id){ return !!boxOpen[String(id||'')]; }
+function boxSet(id,v){ if(!id)return; boxOpen[String(id)]=!!v; boxSave(); }
+/* アプリの都合で開け閉めするとき（人が選んだわけではない）は保存しない。
+   ⚙設定のグループと同じ data-…auto の形にしてある。 */
+function boxQuietOpen(d,v){
+  if(!d||d.open===!!v)return;
+  d.setAttribute('data-boxauto','1');
+  d.open=!!v;
+}
+/* 保存した状態を当てはめる（読み込みのときに1回）。 */
+function boxApply(){
+  Array.prototype.forEach.call(document.querySelectorAll('details[data-box]'),
+    function(d){ if(d.id&&boxKnown(d.id))d.open=boxIsOpen(d.id); });
+}
+document.addEventListener('toggle',function(e){
+  var t=e.target;
+  if(!t||t.tagName!=='DETAILS'||!t.hasAttribute('data-box')||!t.id)return;
+  // アプリが開けた分は覚えない（人が押したときだけ覚える）
+  if(t.hasAttribute('data-boxauto')){ t.removeAttribute('data-boxauto'); return; }
+  boxSet(t.id,t.open);
+},true);
+
 /* ================= 長いまとめは先頭3件だけ出す（6.46）=================
    販売連携タブの初期表示が長すぎるので、まとめの一覧は**先頭3件**だけ出し、
    「すべて表示（n件）」で開く。開閉はこの端末に保存する。 */
@@ -12581,7 +12625,29 @@ function syncRowReplace(key){
   syncFilterOpts();        // 絞り込みの件数だけ直す
   syncPickNote();
 }
+/* ---- 描き直しでスクロールが飛ばないようにする（6.80）----
+   印のボタンを押すと一覧を作り直すので、上の帯の高さが変わると画面が飛ぶ。
+   **いま画面の上のほうに見えている行**を目印にして、作り直したあとも
+   同じ位置に来るようにスクロールを戻す（操作した行が画面内に残る）。
+   行が見つからないとき（ページを変えた・絞り込みを変えた）は何もしない。 */
+function syncScrollKeep(){
+  var list=$('syncList'); if(!list)return null;
+  var els=list.querySelectorAll('[data-srow]');
+  for(var i=0;i<els.length;i++){
+    var top=els[i].getBoundingClientRect().top;
+    if(top>=-40)return { key:els[i].getAttribute('data-srow'), top:top };
+  }
+  return null;
+}
+function syncScrollBack(a){
+  if(!a||!a.key)return;
+  var el=$('syncList').querySelector('[data-srow="'+a.key+'"]');
+  if(!el)return;
+  var d=el.getBoundingClientRect().top-a.top;
+  if(Math.abs(d)>1)window.scrollBy(0,d);
+}
 function syncRender(){
+  var keepPos=syncScrollKeep();     // スクロールの目印（6.80）
   syncMemoClear();                  // 引き当てと計算の控えを捨てる
   syncFilterOpts();                 // 絞り込みの件数を先に作り直す
   syncWarnBreakRender();            // 警告の理由ごとの件数
@@ -12634,6 +12700,7 @@ function syncRender(){
   syncShown=shown;
   syncPickNote();
   syncBarRender();
+  syncScrollBack(keepPos);          // 目印の行を同じ位置に戻す（6.80）
 }
 /* 無在庫が上限を超えたときの警告。出品を増やしすぎないための見張り。
    件数は「いまeBayに出ている無在庫」で数える（終了した出品は数えない）。 */
@@ -12646,6 +12713,21 @@ function syncDropWarn(){
     +'（絞り込み「無在庫」で一覧できます）。';
 }
 var syncShown=0;
+/* チェックを付ける・外すだけの操作で直すところ（6.80）。
+   一覧（#syncList）の innerHTML は作り直さない。
+   ・いま出ている行のチェック欄を、選択の控え（syncPick）に合わせる
+   ・件数の表示（syncPickNote・下の操作バー・「ページ内を全て選択」）を直す */
+function syncPickApply(){
+  var list=$('syncList');
+  if(list)Array.prototype.forEach.call(list.querySelectorAll('[data-spick]'),
+    function(c){
+      var want=!!syncPick[c.getAttribute('data-spick')];
+      if(c.checked!==want)c.checked=want;
+    });
+  syncPickNote();          // 件数の表示
+  syncBarRender();         // 下の操作バーは出し入れする
+  pageAllRender('syncPageAll','syncPageAllLabel',syncPageIds,syncPick);
+}
 // 選択の件数だけ書き替える。一覧は作り直さない（触っている欄が消えないように）
 // いま見えていないページで選んでいる件数
 function syncPickOff(){
@@ -12761,7 +12843,9 @@ function syncPageGo(n){
 $('syncPageAll').addEventListener('change',function(){
   var on=this.checked;
   syncPageIds.forEach(function(k){ if(on)syncPick[k]=true; else delete syncPick[k]; });
-  syncRender();
+  /* 一覧は作り直さない（6.80）。作り直すと折りたたみが戻り、画面も飛ぶ。
+     変わるのはチェック欄と件数だけなので、そこだけ直す。 */
+  syncPickApply();
 });
 function syncPerApply(v){
   $('syncPerPage').value=v; $('syncPerPage2').value=v;
@@ -13275,9 +13359,7 @@ $('syncList').addEventListener('change',function(e){
   var k=t.getAttribute('data-spick');
   if(!k)return;
   syncPick[k]=t.checked;
-  syncPickNote();          // 一覧は作り直さない
-  syncBarRender();         // 下の操作バーは出し入れする
-  pageAllRender('syncPageAll','syncPageAllLabel',syncPageIds,syncPick);
+  syncPickApply();         // 一覧は作り直さない（6.80）
 });
 /* 状況を取り込む（読み取りだけ） */
 /* 「状況を取り込む」の中身。「まとめて実行」のあとにも自動で呼ぶ（6.58）ので、
@@ -13767,7 +13849,7 @@ $('addToCsv').onclick=function(){
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
 roleLoad(); roleApply();          // 作業者用キーなら価格の欄を出さない（6.52）
 uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
-syncSentLoad(); syncMoreLoad(); detLoad();
+syncSentLoad(); syncMoreLoad(); detLoad(); boxApply();   // 折りたたみの開閉（6.80）
 /* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
 $('csvPerPage2').value=$('csvPerPage').value;
 $('syncPerPage2').value=$('syncPerPage').value;
@@ -13794,7 +13876,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v180';   // sw.js の const V と必ず同じ値にする
+var APP_V='v181';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
