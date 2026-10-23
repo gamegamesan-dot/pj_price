@@ -389,5 +389,38 @@ console.log('   '+JSON.stringify(pf));
 ok(pf.indexOf('B0BOX00002|used')>=0,'★★写真が500px未満で弾かれた行が入る');
 ok(pf.indexOf('B0BOX00001|used')<0,'★★22003 の行は入らない（写真の話ではない）');
 
+console.log('\n=== 「対応が必要」の内訳を理由ごとに分ける（6.83）===');
+await setup({});
+let br=await p.evaluate(()=>{
+  var a=syncRowBy('B0BOX00001|used');
+  a.revise_err='自動値下げ 22003 / Auto decline amount cannot be greater / x';
+  var b=syncRowBy('B0BOX00002|used');
+  b.revise_err='自動値下げ 21919137 / Picture is too small / x';
+  var c=syncRowBy('B0BOX00003|used');
+  c.revise_err='売値の自動反映 21919188 / cannot be revised / x';
+  var d=syncRowBy('B0BOX00004|used');
+  d.revise_err='自動値下げ 22003 / Auto decline amount cannot be greater / x';
+  syncMemoClear(); syncRender();
+  return $('syncWarnBreak').textContent;
+});
+console.log('   '+br.replace(/\n/g,' / ').slice(0,220));
+ok(/写真が500px未満 1件/.test(br),
+   '★★写真のエラーだけを「写真が500px未満」として数える');
+ok(/ベストオファー金額（22003） 2件/.test(br),'★★22003 は別に数える');
+ok(/eBay への書き込みに失敗 1件/.test(br),'★★そのほかも別に数える');
+ok(!/写真が500px未満 4件/.test(br),
+   '★★失敗の全部を写真の問題として数えない（v183 の数え違い）');
+
+console.log('\n=== 写真が小さい行の案内 ===');
+let pg=await p.evaluate(()=>{
+  $('syncFilter').value='all'; syncRender();
+  const el=document.querySelector('#syncList [data-srow="B0BOX00002|used"]');
+  return el?el.innerText.replace(/\n/g,' | '):'';
+});
+console.log('   '+pg.slice(0,240));
+ok(/写真が500px未満/.test(pg),'★理由を出す');
+ok(/「写真を eBay 保管に切り替え」でこの行を確かめると/.test(pg),
+   '★★差し替えたあとの戻し方を書く（6.83）');
+
 await T.done();
 })();

@@ -1342,7 +1342,7 @@ const SKU_COLS = `
    jobRkPrice・jobSoldKeep・selfTargets）と shared/pricing.js が読む列。 */
 const ITEM_COLS = `
   asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
-  ebay_ship_profile, ebay_bo, ebay_bo_accept, revise_err, fba_available,
+  ebay_ship_profile, ebay_bo, ebay_bo_accept, revise_err, revise_err_at, fba_available,
   fba_inbound, fba_reserved, fba_res_cust, fba_res_trans, fba_res_proc,
   fba_seen_at, mode, one_off, one_off_known, fba_link, on_hand, amazon_lowest,
   amazon_lowest_n, amazon_offers, amazon_offers_json, amazon_lowest_at,
@@ -2186,6 +2186,7 @@ const MD_PLAN_SHOW = 50;           // 予定の一覧に入れる件数
             自動値下げの対象から外す（mdSkip）。
    一時的 … System error など。人が直すものではないので、
             3回で自動処理から外す「失敗の回数」には数えない。 */
+const PIC_OK_MIN = 500;            // 出品に使える写真の長辺（px）
 const BO_ERR = /\b22003\b|auto\s*decline\s*amount/i;
 const PIC_ERR = /\b21919137\b|500\s*pixels|longest side/i;
 const TEMP_ERR = /\b(10007|10001|21916750|21917053)\b|system error|internal error|please try again|temporarily unavailable/i;
@@ -4314,6 +4315,22 @@ async function getItemPics(env, run, token, itemId) {
   pics.all_eps = pics.n > 0 && pics.picture_url.every((u) => /(^|\.)ebayimg\.com\//.test(u));
   pics.eps_only = pics.all_eps && pics.ext_n === 0;
   pics.source_eps = /^EPS$/i.test(pics.picture_source || "");
+  /* 写真の大きさ（7.59）。eBay 保管（i.ebayimg.com）の URL は /s/ に
+     「幅X高さ」が base64 で入っているので、GetItem だけで大きさが分かる。
+     長辺500px未満は出品に使えない（21919137）。 */
+  pics.sizes = pics.picture_url.map((u) => {
+    const z = epsSize(u);
+    const long = Math.max(Number(z.w || 0), Number(z.h || 0));
+    return { url: u, w: Number(z.w || 0), h: Number(z.h || 0), long: long,
+             ok: long >= PIC_OK_MIN, known: long > 0 };
+  });
+  pics.small_n = pics.sizes.filter((z) => z.known && !z.ok).length;
+  pics.unknown_n = pics.sizes.filter((z) => !z.known).length;
+  pics.min_long = pics.sizes.filter((z) => z.known).length
+    ? Math.min(...pics.sizes.filter((z) => z.known).map((z) => z.long)) : 0;
+  /* 「ぜんぶ500px以上」と言えるのは、**全部の大きさが分かって**いて
+     どれも足りているときだけ（分からない写真が1枚でもあれば言わない）。 */
+  pics.all_big = pics.n > 0 && pics.small_n === 0 && pics.unknown_n === 0;
   pics.raw = String(pd || "").slice(0, 1500);
   /* ベストオファーの設定（7.58）。22003 を直すのに使う。
      GetMyeBaySelling は BestOfferDetails を返さないことがあるので、
@@ -4330,6 +4347,112 @@ async function getItemPics(env, run, token, itemId) {
     count: Number(xmlTag(bod, "BestOfferCount") || 0) || 0,
   };
   return out;
+}
+/* 写真が原因のエラー（21919137）の記録を消す文（7.59）。
+   写真を差し替えて**全部500px以上**になったら、この記録を残しておく理由がない。
+   残っていると「写真が小さい（要撮り直し）」の一覧に出続け、
+   自動値下げの対象からも外れたままになる（mdSkip）。 */
+function picErrClear(env, itemId, at) {
+  return env.DB.prepare(
+    `UPDATE items SET
+       revise_err=CASE WHEN revise_err LIKE '%21919137%' THEN NULL ELSE revise_err END,
+       revise_err_at=CASE WHEN revise_err LIKE '%21919137%' THEN NULL
+                          ELSE revise_err_at END,
+       updated_at=?2
+     WHERE ebay_item_id=?1 AND revise_err LIKE '%21919137%'`)
+    .bind(String(itemId), at);
+}
+/* ===== 写真が小さい行をまとめて確かめ直す（7.59）=====
+   eBayアプリで写真を差し替えても、こちらは気づけない（GetItem を呼ばないと
+   大きさが分からない）。写真が原因で弾かれた記録が残っている行を順に GetItem で
+   確かめ、**全部500px以上になっていれば記録を消す**。
+   まだ小さい行は、いまの大きさを添えて返す（撮り直す対象が分かる）。
+   POST /sync {kind:"picscheck"} から呼ぶ。 */
+const PICS_CHECK_MAX = 60;         // 1回に確かめる件数（GetItem は1件1回）
+async function jobPicsCheck(env, opt) {
+  const run = newRun("pics-check");
+  const limit = Math.min(PICS_CHECK_MAX,
+    Math.max(1, Number((opt && opt.limit) || PICS_CHECK_MAX)));
+  const res = { picked: 0, checked: 0, cleared: 0, small: 0, unknown: 0,
+                failed: 0, left: 0, rows: [] };
+  try {
+    const q = await env.DB.prepare(
+      `SELECT asin, cond, title, ebay_item_id, ebay_qty, pics_n,
+              substr(revise_err,1,120) AS revise_err, revise_err_at
+         FROM items
+        WHERE COALESCE(ebay_item_id,'')<>'' AND revise_err LIKE '%21919137%'
+        ORDER BY COALESCE(revise_err_at,'') ASC`).all();
+    const all = (q && q.results) || [];
+    res.picked = all.length;
+    const rows = all.slice(0, limit);
+    res.left = Math.max(0, all.length - rows.length);
+    if (!rows.length) {
+      run.notes.push("写真が小さい記録の残っている行はありません");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const token = await ebayToken(env, run);
+    const at = nowIso();
+    const stmts = [];
+    for (const r of rows) {
+      const g = await getItemPics(env, run, token, r.ebay_item_id);
+      if (!g.ok || !g.pictures) {
+        res.failed++;
+        res.rows.push({ asin: r.asin, cond: r.cond, item_id: r.ebay_item_id,
+          name: r.title || r.asin, state: "確かめられません",
+          why: (g.error || g.ack || "").slice(0, 80) });
+        continue;
+      }
+      res.checked++;
+      const p = g.pictures;
+      const row = { asin: r.asin, cond: r.cond, item_id: r.ebay_item_id,
+        name: r.title || r.asin, n: p.n, min_long: p.min_long,
+        small_n: p.small_n, unknown_n: p.unknown_n,
+        eps_only: p.eps_only ? 1 : 0,
+        sizes: p.sizes.map((z) => z.w + "x" + z.h).slice(0, 12),
+        err_at: jstText(r.revise_err_at) };
+      if (p.all_big) {
+        res.cleared++;
+        row.state = "直っています（記録を消しました）";
+        stmts.push(picErrClear(env, r.ebay_item_id, at));
+        /* 写真の枚数も新しくしておく（画面の「写真が抜けています」に使う）。 */
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET pics_n=?2, updated_at=?3 WHERE ebay_item_id=?1`)
+          .bind(String(r.ebay_item_id), p.n, at));
+      } else if (p.unknown_n) {
+        res.unknown++;
+        row.state = "大きさが分かりません（自前ホストの写真）";
+      } else {
+        res.small++;
+        row.state = "まだ小さい（撮り直しが必要）";
+      }
+      res.rows.push(row);
+    }
+    if (stmts.length) await runBatch(env, run, stmts);
+    run.notes.push("写真の確かめ直し：確かめた " + res.checked + "件／直っていた "
+      + res.cleared + "件／まだ小さい " + res.small + "件"
+      + (res.unknown ? ("／大きさ不明 " + res.unknown + "件") : "")
+      + (res.failed ? ("／取れなかった " + res.failed + "件") : "")
+      + (res.left ? ("／残り " + res.left + "件（もう一度呼んでください）") : ""));
+    await notify(env, run, picsCheckText(res));
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+function picsCheckText(res) {
+  if (!res.checked && !res.failed) return "";
+  const t = ["🖼 写真の大きさを確かめ直しました（" + PIC_OK_MIN + "px以上かどうか）",
+    "確かめた " + res.checked + "件／直っていた " + res.cleared
+    + "件（記録を消しました）／まだ小さい " + res.small + "件"
+    + (res.unknown ? ("／大きさ不明 " + res.unknown + "件") : "")];
+  if (res.left) t.push("残り " + res.left + "件はもう一度呼んでください");
+  res.rows.filter((x) => x.state === "まだ小さい（撮り直しが必要）")
+    .slice(0, 10).forEach((x) => {
+      t.push("・" + String(x.name).slice(0, 36) + "（" + x.item_id + "）"
+        + " 長辺 " + x.min_long + "px・" + x.small_n + "枚");
+    });
+  return t.join("\n");
 }
 /* ===== 22003（自動拒否額が新しい売値以上）を直す（7.58）=====
    新しい売値より**必ず下**になる自動拒否額と自動承諾額を作る。
@@ -4419,6 +4542,21 @@ async function jobGetItem(env, itemId) {
         + (out.bo.on === null ? "不明" : (out.bo.on ? "オン" : "オフ"))
         + "／自動拒否 " + (out.bo.min || 0) + "／自動承諾 " + (out.bo.acc || 0));
     }
+    /* 写真が差し替わって全部500px以上になっていたら、写真のエラーを消す（7.59）。
+       eBayアプリで差し替えたときは、こちらで確かめるまで記録が残っていた。 */
+    if (out.ok && out.pictures && out.pictures.all_big) {
+      try {
+        const q = await picErrClear(env, itemId, nowIso()).run();
+        const n = Number((q && q.meta && q.meta.changes) || 0);
+        out.pic_err_cleared = n;
+        if (n) run.notes.push("写真が全部 " + PIC_OK_MIN + "px以上になったので、"
+          + "写真が小さいの記録を消しました " + itemId);
+      } catch (e) { run.notes.push("写真の記録を消せません：" + e.message); }
+    }
+    if (out.ok && out.pictures)
+      run.notes.push("GetItem " + itemId + "：写真の長辺 最小 "
+        + out.pictures.min_long + "px／500px未満 " + out.pictures.small_n + "枚"
+        + (out.pictures.unknown_n ? ("／大きさ不明 " + out.pictures.unknown_n + "枚") : ""));
     if (out.ok) run.notes.push("GetItem " + itemId + "：写真 " + out.pictures.n + "枚"
       + (out.pictures.eps_only ? "（eBay 保管だけ）"
          : ("／自前ホストの紐づけ " + out.pictures.ext_n + "件")));
@@ -4695,16 +4833,27 @@ async function jobPicSwitch(env, itemId, urls) {
     if (out.done) {
       const n = (t.after && t.after.n) || 0;
       await env.DB.prepare(
-        `UPDATE items SET pics_eps=1, pics_eps_at=?2, pics_n=?3,
-           /* 写真を入れ替えたので、写真が小さくて弾かれた記録は消す（7.58）。
-              これで自動値下げの対象に戻る。 */
-           revise_err=CASE WHEN revise_err LIKE '%21919137%' THEN NULL
-                           ELSE revise_err END,
-           revise_err_at=CASE WHEN revise_err LIKE '%21919137%' THEN NULL
-                              ELSE revise_err_at END,
-           updated_at=?2
+        `UPDATE items SET pics_eps=1, pics_eps_at=?2, pics_n=?3, updated_at=?2
          WHERE ebay_item_id=?1`).bind(String(itemId), nowIso(), n).run();
       out.pics_eps = 1;
+    }
+    /* 写真が**全部500px以上**なら、写真が小さくて弾かれた記録を消す（7.59）。
+       切り替えが要らなかった行（すでに eBay 保管だけ）でも消す。
+       eBayアプリで大きい写真に差し替えたあと、確かめた時点で戻せるようにするため。 */
+    const after2 = (t.after && t.after.all_big) ? t.after
+                 : ((t.before && t.before.all_big) ? t.before : null);
+    out.pics_min_long = (t.after && t.after.min_long)
+                     || (t.before && t.before.min_long) || 0;
+    out.pics_small_n = (t.after ? t.after.small_n
+                       : (t.before ? t.before.small_n : 0)) || 0;
+    if (after2) {
+      try {
+        const q = await picErrClear(env, String(itemId), nowIso()).run();
+        out.pic_err_cleared = Number((q && q.meta && q.meta.changes) || 0);
+        if (out.pic_err_cleared)
+          run.notes.push("写真が全部 " + PIC_OK_MIN + "px以上になったので、"
+            + "写真が小さいの記録を消しました " + itemId);
+      } catch (e) { run.notes.push("写真の記録を消せません：" + e.message); }
     }
     if (!out.done && !out.error)
       out.error = "切り替えても自前ホストの紐づけが消えませんでした";
@@ -5810,6 +5959,10 @@ export default {
            approve:true は販売連携タブの「再調達をまとめて実行」。 */
         if (kind === "phaseb")
           return json(await jobPhaseB(env, { approve: body.approve === true }), 200, origin);
+        /* 写真の大きさを確かめ直す（7.59）。写真が小さくて弾かれた記録が
+           残っている行を GetItem で確かめ、直っていれば記録を消す。 */
+        if (kind === "picscheck")
+          return json(await jobPicsCheck(env, { limit: body.limit }), 200, origin);
         /* 在庫補充（数量を1に戻す）（7.53）。既定は「確認してから」。
            approve:true は販売連携タブの「在庫補充（数量を1に戻す）」。 */
         if (kind === "soldkeep")
@@ -5904,6 +6057,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
                         picsUrlOk, picsNotifyText,
                         BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
+                        jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
                         jstText, boBelow, boRetry, reviseFix, mdBo,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,

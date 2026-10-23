@@ -10025,6 +10025,11 @@ function syncPicsMark(it){
   hit.pics_eps=1;
   hit.pics_n=((it.after&&it.after.n)||hit.pics_n||0);
   syncPicsErrClear(hit);
+  /* 写真が全部500px以上になって Worker が記録を消したら、
+     この端末の控えからも消す（取り込み直さずに一覧から外れる・7.59）。 */
+  if(Number(it.pic_err_cleared||0)&&syncErrKind(hit.revise_err)==='pic'){
+    hit.revise_err=''; hit.revise_err_at='';
+  }
   return hit;
 }
 /* 切り替えられなかった行の理由を控える（「対応が必要」に出す）。 */
@@ -10140,10 +10145,19 @@ function syncPicsOneHtml(it){
     : (it.changed
        ? '後：eBay には送りましたが、確かめられませんでした（取り込み直してください）'
        : '後：<b>送っていません（出品は変わっていません）</b>');
+  /* いまの写真の大きさ（7.59）。長辺500px未満が残っていないかを出す。 */
+  var sz=(it.pics_min_long||0)
+    ? ('<br>写真の長辺 最小 <b>'+Number(it.pics_min_long)+'px</b>'
+       +'（500px未満 '+Number(it.pics_small_n||0)+'枚）')
+    : '';
+  var cl=Number(it.pic_err_cleared||0)
+    ? ('<br><span style="color:var(--good);font-weight:700">'
+       +'✅ 写真が全部500px以上になったので、「写真が小さい」の記録を消しました'
+       +'（自動値下げの対象に戻ります）</span>') : '';
   return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);border-radius:6px">'
     +'<b>'+esc(it.item_id)+'</b>'+(it.title?('　'+esc(String(it.title).slice(0,40))):'')
     +'<br>'+line('前',b)
-    +'<br>'+after
+    +'<br>'+after+sz+cl
     +'<br>'+(it.done?('✅ '+how)
       :('<span style="color:var(--bad);font-weight:700">⚠ '
         +esc(it.error||'直りませんでした')+'</span>'))
@@ -10500,7 +10514,11 @@ function syncNextHtml(r){
     return nextLine('要対応','#b00020',esc(syncErrSrc(r.revise_err))+'に失敗：'
       +esc(syncErrText(r.revise_err))
       +(syncErrKind(r.revise_err)==='pic'
-        ? '　長辺500px以上の写真に差し替えてください（差し替えると値下げの対象に戻ります）'
+        ? ('　長辺500px以上の写真に差し替えてください。'
+           +'<b>差し替えたあとは「写真を eBay 保管に切り替え」でこの行を確かめると、'
+           +'この表示が消えて値下げの対象に戻ります</b>'
+           +(String(r.revise_err_at||'').trim()
+             ? ('（この記録は '+esc(jstText(r.revise_err_at))+'）'):''))
         : '（直し方は計算の詳細）'));
   /* ③ FBAで売れた行の予定（6.66）。数量0・再調達・内訳待ち。 */
   if(pbMode()!=='off'){
@@ -12419,9 +12437,23 @@ function syncWarnBreakRender(){
   });
   /* Amazonでも販売中（eBayが Amazon同等ラインより安い）は pj_price 側の判定なので、
      Worker からの警告とは別に数えてここに足す。 */
-  var rvErr=rows.filter(syncReviseAlert).length;
-  if(rvErr){ cw['写真が500px未満']=rvErr; nw+=rows.filter(function(r){
-    return syncReviseAlert(r)&&!(r.warnings||[]).length; }).length; }
+  /* eBay への書き込みに失敗した行（6.82）。**理由ごとに分けて**数える。
+     v183 でここを「revise_err があること」に広げたとき、見出しを
+     「写真が500px未満」のまま使っていたので、22003 などの失敗まで
+     写真の問題として数えていた（34件のうち写真は一部だけだった・6.83）。 */
+  var ERR_LABEL={ pic:'写真が500px未満', bo:'ベストオファー金額（22003）',
+                  other:'eBay への書き込みに失敗' };
+  var byKind={};
+  rows.forEach(function(r){
+    if(!syncReviseAlert(r))return;
+    var k=syncErrKind(r.revise_err);
+    byKind[k]=(byKind[k]||0)+1;
+  });
+  Object.keys(byKind).forEach(function(k){
+    cw[ERR_LABEL[k]||ERR_LABEL.other]=byKind[k];
+  });
+  nw+=rows.filter(function(r){
+    return syncReviseAlert(r)&&!(r.warnings||[]).length; }).length;
   var amz=rows.filter(syncAmzAlert).length;
   if(amz){ cw['Amazonでも販売中']=amz; nw+=rows.filter(function(r){
     return syncAmzAlert(r)&&!(r.warnings||[]).length; }).length; }
@@ -13951,7 +13983,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v183';   // sw.js の const V と必ず同じ値にする
+var APP_V='v184';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

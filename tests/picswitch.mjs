@@ -377,4 +377,138 @@ row=await env.DB.prepare(
 ok(Number(row.pics_eps)===1&&!!row.pics_eps_at,
    '★★eBay 保管だけになっていれば印と日時も付ける');
 
+console.log('\n=== 写真の大きさを測る（7.59）===');
+reset({ pics:[EPS(1),EPS(2)], ext:[], source:'EPS' });
+let gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364009',{headers:H('k')}),env));
+console.log('   '+JSON.stringify({n:gp.body.pictures.n,
+  min:gp.body.pictures.min_long, small:gp.body.pictures.small_n,
+  all_big:gp.body.pictures.all_big,
+  sizes:gp.body.pictures.sizes.map((z)=>z.w+'x'+z.h)}));
+ok(gp.body.pictures.min_long===1600,'★★URL の /s/ から長辺を読む');
+ok(gp.body.pictures.small_n===0&&gp.body.pictures.all_big===true,
+   '★★全部500px以上なら all_big');
+/* 小さい写真が混ざっているとき。 */
+reset({ pics:['https://i.ebayimg.com/00/s/'+B64(400,300)+'/z/a/$_1.JPG',EPS(2)],
+        ext:[], source:'EPS' });
+gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364009',{headers:H('k')}),env));
+console.log('   '+JSON.stringify({min:gp.body.pictures.min_long,
+  small:gp.body.pictures.small_n, all_big:gp.body.pictures.all_big}));
+ok(gp.body.pictures.small_n===1&&gp.body.pictures.all_big===false,
+   '★★1枚でも小さければ all_big にしない');
+/* 大きさが分からない写真（自前ホスト）が混ざっているとき。 */
+reset({ pics:['https://pj-img.example.workers.dev/i/20261022/'
+              +'9113905f-e34f-44b5-9671-54f525b28e49.jpg',EPS(2)],
+        ext:[], source:'EPS' });
+gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364009',{headers:H('k')}),env));
+ok(gp.body.pictures.unknown_n===1&&gp.body.pictures.all_big===false,
+   '★★大きさが分からない写真が1枚でもあれば all_big にしない');
+
+console.log('\n=== 全部500px以上なら「写真が小さい」の記録を消す（7.59）===');
+const seedPic=async(asin,id,err)=>{
+  await env.DB.prepare(`INSERT INTO items (asin,cond,scope,title,ebay_item_id,
+    ebay_qty,ebay_price,revise_err,revise_err_at,pics_eps,pics_n,updated_at)
+    VALUES (?1,'used','ebay',?2,?3,1,30,?4,'2026-10-20T01:00:00Z',1,1,
+            '2026-10-20T01:00:00Z')`).bind(asin,asin+'の商品',id,err).run();
+};
+await env.DB.prepare('DELETE FROM items').bind().run();
+await seedPic('B0PIC10001','178566364009',
+  '自動値下げ 21919137 / Picture is too small / x');     // 直っている
+await seedPic('B0PIC10002','178566364010',
+  '自動値下げ 21919137 / Picture is too small / x');     // まだ小さい
+await seedPic('B0PIC10003','178566364011',
+  '自動値下げ 22003 / Auto decline amount / x');         // 写真の話ではない
+reset({ pics:[EPS(1)], ext:[], source:'EPS' });
+gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364009',{headers:H('k')}),env));
+let pr=await env.DB.prepare(
+  `SELECT revise_err FROM items WHERE asin='B0PIC10001'`).first();
+console.log('   '+JSON.stringify({cleared:gp.body.pic_err_cleared,err:pr.revise_err}));
+ok(gp.body.pic_err_cleared===1&&!pr.revise_err,
+   '★★GetItem で確かめたら記録を消す（eBayアプリで差し替えたとき）');
+/* 22003 の記録は消さない。 */
+gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364011',{headers:H('k')}),env));
+pr=await env.DB.prepare(
+  `SELECT revise_err FROM items WHERE asin='B0PIC10003'`).first();
+ok(/22003/.test(String(pr.revise_err||'')),'★★写真以外の失敗は消さない');
+/* まだ小さい行は残す。 */
+reset({ pics:['https://i.ebayimg.com/00/s/'+B64(400,300)+'/z/a/$_1.JPG'],
+        ext:[], source:'EPS' });
+gp=await asJson(await worker.fetch(new Request(
+  'https://x/ebay/item?id=178566364010',{headers:H('k')}),env));
+pr=await env.DB.prepare(
+  `SELECT revise_err FROM items WHERE asin='B0PIC10002'`).first();
+console.log('   '+JSON.stringify({cleared:gp.body.pic_err_cleared,
+  err:String(pr.revise_err||'').slice(0,30)}));
+ok(!gp.body.pic_err_cleared&&/21919137/.test(String(pr.revise_err||'')),
+   '★★まだ小さい行は記録を残す');
+
+console.log('\n=== 切り替えでも消す（すでに eBay 保管だけの行）===');
+await env.DB.prepare('DELETE FROM items').bind().run();
+await seedPic('B0PIC10004','178566364009',
+  '自動値下げ 21919137 / Picture is too small / x');
+reset({ pics:[EPS(1)], ext:[], source:'EPS' });
+r=await call({item_id:'178566364009'});
+pr=await env.DB.prepare(
+  `SELECT revise_err FROM items WHERE asin='B0PIC10004'`).first();
+console.log('   '+JSON.stringify({done:r.body.done,skipped:true,
+  cleared:(r.body.items||[])[0].pic_err_cleared,
+  min:(r.body.items||[])[0].pics_min_long,err:pr.revise_err}));
+ok((r.body.items||[])[0].pic_err_cleared===1&&!pr.revise_err,
+   '★★切り替えが要らなかった行でも、全部500px以上なら記録を消す');
+ok((r.body.items||[])[0].pics_min_long===1600,'★★いまの長辺を返す（画面に出す）');
+
+console.log('\n=== まとめて確かめ直す（kind=picscheck・7.59）===');
+await env.DB.prepare('DELETE FROM items').bind().run();
+await seedPic('B0PIC20001','178566364009',
+  '自動値下げ 21919137 / Picture is too small / x');     // 直っている
+await seedPic('B0PIC20002','178566364010',
+  '自動値下げ 21919137 / Picture is too small / x');     // 直っている
+await seedPic('B0PIC20003','178566364011',
+  '自動値下げ 22003 / Auto decline amount / x');         // 対象外
+reset({ pics:[EPS(1)], ext:[], source:'EPS' });
+notes=[];
+let pc=(await asJson(await worker.fetch(new Request('https://x/sync',
+  {method:'POST',headers:H('k'),
+   body:JSON.stringify({kind:'picscheck'})}),env))).body;
+console.log('   '+JSON.stringify({picked:pc.picked,checked:pc.checked,
+  cleared:pc.cleared,small:pc.small,left:pc.left}));
+console.log('   '+JSON.stringify((pc.rows||[]).map((x)=>
+  x.item_id+':'+x.min_long+'px:'+x.state)));
+ok(pc.picked===2&&pc.checked===2,'★★写真の記録がある行だけを見る（22003 は見ない）');
+ok(pc.cleared===2&&pc.small===0,'★★直っている行の記録を消す');
+ok((pc.rows||[]).every((x)=>x.min_long===1600&&/直っています/.test(x.state)),
+   '★★行ごとに いまの大きさと結果を返す');
+ok((pc.rows||[])[0].sizes&&(pc.rows||[])[0].sizes[0]==='1600x1200',
+   '★写真1枚ごとの大きさも返す');
+let left=await env.DB.prepare(
+  `SELECT COUNT(*) AS n FROM items WHERE revise_err LIKE '%21919137%'`).first();
+ok(Number(left.n)===0,'★★D1 からも消える（一覧と値下げの対象外から外れる）');
+console.log('   Discord: '+(notes[0]||'').split('\n').join(' / '));
+ok(/直っていた 2件/.test(notes[0]||''),'★Discord に結果を出す');
+/* まだ小さい行は残り、撮り直しの対象として返す。 */
+await env.DB.prepare('DELETE FROM items').bind().run();
+await seedPic('B0PIC20004','178566364009',
+  '自動値下げ 21919137 / Picture is too small / x');
+reset({ pics:['https://i.ebayimg.com/00/s/'+B64(400,300)+'/z/a/$_1.JPG'],
+        ext:[], source:'EPS' });
+notes=[];
+pc=(await asJson(await worker.fetch(new Request('https://x/sync',
+  {method:'POST',headers:H('k'),
+   body:JSON.stringify({kind:'picscheck'})}),env))).body;
+console.log('   '+JSON.stringify((pc.rows||[]).map((x)=>
+  x.item_id+':'+x.min_long+'px:'+x.state)));
+ok(pc.small===1&&pc.cleared===0,'★★まだ小さい行は数える');
+ok(/まだ小さい/.test((pc.rows||[])[0].state),'★★撮り直しが必要と返す');
+ok(/長辺 400px/.test(notes[0]||''),'★★Discord に大きさを出す');
+/* 1回の上限と、残りの件数。 */
+ok(W.PICS_CHECK_MAX===60,'★1回に確かめるのは60件まで');
+pc=(await asJson(await worker.fetch(new Request('https://x/sync',
+  {method:'POST',headers:H('k'),
+   body:JSON.stringify({kind:'picscheck',limit:0})}),env))).body;
+ok(pc.checked===1,'★limit が変でも1件以上は確かめる');
+
 T.done();

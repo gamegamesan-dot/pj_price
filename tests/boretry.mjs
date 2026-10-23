@@ -46,8 +46,12 @@ globalThis.fetch=async(u,i)=>{
         +(item.bo.acc?('<BestOfferAutoAcceptPrice currencyID="USD">'
             +item.bo.acc.toFixed(2)+'</BestOfferAutoAcceptPrice>'):'')
         +'</ListingDetails>'
+        /* 写真の大きさは URL の /s/ に base64 で入っている（7.59）。
+           1600x1200 ＝ 500px以上なので「写真が小さい」の記録は消える。 */
         +'<PictureDetails><PictureSource>EPS</PictureSource>'
-        +'<PictureURL>https://i.ebayimg.com/a.jpg</PictureURL></PictureDetails>'
+        +'<PictureURL>https://i.ebayimg.com/00/s/'
+        +Buffer.from('1600X1200','utf8').toString('base64')
+        +'/z/a/$_1.JPG</PictureURL></PictureDetails>'
         +'<SellingStatus><QuantitySold>0</QuantitySold>'
         +'<CurrentPrice currencyID="USD">'+item.price.toFixed(2)+'</CurrentPrice>'
         +'<ListingStatus>'+item.status+'</ListingStatus></SellingStatus>'
@@ -254,7 +258,8 @@ let sw=await asJson(await worker.fetch(new Request(
 const r30b=await env.DB.prepare(
   `SELECT revise_err FROM items WHERE asin='B0BO000030'`).first();
 console.log('   '+JSON.stringify({done:sw.body.done,err:r30b.revise_err}));
-ok(!r30b.revise_err,'★★写真を入れ替えたら写真のエラーは消える');
+ok(!r30b.revise_err,
+   '★★写真が全部500px以上になっていれば、写真のエラーは消える（7.59）');
 
 console.log('\n=== 一時的なエラーは失敗の回数に数えない ===');
 ok(W.TEMP_ERR.test('10007 / System error / x'),'★★10007 は一時的なエラー');
