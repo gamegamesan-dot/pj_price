@@ -62,7 +62,8 @@ const setup=async(o)=>await p.evaluate((o)=>{
     warnings:[],notes:[],state:'ok'},x||{});
   const items=[];
   for(let i=1;i<=12;i++)items.push(it(i,o.nomark?{mark_at:NOW}:null));
-  syncData={at:NOW,counts:{listed:12},items:items,last_runs:[],sold:[]};
+  syncData={at:NOW,counts:{listed:12},items:items,last_runs:[],sold:[],
+            md_last:o.last||null};
   csvList=[]; csvSaveList(); syncPick={};
   syncUndoList=[]; syncUndoSave(); syncUndoHide();
   switchTab('E'); roleCheck(); syncRender();
@@ -309,6 +310,84 @@ console.log('   '+JSON.stringify(hide2));
 ok(hide2.open===false,'★隠すと閉じる');
 ok(hide2.before===true&&hide2.after===true,
    '★★自動で閉じた分は覚えない（また出したときは開いた状態）');
+
+console.log('\n=== 画面に出る時刻は日本時間（6.82）===');
+let tz=await p.evaluate(()=>({
+  t:jstText('2026-10-21T18:15:00.000Z'),
+  sh:jstShort('2026-10-21T18:15:00.000Z'),
+  d:jstDay('2026-10-21T18:15:00.000Z'),
+  md:jstMd('2026-10-21T18:15:00.000Z'),
+  noTz:jstText('2026-10-21T18:15:00'),       // 時間帯なし＝UTC とみなす
+  bad:jstText('へんな値'), empty:jstText('')
+}));
+console.log('   '+JSON.stringify(tz));
+ok(tz.t==='2026-10-22 03:15','★★UTC の 18:15 は日本時間の翌日 03:15');
+ok(tz.sh==='10-22 03:15','★年を省いた形');
+ok(tz.d==='2026-10-22'&&tz.md==='10月22日','★日付だけの形');
+ok(tz.noTz==='2026-10-22 03:15','★★時間帯が付いていなければ UTC とみなす');
+ok(tz.bad==='へんな値'&&tz.empty==='','★読めない値はそのまま');
+/* 帯の「前回」が日本時間で出ること。 */
+await setup({last:{at:'2026-10-21T18:15:00Z',mode:'on',changed:3,failed:16,
+  skipped:5,capped:0}});
+await openCsvBoxes(p);
+let md2=await p.evaluate(()=>{
+  $('autoMdMode').value='on';            // 帯は自動値下げがオフだと出ない
+  syncRender();
+  return $('syncMdNote').textContent;
+});
+console.log('   '+md2.replace(/\n/g,' / ').slice(0,160));
+ok(/前回（2026-10-22 03:15/.test(md2),'★★「前回」を日本時間で出す');
+ok(!/2026-10-21 18:15/.test(md2),'★★UTC のままでは出さない');
+
+console.log('\n=== eBay の書き込みに失敗した行を「対応が必要」に出す（6.82）===');
+await setup({});
+await p.evaluate(()=>{
+  var a=syncRowBy('B0BOX00001|used');
+  a.revise_err='自動値下げ 22003 / Auto decline amount cannot be greater / x';
+  a.revise_err_at='2026-10-21T18:15:00Z';
+  var b=syncRowBy('B0BOX00002|used');
+  b.revise_err='売値の自動反映 21919137 / Picture is too small / x';
+  var c=syncRowBy('B0BOX00003|used');
+  c.revise_err='在庫補充（数量を1に戻す） 21919188 / cannot be revised / x';
+  syncMemoClear(); syncRender();
+});
+let we=await p.evaluate(()=>{
+  $('syncFilter').value='warn'; syncRender();
+  var keys=Array.prototype.map.call(
+    document.querySelectorAll('#syncList [data-srow]'),
+    function(e){ return e.getAttribute('data-srow'); });
+  var el=document.querySelector('#syncList [data-srow="B0BOX00001|used"]');
+  return { keys:keys, txt:el?el.innerText.replace(/\n/g,' | '):'',
+    src:[syncErrSrc('自動値下げ 22003 / x'),
+         syncErrSrc('売値の自動反映 1 / x'),
+         syncErrSrc('在庫補充（数量を1に戻す） 1 / x'),
+         syncErrSrc('再調達中の売値 1 / x'),
+         syncErrSrc('なにか')] };
+});
+console.log('   '+JSON.stringify(we.keys));
+console.log('   '+we.txt.slice(0,200));
+ok(we.keys.indexOf('B0BOX00001|used')>=0,'★★22003 で失敗した行が入る');
+ok(we.keys.indexOf('B0BOX00002|used')>=0,'★★写真のエラーの行も入る（今までどおり）');
+ok(we.keys.indexOf('B0BOX00003|used')>=0,'★★在庫補充の失敗も入る');
+ok(we.keys.indexOf('B0BOX00004|used')<0,'★失敗していない行は入らない');
+ok(/自動値下げに失敗/.test(we.txt),'★★どの処理で失敗したかを出す');
+ok(/ベストオファー金額/.test(we.txt),'★★理由を日本語で出す');
+console.log('   '+JSON.stringify(we.src));
+ok(we.src[0]==='自動値下げ'&&we.src[1]==='売値の自動反映'
+   &&we.src[2]==='在庫補充'&&we.src[3]==='再調達中の売値',
+   '★★処理の名前を revise_err の先頭から読む');
+ok(we.src[4]==='eBay への書き込み','★分からなければそう書く');
+
+console.log('\n=== 写真が小さい行は「写真が小さい（要撮り直し）」に入る ===');
+let pf=await p.evaluate(()=>{
+  $('syncFilter').value='picsneed'; syncRender();
+  return Array.prototype.map.call(
+    document.querySelectorAll('#syncList [data-srow]'),
+    function(e){ return e.getAttribute('data-srow'); });
+});
+console.log('   '+JSON.stringify(pf));
+ok(pf.indexOf('B0BOX00002|used')>=0,'★★写真が500px未満で弾かれた行が入る');
+ok(pf.indexOf('B0BOX00001|used')<0,'★★22003 の行は入らない（写真の話ではない）');
 
 await T.done();
 })();

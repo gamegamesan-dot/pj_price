@@ -197,7 +197,7 @@ const fromSync=await p.evaluate(()=>{
 });
 console.log('   '+fromSync.note.replace(/\n/g,' / '));
 console.log('   一覧: '+fromSync.list.replace(/\n/g,' / '));
-ok(fromSync.from==='sync'&&/pj-sync の予定 2026-10-15 18:00/.test(fromSync.note),
+ok(fromSync.from==='sync'&&/pj-sync の予定 2026-10-16 03:00/.test(fromSync.note),
    '★pj-sync が残した予定（とその時刻）を出す');
 ok(/変更の予定：2件/.test(fromSync.note)&&/まとめて実行（2件）/.test(fromSync.go),
    '★承認の件数も pj-sync の予定に合わせる');

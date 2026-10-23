@@ -4221,3 +4221,108 @@ eBay 保管だけになっていれば `pics_eps` と `pics_eps_at` も付ける
 （`/status` は 86→87列。上限100・警告線90に収まっている）。
 
 テストは `tests/picswitch.mjs`（77件）と `tests/picsnow.js`（画面34件）。
+
+## 7.58 22003 を直してやり直す・失敗の理由を通知に出す・時刻を日本時間に（2026-10-23・sw.js v183）
+
+### ① なぜ 22003 で10件失敗したのか
+
+10/22（JST）の自動値下げの失敗16件の内訳は
+**22003 が10件・21919137 が5件・10007 が1件**。
+
+22003 は「**自動拒否額（MinimumBestOfferPrice）が新しい売値以上**」。
+`mdBo()` は自動拒否額を一緒に送る作りになっていたが、送る条件が
+`Number(r.ebay_bo || 0)` だった。
+
+```js
+function mdBo(r, next) {
+  if (!Number(r.ebay_bo || 0)) return { min: 0, acc: 0 };   // ← ここで諦めていた
+```
+
+`ebay_bo` を埋めているのは `GetMyeBaySelling`（出品の一覧）で、
+`BestOfferDetails/BestOfferEnabled` を読んでいる。
+**ところがこのAPIは BestOfferDetails を返さないことがある**。
+返ってこないと `bo: null` → `COALESCE(?13, ebay_bo)` で**前の値（0 や NULL）のまま**。
+
+その結果、
+
+1. eBay 側では**ベストオファーが有効**で、自動拒否額が前の売値に合わせて入っている
+2. D1 の `ebay_bo` は 0 なので `mdBo` は `{min:0, acc:0}` を返す
+3. `ReviseFixedPriceItem` に `ListingDetails` を付けず、**売値だけ**下げる
+4. eBay は「自動拒否額（古い・高い）≧ 新しい売値」で 22003 を返す
+
+**本当のベストオファー設定は `GetItem` でしか分からない**。
+
+### ② 22003 が返ったら、その場で直して1回だけやり直す
+
+`boRetry()` / `reviseFix()` を追加した。
+
+1. `GetItem` で本当の設定を取る（`BestOfferDetails` と `ListingDetails`）
+2. `boBelow(price, floor, got)` で**新しい売値より必ず下**の額を作る
+   - 自動拒否額 … 最低売値（あれば）。売値以上になるなら「売値 − $0.01」
+   - 自動承諾額 … **いまの設定が売値以上のときだけ**「売値 − $0.01」に直す
+     （売値より下なら触らない。人が決めた値を勝手に動かさない）
+3. `ReviseFixedPriceItem` で**1回だけ**やり直す
+4. 取れた設定（`ebay_bo` / `ebay_bo_accept` / `ebay_bo_decline`）を **D1 に控える**
+   → 次回は最初の1回で通る（`GetItem` を呼ばない）
+
+直せなかったとき（売値が小さすぎて下に置けないなど）は、
+今までどおり失敗として理由を残す。
+
+### ③ 共通にした（4つの処理）
+
+| 処理 | 1回目 | 22003 のとき |
+| --- | --- | --- |
+| 自動値下げ | `ReviseFixedPriceItem` | `reviseFix` が中でやり直す |
+| 売値の自動反映 | `ReviseInventoryStatus`（まとめて） | 行ごとに `boRetry` で `ReviseFixedPriceItem` に切り替え |
+| 再調達中の売値 | 両方（`ebay_bo` で分岐） | `reviseFix` と `boRetry` |
+| フェイズBの再調達 | 両方（`ebay_bo` で分岐） | `reviseFix` と `boRetry` |
+
+`ReviseInventoryStatus` は**ベストオファーを送れない**ので、そちらで 22003 が出た行は
+`ReviseFixedPriceItem` に切り替えてやり直す。
+直った行は成功として数え、Discord に「自動拒否額を直してやり直した n件」を出す。
+
+### ④ 写真が小さい行は値下げの対象から外す
+
+`mdSkip` に1行足した。写真を入れ替えるまで何度やっても同じ失敗になるため。
+
+```js
+if (PIC_ERR.test(String(r.revise_err || ""))) return "写真が小さい（要撮り直し）";
+```
+
+写真を切り替えると（`jobPicSwitch` が成功すると）`revise_err` の写真のエラーは消えるので、
+**自動的に対象へ戻る**。画面では絞り込み「写真が小さい（要撮り直し）」に出る（6.82）。
+
+### ⑤ 一時的なエラーは失敗の回数に数えない
+
+`TEMP_ERR`（`10007` System error など）は、人が直すものではないので
+**3回で自動処理から外す「連続失敗の回数」には数えない**
+（`rv_fail` / `rk_fail` / `pb_fail` / `sk_fail` を増やさない）。
+その日の「失敗 n件」には今までどおり数え、Discord に
+「一時的なエラー n件は次回やり直します」と出す。
+
+### ⑥ Discord に失敗の理由の上位3つを出す
+
+`whyKey()` でコードごとにまとめ、`whyTop()` が多い順に3つ返す。
+
+```
+🏷️ 自動値下げ（3日ごと）
+下げた 134件／失敗 16件／とばした 52件
+ベストオファーの自動拒否額を直してやり直した 10件（22003）
+写真が小さくて対象外 5件（絞り込み「写真が小さい（要撮り直し）」で撮り直してください）
+失敗の理由：コード 22003：Auto decline amount cannot be … 10件／コード 21919137：… 5件／コード 10007：System error 1件
+（2026-10-23 22:30 日本時間）
+```
+
+自動値下げ・売値の自動反映・再調達中の売値・フェイズB・在庫補充の**すべて**に入れた。
+
+### ⑦ 時刻を日本時間にそろえる
+
+- **Discord** … どの通知も末尾に「（2026-10-23 22:30 日本時間）」を付ける（`notify` で1か所）
+- **`/runs`** … `started_jst` / `finished_jst` を足す。
+  `started_at` / `finished_at` は**保存している UTC のまま**返す（機械が読む値は変えない）
+- **`GET /ebay/item`** … ベストオファーの設定（`bo.on` / `bo.min` / `bo.acc`）を返し、
+  D1 にも控える。22003 の調べ物に使える
+
+D1 に入れる時刻は今までどおり UTC（`nowIso()`）。**出すときだけ**日本時間に直す。
+
+テストは `tests/boretry.mjs`（38件）と `tests/syncbox.js`（画面51件）。

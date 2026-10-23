@@ -994,10 +994,13 @@ async function ebayActive(env, run) {
 /* ---- Discord 通知 ---- */
 async function notify(env, run, text) {
   if (!env.DISCORD_WEBHOOK_URL || !text) return false;
+  /* 時刻は日本時間で出す（7.58）。D1 に入れるのは今までどおり UTC。 */
+  const body = (String(text) + "\n（" + jstText(nowIso()) + " 日本時間）")
+    .slice(0, NOTIFY_MAX);
   const resp = await net(run, env.DISCORD_WEBHOOK_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: text.slice(0, NOTIFY_MAX) }),
+    body: JSON.stringify({ content: body }),
   });
   if (!resp.ok) { run.errors++; run.notes.push("discord -> " + resp.status); return false; }
   return true;
@@ -2174,6 +2177,63 @@ const MD_PICK_LIMIT = 2000;        // 1回に見る行数
 const MD_PLAN_SHOW = 50;           // 予定の一覧に入れる件数
 /* 権限が足りないときのエラー。トークンの取り直しが必要なので、
    そこで打ち切って通知する（同じ失敗を200件くり返さない）。 */
+/* ================= eBay の書き込みエラーの扱い（7.58）=================
+   22003 … ベストオファーの**自動拒否額が新しい売値以上**。売値だけ下げると弾かれる。
+            GetMyeBaySelling は BestOfferDetails を返さないことがあり、そのとき
+            ebay_bo が 0/NULL のままなので、mdBo が自動拒否額を一緒に送れていなかった
+            （2026-10-22 の自動値下げで10件失敗した原因）。
+   21919137 … 写真が長辺500px未満。写真を入れ替えるまで何度やっても同じなので、
+            自動値下げの対象から外す（mdSkip）。
+   一時的 … System error など。人が直すものではないので、
+            3回で自動処理から外す「失敗の回数」には数えない。 */
+const BO_ERR = /\b22003\b|auto\s*decline\s*amount/i;
+const PIC_ERR = /\b21919137\b|500\s*pixels|longest side/i;
+const TEMP_ERR = /\b(10007|10001|21916750|21917053)\b|system error|internal error|please try again|temporarily unavailable/i;
+/* 失敗の理由を短い見出しにまとめる。why は「コード / 短い文 / 長い文」の形。 */
+function whyKey(w) {
+  const t = String(w || "").trim();
+  if (!t) return "理由不明";
+  const a = t.split(" / ");
+  const code = /^[0-9]{3,9}$/.test(String(a[0] || "").trim()) ? a[0].trim() : "";
+  const short = String((code ? a[1] : a[0]) || "").trim() || t;
+  return (code ? ("コード " + code + "：") : "") + short.replace(/\s+/g, " ").slice(0, 40);
+}
+/* 上位 n件（既定3件）を「理由 n件」の形で並べる。Discord の通知に出す。 */
+function whyTop(list, n) {
+  const m = {};
+  for (const w of (list || [])) { const k = whyKey(w); m[k] = (m[k] || 0) + 1; }
+  const ks = Object.keys(m).sort((a, b) => (m[b] - m[a]) || (a < b ? -1 : 1));
+  return ks.slice(0, n || 3).map((k) => k + " " + m[k] + "件");
+}
+/* 失敗の理由の行（Discord 用）。1件も無ければ空。 */
+function whyLine(list, n) {
+  const a = whyTop(list, n);
+  if (!a.length) return "";
+  const rest = (list || []).length;
+  return "失敗の理由：" + a.join("／")
+    + ((a.length < Object.keys((list || []).reduce((o, w) => {
+        o[whyKey(w)] = 1; return o; }, {})).length)
+       ? ("　ほかにも理由があります（計 " + rest + "件）") : "");
+}
+/* ================= 画面と通知に出す時刻は日本時間（7.58）=================
+   D1 に入れるのは今までどおり UTC（…Z）。**出すときだけ** JST に直す。
+   これまで UTC のまま出していたので、「前回 2026-10-21 18:15」が
+   実際には 10/22 03:15（JST）という食い違いが起きていた。 */
+const JST_MS = 9 * 60 * 60 * 1000;
+function jstText(v) {
+  const s0 = String(v || "").trim();
+  if (!s0) return "";
+  /* 時間帯が付いていなければ UTC とみなす（D1 に入っているのは UTC）。 */
+  const iso = (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s0)
+               && !/(Z|[+-]\d{2}:?\d{2})$/.test(s0))
+    ? (s0.replace(" ", "T") + "Z") : s0;
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return s0.slice(0, 16).replace("T", " ");
+  const d = new Date(t + JST_MS);
+  const p = (n) => (n < 10 ? "0" : "") + n;
+  return d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate())
+    + " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes());
+}
 const MD_SCOPE_ERR = /scope|insufficient permission|not authorized|21916884|931|932|1.32/i;
 /* eBayのセール中は値段を変えられない（6.59）。これは失敗ではないので数えず、
    「セール中」の印を立てて、値上げ・自動値下げの対象から一時的に外す。
@@ -2209,6 +2269,10 @@ function mdSkip(r, st, cutoff) {
      下の mark/sold の比べ方は、印を立てる前（v175以前）に売れた行のための保険。
      こちらだけだと **一度も値下げしていない行（mark_at が空）が止まらなかった**。 */
   if (Number(r.sold_keep || 0)) return "売れた値段で保っています";
+  /* 写真が長辺500px未満で弾かれた行（21919137）は、写真を入れ替えるまで
+     何度やっても同じなので対象から外す（7.58）。
+     写真を切り替えると revise_err が消えるので、そこで自動的に戻る。 */
+  if (PIC_ERR.test(String(r.revise_err || ""))) return "写真が小さい（要撮り直し）";
   const mark = String(r.mark_at || "");
   const sold = String(r.ebay_sold_at || "");
   if (mark && sold && sold > mark) return "売れたので値下げ停止";
@@ -2285,7 +2349,7 @@ async function ebayRevise(env, run, token, itemId, price, bo, qty) {
 async function jobMarkdown(env) {
   const run = newRun("markdown");
   const res = { mode: "off", picked: 0, changed: 0, failed: 0, skipped: 0,
-                capped: 0, sale: 0, plan: [] };
+                capped: 0, sale: 0, pic: 0, bofix: 0, plan: [], fails: [] };
   try {
     const st = await mdSettings(env);
     res.mode = st.mode;
@@ -2308,7 +2372,12 @@ async function jobMarkdown(env) {
     const rows = self0.rows;
     const due = [];
     for (const r of rows) {
-      if (mdSkip(r, st, cutoff)) { res.skipped++; continue; }
+      const why0 = mdSkip(r, st, cutoff);
+      if (why0) {
+        res.skipped++;
+        if (why0 === "写真が小さい（要撮り直し）") res.pic++;
+        continue;
+      }
       const next = mdNext(r);
       if (next === null) { res.skipped++; continue; }
       due.push({ r, next, bo: mdBo(r, next) });
@@ -2340,7 +2409,11 @@ async function jobMarkdown(env) {
     let scopeErr = "";
     for (const x of list) {
       const r = x.r;
-      const v = await ebayRevise(env, run, token, r.ebay_item_id, x.next, x.bo);
+      /* 22003 が返ったら、本当のベストオファー設定を取り直して1回だけやり直す（7.58）。 */
+      const fx = await reviseFix(env, run, token, r, x.next, x.bo, null, r.md_floor);
+      const v = fx.v;
+      if (fx.stmt) stmts.push(fx.stmt);
+      if (fx.fixed) res.bofix = (res.bofix || 0) + 1;
       if (v.ok) {
         res.changed++;
         stmts.push(env.DB.prepare(
@@ -2359,6 +2432,7 @@ async function jobMarkdown(env) {
       } else {
         res.failed++;
         run.errors++;
+        res.fails.push(v.why);                 // 理由の内訳（Discord に出す・7.58）
         stmts.push(env.DB.prepare(
           `UPDATE items SET revise_err=?3, revise_err_at=?4, updated_at=?4
            WHERE asin=?1 AND cond=?2`
@@ -2399,6 +2473,13 @@ function mdNotifyText(res, st, scopeErr) {
   const t = ["🏷️ 自動値下げ（" + st.days + "日ごと）",
     "下げた " + res.changed + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
     + (res.sale ? ("／セール中 " + res.sale + "件") : "")];
+  if (res.bofix)
+    t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
+  if (res.pic)
+    t.push("写真が小さくて対象外 " + res.pic + "件"
+      + "（絞り込み「写真が小さい（要撮り直し）」で撮り直してください）");
+  const wl = whyLine(res.fails);
+  if (wl) t.push(wl);
   if (res.capped) t.push("上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
   if (scopeErr) t.push("⚠️ 権限が足りません。eBayのユーザートークンを取り直してください");
   res.plan.slice(0, 10).forEach((x) => {
@@ -2635,7 +2716,8 @@ async function jobReview(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("review");
   const res = { mode: "off", picked: 0, changed: 0, zeroed: 0, failed: 0, skipped: 0,
-                capped: 0, sale: 0, used: 0, max: RV_MAX_DEFAULT, fail3: 0, plan: [] };
+                capped: 0, sale: 0, used: 0, max: RV_MAX_DEFAULT, fail3: 0,
+                bofix: 0, temp: 0, plan: [], fails: [] };
   try {
     const st = await rvSettings(env);
     res.mode = approve ? "approve" : st.mode;
@@ -2742,13 +2824,37 @@ async function jobReview(env, opt) {
             stmts.push(rvLogRow(env, at, x, 0, "セール中のため変えません（21919248）"));
             continue;
           }
+          /* 22003（自動拒否額が売値以上）は、本当の設定を取り直して1回だけ
+             やり直す（7.58）。ReviseInventoryStatus はベストオファーを送れないので、
+             ここで ReviseFixedPriceItem に切り替える。 */
+          if (x.kind !== "zero" && BO_ERR.test(String(reason || ""))) {
+            const fx = await boRetry(env, run, token, x.r, x.to, null,
+                                     numOf(x.r, "rv_floor"), reason);
+            if (fx.stmt) stmts.push(fx.stmt);
+            if (fx.fixed) {
+              res.bofix++; res.changed++;
+              stmts.push(env.DB.prepare(
+                `UPDATE items SET ebay_price=?3, rv_fail=0, rv_done_at=?4,
+                   revise_err=NULL, revise_err_at=NULL, updated_at=?4
+                 WHERE asin=?1 AND cond=?2`).bind(x.asin, x.cond, x.to, at));
+              stmts.push(rvLogRow(env, at, x, 1, "自動拒否額を直してやり直した（22003）"));
+              continue;
+            }
+          }
           res.failed++;
           run.errors++;
+          res.fails.push(reason);              // 理由の内訳（7.58）
+          /* System error などの一時的なエラーは、3回で自動処理から外す
+             「連続失敗の回数」には数えない（人が直すものではない・7.58）。 */
+          const tmp = TEMP_ERR.test(String(reason || ""));
+          if (tmp) res.temp++;
           stmts.push(env.DB.prepare(
-            `UPDATE items SET rv_fail=COALESCE(rv_fail,0)+1, revise_err=?3,
-               revise_err_at=?4, updated_at=?4
+            `UPDATE items SET rv_fail=CASE WHEN ?5=1 THEN COALESCE(rv_fail,0)
+                                           ELSE COALESCE(rv_fail,0)+1 END,
+               revise_err=?3, revise_err_at=?4, updated_at=?4
              WHERE asin=?1 AND cond=?2`)
-            .bind(x.asin, x.cond, ("売値の自動反映 " + reason).slice(0, 300), at));
+            .bind(x.asin, x.cond, ("売値の自動反映 " + reason).slice(0, 300), at,
+                  tmp ? 1 : 0));
           stmts.push(rvLogRow(env, at, x, 0, reason));
           if (RV_SCOPE_ERR.test(reason)) { scopeErr = reason; break; }
         }
@@ -2811,6 +2917,12 @@ function rvNotifyText(res, st, scopeErr) {
       + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件"
       + (res.sale ? ("／セール中 " + res.sale + "件") : ""));
   }
+  if (res.bofix)
+    t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
+  const wl = whyLine(res.fails);
+  if (wl) t.push(wl);
+  if (res.temp)
+    t.push("一時的なエラー " + res.temp + "件は次回やり直します（失敗の回数に数えません）");
   if (res.capped)
     t.push("1日の上限 " + st.max + "件を超えた " + res.capped + "件は翌日に回しました");
   if (res.fail3)
@@ -2996,6 +3108,12 @@ function rkNotifyText(res, scopeErr) {
     t.push("上げた " + res.up + "件／下げた " + res.down + "件／数量0 " + res.zeroed
       + "件／失敗 " + res.failed + "件／とばした " + res.skipped + "件");
   }
+  if (res.bofix)
+    t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
+  const wl = whyLine(res.fails);
+  if (wl) t.push(wl);
+  if (res.temp)
+    t.push("一時的なエラー " + res.temp + "件は次回やり直します（失敗の回数に数えません）");
   if (res.held)
     t.push("最安グループが " + RK_MIN_OFFERS + "人未満の " + res.held
       + "件は、下げを保留しました（1人だけの安値に引っぱられないため）");
@@ -3057,7 +3175,7 @@ async function jobRkPrice(env, opt) {
   const run = newRun("restockprice");
   const res = { mode: "auto", picked: 0, up: 0, down: 0, zeroed: 0, failed: 0,
                 skipped: 0, held: 0, capped: 0, used: 0, max: RK_MAX, fail3: 0,
-                plan: [] };
+                bofix: 0, temp: 0, plan: [], fails: [] };
   try {
     const st = await rkSettings(env);
     res.mode = approve ? "approve" : st.mode;
@@ -3140,20 +3258,44 @@ async function jobRkPrice(env, opt) {
       }
       res.failed++;
       run.errors++;
+      res.fails.push(reason);                  // 理由の内訳（7.58）
+      /* 一時的なエラーは連続失敗の回数に数えない（7.58）。 */
+      const tmp = TEMP_ERR.test(String(reason || ""));
+      if (tmp) res.temp++;
       stmts.push(env.DB.prepare(
-        `UPDATE items SET rk_fail=COALESCE(rk_fail,0)+1, revise_err=?3,
-           revise_err_at=?4, rk_at=?4, updated_at=?4
+        `UPDATE items SET rk_fail=CASE WHEN ?5=1 THEN COALESCE(rk_fail,0)
+                                       ELSE COALESCE(rk_fail,0)+1 END,
+           revise_err=?3, revise_err_at=?4, rk_at=?4, updated_at=?4
          WHERE asin=?1 AND cond=?2`)
-        .bind(x.asin, x.cond, ("再調達中の売値 " + reason).slice(0, 300), at));
+        .bind(x.asin, x.cond, ("再調達中の売値 " + reason).slice(0, 300), at,
+              tmp ? 1 : 0));
       stmts.push(rkLogRow(env, at, x, 0, reason));
       if (RV_SCOPE_ERR.test(reason)) scopeErr = reason;
+    };
+    /* 22003 が返ったら本当のベストオファー設定を取り直して1回だけやり直す（7.58）。
+       直ったら成功として数える。 */
+    const boBad = async (x, reason) => {
+      if (x.kind !== "zero" && BO_ERR.test(String(reason || ""))) {
+        const fx = await boRetry(env, run, token, x.r, x.to, null,
+                                 numOf(x.r, "rk_floor"), reason);
+        if (fx.stmt) stmts.push(fx.stmt);
+        if (fx.fixed) {
+          res.bofix++;
+          okRow(x);
+          stmts.push(rkLogRow(env, at, x, 1, "自動拒否額を直してやり直した（22003）"));
+          return;
+        }
+      }
+      badRow(x, reason);
     };
     const bo = list.filter((x) => x.kind !== "zero" && Number(x.r.ebay_bo || 0));
     const rest = list.filter((x) => !(x.kind !== "zero" && Number(x.r.ebay_bo || 0)));
     for (const x of bo) {
-      const v = await ebayRevise(env, run, token, x.item_id, x.to,
-                                rkBo(x.r, x.to), null);
-      if (v.ok) okRow(x); else badRow(x, v.why);
+      const fx = await reviseFix(env, run, token, x.r, x.to, rkBo(x.r, x.to), null,
+                                 numOf(x.r, "rk_floor"));
+      if (fx.stmt) stmts.push(fx.stmt);
+      if (fx.fixed) res.bofix++;
+      if (fx.v.ok) okRow(x); else badRow(x, fx.v.why);
       if (scopeErr) break;
     }
     if (!scopeErr)
@@ -3165,7 +3307,7 @@ async function jobRkPrice(env, opt) {
           const bad = part.filter((y) => !v.ok(y.item_id));
           const one = v.errFor(x.item_id)
                    || ((bad.length === 1) ? { code: "", why: v.why } : null);
-          badRow(x, (one && one.why) || v.why);
+          await boBad(x, (one && one.why) || v.why);
           if (scopeErr) break;
         }
         if (scopeErr) break;
@@ -3403,6 +3545,10 @@ function skNotifyText(res) {
     t.push("補充 " + res.relisted + "件／失敗 " + res.failed + "件／とばした "
       + res.skipped + "件");
   }
+  const wl = whyLine(res.fails);
+  if (wl) t.push(wl);
+  if (res.temp)
+    t.push("一時的なエラー " + res.temp + "件は次回やり直します（失敗の回数に数えません）");
   if (res.capped)
     t.push("1日の上限 " + SK_MAX + "件を超えた " + res.capped + "件は翌日に回しました");
   if (res.ended)
@@ -3456,7 +3602,8 @@ async function skPlanRows(env, run) {
 async function jobSoldKeep(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("soldkeep");
-  const res = { mode: "confirm", picked: 0, relisted: 0, failed: 0, skipped: 0,
+  const res = { temp: 0, fails: [],
+                mode: "confirm", picked: 0, relisted: 0, failed: 0, skipped: 0,
                 capped: 0, ended: 0, used: 0, max: SK_MAX, fail3: 0, plan: [] };
   try {
     const st = await skSettings(env);
@@ -3527,12 +3674,18 @@ async function jobSoldKeep(env, opt) {
           continue;
         }
         res.failed++; run.errors++;
+        res.fails.push(why);                   // 理由の内訳（7.58）
+        /* 一時的なエラーは連続失敗の回数に数えない（7.58）。 */
+        const tmp = TEMP_ERR.test(String(why || ""));
+        if (tmp) res.temp++;
         stmts.push(env.DB.prepare(
-          `UPDATE items SET sk_fail=COALESCE(sk_fail,0)+1, sk_why=?3, sk_at=?4,
+          `UPDATE items SET sk_fail=CASE WHEN ?6=1 THEN COALESCE(sk_fail,0)
+                                         ELSE COALESCE(sk_fail,0)+1 END,
+             sk_why=?3, sk_at=?4,
              revise_err=?5, revise_err_at=?4, updated_at=?4
            WHERE asin=?1 AND cond=?2`)
           .bind(x.asin, x.cond, ("在庫を補充できません：" + why).slice(0, 300), at,
-                ("在庫補充（数量を1に戻す） " + why).slice(0, 300)));
+                ("在庫補充（数量を1に戻す） " + why).slice(0, 300), tmp ? 1 : 0));
         stmts.push(skLogRow(env, at, x.r, x, 0, why));
         if (RV_SCOPE_ERR.test(why)) { scopeErr = why; break; }
         continue;
@@ -3757,6 +3910,12 @@ function pbNotifyText(res, st) {
       + "件／失敗 " + res.failed + "件"
       + (res.capped ? ("／上限で次回に回した " + res.capped + "件") : ""));
   }
+  if (res.bofix)
+    t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
+  const wl = whyLine(res.fails);
+  if (wl) t.push(wl);
+  if (res.temp)
+    t.push("一時的なエラー " + res.temp + "件は次回やり直します（失敗の回数に数えません）");
   if (res.ended) t.push("⚠️ " + res.ended + "件は出品が終了しました（Out-of-stock control を確認してください）");
   if (res.unknown_old)
     t.push("⚠️ " + res.unknown_old + "件は予約済みの内訳が24時間以上分かりません（対応が必要）");
@@ -3781,7 +3940,8 @@ async function pbNotify(env, run, res, st, text) {
 async function jobPhaseB(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("phaseb");
-  const res = { mode: "off", restock_mode: "confirm", picked: 0, zero_plan: 0,
+  const res = { bofix: 0, temp: 0, fails: [],
+                mode: "off", restock_mode: "confirm", picked: 0, zero_plan: 0,
                 restock_plan: 0, zeroed: 0, restocked: 0, failed: 0, skipped: 0,
                 capped: 0, unknown: 0, unknown_old: 0, ended: 0, used: 0,
                 plan: [] };
@@ -3946,17 +4106,29 @@ async function jobPhaseB(env, opt) {
              それ以外は ReviseInventoryStatus で価格と数量を1回で送る。 */
           let ok = false, bad = "";
           if (Number(r.ebay_bo || 0)) {
-            const v2 = await ebayRevise(env, run, token, r.ebay_item_id, want,
-                                        mdBo(r, want), 1);
-            ok = v2.ok; bad = v2.why;
+            const fx = await reviseFix(env, run, token, r, want, mdBo(r, want), 1,
+                                       numOf(r, "md_floor"));
+            if (fx.stmt) st2.push(fx.stmt);
+            if (fx.fixed) res.bofix++;
+            ok = fx.v.ok; bad = fx.v.why;
           } else {
             const v2 = await ebayReviseInv(env, run, token,
               [{ item_id: String(r.ebay_item_id), kind: "restock", to: want, qty: 1 }]);
             ok = v2.ok(String(r.ebay_item_id));
             bad = ok ? "" : ((v2.errFor(String(r.ebay_item_id)) || {}).why || v2.why);
+            /* ReviseInventoryStatus はベストオファーを送れない。22003 が返ったら
+               本当の設定を取り直して ReviseFixedPriceItem でやり直す（7.58）。 */
+            if (!ok && BO_ERR.test(String(bad || ""))) {
+              const fx = await boRetry(env, run, token, r, want, 1,
+                                       numOf(r, "md_floor"), bad);
+              if (fx.stmt) st2.push(fx.stmt);
+              if (fx.fixed) { res.bofix++; ok = true; bad = ""; }
+            }
           }
           if (!ok) {
             res.failed++; run.errors++;
+            res.fails.push(bad);               // 理由の内訳（7.58）
+            if (TEMP_ERR.test(String(bad || ""))) res.temp++;
             st2.push(pbFailStmt(env, r, at, "再調達にできません：" + bad));
             st2.push(pbLogRow(env, at, r, "restock", 0, bad,
               { fromQty: 0, toQty: 1, fromPrice: Number(r.ebay_price || 0), toPrice: want }));
@@ -3992,10 +4164,15 @@ async function jobPhaseB(env, opt) {
 }
 /* 失敗を残す（3回続けたら自動処理から外す）。 */
 function pbFailStmt(env, r, at, why) {
+  /* System error などの一時的なエラーは、3回で自動処理から外す
+     「連続失敗の回数」には数えない（人が直すものではない・7.58）。 */
+  const tmp = TEMP_ERR.test(String(why || "")) ? 1 : 0;
   return env.DB.prepare(
-    `UPDATE items SET pb_fail=COALESCE(pb_fail,0)+1, pb_why=?3, revise_err=?3,
+    `UPDATE items SET pb_fail=CASE WHEN ?5=1 THEN COALESCE(pb_fail,0)
+                                   ELSE COALESCE(pb_fail,0)+1 END,
+       pb_why=?3, revise_err=?3,
        revise_err_at=?4, updated_at=?4 WHERE asin=?1 AND cond=?2`)
-    .bind(r.asin, r.cond, String(why || "").slice(0, 300), at);
+    .bind(r.asin, r.cond, String(why || "").slice(0, 300), at, tmp);
 }
 
 /* ================= 写真の預け先（7.41 / 7.42・管理者だけ）=================
@@ -4138,7 +4315,74 @@ async function getItemPics(env, run, token, itemId) {
   pics.eps_only = pics.all_eps && pics.ext_n === 0;
   pics.source_eps = /^EPS$/i.test(pics.picture_source || "");
   pics.raw = String(pd || "").slice(0, 1500);
+  /* ベストオファーの設定（7.58）。22003 を直すのに使う。
+     GetMyeBaySelling は BestOfferDetails を返さないことがあるので、
+     **本当の設定はここでしか分からない**。 */
+  const bod = xmlTag(xml, "BestOfferDetails");
+  const ld = xmlTag(xml, "ListingDetails");
+  const onTxt = xmlTag(bod, "BestOfferEnabled");
+  out.bo = {
+    on: onTxt === "" ? null : (/^(true|1)$/i.test(onTxt) ? 1 : 0),
+    min: Number(xmlTag(ld, "MinimumBestOfferPrice")
+                || xmlTag(xml, "MinimumBestOfferPrice") || 0) || 0,
+    acc: Number(xmlTag(ld, "BestOfferAutoAcceptPrice")
+                || xmlTag(xml, "BestOfferAutoAcceptPrice") || 0) || 0,
+    count: Number(xmlTag(bod, "BestOfferCount") || 0) || 0,
+  };
   return out;
+}
+/* ===== 22003（自動拒否額が新しい売値以上）を直す（7.58）=====
+   新しい売値より**必ず下**になる自動拒否額と自動承諾額を作る。
+   ・自動拒否額 … 最低売値（あれば）。売値以上になるなら「売値 − $0.01」
+   ・自動承諾額 … いまの設定が売値以上のときだけ「売値 − $0.01」に直す
+     （売値より下なら触らない。人が決めた値を勝手に動かさない） */
+function boBelow(price, floor, got) {
+  const cap = Math.round((Number(price) - 0.01) * 100) / 100;
+  if (!(cap > 0)) return { min: 0, acc: 0 };
+  const fl = Math.round((Number(floor) || 0) * 100) / 100;
+  const min = (fl > 0 && fl < cap) ? fl : cap;
+  const acc0 = Number((got && got.acc) || 0);
+  return { min: min > 0 ? min : 0, acc: (acc0 > 0 && acc0 >= Number(price)) ? cap : 0 };
+}
+/* ベストオファーの設定を D1 に控える文（次回は1回で通るように）。 */
+function boSave(env, r, got, at) {
+  return env.DB.prepare(
+    `UPDATE items SET ebay_bo=?3, ebay_bo_accept=?4, ebay_bo_decline=?5,
+       updated_at=?6 WHERE asin=?1 AND cond=?2`)
+    .bind(r.asin, r.cond,
+          (got && got.on === null) ? null : Number((got && got.on) || 0),
+          Number((got && got.acc) || 0) || null,
+          Number((got && got.min) || 0) || null, at);
+}
+/* 売値を変える Revise。22003 が返ったら GetItem で本当の設定を取り直し、
+   自動拒否額（と必要なら自動承諾額）を売値より下に直して**1回だけ**やり直す。
+   自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達で共通に使う。
+   返り値 { v, bo, fixed, got, stmt }（stmt は D1 に控える文。無ければ null） */
+async function boRetry(env, run, token, r, price, qty, floor, why0) {
+  const none = { v: { ok: false, why: why0 || "" }, bo: null, fixed: false,
+                 got: null, stmt: null };
+  const g = await getItemPics(env, run, token, r.ebay_item_id);
+  if (!g.ok || !g.bo) {
+    run.notes.push("22003 の直しに失敗（GetItem が取れません） " + r.ebay_item_id);
+    return none;
+  }
+  const stmt = boSave(env, r, g.bo, nowIso());
+  const bo2 = boBelow(price, floor, g.bo);
+  if (!(bo2.min > 0)) {
+    run.notes.push("22003：自動拒否額を売値より下にできません " + r.ebay_item_id);
+    return Object.assign({}, none, { got: g.bo, stmt: stmt });
+  }
+  run.notes.push("22003 を直してやり直し " + r.ebay_item_id
+    + "：自動拒否 " + (g.bo.min || 0) + " → " + bo2.min
+    + (bo2.acc ? ("／自動承諾 " + (g.bo.acc || 0) + " → " + bo2.acc) : ""));
+  const v = await ebayRevise(env, run, token, r.ebay_item_id, price, bo2, qty);
+  return { v: v, bo: bo2, fixed: v.ok, got: g.bo, stmt: stmt };
+}
+async function reviseFix(env, run, token, r, price, bo, qty, floor) {
+  const v = await ebayRevise(env, run, token, r.ebay_item_id, price, bo, qty);
+  if (v.ok || !BO_ERR.test(String(v.why || "")))
+    return { v: v, bo: bo, fixed: false, got: null, stmt: null };
+  return await boRetry(env, run, token, r, price, qty, floor, v.why);
 }
 async function jobGetItem(env, itemId) {
   const run = newRun("getitem");
@@ -4158,6 +4402,22 @@ async function jobGetItem(env, itemId) {
           .bind(String(itemId), Number(out.pictures.n || 0),
                 out.pictures.eps_only ? 1 : 0, nowIso()).run();
       } catch (e) { run.notes.push("写真の枚数を控えられません：" + e.message); }
+    }
+    /* ベストオファーの設定も控える（7.58）。GetMyeBaySelling は
+       BestOfferDetails を返さないことがあり、そこが 22003 の原因だった。 */
+    if (out.ok && out.bo) {
+      try {
+        await env.DB.prepare(
+          `UPDATE items SET ebay_bo=?2, ebay_bo_accept=?3, ebay_bo_decline=?4,
+             updated_at=?5 WHERE ebay_item_id=?1`)
+          .bind(String(itemId),
+                out.bo.on === null ? null : Number(out.bo.on || 0),
+                Number(out.bo.acc || 0) || null,
+                Number(out.bo.min || 0) || null, nowIso()).run();
+      } catch (e) { run.notes.push("ベストオファーを控えられません：" + e.message); }
+      run.notes.push("GetItem " + itemId + "：ベストオファー "
+        + (out.bo.on === null ? "不明" : (out.bo.on ? "オン" : "オフ"))
+        + "／自動拒否 " + (out.bo.min || 0) + "／自動承諾 " + (out.bo.acc || 0));
     }
     if (out.ok) run.notes.push("GetItem " + itemId + "：写真 " + out.pictures.n + "枚"
       + (out.pictures.eps_only ? "（eBay 保管だけ）"
@@ -4435,7 +4695,14 @@ async function jobPicSwitch(env, itemId, urls) {
     if (out.done) {
       const n = (t.after && t.after.n) || 0;
       await env.DB.prepare(
-        `UPDATE items SET pics_eps=1, pics_eps_at=?2, pics_n=?3, updated_at=?2
+        `UPDATE items SET pics_eps=1, pics_eps_at=?2, pics_n=?3,
+           /* 写真を入れ替えたので、写真が小さくて弾かれた記録は消す（7.58）。
+              これで自動値下げの対象に戻る。 */
+           revise_err=CASE WHEN revise_err LIKE '%21919137%' THEN NULL
+                           ELSE revise_err END,
+           revise_err_at=CASE WHEN revise_err LIKE '%21919137%' THEN NULL
+                              ELSE revise_err_at END,
+           updated_at=?2
          WHERE ebay_item_id=?1`).bind(String(itemId), nowIso(), n).run();
       out.pics_eps = 1;
     }
@@ -5484,7 +5751,12 @@ export default {
         const r = await env.DB.prepare(
           `SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?1`
         ).bind(Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || 20)))).all();
-        return json({ runs: (r && r.results) || [] }, 200, origin);
+        /* 読むのは人なので日本時間の列を添える（7.58）。
+           started_at / finished_at は保存している UTC のまま返す。 */
+        const runs = ((r && r.results) || []).map((x) => Object.assign({}, x, {
+          started_jst: jstText(x.started_at),
+          finished_jst: jstText(x.finished_at) }));
+        return json({ runs: runs, tz: "Asia/Tokyo（*_jst）" }, 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/lowest") {
         let body; try { body = await request.json(); }
@@ -5631,6 +5903,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         newRun, syncEbayActive, SALE_ERR,
                         picsBody, jobPicSwitch, getItemPics, epsFromUrl, PICS_MAX,
                         picsUrlOk, picsNotifyText,
+                        BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
+                        jstText, boBelow, boRetry, reviseFix, mdBo,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,

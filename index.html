@@ -1510,6 +1510,49 @@ const AIRPACKET_MAX=PJ_PRICING.C.AIRPACKET_MAX;   // 国際エアパケットの
 
 const $=id=>document.getElementById(id);
 const yen=n=>(n<0?'\u2212':'')+'\u00A5'+Math.abs(Math.round(n)).toLocaleString();
+/* ---- 画面に出す時刻は日本時間（6.82）----
+   D1 と Worker に入っている時刻は UTC（…Z）。これまで文字列を切って
+   そのまま出していたので、「前回 2026-10-21 18:15」が実際には
+   10/22 03:15（JST）という食い違いが起きていた。
+   端末の時計の設定に関係なく日本時間で出す。 */
+var JST_MS=9*60*60*1000;
+function jstDate(v){
+  var t=String(v||'').trim();
+  if(!t)return null;
+  // 時間帯が付いていなければ UTC とみなす（D1 に入っているのは UTC）
+  if(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(t)&&!/(Z|[+-]\d{2}:?\d{2})$/.test(t))
+    t=t.replace(' ','T')+'Z';
+  var n=Date.parse(t);
+  return isFinite(n)?new Date(n+JST_MS):null;
+}
+function jstP(n){ return (n<10?'0':'')+n; }
+// 「2026-10-22 03:15」。読めなければ元の文字列をそのまま返す
+function jstText(v){
+  var d=jstDate(v);
+  if(!d)return String(v||'').slice(0,16).replace('T',' ');
+  return d.getUTCFullYear()+'-'+jstP(d.getUTCMonth()+1)+'-'+jstP(d.getUTCDate())
+    +' '+jstP(d.getUTCHours())+':'+jstP(d.getUTCMinutes());
+}
+// 「10-22 03:15」（年を省く）
+function jstShort(v){
+  var d=jstDate(v);
+  if(!d)return String(v||'').slice(5,16).replace('T',' ');
+  return jstP(d.getUTCMonth()+1)+'-'+jstP(d.getUTCDate())
+    +' '+jstP(d.getUTCHours())+':'+jstP(d.getUTCMinutes());
+}
+// 「2026-10-22」
+function jstDay(v){
+  var d=jstDate(v);
+  if(!d)return String(v||'').slice(0,10);
+  return d.getUTCFullYear()+'-'+jstP(d.getUTCMonth()+1)+'-'+jstP(d.getUTCDate());
+}
+// 「10月22日」
+function jstMd(v){
+  var d=jstDate(v);
+  return d?((d.getUTCMonth()+1)+'月'+d.getUTCDate()+'日'):'';
+}
+// いまの日本時間の日付（YYYY-MM-DD）
+function jstToday(){ return jstDay(new Date().toISOString()); }
 const usd=n=>'$'+n.toFixed(2);
 // 丸め・手数料の内訳・郵便料金。式は shared/pricing.js
 const ceil2=PJP.ceil2, round2=PJP.round2, feeBreak=PJP.feeBreak;
@@ -1555,8 +1598,12 @@ const FX_MIN=50, FX_MAX=500;   // 明らかにおかしい応答を弾く範囲
 var lastRecTotal=0;
 var fxEdited=false;
 function setFxNote(t){ $('fxNote').textContent=t; }
+/* 日本時間で出す（6.82）。 */
 function fxStamp(d){
-  return (d.getMonth()+1)+'/'+d.getDate()+' '
+  var j=jstDate(d&&d.toISOString?d.toISOString():d);
+  d=j||d;
+  return (d.getUTCMonth?(d.getUTCMonth()+1):(d.getMonth()+1))+'/'
+    +(d.getUTCDate?d.getUTCDate():d.getDate())+' '
     +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
 }
 function fetchFx(){
@@ -1610,7 +1657,7 @@ function fxSyncShow(force){
       var diff=(dev>0)?Math.abs(n-dev)/dev*100:0;
       el.innerHTML='pj-sync が使う為替：<b>1ドル='+n+'円</b>'
         +(from?('（'+esc(from)+'）'):'')
-        +(d.at?('　'+esc(String(d.at).slice(0,16).replace('T',' '))):'')
+        +(d.at?('　'+esc(jstText(d.at))):'')
         +(dev>0?('　この端末は '+dev+'円'
           +(diff>=1?('<span style="color:var(--bad);font-weight:700">・'
                      +diff.toFixed(1)+'%ちがいます</span>'):'（ほぼ同じ）')):'')
@@ -4960,7 +5007,7 @@ function syncSaleOff(r){
 function syncSaleText(r){
   if(!syncOnSale(r))return '';
   var o=+(r.ebay_sale_orig||0), off=syncSaleOff(r);
-  var end=String(r.ebay_sale_end||'').slice(0,16).replace('T',' ');
+  var end=jstText(r.ebay_sale_end);
   return 'eBayのセール中'
     +((o>0)?('：'+usd(o)+' → '+usd(+r.ebay_price||0)+(off?('（'+off+'%引き）'):''))
            :'（セール前の値段は取れていません）')
@@ -5896,7 +5943,7 @@ function csvTrashRender(){
     h+='<div class="lcard" style="margin-bottom:8px">'
       +'<div class="lhead">'+esc(r.titleJa||r.titleEn||r.sku||'(無題)')+'</div>'
       +'<div class="note2" style="margin:0">'
-      +esc(String(t.at).slice(0,16).replace('T',' '))+' に削除　'
+      +esc(jstText(t.at))+' に削除　'
       +esc(r.sku||'SKUなし')+'　/　'+esc(csvCatName(r.cat))
       +'　/　写真 '+pics+'枚'
       +(String(r.titleEn||'').trim()?'　/　英題あり':'　/　英題なし')
@@ -7420,7 +7467,7 @@ function csvReviveGo(d,q,box){
   var gaps=d.rows.filter(function(x){ return csvCartPriceGap(x.r,x.ex); }).length;
   var relabel=d.rows.filter(function(x){ return x.ex.dropship; }).length;
   if(!confirm(d.rows.length+'件の出品を復活させます（Revise）。\n'
-    +'eBayのいまの数量を取り直しました（'+String(q.at||'').slice(0,16).replace('T',' ')+'）。\n'
+    +'eBayのいまの数量を取り直しました（'+jstText(q.at)+'）。\n'
     +d.rows.slice(0,5).map(function(x){
         return '・'+(x.r.titleJa||x.r.sku)+'：数量 '+x.now+' → '+(x.now+1)
           +'／写真 '+(x.r.pics||[]).length+'枚に差し替え'; }).join('\n')
@@ -7518,7 +7565,7 @@ function csvCartAddGo(list,d,box){
   var moved=list.filter(function(x){ return x.now!==Number(x.ex.qty||0); });
   var gaps=list.filter(function(x){ return csvCartPriceGap(x.r,x.ex); }).length;
   if(!confirm(list.length+'件を既存の出品に追加します（数量を+1する Revise）。\n'
-    +'eBayのいまの数量を取り直しました（'+String(d.at||'').slice(0,16).replace('T',' ')+'）。\n'
+    +'eBayのいまの数量を取り直しました（'+jstText(d.at)+'）。\n'
     +list.slice(0,5).map(function(x){
         return '・'+(x.r.titleJa||x.r.sku)+'：'+x.now+' → '+(x.now+1); }).join('\n')
     +(list.length>5?('\n…ほか'+(list.length-5)+'件'):'')+'\n'
@@ -7907,7 +7954,7 @@ function csvLowOf(asin,cond){
 function csvLowAtOf(asin,cond){
   var k=String(asin||'');
   var o=csvNew.low[k+'|'+(cond||'new')]||((cond==='new')?csvNew.low[k]:null);
-  return (o&&o.at)?String(o.at).slice(0,16).replace('T',' '):'';
+  return (o&&o.at)?jstText(o.at):'';
 }
 // 新品最安値（送料込み・円）。取っていなければ0
 function csvNewLow(r){
@@ -8329,7 +8376,7 @@ function csvExportRun(ids){
   }
   csvExportFilesUI();
   // 書き出した行をログに残す（次回の取り込みで既出を知らせるため）
-  var at=new Date().toISOString().slice(0,10);
+  var at=jstToday();                 // 書き出した日（日本時間・6.82）
   rows.forEach(function(r){
     r.priceSent=+r.price||0;      // 出した売値を控える（価格更新CSVの絞り込みに使う）
     r.fxSent=+$('fx').value||0;   // そのときの為替も控える（見直しの理由に使う）
@@ -9095,7 +9142,7 @@ function syncHotWarnRender(){
     +'対象 '+Number(h.picked||0)+'件のうち '+Number(h.rows||0)+'件だけ取り直しました'
     +'（上限 '+Number(h.max||0)+'件）。取り切れなかった '+Number(h.left||0)
     +'件は次の回に回ります'
-    +(h.at?('　前回 '+String(h.at).slice(0,16).replace('T',' ')):'')
+    +(h.at?('　前回 '+jstText(h.at)):'')
     +'。再調達中とフェイズBの対象が増えているので、上限（PRICING_HOT_MAX）を'
     +'上げてください。';
 }
@@ -9339,9 +9386,26 @@ function syncErrText(t){
   if(k==='bo')return 'ベストオファー金額（自動拒否額が売値以上）';
   return String(t||'').slice(0,120);
 }
-// 直し方の分かる失敗（写真）は「対応が必要」に出す
+/* eBay への書き込みに失敗した行（6.82）。
+   自動値下げ・売値の自動反映・再調達中の売値・フェイズB・在庫補充のどれでも、
+   revise_err が入っていれば「対応が必要」に出す。
+   これまでは写真のエラー（21919137）だけを見ていたので、
+   22003 などで失敗した10件が一覧から探せなかった。 */
 function syncReviseAlert(r){
-  return syncErrKind(r&&r.revise_err)==='pic'&&!!String((r||{}).revise_err||'').trim();
+  return !!String((r||{}).revise_err||'').trim();
+}
+/* 失敗がどの処理で起きたか（行に出す見出し）。revise_err の先頭に入っている。 */
+var SYNC_ERR_SRC=[
+  ['自動値下げ','自動値下げ'],
+  ['売値の自動反映','売値の自動反映'],
+  ['再調達中の売値','再調達中の売値'],
+  ['在庫補充','在庫補充'],
+  ['再調達にできません','再調達（フェイズB）']];
+function syncErrSrc(t){
+  var x=String(t||'');
+  for(var i=0;i<SYNC_ERR_SRC.length;i++)
+    if(x.indexOf(SYNC_ERR_SRC[i][0])===0)return SYNC_ERR_SRC[i][1];
+  return 'eBay への書き込み';
 }
 /* 結果ファイルの1行を出品データに反映する。戻り値は「この ItemID を扱えたか」。
    送るものは post に貯めて、最後にまとめて pj-sync へ送る。 */
@@ -9663,7 +9727,7 @@ function syncMarkHtml(r){
   }
   var now=+r.ebay_price||0, fl=syncMdFloor(r), at=Date.parse(syncMarkAtOf(r));
   var nx='';
-  if(at)nx='　次は'+new Date(at+csvMarkDays()*86400000).toISOString().slice(0,10);
+  if(at)nx='　次は'+jstDay(new Date(at+csvMarkDays()*86400000).toISOString());
   var auto=autoMdOn()&&(+r.md_step>0);
   return '<div class="note2" style="margin-top:4px">'
     +'<span style="display:inline-block;background:#8a6d00;color:#fff;border-radius:2px;'
@@ -10045,7 +10109,7 @@ function syncPicsGoneHtml(r){
   if(!g)return '';
   return '<div class="note2" style="margin-top:4px;color:var(--bad);font-weight:700">'
     +'⚠ 写真が抜けています（eBay '+g.n+'枚／出品リスト '+g.m+'枚'
-    +(g.at?('・'+esc(g.at.slice(0,16).replace('T',' '))+'に確認'):'')+'）</div>'
+    +(g.at?('・'+esc(jstText(g.at))+'に確認'):'')+'）</div>'
     +'<div class="note2" style="margin-top:1px">'
     +'「写真を eBay 保管に切り替え」でこの行を選ぶと、出品リストの '+g.m+'枚に戻します。</div>';
 }
@@ -10089,7 +10153,7 @@ function syncPicsOneHtml(it){
          +Number(it.restore||0)+'枚に戻しました</span>') : '')
     +(((it.tries||[])[0]||{}).fixed_urls
       ? '<br>pj-img の元の写真から作り直しました' : '')
-    +(it.expiration?('<br>預け直した写真の期限：'+esc(String(it.expiration).slice(0,10))
+    +(it.expiration?('<br>預け直した写真の期限：'+esc(jstDay(it.expiration))
       +'（この出品で使っているので消えません）'):'')
     +'</div>';
 }
@@ -10327,8 +10391,8 @@ function syncMdDueText(r){
   var due=syncMdDueAt(r);
   if(due===null)return '';
   if(!due)return '今日';
-  var d=new Date(due);
-  return (d.getMonth()+1)+'/'+d.getDate();
+  var d=jstDate(new Date(due).toISOString())||new Date(due);
+  return (d.getUTCMonth()+1)+'/'+d.getUTCDate();
 }
 /* 自動値下げの予定の件数。「今日 ○件／3日以内 ○件」を出すために分けて数える
    （3日以内は今日を含む）。 */
@@ -10433,8 +10497,11 @@ function syncNextHtml(r){
         ? '　長辺500px以上の写真に差し替えてください。':''));
   // ② 値段の更新に失敗した行。人が直すまで何も進まない
   if(String(r.revise_err||'').trim())
-    return nextLine('要対応','#b00020','値段の更新に失敗：'
-      +esc(syncErrText(r.revise_err))+'（直し方は計算の詳細）');
+    return nextLine('要対応','#b00020',esc(syncErrSrc(r.revise_err))+'に失敗：'
+      +esc(syncErrText(r.revise_err))
+      +(syncErrKind(r.revise_err)==='pic'
+        ? '　長辺500px以上の写真に差し替えてください（差し替えると値下げの対象に戻ります）'
+        : '（直し方は計算の詳細）'));
   /* ③ FBAで売れた行の予定（6.66）。数量0・再調達・内訳待ち。 */
   if(pbMode()!=='off'){
     var pa=syncPbActOf(r);
@@ -10677,7 +10744,7 @@ function syncMdBarRender(){
       ? ('　1日の上限 '+autoMdMax()+'件を超えるぶんは翌日に回ります'):'')
     +'　<a href="#" id="syncMdPick">一覧で見る</a>'
     +(mode==='plan'?'　<b>eBay は変えません</b>':'')
-    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+    +(last?('<br>前回（'+esc(jstText(last.at))
             +'・'+(last.mode==='on'?'オン':'予定')+'）：下げた '+Number(last.changed||0)
             +'件／失敗 '+Number(last.failed||0)+'件／とばした '+Number(last.skipped||0)
             +'件'+(Number(last.capped||0)?('／翌日に回した '+Number(last.capped)+'件'):'')
@@ -10933,7 +11000,7 @@ function syncPbLowNote(r){
   if(!lo.has)return '<span style="color:var(--bad)">Amazon最安値が未取得</span>';
   return '<span style="opacity:.85">基準：<b>Amazon最安値'+(lo.useNew?'（新品）':'')
     +'</b> '+yen(lo.low)
-    +(lo.at?('（'+esc(lo.at.slice(5,16).replace('T',' '))+'）'):'')
+    +(lo.at?('（'+esc(jstShort(lo.at))+'）'):'')
     +(lo.fresh?'':'<span style="color:var(--bad)">・24時間より古い</span>')+'</span>';
 }
 function syncPbSkipOf(r){ return Number((r||{}).pb_skip||0)>0; }
@@ -11120,7 +11187,7 @@ function syncPbBarRender(){
       +'（行の「在庫0時」ボタンで決められます。未設定は「寝かせる」扱いです）'):'')
     +(plan&&plan.unknown?('<br>pj-sync の予定：数量0 '+Number(plan.zero||0)
       +'件／再調達 '+Number(plan.restock||0)+'件／内訳不明 '+Number(plan.unknown||0)+'件'):'')
-    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+    +(last?('<br>前回（'+esc(jstText(last.at))
       +'・'+({plan:'予定だけ',on:'オン'}[last.mode]||last.mode)+'）：数量0 '
       +Number(last.zeroed||0)+'件／再調達 '+Number(last.restocked||0)+'件／失敗 '
       +Number(last.failed||0)+'件'):'');
@@ -11390,8 +11457,7 @@ function syncSkLine(x){
 function syncSoldKeepHtml(r){
   if(!syncSoldKeepOf(r))return '';
   var p=syncSoldKeepPrice(r), at=String(r.sold_kept_at||'');
-  var d=Date.parse(at);
-  var when=d?(new Date(d).getMonth()+1)+'月'+new Date(d).getDate()+'日':'';
+  var when=jstMd(at);                  // 日本時間（6.82）
   return '<div class="note2" style="margin-top:4px">'
     +'<span style="display:inline-block;background:#1f7a4d;color:#fff;border-radius:2px;'
     +'padding:1px 5px;font-size:11px">売れた値段で保っています</span>　'
@@ -11430,7 +11496,7 @@ function syncSkBarRender(){
     +'（在庫補充は'+(mode==='auto'?'自動で実行':'確認してから')+'）　'
     +'在庫補充の予定：'+pl.n+'件'
     +(pl.from==='sync'
-      ? ('（pj-sync の予定 '+esc(String(pl.at||'').slice(0,16).replace('T',' '))+'）')
+      ? ('（pj-sync の予定 '+esc(jstText(pl.at))+'）')
       : '（この端末の計算）')
     +(pl.capped?('　1日の上限 '+SK_MAX_UI+'件を超えた '+pl.capped+'件は翌日'):'')
     +(mode==='confirm'?'　<b>「在庫補充」を押すまで eBay は変えません</b>'
@@ -11438,7 +11504,7 @@ function syncSkBarRender(){
     +(stuck.length?('<br><b style="color:var(--bad)">'+stuck.length
        +'件は数量0のまま在庫を補充できません</b>（絞り込み「対応が必要」で理由を見てください）'):'')
     +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>'):'')
-    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+    +(last?('<br>前回（'+esc(jstText(last.at))
             +'・'+({confirm:'確認',auto:'自動',approve:'まとめて実行'}[last.mode]||last.mode)
             +'）：補充 '+Number(last.relisted||0)+'件／失敗 '+Number(last.failed||0)
             +'件'+(Number(last.ended||0)?('／出品が終了していた '+Number(last.ended)+'件'):'')
@@ -11528,7 +11594,7 @@ function syncRkBarRender(){
     '<b>再調達中の売値：'+(mode==='auto'?'自動で更新':'確認してから')+'</b>'
     +'（再調達中 '+rows.length+'件）　変更の予定：'+pl.n+'件'
     +(pl.from==='sync'
-      ? ('（pj-sync の予定 '+esc(String(pl.at||'').slice(0,16).replace('T',' '))+'）')
+      ? ('（pj-sync の予定 '+esc(jstText(pl.at))+'）')
       : '（この端末の計算）')
     +(pl.held?('　最安グループが'+RK_MIN_OFFERS+'人未満の '+pl.held+'件は下げを保留'):'')
     +(pl.capped?('　1日の上限 '+RK_MAX+'件を超えた '+pl.capped+'件は翌日'):'')
@@ -11537,7 +11603,7 @@ function syncRkBarRender(){
     +(trouble?('<br><b style="color:var(--bad)">'+trouble
                +'件は「再調達で赤字」です</b>（次の反映で売値を上げます）'):'')
     +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>（絞り込み「対応が必要」）'):'')
-    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+    +(last?('<br>前回（'+esc(jstText(last.at))
             +'・'+({auto:'自動',confirm:'確認',approve:'まとめて実行'}[last.mode]||last.mode)
             +'）：上げた '+Number(last.up||0)+'件／下げた '+Number(last.down||0)
             +'件／数量0 '+Number(last.zeroed||0)+'件／失敗 '+Number(last.failed||0)+'件'):'');
@@ -11638,7 +11704,7 @@ function syncRvBarRender(){
     '<b>'+(mode==='auto'?'売値の自動反映：自動実行':'売値の自動反映：確認モード')+'</b>　'
     +'変更の予定：'+pl.n+'件'
     +(pl.from==='sync'
-      ? ('（pj-sync の予定 '+esc(String(pl.at||'').slice(0,16).replace('T',' '))+'）')
+      ? ('（pj-sync の予定 '+esc(jstText(pl.at))+'）')
       : '（この端末の計算）')
     +(pl.capped?('　1日の上限を超えた '+pl.capped+'件は翌日に回ります'):'')
     +(mode==='confirm'?'　<b>「まとめて実行」を押すまで eBay は変えません</b>':'')
@@ -11647,7 +11713,7 @@ function syncRvBarRender(){
          +'状況を取り込むを押してください</b>'):'')
     +(f3?('<br><b>'+f3+'件は3回続けて失敗しています</b>（絞り込み「対応が必要」で直してください）'
           +'　行ごとに eBay の理由を出しています'):'')
-    +(last?('<br>前回（'+esc(String(last.at||'').slice(0,16).replace('T',' '))
+    +(last?('<br>前回（'+esc(jstText(last.at))
             +'・'+({confirm:'確認',auto:'自動',approve:'まとめて実行'}[last.mode]||last.mode)
             +'）：上げた '+Number(last.changed||0)+'件／数量0 '+Number(last.zeroed||0)
             +'件／失敗 '+Number(last.failed||0)+'件'
@@ -11867,8 +11933,8 @@ function syncSoldStale(r){
 function syncSoldAt(o){
   var t=Date.parse(String((o&&o.at)||''));
   if(isNaN(t))return (o&&o.d1)?'保存済み':'';
-  var d=new Date(t);
-  return (d.getMonth()+1)+'/'+('0'+d.getDate()).slice(-2)+'入力';
+  var d=jstDate(new Date(t).toISOString())||new Date(t);
+  return (d.getUTCMonth()+1)+'/'+('0'+d.getUTCDate()).slice(-2)+'入力';
 }
 // 相場（総額$）→ 商品代（$）。送料以下の値は誤入力として扱わない。
 function syncSoldItem(r){
@@ -12002,7 +12068,9 @@ var SYNC_FILTERS=[
      いまは、**元の写真が小さくて切り替えられなかった行**だけが残るので、
      名前を「写真が小さい（要撮り直し）」にした（6.71）。 */
   { v:'picsneed',       label:'写真が小さい（要撮り直し）',
-    f:function(r){ return syncPicsNeed(r); } },
+    /* 写真が長辺500px未満で eBay に弾かれた行（21919137）も入れる（6.82）。
+       この行は写真を入れ替えるまで自動値下げの対象から外れている。 */
+    f:function(r){ return syncPicsNeed(r)||syncErrKind(r.revise_err)==='pic'; } },
   { v:'restocking',     label:'再調達中',
     f:function(r){ return syncIsRestocking(r); } },
   /* 無在庫：売れてから仕入れる出品。件数は上限の見張りに使う。 */
@@ -12515,7 +12583,7 @@ function syncRowHtml(r,key){
       +(sold?('　eBay販売 '+sold+'点（180日）'):'')+'</div>'
       +'<div class="note2" style="margin-top:3px">'+syncLowLabel(r)
       +(low?('　'+syncOfferNote(r)
-             +'　'+esc(String(r.amazon_lowest_at||'').slice(0,16).replace('T',' '))):'')
+             +'　'+esc(jstText(r.amazon_lowest_at))):'')
       +'</div>'
       +'<div class="note2" style="margin-top:2px">'
       +(rec?('推奨売値 <b>'+usd(rec.price)+'</b>（利益 '+yen(rec.profit)+'）'
@@ -13076,7 +13144,7 @@ function syncHistRender(){
       ? (first.id?('csv:'+first.id):'')
       : (first.asin?('sync:'+first.asin+'|'+first.cond):'');
     h+='<div style="border-top:1px solid var(--line);padding:5px 0;font-size:12px">'
-      +'<span style="opacity:.7">'+esc(String(e.at||'').slice(5,16).replace('T',' '))
+      +'<span style="opacity:.7">'+esc(jstShort(e.at))
       +'</span>　'+esc(syncUndoText(e))
       +(e.noundo
         ? '<br><span style="color:var(--bad)">eBay への変更は戻せません</span>'
@@ -13416,7 +13484,7 @@ function syncLoadRun(done,quiet){
       syncSay('取り込みました：'+syncData.items.length+'件'
         +(syncData.rows_total&&syncData.rows_total>syncData.items.length
           ? ('（pj-sync には '+syncData.rows_total+'件）'):'')
-        +(run.started_at?('　最終実行 '+String(run.started_at).slice(0,16).replace('T',' ')
+        +(run.started_at?('　最終実行 '+jstText(run.started_at)
           +'（'+esc(run.kind||'')+'）'):'')
         +(d.errors_recent?'　直近の実行にエラーがあります（/runs を確認）':''));
       syncRender();
@@ -13883,7 +13951,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v182';   // sw.js の const V と必ず同じ値にする
+var APP_V='v183';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

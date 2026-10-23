@@ -289,7 +289,7 @@ v=await view();
 console.log('   '+v.note.replace(/\n/g,' / '));
 console.log('   '+v.list.replace(/\n/g,' / '));
 ok(v.from==='sync'&&v.n===1,'★★pj-sync の予定があればそれを出す');
-ok(/pj-sync の予定 2026-10-21 06:00/.test(v.note),'★いつの予定かを出す');
+ok(/pj-sync の予定 2026-10-21 15:00/.test(v.note),'★いつの予定かを出す');
 ok(/サクラ大戦（通常版）/.test(v.list)&&/\$52\.16/.test(v.list),'★★中身を出す');
 ok(/1日の上限 30件を超えた 3件は翌日/.test(v.note),'★★上限を超えた件数を出す');
 ok(/前回/.test(v.note)&&/補充 2件/.test(v.note)
