@@ -247,5 +247,68 @@ let bb=await p.evaluate(()=>{
 });
 ok(bb.price===false,'★★チェックを付けても開かない');
 
+console.log('\n=== 出品CSVタブの折りたたみも覚える（6.81）===');
+await setup({});
+let csvb=await p.evaluate(()=>{
+  const ids=['csvNewBox','csvListBox','csvPicFindBox','csvTrashBox','csvLogBox'];
+  const miss=ids.filter(function(id){
+    const d=$(id); return !d||!d.hasAttribute('data-box'); });
+  /* 「新しい仕入れ」は隠れていると閉じられるので、出してから試す。 */
+  $('csvShowNew').checked=true; csvNewBoxApply();
+  switchTab('D');
+  ids.forEach(function(id){ const d=$(id); if(d)d.open=false; });
+  return { miss:miss };
+},0);
+console.log('   印が無いもの: '+JSON.stringify(csvb.miss));
+ok(csvb.miss.length===0,'★★出品リスト・新しい仕入れ・写真を探す・ログ・ごみ箱に印');
+await p.waitForTimeout(80);
+/* 人が開けるところまでをまねる（開く → 一部を閉じる）。
+   既定で閉じている箱に open=false を入れても toggle は起きないので、
+   いったん開けてから閉じる。 */
+await p.evaluate(()=>{
+  ['csvNewBox','csvListBox','csvPicFindBox','csvTrashBox','csvLogBox']
+    .forEach(function(id){ $(id).open=true; });
+});
+await p.waitForTimeout(80);
+await p.evaluate(()=>{ $('csvNewBox').open=false; $('csvLogBox').open=false; });
+await p.waitForTimeout(80);
+let csv3=await p.evaluate(()=>{
+  csvRender();                       // 出品CSV側の描き直し
+  return { list:$('csvListBox').open, trash:$('csvTrashBox').open,
+    newb:$('csvNewBox').open, log:$('csvLogBox').open,
+    saved:JSON.parse(localStorage.getItem('pj:boxopen:v1')||'{}') };
+});
+console.log('   '+JSON.stringify(csv3));
+ok(csv3.list===true&&csv3.trash===true,'★★開けたものは描き直しても開いたまま');
+ok(csv3.newb===false&&csv3.log===false,'★★閉じたものは閉じたまま');
+ok(csv3.saved.csvListBox===true&&csv3.saved.csvTrashBox===true
+   &&csv3.saved.csvPicFindBox===true,'★★開けたものを端末に保存する');
+ok(csv3.saved.csvNewBox===false&&csv3.saved.csvLogBox===false,
+   '★★閉じたものも端末に保存する');
+let csv4=await p.evaluate(()=>{
+  /* 起動時と同じ当てはめ。わざと逆にしてから戻す。 */
+  $('csvListBox').open=false; $('csvNewBox').open=true;
+  boxApply();
+  return { list:$('csvListBox').open, newb:$('csvNewBox').open };
+});
+ok(csv4.list===true&&csv4.newb===false,'★★開き直しても前回の状態（boxApply）');
+
+console.log('\n=== 「新しい仕入れ」を隠したときの閉じるは覚えない ===');
+let hide=await p.evaluate(()=>{
+  $('csvNewBox').open=true;
+  return 1;
+});
+await p.waitForTimeout(80);
+let hide2=await p.evaluate(()=>{
+  const before=JSON.parse(localStorage.getItem('pj:boxopen:v1')||'{}').csvNewBox;
+  $('csvShowNew').checked=false; csvNewBoxApply();   // 隠す＝自動で閉じる
+  const after=JSON.parse(localStorage.getItem('pj:boxopen:v1')||'{}').csvNewBox;
+  return { before:before, after:after, open:$('csvNewBox').open };
+});
+console.log('   '+JSON.stringify(hide2));
+ok(hide2.open===false,'★隠すと閉じる');
+ok(hide2.before===true&&hide2.after===true,
+   '★★自動で閉じた分は覚えない（また出したときは開いた状態）');
+
 await T.done();
 })();

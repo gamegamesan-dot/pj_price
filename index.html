@@ -684,7 +684,7 @@ body.staff #syncOnHandFix{display:none !important}
 
   <!-- ②-2 無在庫（新品・カタログ画像）で出す -->
   <section>
-    <details id="csvNewBox">
+    <details id="csvNewBox" data-box="1">
       <summary class="h" style="cursor:pointer">無在庫（新品・カタログ画像）で出す</summary>
       <div class="body">
         <div class="note2" style="margin-top:0">一覧で選んだ行を、せどりすとの状態や仕入値に関係なく<b>新品</b>として出します。売値は<b>Amazonの新品最安値（送料込み）を仕入値とみなして</b>計算します（再調達と同じ計算）。SKUは変えず、CustomLabel は M-&lt;ASIN&gt;、配送ポリシーは再調達用（既定 W2000）です。</div>
@@ -704,11 +704,11 @@ body.staff #syncOnHandFix{display:none !important}
 
   <!-- ④ 一覧（各商品） -->
   <section>
-    <details id="csvListBox">
+    <details id="csvListBox" data-box="1">
       <summary>一覧を表示</summary>
       <div style="padding:0 13px 12px">
         <!-- R2に残っている写真を行に付け直す（行ごと消してしまったときの戻し方）。 -->
-        <details id="csvPicFindBox" style="margin-bottom:8px">
+        <details id="csvPicFindBox" data-box="1" style="margin-bottom:8px">
           <summary class="note2" style="margin:0;cursor:pointer">写真から戻す（R2に残っている写真を行に付ける）</summary>
           <div style="padding:6px 0 0">
             <div class="note2" style="margin:0 0 6px">行を消すと写真のURLも一緒に消えますが、写真そのもの（R2）は残しています。上げた日で探して、行に付け直せます。<br><b>日付は世界標準時（UTC）です。</b>日本時間の朝9時より前に上げた写真は、1日前の日付に入っています。</div>
@@ -773,7 +773,7 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvLogPurge" style="flex:0 0 auto">削除</button>
       </div>
     </div>
-    <details>
+    <details id="csvLogBox" data-box="1">
       <summary>ログを表示</summary>
       <div style="padding:0 13px 12px" id="csvLog"></div>
     </details>
@@ -1238,7 +1238,7 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn" id="csvRevise" style="width:100%;margin-top:8px">数量更新CSV</button>
       <div class="chk cfgprice" style="margin-top:8px"><input type="checkbox" id="csvRevisePrice"><label for="csvRevisePrice" style="flex:1">数量更新CSVに売値も含める</label></div>
       <!-- ゴミ箱。消した行をすぐには捨てず、ここから元に戻せる。 -->
-      <details id="csvTrashBox" style="margin-top:10px">
+      <details id="csvTrashBox" data-box="1" style="margin-top:10px">
         <summary class="note2" style="margin:0;cursor:pointer" id="csvTrashSum">ゴミ箱（0件）</summary>
         <div style="padding:6px 0 0">
           <div class="note2" id="csvTrashNote" style="margin:0 0 6px"></div>
@@ -7866,7 +7866,8 @@ function csvNewBoxApply(){
   var box=$('csvNewBox'); if(!box)return;
   var on=csvNewShown();
   box.parentNode.style.display=on?'':'none';
-  if(!on)box.open=false;
+  /* 隠すときに閉じるのは人の判断ではないので覚えない（6.81）。 */
+  if(!on)boxQuietOpen(box,false);
 }
 $('csvShowNew').addEventListener('change',function(){
   csvNewBoxApply();
@@ -10572,11 +10573,17 @@ document.addEventListener('toggle',function(e){
   // 英題の欄は閉じているあいだ高さが測れないので、開いたときに合わせ直す
   if(t.open&&typeof csvTaFitAll==='function')csvTaFitAll();
 },true);
-/* ================= 折りたたみ（details）の開閉を覚える（6.80）=================
+/* ================= 折りたたみ（details）の開閉を覚える（6.80・6.81）=========
    販売連携タブは、行のチェックや印のボタンのたびに syncRender() が走る。
    そのとき「価格の操作」などが勝手に開いた状態に戻って使いづらかったので、
    **data-box を付けた details の開閉をこの端末に保存**して、
    描き直したあとも、アプリを開き直したあとも同じ状態にする。
+
+   覚える折りたたみ
+     販売連携 … 価格の操作／写真を eBay 保管に切り替え／その他／詳しい数字／
+                操作の履歴／一覧
+     出品CSV  … 新しい仕入れ／出品リスト／写真を探す／ログを表示（6.81）
+     ⚙設定    … ごみ箱（6.81。グループ自体は data-cfgg の仕組みで覚える）
 
    既定（まだ一度も開閉していないとき）は HTML の open 属性のまま。
    「価格の操作」は値下げの時期が来ていれば自動で開くが、
@@ -13876,7 +13883,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v181';   // sw.js の const V と必ず同じ値にする
+var APP_V='v182';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
