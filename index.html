@@ -682,6 +682,33 @@ body.staff #syncOnHandFix{display:none !important}
     </div>
   </section>
 
+  <!-- ②-3 マッチングワールド（MW）の無在庫（6.85・段取りA） -->
+  <section>
+    <details id="csvMwBox" data-box="1">
+      <summary class="h" style="cursor:pointer">マッチングワールド（MW）の無在庫</summary>
+      <div class="body">
+        <div class="note2" style="margin-top:0">MW の在庫CSV（<b>Shift_JIS</b>・約12,200行）を
+          読み込み、JANごとに使う仕入れ元を1つ選んで<b>候補一覧</b>に出します。
+          仕入値は<b>卸値×1.1＋1点あたりの仕入れ送料</b>で計算します（⚙設定）。
+          <b>この段では出品しません</b>（写真はまだ付きません）。</div>
+        <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
+        <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
+        <div class="note2" id="csvMwNote" style="margin-top:2px"></div>
+        <div class="warn" id="csvMwWarn" style="display:none;margin-top:8px"></div>
+        <!-- 出荷日が読めなかった文字の一覧（画面に残す） -->
+        <details id="csvMwShipBox" data-box="1" style="margin-top:8px;display:none">
+          <summary class="note2" style="margin:0;cursor:pointer" id="csvMwShipSum">出荷日が読めなかった文字</summary>
+          <div class="note2" style="margin:4px 0 0">ここに出た文字は <b>99（無在庫に使わない）</b>として
+            扱っています。読み取りの規則に足すときはこの一覧を見せてください。</div>
+          <div id="csvMwShipList" style="margin-top:4px"></div>
+        </details>
+        <button class="btn" id="csvMwLoad" style="width:100%;margin-top:8px">候補一覧を取り込む</button>
+        <div class="note2" id="csvMwListNote" style="margin-top:2px"></div>
+        <div id="csvMwList" style="margin-top:6px"></div>
+      </div>
+    </details>
+  </section>
+
   <!-- ②-2 無在庫（新品・カタログ画像）で出す -->
   <section>
     <details id="csvNewBox" data-box="1">
@@ -1108,6 +1135,15 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
       <div class="note2" style="margin-top:0">ビジネスポリシー（下の3つ）を使うときは、この値と返品条件はCSVに出さずポリシー側の設定が使われます。ポリシー名を空にしたときだけ使われます。</div>
       <div class="chk"><input type="checkbox" id="csvAutoParse" checked><label for="csvAutoParse" style="flex:1">英題が空の行を開いたら「自動で振り分け」を実行する</label></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <div class="cfgsub">マッチングワールド（MW）の無在庫</div>
+      <div class="row"><label>1点あたりの仕入れ送料</label><input type="number" id="mwShipFee" value="176" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:0">MW の送料は1回 ¥880（5万円以上は無料）。取り置きでまとめて5点で発送すると1点 ¥176 になるので、送料無料に届かなくても ¥176 で計算します。仕入値＝<b>卸値×1.1＋この額</b>。</div>
+      <div class="rowv"><label>対象の機種</label><input type="text" id="mwKishu" value="NS,NS2,NS2H,P5,P4,b2cchara_figure,figure,FIG,GF,plasticmodel"><div class="note2" style="margin-top:2px">MW の CSV の「機種」の値をカンマで並べます。ここに無い機種は候補に出ません。</div></div>
+      <div class="row"><label>出荷の上限</label><input type="number" id="mwShipMax" value="4" step="1" min="0" max="99" inputmode="numeric"><span class="unit">営業日</span></div>
+      <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="2" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
+      <div class="note2" style="margin-top:0">1点しかない商品は売れる前に消えやすいので、既定では2点以上だけを候補にします。</div>
+      <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
       <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
       </div>
@@ -4092,7 +4128,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // フェイズB（FBAで売れたときの動作・再調達の実行方法）
                  'pbMode','pbRestock','autoRkMode',
                  // 自動処理の広告料率（6.74）／売れたあとの在庫補充（6.77）
-                 'autoAdRate','autoSkMode'];
+                 'autoAdRate','autoSkMode',
+                 // マッチングワールド（MW）の無在庫（6.85）
+                 'mwShipFee','mwKishu','mwShipMax','mwStockMin'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4122,6 +4160,7 @@ function csvLoad(){
          if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
        if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
+       if(typeof o.mwNewOnly==='boolean')$('mwNewOnly').checked=o.mwNewOnly;
        if(typeof o.csvPriceChangedOnly==='boolean')
          $('csvPriceChangedOnly').checked=o.csvPriceChangedOnly;
        if(typeof o.csvReviewZero==='boolean')$('csvReviewZero').checked=o.csvReviewZero;
@@ -4285,6 +4324,7 @@ function csvSaveCfg(){
     });
     o.csvAutoParse=$('csvAutoParse').checked;
     o.csvShowNew=$('csvShowNew').checked;
+    o.mwNewOnly=$('mwNewOnly').checked;        // MW：新品だけ（6.85）
     o.csvPriceChangedOnly=$('csvPriceChangedOnly').checked;
     o.csvReviewZero=$('csvReviewZero').checked;
     o.syncOnHand=$('syncOnHand').checked;
@@ -8419,6 +8459,301 @@ $('csvExportPick').onclick=function(){
   }
   csvExportRun(ids);
 };
+/* ================= マッチングワールド（MW）の無在庫（6.85・段取りA）=========
+   MW の在庫CSV（Shift_JIS・約12,200行）を読み、pj-sync に送って D1 に置く。
+   JANごとに使う仕入れ元を1つ選び、候補一覧に出す。**この段では出品しない**。
+   仕入値 ＝ 卸値×1.1（税込）＋ 1点あたりの仕入れ送料（⚙設定・既定 ¥176）。
+   推奨売値・利益は shared/pricing.js（PJP）で出すので、
+   販売連携・出品CSVの金額と1円もずれない。 */
+var MW_SEND_MAX=400;          // 1回に送る行数（Worker の MW_CHUNK と同じ）
+function mwShipFee(){ var n=+$('mwShipFee').value; return (isFinite(n)&&n>=0)?n:176; }
+function mwKishuList(){
+  return String($('mwKishu').value||'').split(',')
+    .map(function(x){ return x.trim(); }).filter(Boolean);
+}
+function mwShipMax(){ var n=+$('mwShipMax').value; return (isFinite(n)&&n>=0)?n:4; }
+function mwStockMin(){ var n=+$('mwStockMin').value; return (isFinite(n)&&n>=1)?n:2; }
+function mwNewOnly(){ return !!$('mwNewOnly').checked; }
+/* ---- 出荷日の文字 → 営業日数（仕様 3章）----
+   即日=0／翌営業日=1／「1~2営業日」=2／「2.3営業日」=3／「3.4営業日」=4／
+   「5.6」=6／「7.8」=8／日付・週単位・予約・2週間などは 99（無在庫に使わない）。
+   読めなかった文字は null を返し、呼ぶ側が 99 として扱い、一覧に残す。 */
+function mwNorm(t){
+  return String(t||'').trim()
+    .replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })
+    .replace(/[．｡。]/g,'.').replace(/[～〜]/g,'~').replace(/[－ー―]/g,'-')
+    .replace(/[･・､]/g,',').replace(/　/g,' ').trim();
+}
+function mwShipDays(t){
+  var z=mwNorm(t);
+  /* 空欄は 99（無在庫に使わない）。読めない文字とは分けて数える（仕様3章）。 */
+  if(!z)return 99;
+  if(/即日|当日出荷|即出荷|12時締め/.test(z))return 0;
+  if(/翌営業日|翌日/.test(z))return 1;
+  /* 「0716 出荷」のような日付だけの書き方は無在庫に使わない。 */
+  if(/^\d{3,4}\s*出荷/.test(z))return 99;
+  /* 「2.3営業日」「3~4営業日」「2,3営業日」… 大きい方を採る。
+     「ご注文後2〜3営業」のように「日」が落ちている書き方も読む。 */
+  var m=/(\d+)\s*[.~,\-]\s*(\d+)\s*営業日?/.exec(z);
+  if(m)return Math.max(+m[1],+m[2]);
+  m=/(\d+)\s*営業日?/.exec(z);
+  if(m)return +m[1];
+  /* 日付・週単位・予約・入荷予定・再販は無在庫に使わない。
+     **数字＋日を読む前に**ここで弾く（「29日（木）」を29営業日と読まないため）。 */
+  if(/週|[月火水木金土日]曜|入荷|予約|発売|再販|中旬|上旬|下旬|月末|ヶ月|か月|箇月/.test(z)
+     ||/\d+\s*\/\s*\d+/.test(z)
+     ||/\d+\s*日\s*[（(]/.test(z)
+     ||/\d+\s*月/.test(z))
+    return 99;
+  /* 「営業日」が無い「N〜M日」「N日以内」も大きい方を採る */
+  m=/(\d+)\s*[.~,\-]\s*(\d+)\s*日/.exec(z);
+  if(m)return Math.max(+m[1],+m[2]);
+  m=/(\d+)\s*日/.exec(z);
+  if(m)return +m[1];
+  return null;                                         // 読めない
+}
+/* ---- MW の在庫CSV を読む ---- */
+var mwShipBad={};              // 読めなかった出荷日の文字 → 件数
+function mwParse(text){
+  var rows=csvParse(text);
+  if(!rows.length)return { err:'空のファイルです' };
+  var head=(rows[0]||[]).map(function(x){
+    return String(x||'').replace(/^﻿/,'').trim(); });
+  var col=function(){
+    for(var i=0;i<arguments.length;i++){
+      var j=head.indexOf(arguments[i]); if(j>=0)return j;
+    } return -1; };
+  var iJ=col('JAN'), iS=col('社'), iK=col('機種'), iN=col('商品名'),
+      iL=col('定価'), iR=col('発売日'), iC=col('新・中','新中'),
+      iW=col('卸値'), iQ=col('掲載数'), iB=col('備考'), iD=col('出荷日');
+  if(iJ<0||iS<0||iW<0)
+    return { err:'JAN・社・卸値の列が見つかりません（MW の在庫CSVか確かめてください）' };
+  var out=[], bad={}, seen={}, ng=0, dup=0, empty=0;
+  mwShipBad={};
+  for(var n=1;n<rows.length;n++){
+    var r=rows[n]; if(!r||!r.length)continue;
+    /* 利益計算CSVは ="4595..." の形で入っているので、=" と " を外す */
+    var jan=String(r[iJ]||'').replace(/^="?|"?$/g,'').replace(/\D/g,'');
+    var sha=String(r[iS]||'').trim();
+    if(jan.length!==13||!sha){ ng++; continue; }
+    var k=jan+'|'+sha;
+    var idx=seen[k]||0; seen[k]=idx+1;
+    if(idx>0)dup++;
+    var txt=String(r[iD]||'');
+    var d=mwShipDays(txt);
+    if(!mwNorm(txt))empty++;                     // 空欄（99 扱い）
+    else if(d===null){ bad[txt.trim()]=(bad[txt.trim()]||0)+1; d=99; }
+    out.push({ jan:jan, sha:sha, idx:idx,
+      kishu:String(r[iK]||'').trim(), name:String(r[iN]||'').trim(),
+      list_price:+String(r[iL]||'').replace(/[^0-9]/g,'')||0,
+      release:String(r[iR]||'').trim(), cond:String(r[iC]||'').trim(),
+      wholesale:+String(r[iW]||'').replace(/[^0-9]/g,'')||0,
+      stock:+String(r[iQ]||'').replace(/[^0-9]/g,'')||0,
+      note:String(r[iB]||'').trim(), ship_text:txt.trim(), ship_days:d });
+  }
+  mwShipBad=bad;
+  var unread=0;
+  Object.keys(bad).forEach(function(x){ unread+=bad[x]; });
+  return { rows:out, ng:ng, dup:dup, bad:bad, unread:unread, empty:empty };
+}
+/* 読めなかった出荷日の文字を画面に残す（多い順）。 */
+function mwShipBadRender(){
+  var box=$('csvMwShipBox'), el=$('csvMwShipList');
+  var ks=Object.keys(mwShipBad||{});
+  if(!ks.length){ box.style.display='none'; el.innerHTML=''; return; }
+  ks.sort(function(a,b){ return mwShipBad[b]-mwShipBad[a]; });
+  var n=0; ks.forEach(function(k){ n+=mwShipBad[k]; });
+  $('csvMwShipSum').textContent='出荷日が読めなかった文字 '+ks.length+'種類（'+n+'行）';
+  el.innerHTML=ks.map(function(k){
+    return '<div class="note2" style="margin:0">'+mwShipBad[k]+'行　<code>'
+      +esc(k)+'</code></div>'; }).join('');
+  box.style.display='';
+}
+/* ---- 取り込み（分けて送る）---- */
+function mwImportRun(text){
+  var note=$('csvMwNote'), warn=$('csvMwWarn');
+  warn.style.display='none'; warn.textContent='';
+  var d=mwParse(text);
+  mwShipBadRender();
+  if(d.err){ note.textContent='⚠ '+d.err; return; }
+  if(!d.rows.length){ note.textContent='⚠ 取り込める行がありませんでした。'; return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLと管理者キーを⚙設定の「接続設定」に入れてください。';
+    return;
+  }
+  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  var parts=[];
+  for(var i=0;i<d.rows.length;i+=MW_SEND_MAX)parts.push(d.rows.slice(i,i+MW_SEND_MAX));
+  var at=new Date().toISOString();
+  var pi=0, sum={ added:0, changed:0, same:0, skipped:0, gone:0, back:0,
+                  picked:0, seen:0, warn:'' };
+  var btn=$('csvMwImport'); btn.disabled=true;
+  function step(){
+    if(pi>=parts.length){
+      btn.disabled=false;
+      note.textContent='✓ '+d.rows.length+'行を送りました（足した '+sum.added
+        +'／変わった '+sum.changed+'／同じ '+sum.same+'／欠品 '+sum.gone
+        +'／戻った '+sum.back+'）。JANごとの代表 '+sum.picked+'件。'
+        +(d.ng?('　JANが13桁でない行 '+d.ng+'件は除きました。'):'')
+        +(d.dup?('　同じJAN・社の行 '+d.dup+'件は別の行として残しました。'):'')
+        +(d.empty?('　出荷日が空欄の '+d.empty+'行は 99（無在庫に使わない）です。'):'')
+        +(d.unread?('　出荷日が読めなかった '+d.unread+'行も 99 扱いです（下の一覧）。'):'');
+      if(sum.warn){ warn.style.display=''; warn.textContent='⚠ '+sum.warn; }
+      mwListRun();                 // 続けて候補一覧を出す
+      return;
+    }
+    var part=parts[pi++];
+    note.textContent='送信中… '+pi+'／'+parts.length+'便（'+part.length+'行）';
+    syncJsonPost('/mw/stock',{ at:at, part:pi, parts:parts.length, rows:part,
+      rows_in:d.rows.length, unreadable:d.unread },function(x){
+      ['added','changed','same','skipped','gone','back','picked','seen']
+        .forEach(function(k){ sum[k]=(sum[k]||0)+(+x[k]||0); });
+      if(x.picked)sum.picked=+x.picked;      // 代表は最後の便の値
+      if(x.warn)sum.warn=x.warn;
+      step();
+    },function(why){
+      btn.disabled=false;
+      note.textContent='⚠ '+pi+'便目で失敗しました：'+why
+        +'（もう一度「MWの在庫CSVを取り込む」を押すと、続きから送り直せます）';
+    });
+  }
+  step();
+}
+$('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
+$('csvMwFile').addEventListener('change',function(){
+  var f=this.files&&this.files[0]; this.value='';
+  if(!f)return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    /* MW の在庫CSV は Shift_JIS。化けたら UTF-8 として読み直す。 */
+    var buf=new Uint8Array(fr.result), text;
+    try{ text=new TextDecoder('shift_jis').decode(buf); }
+    catch(e){ text=new TextDecoder('utf-8').decode(buf); }
+    if(text.indexOf('�')>=0){
+      try{ text=new TextDecoder('utf-8').decode(buf); }catch(e2){}
+    }
+    if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+    mwImportRun(text);
+  };
+  fr.readAsArrayBuffer(f);
+});
+/* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
+var mwRows=[], mwLast=null;
+/* MW の仕入値（円・税込＋1点あたりの送料）。 */
+function mwCost(r){
+  var w=+((r||{}).wholesale)||0;
+  if(!(w>0))return 0;
+  return Math.round(w*1.1)+mwShipFee();
+}
+/* 重量の既定値。ゲームは syncWeightGame、ホビーは syncWeight（⚙設定）。 */
+var MW_GAME_KISHU={ NS:1, NS2:1, NS2H:1, P5:1, P4:1, '3DS':1, PS5:1, PS4:1, SW:1 };
+function mwWeight(r){
+  var g=!!MW_GAME_KISHU[String((r||{}).kishu||'')];
+  var n=+(g?$('syncWeightGame').value:$('syncWeight').value)||0;
+  return n>0?n:(g?150:400);
+}
+/* 行ごとの下限利益（目標）。下限利益＋仕入値×連動率（⚙設定）。
+   販売連携・出品CSVと同じ PJP.autoTarget を使う。 */
+function mwTarget(cost){
+  try{ return PJP.autoTarget(pricingSettings(),cost); }catch(e){ return 0; }
+}
+/* 推奨売値・最低売値・利益。shared/pricing.js の式をそのまま使う。 */
+function mwRec(r){
+  var c=mwCost(r); if(!(c>0))return null;
+  var w=mwWeight(r);
+  var p=csvPriceFor(c,w);
+  if(!(p.price>0))return null;
+  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
+           target:mwTarget(c), cost:c, weight:w };
+}
+function mwListRun(){
+  var note=$('csvMwListNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  var q='?kishu='+encodeURIComponent(mwKishuList().join(','))
+    +'&new_only='+(mwNewOnly()?'1':'0')
+    +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()+'&limit=500';
+  note.textContent='候補一覧を取り込んでいます…';
+  fetch(syncUrl()+'/mw/list'+q,{headers:{'X-PJ-Key':syncKeyReady()}})
+    .then(function(res){
+      if(res.ok)return res.json();
+      return res.text().then(function(t){
+        var b=null; try{ b=JSON.parse(t); }catch(e){}
+        throw new Error(syncPostWhy(res.status,b,t)); });
+    })
+    .then(function(d){
+      mwRows=d.rows||[]; mwLast=d.last||null;
+      note.textContent='候補 '+(d.n||0)+'件'
+        +(d.n>mwRows.length?('（うち '+mwRows.length+'件を表示）'):'')
+        +'　／　MW の生きている行 '+(d.alive||0)+'　JANごとの代表 '+(d.picked||0)
+        +(mwLast?('　／　前回の取り込み '+esc(mwLast.at_jst||'')
+          +'（足した '+mwLast.added+'／変わった '+mwLast.changed
+          +'／欠品 '+mwLast.gone+'）'):'');
+      mwListRender();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
+}
+function mwListRender(){
+  var el=$('csvMwList');
+  if(!mwRows.length){
+    el.innerHTML='<div class="note2">候補はありません。'
+      +'⚙設定の「マッチングワールド（MW）の無在庫」で対象の機種・出荷の上限・'
+      +'在庫の下限を見直してください。</div>';
+    return;
+  }
+  /* 値段を出せた行と、出せなかった行（卸値が読めない行）に分ける。 */
+  var ok=[], ng=[];
+  mwRows.forEach(function(r){
+    var rec=mwRec(r);
+    var o={ r:r, rec:rec };
+    if(rec)ok.push(o); else ng.push(o);
+  });
+  /* 卸値が安い順（＝売値が低い順）に並べる。相場に収まりやすい行が上に来る。 */
+  ok.sort(function(a,b){ return (a.rec.price||0)-(b.rec.price||0); });
+  var line=function(o){
+    var r=o.r, rec=o.rec;
+    return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+      +'border-radius:6px">'
+      +'<b>'+esc(String(r.name||'').slice(0,60))+'</b>'
+      +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
+      +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'　'+esc(r.cond||'')
+      +'　在庫 '+(+r.stock||0)+'点　出荷 '+(+r.ship_days||0)+'営業日'
+      +(r.ship_text?('（'+esc(String(r.ship_text).slice(0,24))+'）'):'')+'</div>'
+      +'<div class="note2" style="margin:2px 0 0">卸値 '+yen(+r.wholesale||0)
+      +'（税抜）→ 仕入 <b>'+yen(rec?rec.cost:0)+'</b>'
+      +'（×1.1＋送料 '+yen(mwShipFee())+'）　重量 '+(rec?rec.weight:0)+'g</div>'
+      +(rec
+        ? ('<div class="note2" style="margin:2px 0 0">推奨売値 <b>'+usd(rec.price)
+           +'</b>（最低 '+usd(rec.floor)+'）　利益 <b'
+           +(rec.profit>=rec.target?'':' style="color:var(--bad)"')+'>'
+           +yen(rec.profit)+'</b>　下限利益 '+yen(rec.target)+'</div>')
+        : '<div class="note2" style="margin:2px 0 0;color:var(--bad)">卸値が読めません</div>')
+      +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
+        +esc(String(r.note).slice(0,60))+'</div>'):'')
+      +'</div>';
+  };
+  el.innerHTML='<div class="note2" style="margin:0 0 4px"><b>候補 '
+    +ok.length+'件</b>'
+    +(ng.length?('　/　値段を出せない '+ng.length+'件'):'')
+    +'（下限利益＝'+yen(+$('baseProfit').value||0)+'＋仕入値×'
+    +(+$('linkRate').value||0)+'%・広告料率 '+(+$('autoAdRate').value||6)+'%）</div>'
+    /* 推奨売値は**その下限利益がちょうど出る値段**なので、推奨売値で出すかぎり
+       利益は必ず下限を満たす（4章の5はここでは効かない）。
+       「その値段で本当に売れるか」はeBayの相場と比べて決めるので、
+       段取り C で足す（4章の6）。それまでは人が目で見て選ぶ。 */
+    +'<div class="note2" style="margin:0 0 6px;color:var(--bad)">'
+    +'推奨売値は下限利益がちょうど出る値段なので、<b>この一覧は「利益が出るか」では'
+    +'絞っていません</b>。<b>eBayの相場と比べる絞り込み（4章の6）は段取り C で足します</b>。'
+    +'いまは売値が高すぎる行（卸値が高い行）も混ざるので、目で見て選んでください。</div>'
+    +listMoreHtml('mwok',ok.map(line),'',10)
+    +(ng.length?('<div class="note2" style="margin:8px 0 4px">'
+      +'卸値が読めず値段を出せない行</div>'
+      +listMoreHtml('mwng',ng.slice(0,50).map(line),'',10)):'');
+}
+$('csvMwLoad').onclick=function(){ mwListRun(); };
 /* ---- eBayのアップロード結果ファイルを取り込む ----
    列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
    Success・Warning は ItemID を行と書き出しログへ（Warning は警告文もログに残す）。
@@ -13991,7 +14326,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v185';   // sw.js の const V と必ず同じ値にする
+var APP_V='v186';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

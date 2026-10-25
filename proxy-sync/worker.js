@@ -4362,6 +4362,225 @@ function picErrClear(env, itemId, at) {
      WHERE ebay_item_id=?1 AND revise_err LIKE '%21919137%'`)
     .bind(String(itemId), at);
 }
+/* ================= マッチングワールド（MW）の在庫（7.60・段取りA）=========
+   MW の在庫CSV（約12,200行・Shift_JIS）を画面が読んで、ここへ送ってくる。
+   ・主キーは連番。差分の突き合わせは **(jan, sha, idx)**
+     （同じ (jan,社) の行が約169組あるため。idx は CSV に現れた順）
+   ・**変わった行だけ** UPSERT する（row_hash を比べる）。全件書き込みは初回だけ
+   ・欠品は「今回の取り込みに現れなかった行」で判定する。ただし行数が
+     30%以上減っていたら、CSV の取得ミスとみなして欠品にせず警告だけ出す
+   ・JAN ごとに使う仕入れ元を1つ選ぶ（出荷が4営業日以内 → 卸値が安い →
+     在庫が多い → 出荷が早い）。窓関数で2文だけなので行数に関係なく速い
+
+   items の mw_low ほかへの書き戻しは**まだしない**。D1 に JAN の列が無く、
+   JAN→ASIN の対応が付くのは行を出品リストに入れたとき（段取り C・D）だから。 */
+const MW_CHUNK = 400;                  // 画面が1回に送ってくる行数の上限
+const MW_SHIP_OK = 4;                  // 無在庫に使える出荷の営業日数
+const MW_DROP_WARN = 0.30;             // 行数がこれ以上減ったら取得ミスとみなす
+const MW_LIST_MAX = 500;               // 候補一覧で返す行数の上限
+function mwNum(v) {
+  const n = Number(String(v == null ? "" : v).replace(/[^0-9.-]/g, ""));
+  return isFinite(n) ? Math.round(n) : 0;
+}
+/* 1行の中身のハッシュ。変わったかどうかだけ見たいので短くてよい。 */
+function mwHash(r) {
+  const t = [r.kishu, r.name, r.list_price, r.release, r.cond, r.wholesale,
+             r.stock, r.note, r.ship_text, r.ship_days].join("\u0001");
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  return h.toString(36) + "." + t.length.toString(36);
+}
+/* 画面から来た1行を整える。jan は13桁の数字だけを通す。 */
+function mwRow(x) {
+  const jan = String((x && x.jan) || "").replace(/\D/g, "");
+  if (jan.length !== 13) return null;
+  const r = {
+    jan: jan,
+    sha: String((x && x.sha) || "").slice(0, 20),
+    idx: Math.max(0, Math.min(99, mwNum(x && x.idx))),
+    kishu: String((x && x.kishu) || "").slice(0, 40),
+    name: String((x && x.name) || "").slice(0, 200),
+    list_price: mwNum(x && x.list_price),
+    release: String((x && x.release) || "").slice(0, 20),
+    cond: String((x && x.cond) || "").slice(0, 10),
+    wholesale: mwNum(x && x.wholesale),
+    stock: mwNum(x && x.stock),
+    note: String((x && x.note) || "").slice(0, 200),
+    ship_text: String((x && x.ship_text) || "").slice(0, 80),
+    ship_days: Math.max(0, Math.min(99, mwNum(x && x.ship_days))),
+  };
+  if (!r.sha) return null;
+  r.row_hash = mwHash(r);
+  return r;
+}
+/* 取り込み。body = { at, part, parts, rows:[…], rows_in, unreadable }
+   part/parts は分けて送るときの通し番号（1/31 … 31/31）。
+   最後の便（part>=parts）で欠品の判定と代表選びをする。 */
+async function mwStockPut(env, body) {
+  const run = newRun("mw-stock");
+  const res = { ok: false, part: 1, parts: 1, taken: 0, added: 0, changed: 0,
+                same: 0, skipped: 0, gone: 0, back: 0, picked: 0, seen: 0,
+                warn: "", at: "" };
+  try {
+    const at = String((body && body.at) || "").trim() || nowIso();
+    res.at = at;
+    res.part = Math.max(1, mwNum(body && body.part) || 1);
+    res.parts = Math.max(1, mwNum(body && body.parts) || 1);
+    const list = Array.isArray(body && body.rows) ? body.rows : [];
+    if (list.length > MW_CHUNK) {
+      res.error = "too_many";
+      res.warn = "1回に送れるのは " + MW_CHUNK + "行までです";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const rows = [];
+    for (const x of list) {
+      const r = mwRow(x);
+      if (r) rows.push(r); else res.skipped++;
+    }
+    res.taken = rows.length;
+    /* いまの row_hash を引いて、変わった行だけ書く。 */
+    const have = {};
+    for (let i = 0; i < rows.length; i += D1_MAX_KEYS) {
+      const part = rows.slice(i, i + D1_MAX_KEYS);
+      const where = part.map(() => "(jan=? AND sha=? AND idx=?)").join(" OR ");
+      const bind = [];
+      for (const r of part) bind.push(r.jan, r.sha, r.idx);
+      const got = await env.DB.prepare(
+        `SELECT jan, sha, idx, row_hash, gone_at FROM mw_stock WHERE ${where}`)
+        .bind(...bind).all();
+      for (const y of (got && got.results) || [])
+        have[y.jan + "|" + y.sha + "|" + y.idx] = y;
+    }
+    const stmts = [];
+    for (const r of rows) {
+      const old = have[r.jan + "|" + r.sha + "|" + r.idx];
+      if (old && old.row_hash === r.row_hash && !old.gone_at) {
+        /* 中身が同じなら seen_at だけ新しくする（差分書き込み）。 */
+        res.same++;
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_stock SET seen_at=?4 WHERE jan=?1 AND sha=?2 AND idx=?3`)
+          .bind(r.jan, r.sha, r.idx, at));
+        continue;
+      }
+      if (old) { res.changed++; if (old.gone_at) res.back++; } else res.added++;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_stock (jan,sha,idx,kishu,name,list_price,release,cond,
+           wholesale,stock,note,ship_text,ship_days,row_hash,seen_at,gone_at,
+           created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,NULL,?15)
+         ON CONFLICT(jan,sha,idx) DO UPDATE SET
+           kishu=excluded.kishu, name=excluded.name,
+           list_price=excluded.list_price, release=excluded.release,
+           cond=excluded.cond, wholesale=excluded.wholesale,
+           stock=excluded.stock, note=excluded.note,
+           ship_text=excluded.ship_text, ship_days=excluded.ship_days,
+           row_hash=excluded.row_hash, seen_at=excluded.seen_at, gone_at=NULL`)
+        .bind(r.jan, r.sha, r.idx, r.kishu, r.name, r.list_price, r.release,
+              r.cond, r.wholesale, r.stock, r.note, r.ship_text, r.ship_days,
+              r.row_hash, at));
+    }
+    await runBatch(env, run, stmts);
+    /* 最後の便。欠品の判定と、JANごとの代表選び。 */
+    if (res.part >= res.parts) {
+      const a = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM mw_stock WHERE seen_at=?1`).bind(at).first();
+      const b = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`).first();
+      const seen = Number((a && a.n) || 0);      // 今回の取り込みに現れた行
+      const live = Number((b && b.n) || 0);      // いま生きている行（今回ぶんを含む）
+      res.seen = seen;
+      const missing = Math.max(0, live - seen);
+      if (live > 0 && seen > 0 && (missing / live) >= MW_DROP_WARN) {
+        res.warn = "今回の取り込みは " + seen + "行で、生きている " + live
+          + "行より " + Math.round(missing / live * 100)
+          + "% 少ないため、欠品にしていません（CSV の取得ミスの可能性）。"
+          + "もう一度取り込んでください";
+        run.notes.push(res.warn);
+      } else if (missing > 0) {
+        const g = await env.DB.prepare(
+          `UPDATE mw_stock SET gone_at=?1 WHERE gone_at IS NULL AND seen_at<>?1`)
+          .bind(at).run();
+        res.gone = Number((g && g.meta && g.meta.changes) || 0);
+      }
+      /* JANごとに1つ選ぶ（窓関数。行数に関係なく2文で済む）。 */
+      await env.DB.prepare(`UPDATE mw_stock SET pick=0 WHERE pick=1`).run();
+      const pk = await env.DB.prepare(
+        `UPDATE mw_stock SET pick=1 WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (PARTITION BY jan ORDER BY
+               CASE WHEN COALESCE(ship_days,99)<=${MW_SHIP_OK} THEN 0 ELSE 1 END,
+               COALESCE(wholesale,999999999) ASC,
+               COALESCE(stock,0) DESC,
+               COALESCE(ship_days,99) ASC,
+               id ASC) AS rn
+             FROM mw_stock WHERE gone_at IS NULL
+           ) WHERE rn=1)`).run();
+      res.picked = Number((pk && pk.meta && pk.meta.changes) || 0);
+      await env.DB.prepare(
+        `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
+           unreadable,warn,note,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?1)`)
+        .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
+              res.gone, res.back, res.picked, mwNum(body && body.unreadable),
+              res.warn || null,
+              ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300))
+        .run();
+      run.notes.push("MW在庫：現れた " + seen + "行／足した " + res.added
+        + "／変わった " + res.changed + "／同じ " + res.same
+        + "／欠品 " + res.gone + "／戻った " + res.back
+        + "／代表 " + res.picked);
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+    res.error = e.message;
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 候補一覧（段取りA）。4章の1〜4で絞った**代表の行**だけ返す。
+   5章の利益計算（卸値×1.1＋送料）は画面が shared/pricing.js で行う。 */
+async function mwList(env, url) {
+  const p = url.searchParams;
+  const kishu = String(p.get("kishu") || "").split(",")
+    .map((x) => x.trim()).filter(Boolean).slice(0, 40);
+  const newOnly = p.get("new_only") !== "0";
+  const shipMax = Math.max(0, Math.min(99, mwNum(p.get("ship_max")) || MW_SHIP_OK));
+  const stockMin = Math.max(1, mwNum(p.get("stock_min")) || 2);
+  const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
+  const where = ["gone_at IS NULL", "pick=1"];
+  const bind = [];
+  if (kishu.length) {
+    where.push("kishu IN (" + kishu.map(() => "?").join(",") + ")");
+    for (const k of kishu) bind.push(k);
+  }
+  if (newOnly) where.push("cond='新品'");
+  where.push("COALESCE(ship_days,99)<=" + shipMax);
+  where.push("COALESCE(stock,0)>=" + stockMin);
+  const w = where.join(" AND ");
+  const q = await env.DB.prepare(
+    `SELECT jan,sha,idx,kishu,name,list_price,release,cond,wholesale,
+            stock,note,ship_text,ship_days,seen_at
+       FROM mw_stock WHERE ${w}
+      ORDER BY COALESCE(wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_stock WHERE ${w}`).bind(...bind).first();
+  const all = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`).first();
+  const pick = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL AND pick=1`).first();
+  const last = await env.DB.prepare(
+    `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn
+       FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+  return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
+           alive: Number((all && all.n) || 0),
+           picked: Number((pick && pick.n) || 0),
+           last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
+           limit: limit };
+}
 /* ===== 写真が小さい行をまとめて確かめ直す（7.59）=====
    eBayアプリで写真を差し替えても、こちらは気づけない（GetItem を呼ばないと
    大きさが分からない）。写真が原因で弾かれた記録が残っている行を順に GetItem で
@@ -5719,6 +5938,10 @@ export default {
        ・設定の送信（POST /settings）… 自動値下げ・自動反映の設定が入る
        ・手動実行（POST /sync）… 「まとめて実行」もこれ
        /listings の中の価格の設定（md_* / rv_*）は、その route で弾く。 */
+    /* MW の在庫の取り込み（7.60）は管理者だけ。無在庫の仕入れ値が入るため。 */
+    if (role !== "admin" && request.method === "POST"
+        && url.pathname === "/mw/stock")
+      return forbidStaff("MW の在庫の取り込みは管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
       return forbidStaff("価格の設定と実行は管理者用のキーが必要です"
@@ -5917,6 +6140,14 @@ export default {
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await cartQtyNow(env, body), 200, origin);
       }
+      /* MW の在庫CSV（7.60・段取りA）。画面が Shift_JIS を読んで送ってくる。 */
+      if (request.method === "POST" && url.pathname === "/mw/stock") {
+        let body; try { body = await request.json(); }
+        catch (e) { return json({ error: "bad_request" }, 400, origin); }
+        return json(await mwStockPut(env, body), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/list")
+        return json(await mwList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/catalog") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
@@ -6058,6 +6289,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         picsUrlOk, picsNotifyText,
                         BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
+                        mwStockPut, mwList, mwRow, mwHash, MW_CHUNK,
+                        MW_SHIP_OK, MW_DROP_WARN,
                         jstText, boBelow, boRetry, reviseFix, mdBo,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,

@@ -4390,3 +4390,66 @@ eBay 保管（`i.ebayimg.com`）の URL は `/s/` に「幅X高さ」が base64 
 - Discord にも結果と、まだ小さい行の大きさを出す
 
 テストは `tests/picswitch.mjs`（77→97件）。
+
+## 7.60 MW の在庫を `mw_stock` に置く・JANごとに1つ選ぶ（段取り A・2026-10-25・sw.js v186）
+
+6.85 の受け口。MW の在庫CSVを `mw_stock` に**差分で**書き、JAN ごとに仕入れ先を1つ選ぶ。
+
+### `mw_stock`（`migrate-0024-mw-stock.sql`）
+
+主キーは**連番**（`id`）。同じ JAN が複数の社から出るので、
+`UNIQUE(jan,sha,idx)` で行を見分ける（`idx` は同じ `(jan,社)` の出てきた順）。
+
+| 列 | 中身 |
+| --- | --- |
+| `jan` `sha` `idx` | JAN（13桁）・社・同じ `(jan,社)` の何番目か |
+| `kishu` `name` `list_price` `release` `cond` `wholesale` `stock` `note` | CSV の中身 |
+| `ship_text` `ship_days` | 出荷日の原文と、営業日数（6.85 の規則。読めなければ 99） |
+| `row_hash` | 上の中身の FNV-1a。**変わっていない行を書き直さない**ため |
+| `pick` | JAN ごとに選ばれた1行だけ 1 |
+| `seen_at` `gone_at` | 最後に CSV にあった時刻／CSV から消えた時刻（UTC） |
+
+索引は `idx_mw_key(jan,sha,idx)` `idx_mw_jan` `idx_mw_seen` `idx_mw_pick` `idx_mw_kishu`。
+取り込みの記録は `mw_runs`（`rows_in` `added` `changed` `same` `gone` `back` `picked` `unreadable` `warn`）。
+
+### `POST /mw/stock`（`mwStockPut`）
+
+画面が 400行ずつ送る。`{at, part, parts, rows, rows_in, unreadable}`。
+`at` は1回の取り込みで同じ値を使う（分けて送っても1回として扱う）。
+
+1. 送られた行の `row_hash` を**40件ずつ**引き当てる（D1 は1文に100個まで値を渡せる）
+2. 中身が同じで欠品でもない行は `seen_at` だけ更新（`same`）
+3. 違う行だけ `ON CONFLICT(jan,sha,idx)` で入れ替え（`added`／`changed`／`back`）
+4. **最後の便（`part===parts`）のときだけ**、仕上げをする
+
+`stocks_3.csv` の2週半ぶんで測ったところ、動くのは全体の約1割だった。
+
+### 仕上げ（最後の便）
+
+**欠品**：`gone_at IS NULL AND seen_at<>?at` の行に `gone_at` を入れる。
+ただし 欠品 ÷ 生きている行 が **3割（`MW_DROP_WARN`）以上**なら、
+CSV が途中までだった可能性があるので**何も消さず注意だけ出す**（`warn`）。
+
+**JANごとの代表選び**：2文で済ませる（行数によらず同じ手間）。
+
+```sql
+UPDATE mw_stock SET pick=0 WHERE pick=1;
+UPDATE mw_stock SET pick=1 WHERE id IN (
+  SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY jan ORDER BY
+    CASE WHEN COALESCE(ship_days,99)<=4 THEN 0 ELSE 1 END,  -- 早く出るものが先
+    COALESCE(wholesale,999999999) ASC,                      -- 次に安いもの
+    COALESCE(stock,0) DESC,                                 -- 次に在庫が多いもの
+    COALESCE(ship_days,99) ASC, id ASC) AS rn
+    FROM mw_stock WHERE gone_at IS NULL) WHERE rn=1);
+```
+
+### `GET /mw/list`（`mwList`）
+
+`gone_at IS NULL AND pick=1` に、`kishu`（最大40個）・`new_only`・
+`ship_max`・`stock_min` を足して返す。
+返すのは `n`（件数）・`rows`（最大 `MW_LIST_MAX`=500）・
+`alive`（生きている行）・`picked`（代表の数）・`last`（直前の取り込み。`at_jst` 付き）。
+
+`POST /mw/stock` は `forbidStaff` で**作業者のキーでは断る**（取り込みは本人だけ）。
+
+テストは `tests/mwstock.mjs`（40件）。
