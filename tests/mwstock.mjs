@@ -192,4 +192,74 @@ r=await put({ at:'2026-10-26T07:00:00Z', part:1, parts:1,
     String(4900000000000+i),'M200')) });
 ok(r.body.error==='too_many','★★超えたら断る');
 
+/* ここが v186 で落ちたところ。引き当ての SELECT は 1件 (jan,sha,idx) で
+   3個の値を使うので、件数で決め打ちすると 40件＝120個になって
+   「too many SQL variables」で 1便目から落ちる。 */
+console.log('\n=== 1文のバインド変数は100個まで（D1 の上限）===');
+console.log('   1件あたりの個数 → 1文に入れる件数 → 使う個数');
+[1,2,3,5,15].forEach(function(n){
+  console.log('   '+n+'個 → '+W.d1Step(n)+'件 → '+(W.d1Step(n)*n)+'個'); });
+ok(W.D1_MAX_BINDS===100,'★D1 が1文に受け取れる値は100個');
+[1,2,3,4,5,10,15,20].forEach(function(n){
+  ok(W.d1Step(n)*n<=W.D1_MAX_BINDS,
+     '★★1件'+n+'個なら '+W.d1Step(n)+'件まで（'+(W.d1Step(n)*n)+'個）'); });
+ok(W.d1Step(3)>=30,'★1件3個でも30件以上まとめる（便の数が増えすぎない）');
+ok(W.d1Step(0)>=1&&W.d1Step(-5)>=1,'★おかしな値でも1件は返す');
+
+/* 手元のテストでも D1 と同じところで落ちることを確かめる（lib.mjs の作り）。 */
+let over=null;
+try { env.DB.prepare('SELECT 1 WHERE x IN ('
+  +new Array(101).fill('?').join(',')+')').bind(...new Array(101).fill(1)); }
+catch(e){ over=String(e.message); }
+console.log('   101個: '+over);
+ok(/too many SQL variables/.test(over||''),
+   '★★テストでも101個で「too many SQL variables」になる（上限の再現）');
+let under=null;
+try { env.DB.prepare('SELECT 1 WHERE x IN ('
+  +new Array(100).fill('?').join(',')+')').bind(...new Array(100).fill(1));
+  under='ok'; } catch(e){ under=String(e.message); }
+ok(under==='ok','★100個までは通る');
+
+console.log('\n=== 400行（上限ちょうど）を1便で送る ===');
+const env2=makeEnv({ STAFF_KEY:'staff-key-123' });
+const put2=async(body)=>asJson(await worker.fetch(new Request('https://x/mw/stock',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env2));
+const big=new Array(400).fill(0).map((_,i)=>row(String(4900000000000+i),'M200'));
+r=await put2({ at:'2026-10-26T08:00:00Z', part:1, parts:3, rows:big,
+  rows_in:1200, unreadable:0 });
+console.log('   '+JSON.stringify({status:r.status,ok:r.body.ok,
+  taken:r.body.taken,added:r.body.added,err:r.body.error||''}));
+ok(r.status===200&&r.body.ok===true,'★★400行の1便が通る（v186 はここで落ちた）');
+ok(r.body.taken===400&&r.body.added===400,'★★400行ぜんぶ入る');
+let n2=await env2.DB.prepare('SELECT COUNT(*) AS n FROM mw_stock').first();
+ok(Number(n2.n)===400,'★★取りこぼしが無い');
+
+console.log('\n=== 途中で失敗したあと、送り直しても壊れない ===');
+/* 1便目だけ入った状態（2便目・3便目は届いていない）。
+   画面は3便をまとめて送り直すので、同じ at で最初から送る。 */
+const at2='2026-10-26T09:00:00Z';
+const big2=new Array(400).fill(0).map((_,i)=>row(String(4910000000000+i),'M200'));
+const big3=new Array(100).fill(0).map((_,i)=>row(String(4920000000000+i),'M200'));
+r=await put2({ at:at2, part:1, parts:3, rows:big });        // 同じ400行をもう一度
+console.log('   1便目（送り直し）: '+JSON.stringify({same:r.body.same,
+  added:r.body.added,changed:r.body.changed}));
+ok(r.body.ok===true&&r.body.same===400&&r.body.added===0,
+   '★★同じ行を送り直しても二重にならず、seen_at だけ新しくなる');
+r=await put2({ at:at2, part:2, parts:3, rows:big2 });
+ok(r.body.ok===true&&r.body.added===400,'★2便目が入る');
+ok(r.body.gone===0&&r.body.picked===0,
+   '★★途中の便では欠品も代表選びもしない');
+r=await put2({ at:at2, part:3, parts:3, rows:big3 });
+console.log('   3便目: '+JSON.stringify({added:r.body.added,gone:r.body.gone,
+  picked:r.body.picked,warn:r.body.warn||''}));
+ok(r.body.ok===true&&r.body.added===100,'★3便目が入る');
+let live=await env2.DB.prepare(
+  'SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL').first();
+ok(Number(live.n)===900,'★★900行すべて生きている（送り直した分が欠品にならない）');
+ok(r.body.picked===900,'★★最後の便で代表選びが走る');
+let gone=await env2.DB.prepare(
+  'SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NOT NULL').first();
+ok(Number(gone.n)===0,'★★欠品にされた行は無い');
+
 await T.done();

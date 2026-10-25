@@ -74,7 +74,15 @@ const DAILY_UTC_HOUR = 18;         // JST 3時台に日次処理を回す
 const ITEMS_PER_RUN = 25;          // 1回の実行で明細を取る注文の数（2.1秒×25＝約53秒）
 const ITEMS_PER_RUN_MAX = 120;     // 手動実行で増やせる上限
 const ITEMS_DEADLINE_MS = 240000;  // 明細取得に使う時間の上限（これを越えたら次回へ回す）
-const D1_MAX_KEYS = 40;            // 1命令のバインド変数上限（100）に収まる件数（40件＝80個）
+const D1_MAX_BINDS = 100;          // D1 が1つの文に受け取れる値の数（これを超えると
+                                   // too many SQL variables で落ちる）
+const D1_MAX_KEYS = 40;            // 1件2変数（asin,cond）のときの件数（40件＝80個）
+/* 1件が何個の値を使うかで、1文に入れられる件数を決める（7.61）。
+   件数で決め打ちすると、1件3変数の引き当てで上限を越える。 */
+function d1Step(perRow) {
+  const n = Math.max(1, perRow | 0);
+  return Math.max(1, Math.floor((D1_MAX_BINDS - 4) / n));   // 4個は余裕
+}
 const NOTIFY_MAX = 1800;           // Discord の1通の文字数上限に対する余裕
 
 /* pj_price の CSV_PREFIX と同じ表。eBayに出すカテゴリだけ 'ebay'。 */
@@ -1377,8 +1385,9 @@ const STATUS_COLS = `
   sk_fail, mw_low, mw_low_at, mw_n, mw_stock,` + SKU_COLS;
 
 /* items をキーで引く。D1 は1命令あたりのバインド変数が100個までなので、
-   重複キーをまとめたうえで D1_MAX_KEYS 件ずつに分けて引く
-   （まとめて引くと「too many SQL variables」で中断する）。 */
+   重複キーをまとめたうえで d1Step() 件ずつに分けて引く
+   （まとめて引くと「too many SQL variables」で中断する）。
+   1件 (asin,cond) で2個使うので d1Step(2)。 */
 async function itemsByKeys(env, keys) {
   const uniq = [], seen = {};
   for (const k of keys || []) {
@@ -1389,8 +1398,9 @@ async function itemsByKeys(env, keys) {
     uniq.push(k);
   }
   const out = [];
-  for (let i = 0; i < uniq.length; i += D1_MAX_KEYS) {
-    const part = uniq.slice(i, i + D1_MAX_KEYS);
+  const step = d1Step(2);
+  for (let i = 0; i < uniq.length; i += step) {
+    const part = uniq.slice(i, i + step);
     const where = part.map(() => "(asin=? AND cond=?)").join(" OR ");
     const bind = [];
     for (const k of part) bind.push(k.asin, k.cond);
@@ -1509,8 +1519,9 @@ async function syncOrders(env, run, days, maxItems) {
   {
     const pairs = soldE.map((x) => ({ o: x.orderId, l: x.line }));
     const known = {};
-    for (let i = 0; i < pairs.length; i += 40) {
-      const part = pairs.slice(i, i + 40);
+    const stepO = d1Step(2);                 // (order_id,line_id) で1件2個
+    for (let i = 0; i < pairs.length; i += stepO) {
+      const part = pairs.slice(i, i + stepO);
       const where = part.map(() => "(order_id=? AND line_id=?)").join(" OR ");
       const bind = [];
       for (const q of part) bind.push(q.o, q.l);
@@ -1532,8 +1543,9 @@ async function syncOrders(env, run, days, maxItems) {
   {
     const freshE = soldE.filter((x) => fresh[x.orderId + "|" + x.line]);
     const flg = {};
-    for (let i = 0; i < freshE.length; i += 40) {
-      const part = freshE.slice(i, i + 40);
+    const stepF = d1Step(2);                 // (asin,cond) で1件2個
+    for (let i = 0; i < freshE.length; i += stepF) {
+      const part = freshE.slice(i, i + stepF);
       const where = part.map(() => "(asin=? AND cond=?)").join(" OR ");
       const bind = [];
       for (const q of part) bind.push(q.asin, q.cond);
@@ -4443,8 +4455,9 @@ async function mwStockPut(env, body) {
     res.taken = rows.length;
     /* いまの row_hash を引いて、変わった行だけ書く。 */
     const have = {};
-    for (let i = 0; i < rows.length; i += D1_MAX_KEYS) {
-      const part = rows.slice(i, i + D1_MAX_KEYS);
+    const step = d1Step(3);                 // (jan,sha,idx) で1件3個 → 32件ずつ
+    for (let i = 0; i < rows.length; i += step) {
+      const part = rows.slice(i, i + step);
       const where = part.map(() => "(jan=? AND sha=? AND idx=?)").join(" OR ");
       const bind = [];
       for (const r of part) bind.push(r.jan, r.sha, r.idx);
@@ -4546,7 +4559,7 @@ async function mwStockPut(env, body) {
 async function mwList(env, url) {
   const p = url.searchParams;
   const kishu = String(p.get("kishu") || "").split(",")
-    .map((x) => x.trim()).filter(Boolean).slice(0, 40);
+    .map((x) => x.trim()).filter(Boolean).slice(0, d1Step(1));
   const newOnly = p.get("new_only") !== "0";
   const shipMax = Math.max(0, Math.min(99, mwNum(p.get("ship_max")) || MW_SHIP_OK));
   const stockMin = Math.max(1, mwNum(p.get("stock_min")) || 2);
@@ -6289,7 +6302,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         picsUrlOk, picsNotifyText,
                         BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
-                        mwStockPut, mwList, mwRow, mwHash, MW_CHUNK,
+                        mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS, MW_CHUNK,
                         MW_SHIP_OK, MW_DROP_WARN,
                         jstText, boBelow, boRetry, reviseFix, mdBo,
                         epsMaxUrl, epsSize,
