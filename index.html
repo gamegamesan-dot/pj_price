@@ -4810,7 +4810,7 @@ function csvIssues(r){
   }
   if(!(r.pics||[]).length)a.push('写真なし');
   // フィギュアの原産国は補完しないので、空なら指摘する。
-  if(r.cat!=='139973'&&!String((r.specs||{}).origin||'').trim())a.push('原産国なし');
+  if(csvOriginNeed(r))a.push('原産国なし');
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
   /* アップロード失敗は、**失敗したときの中身のまま**なら書き出しを止める
@@ -5071,6 +5071,15 @@ function csvPicsWaitHtml(r){
   if(!csvPicsWait(r))return '';
   return picsWaitHtml('「アップロード結果を取り込む」で切り替えます。');
 }
+/* 原産国が「要確認」なのは**空欄のときだけ**（6.84）。
+   既定値（⚙設定の「原産国の既定値」）のままは問題ないので、
+   ③の件数・赤枠・行のバッジ・書き出しの可否のどこにも数えない。
+   ゲーム（139973）は Japan 固定で必ず埋まるので対象外。
+   既定値のままの行を探したいときは、絞り込み「原産国：既定値の行だけ」を使う。 */
+function csvOriginNeed(r){
+  return (r||{}).cat!=='139973'
+    && !String((((r||{}).specs)||{}).origin||'').trim();
+}
 function csvBadgeHtml(r){
   var iss=csvIssues(r), badge='';
   var b=function(t,c){ return '<span style="display:inline-block;background:'+c
@@ -5098,7 +5107,6 @@ function csvBadgeHtml(r){
   if(csvPicsGone(r))badge+=b('写真が抜けています','var(--bad)');
   else if(csvPicsWait(r)||String(r.picsErr||'').trim())
     badge+=b('写真の切り替え待ち','var(--bad)');
-  if((r.specs||{}).originDefault)badge+=b('原産国：既定値','#8a6d00');
   if(r.condId!==1000)badge+=b('中古・要撮影','var(--mute)');
   if(r.rows>1)badge+=b(r.rows+'行をまとめ','var(--mute)');
   return badge;
@@ -6127,8 +6135,10 @@ var CSV_STEPS=[
     s:function(n){ return n?('残り '+n+'件'):'そろいました'; },
     todo:function(n){ return n>0; } },
   { k:'③', t:'写真・原産国・カテゴリ', box:'csvListBox',
+    /* 数えるのは「写真なし」「カテゴリなし」「原産国が空欄」だけ。
+       原産国が既定値のままの行は数えない（6.84）。 */
     n:function(){ return csvList.filter(function(r){
-        return !(r.pics||[]).length||!!(r.specs||{}).originDefault
+        return !(r.pics||[]).length||csvOriginNeed(r)
             ||!String(r.cat||'').trim(); }).length; },
     s:function(n){ return n?('確認 '+n+'件'):'そろいました'; },
     todo:function(n){ return n>0; } },
@@ -6186,8 +6196,6 @@ function csvRender(){
        +(preN?('　/　仕入れ前の候補 '+preN+'件（判定しません）'):'')
        +'　/　英題なし '+noEn+'件　/　説明文なし '+noDesc+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、eBayタブの「出品文」から1件ずつ追加してください';
-  var odef=csvList.filter(function(r){ return !!(r.specs||{}).originDefault; }).length;
-  if(odef)$('csvSummary').textContent+='　/　原産国が既定値 '+odef+'件';
   /* 書き出しの見通し。実際に書き出す行だけでカテゴリを数え、除外のぶんは別に出す。
      カテゴリが2つ以上あるときは1つのZIPにまとめる（iPhoneで取りこぼさないため）。 */
   var sp=csvExportSplit(), byCat={};
@@ -13983,7 +13991,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v184';   // sw.js の const V と必ず同じ値にする
+var APP_V='v185';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

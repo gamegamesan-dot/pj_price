@@ -101,7 +101,9 @@ ok(org.opts.length===5&&/China/.test(org.opts[1])&&/Japan/.test(org.opts[2])
    '★選択肢は China / Japan / Vietnam / その他');
 ok(org.value===''&&/原産国：既定値/.test(org.opts[0]),
    '★★未選択のときは「原産国：既定値」と分かる');
-ok(/原産国：既定値/.test(org.badge),'★黄色いバッジも今までどおり出す');
+/* 既定値のままは問題ないので、バッジは出さない（6.84）。
+   プルダウンの選択肢の文字で「既定値のまま」と分かる。 */
+ok(!/原産国：既定値/.test(org.badge),'★★既定値のままでもバッジは出さない（6.84）');
 ok(org.game===false,'★ゲームの行には出さない（今までと同じ）');
 const pick=async(v)=>await p.evaluate((v)=>{
   const sel=document.querySelector('#csvList [data-row="c1"] [data-origsel]');
@@ -121,7 +123,7 @@ console.log('   '+JSON.stringify(after));
 ok(after.origin==='Japan'&&after.def===false&&after.manual===true,
    '★★選ぶと原産国が確定する（手で決めた印も付く）');
 ok(after.value==='Japan'&&!/原産国：既定値/.test(after.badge),
-   '★確定したらバッジが消え、選んだ国が出たままになる');
+   '★確定しても出ない（選んだ国はプルダウンに出たまま）');
 answer='Taiwan';
 await pick('*');
 await p.waitForTimeout(150);
