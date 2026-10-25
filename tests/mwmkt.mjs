@@ -212,6 +212,47 @@ ok(g.rows.length===12,'★控えは12枚ぶん');
 ok(d.rows.filter((x)=>x.jan==='4902370550467')[0].pics_ok!==undefined,
    '★一覧に使える写真の枚数が付く');
 
+console.log('\n=== 備考による除外（7.64）===');
+const env4=makeEnv({ STAFF_KEY:'staff-key-123' });
+const put4=async(path,body)=>asJson(await worker.fetch(new Request('https://x'+path,
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env4));
+const list4=async(q)=>(await asJson(await worker.fetch(
+  new Request('https://x/mw/list'+q,{headers:{'X-PJ-Key':'k'}}),env4))).body;
+r=await put4('/mw/stock',{ at:'2026-10-27T00:00:00Z', part:1, parts:1, rows:[
+  row('4902370550467','M200',{ note:'在庫処分' }),
+  row('4580416924740','MC02',{ note:'★新品ですが店頭引き上げ品の為パッケージにダメージ' }),
+  row('4988611224878','E027',{ note:'外箱不良' }),
+  row('4970381909444','Q061',{ note:'100%_新品' })] });
+ok(r.body.ok===true&&r.body.added===4,'★4件入れる');
+const NG='ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良';
+let d4=await list4('?kishu=NS&new_only=1&ship_max=4&stock_min=2&limit=100'
+  +'&note_ng='+encodeURIComponent(NG)+'&note_all=0');
+console.log('   外したとき: '+d4.n+'件　'+JSON.stringify(d4.rows.map((x)=>x.jan)));
+ok(d4.n===2,'★★注意する言葉を含む2件を外す');
+ok(d4.rows.some((x)=>x.jan==='4902370550467'),'★「在庫処分」だけの行は残る');
+ok(d4.rows.some((x)=>x.jan==='4970381909444'),'★★「100%_新品」は残る（% と _ を文字として扱う）');
+ok(!d4.rows.some((x)=>x.jan==='4580416924740'),'★★「ダメージ」「引き上げ」の行は出ない');
+ok(!d4.rows.some((x)=>x.jan==='4988611224878'),'★★「外箱不良」の行は出ない');
+d4=await list4('?kishu=NS&new_only=1&ship_max=4&stock_min=2&limit=100'
+  +'&note_ng='+encodeURIComponent(NG)+'&note_all=1');
+ok(d4.n===4,'★★note_all=1 なら外さない（⚙で含められる）');
+d4=await list4('?kishu=NS&new_only=1&ship_max=4&stock_min=2&limit=100');
+ok(d4.n===4,'★言葉を送らなければ外さない（今までと同じ）');
+/* 相場の取得も同じ絞り込みなので、注意の行に API を使わない。 */
+browse['4902370550467']={ total:0, itemSummaries:[] };
+browse['4970381909444']={ total:0, itemSummaries:[] };
+let before=calls.filter((u)=>/item_summary/.test(u)).length;
+calls=[];
+r=await put4('/mw/market',{ limit:10, kishu:'NS', note_ng:NG, note_all:0 });
+console.log('   相場を調べた件数: '+r.body.asked);
+ok(r.body.asked===2,'★★相場も注意の行を調べない（呼び出しを無駄にしない）');
+let w=W.mwWhere({ kishu:'NS', note_ng:NG, note_all:0 });
+ok(w.ngWords.length===8&&w.noteAll===false,'★言葉の数と既定');
+ok((w.w.match(/NOT LIKE \? ESCAPE/g)||[]).length===8,
+   '★★言葉ごとに ESCAPE 付きの NOT LIKE を1つずつ足す');
+ok(w.bind.filter((x)=>String(x).indexOf('%')===0).length===8,'★当てる文字を渡す');
+
 console.log('\n=== 作業者のキー ===');
 r=await put('/mw/market',{ limit:1 },'staff-key-123');
 ok(r.status===403&&r.body.error==='forbidden_for_staff','★★相場は作業者では引けない');

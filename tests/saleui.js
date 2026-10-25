@@ -70,7 +70,12 @@ console.log('   バッジ: '+c.badge);
 console.log('   '+c.text.slice(0,260));
 ok(/セール中 25%引き/.test(c.badge),'★★「セール中 ○%引き」のバッジを出す');
 ok(/\$24\.00 → \$18\.00/.test(c.text),'★★セール前の値段といまの値段を出す');
-ok(c.text.indexOf(String(end).slice(0,10))>=0,'★★いつまでかを出す');
+/* 画面は日本時間で出す（7.58）。UTC の日付で比べると、
+   JST が日付をまたぐ 9時間（UTC 15時〜24時）だけ落ちていた。 */
+const jstDay10=(iso)=>new Date(new Date(iso).getTime()+9*3600000)
+  .toISOString().slice(0,10);
+console.log('   いつまで（日本時間）: '+jstDay10(end));
+ok(c.text.indexOf(jstDay10(end))>=0,'★★いつまでかを日本時間で出す');
 ok(/値上げと自動値下げはお休みします/.test(c.text),'★対象から外していることを書く');
 
 console.log('\n=== 利益はセール後の値段で計算 ===');

@@ -192,6 +192,41 @@ r=await put({ at:'2026-10-26T07:00:00Z', part:1, parts:1,
     String(4900000000000+i),'M200')) });
 ok(r.body.error==='too_many','★★超えたら断る');
 
+console.log('\n=== 途中までしか入っていない状態に、読み直した全部を重ねる ===');
+/* v187 では 12,062行あるのに 3,802行で終わっていた。その状態の D1 に、
+   正しく読み直した全部を取り込んだとき、足りない行が足されるだけで
+   入っていた行が欠品にならないことを確かめる（6.88 の直しの受け入れ）。 */
+const env3=makeEnv({ STAFF_KEY:'staff-key-123' });
+const put3=async(body)=>asJson(await worker.fetch(new Request('https://x/mw/stock',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env3));
+const mk=(n,from)=>new Array(n).fill(0)
+  .map((_,i)=>row(String(4930000000000+(from||0)+i),'M200'));
+/* ① 途中で終わった取り込み（380行を1便＝parts:1 として終えてしまった） */
+r=await put3({ at:'2026-10-27T00:00:00Z', part:1, parts:1, rows:mk(380) });
+ok(r.body.ok===true&&r.body.added===380,'★途中までの380行が入っている');
+let live3=async()=>Number((await env3.DB.prepare(
+  'SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL').first()).n);
+let gone3=async()=>Number((await env3.DB.prepare(
+  'SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NOT NULL').first()).n);
+ok(await live3()===380,'★生きている行は380');
+/* ② 読み直した全部（1,000行）を3便で重ねる。最初の380行を含む */
+const at3='2026-10-27T01:00:00Z';
+r=await put3({ at:at3, part:1, parts:3, rows:mk(400) });
+console.log('   1便目: '+JSON.stringify({same:r.body.same,added:r.body.added}));
+ok(r.body.same===380&&r.body.added===20,
+   '★★入っていた380行は same（二重にならない）、足りない20行だけ added');
+r=await put3({ at:at3, part:2, parts:3, rows:mk(400,400) });
+ok(r.body.added===400,'★2便目');
+r=await put3({ at:at3, part:3, parts:3, rows:mk(200,800) });
+console.log('   3便目: '+JSON.stringify({added:r.body.added,gone:r.body.gone,
+  picked:r.body.picked,warn:r.body.warn||''}));
+ok(r.body.added===200,'★3便目');
+ok(await live3()===1000,'★★1,000行すべて生きている');
+ok(await gone3()===0,'★★★入っていた380行が欠品にされない（壊れない）');
+ok(r.body.gone===0,'★欠品は0件');
+ok(r.body.picked===1000,'★最後の便で代表選びが走る');
+
 /* ここが v186 で落ちたところ。引き当ての SELECT は 1件 (jan,sha,idx) で
    3個の値を使うので、件数で決め打ちすると 40件＝120個になって
    「too many SQL variables」で 1便目から落ちる。 */

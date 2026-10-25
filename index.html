@@ -693,6 +693,7 @@ body.staff #syncOnHandFix{display:none !important}
           <b>この段では出品しません</b>（写真はまだ付きません）。</div>
         <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
         <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
+        <div class="note2" id="csvMwRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
         <div class="note2" id="csvMwNote" style="margin-top:2px"></div>
         <div class="warn" id="csvMwWarn" style="display:none;margin-top:8px"></div>
         <!-- 出荷日が読めなかった文字の一覧（画面に残す） -->
@@ -1151,6 +1152,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="2" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
       <div class="note2" style="margin-top:0">1点しかない商品は売れる前に消えやすいので、既定では2点以上だけを候補にします。</div>
       <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
+      <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
+      <div class="chk"><input type="checkbox" id="mwNoteAll"><label for="mwNoteAll" style="flex:1">状態に注意の行も候補に含める</label></div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
       <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
       </div>
@@ -4137,7 +4140,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 自動処理の広告料率（6.74）／売れたあとの在庫補充（6.77）
                  'autoAdRate','autoSkMode',
                  // マッチングワールド（MW）の無在庫（6.85）
-                 'mwShipFee','mwKishu','mwShipMax','mwStockMin'];
+                 'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4168,6 +4171,7 @@ function csvLoad(){
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
        if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
        if(typeof o.mwNewOnly==='boolean')$('mwNewOnly').checked=o.mwNewOnly;
+       if(typeof o.mwNoteAll==='boolean')$('mwNoteAll').checked=o.mwNoteAll;
        if(typeof o.csvPriceChangedOnly==='boolean')
          $('csvPriceChangedOnly').checked=o.csvPriceChangedOnly;
        if(typeof o.csvReviewZero==='boolean')$('csvReviewZero').checked=o.csvReviewZero;
@@ -4332,6 +4336,7 @@ function csvSaveCfg(){
     o.csvAutoParse=$('csvAutoParse').checked;
     o.csvShowNew=$('csvShowNew').checked;
     o.mwNewOnly=$('mwNewOnly').checked;        // MW：新品だけ（6.85）
+    o.mwNoteAll=$('mwNoteAll').checked;        // MW：状態に注意も含める（6.89）
     o.csvPriceChangedOnly=$('csvPriceChangedOnly').checked;
     o.csvReviewZero=$('csvReviewZero').checked;
     o.syncOnHand=$('syncOnHand').checked;
@@ -8481,6 +8486,18 @@ function mwKishuList(){
 function mwShipMax(){ var n=+$('mwShipMax').value; return (isFinite(n)&&n>=0)?n:4; }
 function mwStockMin(){ var n=+$('mwStockMin').value; return (isFinite(n)&&n>=1)?n:2; }
 function mwNewOnly(){ return !!$('mwNewOnly').checked; }
+/* 備考の注意する言葉（6.89）。⚙設定で編集できる。 */
+function mwNoteNgList(){
+  return String($('mwNoteNg').value||'').split(',')
+    .map(function(x){ return x.trim(); }).filter(Boolean).slice(0,40);
+}
+function mwNoteAll(){ return !!$('mwNoteAll').checked; }
+/* その行の備考に注意する言葉が入っているか（当たった言葉を返す）。 */
+function mwNoteHit(r){
+  var t=String((r||{}).note||'');
+  if(!t)return [];
+  return mwNoteNgList().filter(function(w){ return t.indexOf(w)>=0; });
+}
 /* ---- 出荷日の文字 → 営業日数（仕様 3章）----
    即日=0／翌営業日=1／「1~2営業日」=2／「2.3営業日」=3／「3.4営業日」=4／
    「5.6」=6／「7.8」=8／日付・週単位・予約・2週間などは 99（無在庫に使わない）。
@@ -8521,9 +8538,39 @@ function mwShipDays(t){
 }
 /* ---- MW の在庫CSV を読む ---- */
 var mwShipBad={};              // 読めなかった出荷日の文字 → 件数
+/* MW の在庫CSV専用の読み方（6.88）。
+   MW の書き出しは「1行＝1件・全部の欄を " で囲む」形だが、備考に**閉じていない
+   "** が入る行がある（stocks_3.csv の 3805行目。MW 側の書き出しの壊れ）。
+   欄が改行をまたげる普通の読み方（csvParse）だと、その行以降が1つの欄に
+   飲み込まれ、12,062行あるのに **3,802行で静かに終わってしまう**。
+   そこで MW のCSVだけは **改行を必ず行の区切り**として扱い、
+   引用符は1行の中だけで見る。壊れた行の被害がその行だけで止まる。 */
+function mwSplitLine(line){
+  var out=[], cur='', q=false;
+  for(var i=0;i<line.length;i++){
+    var c=line.charAt(i);
+    if(q){
+      if(c==='"'){
+        if(line.charAt(i+1)==='"'){ cur+='"'; i++; }   // "" は1つの "
+        else q=false;
+      } else cur+=c;
+    }
+    else if(c==='"')q=true;
+    else if(c===','){ out.push(cur); cur=''; }
+    else cur+=c;
+  }
+  out.push(cur);
+  return out;
+}
+function mwLines(text){
+  var a=String(text||'').replace(/^﻿/,'').split(/\r\n|\r|\n/);
+  while(a.length&&a[a.length-1]==='')a.pop();     // 末尾の空行だけ落とす
+  return a;
+}
 function mwParse(text){
-  var rows=csvParse(text);
-  if(!rows.length)return { err:'空のファイルです' };
+  var raw=mwLines(text);
+  if(!raw.length)return { err:'空のファイルです' };
+  var rows=raw.map(mwSplitLine);
   var head=(rows[0]||[]).map(function(x){
     return String(x||'').replace(/^﻿/,'').trim(); });
   var col=function(){
@@ -8536,9 +8583,15 @@ function mwParse(text){
   if(iJ<0||iS<0||iW<0)
     return { err:'JAN・社・卸値の列が見つかりません（MW の在庫CSVか確かめてください）' };
   var out=[], bad={}, seen={}, ng=0, dup=0, empty=0;
+  var cols=head.length, few=0, many=0, blank=0;
   mwShipBad={};
   for(var n=1;n<rows.length;n++){
-    var r=rows[n]; if(!r||!r.length)continue;
+    var r=rows[n];
+    if(!r||(r.length===1&&r[0]==='')){ blank++; continue; }   // 空行
+    /* 列の数が合わない行を数える。足りない行は飛ばし、
+       多い行は**先頭11列だけ**を使う（壊れた備考で列が増えた行を救う）。 */
+    if(r.length<cols){ few++; continue; }
+    if(r.length>cols){ many++; r=r.slice(0,cols); }
     /* 利益計算CSVは ="4595..." の形で入っているので、=" と " を外す */
     var jan=String(r[iJ]||'').replace(/^="?|"?$/g,'').replace(/\D/g,'');
     var sha=String(r[iS]||'').trim();
@@ -8561,7 +8614,9 @@ function mwParse(text){
   mwShipBad=bad;
   var unread=0;
   Object.keys(bad).forEach(function(x){ unread+=bad[x]; });
-  return { rows:out, ng:ng, dup:dup, bad:bad, unread:unread, empty:empty };
+  return { rows:out, ng:ng, dup:dup, bad:bad, unread:unread, empty:empty,
+           lines:raw.length, data:raw.length-1, cols:cols,
+           few:few, many:many, blank:blank };
 }
 /* 読めなかった出荷日の文字を画面に残す（多い順）。 */
 function mwShipBadRender(){
@@ -8577,12 +8632,13 @@ function mwShipBadRender(){
   box.style.display='';
 }
 /* ---- 取り込み（分けて送る）---- */
-function mwImportRun(text){
+function mwImportRun(text,fi){
   var note=$('csvMwNote'), warn=$('csvMwWarn');
   warn.style.display='none'; warn.textContent='';
   var d=mwParse(text);
   mwShipBadRender();
   if(d.err){ note.textContent='⚠ '+d.err; return; }
+  mwReadNote(d,fi);                      // 送る前に読んだ結果を出す（6.88）
   if(!d.rows.length){ note.textContent='⚠ 取り込める行がありませんでした。'; return; }
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
@@ -8603,6 +8659,8 @@ function mwImportRun(text){
         +'／変わった '+sum.changed+'／同じ '+sum.same+'／欠品 '+sum.gone
         +'／戻った '+sum.back+'）。JANごとの代表 '+sum.picked+'件。'
         +(d.ng?('　JANが13桁でない行 '+d.ng+'件は除きました。'):'')
+        +(d.few?('　列が足りない行 '+d.few+'件は飛ばしました。'):'')
+        +(d.many?('　列が多い行 '+d.many+'件は先頭'+d.cols+'列を使いました。'):'')
         +(d.dup?('　同じJAN・社の行 '+d.dup+'件は別の行として残しました。'):'')
         +(d.empty?('　出荷日が空欄の '+d.empty+'行は 99（無在庫に使わない）です。'):'')
         +(d.unread?('　出荷日が読めなかった '+d.unread+'行も 99 扱いです（下の一覧）。'):'');
@@ -8644,10 +8702,36 @@ $('csvMwFile').addEventListener('change',function(){
       try{ text=new TextDecoder('utf-8').decode(buf); }catch(e2){}
     }
     if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
-    mwImportRun(text);
+    mwImportRun(text,{ name:f.name, size:f.size, bytes:buf.length });
   };
   fr.readAsArrayBuffer(f);
 });
+/* 送る前に「読んだ結果」を必ず画面に出す（6.88）。
+   v187 では 12,062行あるのに 3,802行で静かに終わっていたので、
+   ファイルの大きさ・読んだ行数・列の数が合わない行を先に見せる。 */
+function mwReadNote(d,fi){
+  var kb=function(n){ return n>=1048576?((n/1048576).toFixed(2)+'MB')
+    :((Math.round(n/1024))+'KB'); };
+  var el=$('csvMwRead');
+  var warn=(d.few||d.many)?' style="color:var(--bad)"':'';
+  el.innerHTML='<b>読んだ結果</b>'
+    +(fi?('<br>ファイル '+esc(fi.name||'')+'　<b>'+kb(fi.size||fi.bytes||0)+'</b>'):'')
+    +'<br>読んだ行数 <b>'+(d.lines||0)+'行</b>'
+    +'（見出し1行＋中身 '+(d.data||0)+'行'
+    +(d.blank?('＋空行 '+d.blank):'')+'）'
+    +'<br>列の数 '+(d.cols||0)+'　'
+    +'<span'+warn+'>列の数が合わない行 <b>'
+    +((d.few||0)+(d.many||0))+'行</b>'
+    +((d.few||d.many)?('（足りない '+(d.few||0)+'・多い '+(d.many||0)
+      +'）'):'')+'</span>'
+    +'<br>送る行 <b>'+d.rows.length+'行</b>'
+    +'（JANが13桁でない '+(d.ng||0)+'行を除いた）';
+  el.style.display='';
+  /* 読んだ中身と送る行の数が合わない分は、ここで必ず説明が付くようにする。 */
+  var lost=(d.data||0)-d.rows.length-(d.ng||0)-(d.blank||0)-(d.few||0);
+  if(lost>0)el.innerHTML+='<br><span style="color:var(--bad)">'
+    +'説明の付かない行が '+lost+'行あります（読み込みの不具合です）。</span>';
+}
 /* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
 var mwRows=[], mwLast=null, mwMkt=null;
 /* MW の仕入値（円・税込＋1点あたりの送料）。 */
@@ -8710,7 +8794,8 @@ function mwMktRun(){
   note.textContent='eBay で相場を調べています…（1件につき1回の呼び出し）';
   mwPost('/mw/market',{ limit:mwMktLimit(),
     kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
-    ship_max:mwShipMax(), stock_min:mwStockMin() })
+    ship_max:mwShipMax(), stock_min:mwStockMin(),
+    note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
       note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
@@ -8782,7 +8867,9 @@ function mwListRun(){
   }
   var q='?kishu='+encodeURIComponent(mwKishuList().join(','))
     +'&new_only='+(mwNewOnly()?'1':'0')
-    +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()+'&limit=500';
+    +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()
+    +'&note_ng='+encodeURIComponent(mwNoteNgList().join(','))
+    +'&note_all='+(mwNoteAll()?'1':'0')+'&limit=500';
   note.textContent='候補一覧を取り込んでいます…';
   fetch(syncUrl()+'/mw/list'+q,{headers:{'X-PJ-Key':syncKeyReady()}})
     .then(function(res){
@@ -8910,7 +8997,7 @@ function mwListRender(){
   var g={ ok:[], nomkt:[], high:[], none:[] }, ng=[];
   mwRows.forEach(function(r){
     var rec=mwRec(r);
-    var o={ r:r, rec:rec, j:mwMktJudge(r,rec) };
+    var o={ r:r, rec:rec, j:mwMktJudge(r,rec), ng:mwNoteHit(r) };
     if(!rec){ ng.push(o); return; }
     if(o.j.k==='ok')g.ok.push(o);
     else if(o.j.k==='nomkt')g.nomkt.push(o);
@@ -8929,6 +9016,7 @@ function mwListRender(){
       +'<b>'+esc(String(r.name||'').slice(0,60))+'</b>'
       +(o.j.k==='ok'?(' <span class="badge" style="background:var(--good)">'
         +o.j.pct+'%</span>'):'')
+      +(o.ng.length?(' <span class="badge" style="background:var(--bad)">状態に注意</span>'):'')
       +'<div class="note2" style="margin:2px 0 0">JAN '+esc(jan)
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'　'+esc(r.cond||'')
       +'　在庫 '+(+r.stock||0)+'点　出荷 '+(+r.ship_days||0)+'営業日'
@@ -8937,14 +9025,22 @@ function mwListRender(){
       +'（税抜）→ 仕入 <b>'+yen(rec?rec.cost:0)+'</b>'
       +'（×1.1＋送料 '+yen(mwShipFee())+'）　重量 '+(rec?rec.weight:0)+'g</div>'
       +(rec
+        /* 推奨売値は**目標利益**（下限利益＋仕入値×連動率）がちょうど出る売値。
+           floor は**下限利益**ちょうどの売値＝これ以上は下げない線。
+           v188 までは rec.target を「下限利益」と誤って表示していた（6.90）。 */
         ? ('<div class="note2" style="margin:2px 0 0">推奨売値 <b>'+usd(rec.price)
-           +'</b>（最低 '+usd(rec.floor)+'）　利益 <b'
+           +'</b>　利益 <b'
            +(rec.profit>=rec.target?'':' style="color:var(--bad)"')+'>'
-           +yen(rec.profit)+'</b>　下限利益 '+yen(rec.target)+'</div>')
+           +yen(rec.profit)+'</b>＝<b>目標利益</b> '+yen(rec.target)
+           +'<br>下げられる下限 '+usd(rec.floor)
+           +'（下限利益 '+yen(+$('baseProfit').value||0)+'）</div>')
         : '<div class="note2" style="margin:2px 0 0;color:var(--bad)">卸値が読めません</div>')
       +mwMktHtml(r,rec)
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
         +esc(String(r.note).slice(0,60))+'</div>'):'')
+      +(o.ng.length?('<div class="note2" style="margin:2px 0 0;color:var(--bad)">'
+        +'状態に注意：備考に「'+esc(o.ng.join('」「'))+'」'
+        +'（⚙設定で候補に含められます）</div>'):'')
       /* 写真を貼る口（6.1 の①）。商品IDか画像URLを改行で最大12枚。 */
       +'<details data-box="1" style="margin-top:4px"><summary class="note2"'
       +' style="margin:0;cursor:pointer">写真（MWの商品IDか画像URLを貼る）'
@@ -8968,7 +9064,7 @@ function mwListRender(){
   var head='<div class="note2" style="margin:0 0 4px"><b>候補 '
     +mwRows.length+'件</b>'
     +(ng.length?('　/　値段を出せない '+ng.length+'件'):'')
-    +'（下限利益＝'+yen(+$('baseProfit').value||0)+'＋仕入値×'
+    +'（<b>目標利益</b>＝下限利益 '+yen(+$('baseProfit').value||0)+'＋仕入値×'
     +(+$('linkRate').value||0)+'%・広告料率 '+(+$('autoAdRate').value||6)+'%）</div>'
     +'<div class="note2" style="margin:0 0 6px">相場を調べ終わった '
     +(mk.seen||0)+'件／<b>まだ '+(mk.left||0)+'件</b>'
@@ -8985,8 +9081,11 @@ function mwListRender(){
       '推奨売値が eBay の最安値（送料込み）の115%以内です。'
       +'<b>相場に対して安い順</b>に並べてあるので、写真はこの順に貼ってください。',g.ok)
     +sect('mwnomkt','② 相場なし（eBayに出品なし）','',
-      'eBay に同じ JAN の即決の出品がありません。'
-      +'相場は分かりませんが、無在庫なので<b>推奨売値で出せます</b>（仕様4章の6の優先2）。',
+      'eBay に同じ JAN の即決の出品がありません。相場は分かりませんが、'
+      +'無在庫なので<b>推奨売値（＝目標利益がちょうど出る売値）で出します</b>'
+      +'（仕様4章の6の優先2）。下限利益まで下げるのではなく<b>目標利益から始めて、'
+      +'売れなければ自動値下げで下げます</b>（下限は '
+      +'下限利益 '+yen(+$('baseProfit').value||0)+' の売値）。',
       g.nomkt)
     +(g.high.length?('<details data-box="1" style="margin-top:10px">'
       +'<summary class="note2" style="margin:0;cursor:pointer">'
@@ -14580,7 +14679,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v188';   // sw.js の const V と必ず同じ値にする
+var APP_V='v189';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

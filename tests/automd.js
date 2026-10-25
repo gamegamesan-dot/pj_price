@@ -271,8 +271,11 @@ ok(pl.target.join()==='B0PLAN00001,B0PLAN00002,B0PLAN00003',
    '★幅が未設定・値下げしない・セール中の行は対象にしない');
 ok(pl.count.n===3&&pl.count.today===1&&pl.count.soon===3,
    '★今日 1件／3日以内 3件（3日以内は今日を含む）');
-const dd=(n)=>{ const d=new Date(Date.now()+n*86400000);
-  return (d.getMonth()+1)+'/'+d.getDate(); };
+/* 画面の日付は日本時間（jstMd）で出すので、期待値も日本時間で作る。
+   Node の地方時（この入れ物では UTC）で作ると、JST が日付をまたぐ
+   9時間（UTC 15時〜24時）だけ落ちていた。 */
+const dd=(n)=>{ const d=new Date(Date.now()+n*86400000+9*3600000);
+  return (d.getUTCMonth()+1)+'/'+d.getUTCDate(); };
 ok(pl.plan[0].indexOf('B0PLAN00001:今日')===0,'★今日の行が先頭（「今日」と出す）');
 ok(pl.plan[1]==='B0PLAN00002:'+dd(1)+':47.65→46.65','★次は明日の行（'+dd(1)+'）');
 ok(pl.plan[2].indexOf('B0PLAN00003:'+dd(3))===0,'★そのあとに3日後の行');

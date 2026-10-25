@@ -4609,7 +4609,21 @@ function mwWhere(opt) {
   if (newOnly) where.push("cond='新品'");
   where.push("COALESCE(ship_days,99)<=" + shipMax);
   where.push("COALESCE(stock,0)>=" + stockMin);
-  return { w: where.join(" AND "), bind, kishu, newOnly, shipMax, stockMin };
+  /* 備考に注意する言葉（ダメージ・引き上げ など）が入っている行を外す（7.64）。
+     言葉の一覧は画面の⚙設定から来る。note_all=1 のときは外さない。
+     言葉に % や _ が入っても文字として扱えるよう ESCAPE を付ける。 */
+  const ngWords = (Array.isArray(o.note_ng) ? o.note_ng
+      : String(o.note_ng || "").split(","))
+    .map((x) => String(x).trim()).filter(Boolean).slice(0, 40);
+  const noteAll = o.note_all === 1 || o.note_all === "1" || o.note_all === true;
+  if (!noteAll && ngWords.length) {
+    for (const g of ngWords) {
+      where.push("COALESCE(note,'') NOT LIKE ? ESCAPE '\\'");
+      bind.push("%" + g.replace(/[\\%_]/g, "\\$&") + "%");
+    }
+  }
+  return { w: where.join(" AND "), bind, kishu, newOnly, shipMax, stockMin,
+           ngWords, noteAll };
 }
 
 /* ---- eBay の相場を1件引く（4章の6・7.62）----
@@ -4746,9 +4760,10 @@ async function mwMarketRun(env, body) {
 async function mwList(env, url) {
   const p = url.searchParams;
   const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
-                       ship_max: p.get("ship_max"), stock_min: p.get("stock_min") });
+                       ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
+                       note_ng: p.get("note_ng"), note_all: p.get("note_all") });
   const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
-  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock)\b/g, "s.$1");
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const bind = q0.bind;
   /* 相場（7.62）を一緒に返す。まだ調べていない JAN は null で返る。 */
   const q = await env.DB.prepare(
@@ -6651,7 +6666,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwImgId, mwWhere, toB64, MW_OVER, MW_MKT_MAX,
                         MW_MKT_TTL_D, MW_IMG_MAX, MW_IMG_MIN_LONG, MW_CHUNK,
                         MW_SHIP_OK, MW_DROP_WARN,
-                        jstText, boBelow, boRetry, reviseFix, mdBo,
+                        jstText, boBelow, boRetry, reviseFix,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
