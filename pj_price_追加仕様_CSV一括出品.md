@@ -5046,8 +5046,29 @@ function mwCost(r){ var w=+((r||{}).wholesale)||0;
 
 ### 4つに分ける（`mwMktJudge`）
 
-最安値は**送料込みの総額ドル**。推奨売値（`priceFor` の `price`）も総額ドルなので、
-為替をはさまずそのまま比べられる。
+### 比べるのは「買い手が払う総額」どうし
+
+eBay の最安値は **本体＋送料**の総額。いっぽう `priceFor` が返す `price` は
+**商品代**で、請求送料（`shipCharge` ＝ ⚙設定の「請求送料」）は別建てになる地帯がある。
+そのまま比べると、**請求送料のぶん自分を安く見せてしまう**。
+
+そこで `mwRec` に請求送料を持たせ、**総額にそろえてから**比べる。
+そろえ方は既存の `PJP.soldItem`（相場→商品代）と同じ考え方で、
+基準の地帯の `zoneShipCharge(basisZone)` を使う。
+
+```js
+function mwShipCharge(cost,weight){
+  var m=PJP.model(pricingSettings(),{ cost:cost, weight:weight, flat:0 });
+  return +m.zoneShipCharge(m.basisZone)||0;
+}
+// rec.total = rec.price（商品代）＋ rec.ship（請求送料）
+```
+
+どちらもドルなので、為替ははさまない。
+行には「こちらの総額（商品代＋請求送料）」と「最安値の何%」「115%＝いくらまで」を出す。
+
+実例：商品代 $62.05・請求送料 $15・eBay 最安値 $60 のとき、
+商品代で比べると 103%（候補に見える）が、総額では **128%**（後回し）。
 
 | 区分 | 条件 | 画面 |
 | --- | --- | --- |
@@ -5068,7 +5089,7 @@ function mwCost(r){ var w=+((r||{}).wholesale)||0;
 v186 で出していた「この一覧は利益では絞っていません／絞り込みは段取り C で足します」の
 断りは、この節で実装したので外した。
 
-テストは `tests/mwmktui.js`（50件）。
+テストは `tests/mwmktui.js`（57件）。
 
 ## 6.87 MW の商品画像を貼る口（6.1 の①・2026-10-25・sw.js v188）
 
@@ -5111,4 +5132,4 @@ pj-sync に pj-img の合言葉を置かずに済む。
 - **会員サイト（`/buy/?q=`）は見に行かない。** 画像URLだけを読む
 - **Amazon の画像は使わない**
 
-テストは `tests/mwmktui.js`（50件）。
+テストは `tests/mwmktui.js`（57件）。

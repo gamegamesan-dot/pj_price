@@ -60,7 +60,7 @@ const setup=async(o)=>await p.evaluate((o)=>{
 const ROWS=[
  { jan:'4902370550467', sha:'M200', idx:0, kishu:'NS', name:'安い新品ソフト',
    cond:'新品', wholesale:3000, stock:5, ship_days:0, ship_text:'即日出荷',
-   mkt_n:12, mkt_n_new:8, mkt_low:60, mkt_low_any:40, mkt_ship:0, mkt_cur:'USD',
+   mkt_n:12, mkt_n_new:8, mkt_low:75, mkt_low_any:40, mkt_ship:0, mkt_cur:'USD',
    mkt_url:'https://www.ebay.com/itm/1', mkt_no_ship:0, mkt_err:'',
    mkt_at:'2026-10-26T01:00:00Z', pics_ok:0 },
  { jan:'4580416924740', sha:'MC02', idx:0, kishu:'figure', name:'相場が無いフィギュア',
@@ -119,16 +119,49 @@ console.log('\n=== 判定の中身 ===');
 let j=await p.evaluate((L)=>{
   const f=(jan)=>{ const r=L.rows.filter((x)=>x.jan===jan)[0];
     const rec=mwRec(r); const d=mwMktJudge(r,rec);
-    return { k:d.k, pct:d.pct, low:d.low, price:rec?rec.price:null }; };
+    return { k:d.k, pct:d.pct, low:d.low, lim:d.lim, mine:d.mine,
+             price:rec?rec.price:null, ship:rec?rec.ship:null,
+             total:rec?rec.total:null }; };
   return { a:f('4902370550467'), b:f('4580416924740'),
            c:f('4988611224878'), d:f('4970381909444') };
 },LIST);
 console.log('   '+JSON.stringify(j));
-ok(j.a.k==='ok'&&j.a.pct<=115,'★★推奨売値が最安値の115%以内なら出品候補');
+ok(j.a.k==='ok'&&j.a.pct<=115,'★★こちらの総額が最安値の115%以内なら出品候補');
 ok(j.b.k==='nomkt','★★eBay に出品が無ければ相場なし');
 ok(j.c.k==='high'&&j.c.pct>115,'★★115%を超えたら後回し');
 ok(j.d.k==='none','★★調べていない行は未調査');
-ok(j.a.low===60&&j.c.low===30,'★新品の最安値を使う');
+ok(j.a.low===75&&j.c.low===30,'★新品の最安値を使う');
+/* 商品代だけで比べていたら 62.05/75＝83% で候補、総額なら 77.05/75＝103% で候補。
+   どちらでも候補になる行とは別に、「商品代なら候補・総額なら後回し」の行も見る。 */
+/* ここが v188 で直したところ。eBay の最安値は「本体＋送料」の総額なのに、
+   priceFor が返すのは商品代（請求送料は別建て）。そろえずに比べると、
+   請求送料のぶん自分を安く見せてしまう。 */
+console.log('   商品代 '+j.a.price+' ＋請求送料 '+j.a.ship+' ＝ 総額 '+j.a.total);
+ok(Math.abs(j.a.total-(j.a.price+j.a.ship))<0.01,
+   '★★こちらの総額＝商品代＋請求送料');
+ok(j.a.mine===j.a.total,
+   '★★比べるのは「商品代」ではなく「総額」（相場も総額なので）');
+ok(j.a.ship>0,'★この条件では請求送料が別建てになっている（そろえる意味がある）');
+ok(Math.abs(j.a.pct-Math.round(j.a.total/j.a.low*100))<0.01,
+   '★★%も総額どうしで出す');
+ok(Math.abs(j.a.lim-Math.round(j.a.low*1.15*100)/100)<0.01,
+   '★115%の金額も出す');
+
+let edge=await p.evaluate(()=>{
+  const r={ jan:'4902370550467', sha:'M200', idx:0, kishu:'NS', name:'境目の行',
+    cond:'新品', wholesale:3000, stock:5, ship_days:0, mkt_n:3, mkt_n_new:3,
+    mkt_low:0, mkt_low_any:null, mkt_ship:0, mkt_err:'',
+    mkt_at:'2026-10-26T01:00:00Z' };
+  const rec=mwRec(r);
+  /* 相場を「商品代ちょうど」に置く。商品代で比べれば100%、総額なら100%超。 */
+  r.mkt_low=rec.price;
+  const d=mwMktJudge(r,rec);
+  return { price:rec.price, ship:rec.ship, total:rec.total, low:r.mkt_low,
+           k:d.k, pct:d.pct }; });
+console.log('   '+JSON.stringify(edge));
+ok(edge.pct>115&&edge.k==='high',
+   '★★相場が商品代ちょうどの行は、請求送料のぶん115%を超えて後回しになる'
+   +'（商品代で比べていたら100%で候補に見えてしまう）');
 
 console.log('\n=== 行に出る相場の中身 ===');
 ok(/eBay 最安値/.test(txt),'★最安値を出す');
@@ -137,7 +170,8 @@ ok(/送料 \$4\.50/.test(txt)||/送料 \$4.5/.test(txt),'★★送料があれ�
 ok(/出品 12件（新品 8）/.test(txt),'★★出品数と新品の数を出す');
 ok(/送料が分からない出品が混じる/.test(txt),
    '★★送料が分からない出品が混じるときは、低めに見ていると断る');
-ok(/115%まで/.test(txt),'★115%の線を出す');
+ok(/115%＝/.test(txt),'★115%の金額を出す');
+ok(/こちらの総額/.test(txt),'★★行に「こちらの総額」を出す（商品代と請求送料の内訳つき）');
 
 console.log('\n=== 写真を貼る口（6.1 の①）===');
 let box=await p.evaluate(()=>({

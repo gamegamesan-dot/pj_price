@@ -8674,8 +8674,20 @@ function mwRec(r){
   var w=mwWeight(r);
   var p=csvPriceFor(c,w);
   if(!(p.price>0))return null;
+  /* 推奨売値（price）は**商品代**で、請求送料（ship）は別建て。
+     eBay の相場は**総額**なので、比べるときは必ずどちらかにそろえる。
+     そろえ方は既存の PJP.soldItem と同じ（基準の地帯の請求送料を使う）。 */
+  var g=mwShipCharge(c,w);
   return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
-           target:mwTarget(c), cost:c, weight:w };
+           target:mwTarget(c), cost:c, weight:w,
+           ship:g, total:Math.round((p.price+g)*100)/100 };
+}
+/* その行の請求送料（$）。基準の地帯で別建てしない地帯なら0。 */
+function mwShipCharge(cost,weight){
+  try{
+    var m=PJP.model(pricingSettings(),{ cost:cost, weight:weight, flat:0 });
+    return +m.zoneShipCharge(m.basisZone)||0;
+  }catch(e){ return 0; }
 }
 /* pj-sync に POST して Promise で返す（syncJsonPost をそのまま包む）。
    MW の相場・画像は続けて何回か呼ぶので、つなげて書けるようにする。 */
@@ -8719,6 +8731,10 @@ function mwMktRun(){
    優先2：相場なし（eBay に即決の出品が無い）  → 別に出す
    優先3：115%を超える                        → 後回し（畳んで出す） */
 var MW_OVER=1.15;
+/* 相場（eBay の最安値）と推奨売値を見比べる。
+   **どちらも「買い手が払う総額」にそろえてから比べる。**
+   eBay の最安値は 本体＋送料 の総額。こちらの推奨売値は商品代なので、
+   請求送料（rec.ship）を足した rec.total を使う。 */
 function mwMktJudge(r,rec){
   if(!r.mkt_at)return { k:'none', label:'未調査', pri:4 };
   var n=+r.mkt_n||0;
@@ -8726,13 +8742,14 @@ function mwMktJudge(r,rec){
   if(!n)return { k:'nomkt', label:'相場なし（eBayに出品なし）', pri:2 };
   var low=(r.mkt_low!=null)?+r.mkt_low:((r.mkt_low_any!=null)?+r.mkt_low_any:0);
   if(!(low>0))return { k:'nomkt', label:'相場なし（値段が読めません）', pri:2 };
-  var lim=low*MW_OVER;
+  var lim=Math.round(low*MW_OVER*100)/100;
   if(!rec)return { k:'high', label:'値段を出せません', pri:4, low:low, lim:lim };
-  if(rec.price<=lim)
-    return { k:'ok', label:'出品候補', pri:1, low:low, lim:lim,
-             pct:Math.round(rec.price/low*100) };
+  var mine=rec.total;                       // こちらの総額（商品代＋請求送料）
+  var pct=Math.round(mine/low*100);
+  if(mine<=lim)
+    return { k:'ok', label:'出品候補', pri:1, low:low, lim:lim, pct:pct, mine:mine };
   return { k:'high', label:'後回し（相場の115%超）', pri:3, low:low, lim:lim,
-           pct:Math.round(rec.price/low*100) };
+           pct:pct, mine:mine };
 }
 function mwMktHtml(r,rec){
   var j=mwMktJudge(r,rec);
@@ -8748,8 +8765,10 @@ function mwMktHtml(r,rec){
   return '<div class="note2" style="margin:2px 0 0">eBay 最安値 <b>'+usd(j.low)+'</b>'
     +((r.mkt_ship!=null&&+r.mkt_ship>0)?('（送料 '+usd(+r.mkt_ship)+'込み）'):'（送料無料）')
     +'　出品 '+(+r.mkt_n||0)+'件（新品 '+(+r.mkt_n_new||0)+'）'
-    +'　推奨売値は最安値の <b'+(j.k==='ok'?'':' style="color:var(--bad)"')+'>'
-    +j.pct+'%</b>（115%まで）'
+    +'<br>こちらの総額 <b>'+usd(j.mine||0)+'</b>'
+    +((rec&&rec.ship>0)?('（商品代 '+usd(rec.price)+'＋請求送料 '+usd(rec.ship)+'）'):'（送料無料）')
+    +'　最安値の <b'+(j.k==='ok'?'':' style="color:var(--bad)"')+'>'
+    +j.pct+'%</b>（115%＝'+usd(j.lim)+' まで）'
     +(+r.mkt_no_ship?'<br><span style="opacity:.8">送料が分からない出品が混じるため、'
       +'最安値を低めに見ています</span>':'')
     +(r.mkt_url?('　<a href="'+esc(r.mkt_url)+'" target="_blank" rel="noopener">eBayで見る</a>'):'')
