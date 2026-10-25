@@ -4532,3 +4532,101 @@ UPSERT は1行15個。`items` への反映は**段取り A では行っていな
 テストの D1 でも101個で「too many SQL variables」になること、
 **400行（1便の上限ちょうど）が通ること**、
 400行＋400行＋100行を送り直しても900行すべて生き残ることを見張る。
+
+## 7.62 eBay の相場を JAN で引いて控える（4章の6・2026-10-25・sw.js v188）
+
+候補の JAN（GTIN）で eBay を検索し、**即決の出品の最安値（送料込み）**を `mw_market` に控える。
+
+### `POST /mw/market`（管理者だけ）
+
+対象は「候補の代表（`pick=1`）のうち、控えが無い／古いもの」を**古い順**に。
+一覧と同じ絞り込み（機種・新品・出荷・在庫）を body で受けるので、
+**画面に出ている候補だけ**を調べる。
+
+| 決まり | 値 |
+| --- | --- |
+| 1回に調べる件数 | `MW_MKT_MAX` **120**（画面から最大 `MW_MKT_HARD` 400 まで） |
+| 時間の上限 | `MW_MKT_DEADLINE_MS` **60秒** |
+| 呼び出しの間隔 | `MW_MKT_GAP_MS` **120ms** |
+| 取り直さない期間 | `MW_MKT_TTL_D` **7日**（失敗したものは `MW_MKT_ERR_TTL_H` **24時間**） |
+| 1件の呼び出し回数 | **1回**（`item_summary/search?gtin=…`） |
+
+件数・時間のどちらかで必ず止まり、`left` に残りを返す（押すたびに進む）。
+eBay が 429／500／503 を返したらその回で止める（`stopped:"ebay"`）。
+
+### 使う API（ALLOWED は増やしていない）
+
+既にある Browse の1本をそのまま使う。
+`GET https://api.ebay.com/buy/browse/v1/item_summary/search?` ＋
+`gtin` / `limit=50` / `sort=price` / `filter=buyingOptions:{FIXED_PRICE}`。
+アプリトークン（`client_credentials`・基本スコープ）は KV に控えてあるので、
+トークンの取得は2時間に1回だけ。
+
+### 最安値の出し方（`mwMktPick`）
+
+- **総額 = 本体 ＋ 送料**。`shippingOptions[0].shippingCost` を足す
+- 送料が分からない出品は**本体だけ**で数え、`no_ship=1` を立てる
+  （総額を低めに見るので、115%の判定は厳しい側に出る）
+- **新品の最安値**（`low`）と**状態を問わない最安値**（`low_any`）を**1回の検索で両方**出す
+- **競売は入れない**（値段が動くので `buyingOptions:{FIXED_PRICE}` で絞る）
+- `n`（即決の出品数）が 0 なら「相場なし」
+
+控えるのは `n` `n_new` `low` `low_item` `low_ship` `low_any` `cur` `title`
+`item_id` `item_url` `no_ship` `err` `checked_at`。
+取り直せたら `err` は消す。取得の記録は `mw_mkt_runs`。
+
+`GET /mw/list` は `mw_market` を左結合して行に相場を付け、
+`mkt`（調べ終わった件数・残り・115%の線・7日・1回の件数）も返す。
+
+### 呼び出し回数の見込み（候補1,761件）
+
+| | 回数 |
+| --- | --- |
+| 1回のボタン | **最大120回**（時間の上限で止まることもある） |
+| 全部を1周 | **1,761回**＝15回ほど押す |
+| 毎週の取り直し | 1,761回／週 ＝ **1日あたり約252回** |
+
+Browse の既定の上限（1日5,000回）に対して十分収まる。
+1リクエストあたりの外部呼び出しは最大400回で、Workers の上限（1,000）内。
+
+テストは `tests/mwmkt.mjs`（51件）。
+
+## 7.63 MW の商品画像を取って長辺を測る（6.1 の①・2026-10-25・sw.js v188）
+
+### `POST /mw/img`（管理者だけ）
+
+```
+{jan, ids:["10921742", "https://…/10921743.jpg", …], probe:true}
+  → MW から取って長辺を測る（probe のときは中身を返さない）
+{jan, saved:[{pos, url}, …]}
+  → 画面が pj-img に上げ終わった公開URLを控える
+```
+
+- 1商品 **12枚まで**（`MW_IMG_MAX`）。`pos=0` がメイン
+- 長辺 **500px 以上**（`MW_IMG_MIN_LONG`）でなければ `ok=0`。理由を文で返す
+- 大きさは既にある `imageSize()`（JPEG の SOF・PNG の IHDR）で読む
+- 1枚ごとに 150ms 空ける。5MB を超える画像は断る
+- 使える画像は `b64` で返す。画面が**今までの口**（pj-img の `POST /upload`）で R2 に控える
+  → pj-sync に pj-img の合言葉を置かずに済む
+- `saved` で受け取るURLは **pj-img の形**（`/i/YYYYMMDD/<uuid>.<ext>`）だけ通す
+
+`GET /mw/img?jan=…` は控えてある分を返す（貼り直さなくて済む）。
+
+### 許可表（ALLOWED）に足した1本だけ
+
+```js
+{ m: "GET", re: /^https:\/\/matchingworld\.asia\/products\/\d+\/\d+\/\d+\.jpg$/ },
+```
+
+- **読み取りの1本だけ。** 会員サイト（`/buy/?q=`）は許可表に無いので呼べない
+- `mwImgId()` は会員サイトのURLや他のホストを**受け取らない**
+- **Amazon（SP-API など）の画像は使わない**
+
+`mw_img` に `jan` `pos` `mw_id` `src` `url` `w` `h` `long_px` `bytes` `ct`
+`ok` `err` `at` を控える（主キー `(jan, pos)`）。
+
+### 出品はしていない
+
+この節は**画像の控えまで**。CSV の書き出し（出品）は作っていない。
+
+テストは `tests/mwmkt.mjs`（51件）。

@@ -161,6 +161,10 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/open\.er-api\.com\/v6\/latest\/USD$/ },
   { m: "GET",  re: /^https:\/\/api\.frankfurter\.app\/latest\?from=USD&to=JPY$/ },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
+  /* MW（マッチングワールド）の商品画像（6.1）。**読み取りの1本だけ**。
+     画像URLはログインなしで見られる。会員サイト（/buy/?q=）は見に行かない。
+     MW が利用を許諾した画像だけを使い、Amazon の画像は使わない。 */
+  { m: "GET",  re: /^https:\/\/matchingworld\.asia\/products\/\d+\/\d+\/\d+\.jpg$/ },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -4390,6 +4394,38 @@ const MW_CHUNK = 400;                  // 画面が1回に送ってくる行数�
 const MW_SHIP_OK = 4;                  // 無在庫に使える出荷の営業日数
 const MW_DROP_WARN = 0.30;             // 行数がこれ以上減ったら取得ミスとみなす
 const MW_LIST_MAX = 500;               // 候補一覧で返す行数の上限
+/* ---- eBay の相場（4章の6・7.62）---- */
+const MW_MKT_MAX = 120;                // 1回に調べる JAN の数（＝Browse の呼び出し回数）
+                                       // 60秒の上限でだいたいこの数まで進む
+const MW_MKT_HARD = 400;               // 画面から増やせる上限
+const MW_MKT_TTL_D = 7;                // 取れた相場を取り直さない日数
+const MW_MKT_ERR_TTL_H = 24;           // 取れなかったものを取り直すまでの時間
+const MW_MKT_GAP_MS = 120;             // 呼び出しの間隔（eBay に続けて当てない）
+const MW_MKT_DEADLINE_MS = 60000;      // 1回の実行で使う時間の上限
+const MW_MKT_PAGE = 50;                // 1回の検索で見る出品の数
+const MW_OVER = 1.15;                  // 推奨売値が最安値のこの倍までなら「出品候補」
+/* ---- MW の商品画像（6.1 の①・7.63）---- */
+const MW_IMG_MAX = 12;                 // 1商品に貼れる枚数（1枚目がメイン）
+const MW_IMG_MIN_LONG = 500;           // eBay が要る長辺。これ未満は使えない
+const MW_IMG_BYTES = 5 * 1024 * 1024;  // pj-img の1枚の上限と同じ
+const MW_IMG_HOST = "https://matchingworld.asia";
+/* MW の商品IDから画像URLを作る（仕様6.1）。
+   products/{IDの下4桁を0にした値}/{下2桁を0にした値}/{ID}.jpg */
+function mwImgUrl(id) {
+  const n = Math.floor(Number(id) || 0);
+  if (!(n > 0)) return "";
+  return MW_IMG_HOST + "/products/" + (Math.floor(n / 10000) * 10000)
+    + "/" + (Math.floor(n / 100) * 100) + "/" + n + ".jpg";
+}
+/* 貼られた文字から MW の商品IDを読む。商品IDそのものか、画像URLのどちらでもよい。 */
+function mwImgId(text) {
+  const t = String(text || "").trim();
+  if (!t) return 0;
+  const m = /^https:\/\/matchingworld\.asia\/products\/\d+\/\d+\/(\d+)\.jpg$/.exec(t);
+  if (m) return Number(m[1]);
+  if (/^\d{1,12}$/.test(t)) return Number(t);
+  return 0;
+}
 function mwNum(v) {
   const n = Number(String(v == null ? "" : v).replace(/[^0-9.-]/g, ""));
   return isFinite(n) ? Math.round(n) : 0;
@@ -4556,14 +4592,14 @@ async function mwStockPut(env, body) {
 }
 /* 候補一覧（段取りA）。4章の1〜4で絞った**代表の行**だけ返す。
    5章の利益計算（卸値×1.1＋送料）は画面が shared/pricing.js で行う。 */
-async function mwList(env, url) {
-  const p = url.searchParams;
-  const kishu = String(p.get("kishu") || "").split(",")
-    .map((x) => x.trim()).filter(Boolean).slice(0, d1Step(1));
-  const newOnly = p.get("new_only") !== "0";
-  const shipMax = Math.max(0, Math.min(99, mwNum(p.get("ship_max")) || MW_SHIP_OK));
-  const stockMin = Math.max(1, mwNum(p.get("stock_min")) || 2);
-  const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
+/* ---- 候補の絞り込み（4章の1〜4）。一覧と相場の取得で同じ条件を使う ---- */
+function mwWhere(opt) {
+  const o = opt || {};
+  const kishu = (Array.isArray(o.kishu) ? o.kishu : String(o.kishu || "").split(","))
+    .map((x) => String(x).trim()).filter(Boolean).slice(0, d1Step(1));
+  const newOnly = o.new_only !== 0 && o.new_only !== "0" && o.new_only !== false;
+  const shipMax = Math.max(0, Math.min(99, mwNum(o.ship_max) || MW_SHIP_OK));
+  const stockMin = Math.max(1, mwNum(o.stock_min) || 2);
   const where = ["gone_at IS NULL", "pick=1"];
   const bind = [];
   if (kishu.length) {
@@ -4573,14 +4609,171 @@ async function mwList(env, url) {
   if (newOnly) where.push("cond='新品'");
   where.push("COALESCE(ship_days,99)<=" + shipMax);
   where.push("COALESCE(stock,0)>=" + stockMin);
-  const w = where.join(" AND ");
+  return { w: where.join(" AND "), bind, kishu, newOnly, shipMax, stockMin };
+}
+
+/* ---- eBay の相場を1件引く（4章の6・7.62）----
+   JAN（GTIN）で Browse API を検索し、**即決の出品**の最安値を送料込みで出す。
+   ・新品の最安値（low）と、状態を問わない最安値（low_any）を1回の検索で両方出す
+   ・送料が分からない出品は本体だけで数える（印に no_ship=1 を立てる）。
+     総額を低めに見るので、115%の判定は厳しい側に出る
+   ・競売（オークション）は値段が動くので入れない */
+function mwMktPick(d) {
+  const out = { n: 0, n_new: 0, low: null, low_item: null, low_ship: null,
+                low_any: null, cur: "", title: "", item_id: "", item_url: "",
+                no_ship: 0 };
+  const list = (d && d.itemSummaries) || [];
+  out.n = Number((d && d.total) || list.length) || 0;
+  for (const x of list) {
+    const p = Number(((x.price) || {}).value);
+    if (!isFinite(p) || p <= 0) continue;
+    const so = (x.shippingOptions || [])[0];
+    const sc = so && so.shippingCost ? Number(so.shippingCost.value) : NaN;
+    const ship = isFinite(sc) ? sc : 0;
+    if (!isFinite(sc)) out.no_ship = 1;
+    const tot = Math.round((p + ship) * 100) / 100;
+    if (out.low_any === null || tot < out.low_any) out.low_any = tot;
+    const isNew = String(x.condition || "") === "New"
+      || String(x.conditionId || "") === "1000";
+    if (!isNew) continue;
+    out.n_new++;
+    if (out.low === null || tot < out.low) {
+      out.low = tot; out.low_item = p; out.low_ship = ship;
+      out.cur = String(((x.price) || {}).currency || "");
+      out.title = String(x.title || "").slice(0, 200);
+      out.item_id = String(x.itemId || "");
+      out.item_url = String(x.itemWebUrl || "").slice(0, 300);
+    }
+  }
+  return out;
+}
+async function mwMktOne(env, run, jan) {
+  const g = String(jan || "").replace(/\D/g, "");
+  if (g.length !== 13) return { ok: false, err: "bad_gtin" };
+  const a = await ebayAppToken(env, run, EBAY_BASE_SCOPE);
+  if (!a.ok) return { ok: false, err: "token_" + (a.status || "") };
+  const q = new URLSearchParams({ gtin: g, limit: String(MW_MKT_PAGE),
+    sort: "price", filter: "buyingOptions:{FIXED_PRICE}" });
+  const r = await net(run, EBAY_API + "/buy/browse/v1/item_summary/search?" + q.toString(),
+    { headers: { authorization: "Bearer " + a.token, accept: "application/json",
+                 "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" } });
+  const t = await r.text();
+  if (!r.ok) {
+    run.errors++;
+    return { ok: false, err: "browse_" + r.status, body: t.slice(0, 200) };
+  }
+  run.pages++;
+  let d = {}; try { d = JSON.parse(t); } catch (e) { d = {}; }
+  return Object.assign({ ok: true }, mwMktPick(d));
+}
+/* ---- POST /mw/market ----
+   候補のうち、相場をまだ見ていない／7日より古いものを古い順に引く。
+   1回の上限と時間の上限で必ず止まり、残りは left で返す（押すたびに進む）。 */
+async function mwMarketRun(env, body) {
+  const run = newRun("mw-market");
+  const res = { ok: false, asked: 0, done: 0, hit: 0, none: 0, failed: 0,
+                left: 0, limit: 0, calls: 0, stopped: "", rows: [] };
+  try {
+    const o = body || {};
+    const limit = Math.max(1, Math.min(MW_MKT_HARD, mwNum(o.limit) || MW_MKT_MAX));
+    res.limit = limit;
+    const q = mwWhere(o);
+    const okOld = new Date(Date.now() - MW_MKT_TTL_D * 86400000).toISOString();
+    const errOld = new Date(Date.now() - MW_MKT_ERR_TTL_H * 3600000).toISOString();
+    /* 代表の JAN のうち、控えが無い／古いものだけ。古い順（NULL が先）。 */
+    const pick = await env.DB.prepare(
+      `SELECT s.jan AS jan, m.checked_at AS checked_at
+         FROM mw_stock s LEFT JOIN mw_market m ON m.jan = s.jan
+        WHERE ${q.w}
+          AND (m.checked_at IS NULL
+               OR (COALESCE(m.err,'')='' AND m.checked_at < ?${q.bind.length + 1})
+               OR (COALESCE(m.err,'')<>'' AND m.checked_at < ?${q.bind.length + 2}))
+        ORDER BY COALESCE(m.checked_at,'') ASC, s.jan ASC`)
+      .bind(...q.bind, okOld, errOld).all();
+    const all = (pick && pick.results) || [];
+    res.asked = all.length;
+    const t0 = Date.now();
+    const stmts = [];
+    for (const row of all) {
+      if (res.done >= limit) { res.stopped = "limit"; break; }
+      if (Date.now() - t0 > MW_MKT_DEADLINE_MS) { res.stopped = "time"; break; }
+      if (res.done) await sleep(MW_MKT_GAP_MS);
+      const g = await mwMktOne(env, run, row.jan);
+      res.done++; res.calls++;
+      const at = nowIso();
+      if (!g.ok) {
+        res.failed++;
+        stmts.push(env.DB.prepare(
+          `INSERT INTO mw_market (jan,err,checked_at,created_at)
+             VALUES (?1,?2,?3,?3)
+           ON CONFLICT(jan) DO UPDATE SET err=excluded.err,
+             checked_at=excluded.checked_at`).bind(row.jan, String(g.err), at));
+        if (/^browse_(429|500|503)/.test(String(g.err))) { res.stopped = "ebay"; break; }
+        continue;
+      }
+      if (g.n > 0) res.hit++; else res.none++;
+      res.rows.push({ jan: row.jan, n: g.n, n_new: g.n_new, low: g.low,
+                      low_any: g.low_any, title: g.title });
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_market (jan,n,n_new,low,low_item,low_ship,low_any,cur,
+           title,item_id,item_url,no_ship,err,checked_at,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'',?13,?13)
+         ON CONFLICT(jan) DO UPDATE SET n=excluded.n, n_new=excluded.n_new,
+           low=excluded.low, low_item=excluded.low_item, low_ship=excluded.low_ship,
+           low_any=excluded.low_any, cur=excluded.cur, title=excluded.title,
+           item_id=excluded.item_id, item_url=excluded.item_url,
+           no_ship=excluded.no_ship, err='', checked_at=excluded.checked_at`)
+        .bind(row.jan, g.n, g.n_new, g.low, g.low_item, g.low_ship, g.low_any,
+              g.cur, g.title, g.item_id, g.item_url, g.no_ship, at));
+    }
+    await runBatch(env, run, stmts);
+    res.left = Math.max(0, res.asked - res.done);
+    await env.DB.prepare(
+      `INSERT INTO mw_mkt_runs (at,asked,done,hit,none,failed,left_n,note,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
+      .bind(nowIso(), res.asked, res.done, res.hit, res.none, res.failed, res.left,
+            ("止まった理由 " + (res.stopped || "すべて")).slice(0, 300)).run();
+    run.notes.push("MW相場：調べた " + res.done + "件／相場あり " + res.hit
+      + "／相場なし " + res.none + "／失敗 " + res.failed + "／残り " + res.left);
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-market: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
+async function mwList(env, url) {
+  const p = url.searchParams;
+  const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
+                       ship_max: p.get("ship_max"), stock_min: p.get("stock_min") });
+  const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock)\b/g, "s.$1");
+  const bind = q0.bind;
+  /* 相場（7.62）を一緒に返す。まだ調べていない JAN は null で返る。 */
   const q = await env.DB.prepare(
-    `SELECT jan,sha,idx,kishu,name,list_price,release,cond,wholesale,
-            stock,note,ship_text,ship_days,seen_at
-       FROM mw_stock WHERE ${w}
-      ORDER BY COALESCE(wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
+    `SELECT s.jan AS jan, s.sha AS sha, s.idx AS idx, s.kishu AS kishu,
+            s.name AS name, s.list_price AS list_price, s.release AS release,
+            s.cond AS cond, s.wholesale AS wholesale, s.stock AS stock,
+            s.note AS note, s.ship_text AS ship_text, s.ship_days AS ship_days,
+            s.seen_at AS seen_at,
+            m.n AS mkt_n, m.n_new AS mkt_n_new, m.low AS mkt_low,
+            m.low_any AS mkt_low_any, m.low_ship AS mkt_ship, m.cur AS mkt_cur,
+            m.item_url AS mkt_url, m.no_ship AS mkt_no_ship,
+            m.err AS mkt_err, m.checked_at AS mkt_at,
+            (SELECT COUNT(*) FROM mw_img g WHERE g.jan=s.jan AND g.ok=1) AS pics_ok
+       FROM mw_stock s LEFT JOIN mw_market m ON m.jan = s.jan
+      WHERE ${w}
+      ORDER BY COALESCE(s.wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
   const n = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM mw_stock WHERE ${w}`).bind(...bind).first();
+    `SELECT COUNT(*) AS n FROM mw_stock s WHERE ${w}`).bind(...bind).first();
+  /* 相場の進み具合（調べ終わった件数・残り）。 */
+  const mk = await env.DB.prepare(
+    `SELECT COUNT(m.jan) AS seen,
+            SUM(CASE WHEN COALESCE(m.err,'')='' AND COALESCE(m.n,0)>0 THEN 1 ELSE 0 END) AS hit,
+            SUM(CASE WHEN COALESCE(m.err,'')='' AND COALESCE(m.n,0)=0 THEN 1 ELSE 0 END) AS none
+       FROM mw_stock s JOIN mw_market m ON m.jan = s.jan
+      WHERE ${w}`).bind(...bind).first();
   const all = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`).first();
   const pick = await env.DB.prepare(
@@ -4589,11 +4782,151 @@ async function mwList(env, url) {
     `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn
        FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
   return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
+           mkt: { seen: Number((mk && mk.seen) || 0), hit: Number((mk && mk.hit) || 0),
+                  none: Number((mk && mk.none) || 0),
+                  left: Math.max(0, Number((n && n.n) || 0) - Number((mk && mk.seen) || 0)),
+                  over: MW_OVER, ttl_days: MW_MKT_TTL_D, per_run: MW_MKT_MAX },
            alive: Number((all && all.n) || 0),
            picked: Number((pick && pick.n) || 0),
            last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
            limit: limit };
 }
+/* ===== MW の商品画像（6.1 の①・7.63）=====
+   貼られた「MW の商品ID」または「画像URL」から画像を取り、**大きさだけ測る**。
+   取った画像は画面に返して、画面が今までの口（pj-img の POST /upload）で
+   R2 に控える。こうすると pj-sync に新しい合言葉を置かずに済む。
+   ・使うのは MW の画像だけ。Amazon の画像は使わない
+   ・会員サイト（/buy/?q=）は見に行かない。ALLOWED も products/….jpg の1本だけ
+   ・長辺が500px未満の画像は eBay が受け取らないので「使えません」として返す */
+/* バイト列を base64 にする（画面が pj-img に上げるため）。
+   Workers の btoa は文字列しか受け取れないので、8KBずつ文字にしてから渡す。 */
+function toB64(buf) {
+  const b = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < b.length; i += 8192)
+    bin += String.fromCharCode.apply(null, b.subarray(i, i + 8192));
+  return btoa(bin);
+}
+async function mwImgOne(env, run, jan, pos, text, want) {
+  const r = { jan: jan, pos: pos, mw_id: "", src: "", w: 0, h: 0, long: 0,
+              bytes: 0, ct: "", ok: false, err: "" };
+  const id = mwImgId(text);
+  if (!id) { r.err = "商品IDか画像URLの形ではありません"; return r; }
+  r.mw_id = String(id);
+  r.src = mwImgUrl(id);
+  if (!r.src) { r.err = "画像URLを作れませんでした"; return r; }
+  let resp;
+  try {
+    resp = await net(run, r.src, { method: "GET", redirect: "manual" });
+  } catch (e) {
+    run.errors++; r.err = "取りに行けませんでした: " + String((e && e.message) || e);
+    return r;
+  }
+  if (!resp.ok) {
+    r.err = (resp.status === 404) ? "その商品IDの画像がありません（404）"
+                                  : ("取れませんでした（" + resp.status + "）");
+    return r;
+  }
+  const ct = String(resp.headers.get("content-type") || "").split(";")[0].trim();
+  r.ct = ct || "image/jpeg";
+  const buf = await resp.arrayBuffer();
+  r.bytes = buf.byteLength;
+  if (!r.bytes) { r.err = "中身が空でした"; return r; }
+  if (r.bytes > MW_IMG_BYTES) { r.err = "大きすぎます（5MBまで）"; return r; }
+  const sz = imageSize(buf);
+  r.w = Number(sz.w) || 0; r.h = Number(sz.h) || 0;
+  r.long = Math.max(r.w, r.h);
+  if (!r.long) { r.err = "画像の大きさが読めませんでした"; return r; }
+  if (r.long < MW_IMG_MIN_LONG) {
+    r.err = "長辺 " + r.long + "px（" + MW_IMG_MIN_LONG + "px未満なので使えません）";
+    return r;
+  }
+  r.ok = true;
+  if (want) r.b64 = toB64(buf);          // 画面が pj-img に上げるための中身
+  return r;
+}
+/* POST /mw/img
+   {jan, ids:["10921742", "https://…/10921743.jpg", …], probe:true}
+     → 大きさだけ測る（probe のときは中身を返さない）
+   {jan, saved:[{pos, url}, …]}
+     → 画面が pj-img に上げ終わった公開URLを控える（二度は取りに行かない） */
+async function mwImgRun(env, body) {
+  const run = newRun("mw-img");
+  const res = { ok: false, jan: "", n: 0, good: 0, bad: 0, rows: [],
+                min_long: MW_IMG_MIN_LONG, max: MW_IMG_MAX };
+  try {
+    const o = body || {};
+    const jan = String(o.jan || "").replace(/\D/g, "");
+    res.jan = jan;
+    if (jan.length !== 13) {
+      res.error = "bad_jan";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 上げ終わった公開URLを控える（取りに行かない）。 */
+    if (Array.isArray(o.saved)) {
+      const stmts = [];
+      for (const x of o.saved.slice(0, MW_IMG_MAX)) {
+        const pos = Math.max(0, Math.min(MW_IMG_MAX - 1, mwNum(x && x.pos)));
+        const u = String((x && x.url) || "").trim().slice(0, 300);
+        if (!/^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(u))
+          continue;
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_img SET url=?3, at=?4 WHERE jan=?1 AND pos=?2`)
+          .bind(jan, pos, u, nowIso()));
+        res.n++;
+      }
+      await runBatch(env, run, stmts);
+      res.ok = true;
+      run.notes.push("MW画像：公開URLを " + res.n + "枚控えました（" + jan + "）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 貼られた文字から画像を取って測る。1枚目がメイン（pos=0）。 */
+    const ids = (Array.isArray(o.ids) ? o.ids : String(o.ids || "").split(/[\r\n,]+/))
+      .map((x) => String(x || "").trim()).filter(Boolean).slice(0, MW_IMG_MAX);
+    if (!ids.length) {
+      res.error = "no_ids";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const probe = !!o.probe;
+    const stmts = [];
+    for (let i = 0; i < ids.length; i++) {
+      if (i) await sleep(150);                 // MW に続けて当てない
+      const r = await mwImgOne(env, run, jan, i, ids[i], !probe);
+      if (r.ok) res.good++; else res.bad++;
+      res.rows.push(r);
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_img (jan,pos,mw_id,src,url,w,h,long_px,bytes,ct,ok,err,
+           at,created_at)
+         VALUES (?1,?2,?3,?4,NULL,?5,?6,?7,?8,?9,?10,?11,?12,?12)
+         ON CONFLICT(jan,pos) DO UPDATE SET mw_id=excluded.mw_id,
+           src=excluded.src, w=excluded.w, h=excluded.h, long_px=excluded.long_px,
+           bytes=excluded.bytes, ct=excluded.ct, ok=excluded.ok,
+           err=excluded.err, at=excluded.at`)
+        .bind(jan, i, r.mw_id, r.src, r.w, r.h, r.long, r.bytes, r.ct,
+              r.ok ? 1 : 0, r.err || "", nowIso()));
+    }
+    await runBatch(env, run, stmts);
+    res.n = res.rows.length;
+    res.ok = true;
+    run.notes.push("MW画像：" + jan + " の " + res.n + "枚を測りました（使える "
+      + res.good + "／使えない " + res.bad + "）");
+  } catch (e) {
+    run.errors++; run.notes.push("mw-img: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /mw/img?jan=… 控えてある画像（貼り直さなくて済むように返す） */
+async function mwImgGet(env, url) {
+  const jan = String(url.searchParams.get("jan") || "").replace(/\D/g, "");
+  if (jan.length !== 13) return { ok: false, error: "bad_jan", rows: [] };
+  const q = await env.DB.prepare(
+    `SELECT jan,pos,mw_id,src,url,w,h,long_px,bytes,ct,ok,err,at
+       FROM mw_img WHERE jan=?1 ORDER BY pos ASC`).bind(jan).all();
+  return { ok: true, jan: jan, rows: (q && q.results) || [],
+           min_long: MW_IMG_MIN_LONG, max: MW_IMG_MAX };
+}
+
 /* ===== 写真が小さい行をまとめて確かめ直す（7.59）=====
    eBayアプリで写真を差し替えても、こちらは気づけない（GetItem を呼ばないと
    大きさが分からない）。写真が原因で弾かれた記録が残っている行を順に GetItem で
@@ -5953,8 +6286,9 @@ export default {
        /listings の中の価格の設定（md_* / rv_*）は、その route で弾く。 */
     /* MW の在庫の取り込み（7.60）は管理者だけ。無在庫の仕入れ値が入るため。 */
     if (role !== "admin" && request.method === "POST"
-        && url.pathname === "/mw/stock")
-      return forbidStaff("MW の在庫の取り込みは管理者用のキーが必要です", [], origin);
+        && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
+            || url.pathname === "/mw/img"))
+      return forbidStaff("MW の取り込み・相場・画像は管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
       return forbidStaff("価格の設定と実行は管理者用のキーが必要です"
@@ -6159,6 +6493,16 @@ export default {
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await mwStockPut(env, body), 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/mw/market") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwMarketRun(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mw/img") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwImgRun(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/img")
+        return json(await mwImgGet(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/list")
         return json(await mwList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/catalog") {
@@ -6302,7 +6646,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         picsUrlOk, picsNotifyText,
                         BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
-                        mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS, MW_CHUNK,
+                        mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
+                        mwMarketRun, mwMktPick, mwImgRun, mwImgGet, mwImgUrl,
+                        mwImgId, mwWhere, toB64, MW_OVER, MW_MKT_MAX,
+                        MW_MKT_TTL_D, MW_IMG_MAX, MW_IMG_MIN_LONG, MW_CHUNK,
                         MW_SHIP_OK, MW_DROP_WARN,
                         jstText, boBelow, boRetry, reviseFix, mdBo,
                         epsMaxUrl, epsSize,

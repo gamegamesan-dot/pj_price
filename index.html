@@ -702,6 +702,13 @@ body.staff #syncOnHandFix{display:none !important}
             扱っています。読み取りの規則に足すときはこの一覧を見せてください。</div>
           <div id="csvMwShipList" style="margin-top:4px"></div>
         </details>
+        <!-- eBay の相場（4章の6）。1回の件数で区切って、押すたびに進む -->
+        <div class="row" style="margin-top:10px"><label>1回に調べる件数</label>
+          <input type="number" id="csvMwMktLimit" value="120" step="10" min="1" max="400" inputmode="numeric"><span class="unit">件</span></div>
+        <button class="btn" id="csvMwMkt" style="width:100%;margin-top:6px">eBayの相場を調べる（JANで検索）</button>
+        <div class="note2" id="csvMwMktNote" style="margin-top:2px">候補の JAN で eBay を検索し、
+          <b>即決の出品の最安値（送料込み）</b>を控えます。1件につき1回の呼び出しで、
+          <b>一度調べた JAN は7日間調べ直しません</b>。残りが出たら押し直してください。</div>
         <button class="btn" id="csvMwLoad" style="width:100%;margin-top:8px">候補一覧を取り込む</button>
         <div class="note2" id="csvMwListNote" style="margin-top:2px"></div>
         <div id="csvMwList" style="margin-top:6px"></div>
@@ -8621,6 +8628,9 @@ function mwImportRun(text){
   step();
 }
 $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
+/* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
+$('csvMwLoad').onclick=mwListRun;
+$('csvMwMkt').onclick=mwMktRun;
 $('csvMwFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; this.value='';
   if(!f)return;
@@ -8639,7 +8649,7 @@ $('csvMwFile').addEventListener('change',function(){
   fr.readAsArrayBuffer(f);
 });
 /* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
-var mwRows=[], mwLast=null;
+var mwRows=[], mwLast=null, mwMkt=null;
 /* MW の仕入値（円・税込＋1点あたりの送料）。 */
 function mwCost(r){
   var w=+((r||{}).wholesale)||0;
@@ -8667,6 +8677,84 @@ function mwRec(r){
   return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
            target:mwTarget(c), cost:c, weight:w };
 }
+/* pj-sync に POST して Promise で返す（syncJsonPost をそのまま包む）。
+   MW の相場・画像は続けて何回か呼ぶので、つなげて書けるようにする。 */
+function mwPost(path,body){
+  return new Promise(function(res,rej){
+    syncJsonPost(path,body,res,function(why){ rej(new Error(why)); });
+  });
+}
+/* ---- eBay の相場を調べる（4章の6・6.86）----
+   候補の JAN で eBay を検索し、即決の出品の最安値（送料込み）を控える。
+   1回の件数で区切り、残りが出たら押し直す（7日たつまで調べ直さない）。 */
+function mwMktLimit(){ var n=+$('csvMwMktLimit').value; return (isFinite(n)&&n>0)?Math.min(400,n):120; }
+function mwMktRun(){
+  var note=$('csvMwMktNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  var btn=$('csvMwMkt'); btn.disabled=true;
+  note.textContent='eBay で相場を調べています…（1件につき1回の呼び出し）';
+  mwPost('/mw/market',{ limit:mwMktLimit(),
+    kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
+    ship_max:mwShipMax(), stock_min:mwStockMin() })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
+      note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
+        +'（相場あり '+(d.hit||0)+'／相場なし '+(d.none||0)
+        +'／失敗 '+(d.failed||0)+'）　eBay の呼び出し <b>'+(d.calls||0)+'回</b>'
+        +(d.left?('<br>まだ <b>'+d.left+'件</b>残っています（'
+          +(d.stopped==='time'?'時間の上限で止まりました':
+            d.stopped==='ebay'?'eBay が混んでいるので止めました。少し待ってください':
+            '1回の件数の上限')+'）。もう一度押すと続きを調べます。'):
+          '<br>調べ終わりました。');
+      mwListRun();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 調べられませんでした：'+e.message; })
+    .then(function(){ btn.disabled=false; });
+}
+/* ---- 相場と推奨売値の見比べ（4章の6）----
+   優先1：相場あり・推奨売値が最安値の115%以内 → 出品候補
+   優先2：相場なし（eBay に即決の出品が無い）  → 別に出す
+   優先3：115%を超える                        → 後回し（畳んで出す） */
+var MW_OVER=1.15;
+function mwMktJudge(r,rec){
+  if(!r.mkt_at)return { k:'none', label:'未調査', pri:4 };
+  var n=+r.mkt_n||0;
+  if(r.mkt_err)return { k:'err', label:'調べられませんでした', pri:4 };
+  if(!n)return { k:'nomkt', label:'相場なし（eBayに出品なし）', pri:2 };
+  var low=(r.mkt_low!=null)?+r.mkt_low:((r.mkt_low_any!=null)?+r.mkt_low_any:0);
+  if(!(low>0))return { k:'nomkt', label:'相場なし（値段が読めません）', pri:2 };
+  var lim=low*MW_OVER;
+  if(!rec)return { k:'high', label:'値段を出せません', pri:4, low:low, lim:lim };
+  if(rec.price<=lim)
+    return { k:'ok', label:'出品候補', pri:1, low:low, lim:lim,
+             pct:Math.round(rec.price/low*100) };
+  return { k:'high', label:'後回し（相場の115%超）', pri:3, low:low, lim:lim,
+           pct:Math.round(rec.price/low*100) };
+}
+function mwMktHtml(r,rec){
+  var j=mwMktJudge(r,rec);
+  if(j.k==='none')
+    return '<div class="note2" style="margin:2px 0 0;opacity:.7">相場 未調査'
+      +'（「eBayの相場を調べる」を押してください）</div>';
+  if(j.k==='err')
+    return '<div class="note2" style="margin:2px 0 0;color:var(--bad)">相場 '
+      +esc(String(r.mkt_err).slice(0,40))+'</div>';
+  if(j.k==='nomkt')
+    return '<div class="note2" style="margin:2px 0 0">eBay に即決の出品が'
+      +'<b>ありません</b>（'+esc(jstShort(r.mkt_at))+' 調べ）</div>';
+  return '<div class="note2" style="margin:2px 0 0">eBay 最安値 <b>'+usd(j.low)+'</b>'
+    +((r.mkt_ship!=null&&+r.mkt_ship>0)?('（送料 '+usd(+r.mkt_ship)+'込み）'):'（送料無料）')
+    +'　出品 '+(+r.mkt_n||0)+'件（新品 '+(+r.mkt_n_new||0)+'）'
+    +'　推奨売値は最安値の <b'+(j.k==='ok'?'':' style="color:var(--bad)"')+'>'
+    +j.pct+'%</b>（115%まで）'
+    +(+r.mkt_no_ship?'<br><span style="opacity:.8">送料が分からない出品が混じるため、'
+      +'最安値を低めに見ています</span>':'')
+    +(r.mkt_url?('　<a href="'+esc(r.mkt_url)+'" target="_blank" rel="noopener">eBayで見る</a>'):'')
+    +'</div>';
+}
 function mwListRun(){
   var note=$('csvMwListNote');
   csvSecretFill();
@@ -8685,7 +8773,7 @@ function mwListRun(){
         throw new Error(syncPostWhy(res.status,b,t)); });
     })
     .then(function(d){
-      mwRows=d.rows||[]; mwLast=d.last||null;
+      mwRows=d.rows||[]; mwLast=d.last||null; mwMkt=d.mkt||null;
       note.textContent='候補 '+(d.n||0)+'件'
         +(d.n>mwRows.length?('（うち '+mwRows.length+'件を表示）'):'')
         +'　／　MW の生きている行 '+(d.alive||0)+'　JANごとの代表 '+(d.picked||0)
@@ -8696,6 +8784,101 @@ function mwListRun(){
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
+/* ---- MW の画像を貼る口（仕様6.1 の①・6.87）----
+   「MW の商品ID」か「画像URL」を改行で区切って最大12枚。1枚目がメイン。
+   pj-sync が MW から画像を取って**大きさを測り**、使える画像の中身を返す。
+   画面は今までの口（pj-img の POST /upload）で R2 に控え、公開URLを控え直す。
+   会員サイト（JAN検索）には行かない。MW の画像だけを使う。 */
+var MW_IMG_MAX=12, MW_IMG_MIN=500;
+function mwImgIn(jan){ return $('mwImgIn_'+jan); }
+function mwImgOut(jan){ return $('mwImgOut_'+jan); }
+function mwImgIds(jan){
+  var el=mwImgIn(jan);
+  return String((el&&el.value)||'').split(/[\r\n,]+/)
+    .map(function(x){ return x.trim(); }).filter(Boolean).slice(0,MW_IMG_MAX);
+}
+function mwImgSizeHtml(rows){
+  if(!rows||!rows.length)return '';
+  return '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr><th style="text-align:left">#</th><th style="text-align:left">商品ID</th>'
+    +'<th style="text-align:right">大きさ</th><th style="text-align:right">長辺</th>'
+    +'<th style="text-align:left">結果</th></tr>'
+    +rows.map(function(x){
+      var bad=!x.ok;
+      return '<tr><td>'+((+x.pos===0)?'<b>1（メイン）</b>':(+x.pos+1))+'</td>'
+        +'<td>'+esc(x.mw_id||'')+'</td>'
+        +'<td style="text-align:right">'+(x.w?(x.w+'×'+x.h):'—')+'</td>'
+        +'<td style="text-align:right"'+(bad?' style="color:var(--bad)"':'')+'>'
+        +(x.long?(x.long+'px'):'—')+'</td>'
+        +'<td'+(bad?' style="color:var(--bad)"':'')+'>'
+        +(x.ok?'使えます':('<b>使えません</b>　'+esc(x.err||'')))+'</td></tr>';
+    }).join('')+'</table>';
+}
+/* 大きさだけ調べる（取り込まない）。写真の方針を決めるための下見。 */
+function mwImgProbe(jan){
+  var out=mwImgOut(jan), ids=mwImgIds(jan);
+  if(!out)return;
+  if(!ids.length){ out.innerHTML='<span class="note2">商品IDか画像URLを入れてください。</span>'; return; }
+  out.innerHTML='<span class="note2">大きさを調べています…</span>';
+  mwPost('/mw/img',{ jan:jan, ids:ids, probe:1 })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'調べられませんでした');
+      out.innerHTML='<div class="note2" style="margin:0 0 4px">'+d.n+'枚の大きさ'
+        +'（使える '+d.good+'／使えない '+d.bad+'）　長辺 '+MW_IMG_MIN+'px 以上が必要です。'
+        +'まだ取り込んでいません。</div>'+mwImgSizeHtml(d.rows);
+    })
+    ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
+      +esc(e.message)+'</span>'; });
+}
+/* 取り込む：MW から取って測り、使える画像だけ pj-img（R2）に控える。 */
+function mwImgTake(jan){
+  var out=mwImgOut(jan), ids=mwImgIds(jan);
+  if(!out)return;
+  if(!ids.length){ out.innerHTML='<span class="note2">商品IDか画像URLを入れてください。</span>'; return; }
+  if(!csvImgBase()||!csvImgToken()){
+    out.innerHTML='<span class="note2" style="color:var(--bad)">⚙設定の「画像サーバーURL」と'
+      +'「アップロードトークン」を入れてください。</span>'; return;
+  }
+  out.innerHTML='<span class="note2">MW から画像を取っています…</span>';
+  mwPost('/mw/img',{ jan:jan, ids:ids })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
+      out.innerHTML='<div class="note2" style="margin:0 0 4px">'+d.n+'枚を取りました'
+        +'（使える '+d.good+'／使えない '+d.bad+'）　R2 に控えています…</div>'
+        +mwImgSizeHtml(d.rows);
+      /* 使える画像だけを、今までの口で pj-img に上げる。 */
+      var good=(d.rows||[]).filter(function(x){ return x.ok&&x.b64; });
+      var saved=[];
+      return good.reduce(function(chain,x){
+        return chain.then(function(){
+          var bin=atob(x.b64), a=new Uint8Array(bin.length);
+          for(var i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);
+          return csvPicUpload(new Blob([a],{type:x.ct||'image/jpeg'}))
+            .then(function(d){ if(d&&d.url)saved.push({ pos:x.pos, url:d.url }); });
+        });
+      },Promise.resolve()).then(function(){
+        if(!saved.length)return { rows:d.rows, saved:saved };
+        return mwPost('/mw/img',{ jan:jan, saved:saved })
+          .then(function(){ return { rows:d.rows, saved:saved }; });
+      });
+    })
+    .then(function(z){
+      if(!z)return;
+      var first=z.saved.filter(function(x){ return +x.pos===0; })[0];
+      out.innerHTML='<div class="note2" style="margin:0 0 4px">'
+        +'<b>'+z.saved.length+'枚</b>を控えました'
+        +(first?'（1枚目をメインにします）':'（メインに使える画像がありません）')
+        +'</div>'+mwImgSizeHtml(z.rows)
+        +(z.saved.length?('<div class="note2" style="margin:4px 0 0">'
+          +z.saved.map(function(x){ return '<a href="'+esc(x.url)
+            +'" target="_blank" rel="noopener">'+((+x.pos===0)?'メイン':('#'+(+x.pos+1)))
+            +'</a>'; }).join('　')+'</div>'):'')
+        +'<div class="note2" style="margin:4px 0 0;opacity:.8">'
+        +'出品（CSVの書き出し）は<b>まだ作っていません</b>。写真の控えだけです。</div>';
+    })
+    ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
+      +esc(e.message)+'</span>'; });
+}
 function mwListRender(){
   var el=$('csvMwList');
   if(!mwRows.length){
@@ -8704,21 +8887,30 @@ function mwListRender(){
       +'在庫の下限を見直してください。</div>';
     return;
   }
-  /* 値段を出せた行と、出せなかった行（卸値が読めない行）に分ける。 */
-  var ok=[], ng=[];
+  /* 相場と見比べて4つに分ける（4章の6）。 */
+  var g={ ok:[], nomkt:[], high:[], none:[] }, ng=[];
   mwRows.forEach(function(r){
     var rec=mwRec(r);
-    var o={ r:r, rec:rec };
-    if(rec)ok.push(o); else ng.push(o);
+    var o={ r:r, rec:rec, j:mwMktJudge(r,rec) };
+    if(!rec){ ng.push(o); return; }
+    if(o.j.k==='ok')g.ok.push(o);
+    else if(o.j.k==='nomkt')g.nomkt.push(o);
+    else if(o.j.k==='high')g.high.push(o);
+    else g.none.push(o);
   });
-  /* 卸値が安い順（＝売値が低い順）に並べる。相場に収まりやすい行が上に来る。 */
-  ok.sort(function(a,b){ return (a.rec.price||0)-(b.rec.price||0); });
+  /* 出品候補は「相場に対して安い順」＝写真を貼る作業の順番（仕様4章の6）。
+     それ以外は売値が低い順。 */
+  g.ok.sort(function(a,b){ return (a.j.pct||999)-(b.j.pct||999); });
+  [g.nomkt,g.high,g.none,ng].forEach(function(l){
+    l.sort(function(a,b){ return ((a.rec&&a.rec.price)||0)-((b.rec&&b.rec.price)||0); }); });
   var line=function(o){
-    var r=o.r, rec=o.rec;
+    var r=o.r, rec=o.rec, jan=String(r.jan||'');
     return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
       +'border-radius:6px">'
       +'<b>'+esc(String(r.name||'').slice(0,60))+'</b>'
-      +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
+      +(o.j.k==='ok'?(' <span class="badge" style="background:var(--good)">'
+        +o.j.pct+'%</span>'):'')
+      +'<div class="note2" style="margin:2px 0 0">JAN '+esc(jan)
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'　'+esc(r.cond||'')
       +'　在庫 '+(+r.stock||0)+'点　出荷 '+(+r.ship_days||0)+'営業日'
       +(r.ship_text?('（'+esc(String(r.ship_text).slice(0,24))+'）'):'')+'</div>'
@@ -8731,29 +8923,68 @@ function mwListRender(){
            +(rec.profit>=rec.target?'':' style="color:var(--bad)"')+'>'
            +yen(rec.profit)+'</b>　下限利益 '+yen(rec.target)+'</div>')
         : '<div class="note2" style="margin:2px 0 0;color:var(--bad)">卸値が読めません</div>')
+      +mwMktHtml(r,rec)
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
         +esc(String(r.note).slice(0,60))+'</div>'):'')
+      /* 写真を貼る口（6.1 の①）。商品IDか画像URLを改行で最大12枚。 */
+      +'<details data-box="1" style="margin-top:4px"><summary class="note2"'
+      +' style="margin:0;cursor:pointer">写真（MWの商品IDか画像URLを貼る）'
+      +((+r.pics_ok>0)?('　<b style="color:var(--good)">控え '+(+r.pics_ok)+'枚</b>'):'')
+      +'</summary>'
+      +'<div class="note2" style="margin:4px 0 2px">MW の<b>商品ID</b>'
+      +'（例 10921742）か<b>画像URL</b>を、<b>改行で区切って最大'+MW_IMG_MAX+'枚</b>。'
+      +'<b>1枚目がメイン</b>になります。長辺 '+MW_IMG_MIN+'px 未満は使えません。</div>'
+      +'<textarea id="mwImgIn_'+esc(jan)+'" rows="3" style="width:100%"'
+      +' placeholder="10921742&#10;10921743"></textarea>'
+      +'<div style="display:flex;gap:6px;margin-top:4px">'
+      +'<button class="btn" style="flex:1" onclick="mwImgProbe(\''+esc(jan)+'\')">'
+      +'大きさだけ調べる</button>'
+      +'<button class="btn primary" style="flex:1" onclick="mwImgTake(\''+esc(jan)+'\')">'
+      +'画像を取り込む</button></div>'
+      +'<div id="mwImgOut_'+esc(jan)+'" style="margin-top:4px"></div>'
+      +'</details>'
       +'</div>';
   };
-  el.innerHTML='<div class="note2" style="margin:0 0 4px"><b>候補 '
-    +ok.length+'件</b>'
+  var mk=mwMkt||{};
+  var head='<div class="note2" style="margin:0 0 4px"><b>候補 '
+    +mwRows.length+'件</b>'
     +(ng.length?('　/　値段を出せない '+ng.length+'件'):'')
     +'（下限利益＝'+yen(+$('baseProfit').value||0)+'＋仕入値×'
     +(+$('linkRate').value||0)+'%・広告料率 '+(+$('autoAdRate').value||6)+'%）</div>'
-    /* 推奨売値は**その下限利益がちょうど出る値段**なので、推奨売値で出すかぎり
-       利益は必ず下限を満たす（4章の5はここでは効かない）。
-       「その値段で本当に売れるか」はeBayの相場と比べて決めるので、
-       段取り C で足す（4章の6）。それまでは人が目で見て選ぶ。 */
-    +'<div class="note2" style="margin:0 0 6px;color:var(--bad)">'
-    +'推奨売値は下限利益がちょうど出る値段なので、<b>この一覧は「利益が出るか」では'
-    +'絞っていません</b>。<b>eBayの相場と比べる絞り込み（4章の6）は段取り C で足します</b>。'
-    +'いまは売値が高すぎる行（卸値が高い行）も混ざるので、目で見て選んでください。</div>'
-    +listMoreHtml('mwok',ok.map(line),'',10)
-    +(ng.length?('<div class="note2" style="margin:8px 0 4px">'
-      +'卸値が読めず値段を出せない行</div>'
-      +listMoreHtml('mwng',ng.slice(0,50).map(line),'',10)):'');
+    +'<div class="note2" style="margin:0 0 6px">相場を調べ終わった '
+    +(mk.seen||0)+'件／<b>まだ '+(mk.left||0)+'件</b>'
+    +(mk.left?'（「eBayの相場を調べる」を押すと進みます）':'')+'</div>';
+  var sect=function(id,title,color,note,list){
+    if(!list.length)return '';
+    return '<div class="note2" style="margin:10px 0 4px'
+      +(color?(';color:'+color):'')+'"><b>'+title+' '+list.length+'件</b></div>'
+      +(note?('<div class="note2" style="margin:0 0 4px;opacity:.85">'+note+'</div>'):'')
+      +listMoreHtml(id,list.map(line),'',10);
+  };
+  el.innerHTML=head
+    +sect('mwok','① 出品候補（相場の115%以内）','var(--good)',
+      '推奨売値が eBay の最安値（送料込み）の115%以内です。'
+      +'<b>相場に対して安い順</b>に並べてあるので、写真はこの順に貼ってください。',g.ok)
+    +sect('mwnomkt','② 相場なし（eBayに出品なし）','',
+      'eBay に同じ JAN の即決の出品がありません。'
+      +'相場は分かりませんが、無在庫なので<b>推奨売値で出せます</b>（仕様4章の6の優先2）。',
+      g.nomkt)
+    +(g.high.length?('<details data-box="1" style="margin-top:10px">'
+      +'<summary class="note2" style="margin:0;cursor:pointer">'
+      +'③ 後回し（相場の115%超） '+g.high.length+'件</summary>'
+      +'<div class="note2" style="margin:4px 0">推奨売値が eBay の最安値の115%を'
+      +'超えています。既定では後回しです（仕様4章の6の優先3）。</div>'
+      +listMoreHtml('mwhigh',g.high.map(line),'',10)+'</details>'):'')
+    +(g.none.length?('<details data-box="1" style="margin-top:10px">'
+      +'<summary class="note2" style="margin:0;cursor:pointer">'
+      +'④ 相場 未調査 '+g.none.length+'件</summary>'
+      +listMoreHtml('mwnone',g.none.map(line),'',10)+'</details>'):'')
+    +(ng.length?('<details data-box="1" style="margin-top:10px">'
+      +'<summary class="note2" style="margin:0;cursor:pointer">'
+      +'卸値が読めず値段を出せない行 '+ng.length+'件</summary>'
+      +listMoreHtml('mwng',ng.slice(0,50).map(line),'',10)+'</details>'):'');
 }
-$('csvMwLoad').onclick=function(){ mwListRun(); };
+
 /* ---- eBayのアップロード結果ファイルを取り込む ----
    列名は版によって表記ゆれがあるので、英数字だけに落として突き合わせる。
    Success・Warning は ItemID を行と書き出しログへ（Warning は警告文もログに残す）。
@@ -11082,6 +11313,10 @@ document.addEventListener('click',function(e){
   e.preventDefault();
   syncMoreOpen[k]=!syncMoreOpen[k];
   syncMoreSave();
+  /* MW の候補一覧（mw…）はそちらを作り直す。ほかは販売連携の一覧。 */
+  if(/^mw/.test(k)&&typeof mwListRender==='function'&&mwRows&&mwRows.length){
+    mwListRender(); return;
+  }
   if(typeof syncRender==='function'&&syncData)syncRender();
 });
 /* 自動値下げの帯。オフのときは出さない。 */
@@ -14326,7 +14561,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v187';   // sw.js の const V と必ず同じ値にする
+var APP_V='v188';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

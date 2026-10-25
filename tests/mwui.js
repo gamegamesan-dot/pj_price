@@ -204,26 +204,26 @@ ok(Math.abs(calc.target-(1000+calc.cost*0.3))<0.01,
 ok(/推奨売値/.test(lst.html)&&/利益/.test(lst.html)&&/下限利益/.test(lst.html),
    '★★一覧に推奨売値・利益・下限利益を出す');
 
-console.log('\n=== 絞っていないことをはっきり書く（4章の6は段取りC）===');
+console.log('\n=== 相場を調べる前は「未調査」に入る（4章の6は 6.86）===');
 let split=await p.evaluate(()=>{
   const t=$('csvMwList').textContent;
   return { n:/候補 3件/.test(t),
-    warn:/この一覧は「利益が出るか」では絞っていません/.test(t),
-    c:/段取り C で足します/.test(t),
-    eye:/目で見て選んでください/.test(t),
+    none:/④ 相場 未調査 3件/.test(t),
+    say:/相場 未調査/.test(t),
     order:(function(){
-      /* 卸値が安い順（売値が低い順）に並ぶ。 */
+      /* 未調査の中は売値が低い順に並ぶ。 */
       const i1=t.indexOf('ベヨネッタ'), i2=t.indexOf('グリザイア'),
             i3=t.indexOf('高すぎる商品');
       return i1<i2&&i2<i3; })() };
 });
 console.log('   '+JSON.stringify(split));
 /* 推奨売値は下限利益がちょうど出る値段なので、3件すべて「利益は出る」。
-   実際のふるい分けは eBay の相場と比べる 4章の6（段取り C）。 */
+   実際のふるい分けは eBay の相場と比べる 4章の6（6.86 で実装した）。
+   相場をまだ引いていない行は「未調査」に入り、出品候補には混ぜない。 */
 ok(split.n,'★★値段を出せた3件が候補になる');
-ok(split.warn&&split.c,'★★「利益では絞っていない」「相場の比べは段取りC」と書く');
-ok(split.eye,'★いまは目で見て選ぶと書く');
-ok(split.order,'★★売値が低い順に並べる（相場に収まりやすい行を上に）');
+ok(split.none,'★★相場を調べていない行は「未調査」に入る（出品候補に混ぜない）');
+ok(split.say,'★★行にも「相場 未調査」と出して、調べるよう促す');
+ok(split.order,'★★売値が低い順に並べる');
 
 console.log('\n=== 行数が減りすぎたときの警告 ===');
 await setup({warn:'今回の取り込みは 3行で、生きている 12行より 75% 少ないため、欠品にしていません'});
