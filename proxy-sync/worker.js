@@ -4459,6 +4459,7 @@ const MW_CHUNK = 400;                  // 画面が1回に送ってくる行数�
 const MW_SHIP_OK = 4;                  // 無在庫に使える出荷の営業日数
 const MW_DROP_WARN = 0.30;             // 行数がこれ以上減ったら取得ミスとみなす
 const MW_LIST_MAX = 500;               // 候補一覧で返す行数の上限
+const MW_STOCK_MIN = 5;                // MW在庫の下限の既定（7.74）
 /* ---- eBay の相場（4章の6・7.62）---- */
 const MW_MKT_MAX = 120;                // 1回に調べる JAN の数（＝Browse の呼び出し回数）
                                        // 60秒の上限でだいたいこの数まで進む
@@ -4536,7 +4537,7 @@ async function mwStockPut(env, body) {
   const run = newRun("mw-stock");
   const res = { ok: false, part: 1, parts: 1, taken: 0, added: 0, changed: 0,
                 same: 0, skipped: 0, gone: 0, back: 0, picked: 0, seen: 0,
-                warn: "", at: "" };
+                zeroed: 0, warn: "", at: "" };
   try {
     const at = String((body && body.at) || "").trim() || nowIso();
     res.at = at;
@@ -4633,6 +4634,19 @@ async function mwStockPut(env, body) {
              FROM mw_stock WHERE gone_at IS NULL
            ) WHERE rn=1)`).run();
       res.picked = Number((pk && pk.meta && pk.meta.changes) || 0);
+      /* ---- 欠品した出品の数量を**すぐ0にする**（7.73）----
+         数量を減らす方向なので確認を待たない（売り越しが一番まずい）。
+         値上げと数量1に戻すのは今までどおり（毎時は予定・日次で実行）。 */
+      try {
+        /* 何か動いたときだけ走らせる（欠品が出た・在庫数が変わった）。
+           3割の歯止めが効いたときは何も消していないので走らせない。 */
+        if (!res.warn && (res.gone > 0 || res.changed > 0)) {
+          const z = await jobMwDrop(env, { approve: true, only: "zero" });
+          res.zeroed = Number((z && z.zero) || 0);
+          if (res.zeroed)
+            run.notes.push("欠品した出品 " + res.zeroed + "件の数量を0にしました");
+        }
+      } catch (e) { run.notes.push("mw-zero: " + String((e && e.message) || e)); }
       await env.DB.prepare(
         `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
            unreadable,warn,note,created_at)
@@ -5058,6 +5072,11 @@ async function jobMwDrop(env, opt) {
     const limit = Math.max(1, Math.min(MW_D_MAX, mwNum(o.limit) || MW_D_MAX));
     const mode = (o.approve || o.mode === "auto") ? "auto" : "confirm";
     res.mode = mode;
+    /* only:'zero' … **数量を0にする行だけ**を扱う（7.73）。
+       数量を減らす方向なので確認を待たずに実行してよい。
+       値上げと数量1に戻すのは今までどおり（毎時は予定・日次で実行）。 */
+    const only = String(o.only || "");
+    res.only = only;
     /* W- の SKU を持つ出品だけ。 */
     const q = await env.DB.prepare(
       `SELECT asin, cond, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
@@ -5105,6 +5124,7 @@ async function jobMwDrop(env, opt) {
       if (!j) { res.skipped++; continue; }
       const pl = mwDropPlan(S, r, mwBy[j], mkBy[j], over);
       if (!pl.act) { if (pl.why) res.plan.push({ jan: j, why: pl.why }); continue; }
+      if (only === "zero" && pl.act !== "zero") continue;   // 7.73
       todo.push({ jan: j, item_id: String(r.ebay_item_id), act: pl.act,
                   kind: (pl.act === "up") ? "price" : pl.act,
                   to: pl.to, qty: pl.qty, why: pl.why,
@@ -5187,7 +5207,10 @@ async function mwDropNotify(env, run, res, done) {
   const n = res.zero + res.up + res.relist + res.restock;
   if (!n && !res.failed) return;
   const t = [];
-  t.push(done ? "🏷 MW無在庫の見直し" : "🏷 MW無在庫の見直し（確認。まだ変えていません）");
+  t.push(res.only === "zero"
+    ? "🛑 MWで欠品した出品の数量を0にしました（取り込みのたびに自動）"
+    : (done ? "🏷 MW無在庫の見直し"
+            : "🏷 MW無在庫の見直し（確認。まだ変えていません）"));
   if (res.zero) t.push("・数量を0にした（MWで欠品・赤字）… " + res.zero + "件");
   if (res.up) t.push("・売値を上げた（卸値が上がった）… " + res.up + "件");
   if (res.relist + res.restock)
@@ -5196,6 +5219,42 @@ async function mwDropNotify(env, run, res, done) {
   for (const x of res.rows.slice(0, 10))
     t.push("  JAN " + x.jan + " " + x.title + " … " + x.why);
   await notify(env, run, t.join("\n"));
+}
+
+/* ===== MW の在庫CSVの取り込みが古いときの催促（7.75）=====
+   欠品は **CSV を取り込まないと分からない**。取り込みが止まると
+   売り越しに気づけないので、24時間を過ぎたら知らせる。
+   Discord は1日1回まで（毎時の実行で鳴り続けないように）。 */
+const MW_STALE_H = 24;             // これを過ぎたら催促する
+const MW_STALE_KEY = "mw.stale.notified";
+async function mwStaleCheck(env, run) {
+  const r = await env.DB.prepare(
+    `SELECT at FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+  const alive = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`).first();
+  /* そもそも MW を使っていない（在庫が入っていない）なら何も言わない。 */
+  if (!Number((alive && alive.n) || 0)) return { stale: false, hours: 0 };
+  const at = (r && r.at) || "";
+  const ms = at ? (Date.now() - new Date(at).getTime()) : Infinity;
+  const hours = isFinite(ms) ? Math.floor(ms / 3600000) : 0;
+  const stale = ms >= MW_STALE_H * 3600000;
+  if (!stale) {
+    if (await stateGet(env, MW_STALE_KEY)) await stateSet(env, MW_STALE_KEY, "").run();
+    return { stale: false, hours, at };
+  }
+  /* 1日1回まで。 */
+  const last = await stateGet(env, MW_STALE_KEY);
+  const lastMs = last ? (Date.now() - new Date(last).getTime()) : Infinity;
+  if (lastMs >= 24 * 3600000) {
+    await notify(env, run,
+      "⏰ **MW の在庫CSVを取り込んでください**\n"
+      + (at ? ("最後の取り込みは " + jstText(at) + "（" + hours + "時間前）です。")
+            : "まだ一度も取り込んでいません。")
+      + "\n取り込まないと **MW の欠品が分からず、売り越し**になります。"
+      + "\n出品CSVタブの「MWの在庫CSVを取り込む」から入れてください。");
+    await stateSet(env, MW_STALE_KEY, nowIso()).run();
+  }
+  return { stale: true, hours, at };
 }
 
 /* ===== 売れたら「MW に注文してください」（7.72）=====
@@ -5373,7 +5432,9 @@ function mwWhere(opt) {
     .map((x) => String(x).trim()).filter(Boolean).slice(0, d1Step(1));
   const newOnly = o.new_only !== 0 && o.new_only !== "0" && o.new_only !== false;
   const shipMax = Math.max(0, Math.min(99, mwNum(o.ship_max) || MW_SHIP_OK));
-  const stockMin = Math.max(1, mwNum(o.stock_min) || 2);
+  /* MW在庫の下限（既定5点）。手で取り込む間に売り切れるのを防ぐため、
+     1〜2点の商品は無在庫にしない（7.74）。 */
+  const stockMin = Math.max(1, mwNum(o.stock_min) || MW_STOCK_MIN);
   const where = ["gone_at IS NULL", "pick=1"];
   const bind = [];
   if (kishu.length) {
@@ -5571,6 +5632,7 @@ async function mwList(env, url) {
     `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn
        FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
   return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
+           stale_h: MW_STALE_H,
            mkt: { seen: Number((mk && mk.seen) || 0), hit: Number((mk && mk.hit) || 0),
                   none: Number((mk && mk.none) || 0),
                   left: Math.max(0, Number((n && n.n) || 0) - Number((mk && mk.seen) || 0)),
@@ -7364,7 +7426,9 @@ export default {
            approve:true で実際に eBay の数量・売値を変える。 */
         if (kind === "mwdrop")
           return json(await jobMwDrop(env, { approve: body.approve === true,
-            limit: body.limit, over: body.over }), 200, origin);
+            limit: body.limit, over: body.over,
+            /* only:"zero" は数量0だけ（7.73）。 */
+            only: body.only }), 200, origin);
         /* 在庫補充（数量を1に戻す）（7.53）。既定は「確認してから」。
            approve:true は販売連携タブの「在庫補充（数量を1に戻す）」。 */
         if (kind === "soldkeep")
@@ -7429,8 +7493,11 @@ export default {
       await jobSoldKeep(env, {});        // 在庫補充（数量を1に戻す）（7.53）
       /* 段取り D：MW の無在庫を守る（7.72）。
          欠品で売り越すのが一番まずいので、毎時「確認」まで走らせる
-         （実際に変えるのは日次、または画面の「まとめて実行」）。 */
+         （実際に変えるのは日次、または画面のボタン）。 */
       await jobMwDrop(env, {});
+      /* 取り込みが24時間止まっていたら催促する（7.75）。 */
+      try { await mwStaleCheck(env, newRun("mw-stale")); }
+      catch (e) { /* 催促が失敗しても本体は止めない */ }
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -7471,6 +7538,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
+                        mwStaleCheck, MW_STALE_H, MW_STOCK_MIN,
                         MW_D_MAX, MW_D_OVER,
                         spSlotKv, SP_KV_LANES,
                         mwAmzRun, mwAmzList, mwAsinFind, amazonLowest,

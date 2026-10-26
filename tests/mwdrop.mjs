@@ -208,6 +208,130 @@ ok(/在庫に見つかりません/.test(notes[0]),'★★MW に無い JAN は�
 ok(/2週間の取り置き/.test(notes[0])&&/銀行振込/.test(notes[0]),
    '★★注文のしかたも書く');
 
+console.log('\n=== 欠品だけをすぐ実行する（only:zero・7.73）===');
+/* 数量を減らす方向なので確認を待たない。値上げと数量1は対象にしない。 */
+await env.DB.prepare(
+  "UPDATE mw_stock SET gone_at='2026-10-31T00:00:00Z' WHERE jan='4988611224878'").run();
+await env.DB.prepare(
+  "UPDATE items SET ebay_qty=1 WHERE asin='B00W000003'").run();
+/* 卸値を上げて「値上げが必要な行」も作っておく */
+await env.DB.prepare(
+  "UPDATE mw_stock SET wholesale=9000 WHERE jan='4580416924740'").run();
+await env.DB.prepare(
+  "UPDATE items SET ebay_price=?1 WHERE asin='B00W000002'").bind(base.price).run();
+sent=[]; notes=[];
+r=await post({ kind:'mwdrop', approve:true, only:'zero' });
+console.log('   '+JSON.stringify({only:r.body.only,zero:r.body.zero,
+  up:r.body.up,relist:r.body.relist}));
+ok(r.body.only==='zero','★only を返す');
+ok(r.body.zero===1,'★★★欠品の行は数量0にする');
+ok(r.body.up===0&&r.body.relist===0&&r.body.restock===0,
+   '★★★値上げと数量1に戻すのは only:zero では行わない');
+ok(/<Quantity>0<\/Quantity>/.test(sent.map((x)=>x.body).join('')),'★数量0を送る');
+ok(!/<StartPrice/.test(sent.map((x)=>x.body).join('')),'★★売値は送らない');
+let q2=await env.DB.prepare(
+  "SELECT ebay_price FROM items WHERE asin='B00W000002'").first();
+ok(Math.abs(q2.ebay_price-base.price)<0.01,'★★値上げの行は触っていない');
+ok(/欠品した出品の数量を0にしました/.test(notes.join('')),
+   '★★★Discord に実行結果として出す（確認ではない）');
+ok(/取り込みのたびに自動/.test(notes.join('')),'★★自動であることを書く');
+
+console.log('\n=== 取り込みの最後の便で、欠品の数量0を自動で実行する（7.73）===');
+const env2=makeEnv({ EBAY_CLIENT_ID:'ci', EBAY_CLIENT_SECRET:'cs',
+  EBAY_REFRESH_TOKEN:'rt', LWA_CLIENT_ID:'a', LWA_CLIENT_SECRET:'b',
+  LWA_REFRESH_TOKEN:'c' });
+await env2.DB.prepare(
+  `INSERT INTO sync_state (k,v,updated_at) VALUES ('settings',?1,'x')`)
+  .bind(JSON.stringify({ fx:160, fee:13.6, intlFee:1.35, autoAdRate:6, feeTax:10,
+    fixed:0.40, pack:150, shipCharge:15, usTaxRate:8, baseProfit:1000,
+    linkRate:30, saleRate:15, targetMode:'auto', mwShipFee:176 })).run();
+const row2=(jan)=>({jan:jan,sha:'M200',idx:0,kishu:'NS',name:jan+'の商品',
+  list_price:5000,release:'2025/01/01',cond:'新品',wholesale:3000,stock:9,
+  note:'',ship_text:'即日出荷',ship_days:0});
+const put2=async(body)=>asJson(await worker.fetch(new Request('https://x/mw/stock',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env2));
+/* 20件入れて、うち2件を eBay に出ている状態にする。
+   1件だけ消せば 5% なので3割の歯止めには当たらない。 */
+const many2=new Array(20).fill(0).map((_,i)=>row2(String(4950000000000+i)));
+await put2({ at:'2026-11-01T00:00:00Z', part:1, parts:1, rows:many2 });
+await env2.DB.prepare(
+  `INSERT INTO items (asin,cond,scope,title,ebay_item_id,ebay_sku,ebay_qty,
+     ebay_price,weight_g,updated_at) VALUES
+   ('B00Z000001','new','ebay','出品1','180011',?2,1,?1,150,'x'),
+   ('B00Z000002','new','ebay','出品2','180012',?3,1,?1,150,'x')`)
+  .bind(base.price,'W-'+many2[0].jan,'W-'+many2[1].jan).run();
+/* 2件目が消えた CSV を取り込む（＝欠品） */
+sent=[]; notes=[];
+r=await put2({ at:'2026-11-02T00:00:00Z', part:1, parts:1,
+  rows:many2.filter(function(x){ return x.jan!==many2[1].jan; }) });
+console.log('   '+JSON.stringify({gone:r.body.gone,zeroed:r.body.zeroed,
+  warn:r.body.warn||''}));
+ok(r.body.gone===1,'★欠品が1件');
+ok(r.body.zeroed===1,'★★★取り込んだ時点で欠品の数量を0にする（確認を待たない）');
+let z=await env2.DB.prepare(
+  "SELECT ebay_qty FROM items WHERE asin='B00Z000002'").first();
+ok(z.ebay_qty===0,'★★★D1 の数量も0になる');
+let z2=await env2.DB.prepare(
+  "SELECT ebay_qty FROM items WHERE asin='B00Z000001'").first();
+ok(z2.ebay_qty===1,'★★残っている行は触らない');
+ok(/欠品した出品の数量を0にしました/.test(notes.join('')),
+   '★★Discord に実行結果を出す');
+
+console.log('\n=== 3割の歯止めが効いたときは数量0にしない ===');
+const env3=makeEnv({ EBAY_CLIENT_ID:'ci', EBAY_CLIENT_SECRET:'cs',
+  EBAY_REFRESH_TOKEN:'rt' });
+await env3.DB.prepare(
+  `INSERT INTO sync_state (k,v,updated_at) VALUES ('settings','{}','x')`).run();
+const put3=async(body)=>asJson(await worker.fetch(new Request('https://x/mw/stock',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env3));
+await put3({ at:'2026-11-01T00:00:00Z', part:1, parts:1,
+  rows:new Array(10).fill(0).map((_,i)=>row2(String(4940000000000+i))) });
+sent=[];
+r=await put3({ at:'2026-11-02T00:00:00Z', part:1, parts:1, rows:[row2('4940000000000')] });
+console.log('   '+JSON.stringify({gone:r.body.gone,zeroed:r.body.zeroed,
+  warn:(r.body.warn||'').slice(0,30)}));
+ok(!!r.body.warn,'★3割の歯止めが効く');
+ok(r.body.gone===0&&r.body.zeroed===0,
+   '★★★取得ミスの可能性があるときは数量0にしない（売り越しより怖い誤爆を避ける）');
+ok(sent.length===0,'★★eBay を呼ばない');
+
+console.log('\n=== MW在庫の下限の既定（7.74）===');
+ok(W.MW_STOCK_MIN===5,'★★★在庫の下限の既定は5点');
+let w5=W.mwWhere({ kishu:'NS' });
+ok(/COALESCE\(stock,0\)>=5/.test(w5.w),
+   '★★★stock_min を送らなければ5点で絞る');
+let w2=W.mwWhere({ kishu:'NS', stock_min:2 });
+ok(/COALESCE\(stock,0\)>=2/.test(w2.w),'★★⚙設定で変えられる');
+
+console.log('\n=== 取り込みが24時間止まったら催促する（7.75）===');
+ok(W.MW_STALE_H===24,'★24時間');
+notes=[];
+let st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+console.log('   '+JSON.stringify(st));
+ok(st.stale===false,'★★さっき取り込んだので催促しない');
+ok(notes.length===0,'★Discord にも出さない');
+/* 25時間前にする */
+await env2.DB.prepare(
+  "UPDATE mw_runs SET at=?1").bind(new Date(Date.now()-25*3600000).toISOString()).run();
+notes=[];
+st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+console.log('   '+JSON.stringify({stale:st.stale,hours:st.hours}));
+ok(st.stale===true&&st.hours>=25,'★★★24時間を過ぎたら催促する');
+ok(/MW の在庫CSVを取り込んでください/.test(notes.join('')),'★★★Discord に出す');
+ok(/売り越し/.test(notes.join('')),'★★なぜ必要かを書く');
+/* 1日1回まで */
+notes=[];
+st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+ok(notes.length===0,'★★★1日1回まで（毎時鳴らさない）');
+/* MW を使っていない（在庫が入っていない）なら何も言わない */
+const env4=makeEnv({});
+notes=[];
+st=await W.mwStaleCheck(env4,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+ok(st.stale===false&&notes.length===0,
+   '★★★MW の在庫が入っていなければ催促しない');
+
 console.log('\n=== 作業者のキー ===');
 r=await post({ kind:'mwdrop' },'staff-key-123');
 ok(r.status===403,'★★作業者では走らせられない（価格と数量を動かすため）');

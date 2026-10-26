@@ -150,6 +150,7 @@ body.staff #syncBarPics,
 body.staff #syncPbBar,                /* フェイズB（価格と在庫を動かす） */
 body.staff #syncRkBar,                /* 再調達中の売値の追従（6.70） */
 body.staff #syncSkBar,                /* 在庫補充（数量を1に戻す）（6.77） */
+body.staff #syncMwBox,                /* 無在庫（MW）の見直し（6.97・数量と売値を動かす） */
 body.staff .pbonly,
 body.staff #syncOnHandFix{display:none !important}
 /* ⚙設定を使う頻度で3段に並べる（6.50）。
@@ -872,6 +873,7 @@ body.staff #syncOnHandFix{display:none !important}
     <div class="h">販売連携（FBA × eBay）</div>
     <div class="body">
       <!-- 取り込みが上限で切れたときの警告（設定の「取り込みの上限」） -->
+      <div class="warn" id="syncMwStale" style="display:none;margin-bottom:8px"></div>
       <div class="warn" id="syncCutWarn" style="display:none;margin-bottom:8px"></div>
       <!-- 3時間ごとの最安値が上限で取り切れていないときの警告（6.72） -->
       <div class="warn cfgprice" id="syncHotWarn" style="display:none;margin-bottom:8px"></div>
@@ -992,6 +994,16 @@ body.staff #syncOnHandFix{display:none !important}
         <summary class="note2" style="margin:0;cursor:pointer">その他（ときどき使う）</summary>
         <div style="padding:6px 0 0">
           <button class="btn" id="syncPush" style="width:100%">出品リストの名簿を送る（手元在庫の印つき）</button>
+          <!-- 段取り D：MW の無在庫（6.97）。管理者だけ -->
+          <div id="syncMwBox" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px">
+            <div class="note2" style="margin:0 0 4px"><b>無在庫（MW）の見直し</b>　MW の在庫に合わせて eBay の数量・売値を直します。<b>欠品の数量0は取り込みのたびに自動</b>で行います。ここでは<b>値上げと数量1に戻す</b>分を見ます。</div>
+            <div style="display:flex;gap:6px">
+              <button class="btn" id="syncMwPlan" style="flex:1">無在庫の予定を見る</button>
+              <button class="btn primary" id="syncMwGo" style="flex:1">実行する</button>
+            </div>
+            <div class="note2" id="syncMwNote" style="margin-top:2px"></div>
+            <div id="syncMwList" style="margin-top:4px"></div>
+          </div>
           <div class="note2" id="syncPushNote">アップロード結果を取り込んだときに自動で送ります。手で送り直したいときだけ押してください。</div>
           <button class="btn" id="syncOnHandFix" style="width:100%;margin-top:8px">手元在庫の印を付け直す（FBAに在庫がある行から外す）</button>
           <div class="note2" id="syncFixNote"></div>
@@ -1210,7 +1222,7 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" style="margin-top:0">MW の送料は1回 ¥880（5万円以上は無料）。取り置きでまとめて5点で発送すると1点 ¥176 になるので、送料無料に届かなくても ¥176 で計算します。仕入値＝<b>卸値×1.1＋この額</b>。</div>
       <div class="rowv"><label>対象の機種</label><input type="text" id="mwKishu" value="NS,NS2,NS2H,P5,P4,b2cchara_figure,figure,FIG,GF,plasticmodel"><div class="note2" style="margin-top:2px">MW の CSV の「機種」の値をカンマで並べます。ここに無い機種は候補に出ません。</div></div>
       <div class="row"><label>出荷の上限</label><input type="number" id="mwShipMax" value="4" step="1" min="0" max="99" inputmode="numeric"><span class="unit">営業日</span></div>
-      <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="2" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
+      <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="5" step="1" min="1" inputmode="numeric"><span class="unit">点</span><div class="note2" style="margin-top:2px">手で取り込む間に売り切れるのを防ぐため、<b>既定は5点</b>です。少なくすると候補は増えますが、欠品の危険も増えます。</div></div>
       <div class="note2" style="margin-top:0">1点しかない商品は売れる前に消えやすいので、既定では2点以上だけを候補にします。</div>
       <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
       <div class="rowv"><label>MW用の配送ポリシー名</label><input type="text" id="csvShipProfileMw" value="W2000"><div class="note2" style="margin-top:2px">無在庫（MW）の行をこのポリシーで出します。<b>MW の出荷日数＋2日以上</b>のハンドリングタイムが設定されたポリシーを指定してください。</div></div>
@@ -2768,6 +2780,12 @@ function switchTab(t){
   $('tabShopee').style.display=t==='C'?'block':'none';
   $('tabCsv').style.display=t==='D'?'block':'none';
   $('tabSync').style.display=t==='E'?'block':'none';
+  /* 販売連携タブを開いたら、MW の取り込みの古さを見に行く（6.97）。
+     1分に1回までにして、タブを往復しても鳴らし続けない。 */
+  if(t==='E'&&typeof mwStaleLoad==='function'
+     &&(Date.now()-(switchTab._mw||0))>60000){
+    switchTab._mw=Date.now(); mwStaleLoad();
+  }
   // 選んだ行の操作バーは販売連携タブだけに出す
   var sb=$('syncBar'); if(sb&&t!=='E')sb.style.display='none';
   /* 出品CSVタブと販売連携タブでは計算機の「商品」欄を使わない
@@ -8624,7 +8642,7 @@ function mwKishuList(){
     .map(function(x){ return x.trim(); }).filter(Boolean);
 }
 function mwShipMax(){ var n=+$('mwShipMax').value; return (isFinite(n)&&n>=0)?n:4; }
-function mwStockMin(){ var n=+$('mwStockMin').value; return (isFinite(n)&&n>=1)?n:2; }
+function mwStockMin(){ var n=+$('mwStockMin').value; return (isFinite(n)&&n>=1)?n:5; }
 function mwNewOnly(){ return !!$('mwNewOnly').checked; }
 /* 備考の注意する言葉（6.89）。⚙設定で編集できる。 */
 function mwNoteNgList(){
@@ -8860,6 +8878,8 @@ $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
 })();
 $('csvMwLoad').onclick=mwListRun;
 $('csvMwPush').onclick=mwPushRun;
+$('syncMwPlan').onclick=function(){ mwDropAct(false); };
+$('syncMwGo').onclick=function(){ mwDropAct(true); };
 $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
@@ -8961,6 +8981,81 @@ function mwPost(path,body){
     syncJsonPost(path,body,res,function(why){ rej(new Error(why)); });
   });
 }
+/* ===== 段取り D を画面から動かす（6.97）=====
+   PowerShell を使わずに、販売連携タブのボタンで確認と実行ができる。
+   欠品の数量0は取り込みのたびに自動で走るので、ここで見るのは
+   **値上げと数量1に戻す**分。管理者だけ（数量と売値を動かすため）。 */
+function mwDropAct(approve){
+  var note=$('syncMwNote'), el=$('syncMwList');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  if(approve&&!confirm('MW の在庫に合わせて eBay の数量・売値を変えます。'
+    +'よろしいですか？\n（先に「無在庫の予定を見る」で中身を確かめられます）'))return;
+  var a=$('syncMwPlan'), b=$('syncMwGo');
+  a.disabled=true; b.disabled=true;
+  note.textContent=approve?'実行しています…':'予定を調べています…';
+  mwPost('/sync',{ kind:'mwdrop', approve:!!approve })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'動きませんでした');
+      var n=(d.zero||0)+(d.up||0)+(d.relist||0)+(d.restock||0);
+      note.innerHTML=(approve?'<b>実行しました</b>':'<b>予定（まだ変えていません）</b>')
+        +'　見た出品 '+(d.picked||0)+'件'
+        +'<br>数量0 <b>'+(d.zero||0)+'</b>件'
+        +'／値上げ <b>'+(d.up||0)+'</b>件'
+        +'／数量1に戻す <b>'+((d.relist||0)+(d.restock||0))+'</b>件'
+        +(d.failed?('／<span style="color:var(--bad)">失敗 '+d.failed+'件</span>'):'')
+        +(n?'':'<br>直すものはありません。');
+      el.innerHTML=(d.rows||[]).slice(0,30).map(function(x){
+        var name={ zero:'数量0', up:'値上げ', relist:'数量1', restock:'売値を直して数量1' };
+        return '<div class="note2" style="margin:3px 0;padding:4px;'
+          +'border-left:3px solid '+((x.act==='zero')?'var(--bad)':'var(--good)')
+          +';padding-left:6px"><b>'+(name[x.act]||x.act)+'</b>'
+          +(x.to?('　→ '+usd(x.to)):'')
+          +'　JAN '+esc(x.jan)+'<br>'+esc(String(x.title||'').slice(0,50))
+          +'<br><span style="opacity:.8">'+esc(x.why||'')+'</span></div>';
+      }).join('')
+        +(((d.rows||[]).length>30)?('<div class="note2">…ほか '
+          +((d.rows||[]).length-30)+'件</div>'):'');
+      /* 実行したら一覧も取り直す（数量と売値が変わっているため）。 */
+      if(approve&&n)syncLoadRun(function(){});
+    })
+    ['catch'](function(e){ note.textContent='⚠ '+e.message; })
+    .then(function(){ a.disabled=false; b.disabled=false; });
+}
+/* ---- MW の在庫CSVの取り込みが古いときの催促（6.97）----
+   欠品は CSV を取り込まないと分からないので、24時間を過ぎたら帯で出す。 */
+var MW_STALE_H=24;
+/* 販売連携タブを開いたときにも、取り込みの時刻だけ軽く引いておく。 */
+function mwStaleLoad(){
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey())return;
+  fetch(syncUrl()+'/mw/list?limit=1',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ return res.ok?res.json():null; })
+    .then(function(d){
+      if(d&&d.last&&d.last.at)mwStaleAt=d.last.at;
+      if(d&&d.stale_h)MW_STALE_H=+d.stale_h||24;
+      mwStaleRender();
+    })
+    ['catch'](function(){});
+}
+function mwStaleRender(){
+  var el=$('syncMwStale'); if(!el)return;
+  var at=(mwLast&&mwLast.at)||mwStaleAt||'';
+  if(!at){ el.style.display='none'; return; }
+  var ms=Date.now()-new Date(at).getTime();
+  if(!isFinite(ms)||ms<MW_STALE_H*3600000){ el.style.display='none'; return; }
+  var h=Math.floor(ms/3600000);
+  el.innerHTML='⏰ <b>MW の在庫CSVを取り込んでください</b>'
+    +'　最後の取り込みは '+esc(jstShort(at))+'（'+h+'時間前）です。'
+    +'<br>取り込まないと <b>MW の欠品が分からず、売り越し</b>になります。'
+    +'出品CSVタブの「MWの在庫CSVを取り込む」から入れてください。';
+  el.style.display='';
+}
+/* 取り込みの時刻は候補一覧からも販売連携からも拾えるようにする。 */
+var mwStaleAt='';
 /* ===== MW の候補を出品リストに入れる（6.96）=====
    写真が付いた「① 出品候補」の行を、既存の出品リスト（csvList）に足す。
    こうすると英題生成・Item Specifics・原産国・書き出し（File Exchange）は
@@ -14490,6 +14585,7 @@ function syncRender(){
       return ((x===null)?Infinity:x)-((y===null)?Infinity:y); });
   shown=keep.length;
   findNoteRender('sync',shown,rows.length);     // 検索の件数と「×」（6.92）
+  mwStaleRender();                              // MW の取り込みが古い催促（6.97）
   var sPer=pagePer('syncPerPage');
   syncPage=pageClamp(syncPage,shown,sPer);
   var sFrom=(syncPage-1)*sPer;
@@ -15688,7 +15784,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v193';   // sw.js の const V と必ず同じ値にする
+var APP_V='v194';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
