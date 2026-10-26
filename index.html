@@ -703,6 +703,22 @@ body.staff #syncOnHandFix{display:none !important}
             扱っています。読み取りの規則に足すときはこの一覧を見せてください。</div>
           <div id="csvMwShipList" style="margin-top:4px"></div>
         </details>
+        <!-- 国内 Amazon FBA の実売価格（7.66）。eBay とは別の出口 -->
+        <details id="csvMwAmzBox" data-box="1" style="margin-top:10px">
+          <summary class="h" style="cursor:pointer;font-size:13px">国内 Amazon FBA で見る（テスト仕入れ用）</summary>
+          <div class="note2" style="margin:4px 0 0">候補の JAN から <b>ASIN</b> を引き、
+            <b>Amazon の実売価格</b>（カートか最安）で FBA の利益を出します。
+            定価の見積りではありません。<b>ランキング・新品出品者数・Amazon本体の有無</b>も出します。
+            1回に <b id="csvMwAmzMax">120</b>件まで（値段の取得が10秒に1回のため）。</div>
+          <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonの実売価格を取る</button>
+          <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
+            <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
+          </div>
+          <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
+          <div id="csvMwAmzList" style="margin-top:6px"></div>
+        </details>
         <!-- eBay の相場（4章の6）。1回の件数で区切って、押すたびに進む -->
         <div class="row" style="margin-top:10px"><label>1回に調べる件数</label>
           <input type="number" id="csvMwMktLimit" value="120" step="10" min="1" max="400" inputmode="numeric"><span class="unit">件</span></div>
@@ -1154,6 +1170,12 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
       <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
       <div class="chk"><input type="checkbox" id="mwNoteAll"><label for="mwNoteAll" style="flex:1">状態に注意の行も候補に含める</label></div>
+      <div class="note2" style="margin:8px 0 2px"><b>国内 Amazon FBA の手数料</b>（実売価格で利益を出すときに使います。10/7 の利益計算ファイルから読み取った値を既定にしています）</div>
+      <div class="row"><label>販売手数料（ゲーム）</label><input type="number" id="mwAmzFeeGame" value="15" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>FBA手数料（ゲーム）</label><input type="number" id="mwAmzFbaGame" value="530" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label>販売手数料（ホビー）</label><input type="number" id="mwAmzFeeHobby" value="10" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="row"><label>FBA手数料（ホビー）</label><input type="number" id="mwAmzFbaHobby" value="580" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="note2" style="margin-top:2px">そのほかの機種は⚙設定の「Amazon販売手数料」「FBA配送代行手数料」を使います。FBA手数料は実際には商品の大きさで変わるので、発注前に Amazon の料金シミュレーターで確かめてください。</div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
       <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
       </div>
@@ -4140,7 +4162,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 自動処理の広告料率（6.74）／売れたあとの在庫補充（6.77）
                  'autoAdRate','autoSkMode',
                  // マッチングワールド（MW）の無在庫（6.85）
-                 'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg'];
+                 'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
+                 'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -8688,6 +8711,9 @@ function mwImportRun(text,fi){
 $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
 /* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
 $('csvMwLoad').onclick=mwListRun;
+$('csvMwAmz').onclick=mwAmzRunGo;
+$('csvMwAmzLoad').onclick=mwAmzLoad;
+$('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwMkt').onclick=mwMktRun;
 $('csvMwFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; this.value='';
@@ -8779,6 +8805,198 @@ function mwPost(path,body){
   return new Promise(function(res,rej){
     syncJsonPost(path,body,res,function(why){ rej(new Error(why)); });
   });
+}
+/* ===== 国内 Amazon FBA で見る（6.91・7.66）=====
+   候補の JAN から ASIN を引き、**Amazon の実売価格**で FBA の利益を出す。
+   Worker は「取ってきた事実」だけを控え、**手数料と利益はここで計算する**
+   （手数料率が⚙設定で変わるので、設定を変えたら取り直さずに計算し直せる）。
+
+   利益 ＝ 販売価格 −（販売手数料 ＋ FBA手数料）− 仕入値
+   仕入値 ＝ 卸値 × 1.1（税込）＋ 1点あたりの仕入れ送料
+   粗利（税抜）＝ 粗利 × 10 / 11（消費税を引いた額） */
+var mwAmzRows=[], mwAmzMeta=null;
+var MW_AMZ_GAME={ NS:1, NS2:1, NS2H:1, P5:1, P4:1, '3DS':1, PS5:1, PS4:1, SW:1,
+  PP:1, PV:1, XB:1, XBX:1, WIN:1, PCC:1, '68':1 };
+var MW_AMZ_HOBBY={ b2cchara_figure:1, figure:1, FIG:1, GF:1, plasticmodel:1 };
+/* その行のジャンル（手数料の区分）。10/7 のファイルの「ジャンル」に相当。 */
+function mwAmzGenre(r){
+  var k=String((r||{}).kishu||'');
+  if(MW_AMZ_GAME[k])return 'ゲーム';
+  if(MW_AMZ_HOBBY[k])return 'フィギュア';
+  return 'その他';
+}
+/* 0 を入れたときに既定値へ戻ってしまわないよう、数かどうかで見る
+   （`+v||既定` だと 0 が falsy なので既定に戻る）。 */
+function mwNum0(id,def){
+  var n=+$(id).value;
+  return (isFinite(n)&&n>=0)?n:def;
+}
+function mwAmzFee(r){
+  var g=mwAmzGenre(r);
+  if(g==='ゲーム')
+    return { rate:mwNum0('mwAmzFeeGame',15), fba:mwNum0('mwAmzFbaGame',530) };
+  if(g==='フィギュア')
+    return { rate:mwNum0('mwAmzFeeHobby',10), fba:mwNum0('mwAmzFbaHobby',580) };
+  return { rate:mwNum0('amzFeeRate',15), fba:mwNum0('amzFbaFee',400) };
+}
+/* 1行ぶんの利益。値段が取れていない行は null。 */
+function mwAmzCalc(r){
+  var price=+((r||{}).price)||0;
+  if(!(price>0))return null;
+  var cost=mwCost(r);                      // 卸値×1.1＋仕入れ送料（MW と同じ式）
+  if(!(cost>0))return null;
+  var f=mwAmzFee(r);
+  var fee=Math.round(price*f.rate/100)+f.fba;
+  var profit=Math.round(price-fee-cost);
+  return { price:price, cost:cost, fee:fee, rate:f.rate, fba:f.fba,
+           profit:profit,
+           /* 消費税を引いた額。売上の消費税（10/11）ぶんを落とす。 */
+           net:Math.round(profit*10/11),
+           margin:Math.round(profit/price*1000)/10,
+           genre:mwAmzGenre(r) };
+}
+function mwAmzRunGo(){
+  var note=$('csvMwAmzNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  var btn=$('csvMwAmz'); btn.disabled=true;
+  note.textContent='Amazon の実売価格を取っています…（値段の取得は10秒に1回なので時間がかかります）';
+  mwPost('/mw/amz',{ kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
+    ship_max:mwShipMax(), stock_min:mwStockMin(),
+    note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
+      note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
+        +'（ASIN が引けた '+(d.asin_ok||0)+'／引けなかった '+(d.asin_ng||0)
+        +'／値段あり '+(d.priced||0)+'／Amazon に出品なし '+(d.none||0)+'）'
+        +'<br>呼び出し：ASIN引き '+(d.calls_cat||0)+'回／値段 '+(d.calls_prc||0)+'回'
+        +(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。もう一度押すと続きを調べます。')
+          :'<br>調べ終わりました。');
+      mwAmzLoad();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 取れませんでした：'+e.message; })
+    .then(function(){ btn.disabled=false; });
+}
+function mwAmzQuery(priced){
+  return '?kishu='+encodeURIComponent(mwKishuList().join(','))
+    +'&new_only='+(mwNewOnly()?'1':'0')
+    +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()
+    +'&note_ng='+encodeURIComponent(mwNoteNgList().join(','))
+    +'&note_all='+(mwNoteAll()?'1':'0')
+    +(priced?'&priced=1':'')+'&limit=3000';
+}
+function mwAmzLoad(){
+  var note=$('csvMwAmzListNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  note.textContent='一覧を取り込んでいます…';
+  fetch(syncUrl()+'/mw/amz'+mwAmzQuery(1),{headers:{'X-PJ-Key':syncKeyReady()}})
+    .then(function(res){
+      if(res.ok)return res.json();
+      return res.text().then(function(t){
+        var b=null; try{ b=JSON.parse(t); }catch(e){}
+        throw new Error(syncPostWhy(res.status,b,t)); });
+    })
+    .then(function(d){
+      mwAmzRows=d.rows||[]; mwAmzMeta=d;
+      $('csvMwAmzMax').textContent=String(d.per_run||120);
+      mwAmzRender();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
+}
+function mwAmzRender(){
+  var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
+  var d=mwAmzMeta||{};
+  var list=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
+    .filter(function(x){ return x.c; });
+  var win=list.filter(function(x){ return x.c.profit>0; });
+  win.sort(function(a,b){ return b.c.profit-a.c.profit; });
+  note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
+    +'　値段あり '+(d.priced||0)
+    +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
+    +'　／　<b>黒字 '+win.length+'件</b>（赤字 '+(list.length-win.length)+'件）'
+    +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'');
+  if(!win.length){
+    el.innerHTML='<div class="note2">黒字の行がありません。'
+      +'「Amazonの実売価格を取る」を押して調べてください。</div>';
+    return;
+  }
+  var g={};
+  win.forEach(function(x){ var k=x.c.genre; (g[k]=g[k]||[]).push(x); });
+  var line=function(x){
+    var r=x.r, c=x.c;
+    return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+      +'border-radius:6px">'
+      +'<b>'+yen(c.profit)+'</b>'
+      +' <span class="note2">（税抜 '+yen(c.net)+'・利益率 '+c.margin+'%）</span>'
+      +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
+      +'<div class="note2" style="margin:2px 0 0">'
+      +esc(String(r.amz_name||r.mw_name||'').slice(0,60))+'</div>'
+      +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
+      +'　<a href="https://www.amazon.co.jp/dp/'+esc(r.asin||'')
+      +'" target="_blank" rel="noopener">'+esc(r.asin||'')+'</a>'
+      +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'</div>'
+      +'<div class="note2" style="margin:2px 0 0">販売価格 <b>'+yen(c.price)+'</b>'
+      +'（'+esc(r.basis||'')+'）　手数料 '+yen(c.fee)
+      +'（'+c.rate+'%＋FBA '+yen(c.fba)+'）　仕入 '+yen(c.cost)
+      +'（卸値 '+yen(+r.wholesale||0)+'×1.1＋'+yen(mwShipFee())+'）</div>'
+      +'<div class="note2" style="margin:2px 0 0">ランキング '
+      +((+r.rank>0)?(Number(r.rank).toLocaleString('ja-JP')
+        +(r.rank_cat?('（'+esc(r.rank_cat)+'）'):'')):'—')
+      +'　新品出品者 '+(+r.new_n||0)+'人　在庫 '+(+r.stock||0)+'点'
+      +'　出荷 '+(+r.ship_days||0)+'営業日</div>'
+      +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
+        +esc(String(r.note).slice(0,50))+'</div>'):'')
+      +'</div>';
+  };
+  var html='';
+  ['ゲーム','フィギュア','その他'].forEach(function(k){
+    var l=g[k]; if(!l||!l.length)return;
+    var sum=l.reduce(function(a,x){ return a+x.c.profit; },0);
+    html+='<div class="note2" style="margin:10px 0 4px"><b>'+k+' '+l.length+'件</b>'
+      +'　利益の平均 '+yen(Math.round(sum/l.length))+'</div>'
+      +listMoreHtml('mwamz'+k,l.map(line),'',10);
+  });
+  el.innerHTML=html;
+}
+/* ---- CSV で書き出す（10/7 の利益計算ファイルと同じ列）---- */
+function mwAmzCsvGo(){
+  var note=$('csvMwAmzListNote');
+  var list=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
+    .filter(function(x){ return x.c; });
+  if(!list.length){ note.textContent='先に「一覧を出す」を押してください。'; return; }
+  list.sort(function(a,b){ return b.c.profit-a.c.profit; });
+  var head=['出荷区分','注意','ジャンル','粗利','粗利（税抜）','粗利率',
+    '販売価格','価格の基準','手数料','仕入（税込・送料込）','卸値','定価',
+    'ランキング','新品出品者数','Amazon本体','JAN','ASIN','商品名（MW）',
+    'Amazon商品名','新・中','社','掲載数','出荷日','備考','状態','URL'];
+  var rows=list.map(function(x){
+    var r=x.r, c=x.c;
+    var ng=mwNoteHit(r);
+    return [
+      (+r.ship_days===0)?'即日':((+r.ship_days)+'営業日'),
+      [ r.amz?'Amazon本体あり':'', ng.length?('備考：'+ng.join('・')):'' ]
+        .filter(Boolean).join(' / '),
+      c.genre, c.profit, c.net, c.margin+'%',
+      c.price, r.basis||'', c.fee, c.cost, +r.wholesale||0, +r.list_price||0,
+      (+r.rank>0)?+r.rank:'', +r.new_n||0, r.amz?'あり':'',
+      '="'+r.jan+'"', r.asin||'', r.mw_name||'', r.amz_name||'',
+      r.cond||'', r.sha||'', +r.stock||0, r.ship_text||'', r.note||'',
+      (c.profit>0?'OK':'赤字'),
+      r.asin?('https://www.amazon.co.jp/dp/'+r.asin):''
+    ];
+  });
+  var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+  var csv='﻿'+[head.map(q).join(',')]
+    .concat(rows.map(function(a){ return a.map(q).join(','); })).join('\r\n')+'\r\n';
+  var d=new Date(Date.now()+9*3600000).toISOString().slice(0,10).replace(/-/g,'');
+  csvDownload('mw_fba_'+d+'.csv',csv);
+  note.textContent='✓ '+rows.length+'行を書き出しました（黒字 '
+    +list.filter(function(x){ return x.c.profit>0; }).length+'件）。';
 }
 /* ---- eBay の相場を調べる（4章の6・6.86）----
    候補の JAN で eBay を検索し、即決の出品の最安値（送料込み）を控える。
@@ -11431,7 +11649,11 @@ document.addEventListener('click',function(e){
   e.preventDefault();
   syncMoreOpen[k]=!syncMoreOpen[k];
   syncMoreSave();
-  /* MW の候補一覧（mw…）はそちらを作り直す。ほかは販売連携の一覧。 */
+  /* MW の一覧はそちらを作り直す（Amazon の一覧と候補一覧は別）。
+     ほかは販売連携の一覧。 */
+  if(/^mwamz/.test(k)&&typeof mwAmzRender==='function'&&mwAmzRows&&mwAmzRows.length){
+    mwAmzRender(); return;
+  }
   if(/^mw/.test(k)&&typeof mwListRender==='function'&&mwRows&&mwRows.length){
     mwListRender(); return;
   }
@@ -14679,7 +14901,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v189';   // sw.js の const V と必ず同じ値にする
+var APP_V='v190';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

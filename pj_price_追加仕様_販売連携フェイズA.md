@@ -4669,3 +4669,72 @@ Duplicate key "mdBo" in object literal
 
 テストに `__test` の重複キーが無いことの検査は入れていない（`node --check` は
 重複を通すため）。`npx wrangler deploy` の警告が消えたことで確かめる。
+
+## 7.66 MW の候補を Amazon（国内FBA）で見る（2026-10-26・sw.js v190）
+
+6.91 の受け口。候補の JAN から ASIN を引き、**新品の実売価格**と
+**出品の様子**を `mw_amz` に控える。**利益の計算はここでは行わない**
+（手数料率が⚙設定で変わるので画面で計算する。式を2か所に持たない）。
+
+### 2段で取る
+
+| | API | 1回の件数 | 速さ |
+| --- | --- | --- | --- |
+| ① JAN → ASIN・ランキング | Catalog Items（`/catalog/2022-04-01/items`） | **20件** | 5回/秒 |
+| ② ASIN → 実売価格・出品の様子 | `getItemOffersBatch`（既にある） | **20件** | **0.1回/秒** |
+
+**②が10秒に1回**なので、ここが1回の件数を決める。
+`MW_AMZ_MAX = PRICING_BATCH × PRICING_MAX_CALLS = 120件`。
+①は `identifiersType=EAN` で JAN をそのまま渡す（商品名での検索はしない）。
+
+ALLOWED に足したのは Catalog Items の**読み取り1本**だけ。
+
+```js
+{ m: "GET", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/catalog\/2022-04-01\/items\?/ },
+```
+
+### ランキングは「いちばん細かい分類」を採る
+
+`salesRanks[].classificationRanks[]` は大分類から細かい順に並ぶので、
+最後に見つかったものを採る（例：「ゲーム 6,490位」より
+「Nintendo Switch ソフト 649位」）。無ければ `displayGroupRanks` を使う。
+
+### 出品の様子（10/7 の利益計算ファイルと同じ列を出すため）
+
+`amazonLowest()` の返りに4つ足した（**1か所で持つ**。既存の呼び出しにも効く）。
+
+| 足したもの | 中身 |
+| --- | --- |
+| `amz` | **Amazon本体**（`AN1VRQENFRJN5`）の出品があれば 1 |
+| `fba` | FBA の出品者数（`IsFulfilledByAmazon`） |
+| `buy` | **カート価格**（`Summary.BuyBoxPrices`・送料込み） |
+| `newN` | 新品の出品者数（`Summary.NumberOfOffers`） |
+
+綴りが大文字小文字どちらで返るか実データで確定できていないので、
+`pick()` でどちらでも読めるようにしている（`SubCondition` と同じ事情）。
+
+**販売価格はカートがあればカート、無ければ最安**（送料込み）。
+どちらを使ったかを `basis`（`カート` / `最安`）に控える（10/7 のファイルの「価格の基準」）。
+
+### `mw_amz`（`migrate-0026-mw-amz.sql`）
+
+`jan`（主キー）・`asin`・`name`・`rank`・`rank_cat`・`price`・`basis`・`low`・
+`buybox`・`new_n`・`low_n`・`amz`・`fba_n`・`err`・`checked_at`。
+取得の記録は `mw_amz_runs`。
+
+- 取れた値段は **3日**（`MW_AMZ_TTL_D`）取り直さない
+- ASIN が引けなかった／出品が無かった行は **24時間**後に取り直す
+- `POST /mw/amz` は管理者だけ（`forbidStaff`）。`GET /mw/amz` は読める
+- `GET /mw/amz?priced=1` で値段が取れた行だけに絞れる
+
+### 呼び出し回数の見込み（候補1,752件）
+
+| | 回数 |
+| --- | --- |
+| 1回のボタン | ASIN引き **6回**＋値段 **6回**（120件） |
+| 全部を1周 | ASIN引き 88回＋値段 **88回** ＝ ボタン **15回**ほど |
+| 1回にかかる時間 | 値段が10秒に1回なので **約1分** |
+
+`getItemOffersBatch` は0.1回/秒・バースト1なので、1周に実時間で15分ほどかかる。
+
+テストは `tests/mwamz.mjs`（52件）。
