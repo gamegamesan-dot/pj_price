@@ -1556,6 +1556,8 @@ async function syncOrders(env, run, days, maxItems) {
         keys.push({ asin: k.asin, cond: k.cond });
         soldE.push({ asin: k.asin, cond: k.cond, orderId: o.orderId, line: li.lineId,
                      qty: Number(li.qty || 0), at: o.at || "",
+                     /* CustomLabel。W-<JAN> なら MW の無在庫（7.72）。 */
+                     sku: li.sku || "",
                      shipBy: li.shipBy || "", dropship: !!k.dropship });
       } else {
         /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
@@ -1710,6 +1712,17 @@ async function syncOrders(env, run, days, maxItems) {
         drop ? { dropship: 1, low: Math.round(Number(it.amazon_lowest || 0)),
                  ship_by: s2.shipBy || "", days: daysLeft(s2.shipBy) } : {})));
   }
+  /* 売れた行に MW の無在庫（W-<JAN>）があれば、注文の材料を出す（7.72）。
+     商品名・JAN・社・卸値・出荷日・注文の期限。 */
+  try {
+    const mwSold = soldE.filter((x) => mwJanOfSku(x.sku));
+    if (mwSold.length) {
+      const n = await mwOrderNotify(env, run, mwSold.map((x) => ({
+        sku: x.sku, qty: x.qty, orderedAt: x.at,
+        hand: daysLeft(x.shipBy) || MW_HAND_DEFAULT })));
+      if (n) run.notes.push("MWに注文が必要な行 " + n + "件を知らせました");
+    }
+  } catch (e) { run.notes.push("mw-order: " + String((e && e.message) || e)); }
   /* 対応付けできない出品も通知する（自己発送）。
      注文IDと明細IDで重複を防ぐので、同じ注文を二度通知しない。
      入れるのは商品名・数量・金額だけ（購入者の情報は入れない）。 */
@@ -4950,6 +4963,298 @@ async function mwAmzRun(env, body) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 段取り D：MW の無在庫を守る（7.72）=====
+   MW の在庫CSVを取り込んだあと、eBay に出している MW の出品を見直す。
+
+   eBay の出品と MW の商品は **CustomLabel `W-<JAN>`** で結ぶ
+   （items に JAN の列は無く、足せない＝100列。7.67 と同じ事情）。
+
+   | MW の状態 | eBay への操作 |
+   | 欠品（CSV から消えた・pick が無い） | **数量を0**にする |
+   | 卸値が上がって下限利益を割る | 売値を**目標利益の売値まで上げる**。
+   |                               | 上げると相場の115%を超えるなら**数量0** |
+   | 卸値が下がった | 何もしない（自動値下げに任せる） |
+   | 欠品から戻り、利益も出る | **数量を1**に戻す |
+
+   安全のための決まり（フェイズB・在庫補充と同じ考え方）:
+   ・1回の件数に上限。'confirm' では eBay を呼ばず予定だけ残す
+   ・値下げはしない（自動値下げに任せる）
+   ・失敗した行は次の回に再試行する */
+const MW_D_MAX = 60;               // 1回に変える件数の上限
+const MW_D_PICK = 2000;            // 1回に見る行数
+const MW_D_OVER = 1.15;            // 相場のこの倍を超えたら数量0
+function mwJanOfSku(sku) {
+  const m = /^W-(\d{13})$/.exec(String(sku || "").trim());
+  return m ? m[1] : "";
+}
+/* 1行ぶんの判定。値付けの式は shared/pricing.js のものだけを使う。 */
+function mwDropPlan(S, r, mw, mk, over) {
+  const o = { act: "", why: "", to: 0, qty: 0 };
+  const qty = Number(r.ebay_qty) || 0;
+  const now = Number(r.ebay_price) || 0;
+  /* MW から消えた（欠品）。 */
+  if (!mw || mw.gone_at) {
+    if (qty > 0) { o.act = "zero"; o.why = "MWで欠品"; }
+    return o;
+  }
+  const stock = Number(mw.stock) || 0;
+  if (stock <= 0) {
+    if (qty > 0) { o.act = "zero"; o.why = "MWの在庫が0"; }
+    return o;
+  }
+  /* いまの卸値から、目標利益の売値と下限利益の売値を出す。 */
+  const cost = Math.round((Number(mw.wholesale) || 0) * 1.1) + (Number(S.mwShipFee) || 0);
+  if (!(cost > 0)) return o;
+  const w = Number(r.weight_g) || (String(r.prefix || "") === "game" ? 150 : 400);
+  const p = PRICING.priceFor(S, cost, w, 0);
+  const ship = PRICING.model(S, { cost: cost, weight: w, flat: 0 });
+  const g = ship.zoneShipCharge(ship.basisZone);
+  /* 相場の上限（総額）。超える売値では出さない。 */
+  const low = (mk && Number(mk.low) > 0) ? Number(mk.low)
+            : ((mk && Number(mk.low_any) > 0) ? Number(mk.low_any) : 0);
+  const cap = low > 0 ? (low * (over || MW_D_OVER) - g) : 0;
+  /* 欠品から戻った（数量0で、MW に在庫があり、利益も出る）。 */
+  if (qty <= 0) {
+    if (now >= p.floor && (!cap || now <= cap)) {
+      o.act = "relist"; o.qty = 1;
+      o.why = "MWに在庫が戻った（在庫 " + stock + "点）";
+      return o;
+    }
+    /* いまの売値では下限を割るので、売値を直してから戻す。 */
+    if (!cap || p.price <= cap) {
+      o.act = "restock"; o.to = p.price; o.qty = 1;
+      o.why = "MWに在庫が戻ったので売値を直して数量1";
+      return o;
+    }
+    o.why = "戻せません（目標利益の売値が相場の"
+      + Math.round((over || MW_D_OVER) * 100) + "%を超える）";
+    return o;
+  }
+  /* 出ている売値が下限利益を割っている（卸値が上がった）。 */
+  if (now > 0 && now < p.floor) {
+    if (cap && p.price > cap) {
+      o.act = "zero";
+      o.why = "卸値が上がり、相場の" + Math.round((over || MW_D_OVER) * 100)
+        + "%以内では利益が出ない";
+      return o;
+    }
+    o.act = "up"; o.to = p.price;
+    o.why = "卸値が上がったので売値を上げる（下限 $" + p.floor.toFixed(2) + "）";
+    return o;
+  }
+  return o;    // 卸値が下がった・問題なし → 何もしない
+}
+async function jobMwDrop(env, opt) {
+  const run = newRun("mw-drop");
+  const res = { ok: false, picked: 0, zero: 0, up: 0, relist: 0, restock: 0,
+                skipped: 0, failed: 0, mode: "", rows: [], plan: [] };
+  try {
+    const o = opt || {};
+    const ps = await pricingSettings(env, run);
+    const S = ps.S;
+    S.mwShipFee = (o.ship_fee === undefined) ? (Number(ps.st.mwShipFee) || 176)
+                                             : Number(o.ship_fee);
+    const over = Number(o.over) || MW_D_OVER;
+    const limit = Math.max(1, Math.min(MW_D_MAX, mwNum(o.limit) || MW_D_MAX));
+    const mode = (o.approve || o.mode === "auto") ? "auto" : "confirm";
+    res.mode = mode;
+    /* W- の SKU を持つ出品だけ。 */
+    const q = await env.DB.prepare(
+      `SELECT asin, cond, title, ebay_item_id, ebay_sku, ebay_qty, ebay_price,
+              weight_g, prefix_x AS prefix
+         FROM (SELECT i.asin AS asin, i.cond AS cond, i.title AS title,
+                      i.ebay_item_id AS ebay_item_id, i.ebay_sku AS ebay_sku,
+                      i.ebay_qty AS ebay_qty, i.ebay_price AS ebay_price,
+                      i.weight_g AS weight_g,
+                      (SELECT s.prefix FROM skus s
+                        WHERE s.asin=i.asin AND s.cond=i.cond LIMIT 1) AS prefix_x
+                 FROM items i
+                WHERE COALESCE(i.ebay_item_id,'')<>''
+                  AND i.ebay_sku LIKE 'W-%')
+        LIMIT ${MW_D_PICK}`).all();
+    const rows = (q && q.results) || [];
+    res.picked = rows.length;
+    if (!rows.length) {
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* MW の在庫と相場をまとめて引く。 */
+    const jans = [];
+    for (const r of rows) {
+      const j = mwJanOfSku(r.ebay_sku);
+      if (j && jans.indexOf(j) < 0) jans.push(j);
+    }
+    const mwBy = {}, mkBy = {};
+    const step = d1Step(1);
+    for (let i = 0; i < jans.length; i += step) {
+      const part = jans.slice(i, i + step);
+      const marks = part.map(() => "?").join(",");
+      const a = await env.DB.prepare(
+        `SELECT jan, sha, name, wholesale, stock, ship_days, gone_at
+           FROM mw_stock WHERE pick=1 AND jan IN (${marks})`).bind(...part).all();
+      for (const x of (a && a.results) || []) mwBy[x.jan] = x;
+      const b = await env.DB.prepare(
+        `SELECT jan, low, low_any, n FROM mw_market WHERE jan IN (${marks})`)
+        .bind(...part).all();
+      for (const x of (b && b.results) || []) mkBy[x.jan] = x;
+    }
+    /* 判定。 */
+    const todo = [];
+    for (const r of rows) {
+      const j = mwJanOfSku(r.ebay_sku);
+      if (!j) { res.skipped++; continue; }
+      const pl = mwDropPlan(S, r, mwBy[j], mkBy[j], over);
+      if (!pl.act) { if (pl.why) res.plan.push({ jan: j, why: pl.why }); continue; }
+      todo.push({ jan: j, item_id: String(r.ebay_item_id), act: pl.act,
+                  kind: (pl.act === "up") ? "price" : pl.act,
+                  to: pl.to, qty: pl.qty, why: pl.why,
+                  title: String(r.title || r.ebay_sku || ""),
+                  asin: r.asin, cond: r.cond,
+                  sha: (mwBy[j] && mwBy[j].sha) || "" });
+      if (todo.length >= limit) break;
+    }
+    res.rows = todo.map((x) => ({ jan: x.jan, act: x.act, to: x.to, qty: x.qty,
+                                  why: x.why, title: x.title.slice(0, 60) }));
+    if (mode !== "auto" || !todo.length) {
+      /* 確認モードでは eBay を1回も呼ばない。 */
+      for (const x of todo) {
+        if (x.act === "zero") res.zero++;
+        else if (x.act === "up") res.up++;
+        else if (x.act === "relist") res.relist++;
+        else res.restock++;
+      }
+      res.ok = true;
+      run.notes.push("MW無在庫（確認）：数量0 " + res.zero + "／値上げ " + res.up
+        + "／数量1 " + (res.relist + res.restock) + "件");
+      await mwDropNotify(env, run, res, false);
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 実行。ReviseInventoryStatus は1回4件まで。 */
+    const token = await ebayToken(env, run);
+    const stmts = [];
+    for (let i = 0; i < todo.length; i += RV_BATCH) {
+      const part = todo.slice(i, i + RV_BATCH);
+      const send = part.map((x) => ({
+        item_id: x.item_id,
+        kind: (x.act === "zero") ? "zero"
+            : (x.act === "relist") ? "relist"
+            : (x.act === "restock") ? "restock" : "price",
+        to: x.to, qty: x.qty }));
+      const r2 = await ebayReviseInv(env, run, token, send);
+      for (const x of part) {
+        const bad = (r2 && r2.err && r2.err[x.item_id]) || (r2 && !r2.ok ? r2.why : "");
+        if (bad) {
+          res.failed++;
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET revise_err=?3, revise_err_at=?4
+              WHERE asin=?1 AND cond=?2`)
+            .bind(x.asin, x.cond, String(bad).slice(0, 200), nowIso()));
+          continue;
+        }
+        if (x.act === "zero") res.zero++;
+        else if (x.act === "up") res.up++;
+        else if (x.act === "relist") res.relist++;
+        else res.restock++;
+        /* 控え。数量と売値を D1 にも合わせておく。 */
+        const sets = [];
+        const bind = [x.asin, x.cond, nowIso()];
+        if (x.act === "zero") sets.push("ebay_qty=0");
+        else if (x.act === "relist") sets.push("ebay_qty=1");
+        else if (x.act === "restock") {
+          sets.push("ebay_qty=1");
+          sets.push("ebay_price=?" + (bind.length + 1)); bind.push(x.to);
+        } else {
+          sets.push("ebay_price=?" + (bind.length + 1)); bind.push(x.to);
+        }
+        sets.push("revise_err=NULL", "revise_err_at=NULL");
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET ${sets.join(", ")}, updated_at=?3
+            WHERE asin=?1 AND cond=?2`).bind(...bind));
+      }
+    }
+    await runBatch(env, run, stmts);
+    res.ok = true;
+    run.notes.push("MW無在庫：数量0 " + res.zero + "／値上げ " + res.up
+      + "／数量1 " + (res.relist + res.restock) + "／失敗 " + res.failed + "件");
+    await mwDropNotify(env, run, res, true);
+  } catch (e) {
+    run.errors++; run.notes.push("mw-drop: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+async function mwDropNotify(env, run, res, done) {
+  const n = res.zero + res.up + res.relist + res.restock;
+  if (!n && !res.failed) return;
+  const t = [];
+  t.push(done ? "🏷 MW無在庫の見直し" : "🏷 MW無在庫の見直し（確認。まだ変えていません）");
+  if (res.zero) t.push("・数量を0にした（MWで欠品・赤字）… " + res.zero + "件");
+  if (res.up) t.push("・売値を上げた（卸値が上がった）… " + res.up + "件");
+  if (res.relist + res.restock)
+    t.push("・数量を1に戻した（MWに在庫が戻った）… " + (res.relist + res.restock) + "件");
+  if (res.failed) t.push("・失敗 … " + res.failed + "件（次の回にやり直します）");
+  for (const x of res.rows.slice(0, 10))
+    t.push("  JAN " + x.jan + " " + x.title + " … " + x.why);
+  await notify(env, run, t.join("\n"));
+}
+
+/* ===== 売れたら「MW に注文してください」（7.72）=====
+   W- の SKU の注文が入ったら、MW に注文する材料を Discord に出す。
+   商品名・JAN・社・卸値・出荷日・注文の期限（ハンドリングから逆算）。 */
+async function mwOrderNotify(env, run, sold) {
+  const list = [];
+  for (const x of (sold || [])) {
+    const jan = mwJanOfSku(x.sku);
+    if (jan) list.push({ jan, sku: x.sku, qty: Number(x.qty) || 1,
+                         at: x.orderedAt || "" });
+  }
+  if (!list.length) return 0;
+  const jans = list.map((x) => x.jan);
+  const by = {};
+  const step = d1Step(1);
+  for (let i = 0; i < jans.length; i += step) {
+    const part = jans.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT jan, sha, name, wholesale, stock, ship_text, ship_days, gone_at
+         FROM mw_stock WHERE pick=1 AND jan IN (${part.map(() => "?").join(",")})`)
+      .bind(...part).all();
+    for (const r of (q && q.results) || []) by[r.jan] = r;
+  }
+  const t = ["🛒 **MW に注文してください**"];
+  for (const x of list) {
+    const m = by[x.jan];
+    if (!m) {
+      t.push("・JAN " + x.jan + "（MW の在庫に見つかりません。欠品の可能性）");
+      continue;
+    }
+    /* 注文の期限：eBay のハンドリング日数から、MW の出荷日数＋配達1〜2日を引く。
+       ここでは「売れた日＋（ハンドリング − 出荷日数 − 2）」を目安に出す。 */
+    const hand = Number(x.hand) || MW_HAND_DEFAULT;
+    const days = Math.max(0, hand - (Number(m.ship_days) || 0) - 2);
+    const base = x.at ? new Date(x.at) : new Date();
+    const due = new Date(base.getTime() + days * 86400000);
+    t.push("・" + String(m.name || "").slice(0, 50)
+      + "\n　JAN " + x.jan + "　社 **" + String(m.sha || "") + "**"
+      + "　卸値 ¥" + (Number(m.wholesale) || 0).toLocaleString("ja-JP") + "（税抜）"
+      + "　数量 " + x.qty
+      + "\n　MW出荷 " + (Number(m.ship_days) || 0) + "営業日"
+      + (m.ship_text ? "（" + String(m.ship_text).slice(0, 24) + "）" : "")
+      + "　MW在庫 " + (Number(m.stock) || 0) + "点"
+      + "\n　**注文の期限 " + jstDate10(due.toISOString()) + "**"
+      + (m.gone_at ? "　⚠ MW で欠品しています" : ""));
+  }
+  t.push("注文したら2週間の取り置きになります。出荷時に銀行振込で決済してください。");
+  await notify(env, run, t.join("\n"));
+  return list.length;
+}
+const MW_HAND_DEFAULT = 10;        // MW用ポリシーのハンドリング日数の既定
+/* 日本時間の日付（YYYY-MM-DD）。jstText は時刻まで出すので、期限用に日付だけ。 */
+function jstDate10(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
+}
+
 /* ===== 仕入れの印（7.68）=====
    端末をまたいで同じ印が見えるよう D1 に置く。
    **作業者（STAFF_KEY）でも付けられる**（仕入れの候補を選ぶ仕事なので）。
@@ -7055,6 +7360,11 @@ export default {
            残っている行を GetItem で確かめ、直っていれば記録を消す。 */
         if (kind === "picscheck")
           return json(await jobPicsCheck(env, { limit: body.limit }), 200, origin);
+        /* 段取り D：MW の無在庫を守る（7.72）。既定は「確認してから」。
+           approve:true で実際に eBay の数量・売値を変える。 */
+        if (kind === "mwdrop")
+          return json(await jobMwDrop(env, { approve: body.approve === true,
+            limit: body.limit, over: body.over }), 200, origin);
         /* 在庫補充（数量を1に戻す）（7.53）。既定は「確認してから」。
            approve:true は販売連携タブの「在庫補充（数量を1に戻す）」。 */
         if (kind === "soldkeep")
@@ -7117,6 +7427,10 @@ export default {
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
       await jobSoldKeep(env, {});        // 在庫補充（数量を1に戻す）（7.53）
+      /* 段取り D：MW の無在庫を守る（7.72）。
+         欠品で売り越すのが一番まずいので、毎時「確認」まで走らせる
+         （実際に変えるのは日次、または画面の「まとめて実行」）。 */
+      await jobMwDrop(env, {});
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -7128,6 +7442,9 @@ export default {
         /* 再調達中の売値を Amazon最安値に合わせる（7.48）。
            jobDaily で最安値を取り直したあとなので、新しい値で判断できる。 */
         await jobRkPrice(env, {});
+        /* 段取り D を**実行**する（7.72）。欠品の数量0・卸値上がりの値上げ・
+           戻った行の数量1を、ここで実際に eBay へ書き込む。 */
+        await jobMwDrop(env, { approve: true });
       }
     })());
   },
@@ -7153,6 +7470,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
+                        jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
+                        MW_D_MAX, MW_D_OVER,
                         spSlotKv, SP_KV_LANES,
                         mwAmzRun, mwAmzList, mwAsinFind, amazonLowest,
                         amzSelf, fbaN, buyBox,

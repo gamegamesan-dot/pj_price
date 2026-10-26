@@ -163,6 +163,55 @@ ok(edge.pct>115&&edge.k==='high',
    '★★相場が商品代ちょうどの行は、請求送料のぶん115%を超えて後回しになる'
    +'（商品代で比べていたら100%で候補に見えてしまう）');
 
+console.log('\n=== 出す売値の決め方（6.95）===');
+let sell=await p.evaluate((L)=>{
+  $('mwUnder').value='97';
+  const f=(jan,low)=>{
+    const r=Object.assign({},L.rows.filter((x)=>x.jan===jan)[0]);
+    if(low!==undefined){ r.mkt_low=low; r.mkt_n=low?3:0; }
+    const rec=mwRec(r); const s=mwSell(r,rec);
+    return { price:s.price, basis:s.basis, under:s.under, pct:s.pct,
+             target:rec.price, floor:rec.floor, ship:rec.ship }; };
+  return { pct:mwUnderPct(),
+    /* 相場が高い → 相場の97%−請求送料 で出せる */
+    high:f('4902370550467',200),
+    /* 相場が目標利益すれすれ → 目標利益の売値を使う */
+    low:f('4902370550467',75),
+    /* 相場なし → 目標利益の売値 */
+    none:f('4902370550467',0) };
+},LIST);
+console.log('   '+JSON.stringify(sell));
+ok(sell.pct===97,'★既定は97%');
+ok(sell.high.basis==='相場の97%','★★相場が高ければ相場の97%で出す');
+ok(Math.abs(sell.high.price-(200*0.97-sell.high.ship))<0.01,
+   '★★★売値＝相場の総額×97%−請求送料（総額どうしでそろえる）');
+ok(sell.high.price>sell.high.target,
+   '★★相場に余裕があれば目標利益の売値より高く出せる');
+ok(sell.low.basis==='目標利益'&&sell.low.price===sell.low.target,
+   '★★★相場の97%が目標利益を割るときは目標利益の売値にする');
+ok(sell.none.basis==='目標利益'&&sell.none.under===null,
+   '★★★相場が無い行は目標利益の売値');
+ok(sell.high.floor===sell.low.floor&&sell.high.floor<sell.low.price,
+   '★★どちらも下限は下限利益の売値（自動値下げの下限）');
+let pctChg=await p.evaluate((L)=>{
+  $('mwUnder').value='90';
+  const r=Object.assign({},L.rows.filter((x)=>x.jan==='4902370550467')[0],
+    {mkt_low:200,mkt_n:3});
+  const rec=mwRec(r); const s=mwSell(r,rec);
+  $('mwUnder').value='97';
+  return { pct:s.pct, price:s.price, ship:rec.ship }; },LIST);
+ok(pctChg.pct===90&&Math.abs(pctChg.price-(200*0.90-pctChg.ship))<0.01,
+   '★★★割合は⚙設定で変えられる');
+let shown=await p.evaluate((L)=>{
+  mwRows=L.rows.map(function(r){
+    return (r.jan==='4902370550467')?Object.assign({},r,{mkt_low:200,mkt_n:3}):r; });
+  mwMkt=L.mkt; mwListRender();
+  return $('csvMwList').textContent; },LIST);
+ok(/出す売値/.test(shown),'★★行に「出す売値」を出す');
+ok(/相場の97%/.test(shown),'★★どちらを採ったかを出す');
+ok(/目標利益の売値/.test(shown),'★★目標利益の売値も併記する');
+ok(/下げられる下限/.test(shown),'★下限も出す');
+
 console.log('\n=== 行に出る相場の中身 ===');
 ok(/eBay 最安値/.test(txt),'★最安値を出す');
 ok(/送料無料/.test(txt),'★★送料0なら「送料無料」と出す');

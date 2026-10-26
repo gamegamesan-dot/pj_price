@@ -201,8 +201,10 @@ ok(calc.price===calc.same,
    '★★出品CSV・販売連携と同じ式（shared/pricing.js）で1円もずれない');
 ok(Math.abs(calc.target-(1000+calc.cost*0.3))<0.01,
    '★★下限利益＝下限利益＋仕入値×連動率');
-ok(/推奨売値/.test(lst.html)&&/利益/.test(lst.html)&&/下限利益/.test(lst.html),
-   '★★一覧に推奨売値・利益・下限利益を出す');
+/* 6.95 で表示を「出す売値／目標利益の売値／下げられる下限」に変えた。 */
+ok(/出す売値/.test(lst.html)&&/目標利益の売値/.test(lst.html)
+  &&/下げられる下限/.test(lst.html)&&/下限利益/.test(lst.html),
+   '★★一覧に出す売値・目標利益の売値・下げられる下限を出す');
 
 console.log('\n=== 相場を調べる前は「未調査」に入る（4章の6は 6.86）===');
 let split=await p.evaluate(()=>{

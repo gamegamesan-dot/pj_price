@@ -746,6 +746,8 @@ body.staff #syncOnHandFix{display:none !important}
           <b>即決の出品の最安値（送料込み）</b>を控えます。1件につき1回の呼び出しで、
           <b>一度調べた JAN は7日間調べ直しません</b>。残りが出たら押し直してください。</div>
         <button class="btn" id="csvMwLoad" style="width:100%;margin-top:8px">候補一覧を取り込む</button>
+        <button class="btn primary" id="csvMwPush" style="width:100%;margin-top:6px">写真が付いた出品候補を出品リストに入れる</button>
+        <div class="note2" id="csvMwPushNote" style="margin-top:2px">①の出品候補のうち、<b>写真が付いている行</b>だけを出品リスト（出品CSV）に入れます。入れたあとは、ふだんの流れ（英題生成 → 原産国・カテゴリ → 書き出し）で出せます。<b>無在庫の上限（⚙設定）を守ります。</b></div>
         <div class="note2" id="csvMwListNote" style="margin-top:2px"></div>
         <div id="csvMwList" style="margin-top:6px"></div>
       </div>
@@ -1211,6 +1213,10 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="2" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
       <div class="note2" style="margin-top:0">1点しかない商品は売れる前に消えやすいので、既定では2点以上だけを候補にします。</div>
       <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
+      <div class="rowv"><label>MW用の配送ポリシー名</label><input type="text" id="csvShipProfileMw" value="W2000"><div class="note2" style="margin-top:2px">無在庫（MW）の行をこのポリシーで出します。<b>MW の出荷日数＋2日以上</b>のハンドリングタイムが設定されたポリシーを指定してください。</div></div>
+      <div class="row"><label>そのポリシーのハンドリング</label><input type="number" id="csvShipDaysMw" value="10" step="1" min="1" max="30" inputmode="numeric"><span class="unit">日</span><div class="note2" style="margin-top:2px">eBay 側のポリシーに設定した日数を入れてください。<b>MW の出荷日数＋2日</b>がこれを超える行は書き出せません（出荷に間に合わないため）。</div></div>
+      <div class="row"><label>相場より安く出す割合</label><input type="number" id="mwUnder" value="97" step="1" min="50" max="100" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin:0 0 2px">eBay の最安値（送料込みの総額）のこの割合で出します。それでも目標利益を割るときは<b>目標利益の売値</b>にします。相場が無い行は目標利益の売値です。</div>
       <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
       <div class="chk"><input type="checkbox" id="mwNoteAll"><label for="mwNoteAll" style="flex:1">状態に注意の行も候補に含める</label></div>
       <div class="note2" style="margin:8px 0 2px"><b>国内 Amazon FBA の手数料</b>（実売価格で利益を出すときに使います。10/7 の利益計算ファイルから読み取った値を既定にしています）</div>
@@ -4207,7 +4213,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // マッチングワールド（MW）の無在庫（6.85）
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
-                 'csvMwAmzSort','csvMwAmzMinM'];
+                 'csvMwAmzSort','csvMwAmzMinM','mwUnder',
+                 'csvShipProfileMw','csvShipDaysMw'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -4932,6 +4939,14 @@ function csvIssues(r){
   if(csvOriginNeed(r))a.push('原産国なし');
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
+  /* 無在庫（MW）の行は、MW の出荷日数＋2日がポリシーのハンドリングに収まること（6.96）。
+     収まらないと eBay の発送期限に間に合わない。 */
+  var need=csvMwNeedDays(r);
+  if(need&&need>csvShipMwDays())
+    a.push('ハンドリングが足りません（MW '+(+r.mwShipDays||0)
+      +'営業日＋2日＝'+need+'日 > ポリシー '+csvShipMwDays()+'日）');
+  if(String(r.buySource||'')==='mw'&&!csvShipMwProfile())
+    a.push('MW用の配送ポリシー名が未設定');
   /* アップロード失敗は、**失敗したときの中身のまま**なら書き出しを止める
      （同じものを送っても同じ失敗になるため）。
      行を直して中身が変わったら止めない（注意として csvNotes に出す）。
@@ -5650,7 +5665,11 @@ var CSV_FILTERS=[
   { v:'origin', label:'原産国：既定値の行だけ',
     f:function(r){ return !!(r.specs||{}).originDefault; } },
   { v:'review', label:'要確認（review）の行だけ',
-    f:function(r){ return r.titleStatus==='review'; } }
+    f:function(r){ return r.titleStatus==='review'; } },
+  /* 中古フィギュアなのに一点物がオフの行（6.94）。書き出し・名簿送信で
+     自動オンになるが、手でオフにした行はここに残るので見つけられる。 */
+  { v:'figone', label:'中古フィギュアで一点物がオフ',
+    f:function(r){ return csvFigOneNeed(r); } }
 ];
 function csvFilterBy(v){
   for(var i=0;i<CSV_FILTERS.length;i++)if(CSV_FILTERS[i].v===v)return CSV_FILTERS[i];
@@ -6624,7 +6643,11 @@ $('csvList').addEventListener('click',function(e){
   }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
   else if(t.hasAttribute('data-force'))csvList[i].forceEbay=!csvList[i].forceEbay;
-  else if(t.hasAttribute('data-one'))csvList[i].oneOff=!csvList[i].oneOff;
+  else if(t.hasAttribute('data-one')){
+    csvList[i].oneOff=!csvList[i].oneOff;
+    /* 人が決めた印。これが立っている行は自動でオンにしない（6.94）。 */
+    csvList[i].oneOffSet=true;
+  }
   else if(t.hasAttribute('data-drop'))csvList[i].dropship=!csvList[i].dropship;
   else if(t.hasAttribute('data-mstop'))csvMarkStopToggle(csvList[i]);
   else if(t.hasAttribute('data-fast')){
@@ -7177,6 +7200,34 @@ function csvCartSave(){
    新品 → 'new'／箱付き中古 → 'used'／カートリッジのみ → 'cart' */
 /* 「+1するCSV」のボタンの名前。カートリッジのみ・フィギュアのみの両方で使う。 */
 var CSV_STACK_BTN='箱なしで出す行：既存の出品に+1するCSV';
+/* ===== 中古フィギュアの一点物（6.94）=====
+   中古のフィギュア（ホビーのカテゴリ）は、同じものが2つない＝一点物。
+   印を付けないと、売れたあと「再調達」の対象になってしまう。
+   そこで **書き出しと名簿送信のときに自動でオンにする**。
+   手でオフにした行（oneOffSet）はそのまま残す。
+   -U（中古）だけでなく -L（フィギュアのみ・箱なし）も対象にする
+   （箱なしはさらに一点物なので）。-C はゲームなので対象外。 */
+function csvFigUsed(r){
+  var o=r||{};
+  if(o.condId===1000)return false;                 // 新品は対象外
+  if(o.cartOnly)return false;                      // カートリッジのみはゲーム
+  return csvCatTpl(o.cat)!=='139973';              // ゲーム以外＝ホビー
+}
+/* 一点物をオンにすべきなのに、まだオンでない行。 */
+function csvFigOneNeed(r){ return csvFigUsed(r)&&!(r||{}).oneOff; }
+/* 書き出し・名簿送信の直前に、手で触っていない行だけオンにする。
+   直した件数を返す（画面に出す）。 */
+function csvFigOneAuto(){
+  var n=0;
+  csvList.forEach(function(r){
+    if(!csvFigUsed(r))return;
+    if(r.oneOffSet)return;              // 手で決めた行は触らない
+    if(r.oneOff)return;
+    r.oneOff=true; n++;
+  });
+  if(n)csvSaveList();
+  return n;
+}
 function csvKindOf(r){
   if(r.cartOnly)return 'cart';
   if(r.looseOnly)return 'loose';
@@ -7725,6 +7776,10 @@ function csvCartAddGo(list,d,box){
    無在庫の行は M-<ASIN>（中古 M-<ASIN>-U）。pj-sync 側は M- を E- と同じく
    ASIN＋新品/中古で照合し、あわせて無在庫の印を立てる。 */
 function csvCustomLabel(r){
+  /* 無在庫（MW）の行は W-<JAN>（6.96）。ASIN が取れていない行もあるので
+     JAN で付ける。ほかの出品（E-／M-）と重ならない。 */
+  if(String((r||{}).buySource||'')==='mw'&&r.jan)
+    return 'W-'+String(r.jan).replace(/\D/g,'');
   /* カートリッジのみ（箱・説明書なし）は -C。箱付き中古（-U）とは別物として扱う。
      同じASINで -U と -C が並んで出ていてよい。 */
   /* 箱なし（カートリッジのみ -C ／ フィギュアのみ -L）は、箱付き中古とは別の出品。 */
@@ -7746,11 +7801,22 @@ function csvCustomLabel(r){
 function csvShipFast(){ return $('csvShipProfile').value||$('csvShipProfileRe').value; }
 function csvShipSlow(){ return $('csvShipProfileRe').value||$('csvShipProfile').value; }
 function csvShipLooseProfile(){ return String($('csvShipProfileLoose').value||'').trim(); }
+function csvShipMwProfile(){ return String($('csvShipProfileMw').value||'').trim(); }
+function csvShipMwDays(){ var n=+$('csvShipDaysMw').value; return (isFinite(n)&&n>0)?n:10; }
 function csvShipProfileFor(r){
+  /* 無在庫（MW）の行は MW 用のポリシー（6.96）。
+     MW に注文してから届くまでの日数が要るので、ハンドリングが長いものを使う。 */
+  if(r&&String(r.buySource||'')==='mw'&&csvShipMwProfile())
+    return csvShipMwProfile();
   /* フィギュアのみ（箱なし）は封筒で送るので、専用のポリシーを使う。
      ⚙設定が空のときは、これまでどおりのポリシーで出す。 */
   if(r&&r.looseOnly&&csvShipLooseProfile())return csvShipLooseProfile();
   return (r&&r.fastShip)?csvShipFast():csvShipSlow();
+}
+/* MW の行に要るハンドリング日数（出荷日数＋2日。仕様6章）。 */
+function csvMwNeedDays(r){
+  if(String((r||{}).buySource||'')!=='mw')return 0;
+  return (+(r||{}).mwShipDays||0)+2;
 }
 /* 出品済みの行で、eBay に出ているポリシーを変える必要があるか。
    印を切り替えたときに shipNeed を立て、書き出したら消す。 */
@@ -8462,6 +8528,9 @@ $('csvExportFiles').addEventListener('click',function(e){
    渡さなければ今までどおり一覧の全行が対象。確認・ZIP・ログの扱いは同じ。 */
 function csvExportRun(ids){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
+  /* 中古フィギュアの一点物を自動でオンにする（6.94）。
+     書き出す中身に入るので、行を作る前に行う。 */
+  var oneN=csvFigOneAuto();
   var pick=!!(ids&&ids.length);
   var sp=csvExportSplit(ids), rows=sp.rows;
   if(sp.skip||sp.warn.length){
@@ -8482,6 +8551,7 @@ function csvExportRun(ids){
     }
     if(sp.warn.length)
       msg+='\n【注意だけで書き出す行】'+sp.warn.length+'件\n'+list(sp.warn,true)+'\n';
+    if(oneN)msg+='\n中古フィギュア '+oneN+'件に一点物の印を付けました。\n';
     msg+='\nOK：'+(sp.skip?('除外の '+sp.skip+'件を除いて、'+rows.length+'件を書き出す')
                           :(rows.length+'件を書き出す'))
       +'\nキャンセル：中止';
@@ -8789,6 +8859,7 @@ $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
   });
 })();
 $('csvMwLoad').onclick=mwListRun;
+$('csvMwPush').onclick=mwPushRun;
 $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
@@ -8889,6 +8960,134 @@ function mwPost(path,body){
   return new Promise(function(res,rej){
     syncJsonPost(path,body,res,function(why){ rej(new Error(why)); });
   });
+}
+/* ===== MW の候補を出品リストに入れる（6.96）=====
+   写真が付いた「① 出品候補」の行を、既存の出品リスト（csvList）に足す。
+   こうすると英題生成・Item Specifics・原産国・書き出し（File Exchange）は
+   **今までの流れがそのまま使える**（式も画面も増やさない）。 */
+/* 機種から eBay カテゴリを決める。ゲームは 139973、ホビーは 261055。 */
+function mwCatOf(r){
+  return (mwAmzGenre(r)==='ゲーム')?'139973':'261055';
+}
+/* いま出ている無在庫の数（販売連携の取り込み）＋出品リストの無在庫の行。 */
+function mwDropNow(){
+  var n=(typeof syncDropN==='function')?(+syncDropN()||0):0;
+  csvList.forEach(function(r){
+    /* 出品リストにあって、まだ eBay に出ていない無在庫の行も数に入れる。 */
+    if(r.dropship&&!String(r.itemId||'').trim())n++;
+  });
+  return n;
+}
+/* 出品リストに入れる1行を作る。 */
+function mwListRow(r,pics,n){
+  var rec=mwRec(r);
+  var sl=rec?mwSell(r,rec):null;
+  var cat=mwCatOf(r);
+  var jan=String(r.jan||'').replace(/\D/g,'');
+  return { id:'w'+Date.now().toString(36)+n.toString(36),
+    src:'mw', sku:'', jan:jan, asin:String(r.asin||''),
+    titleJa:String(r.mw_name||r.name||''), titleEn:'', cat:cat, catFixed:true,
+    condId:1000, condErr:false, condSrc:'MW（新品）',
+    descHtml:'', qty:1, cost:rec?rec.cost:0, wRaw:0, rows:1,
+    /* 無在庫の印。仕入れ先は MW。 */
+    dropship:true, buySource:'mw', mwSha:String(r.sha||''),
+    mwShipDays:+r.ship_days||0, mwShipText:String(r.ship_text||''),
+    mwStock:+r.stock||0, mwWholesale:+r.wholesale||0,
+    gross:0, rank:+r.rank||0, fba:false, zeroAct:'hold',
+    preBuy:false, costTemp:false, baseYen:0,
+    cartOnly:false, looseOnly:false, forceEbay:false,
+    /* 無在庫は一点物にしない（MW に在庫がある限り補充する）。 */
+    oneOff:false, oneOffSet:true,
+    pics:pics||[],
+    amzLow:'', amzLowAt:'', itemId:'', uploadErr:'',
+    sold:(r.mkt_low!=null&&+r.mkt_n>0)?(Math.round(+r.mkt_low*100)/100):'',
+    price:sl?sl.price:0, floor:rec?rec.floor:0,
+    picsEps:0, picsErr:'',
+    titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
+    specs:{ scale:'', height:'', platform:'', brand:'', line:'',
+            gameName:'', publisher:'', franchise:'', character:'', model:'',
+            genre:'', year:'' } };
+}
+function mwPushRun(){
+  var note=$('csvMwPushNote');
+  if(!mwRows.length){
+    note.textContent='先に「候補一覧を取り込む」を押してください。'; return;
+  }
+  /* ① 出品候補（相場の115%以内）で、写真が付いている行。 */
+  var cand=mwRows.filter(function(r){
+    var rec=mwRec(r);
+    if(!rec)return false;
+    if(mwMktJudge(r,rec).k!=='ok')return false;
+    return (+r.pics_ok||0)>0;
+  });
+  if(!cand.length){
+    note.innerHTML='出品候補のうち<b>写真が付いている行がありません</b>。'
+      +'先に行の「写真（MWの商品IDか画像URLを貼る）」で画像を取り込んでください。';
+    return;
+  }
+  /* すでに出品リストに入っている JAN は足さない（二重に出さない）。 */
+  var have={};
+  csvList.forEach(function(r){
+    if(String(r.buySource||'')==='mw'&&r.jan)have[String(r.jan)]=1; });
+  var todo=cand.filter(function(r){ return !have[String(r.jan)]; });
+  var dup=cand.length-todo.length;
+  /* 無在庫の上限（⚙設定の syncDropMax）を守る。0 なら上限なし。 */
+  var max=(typeof syncDropMax==='function')?(+syncDropMax()||0):0;
+  var now=mwDropNow(), cut=0;
+  if(max>0){
+    var room=Math.max(0,max-now);
+    if(todo.length>room){ cut=todo.length-room; todo=todo.slice(0,room); }
+  }
+  if(!todo.length){
+    note.innerHTML='入れられる行がありません。'
+      +(dup?('<br>すでに出品リストにある '+dup+'件は飛ばしました。'):'')
+      +(cut?('<br><b>無在庫の上限（'+max+'件）に達しています</b>'
+        +'（いま '+now+'件）。⚙設定で上げられます。'):'');
+    return;
+  }
+  var btn=$('csvMwPush'); btn.disabled=true;
+  note.textContent='写真を読み込んでいます… 0／'+todo.length;
+  /* 行ごとに控えてある画像（pj-img の公開URL）を取る。 */
+  var out=[], i=0;
+  function step(){
+    if(i>=todo.length){
+      btn.disabled=false;
+      var added=0;
+      out.forEach(function(x){
+        if(!x.pics.length)return;
+        csvList.push(mwListRow(x.r,x.pics,added)); added++;
+      });
+      if(added)csvSaveList();
+      var noPic=out.length-added;
+      note.innerHTML='✓ <b>'+added+'件</b>を出品リストに入れました。'
+        +(noPic?('<br>'+noPic+'件は公開URLが控えられていないので飛ばしました'
+          +'（「画像を取り込む」をやり直してください）。'):'')
+        +(dup?('<br>すでに出品リストにある '+dup+'件は飛ばしました。'):'')
+        +(cut?('<br><b>無在庫の上限（'+max+'件）で '+cut+'件を見送りました</b>'
+          +'（いま '+(now+added)+'件）。'):'')
+        +'<br>このあと出品CSVタブの<b>「英語タイトル生成」</b>→'
+        +'<b>原産国・カテゴリの確認</b>→<b>「CSVを書き出す」</b>で出せます。';
+      csvRender();
+      return;
+    }
+    var r=todo[i++];
+    note.textContent='写真を読み込んでいます… '+i+'／'+todo.length;
+    fetch(syncUrl()+'/mw/img?jan='+encodeURIComponent(String(r.jan)),
+      {headers:{'X-PJ-Key':syncApiKey()}})
+      .then(function(res){ return res.ok?res.json():null; })
+      .then(function(d){
+        var pics=[];
+        ((d&&d.rows)||[]).forEach(function(g){
+          if(!Number(g.ok))return;
+          if(!String(g.url||'').trim())return;
+          pics.push({ url:g.url, w:+g.w||0, h:+g.h||0, key:'' });
+        });
+        out.push({ r:r, pics:pics });
+        step();
+      })
+      ['catch'](function(){ out.push({ r:r, pics:[] }); step(); });
+  }
+  step();
 }
 /* ===== 国内 Amazon FBA で見る（6.91・7.66）=====
    候補の JAN から ASIN を引き、**Amazon の実売価格**で FBA の利益を出す。
@@ -9345,6 +9544,31 @@ function mwMktRun(){
    優先2：相場なし（eBay に即決の出品が無い）  → 別に出す
    優先3：115%を超える                        → 後回し（畳んで出す） */
 var MW_OVER=1.15;
+/* 相場より少し安く出す割合（⚙設定・既定97%）。 */
+function mwUnderPct(){
+  var n=+$('mwUnder').value;
+  return (isFinite(n)&&n>=50&&n<=100)?n:97;
+}
+/* ---- 出す売値を決める（6.95）----
+   売値 ＝ max( 目標利益の売値, eBay最安値の総額 × 97% − 請求送料 )
+   ・相場より少し安く出す（売れやすくする）
+   ・それでも目標利益を割るなら、目標利益の売値にする（赤字で出さない）
+   ・相場が無い行（②）は目標利益の売値
+   ・どちらも自動値下げの下限は **下限利益の売値**（rec.floor）
+   返すのは**商品代**（請求送料は別建て。相場は総額なので送料を引いてそろえる）。 */
+function mwSell(r,rec){
+  if(!rec)return null;
+  var o={ price:rec.price, floor:rec.floor, basis:'目標利益',
+          under:null, pct:mwUnderPct() };
+  var low=((r||{}).mkt_low!=null)?+r.mkt_low
+    :(((r||{}).mkt_low_any!=null)?+r.mkt_low_any:0);
+  if(!(low>0)||!(+(r||{}).mkt_n>0))return o;        // 相場なし
+  /* 相場（総額）から請求送料を引いて、こちらの商品代にそろえる。 */
+  var want=Math.round((low*o.pct/100-(+rec.ship||0))*100)/100;
+  o.under=want;
+  if(want>o.price){ o.price=want; o.basis='相場の'+o.pct+'%'; }
+  return o;
+}
 /* 相場（eBay の最安値）と推奨売値を見比べる。
    **どちらも「買い手が払う総額」にそろえてから比べる。**
    eBay の最安値は 本体＋送料 の総額。こちらの推奨売値は商品代なので、
@@ -9358,7 +9582,9 @@ function mwMktJudge(r,rec){
   if(!(low>0))return { k:'nomkt', label:'相場なし（値段が読めません）', pri:2 };
   var lim=Math.round(low*MW_OVER*100)/100;
   if(!rec)return { k:'high', label:'値段を出せません', pri:4, low:low, lim:lim };
-  var mine=rec.total;                       // こちらの総額（商品代＋請求送料）
+  /* 実際に出す売値（6.95）の総額で測る。相場より安く出す分も反映される。 */
+  var sl=mwSell(r,rec);
+  var mine=Math.round((sl.price+(+rec.ship||0))*100)/100;
   var pct=Math.round(mine/low*100);
   if(mine<=lim)
     return { k:'ok', label:'出品候補', pri:1, low:low, lim:lim, pct:pct, mine:mine };
@@ -9557,12 +9783,21 @@ function mwListRender(){
         /* 推奨売値は**目標利益**（下限利益＋仕入値×連動率）がちょうど出る売値。
            floor は**下限利益**ちょうどの売値＝これ以上は下げない線。
            v188 までは rec.target を「下限利益」と誤って表示していた（6.90）。 */
-        ? ('<div class="note2" style="margin:2px 0 0">推奨売値 <b>'+usd(rec.price)
-           +'</b>　利益 <b'
-           +(rec.profit>=rec.target?'':' style="color:var(--bad)"')+'>'
-           +yen(rec.profit)+'</b>＝<b>目標利益</b> '+yen(rec.target)
-           +'<br>下げられる下限 '+usd(rec.floor)
-           +'（下限利益 '+yen(+$('baseProfit').value||0)+'）</div>')
+        ? (function(){
+            /* 出す売値（6.95）。相場より少し安く出せるならそちらを使う。 */
+            var sl=mwSell(r,rec);
+            var up=(sl.price>rec.price);
+            return '<div class="note2" style="margin:2px 0 0">'
+              +'<b>出す売値 '+usd(sl.price)+'</b>'
+              +'（'+esc(sl.basis)+'）'
+              +(up?('　<span style="color:var(--good)">目標利益の '+usd(rec.price)
+                +' より高く出せます</span>'):'')
+              +'<br>目標利益の売値 '+usd(rec.price)
+              +'（利益 '+yen(rec.profit)+'＝目標 '+yen(rec.target)+'）'
+              +(sl.under!==null?('　相場の'+sl.pct+'% は '+usd(sl.under)):'')
+              +'<br>下げられる下限 '+usd(rec.floor)
+              +'（下限利益 '+yen(+$('baseProfit').value||0)+'）</div>';
+          })()
         : '<div class="note2" style="margin:2px 0 0;color:var(--bad)">卸値が読めません</div>')
       +mwMktHtml(r,rec)
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
@@ -13342,14 +13577,25 @@ var SYNC_FILTERS=[
   { v:'automd',         label:'自動値下げの予定',
     f:function(r){ return syncMdTarget(r)||syncMarkDue(r); } },
   { v:'review',         label:'売値の見直し',
-    f:function(r){ return !!syncPriceReview(r); } }
+    f:function(r){ return !!syncPriceReview(r); } },
+  /* 中古のフィギュア（ホビー）なのに一点物がオフ／不明の行（6.94）。
+     ここに出る行は、売れたあと「再調達」の対象になってしまう。
+     出品リストの書き出し・名簿送信では自動でオンになるので、
+     ここに残るのは「手でオフにした行」と「出品リストに無い古い行」。 */
+  { v:'figone',         label:'中古フィギュアで一点物がオフ／不明',
+    f:function(r){
+      if(String(r.prefix||'')==='game')return false;    // ゲームは対象外
+      if(String(r.cond||'')==='new')return false;       // 新品は対象外
+      if(!String(r.prefix||'').trim())return false;     // 区分が分からない行は出さない
+      return !Number(r.one_off||0)||!Number(r.one_off_known||0);
+    } }
 ];
 /* プルダウンの並び（見出しつき）。ここに書いていない項目は出さない。 */
 var SYNC_FILTER_GROUPS=[
   { t:'毎日見る', v:['all','warn','pbplan','on_hand'] },
   { t:'出品',     v:['fba_not_listed','picsneed'] },
   { t:'価格',     v:['markdown','automd','review'] },
-  { t:'状態',     v:['restocking','dropship'] }
+  { t:'状態',     v:['restocking','dropship','figone'] }
 ];
 // 0件でも必ず出す項目
 var SYNC_FILTER_KEEP={ all:1, warn:1 };
@@ -14994,6 +15240,9 @@ function syncPushRun(done,quiet){
   var u=syncUrl();
   if(!u){ if(!quiet)alert('設定の「pj-sync のURL」を入れてください。'); fin(); return; }
   if(!csvList.length){ if(!quiet)alert('出品リストが空です。'); fin(); return; }
+  /* 中古フィギュアの一点物を自動でオンにする（6.94）。
+     名簿に one_off として入るので、送る前に行う。 */
+  var figOneN=csvFigOneAuto();
   var onHandOn=$('syncOnHand').checked;
   /* FBAに在庫がある商品には手元在庫の印を付けない。
      突き合わせは **ASIN＋新品/中古** で行う（ItemIDやCustomLabelに頼らない。
@@ -15043,6 +15292,7 @@ function syncPushRun(done,quiet){
                            +'（SKU・ASINの形が合いません）。'):'')))
       +(skipPre?('　仕入れ前の候補 '+skipPre+'件は送っていません'
                  +'（出品してから送ります）。'):'')
+      +(figOneN?('　中古フィギュア '+figOneN+'件に一点物の印を付けました。'):'')
       +'　手元在庫の印 '+items.filter(function(x){return x.on_hand;}).length+'件。'
       +'　価格の元データ（実重量 '
       +items.filter(function(x){return x.weight_g;}).length+'件／仕入値 '
@@ -15438,7 +15688,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v192';   // sw.js の const V と必ず同じ値にする
+var APP_V='v193';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
