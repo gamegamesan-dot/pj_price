@@ -147,19 +147,19 @@ ok(!!q,'★★一覧は値段が取れた行だけを求める（priced=1）');
 let t=await p.evaluate(()=>$('csvMwAmzList').textContent);
 let note2=await p.evaluate(()=>$('csvMwAmzListNote').textContent);
 console.log('   '+note2.replace(/\s+/g,' '));
-ok(/黒字 2件/.test(note2),'★★黒字の件数を出す');
-ok(/赤字 1件/.test(note2),'★★赤字の件数も出す');
-ok(/ゲーム 1件/.test(t)&&/フィギュア 1件/.test(t),'★★ジャンルごとに分ける');
+ok(/2件を表示/.test(note2),'★★表示している件数を出す');
+ok(/値段あり 3件のうち/.test(note2),'★★値段がある件数も出す');
+ok(/粗利（税抜）の高い順/.test(t),'★★既定は粗利（税抜）順（全ジャンル）');
 ok(/税抜/.test(t),'★★税抜の額を出す');
 ok(/Amazon本体あり/.test(t),'★★Amazon本体ありの印を出す');
 ok(/ランキング/.test(t)&&/649/.test(t),'★★ランキングを出す');
 ok(/新品出品者 4人/.test(t),'★★新品出品者数を出す');
 ok(/カート/.test(t),'★価格の基準を出す');
 ok(/B0FVLXGFMH/.test(t),'★ASIN を出す');
-let href=await p.evaluate(()=>{
-  const a=$('csvMwAmzList').querySelector('a');
-  return a?a.getAttribute('href'):''; });
-ok(/amazon\.co\.jp\/dp\/B0FVLXGFMH/.test(href),'★★Amazon のページに飛べる');
+let hrefs=await p.evaluate(()=>Array.prototype.map.call(
+  $('csvMwAmzList').querySelectorAll('a'),(a)=>a.getAttribute('href')));
+ok(hrefs.some((h)=>/amazon\.co\.jp\/dp\/B0FVLXGFMH/.test(h)),
+   '★★Amazon のページに飛べる');
 ok(!/赤字になる商品/.test(t),'★★赤字の行は一覧に出さない（黒字だけ）');
 
 console.log('\n=== CSV の書き出し（10/7 のファイルと同じ列）===');

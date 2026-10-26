@@ -500,6 +500,7 @@ async function spCall(env, run, path, opt) {
   if (o.body) headers["content-type"] = "application/json";
   for (let i = 0; i <= SP_RETRY; i++) {
     await spSlot(o.label);
+    await spSlotKv(env, o.label);        // 実行をまたいだ間隔（7.70）
     let resp, text = "";
     try {
       resp = await net(run, url, { method: o.method || "GET", headers, body: o.body });
@@ -4657,6 +4658,23 @@ const MW_AMZ_MAX = PRICING_BATCH * PRICING_MAX_CALLS;   // 1回に調べる件�
 const MW_AMZ_TTL_D = 3;                 // 取れた値段を取り直さない日数
 const MW_AMZ_ERR_TTL_H = 24;            // 取れなかったものを取り直すまでの時間
 const MW_AMZ_CAT_BATCH = 20;            // Catalog Items の1回の件数
+const MW_AMZ_RETRY_MAX = 120;           // 引けなかった JAN を1件ずつ引き直す上限
+/* getItemOffersBatch は 0.1回/秒。Cron（scheduled）と画面からの実行は
+   **別の isolate で動くことがあり、spLanes（モジュール変数）は共有されない**。
+   そこで最後に呼んだ時刻を KV にも置き、呼び出しの間隔を越えないようにする（7.70）。 */
+const SP_KV_LANES = { getItemOffersBatch: 1 };
+async function spSlotKv(env, label) {
+  if (!SP_KV_LANES[label] || !env || !env.SYNC_CACHE) return;
+  const gap = SP_GAP[label] || SP_GAP_DEFAULT;
+  const key = "sp:last:" + label;
+  try {
+    const last = Number(await env.SYNC_CACHE.get(key)) || 0;
+    const wait = last + gap - Date.now();
+    if (wait > 0 && wait < gap * 2) await sleep(wait);
+    await env.SYNC_CACHE.put(key, String(Date.now()),
+      { expirationTtl: Math.max(60, Math.ceil(gap / 1000) * 3) });
+  } catch (e) { /* KV が使えないときは今までどおり（spLanes だけ） */ }
+}
 /* JAN から ASIN・商品名・ランキングを引く。20件ずつ。 */
 async function mwAsinFind(env, run, jans) {
   const out = {};
@@ -4703,12 +4721,46 @@ async function mwAsinFind(env, run, jans) {
       /* identifiers が返らないときは、要求が1件なら取り違えようがない。 */
       if (!jset.length && part.length === 1 && !out[part[0]]) out[part[0]] = rec;
     }
-    /* 引けた分・引けなかった分を jan_map に控える（7.67）。
-       次からは API を呼ばずに済む。 */
-    await janMapPut(env, part.map((j) => Object.assign({ jan: j },
-      out[j] || { asin: "", err: "ASINが見つかりません" })), "catalog");
+    /* 20件まとめて引くと、Amazon が商品を返しても **その商品の識別子に
+       要求した JAN が入っていない**ことがあり、どの JAN の答えか決められない。
+       その場合はここで落ちてしまうので、下で1件ずつ引き直す（7.69）。 */
   }
-  return { map: out, calls };
+  /* 引けなかった JAN を1件ずつ引き直す。1件なら取り違えようがないので、
+     識別子が合わなくても「その JAN の答え」として採れる。
+     Catalog は5回/秒なので、この引き直しは速い。 */
+  const miss = jans.filter((j) => !out[j]);
+  const why = {};
+  for (const j of miss.slice(0, MW_AMZ_RETRY_MAX)) {
+    const q = new URLSearchParams({
+      identifiers: j, identifiersType: "EAN", marketplaceIds: MP_FE,
+      includedData: "summaries,salesRanks,identifiers",
+    });
+    const r = await spCall(env, run, "/catalog/2022-04-01/items?" + q.toString(),
+                           { label: "searchCatalogItems" });
+    calls++;
+    if (!r.ok) { why[j] = "Amazonに問い合わせできませんでした（" + r.status + "）"; continue; }
+    const items = (r.data && r.data.items) || [];
+    if (!items.length) { why[j] = "Amazonのカタログにこの JAN がありません"; continue; }
+    const it = items[0];
+    const asin = String(it.asin || "");
+    if (!asin) { why[j] = "ASIN が返りませんでした"; continue; }
+    const sum = (it.summaries || [])[0] || {};
+    let rank = 0, rankCat = "";
+    const sr = (it.salesRanks || [])[0] || {};
+    for (const g of (sr.classificationRanks || []))
+      if (Number(g.rank) > 0) { rank = Number(g.rank); rankCat = String(g.title || ""); }
+    if (!rank) for (const g of (sr.displayGroupRanks || []))
+      if (Number(g.rank) > 0 && !rank) { rank = Number(g.rank); rankCat = String(g.title || ""); }
+    out[j] = { asin, name: String(sum.itemName || "").slice(0, 300),
+               rank, rank_cat: rankCat.slice(0, 60), retried: 1 };
+  }
+  for (const j of miss.slice(MW_AMZ_RETRY_MAX))
+    why[j] = "引き直しの上限に達しました（次回に回します）";
+  /* 引けた分・引けなかった分を jan_map に控える（7.67）。
+     次からは API を呼ばずに済む。 */
+  await janMapPut(env, jans.map((j) => Object.assign({ jan: j },
+    out[j] || { asin: "", err: why[j] || "ASINが見つかりません" })), "catalog");
+  return { map: out, calls, retried: miss.length, why };
 }
 /* ---- JAN → ASIN の控え（7.67）----
    items は**すでにちょうど100列**（D1 の上限・7.55）なので jan の列を足せない。
@@ -4898,6 +4950,73 @@ async function mwAmzRun(env, body) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 仕入れの印（7.68）=====
+   端末をまたいで同じ印が見えるよう D1 に置く。
+   **作業者（STAFF_KEY）でも付けられる**（仕入れの候補を選ぶ仕事なので）。
+   お金を動かす操作ではなく、印と数量だけ。 */
+const MW_BUY_MAX_QTY = 99;
+async function mwBuyPut(env, body, role) {
+  const run = newRun("mw-buy");
+  const res = { ok: false, n: 0, rows: [] };
+  try {
+    const o = body || {};
+    const list = Array.isArray(o.items) ? o.items
+      : [{ jan: o.jan, qty: o.qty }];
+    const stmts = [];
+    const at = nowIso();
+    for (const x of list.slice(0, 200)) {
+      const jan = String((x && x.jan) || "").replace(/\D/g, "");
+      if (!janOk(jan)) continue;
+      const qty = Math.max(0, Math.min(MW_BUY_MAX_QTY, mwNum(x && x.qty)));
+      if (qty <= 0) {
+        stmts.push(env.DB.prepare(`DELETE FROM mw_buy WHERE jan=?1`).bind(jan));
+      } else {
+        stmts.push(env.DB.prepare(
+          `INSERT INTO mw_buy (jan,qty,by_role,note,at,created_at)
+             VALUES (?1,?2,?3,?4,?5,?5)
+           ON CONFLICT(jan) DO UPDATE SET qty=excluded.qty,
+             by_role=excluded.by_role, note=excluded.note, at=excluded.at`)
+          .bind(jan, qty, String(role || ""), String((x && x.note) || "").slice(0, 200), at));
+      }
+      res.n++;
+      res.rows.push({ jan, qty });
+    }
+    await runBatch(env, run, stmts);
+    res.ok = true;
+    run.notes.push("MW仕入れの印：" + res.n + "件");
+  } catch (e) {
+    run.errors++; run.notes.push("mw-buy: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。 */
+async function mwBuyList(env, url) {
+  const q = await env.DB.prepare(
+    `SELECT b.jan AS jan, b.qty AS qty, b.by_role AS by_role, b.at AS at,
+            s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
+            s.list_price AS list_price, s.wholesale AS wholesale,
+            s.stock AS stock, s.note AS note, s.ship_text AS ship_text,
+            s.ship_days AS ship_days, s.cond AS cond, s.gone_at AS gone_at,
+            a.asin AS asin, a.name AS amz_name, a.price AS price,
+            a.basis AS basis, a.rank AS rank, a.rank_cat AS rank_cat,
+            a.new_n AS new_n, a.amz AS amz
+       FROM mw_buy b
+       LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
+       LEFT JOIN mw_amz   a ON a.jan = b.jan
+      ORDER BY b.at DESC`).all();
+  const rows = (q && q.results) || [];
+  /* 卸値（税込）の合計。送料無料（5万円）までの残りは画面で出す。 */
+  let yen = 0, n = 0;
+  for (const r of rows) {
+    const w = Number(r.wholesale) || 0;
+    n += Number(r.qty) || 0;
+    yen += Math.round(w * 1.1) * (Number(r.qty) || 0);
+  }
+  return { ok: true, rows, n: rows.length, qty: n, yen,
+           gone: rows.filter((r) => r.gone_at).length };
+}
+
 /* ---- GET /mw/amz ----
    候補＋MW の中身＋Amazon の事実をまとめて返す。利益は画面で計算する。 */
 async function mwAmzList(env, url) {
@@ -4917,8 +5036,10 @@ async function mwAmzList(env, url) {
             a.rank_cat AS rank_cat, a.price AS price, a.basis AS basis,
             a.low AS low, a.buybox AS buybox, a.new_n AS new_n, a.low_n AS low_n,
             a.amz AS amz, a.fba_n AS fba_n, a.err AS amz_err,
-            a.checked_at AS amz_at
+            a.checked_at AS amz_at,
+            COALESCE(b.qty,0) AS buy_qty
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+            LEFT JOIN mw_buy b ON b.jan = s.jan
       WHERE ${w}${only}
       ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
   const n = await env.DB.prepare(
@@ -6635,7 +6756,7 @@ async function catalogCheck(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
     const url = new URL(request.url);
     if (request.method === "OPTIONS")
@@ -6858,15 +6979,27 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/mw/amz") {
         const b = await request.json().catch(() => ({}));
-        return json(await mwAmzRun(env, b), 200, origin);
+        /* 1回に1分前後かかる。画面を閉じても最後まで進むよう waitUntil でも
+           抱える（抱えないと、客が切れた時点で止まることがある。7.70）。 */
+        const pr = mwAmzRun(env, b);
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/mw/buy") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwBuyPut(env, b, role), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/buy")
+        return json(await mwBuyList(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/find")
         return json(await janFind(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/amz")
         return json(await mwAmzList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/market") {
         const b = await request.json().catch(() => ({}));
-        return json(await mwMarketRun(env, b), 200, origin);
+        const pr = mwMarketRun(env, b);
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/mw/img") {
         const b = await request.json().catch(() => ({}));
@@ -7019,6 +7152,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
+                        mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
+                        spSlotKv, SP_KV_LANES,
                         mwAmzRun, mwAmzList, mwAsinFind, amazonLowest,
                         amzSelf, fbaN, buyBox,
                         offerN, MW_AMZ_MAX, MW_AMZ_TTL_D, AMZ_SELF_ID,

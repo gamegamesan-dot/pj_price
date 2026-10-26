@@ -581,3 +581,14 @@ CREATE TABLE IF NOT EXISTS jan_map (
 );
 CREATE INDEX IF NOT EXISTS idx_jan_map_asin ON jan_map(asin);
 CREATE INDEX IF NOT EXISTS idx_jan_map_at   ON jan_map(at);
+
+/* ===== MW の仕入れの印（7.68）===== */
+CREATE TABLE IF NOT EXISTS mw_buy (
+  jan        TEXT PRIMARY KEY,
+  qty        INTEGER NOT NULL DEFAULT 1,   -- 仕入れる数量（0 で印を外す）
+  by_role    TEXT,                         -- 'admin' / 'staff'（誰が付けたか）
+  note       TEXT,
+  at         TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mw_buy_at ON mw_buy(at);

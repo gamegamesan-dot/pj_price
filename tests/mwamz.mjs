@@ -100,7 +100,10 @@ ok(r.body.ok===true,'★★実売価格の取得が通る');
 ok(r.body.asked===4&&r.body.done===4,'★候補4件すべて');
 ok(r.body.asin_ok===3&&r.body.asin_ng===1,'★★ASIN が引けた3件・引けなかった1件');
 ok(r.body.priced===2&&r.body.none===1,'★★値段が取れた2件・出品が無い1件');
-ok(r.body.calls_cat===1,'★★Catalog Items は20件まとめて1回');
+/* まず20件まとめて1回。そのあと引けなかった JAN を1件ずつ引き直す（7.69）。
+   ここでは 4970381909444 が引けないので、引き直しが1回増える。 */
+ok(r.body.calls_cat===2,
+   '★★まず20件まとめて1回＋引けなかった1件を引き直して1回');
 ok(r.body.calls_prc===1,'★★getItemOffersBatch も20件まとめて1回');
 ok(W.MW_AMZ_MAX===120,'★1回に調べるのは120件（0.1回/秒の上限から）');
 
@@ -128,6 +131,48 @@ let g3=await a('4988611224878');
 ok(!g3.price&&/出品がありません/.test(g3.err||''),'★★出品が無ければ理由を残す');
 let g4=await a('4970381909444');
 ok(!g4.asin&&/ASINが見つかりません/.test(g4.err||''),'★★ASIN が引けなければ理由を残す');
+
+console.log('\n=== 識別子が合わない商品も引き直しで救える（7.69）===');
+/* Amazon が商品を返しても、その商品の identifiers に要求した JAN が
+   入っていないことがある。20件まとめてだと「どの JAN の答えか」決められず
+   落ちていた（120件中59件しか取れなかった原因のひとつ）。
+   1件ずつ引き直せば取り違えようがないので採れる。 */
+const env5=makeEnv({ LWA_CLIENT_ID:'a',LWA_CLIENT_SECRET:'b',LWA_REFRESH_TOKEN:'c' });
+const put5=async(body)=>asJson(await worker.fetch(new Request('https://x/mw/stock',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify(body)}),env5));
+await put5({ at:'2026-10-28T00:00:00Z', part:1, parts:1, rows:[
+  row('4510417032793','M200'), row('4510417032847','M200')] });
+/* 識別子に JAN が入っていない（UPC しか返らない）商品にする */
+cat['4510417032793']={ asin:'B00NOID001',
+  identifiers:[{ identifiers:[{ identifierType:'UPC', identifier:'012345678905' }] }],
+  summaries:[{ itemName:'識別子が合わない商品' }],
+  salesRanks:[{ classificationRanks:[{ title:'Switch', rank:777 }] }] };
+cat['4510417032847']=mkCat('4510417032847','B00OKID001','ふつうの商品',888);
+calls=[];
+let r5=await asJson(await worker.fetch(new Request('https://x/mw/amz',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify({ kishu:'NS' })}),env5));
+console.log('   '+JSON.stringify({asin_ok:r5.body.asin_ok,asin_ng:r5.body.asin_ng,
+  cat:r5.body.calls_cat}));
+ok(r5.body.asin_ok===2&&r5.body.asin_ng===0,
+   '★★★識別子が合わない商品も、1件ずつ引き直して ASIN が取れる');
+ok(r5.body.calls_cat===2,'★まとめて1回＋引き直し1回');
+let g5=await env5.DB.prepare(
+  "SELECT asin FROM mw_amz WHERE jan='4510417032793'").first();
+ok(g5.asin==='B00NOID001','★★引き直した ASIN が入る');
+
+console.log('\n=== カタログに無い JAN は理由を分けて控える（7.69）===');
+const env6=makeEnv({ LWA_CLIENT_ID:'a',LWA_CLIENT_SECRET:'b',LWA_REFRESH_TOKEN:'c' });
+const run6={ kind:'t', subrequests:0, pages:0, errors:0, notes:[], rows:0 };
+let f6=await W.mwAsinFind(env6,run6,['4999999999994']);
+console.log('   '+JSON.stringify(f6.why));
+ok(/カタログにこの JAN がありません/.test(f6.why['4999999999994']||''),
+   '★★「カタログに無い」と分かる理由を残す');
+let j6=await env6.DB.prepare(
+  "SELECT err FROM jan_map WHERE jan='4999999999994'").first();
+ok(/カタログにこの JAN がありません/.test(j6.err||''),'★★控えにも理由が入る');
+ok(W.MW_AMZ_RETRY_MAX===120,'★引き直しの上限');
 
 console.log('\n=== 3日たつまで取り直さない ===');
 r=await put('/mw/amz',{ kishu:'NS' });

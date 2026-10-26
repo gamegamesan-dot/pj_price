@@ -712,10 +712,29 @@ body.staff #syncOnHandFix{display:none !important}
             1回に <b id="csvMwAmzMax">120</b>件まで（値段の取得が10秒に1回のため）。</div>
           <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonの実売価格を取る</button>
           <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+          <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
+          <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
           <div style="display:flex;gap:6px;margin-top:6px">
             <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
-            <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
+            <button class="btn" id="csvMwBuyShow" style="flex:1">仕入れる一覧</button>
           </div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
+            <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
+          </div>
+          <!-- 並べ替えと絞り込み（6.93） -->
+          <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+            <span class="note2" style="margin:0;flex:0 0 auto">並べ替え</span>
+            <select id="csvMwAmzSort" style="flex:1 1 0;min-width:0">
+              <option value="net" selected>粗利（税抜）順（全ジャンル）</option>
+              <option value="margin">利益率順</option>
+              <option value="genre">ジャンルごと</option>
+            </select>
+          </div>
+          <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
+          <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上</label></div>
+          <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし</label></div>
+          <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
           <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
           <div id="csvMwAmzList" style="margin-top:6px"></div>
         </details>
@@ -4187,7 +4206,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'autoAdRate','autoSkMode',
                  // マッチングワールド（MW）の無在庫（6.85）
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
-                 'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby'];
+                 'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
+                 'csvMwAmzSort','csvMwAmzMinM'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -8772,6 +8792,12 @@ $('csvMwLoad').onclick=mwListRun;
 $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
+$('csvMwBuyShow').onclick=mwBuyShow;
+$('csvMwBuyCsv').onclick=mwBuyCsvGo;
+['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzMinM']
+  .forEach(function(id){
+    $(id).addEventListener('change',function(){ mwAmzRender(); });
+  });
 $('csvMwMkt').onclick=mwMktRun;
 $('csvMwFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; this.value='';
@@ -8962,64 +8988,291 @@ function mwAmzLoad(){
     .then(function(d){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
       $('csvMwAmzMax').textContent=String(d.per_run||120);
+      /* 行に入っている仕入れの印（端末をまたいで見える）を読み込む。 */
+      mwBuyMap={};
+      mwAmzRows.forEach(function(r){
+        if(+r.buy_qty>0)mwBuyMap[String(r.jan)]=+r.buy_qty; });
       mwAmzRender();
+      mwBuyLoad(true);        // 一覧に出ていない行の印も合計に入れる
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
+}
+/* ---- 並べ替えと絞り込み（6.93）---- */
+function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
+function mwAmzFilters(){
+  return { win:!!$('csvMwAmzWin').checked, multi:!!$('csvMwAmzMulti').checked,
+           noAmz:!!$('csvMwAmzNoAmz').checked,
+           minM:(function(){ var n=+$('csvMwAmzMinM').value; return isFinite(n)?n:0; })() };
+}
+/* 絞り込みを当てた行（計算つき）を返す。 */
+function mwAmzPicked(){
+  var f=mwAmzFilters();
+  return mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
+    .filter(function(x){
+      if(!x.c)return false;
+      if(f.win&&x.c.profit<=0)return false;
+      if(f.multi&&(+x.r.new_n||0)<2)return false;
+      if(f.noAmz&&(+x.r.amz))return false;
+      if(f.minM&&x.c.margin<f.minM)return false;
+      return true;
+    });
+}
+/* ---- タップでコピー（6.93）---- */
+function mwCopy(text,label){
+  var t=String(text||'');
+  var say=function(okay){
+    var el=$('csvMwAmzCopyNote');
+    if(!el)return;
+    el.textContent=okay?('コピーしました：'+t):('コピーできませんでした：'+t);
+    el.style.display='';
+    clearTimeout(mwCopy._t);
+    mwCopy._t=setTimeout(function(){ el.style.display='none'; },1600);
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){ say(true); },
+      function(){ say(false); });
+    return;
+  }
+  /* 古い端末向け。選択してコピーする。 */
+  try{
+    var ta=document.createElement('textarea');
+    ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    var okay=document.execCommand('copy');
+    document.body.removeChild(ta);
+    say(okay);
+  }catch(e){ say(false); }
+}
+/* ---- 仕入れる印（6.93）---- */
+var mwBuyMap={}, mwBuyRows=[], mwBuyMeta=null;
+function mwBuyFeeFree(){ return 50000; }      // 送料無料になる額（MW）
+function mwBuyQtyOf(jan){ return +mwBuyMap[String(jan)]||0; }
+function mwBuySet(jan,qty){
+  var q=Math.max(0,Math.min(99,+qty||0));
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('csvMwAmzListNote').textContent='pj-sync のURLとキーを⚙設定に入れてください。';
+    return;
+  }
+  if(q)mwBuyMap[String(jan)]=q; else delete mwBuyMap[String(jan)];
+  mwBuyBarRender();                        // 先に見た目を直す（待たせない）
+  mwPost('/mw/buy',{ jan:String(jan), qty:q })
+    .then(function(){
+      /* 行の印（バッジ・枠の色）を出すために一覧も描き直す。 */
+      return mwBuyLoad(true).then(function(){ mwAmzRender(); });
+    })
+    ['catch'](function(e){
+      $('csvMwAmzListNote').textContent='⚠ 印を保存できませんでした：'+e.message;
+    });
+}
+/* 印のまとめ（件数・合計・送料無料まで）。 */
+function mwBuyBarRender(){
+  var bar=$('csvMwBuyBar');
+  var jans=Object.keys(mwBuyMap);
+  if(!jans.length){ bar.style.display='none'; bar.innerHTML=''; return; }
+  /* 合計は一覧に出ている行の卸値から出す（一覧に無い行は /mw/buy の値を使う）。 */
+  var byJan={};
+  mwAmzRows.forEach(function(r){ byJan[String(r.jan)]=r; });
+  mwBuyRows.forEach(function(r){ if(!byJan[String(r.jan)])byJan[String(r.jan)]=r; });
+  /* 書式の yen() を隠さないよう、合計は sum という名前で持つ。 */
+  var sum=0, qty=0, unknown=0;
+  jans.forEach(function(j){
+    var n=mwBuyMap[j]; qty+=n;
+    var r=byJan[j];
+    if(r&&+r.wholesale)sum+=Math.round((+r.wholesale)*1.1)*n;
+    else unknown++;
+  });
+  var left=Math.max(0,mwBuyFeeFree()-sum);
+  bar.innerHTML='<b>仕入れる '+jans.length+'件</b>'
+    +(qty!==jans.length?('（数量の合計 '+qty+'点）'):'')
+    +'　合計 <b>'+yen(sum)+'</b>'
+    +'<span class="note2">（卸値×1.1）</span>'
+    +(unknown?('<span class="note2">　※'+unknown+'件は卸値が分かりません</span>'):'')
+    +'<br>'+(left>0
+      ? ('送料無料（'+yen(mwBuyFeeFree())+'）まであと <b>'+yen(left)+'</b>')
+      : '<b style="color:var(--good)">送料無料になります</b>')
+    +((mwBuyMeta&&mwBuyMeta.gone)
+      ? ('<br><span style="color:var(--bad)">印を付けたあとに MW で欠品した行が '
+         +mwBuyMeta.gone+'件あります</span>') : '');
+  bar.style.display='';
+}
+/* D1 から印を読み直す。 */
+function mwBuyLoad(quiet){
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey())return Promise.resolve();
+  return fetch(syncUrl()+'/mw/buy',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ return res.ok?res.json():null; })
+    .then(function(d){
+      if(!d||d.ok!==true)return;
+      mwBuyRows=d.rows||[]; mwBuyMeta=d;
+      mwBuyMap={};
+      mwBuyRows.forEach(function(r){ mwBuyMap[String(r.jan)]=+r.qty||0; });
+      mwBuyBarRender();
+      if(!quiet)mwAmzRender();
+    })
+    ['catch'](function(){});
+}
+/* 印を付けた行だけの一覧。 */
+function mwBuyShow(){
+  mwBuyLoad(true).then(function(){
+    var el=$('csvMwAmzList');
+    if(!mwBuyRows.length){
+      el.innerHTML='<div class="note2">仕入れる印の付いた行はありません。</div>';
+      return;
+    }
+    el.innerHTML='<div class="note2" style="margin:0 0 4px"><b>仕入れる '
+      +mwBuyRows.length+'件</b>（印を付けた順）</div>'
+      +mwBuyRows.map(function(r){
+        var cost=Math.round((+r.wholesale||0)*1.1);
+        return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+          +'border-radius:6px'+(r.gone_at?';border-color:var(--bad)':'')+'">'
+          +'<b>'+(+r.qty||0)+'点</b>　'+esc(String(r.mw_name||r.jan).slice(0,50))
+          +(r.gone_at?' <span class="badge" style="background:var(--bad)">MWで欠品</span>':'')
+          +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
+          +'　社 '+esc(r.sha||'')+'　MW在庫 '+(+r.stock||0)+'点'
+          +'　MW出荷 '+(+r.ship_days||0)+'営業日</div>'
+          +'<div class="note2" style="margin:2px 0 0">卸値 '+yen(+r.wholesale||0)
+          +'（税抜）→ <b>'+yen(cost)+'</b>×'+(+r.qty||0)+' ＝ '
+          +yen(cost*(+r.qty||0))+'</div>'
+          +(r.asin?('<div class="note2" style="margin:2px 0 0">ASIN '+esc(r.asin)
+            +(r.price?('　Amazon '+yen(+r.price)):'')+'</div>'):'')
+          +'</div>';
+      }).join('');
+    mwBuyBarRender();
+  });
+}
+/* 注文用のCSV（吉田さんに渡す形）。 */
+function mwBuyCsvGo(){
+  mwBuyLoad(true).then(function(){
+    var note=$('csvMwAmzListNote');
+    if(!mwBuyRows.length){ note.textContent='仕入れる印の付いた行がありません。'; return; }
+    var head=['数量','JAN','社','商品名（MW）','卸値（税抜）','仕入値（税込）',
+      '小計','MW在庫','MW出荷（営業日）','出荷日（原文）','状態','備考',
+      'ASIN','Amazon販売価格','MWで欠品'];
+    var rows=mwBuyRows.map(function(r){
+      var cost=Math.round((+r.wholesale||0)*1.1), q=+r.qty||0;
+      return [ q, '="'+r.jan+'"', r.sha||'', r.mw_name||'', +r.wholesale||0,
+        cost, cost*q, +r.stock||0, +r.ship_days||0, r.ship_text||'',
+        r.cond||'', r.note||'', r.asin||'', +r.price||0,
+        r.gone_at?'欠品':'' ];
+    });
+    var tot=rows.reduce(function(a,x){ return a+x[6]; },0);
+    rows.push(['','','','合計','', '', tot,'','','','','','','','']);
+    var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
+    var csv='﻿'+[head.map(q).join(',')]
+      .concat(rows.map(function(a){ return a.map(q).join(','); })).join('\r\n')+'\r\n';
+    var d=new Date(Date.now()+9*3600000).toISOString().slice(0,10).replace(/-/g,'');
+    csvDownload('mw_order_'+d+'.csv',csv);
+    note.textContent='✓ 注文用CSV を書き出しました（'+mwBuyRows.length+'件・合計 '
+      +yen(tot)+'）。';
+  });
 }
 function mwAmzRender(){
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
   var d=mwAmzMeta||{};
-  var list=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
+  var all=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
     .filter(function(x){ return x.c; });
-  var win=list.filter(function(x){ return x.c.profit>0; });
-  win.sort(function(a,b){ return b.c.profit-a.c.profit; });
+  var list=mwAmzPicked();
+  var f=mwAmzFilters(), sort=mwAmzSort();
   note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
     +'　値段あり '+(d.priced||0)
     +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
-    +'　／　<b>黒字 '+win.length+'件</b>（赤字 '+(list.length-win.length)+'件）'
-    +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'');
-  if(!win.length){
-    el.innerHTML='<div class="note2">黒字の行がありません。'
-      +'「Amazonの実売価格を取る」を押して調べてください。</div>';
+    +'　／　<b>'+list.length+'件</b>を表示'
+    +'（値段あり '+all.length+'件のうち）'
+    +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'')
+    +'<div class="note2" id="csvMwAmzCopyNote" style="display:none;margin:2px 0 0;'
+    +'color:var(--good)"></div>';
+  if(!list.length){
+    el.innerHTML='<div class="note2">当てはまる行がありません。'
+      +'絞り込みをゆるめるか、「Amazonの実売価格を取る」で件数を増やしてください。</div>';
+    mwBuyBarRender();
     return;
   }
-  var g={};
-  win.forEach(function(x){ var k=x.c.genre; (g[k]=g[k]||[]).push(x); });
+  /* 並べ替え。 */
+  if(sort==='margin')list.sort(function(a,b){ return b.c.margin-a.c.margin; });
+  else list.sort(function(a,b){ return b.c.net-a.c.net; });   // 既定：粗利（税抜）順
   var line=function(x){
-    var r=x.r, c=x.c;
+    var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
+    var q=mwBuyQtyOf(jan);
     return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
-      +'border-radius:6px">'
-      +'<b>'+yen(c.profit)+'</b>'
-      +' <span class="note2">（税抜 '+yen(c.net)+'・利益率 '+c.margin+'%）</span>'
+      +'border-radius:6px'+(q?';border-color:var(--good);background:#f6fff4':'')+'">'
+      +'<b>'+yen(c.net)+'</b>'
+      +' <span class="note2">（税抜・税込 '+yen(c.profit)+'・利益率 '+c.margin+'%）</span>'
       +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
+      +(q?' <span class="badge" style="background:var(--good)">仕入れる '+q+'点</span>':'')
       +'<div class="note2" style="margin:2px 0 0">'
       +esc(String(r.amz_name||r.mw_name||'').slice(0,60))+'</div>'
-      +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
-      +'　<a href="https://www.amazon.co.jp/dp/'+esc(r.asin||'')
-      +'" target="_blank" rel="noopener">'+esc(r.asin||'')+'</a>'
+      /* JAN と ASIN はタップでコピー */
+      +'<div class="note2" style="margin:2px 0 0">'
+      +'JAN <a href="#" onclick="mwCopy(\''+esc(jan)+'\');return false"'
+      +' style="text-decoration:underline dotted">'+esc(jan)+'</a>'
+      +(asin?('　ASIN <a href="#" onclick="mwCopy(\''+esc(asin)+'\');return false"'
+        +' style="text-decoration:underline dotted">'+esc(asin)+'</a>'):'')
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'</div>'
       +'<div class="note2" style="margin:2px 0 0">販売価格 <b>'+yen(c.price)+'</b>'
       +'（'+esc(r.basis||'')+'）　手数料 '+yen(c.fee)
-      +'（'+c.rate+'%＋FBA '+yen(c.fba)+'）　仕入 '+yen(c.cost)
-      +'（卸値 '+yen(+r.wholesale||0)+'×1.1＋'+yen(mwShipFee())+'）</div>'
+      +'（'+c.rate+'%＋FBA '+yen(c.fba)+'）　仕入 '+yen(c.cost)+'</div>'
       +'<div class="note2" style="margin:2px 0 0">ランキング '
       +((+r.rank>0)?(Number(r.rank).toLocaleString('ja-JP')
         +(r.rank_cat?('（'+esc(r.rank_cat)+'）'):'')):'—')
-      +'　新品出品者 '+(+r.new_n||0)+'人　在庫 '+(+r.stock||0)+'点'
-      +'　出荷 '+(+r.ship_days||0)+'営業日</div>'
-      +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8">備考 '
+      +'　新品出品者 '+(+r.new_n||0)+'人'
+      /* MW の数字には「MW」を付けて、Amazon の数字と混ざらないようにする */
+      +'　<b>MW在庫</b> '+(+r.stock||0)+'点'
+      +'　<b>MW出荷</b> '+(+r.ship_days||0)+'営業日</div>'
+      +'<div class="note2" style="margin:2px 0 0"><b>MW卸値</b> '
+      +yen(+r.wholesale||0)+'（税抜）　<b>MW定価</b> '+yen(+r.list_price||0)+'</div>'
+      +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8"><b>MW備考</b> '
         +esc(String(r.note).slice(0,50))+'</div>'):'')
+      /* 外のページを開くボタン */
+      +'<div style="display:flex;gap:6px;margin-top:4px">'
+      +(asin?('<a class="btn" style="flex:1;text-align:center" target="_blank"'
+        +' rel="noopener" href="https://keepa.com/#!product/5-'+esc(asin)+'">Keepa</a>'
+        +'<a class="btn" style="flex:1;text-align:center" target="_blank"'
+        +' rel="noopener" href="https://www.amazon.co.jp/dp/'+esc(asin)+'">Amazon</a>'):'')
+      +'</div>'
+      /* 仕入れる印と数量 */
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+      +'<label class="note2" style="margin:0;flex:1 1 0;display:flex;gap:6px;'
+      +'align-items:center"><input type="checkbox" id="mwBuyChk_'+esc(jan)+'"'
+      +(q?' checked':'')+' onchange="mwBuyToggle(\''+esc(jan)+'\')">'
+      +'<b>仕入れる</b></label>'
+      +'<input type="number" id="mwBuyQty_'+esc(jan)+'" value="'+(q||1)+'"'
+      +' min="1" max="99" step="1" inputmode="numeric" style="flex:0 0 72px"'
+      +' onchange="mwBuyQtyChange(\''+esc(jan)+'\')"><span class="unit">点</span>'
+      +'</div>'
       +'</div>';
   };
-  var html='';
-  ['ゲーム','フィギュア','その他'].forEach(function(k){
-    var l=g[k]; if(!l||!l.length)return;
-    var sum=l.reduce(function(a,x){ return a+x.c.profit; },0);
-    html+='<div class="note2" style="margin:10px 0 4px"><b>'+k+' '+l.length+'件</b>'
-      +'　利益の平均 '+yen(Math.round(sum/l.length))+'</div>'
-      +listMoreHtml('mwamz'+k,l.map(line),'',10);
-  });
-  el.innerHTML=html;
+  if(sort==='genre'){
+    var g={};
+    list.forEach(function(x){ (g[x.c.genre]=g[x.c.genre]||[]).push(x); });
+    var html='';
+    ['ゲーム','フィギュア','その他'].forEach(function(k){
+      var l=g[k]; if(!l||!l.length)return;
+      l.sort(function(a,b){ return b.c.net-a.c.net; });
+      var sum=l.reduce(function(a,x){ return a+x.c.net; },0);
+      html+='<div class="note2" style="margin:10px 0 4px"><b>'+k+' '+l.length+'件</b>'
+        +'　税抜の平均 '+yen(Math.round(sum/l.length))+'</div>'
+        +listMoreHtml('mwamz'+k,l.map(line),'',10);
+    });
+    el.innerHTML=html;
+  }else{
+    el.innerHTML='<div class="note2" style="margin:0 0 4px">'
+      +((sort==='margin')?'<b>利益率の高い順</b>':'<b>粗利（税抜）の高い順</b>')
+      +'（全ジャンル）</div>'
+      +listMoreHtml('mwamzall',list.map(line),'',10);
+  }
+  mwBuyBarRender();
+}
+/* 行のチェックと数量（6.93）。 */
+function mwBuyToggle(jan){
+  var on=$('mwBuyChk_'+jan).checked;
+  var q=+$('mwBuyQty_'+jan).value||1;
+  mwBuySet(jan,on?q:0);
+}
+function mwBuyQtyChange(jan){
+  var on=$('mwBuyChk_'+jan).checked;
+  if(!on)return;                     // 印が付いていないときは保存しない
+  mwBuySet(jan,+$('mwBuyQty_'+jan).value||1);
 }
 /* ---- CSV で書き出す（10/7 の利益計算ファイルと同じ列）---- */
 function mwAmzCsvGo(){
@@ -15185,7 +15438,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v191';   // sw.js の const V と必ず同じ値にする
+var APP_V='v192';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
