@@ -5051,3 +5051,91 @@ const MW_STALE_KEY = "mw.stale.notified";
 `GET /mw/list` は `stale_h` を返す（画面が同じ線で判断できるように）。
 
 催促が失敗しても毎時の本体は止めない（`try`／`catch` で囲む）。
+
+## 7.76 国内FBA：出品の可否を調べる（2026-10-26・sw.js v196）
+
+国内 Amazon FBA に出す前に、**その ASIN を自分が出品できるか**を調べる。
+要許可の商品を仕入れてから気づくと在庫を抱えるため、**仕入れる前**に見る。
+
+**`getListingsRestrictions`**（Listings Restrictions API）を使う。
+必要なロールは **Product Listing**。`searchCatalogItems` と同じなので、
+いまの認可のまま使える（**ロールは変更しない**）。
+
+```js
+const MW_RST_GAP_MS = 250;        // 5回/秒の上限に余裕をみて4回/秒
+const MW_RST_MAX = 400;           // 1回に調べる件数
+const MW_RST_DEADLINE_MS = 60000; // 1回の時間
+const MW_RST_TTL_D = 30;          // 「出品できる」の調べ直し
+const MW_RST_BAD_TTL_D = 7;       // 「許可が要る」「出品できない」の調べ直し
+const MW_RST_COND = "new_new";    // MW は新品のみ
+```
+
+`POST /mw/restrict`（管理者キーのみ）。`ctx.waitUntil` で抱える（7.70 と同じ）。
+1 回の呼び出しで **ASIN 1件**（まとめて送れない API）。1,752件なら
+**250ms × 1,752 ≒ 7分20秒**ぶんの呼び出しだが、Worker の 1 リクエストは
+60 秒で切るので **1回 400件・60秒**で止めて残りを返し、押すたびに進む。
+
+### 3つに分ける（`mwRstPick`）
+
+| 返り | 状態 | 画面 |
+| --- | --- | --- |
+| `restrictions` が空 | `ok` | 緑「出品できる」 |
+| `APPROVAL_REQUIRED`、または `reasons[].links[].resource` がある | `approval` | 黄「許可が要る」＋**申請ページを開く** |
+| それ以外の制限 | `blocked` | 赤「出品できない」 |
+
+`mw_restrict(asin, cond, state, reasons, link, err, checked_at, created_at)`
+に控える（PK は `asin`＋`cond`）。`GET /mw/amz` と `GET /mw/buy` が
+`rst` / `rst_why` / `rst_link` / `rst_at` を一緒に返す。
+
+### 調べ直す順番と間隔
+
+* `ok` は **30日**、`approval`／`blocked` は **7日**で調べ直す
+* **失敗した行は `checked_at` を動かさない**。ここを今の時刻で埋めると
+  `state` が NULL のため3つの条件すべてに当たらず、その行が**二度と
+  調べ直されなくなる**
+* 失敗した行は **いちばん後ろ**に回す（`ORDER BY` の第1キー）。
+  先頭に置くと、503 で止まる1件が毎回いちばん先に当たり、残りが永久に進まない
+
+### 踏んだ穴：番号付きの `?N` と素の `?` を混ぜると値がずれる
+
+`mwWhere()` が返す WHERE には**素の `?`**（機種の IN）が入っている。
+SQLite は素の `?` に「それまでに出た最大の番号＋1」を割り当てるので、
+文の**前**（`LEFT JOIN ... ON r.cond = ?2`）に番号付きを書くと
+素の `?` が `?3` になり、値が1つずれて**何も当たらなくなる**（`asked: 0`）。
+この文は**素の `?` だけ**にして、**文に出てくる順**で渡す。
+
+## 7.77 Amazon に登録した SKU を控える（2026-10-26・sw.js v196）
+
+### SKU の形（せどりすと と同じ）
+
+`接頭辞-仕入日-状態コード-ASIN-仕入原価`。MW から仕入れた分は接頭辞を
+**`mwgame` / `mwhobby`** にする。形は変えないので、マカド（SKU を文字として
+見るだけ）も pj（`parseSku`）も今までどおり動く。いちばん長い形でも
+`mwhobby-20261026-UKN-B0BYZ19WFH-999999` ＝ **38文字**で、Amazon の
+40文字に収まる。
+
+```js
+const PREFIX_SCOPE = { ..., mwgame: "ebay", mwhobby: "ebay" };
+const PREFIX_CAT   = { game:"game", mwgame:"game", hobby:"fig", toy:"fig", mwhobby:"fig" };
+const PREFIX_SRC   = { mwgame:"mw", mwhobby:"mw" };
+function skuCatOf(prefix) { ... }   // 'game' / 'fig' / ''
+function skuSrcOf(prefix) { ... }   // 'mw' / 'other'
+```
+
+接頭辞が増えるたびに各所の `prefix === 'game'` を直さずに済むよう、
+区分は `skuCatOf()` に集めた（画面側にも同じ表を置く）。
+
+### `skus` に足した列（マイグレーション 0029）
+
+| 列 | 中身 |
+| --- | --- |
+| `buy_src` | 仕入れ元。`mw`（MW から）／`other`（店舗仕入れなど）。接頭辞から決まる |
+| `jan` | MW の JAN |
+| `mw_sha` | MW の社 |
+| `cost_src` | 仕入値（卸値×1.1＋1点あたりの仕入送料）。**仕入れたときの額を残す**ので、⚙の送料を変えても再計算しない |
+
+`POST /mw/reg`（管理者キーのみ、1回 500件まで）で控える。
+`jan`／`mw_sha`／`cost_src` は `COALESCE(NULLIF(...))` で入れるので、
+**空で送り直しても控えた中身は消えない**。
+`buy_src` は在庫レポートの取り込み（`writeInventory`）と名簿の送信でも
+SKU の接頭辞から入れ直す。

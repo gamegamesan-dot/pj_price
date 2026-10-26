@@ -173,6 +173,11 @@ CREATE TABLE IF NOT EXISTS skus (
   cond              TEXT NOT NULL,
   cond_code         TEXT,                      -- N / UM / UVG / UG / UA / UKN
   prefix            TEXT,                      -- game / hobby / toy / dvd …
+                                               -- mwgame / mwhobby は MW 仕入れ（7.77）
+  buy_src           TEXT,                      -- 'mw'（MWから）/ 'other'（店舗仕入れなど）
+  mw_sha            TEXT,                      -- MW の社
+  jan               TEXT,
+  cost_src          INTEGER,                   -- 卸値×1.1＋仕入れ送料（円）
   scope             TEXT NOT NULL DEFAULT 'unknown',
   purchased_on      TEXT,                      -- 仕入日（SKUの2番目）
   cost              INTEGER,                   -- 仕入原価（SKUの5番目）
@@ -592,3 +597,36 @@ CREATE TABLE IF NOT EXISTS mw_buy (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_buy_at ON mw_buy(at);
+
+/* ===== 国内FBA：出品の可否（7.76）===== */
+CREATE TABLE IF NOT EXISTS mw_restrict (
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,          -- 'new_new' など conditionType
+  state      TEXT,                   -- 'ok' / 'approval' / 'blocked'
+  reasons    TEXT,                   -- 理由（messageをつないだもの）
+  link       TEXT,                   -- 申請リンク（approval のとき）
+  err        TEXT,
+  checked_at TEXT,
+  created_at TEXT,
+  PRIMARY KEY (asin, cond)
+);
+CREATE INDEX IF NOT EXISTS idx_mw_rst_at    ON mw_restrict(checked_at);
+CREATE INDEX IF NOT EXISTS idx_mw_rst_state ON mw_restrict(state);
+
+-- 取得の記録
+CREATE TABLE IF NOT EXISTS mw_rst_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT,
+  asked      INTEGER,
+  done       INTEGER,
+  ok_n       INTEGER,
+  approval   INTEGER,
+  blocked    INTEGER,
+  failed     INTEGER,
+  left_n     INTEGER,
+  calls      INTEGER,
+  note       TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_skus_src ON skus(buy_src);
+CREATE INDEX IF NOT EXISTS idx_skus_jan ON skus(jan);

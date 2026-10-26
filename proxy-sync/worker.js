@@ -47,6 +47,7 @@ const SP_GAP = {
   getOrderItems: 2100,
   getInventorySummaries: 600,
   getItemOffersBatch: 10500,
+  getListingsRestrictions: 250,      // 5回/秒（7.76）。余裕をみて4回/秒
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -85,12 +86,26 @@ function d1Step(perRow) {
 }
 const NOTIFY_MAX = 1800;           // Discord の1通の文字数上限に対する余裕
 
-/* pj_price の CSV_PREFIX と同じ表。eBayに出すカテゴリだけ 'ebay'。 */
+/* pj_price の CSV_PREFIX と同じ表。eBayに出すカテゴリだけ 'ebay'。
+   mwgame / mwhobby は MW から仕入れた分（7.77）。せどりすとの SKU の形は
+   変えずに、接頭辞だけで仕入れ元が分かるようにしたもの。
+   マカドは SKU を文字として見るだけなので、接頭辞が増えても困らない。 */
 const PREFIX_SCOPE = {
   game: "ebay", hobby: "ebay", toy: "ebay",
+  mwgame: "ebay", mwhobby: "ebay",
   dvd: "out", cd: "out", book: "out", software: "out", pc: "out",
   electronics: "out", kitchen: "out", diy: "out", musicInst: "out",
 };
+/* 接頭辞 → 品の区分。ゲームか、フィギュアなどか。
+   接頭辞を増やすたびに各所の `prefix==='game'` を直さないよう、ここに集める。 */
+const PREFIX_CAT = {
+  game: "game", mwgame: "game",
+  hobby: "fig", toy: "fig", mwhobby: "fig",
+};
+function skuCatOf(prefix) { return PREFIX_CAT[String(prefix || "")] || ""; }
+/* 仕入れ元。MW から仕入れた分と、それ以外（店舗仕入れなど）を分ける（7.77）。 */
+const PREFIX_SRC = { mwgame: "mw", mwhobby: "mw" };
+function skuSrcOf(prefix) { return PREFIX_SRC[String(prefix || "")] || "other"; }
 /* 販売経路（SalesChannel）の区分。
    Amazon.co.jp … 実際の売上。FBA_SOLD の対象。
    Non-Amazon   … Amazon側が作る返送・取り寄せ（長期保管在庫の自動返送、
@@ -130,6 +145,8 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/fba\/inventory\/v1\/summaries\?/ },
   /* JAN から ASIN とランキングを引く（7.66）。読み取りだけ。 */
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/catalog\/2022-04-01\/items\?/ },
+  /* 出品の可否（7.76）。読み取りだけ。Product Listing ロールで使える。 */
+  { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/restrictions\?/ },
   // 価格の照会。読み取りだがPOSTしか用意されていないAPI。
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/identity\/v1\/oauth2\/token$/ },
@@ -1784,13 +1801,16 @@ async function writeInventory(env, run, rows) {
     if (!asin) continue;
     const zero = (r.available + r.inbound + r.reserved) === 0;
     stmts.push(env.DB.prepare(
+      /* buy_src は SKU の接頭辞から決まる（mwgame/mwhobby は MW）。
+         jan・社・cost_src は登録したときにしか分からないので、ここでは触らない。 */
       `INSERT INTO skus (seller_sku, asin, cond, cond_code, prefix, scope, purchased_on, cost,
          ebay_custom_label, title, fba_available, fba_inbound, fba_reserved,
          fba_res_cust, fba_res_trans, fba_res_proc, fba_seen_at,
-         active, updated_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+         active, updated_at, buy_src)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
        ON CONFLICT(seller_sku) DO UPDATE SET
          title=COALESCE(NULLIF(excluded.title,''), skus.title),
+         buy_src=excluded.buy_src,
          fba_available=excluded.fba_available, fba_inbound=excluded.fba_inbound,
          fba_reserved=excluded.fba_reserved,
          fba_res_cust=excluded.fba_res_cust, fba_res_trans=excluded.fba_res_trans,
@@ -1799,7 +1819,7 @@ async function writeInventory(env, run, rows) {
     ).bind(r.sku, asin, cond, p.condCode || "", p.prefix || "", p.scope, p.purchasedOn || "",
            p.cost, null, r.title, r.available, r.inbound, r.reserved,
            numOrNull(r.resCust), numOrNull(r.resTrans), numOrNull(r.resProc), nowIso(),
-           zero ? 0 : 1, nowIso()));
+           zero ? 0 : 1, nowIso(), skuSrcOf(p.prefix)));
     stmts.push(itemSeed(env, asin, cond, p.scope, r.title));
     keys[asin + "|" + cond] = { asin, cond };
   }
@@ -5019,7 +5039,7 @@ function mwDropPlan(S, r, mw, mk, over) {
   /* いまの卸値から、目標利益の売値と下限利益の売値を出す。 */
   const cost = Math.round((Number(mw.wholesale) || 0) * 1.1) + (Number(S.mwShipFee) || 0);
   if (!(cost > 0)) return o;
-  const w = Number(r.weight_g) || (String(r.prefix || "") === "game" ? 150 : 400);
+  const w = Number(r.weight_g) || (skuCatOf(r.prefix) === "game" ? 150 : 400);
   const p = PRICING.priceFor(S, cost, w, 0);
   const ship = PRICING.model(S, { cost: cost, weight: w, flat: 0 });
   const g = ship.zoneShipCharge(ship.basisZone);
@@ -5314,6 +5334,147 @@ function jstDate10(iso) {
   return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
 }
 
+/* ===== 国内FBA：出品の可否（7.76）=====
+   getListingsRestrictions（Listings Restrictions API）で、ASIN ごとに
+   「出品できる／許可が要る（申請リンク）／出品できない」を調べる。
+
+   ・必要なロールは **Product Listing**。searchCatalogItems（7.66）と同じなので、
+     いま動いている認可のままで使える（ロールを足すとトークンを3か所
+     入れ替えることになるので、増やさないのが大事）
+   ・上限は **5回/秒**（アカウント×アプリ）・バースト10。1回で ASIN 1件
+   ・取れた答えは控えて、ふだんは **30日**たつまで調べ直さない。
+     ただし「許可が要る」「出品できない」は **7日**（許可が下りたら早く気づく） */
+const MW_RST_GAP_MS = 250;         // 5回/秒の上限に余裕をみて4回/秒
+const MW_RST_MAX = 400;            // 1回に調べる件数の上限
+const MW_RST_DEADLINE_MS = 60000;  // 1回の実行で使う時間の上限
+const MW_RST_TTL_D = 30;           // 「出品できる」を調べ直さない日数
+const MW_RST_BAD_TTL_D = 7;        // 「許可が要る」「出品できない」を調べ直す日数
+const MW_RST_COND = "new_new";     // 新品（MW は新品だけ）
+/* 返りを3つに分ける。申請リンクがあれば「許可が要る」。 */
+function mwRstPick(d) {
+  const list = (d && d.restrictions) || [];
+  if (!list.length) return { state: "ok", reasons: "", link: "" };
+  const why = [], links = [];
+  let approval = false;
+  for (const r of list) {
+    for (const x of (r.reasons || [])) {
+      const msg = String(x.message || "").trim();
+      if (msg) why.push(msg);
+      const code = String(x.reasonCode || "");
+      if (code === "APPROVAL_REQUIRED") approval = true;
+      for (const l of (x.links || [])) {
+        const u = String(l.resource || "").trim();
+        if (u) links.push(u);
+      }
+    }
+  }
+  /* 申請リンクがあるなら、文面に関わらず「許可が要る」。
+     リンクが無く理由だけのときは「出品できない」。 */
+  const link = links[0] || "";
+  return { state: (approval || link) ? "approval" : "blocked",
+           reasons: why.join(" / ").slice(0, 300), link: link.slice(0, 500) };
+}
+async function mwRstOne(env, run, asin) {
+  const q = new URLSearchParams({ asin: String(asin), conditionType: MW_RST_COND,
+                                  marketplaceIds: MP_FE });
+  const r = await spCall(env, run, "/listings/2021-08-01/restrictions?" + q.toString(),
+                         { label: "getListingsRestrictions" });
+  if (!r.ok) return { ok: false, err: "restrictions_" + r.status };
+  return Object.assign({ ok: true }, mwRstPick(r.data));
+}
+/* ---- POST /mw/restrict ----
+   候補（代表・絞り込みに当てはまる行）のうち ASIN が分かっていて、
+   まだ調べていない／古いものを古い順に調べる。 */
+async function mwRestrictRun(env, body) {
+  const run = newRun("mw-restrict");
+  const res = { ok: false, asked: 0, done: 0, ok_n: 0, approval: 0, blocked: 0,
+                failed: 0, left: 0, limit: 0, calls: 0, stopped: "", rows: [] };
+  try {
+    const o = body || {};
+    const limit = Math.max(1, Math.min(MW_RST_MAX, mwNum(o.limit) || MW_RST_MAX));
+    res.limit = limit;
+    const q = mwWhere(o);
+    /* mw_stock の列だと決めておく。cond は mw_restrict にもあるので、
+       修飾しないと「あいまいな列名」で落ちる（mwAmzList と同じ処理）。 */
+    const w = q.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+    const okOld = new Date(Date.now() - MW_RST_TTL_D * 86400000).toISOString();
+    const badOld = new Date(Date.now() - MW_RST_BAD_TTL_D * 86400000).toISOString();
+    /* ⚠ ここは **番号付きの ?N を使わない**。
+       mwWhere() が出す WHERE には素の `?` が入っている。SQLite は素の `?` に
+       「それまでに出た最大の番号＋1」を割り当てるので、文の**前**に ?2 を書くと
+       素の `?` が ?3 になり、値が1つずれて何も当たらなくなる（実際に起きた）。
+       素の `?` だけにして、**文に出てくる順**で渡す。 */
+    const pick = await env.DB.prepare(
+      `SELECT a.asin AS asin, r.checked_at AS checked_at
+         FROM mw_stock s
+         JOIN mw_amz a ON a.jan = s.jan AND COALESCE(a.asin,'')<>''
+         LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = ?
+        WHERE ${w}
+          AND (r.checked_at IS NULL
+               OR (r.state='ok' AND r.checked_at < ?)
+               OR (COALESCE(r.state,'')<>'ok' AND r.checked_at < ?))
+        GROUP BY a.asin
+        ORDER BY (CASE WHEN COALESCE(MAX(r.err),'')<>'' THEN 1 ELSE 0 END) ASC,
+                 COALESCE(MAX(r.checked_at),'') ASC, a.asin ASC`)
+      .bind(MW_RST_COND, ...q.bind, okOld, badOld).all();
+    const all = ((pick && pick.results) || []).map((x) => String(x.asin));
+    res.asked = all.length;
+    const t0 = Date.now();
+    const stmts = [];
+    for (const asin of all) {
+      if (res.done >= limit) { res.stopped = "limit"; break; }
+      if (Date.now() - t0 > MW_RST_DEADLINE_MS) { res.stopped = "time"; break; }
+      if (res.done) await sleep(MW_RST_GAP_MS);
+      const g = await mwRstOne(env, run, asin);
+      res.done++; res.calls++;
+      const at = nowIso();
+      if (!g.ok) {
+        res.failed++;
+        stmts.push(env.DB.prepare(
+          /* 失敗したときは checked_at を**動かさない**（新しい行は NULL のまま）。
+             ここを今の時刻で埋めると、state が NULL のため下の3つの条件
+             すべてに当たらず、その行が二度と調べ直されなくなる。
+             失敗した行は上の ORDER BY で**最後**に回す。先頭に置くと、
+             503 で止まる1件が毎回いちばん先に当たり、残りが永久に進まない。 */
+          `INSERT INTO mw_restrict (asin,cond,state,reasons,link,err,checked_at,created_at)
+             VALUES (?1,?2,NULL,'','',?3,NULL,?4)
+           ON CONFLICT(asin,cond) DO UPDATE SET err=excluded.err`)
+          .bind(asin, MW_RST_COND, String(g.err), at));
+        if (/_(429|500|503)$/.test(String(g.err))) { res.stopped = "amazon"; break; }
+        continue;
+      }
+      if (g.state === "ok") res.ok_n++;
+      else if (g.state === "approval") res.approval++;
+      else res.blocked++;
+      res.rows.push({ asin, state: g.state, reasons: g.reasons.slice(0, 80),
+                      link: g.link });
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_restrict (asin,cond,state,reasons,link,err,checked_at,created_at)
+           VALUES (?1,?2,?3,?4,?5,'',?6,?6)
+         ON CONFLICT(asin,cond) DO UPDATE SET state=excluded.state,
+           reasons=excluded.reasons, link=excluded.link, err='',
+           checked_at=excluded.checked_at`)
+        .bind(asin, MW_RST_COND, g.state, g.reasons, g.link, at));
+    }
+    await runBatch(env, run, stmts);
+    res.left = Math.max(0, res.asked - res.done);
+    await env.DB.prepare(
+      `INSERT INTO mw_rst_runs (at,asked,done,ok_n,approval,blocked,failed,
+         left_n,calls,note,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?1)`)
+      .bind(nowIso(), res.asked, res.done, res.ok_n, res.approval, res.blocked,
+            res.failed, res.left, res.calls,
+            ("止まった理由 " + (res.stopped || "すべて")).slice(0, 300)).run();
+    run.notes.push("出品の可否：出せる " + res.ok_n + "／許可が要る " + res.approval
+      + "／出せない " + res.blocked + "／失敗 " + res.failed + "／残り " + res.left);
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-restrict: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
 /* ===== 仕入れの印（7.68）=====
    端末をまたいで同じ印が見えるよう D1 に置く。
    **作業者（STAFF_KEY）でも付けられる**（仕入れの候補を選ぶ仕事なので）。
@@ -5364,10 +5525,13 @@ async function mwBuyList(env, url) {
             s.ship_days AS ship_days, s.cond AS cond, s.gone_at AS gone_at,
             a.asin AS asin, a.name AS amz_name, a.price AS price,
             a.basis AS basis, a.rank AS rank, a.rank_cat AS rank_cat,
-            a.new_n AS new_n, a.amz AS amz
+            a.new_n AS new_n, a.amz AS amz,
+            r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
+            r.checked_at AS rst_at
        FROM mw_buy b
        LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
        LEFT JOIN mw_amz   a ON a.jan = b.jan
+       LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
       ORDER BY b.at DESC`).all();
   const rows = (q && q.results) || [];
   /* 卸値（税込）の合計。送料無料（5万円）までの残りは画面で出す。 */
@@ -5379,6 +5543,58 @@ async function mwBuyList(env, url) {
   }
   return { ok: true, rows, n: rows.length, qty: n, yen,
            gone: rows.filter((r) => r.gone_at).length };
+}
+
+/* ===== Amazon に登録した SKU を控える（7.77）=====
+   アップロード用ファイルを作ったときに、画面から送る。
+   ・仕入れ元（buy_src）… MW から仕入れた分は 'mw'。接頭辞からも分かるが、
+     あとの利益計算で素早く分けられるよう列にも持つ。
+   ・社（mw_sha）・JAN（jan）・仕入値（cost_src＝卸値×1.1＋1点あたりの仕入送料）
+     は、登録したときにしか分からないのでここで控える。
+   ・items には触らない（eBay の出品とは別の話）。 */
+const MW_REG_MAX = 500;
+async function mwRegSave(env, body) {
+  const run = newRun("mw-reg");
+  const res = { ok: false, saved: 0, skipped: 0, rows: [] };
+  try {
+    const list = Array.isArray(body && body.rows) ? body.rows.slice(0, MW_REG_MAX) : [];
+    const stmts = [];
+    const at = nowIso();
+    for (const x of list) {
+      const sku = String((x && x.sku) || "").trim();
+      const p = parseSku(sku);
+      if (!p.ok) { res.skipped++; res.rows.push({ sku, why: "SKU の形が違います" }); continue; }
+      const jan = String((x && x.jan) || "").trim();
+      const sha = String((x && x.sha) || "").trim();
+      /* 仕入値は画面で出した額をそのまま控える（卸値×1.1＋仕入送料）。
+         ⚙の送料が変わっても、仕入れたときの額を残したいので再計算しない。 */
+      const costSrc = Number((x && x.cost_src) || 0) || null;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO skus (seller_sku, asin, cond, cond_code, prefix, scope,
+           purchased_on, cost, title, active, updated_at,
+           buy_src, jan, mw_sha, cost_src)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,?11,?12,?13,?14)
+         ON CONFLICT(seller_sku) DO UPDATE SET
+           title=COALESCE(NULLIF(excluded.title,''), skus.title),
+           buy_src=excluded.buy_src,
+           jan=COALESCE(NULLIF(excluded.jan,''), skus.jan),
+           mw_sha=COALESCE(NULLIF(excluded.mw_sha,''), skus.mw_sha),
+           cost_src=COALESCE(excluded.cost_src, skus.cost_src),
+           updated_at=excluded.updated_at`)
+        .bind(sku, p.asin, p.cond, p.condCode, p.prefix, p.scope,
+              p.purchasedOn, p.cost, String((x && x.title) || "").slice(0, 300), at,
+              skuSrcOf(p.prefix), jan, sha, costSrc));
+      res.saved++;
+      res.rows.push({ sku, asin: p.asin, jan, src: skuSrcOf(p.prefix) });
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("Amazon登録の控え：" + res.saved + "件（形が違う " + res.skipped + "件）");
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-reg: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 
 /* ---- GET /mw/amz ----
@@ -5401,9 +5617,12 @@ async function mwAmzList(env, url) {
             a.low AS low, a.buybox AS buybox, a.new_n AS new_n, a.low_n AS low_n,
             a.amz AS amz, a.fba_n AS fba_n, a.err AS amz_err,
             a.checked_at AS amz_at,
-            COALESCE(b.qty,0) AS buy_qty
+            COALESCE(b.qty,0) AS buy_qty,
+            r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
+            r.checked_at AS rst_at
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
             LEFT JOIN mw_buy b ON b.jan = s.jan
+            LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
       WHERE ${w}${only}
       ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
   const n = await env.DB.prepare(
@@ -5425,7 +5644,10 @@ async function mwAmzList(env, url) {
            limit };
 }
 
-/* ---- 候補の絞り込み（4章の1〜4）。一覧と相場の取得で同じ条件を使う ---- */
+/* ---- 候補の絞り込み（4章の1〜4）。一覧と相場の取得で同じ条件を使う ----
+   返す w には **素の `?`** が入る（機種の IN）。番号付きの ?N と混ぜると
+   SQLite の番号割り当てがずれるので、呼ぶ側は素の `?` だけで組むか、
+   WHERE より**後ろ**に ?N を置くこと（7.76 で踏んだ）。 */
 function mwWhere(opt) {
   const o = opt || {};
   const kishu = (Array.isArray(o.kishu) ? o.kishu : String(o.kishu || "").split(","))
@@ -6834,16 +7056,17 @@ async function putListings(env, body) {
     if (sku) {
       stmts.push(env.DB.prepare(
         `INSERT INTO skus (seller_sku, asin, cond, cond_code, prefix, scope, purchased_on, cost,
-           ebay_custom_label, title, active, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,?11)
+           ebay_custom_label, title, active, updated_at, buy_src)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,?11,?12)
          ON CONFLICT(seller_sku) DO UPDATE SET
            ebay_custom_label=excluded.ebay_custom_label,
            title=COALESCE(NULLIF(excluded.title,''), skus.title),
+           buy_src=excluded.buy_src,
            updated_at=excluded.updated_at`
       ).bind(sku, (kSku || k).asin, (kSku || k).cond, (p && p.condCode) || "",
              (p && p.prefix) || "", (kSku || k).scope,
              (p && p.purchasedOn) || "", (p && p.cost) || null, label,
-             String(x.title || ""), nowIso()));
+             String(x.title || ""), nowIso(), skuSrcOf(p && p.prefix)));
     }
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope || "unknown", String(x.title || "")));
     stmts.push(env.DB.prepare(
@@ -7138,7 +7361,8 @@ export default {
     /* MW の在庫の取り込み（7.60）は管理者だけ。無在庫の仕入れ値が入るため。 */
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
-            || url.pathname === "/mw/img" || url.pathname === "/mw/amz"))
+            || url.pathname === "/mw/img" || url.pathname === "/mw/amz"
+            || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"))
       return forbidStaff("MW の取り込み・相場・画像は管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
@@ -7344,6 +7568,16 @@ export default {
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await mwStockPut(env, body), 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/mw/reg") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwRegSave(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mw/restrict") {
+        const b = await request.json().catch(() => ({}));
+        const pr = mwRestrictRun(env, b);
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mw/amz") {
         const b = await request.json().catch(() => ({}));
         /* 1回に1分前後かかる。画面を閉じても最後まで進むよう waitUntil でも
@@ -7537,6 +7771,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
+                        mwRestrictRun, mwRstPick, mwRegSave, MW_REG_MAX,
+  skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
+                        MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
                         mwStaleCheck, MW_STALE_H, MW_STOCK_MIN,
                         MW_D_MAX, MW_D_OVER,

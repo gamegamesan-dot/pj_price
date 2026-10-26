@@ -693,6 +693,7 @@ body.staff #syncOnHandFix{display:none !important}
           <b>この段では出品しません</b>（写真はまだ付きません）。</div>
         <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
         <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
+        <div class="warn" id="csvMwSendBar" style="display:none;margin-top:6px"></div>
         <div class="note2" id="csvMwRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
         <div class="note2" id="csvMwNote" style="margin-top:2px"></div>
         <div class="warn" id="csvMwWarn" style="display:none;margin-top:8px"></div>
@@ -712,6 +713,15 @@ body.staff #syncOnHandFix{display:none !important}
             1回に <b id="csvMwAmzMax">120</b>件まで（値段の取得が10秒に1回のため）。</div>
           <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonの実売価格を取る</button>
           <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+          <!-- 出品の可否（6.101）。要許可・出品不可を先に外してから仕入れる -->
+          <div class="note2" style="margin:8px 0 0">各行が <b>出品できる</b>か調べます。
+            <b style="color:var(--good)">緑</b>＝出せる、
+            <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）、
+            <b style="color:var(--bad)">赤</b>＝出せない。
+            赤い行には「仕入れる」を付けられません。
+            調べ直しは出せる行が30日、それ以外は7日です。</div>
+          <button class="btn" id="csvMwRst" style="width:100%;margin-top:6px">出品の可否を調べる（ASIN・新品）</button>
+          <div class="note2" id="csvMwRstNote" style="margin-top:2px"></div>
           <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
           <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
           <div style="display:flex;gap:6px;margin-top:6px">
@@ -722,6 +732,13 @@ body.staff #syncOnHandFix{display:none !important}
             <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
             <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
           </div>
+          <!-- Amazon 登録用ファイル（6.103）。せどりすと と同じ形 -->
+          <div class="note2" style="margin:8px 0 0">仕入れる印の付いた行から、
+            セラーセントラルの<b>アップロードによる一括商品登録</b>に送るファイルを作ります。
+            <b>出品できる（緑）行だけ</b>が入ります。
+            納品はセラーセントラル、価格改定はマカドで今までどおり行ってください。</div>
+          <button class="btn" id="csvMwReg" style="width:100%;margin-top:6px">Amazon登録用ファイルを作る</button>
+          <div class="note2" id="csvMwRegNote" style="margin-top:2px"></div>
           <!-- 並べ替えと絞り込み（6.93） -->
           <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
             <span class="note2" style="margin:0;flex:0 0 auto">並べ替え</span>
@@ -734,6 +751,7 @@ body.staff #syncOnHandFix{display:none !important}
           <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
           <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上</label></div>
           <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし</label></div>
+          <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）</label></div>
           <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
           <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
           <div id="csvMwAmzList" style="margin-top:6px"></div>
@@ -3897,8 +3915,19 @@ var CSV_HEAD={
 var CSV_CAT={'139973':'ゲーム','261068':'フィギュア（可動）','261055':'フィギュア（非可動）'};
 // せどりすとSKUの接頭辞 → eBayカテゴリ。null は取り込み対象外。
 var CSV_PREFIX={game:'139973',hobby:'261055',toy:'261055',
+                /* MW から仕入れた分（6.102）。せどりすとSKU の形は変えずに、
+                   接頭辞だけで仕入れ元が分かるようにしたもの。 */
+                mwgame:'139973',mwhobby:'261055',
                 dvd:null,cd:null,book:null,software:null,pc:null,electronics:null,
                 kitchen:null,diy:null,musicInst:null};
+/* 接頭辞 → 品の区分（'game' か 'fig'、対象外は ''）。
+   接頭辞を増やすたびに各所の `prefix==='game'` を直さずに済むよう、ここに集める。
+   Worker 側の PREFIX_CAT と同じ表。 */
+var PREFIX_CAT={game:'game',mwgame:'game',hobby:'fig',toy:'fig',mwhobby:'fig'};
+function skuCatOf(prefix){ return PREFIX_CAT[String(prefix||'')]||''; }
+/* 仕入れ元（'mw' か 'other'）。あとの利益計算で分けるために使う。 */
+var PREFIX_SRC={mwgame:'mw',mwhobby:'mw'};
+function skuSrcOf(prefix){ return PREFIX_SRC[String(prefix||'')]||'other'; }
 var CSV_FIG_CATS=['261055','261068'];        // hobby / toy の手動振り分け先
 /* 設定で登録した任意のeBayカテゴリ。1行に「カテゴリID,表示名,act|fig」。
    列ヘッダとItem Specifics はテンプレート3本しか手元に無いので、登録カテゴリでは
@@ -4857,7 +4886,7 @@ function csvImport(text){
       src:'sedori', sku:sku, jan:iJan>=0?String(r[iJan]||'').trim():'', asin:asin,
       titleJa:title, titleEn:'', cat:cat,
       // 機種が書いてある行は確定扱い（「カテゴリ未振分」にしない）
-      catFixed:(sp.prefix==='game'||!!gh),
+      catFixed:(skuCatOf(sp.prefix)==='game'||!!gh),
       condId:condId, condErr:condErr, condSrc:(condCol||sp.cond||''),
       descHtml:'', qty:qty, cost:cost, wRaw:wRaw, rows:1, dropship:preBuy,
       gross:iGross>=0?csvNum(r[iGross]):0, rank:iRank>=0?csvNum(r[iRank]):0,
@@ -8807,9 +8836,19 @@ function mwImportRun(text,fi){
   var pi=0, sum={ added:0, changed:0, same:0, skipped:0, gone:0, back:0,
                   picked:0, seen:0, warn:'' };
   var btn=$('csvMwImport'); btn.disabled=true;
-  function step(){
+  mwSendBarShow(true);                   // 「開いたままにしてください」（6.100）
+  /* 送り直しの控え。step() の中の pi を直に書き換えないよう、
+     再開する便は step(from) で渡す（閉じ込めた pi は「次に送る便」なので、
+     そのまま呼ぶと失敗した便を飛ばしてしまう）。
+     取り込みを2回始めたときに古い便が新しい控えを触らないよう、
+     mwSend がこの控え（st）のままかどうかも見る。 */
+  var st=null;
+  function step(from){
+    if(typeof from==='number')pi=from;
     if(pi>=parts.length){
       btn.disabled=false;
+      if(mwSend===st)
+        { mwSend=null; mwSendBarShow(false); }
       note.textContent='✓ '+d.rows.length+'行を送りました（足した '+sum.added
         +'／変わった '+sum.changed+'／同じ '+sum.same+'／欠品 '+sum.gone
         +'／戻った '+sum.back+'）。JANごとの代表 '+sum.picked+'件。'
@@ -8824,6 +8863,7 @@ function mwImportRun(text,fi){
       return;
     }
     var part=parts[pi++];
+    st.pi=pi-1; st.why='';
     note.textContent='送信中… '+pi+'／'+parts.length+'便（'+part.length+'行）';
     syncJsonPost('/mw/stock',{ at:at, part:pi, parts:parts.length, rows:part,
       rows_in:d.rows.length, unreadable:d.unread },function(x){
@@ -8831,15 +8871,65 @@ function mwImportRun(text,fi){
         .forEach(function(k){ sum[k]=(sum[k]||0)+(+x[k]||0); });
       if(x.picked)sum.picked=+x.picked;      // 代表は最後の便の値
       if(x.warn)sum.warn=x.warn;
+      st.pi=pi;                              // ここまでは送れた
       step();
     },function(why){
       btn.disabled=false;
-      note.textContent='⚠ '+pi+'便目で失敗しました：'+why
-        +'（もう一度「MWの在庫CSVを取り込む」を押すと、続きから送り直せます）';
+      /* 失敗した便を覚えておく（6.100）。iPhone でアプリを切り替えると
+         通信が切られて「Load failed」になるので、画面に戻ったら
+         **その便から**自動で送り直す。 */
+      st.pi=pi-1; st.why=why;
+      if(mwSend!==st)return;                 // 新しい取り込みが始まっていたら触らない
+      note.innerHTML='⚠ '+pi+'便目で失敗しました：'+esc(why)
+        +'<br><b>画面に戻ると、この便から自動で送り直します。</b>'
+        +'（すぐ送り直すなら「続きから送り直す」を押してください）';
+      mwSendBarShow(true,true);
     });
   }
+  st={ parts:parts, at:at, pi:0, sum:sum, d:d, why:'', step:step };
+  mwSend=st;
   step();
 }
+/* ===== 取り込みの途中で切れたときの送り直し（6.100）=====
+   iPhone の Safari は、アプリを切り替えると動いている fetch を切る。
+   12,062行＝31便もあるので途中で切れやすく、「通信できませんでした
+   （Load failed）」で止まっていた。
+   ・取り込み中は「この画面を開いたままにしてください」を上に出す
+   ・切れたら失敗した便を覚えて、画面に戻ったとき（visibilitychange）に
+     **その便から**自動で送り直す */
+var mwSend=null;
+function mwSendBarShow(on,failed){
+  var el=$('csvMwSendBar'); if(!el)return;
+  if(!on){ el.style.display='none'; el.innerHTML=''; return; }
+  el.innerHTML=failed
+    ? ('⚠ <b>取り込みが途中で止まりました。</b>画面に戻ると自動で送り直します。'
+       +'　<button class="btn" id="csvMwResume" style="padding:4px 8px">続きから送り直す</button>')
+    : '⏳ <b>取り込み中はこの画面を開いたままにしてください。</b>'
+      +'ほかのアプリに切り替えると通信が切れて止まります（戻れば続きから送り直します）。';
+  el.style.display='';
+  var b=$('csvMwResume');
+  if(b)b.onclick=mwSendResume;
+}
+function mwSendResume(){
+  if(!mwSend||!mwSend.step)return;
+  var m=mwSend;
+  if(m.pi>=m.parts.length)return;
+  $('csvMwImport').disabled=true;
+  mwSendBarShow(true);
+  $('csvMwNote').textContent='送り直しています… '+(m.pi+1)+'／'+m.parts.length+'便';
+  m.step(m.pi);                       // 覚えた便から（次の便からではない）
+}
+/* 画面に戻ったら、止まっていた取り込みを続ける。 */
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden)return;
+  if(!mwSend||!mwSend.step)return;
+  if(mwSend.pi>=mwSend.parts.length)return;
+  /* 失敗したまま（why が入っている）ときだけ自動で送り直す。
+     動いている途中なら二重に送らない。 */
+  if(!mwSend.why)return;
+  mwSend.why='';
+  mwSendResume();
+});
 $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
 /* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
 /* ---- 商品を探す（6.92）の結び付け ---- */
@@ -8878,11 +8968,14 @@ $('csvMwPush').onclick=mwPushRun;
 $('syncMwPlan').onclick=function(){ mwDropAct(false); };
 $('syncMwGo').onclick=function(){ mwDropAct(true); };
 $('csvMwAmz').onclick=mwAmzRunGo;
+$('csvMwRst').onclick=mwRstGo;
+$('csvMwReg').onclick=mwRegGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
 $('csvMwBuyCsv').onclick=mwBuyCsvGo;
-['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzMinM']
+['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
+ 'csvMwAmzMinM']
   .forEach(function(id){
     $(id).addEventListener('change',function(){ mwAmzRender(); });
   });
@@ -9288,11 +9381,68 @@ function mwAmzLoad(){
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
+/* ---- 出品の可否（6.101）----
+   Worker の /mw/restrict が控えた結果（mw_restrict）を /mw/amz が一緒に返す。
+   ok=出せる／approval=許可が要る（申請リンクあり）／blocked=出せない／
+   ''=まだ調べていない。**赤（blocked）には「仕入れる」を付けられない**。 */
+function mwRstOf(r){ return String((r||{}).rst||''); }
+function mwRstNg(r){ return mwRstOf(r)==='blocked'; }
+function mwRstBadge(r){
+  var st=mwRstOf(r);
+  if(st==='ok')
+    return ' <span class="badge" style="background:var(--good)">出品できる</span>';
+  if(st==='approval')
+    return ' <span class="badge" style="background:#a86b00">許可が要る</span>';
+  if(st==='blocked')
+    return ' <span class="badge" style="background:var(--bad)">出品できない</span>';
+  return ' <span class="badge" style="background:#8a8a8a">可否は未調査</span>';
+}
+/* 黄のときだけ出す、申請ページへの行。リンクが無いこともある。 */
+function mwRstLine(r){
+  var st=mwRstOf(r);
+  if(st!=='approval'&&st!=='blocked')return '';
+  var why=esc(String(r.rst_why||'').slice(0,60));
+  var lk=String(r.rst_link||'');
+  return '<div class="note2" style="margin:2px 0 0;color:'
+    +(st==='approval'?'#a86b00':'var(--bad)')+'">'
+    +(st==='approval'?'出品の許可が必要':'この ASIN では出品できません')
+    +(why?('：'+why):'')
+    +((st==='approval'&&/^https:\/\//.test(lk))
+      ?(' <a href="'+esc(lk)+'" target="_blank" rel="noopener"'
+        +' style="text-decoration:underline">申請ページを開く</a>'):'')
+    +'</div>';
+}
+/* 可否を調べる。1回の件数と時間で区切り、残りを出す。 */
+function mwRstGo(){
+  var note=$('csvMwRstNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  var btn=$('csvMwRst'); btn.disabled=true;
+  note.textContent='出品の可否を調べています…（1件ずつ聞く API なので時間がかかります）';
+  mwPost('/mw/restrict',{ kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
+    ship_max:mwShipMax(), stock_min:mwStockMin(),
+    note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'調べられませんでした');
+      note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
+        +'（出せる '+(d.ok_n||0)+'／許可が要る '+(d.approval||0)
+        +'／出せない '+(d.blocked||0)+'／失敗 '+(d.failed||0)+'）'
+        +(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。'
+          +'もう一度押すと続きを調べます。')
+          :'<br>調べ終わりました。');
+      mwAmzLoad();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 調べられませんでした：'+e.message; })
+    .then(function(){ btn.disabled=false; });
+}
 /* ---- 並べ替えと絞り込み（6.93）---- */
 function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
 function mwAmzFilters(){
   return { win:!!$('csvMwAmzWin').checked, multi:!!$('csvMwAmzMulti').checked,
            noAmz:!!$('csvMwAmzNoAmz').checked,
+           rstOk:!!$('csvMwAmzRstOk').checked,
            minM:(function(){ var n=+$('csvMwAmzMinM').value; return isFinite(n)?n:0; })() };
 }
 /* 絞り込みを当てた行（計算つき）を返す。 */
@@ -9304,6 +9454,7 @@ function mwAmzPicked(){
       if(f.win&&x.c.profit<=0)return false;
       if(f.multi&&(+x.r.new_n||0)<2)return false;
       if(f.noAmz&&(+x.r.amz))return false;
+      if(f.rstOk&&mwRstOf(x.r)!=='ok')return false;
       if(f.minM&&x.c.margin<f.minM)return false;
       return true;
     });
@@ -9340,6 +9491,17 @@ function mwBuyFeeFree(){ return 50000; }      // 送料無料になる額（MW�
 function mwBuyQtyOf(jan){ return +mwBuyMap[String(jan)]||0; }
 function mwBuySet(jan,qty){
   var q=Math.max(0,Math.min(99,+qty||0));
+  /* 出品できない行（赤）に印は付けない。消す（0）のは通す。
+     見た目で止めるだけでなくここでも見る（6.101）。 */
+  if(q>0){
+    var hit=mwAmzRows.filter(function(r){ return String(r.jan)===String(jan); })[0];
+    if(hit&&mwRstNg(hit)){
+      $('csvMwAmzListNote').textContent=
+        '⚠ この ASIN は Amazon で出品できないため、仕入れる印を付けられません。';
+      var box=$('mwBuyChk_'+jan); if(box)box.checked=false;
+      return;
+    }
+  }
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     $('csvMwAmzListNote').textContent='pj-sync のURLとキーを⚙設定に入れてください。';
@@ -9458,6 +9620,125 @@ function mwBuyCsvGo(){
       +yen(tot)+'）。';
   });
 }
+/* ---- Amazon 登録用ファイル（6.103）----
+   せどりすと が出すアップロード用ファイルと同じ形（実物から合わせた）。
+   ・UTF-8（BOM なし）・改行 LF・区切りはタブ・31列
+   ・1行目 TemplateType=Offer / Version=2020.000
+   ・2行目 日本語の列名、3行目 機械の列名、4行目から中身
+   ・FBA なので 在庫数（quantity）は空、fulfillment-center-id は AMAZON_JP
+   ・MW は新品のみなので 商品のコンディション（condition-type）は 11（新品）
+   納品はセラーセントラル、価格改定はマカドで今までどおり行う（pj では作らない）。 */
+var MW_REG_HEAD_JA=['商品管理番号','販売価格','ポイントパーセント','在庫数',
+  '商品コード(JANコード等)','商品コードのタイプ','商品のコンディション',
+  '商品のコンディション説明','対象ASIN','商品名','動作タイプ','セール価格',
+  'セール時ポイントパーセント','セール開始日','セール終了日',
+  'リードタイム(出荷までにかかる作業日数)','商品の公開日','ギフト包装',
+  'ギフトメッセージ','フルフィルメントセンターID','使用しない支払い方法',
+  '出品者SKUのメイン画像URL','出品者SKUのサブ画像URL1',' 出品者SKUのサブ画像URL2',
+  '出品者SKUのサブ画像URL3','出品者SKUのサブ画像URL4','出品者SKUのサブ画像URL5',
+  ' 配送パターン','商品名','電池の有無','危険物該当の該否'];
+var MW_REG_HEAD=['sku','price','standard-price-points-percent','quantity',
+  'product-id','product-id-type','condition-type','condition-note','ASIN-hint',
+  'title','operation-type','sale-price','sale-price-points-percent',
+  'sale-start-date','sale-end-date','leadtime-to-ship','launch-date',
+  'is-giftwrap-available','is-gift-message-available','fulfillment-center-id',
+  'optional-payment-type-exclusion','main-offer-image','offer-image1',
+  'offer-image2','offer-image3','offer-image4','offer-image5',
+  'merchant_shipping_group_name','item_name','batteries_required',
+  'supplier_declared_dg_hz_regulation1'];
+/* 新品（11）の説明文。せどりすと の実物と同じ文（変えると見え方が変わるのでそのまま）。 */
+var MW_REG_NOTE_NEW='★国内正規品★迅速発送★目立ったスレ・凹みのない新品未開封品です。'
+  +'初期からある微小なスレや擦り傷はご容赦下さい。Amazon配送センターが責任をもって、'
+  +'迅速かつ丁寧に商品管理、梱包、配送を行いますので安心してご購入いただけます。';
+/* 行の接頭辞。ゲームは mwgame、それ以外は mwhobby（せどりすと の hobby/toy と同じ扱い）。 */
+function mwRegPrefix(r){
+  return (mwAmzGenre(r)==='ゲーム')?'mwgame':'mwhobby';
+}
+/* せどりすと と同じ形の SKU。接頭辞-仕入日-状態-ASIN-仕入原価。
+   仕入原価は円の整数（卸値×1.1＋1点あたりの仕入送料）。 */
+function mwRegSku(r,ymd){
+  return mwRegPrefix(r)+'-'+ymd+'-N-'+String(r.asin||'')+'-'+mwCost(r);
+}
+/* 登録に回せる行だけを選ぶ。外した行は理由つきで返す。 */
+function mwRegPick(rows){
+  var take=[], skip=[];
+  (rows||[]).forEach(function(r){
+    var why='';
+    if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||'')))why='ASIN が引けていません';
+    else if(!(+r.price>0))why='Amazon の販売価格が取れていません';
+    else if(!(mwCost(r)>0))why='MW の卸値がありません';
+    else if(mwRstOf(r)==='blocked')why='この ASIN では出品できません';
+    else if(mwRstOf(r)==='approval')why='出品の許可が必要です（申請してから）';
+    else if(mwRstOf(r)!=='ok')why='出品の可否をまだ調べていません';
+    else if(r.gone_at)why='MW で欠品になっています';
+    if(why)skip.push({ r:r, why:why }); else take.push(r);
+  });
+  return { take:take, skip:skip };
+}
+/* タブ区切りの1行。タブ・改行は列が崩れるので空白に直す。 */
+function mwRegCell(v){
+  return String(v==null?'':v).replace(/[\t\r\n]+/g,' ');
+}
+function mwRegTsv(rows,ymd){
+  var out=['TemplateType=Offer\tVersion=2020.000',
+           MW_REG_HEAD_JA.join('\t'), MW_REG_HEAD.join('\t')];
+  rows.forEach(function(r){
+    var a=[]; for(var i=0;i<MW_REG_HEAD.length;i++)a.push('');
+    var at=function(k,v){ a[MW_REG_HEAD.indexOf(k)]=mwRegCell(v); };
+    at('sku',mwRegSku(r,ymd));
+    at('price',Math.round(+r.price||0));
+    at('standard-price-points-percent','0');
+    /* 在庫数は空（FBA）。ここに数を入れると自己発送の出品になる。 */
+    at('product-id',r.asin);
+    at('product-id-type','ASIN');
+    at('condition-type','11');                     // MW は新品のみ
+    at('condition-note',MW_REG_NOTE_NEW);
+    at('fulfillment-center-id','AMAZON_JP');
+    at('item_name',String(r.amz_name||r.mw_name||'').slice(0,200));
+    at('batteries_required','false');
+    at('supplier_declared_dg_hz_regulation1','該当なし');
+    out.push(a.join('\t'));
+  });
+  /* 改行は LF、最後にも1つ（実物と同じ）。 */
+  return out.join('\n')+'\n';
+}
+function mwRegGo(){
+  var note=$('csvMwRegNote');
+  mwBuyLoad(true).then(function(){
+    if(!mwBuyRows.length){ note.textContent='仕入れる印の付いた行がありません。'; return; }
+    var pk=mwRegPick(mwBuyRows);
+    if(!pk.take.length){
+      note.innerHTML='登録できる行がありません。<br>'
+        +pk.skip.map(function(x){
+          return esc(String(x.r.mw_name||x.r.jan||''))+'：'+esc(x.why); }).join('<br>');
+      return;
+    }
+    var ymd=new Date(Date.now()+9*3600000).toISOString().slice(0,10).replace(/-/g,'');
+    var tsv=mwRegTsv(pk.take,ymd);
+    /* BOM は付けない（せどりすと の実物に無い）。 */
+    csvDownloadBlob('amazon_offer_'+ymd+'.txt',
+      new Blob([tsv],{type:'text/tab-separated-values;charset=utf-8'}));
+    note.innerHTML='✓ <b>'+pk.take.length+'件</b>のアップロード用ファイルを'
+      +'書き出しました（amazon_offer_'+ymd+'.txt）。'
+      +'セラーセントラルの「アップロードによる一括商品登録」から送ってください。'
+      +(pk.skip.length?('<br>外した '+pk.skip.length+'件：'
+        +pk.skip.map(function(x){
+          return esc(String(x.r.mw_name||x.r.jan||'').slice(0,24))+'（'+esc(x.why)+'）';
+        }).join('／')):'');
+    /* D1 に控える（仕入れ元・社・JAN・仕入値）。失敗しても書き出しは済んでいる。 */
+    mwPost('/mw/reg',{ rows:pk.take.map(function(r){
+      return { sku:mwRegSku(r,ymd), jan:String(r.jan||''), sha:String(r.sha||''),
+               cost_src:mwCost(r), title:String(r.amz_name||r.mw_name||'') }; }) })
+      .then(function(d){
+        if(!d||d.ok!==true)throw new Error((d&&d.error)||'控えられませんでした');
+        note.innerHTML+='<br>D1 に控えました（'+(d.saved||0)+'件）。';
+      })
+      ['catch'](function(e){
+        note.innerHTML+='<br>⚠ D1 に控えられませんでした：'+esc(e.message)
+          +'（ファイルは書き出せています）';
+      });
+  });
+}
 function mwAmzRender(){
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
   var d=mwAmzMeta||{};
@@ -9485,11 +9766,13 @@ function mwAmzRender(){
   var line=function(x){
     var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
     var q=mwBuyQtyOf(jan);
+    var ng=mwRstNg(r);                 // 赤（出品できない）は印を付けられない
     return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
       +'border-radius:6px'+(q?';border-color:var(--good);background:#f6fff4':'')+'">'
       +'<b>'+yen(c.net)+'</b>'
       +' <span class="note2">（税抜・税込 '+yen(c.profit)+'・利益率 '+c.margin+'%）</span>'
       +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
+      +mwRstBadge(r)
       +(q?' <span class="badge" style="background:var(--good)">仕入れる '+q+'点</span>':'')
       +'<div class="note2" style="margin:2px 0 0">'
       +esc(String(r.amz_name||r.mw_name||'').slice(0,60))+'</div>'
@@ -9514,6 +9797,7 @@ function mwAmzRender(){
       +yen(+r.wholesale||0)+'（税抜）　<b>MW定価</b> '+yen(+r.list_price||0)+'</div>'
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8"><b>MW備考</b> '
         +esc(String(r.note).slice(0,50))+'</div>'):'')
+      +mwRstLine(r)
       /* 外のページを開くボタン */
       +'<div style="display:flex;gap:6px;margin-top:4px">'
       +(asin?('<a class="btn" style="flex:1;text-align:center" target="_blank"'
@@ -9525,10 +9809,12 @@ function mwAmzRender(){
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
       +'<label class="note2" style="margin:0;flex:1 1 0;display:flex;gap:6px;'
       +'align-items:center"><input type="checkbox" id="mwBuyChk_'+esc(jan)+'"'
-      +(q?' checked':'')+' onchange="mwBuyToggle(\''+esc(jan)+'\')">'
-      +'<b>仕入れる</b></label>'
+      +(q?' checked':'')+(ng?' disabled':'')
+      +' onchange="mwBuyToggle(\''+esc(jan)+'\')">'
+      +'<b>仕入れる</b>'+(ng?'（出品できないので選べません）':'')+'</label>'
       +'<input type="number" id="mwBuyQty_'+esc(jan)+'" value="'+(q||1)+'"'
       +' min="1" max="99" step="1" inputmode="numeric" style="flex:0 0 72px"'
+      +(ng?' disabled':'')
       +' onchange="mwBuyQtyChange(\''+esc(jan)+'\')"><span class="unit">点</span>'
       +'</div>'
       +'</div>';
@@ -13441,7 +13727,7 @@ $('syncMarkRun').onclick=syncMarkRun;
 /* 販売連携タブの検索語。D1 に残した値があればそれ、無ければ商品名から作る。
    ゲームかどうかは せどりすとSKU の接頭辞（prefix）で見る。 */
 function syncKwAuto(r){
-  var cat=(String(r.prefix||'')==='game')?'139973':'261055';
+  var cat=(skuCatOf(r.prefix)==='game')?'139973':'261055';
   return csvKwAuto(r.title||'',cat,'');
 }
 function syncKwOf(r){
@@ -13673,7 +13959,7 @@ var SYNC_FILTERS=[
      ここに残るのは「手でオフにした行」と「出品リストに無い古い行」。 */
   { v:'figone',         label:'中古フィギュアで一点物がオフ／不明',
     f:function(r){
-      if(String(r.prefix||'')==='game')return false;    // ゲームは対象外
+      if(skuCatOf(r.prefix)==='game')return false;      // ゲームは対象外
       if(String(r.cond||'')==='new')return false;       // 新品は対象外
       if(!String(r.prefix||'').trim())return false;     // 区分が分からない行は出さない
       return !Number(r.one_off||0)||!Number(r.one_off_known||0);
@@ -15632,7 +15918,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v195';   // sw.js の const V と必ず同じ値にする
+var APP_V='v196';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
