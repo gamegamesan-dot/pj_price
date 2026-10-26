@@ -140,7 +140,6 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 body.staff .staffonly{display:block}
 body.staff .cfgprice,
 body.staff #syncPriceBox,            /* 価格の操作（見直し・最低売値・値下げ） */
-body.staff #syncRestockBox,          /* 再調達で出し直すCSV */
 body.staff #syncMarkBar,
 body.staff #syncBarRev,
 body.staff #syncBarFloor,
@@ -985,10 +984,9 @@ body.staff #syncOnHandFix{display:none !important}
       </details>
 
       <!-- 絞り込みが「再調達の候補」のときだけ出す -->
-      <div id="syncRestockBox" style="display:none;margin-top:8px">
-        <button class="btn" id="syncRestock" style="width:100%">再調達で出し直すCSVを書き出す（選んだ行）</button>
-        <div class="note2" id="syncRestockNote"></div>
-      </div>
+      <!-- 選んだ件数（6.99）。再調達CSVの箱の中にあったが、箱を消したので
+           いつでも見えるところに出す。 -->
+      <div class="note2" id="syncPickNote" style="margin-top:4px"></div>
 
       <details id="syncMoreBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">その他（ときどき使う）</summary>
@@ -1510,7 +1508,6 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn" data-sflag="mark_stop|0" style="flex:1 1 46%;padding:7px 3px;font-size:12px">値下げしない オフ</button>
       <button class="btn" data-sflag="dropship|1" style="flex:1 1 46%;padding:7px 3px;font-size:12px">無在庫 オン</button>
       <button class="btn" data-sflag="dropship|0" style="flex:1 1 46%;padding:7px 3px;font-size:12px">無在庫 オフ</button>
-      <button class="btn" id="syncBarRestock" style="flex:1 1 100%;padding:7px 3px;font-size:12px;display:none">再調達で出し直すCSV</button>
       <button class="btn" id="syncBarPics" style="flex:1 1 100%;padding:7px 3px;font-size:12px">写真を eBay 保管に切り替え</button>
     </div>
   </div>
@@ -11394,10 +11391,6 @@ function syncBarRender(){
   var off=syncPickOff();
   $('syncBarN').textContent='選択 '+n+'件'
     +(off?('（他のページ '+off+'件を含む）'):'');
-  /* 再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ
-     （「再調達の候補」はそこにまとめた・6.71）。 */
-  $('syncBarRestock').style.display=
-    ($('syncFilter').value==='pbplan')?'':'none';
 }
 /* 選んだ行の印をまとめて付け外しする。
    その行に付けられない印はとばし、何件とばしたかを出す。 */
@@ -11493,7 +11486,6 @@ $('syncBarFlags').addEventListener('click',function(e){
    ⚙設定の「見直しが要る行だけ」に関係なく、選んだ行すべてが対象。 */
 $('syncBarRev').onclick=function(){ syncRevRun(true); };
 $('syncBarFloor').onclick=function(){ syncFloorRun(); };
-$('syncBarRestock').onclick=function(){ $('syncRestock').click(); };
 
 $('syncBarClear').onclick=function(){ syncPick={}; syncRender(); };
 /* ---- 写真を eBay 保管（EPS）に切り替える（7.42・管理者だけ）----
@@ -13659,8 +13651,6 @@ var SYNC_FILTERS=[
      どちらも一緒に出して、行のバッジで見分ける。 */
   { v:'on_hand',        label:'FBA納品の判断',
     f:function(r){ return !!Number(r.on_hand||0); } },
-  { v:'fba_not_listed', label:'eBay出品の候補',
-    f:function(r){ return r.state==='fba_not_listed'; } },
   /* 値下げの時期（手動の値下げCSV用）。自動値下げがオンのときは
      「自動値下げの予定」に含めるので出さない（6.71）。 */
   { v:'markdown',       label:'値下げの時期',
@@ -13671,7 +13661,11 @@ var SYNC_FILTERS=[
      この絞り込みのときだけ、次の自動値下げ日が近い順に並べ替える。 */
   { v:'automd',         label:'自動値下げの予定',
     f:function(r){ return syncMdTarget(r)||syncMarkDue(r); } },
+  /* 売値の見直し。自動反映が「自動実行」のときは pj-sync が1日1回
+     そのまま反映するので、人が見る必要がない（6.99）。
+     「オフ」「確認モード」のときは人が見て承認するので残す。 */
   { v:'review',         label:'売値の見直し',
+    hide:function(){ return autoRvMode()==='auto'; },
     f:function(r){ return !!syncPriceReview(r); } },
   /* 中古のフィギュア（ホビー）なのに一点物がオフ／不明の行（6.94）。
      ここに出る行は、売れたあと「再調達」の対象になってしまう。
@@ -13688,7 +13682,7 @@ var SYNC_FILTERS=[
 /* プルダウンの並び（見出しつき）。ここに書いていない項目は出さない。 */
 var SYNC_FILTER_GROUPS=[
   { t:'毎日見る', v:['all','warn','pbplan','on_hand'] },
-  { t:'出品',     v:['fba_not_listed','picsneed'] },
+  { t:'出品',     v:['picsneed'] },
   { t:'価格',     v:['markdown','automd','review'] },
   { t:'状態',     v:['restocking','dropship','figone'] }
 ];
@@ -14570,10 +14564,6 @@ function syncRender(){
   syncHotWarnRender();              // 3時間ごとの最安値が取り切れているか（6.72）
   syncMarkBarRender();              // 値下げの時期の帯（価格の欄を自動で開く）
   syncTodoRender();                 // 今日やること
-  /* 再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ出す（6.71）。 */
-  $('syncRestockBox').style.display=
-    (($('syncFilter').value==='pbplan')&&(syncData&&(syncData.items||[]).length))
-      ? 'block' : 'none';
   var rows=(syncData&&syncData.items)||[], h='', shown=0;
   var keep=rows.filter(syncMatch);
   /* 「自動値下げの予定」は日付の近い順（今日の行が先）。
@@ -14642,10 +14632,9 @@ function syncPickOff(){
 function syncPickNote(){
   var pick=Object.keys(syncPick).filter(function(k){return syncPick[k];}).length;
   var rows=(syncData&&syncData.items)||[], off=syncPickOff();
-  $('syncRestockNote').textContent=rows.length
+  $('syncPickNote').textContent=rows.length
     ? (syncShown+'件が対象（このページ '+syncPageIds.length+'件）。選択 '+pick+'件'
-       +(off?('（うち他のページ '+off+'件）'):'')+'。'
-       +'書き出すと 数量・売値（推奨売値）・配送ポリシー（再調達用）を Revise します。')
+       +(off?('（うち他のページ '+off+'件）'):'')+'。')
     : '';
   syncDropBtnNote();   // 無在庫の一括ボタンの件数も合わせる
 }
@@ -15077,7 +15066,9 @@ function syncModeSend(t,r,want){
         +(r.title||r.asin)+'　（'+r.asin+'）'
         /* 再調達にしたときは、何が起きるかを1行で添える（6.67）。 */
         +((want==='restock')
-          ? '　FBAで売れたら数量0 → 承認すると推奨売値で再出品します'
+          /* 実際は同じ出品の売値と数量を直すだけで、出品し直すわけではない
+             （v179 で「在庫補充」に直したのと同じ。6.99）。 */
+          ? '　FBAで売れたら数量0 → 承認すると推奨売値に直して数量を1に戻します'
           : '');
       syncRender();
     })
@@ -15422,149 +15413,6 @@ $('syncOnHandFix').onclick=function(){
     .then(function(){ btn.disabled=false; });
 };
 
-/* ---- 再調達で出し直すCSV（フェイズBの手作業版）----
-   Revise で 数量・売値・配送ポリシー名を入れ替える。
-   ビジネスポリシーは3つ揃えて送る（配送だけ送ると組み合わせが崩れる報告があるため）。
-   特定キーは ItemID のみ。 */
-function syncRestockBuild(rows){
-  var head=[CSV_ACT_COL,'ItemID','*Quantity','*StartPrice',
-            'ShippingProfileName','ReturnProfileName','PaymentProfileName'];
-  var out=[CSV_INFO,csvLine(head)];
-  var ship=String($('csvShipProfileRe').value||$('csvShipProfile').value||'').trim();
-  var ret=String($('csvRetProfile').value||'').trim();
-  var pay=String($('csvPayProfile').value||'').trim();
-  rows.forEach(function(x){
-    out.push(csvLine(['Revise', x.itemId, x.qty, x.price.toFixed(2), ship, ret, pay]));
-  });
-  return { text:out.join('\r\n')+'\r\n', cols:head.length, ship:ship };
-}
-$('syncRestock').onclick=function(){
-  if(roleDenyPrice('syncRestockNote'))return;   // 価格を変えるので管理者だけ（6.52）
-  var rows=(syncData&&syncData.items)||[];
-  var pick=rows.filter(function(r){
-    return syncPick[r.asin+'|'+r.cond]&&String(r.ebay_item_id||'').trim();
-  });
-  if(!pick.length){
-    alert('行を選んでください（ItemIDがある行だけ選べます）。'); return;
-  }
-  var noLow=pick.filter(function(r){ return !(+r.amazon_lowest); });
-  if(noLow.length){
-    alert(noLow.length+'件はAmazon最安値が未取得のため売値を出せません。\n'
-      +'先に pj-sync で最安値を取得してください（rollcall）。');
-    return;
-  }
-  if(!String($('csvShipProfileRe').value||'').trim()){
-    alert('出品CSVタブの設定「再調達用ポリシー名」を入れてください。'); return;
-  }
-  /* 相場（Sold）の判断で「見送り」になった行は、既定で除外する。 */
-  var skip=pick.filter(syncIsSkip), go=pick.filter(function(r){ return !syncIsSkip(r); });
-  if(skip.length){
-    if(!confirm('見送りの行が '+skip.length+'件あります。除外して書き出しますか？\n'
-      +skip.map(function(r){
-          var v=syncVerdict(r);
-          return '・'+(r.title||r.asin)+'（'+SYNC_VERDICT[v.kind].t+'）';
-        }).join('\n')
-      +'\n\nOK：除外して書き出す／キャンセル：やめる'))return;
-  }
-  if(!go.length){
-    alert('書き出す行がありません（選んだ行はすべて見送りです）。'); return;
-  }
-  /* 売値は判断の売値を使う。
-     'rec'（推奨売値で出す）… 推奨売値／'match'（相場に合わせる）… 相場 − 下げる額
-     'none'（相場未確認）… これまでどおり推奨売値 */
-  var list=go.map(function(r){
-    var v=syncVerdict(r);
-    return { itemId:String(r.ebay_item_id).trim(),
-             qty:Math.max(1,Number(r.ebay_qty||0)||1), price:v.price, title:r.title||r.asin,
-             row:r, weight:v.rec.weight, kind:v.kind };
-  });
-  var kn={rec:0,match:0,none:0};
-  list.forEach(function(x){ kn[x.kind]=(kn[x.kind]||0)+1; });
-  var b=syncRestockBuild(list);
-  if(!confirm(list.length+'件を再調達で出し直します。\n'
-    +'売値は 推奨売値 '+kn.rec+'件／相場に合わせる '+kn.match+'件'
-    +'／相場未確認（推奨売値）'+kn.none+'件 です。\n'
-    +'数量・売値・配送ポリシー（'+b.ship+'）を Revise します。\n'
-    +'書き出したファイルを Seller Hub にアップロードしてください。\n'
-    +'よろしいですか？'))return;
-  var name='ebay_restock_itemid_'+csvStamp()+'.csv';
-  /* 先に pj-sync へ「再調達中」を登録し、そのあとでCSVを書き出す。
-     iPhoneのホーム画面アプリでは、書き出しでいったん画面を離れるため、
-     送信中だった通信が切られて「Load failed」になっていた（2026-10-01の不具合報告）。
-     登録が失敗しても、CSVは必ず書き出す。 */
-  syncRestockMark(list,function(){
-    $('syncRestockNote').textContent=csvDownload(name,b.text)
-      ? ('再調達CSVを書き出しました：'+name
-         +'（'+list.length+'件・'+b.cols+'列）　配送ポリシー '+b.ship
-         +'　売値：推奨 '+kn.rec+'件／相場 '+kn.match+'件／相場未確認 '+kn.none+'件'
-         +(skip.length?('　見送り '+skip.length+'件は除外'):'')
-         +'　※Reviseでポリシー名が変わるかは結果ファイルで確認してください。')
-      : '書き出しに失敗しました。';
-    // 除外した行は、数量0にするCSVを別ファイルで書き出せる（任意）
-    if(skip.length)syncZeroAsk(skip);
-  });
-};
-/* 見送りの行を「数量0にする」Revise CSV。出品を取り下げる代わりに在庫を0にする。
-   配送ポリシーなどは変えない（数量だけ）。 */
-function syncZeroBuild(rows){
-  var head=[CSV_ACT_COL,'ItemID','*Quantity'];
-  var out=[CSV_INFO,csvLine(head)];
-  rows.forEach(function(r){
-    out.push(csvLine(['Revise',String(r.ebay_item_id||'').trim(),0]));
-  });
-  return { text:out.join('\r\n')+'\r\n', cols:head.length };
-}
-function syncZeroAsk(rows){
-  if(!confirm('除外した見送りの '+rows.length+'件を「数量0にするCSV」として'
-    +'別ファイルで書き出しますか？\n'
-    +'（在庫を0にして売れないようにします。出品自体は残ります）'))return;
-  var z=syncZeroBuild(rows), name='ebay_restock_zero_'+csvStamp()+'.csv';
-  $('syncRestockNote').textContent+=csvDownload(name,z.text)
-    ? ('　／数量0のCSVも書き出しました：'+name+'（'+rows.length+'件）')
-    : '　／数量0のCSVの書き出しに失敗しました。';
-}
-/* 書き出した行を pj-sync で「再調達中」にする（mode=restock）。
-   あわせて、その売値で損益分岐に収まる仕入値の上限（円）も送る。
-   Worker はこの上限と最安値を比べるだけで、赤字になったら通知（RESTOCK_LOSS）を出せる。 */
-function syncRestockMark(list,done){
-  var fin=function(){ if(done)done(); };
-  /* 欄が空になっていたら保存済みのキーを入れ直す。空のまま送ると失敗するので送らない。 */
-  csvSecretFill();
-  if(!syncApiKey()){
-    $('syncFixNote').textContent='設定の「pj-sync のキー」が空のため、「再調達中」の登録を飛ばしました。'
-      +'キーを入れてから、行の「再調達中にする」で印を付けてください。';
-    fin(); return;
-  }
-  var items=list.map(function(x){
-    return { asin:x.row.asin, cond:x.row.cond, title:x.row.title||'', restocking:true,
-             restock_price:x.price,
-             restock_max_cost:syncMaxCost(x.price,x.weight),
-             restock_skip_acc:($('syncSkipAcc').checked&&x.row.cond!=='new')?1:0 };
-  });
-  fetch(syncUrl()+'/listings',{method:'POST', keepalive:true,
-    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-    body:JSON.stringify({items:items})})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
-    .then(function(d){
-      items.forEach(function(it,i){
-        var r=list[i].row;
-        r.restocking=1; r.restock_price=it.restock_price;
-        r.restock_max_cost=it.restock_max_cost; r.restock_skip_acc=it.restock_skip_acc;
-        r.warnings=(r.warnings||[]).filter(function(w){
-          return w!=='売り越しの恐れ'&&w!=='納品待ちで出品中'&&w.indexOf('予約済み')!==0; });
-      });
-      syncSaveCache(); syncRender();
-      $('syncFixNote').textContent=(d.accepted||0)+'件を「再調達中」にしました'
-        +'（仕入値の上限：'+items.map(function(it){ return yen(it.restock_max_cost); }).join('・')
-        +'）。この上限を超えたら「再調達で赤字」の通知が出ます。';
-    })
-    .catch(function(e){
-      $('syncFixNote').textContent='「再調達中」の登録に失敗しました：'+e.message
-        +'（CSVはこのあと書き出します。行の「再調達中にする」で印を付け直せます）';
-    })
-    .then(fin);     // 成功・失敗どちらでもCSVの書き出しに進む
-}
-
 /* ---- 出品リストの行を出品文タブで仕上げる（3.5節）----
    出品文タブの既存ロジック（タイトル生成・説明文生成・SKU発番）はそのまま使う。
    ここでやるのは、行の値を各欄へ流し込むことと、生成結果を行へ書き戻すことだけ。 */
@@ -15784,7 +15632,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v194';   // sw.js の const V と必ず同じ値にする
+var APP_V='v195';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

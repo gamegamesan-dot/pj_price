@@ -4,7 +4,7 @@
    ・名簿を送る／手元在庫の印／無在庫は「その他」へ
    ・結果ファイルを取り込んだら名簿を自動で送る
    ・行を選んだときだけ画面の下に操作バー
-   ・再調達CSVは絞り込みが「FBAで売れた（対応予定）」のときだけ（6.71）
+   ・再調達CSVは 6.99 で消した（Worker が直接書き込むため）
    ・使わないタブを隠す */
 const { harness, openCsvBoxes } = require('./lib');
 const T = harness('画面の整理（販売連携タブ・⚙設定）');
@@ -140,25 +140,18 @@ await p.waitForTimeout(120);
 bar=await p.evaluate(()=>({ show:getComputedStyle($('syncBar')).display,
   n:$('syncBarN').textContent,
   btn:Array.from(document.querySelectorAll('#syncBar > div:nth-child(2) button'))
-    .map(b=>b.textContent),
-  restock:$('syncBarRestock').style.display }));
+    .map(b=>b.textContent) }));
 console.log('   '+JSON.stringify(bar));
 ok(bar.show!=='none'&&/選択 1件/.test(bar.n),'★選ぶと画面の下に出る');
 ok(bar.btn.join('|')==='見直し価格にする|最低売値まで下げる|印を付ける ▾|選択解除',
    '★バーは4つ（見直し価格・最低売値・印を付ける・選択解除）');
-ok(bar.restock==='none',
-   '★再調達CSVは「FBAで売れた（対応予定）」を見ているときだけ');
-const rst=await p.evaluate(()=>{
-  $('syncBarMarkBtn').click();            // 印の欄を開く（再調達CSVはこの中）
-  syncFilterSet('pbplan');
-  const cb=document.querySelector('#syncList input[data-spick]');
-  cb.checked=true; cb.dispatchEvent(new Event('change',{bubbles:true}));
-  return { bar:$('syncBarRestock').style.display,
-    box:getComputedStyle($('syncRestockBox')).display };
-});
+/* 再調達CSVは 6.99 で消した（Worker が直接書き込むため）。 */
+const rst=await p.evaluate(()=>({ bar:!!$('syncBarRestock'),
+  box:!!$('syncRestockBox'), pick:!!$('syncPickNote') }));
 console.log('   '+JSON.stringify(rst));
-ok(rst.bar!=='none'&&rst.box==='block',
-   '★★「FBAで売れた（対応予定）」のときだけ再調達CSVを出す');
+ok(rst.bar===false&&rst.box===false,
+   '★★★再調達CSVのボタンと箱は無い（6.99 で消した）');
+ok(rst.pick===true,'★選んだ件数の表示は残っている');
 // 選択解除
 await p.click('#syncBarClear'); await p.waitForTimeout(150);
 ok(await p.evaluate(()=>getComputedStyle($('syncBar')).display)==='none',

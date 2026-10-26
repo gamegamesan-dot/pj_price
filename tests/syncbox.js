@@ -197,7 +197,7 @@ let pick=await p.evaluate(()=>{
   cb.dispatchEvent(new Event('change',{bubbles:true}));
   const keep=list.querySelector('[data-srow="B0BOX00003|used"]')
     .hasAttribute('data-sentinel');
-  return { keep:keep, note:$('syncRestockNote').textContent,
+  return { keep:keep, note:$('syncPickNote').textContent,
            n:Object.keys(syncPick).filter(function(k){ return syncPick[k]; }).length,
            bar:getComputedStyle($('syncBar')).display };
 });
@@ -221,7 +221,7 @@ let all=await p.evaluate(()=>{
            checked:boxes.filter(function(c){ return c.checked; }).length,
            total:boxes.length,
            n:Object.keys(syncPick).filter(function(k){ return syncPick[k]; }).length,
-           note:$('syncRestockNote').textContent };
+           note:$('syncPickNote').textContent };
 });
 console.log('   '+JSON.stringify({keep:all.keep,checked:all.checked,
   total:all.total,n:all.n}));

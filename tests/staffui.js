@@ -70,12 +70,10 @@ const view=async()=>await p.evaluate(()=>{
   const cfgNote=vis('#tabCfg .staffonly');
   const price=vis('.cfgprice');
   const revPrice=vis('#csvRevisePrice');
-  /* 再調達CSVは絞り込みが「FBAで売れた（対応予定）」のときだけ出る欄なので
-     （6.71）、そこに合わせたうえで（作業者では出ないことを）見る。 */
+  /* 再調達CSVの箱は 6.99 で消した。代わりに無在庫（MW）の見直しを見る
+     （どちらも数量と売値を動かす欄で、作業者には出さない）。 */
   switchTab('E');
-  syncFilterSet('pbplan');
-  const restock=vis('#syncRestockBox');
-  if($('syncFilter').querySelector('option[value="all"]'))$('syncFilter').value='all';
+  const restock=vis('#syncMwBox');
   syncRender();
   ['syncMoreBox','syncPriceBox'].forEach(function(id){
     var el=$(id); if(el)el.open=true; });
@@ -101,7 +99,7 @@ ok(v.g.goal&&v.g.md&&v.g.rv&&v.g.sold&&v.g.tune&&v.g.fee,
 console.log('   '+JSON.stringify({priceBox:v.priceBox,onhand:v.onhand,
   revPrice:v.revPrice,restock:v.restock}));
 ok(v.priceBox&&v.onhand&&v.revPrice&&v.restock,
-   '★価格の操作・再調達CSV・手元在庫の付け直し・「売値も含める」も出る');
+   '★価格の操作・無在庫（MW）の見直し・手元在庫の付け直し・「売値も含める」も出る');
 ok(v.cfgNote===false&&v.syncNote===false,'★作業者用の案内は出さない');
 
 console.log('\n=== 作業者のキー ===');
@@ -119,7 +117,7 @@ ok(v.g.goal===false&&v.g.md===false&&v.g.rv===false&&v.g.sold===false
 ok(v.g.conn&&v.g.list&&v.g.policy&&v.g.ops&&v.g.man&&v.g.ui,
    '★価格でない設定（接続・原産国・ポリシー・操作・マニュアル・画面）は出す');
 ok(v.priceBox===false&&v.restock===false&&v.revPrice===false,
-   '★★価格の操作・再調達CSV・「売値も含める」を出さない');
+   '★★価格の操作・無在庫（MW）の見直し・「売値も含める」を出さない');
 ok(v.onhand===false,'★手動実行になる操作（手元在庫の付け直し）も出さない');
 ok(v.load===true&&v.push===true,
    '★「状況を取り込む」と「名簿を送る」は出す（作業者の仕事）');

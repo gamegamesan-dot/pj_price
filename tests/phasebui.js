@@ -207,8 +207,11 @@ await p.click('#syncList [data-srow="B0PBU00001|used"] [data-szero]');
 await p.waitForTimeout(400);
 const rn=await p.evaluate(()=>$('syncFixNote').textContent);
 console.log('   '+rn);
-ok(/FBAで売れたら数量0 → 承認すると推奨売値で再出品します/.test(rn),
-   '★★再調達にしたときは何が起きるかを添える');
+/* 6.99 で文言を直した。実際は同じ出品の売値と数量を直すだけで、
+   出品し直すわけではない（v179 の「在庫補充」と同じ理由）。 */
+ok(/FBAで売れたら数量0 → 承認すると推奨売値に直して数量を1に戻します/.test(rn),
+   '★★★再調達にしたときに何が起きるかを正しく添える（「再出品」ではない）');
+ok(!/再出品/.test(rn),'★★「再出品」とは書かない');
 
 console.log('\n=== 今回は動かさない ===');
 await setup({mode:'plan'});

@@ -145,28 +145,59 @@ ok(back2==='all','★★自動値下げがオンのとき「値下げの時期�
 console.log('=== 0件の項目も「今日やること」から選べる ===');
 await setup({});
 await openCsvBoxes(p);
+/* 「eBay出品の候補」（fba_not_listed）は 6.99 で消した。
+   0件でも選べることは、残っている別の項目（無在庫）で確かめる。 */
 let z=await p.evaluate(()=>{
-  var before=!!$('syncFilter').querySelector('option[value="automd"]');
-  syncFilterSet('fba_not_listed');
-  return { before:before, v:$('syncFilter').value,
-    has:!!$('syncFilter').querySelector('option[value="fba_not_listed"]') };
+  var gone=!!$('syncFilter').querySelector('option[value="fba_not_listed"]');
+  var has2=syncFilterHas('fba_not_listed');
+  syncFilterSet('dropship');
+  return { gone:gone, has2:has2, v:$('syncFilter').value,
+    has:!!$('syncFilter').querySelector('option[value="dropship"]') };
 });
 console.log('   '+JSON.stringify(z));
-ok(z.v==='fba_not_listed'&&z.has,'★★0件で隠れている項目も選べる');
-ok((await opts()).some(x=>/^fba_not_listed\|/.test(x)),
+ok(z.gone===false&&z.has2===false,
+   '★★「eBay出品の候補」は消えている（まとめの件数で見る・6.99）');
+ok(z.v==='dropship'&&z.has,'★★0件で隠れている項目も選べる');
+ok((await opts()).some(x=>/^dropship\|/.test(x)),
    '★★選んでいるあいだは一覧に残す');
 
-console.log('=== 再調達CSV は「FBAで売れた（対応予定）」のときに出す ===');
+console.log('=== 売値の見直しは自動反映が auto のときだけ隠す（6.99）===');
+await setup({});
+await openCsvBoxes(p);
+let rv=await p.evaluate(()=>{
+  const seen=()=>Array.prototype.map.call($('syncFilter').options,(o)=>o.value);
+  $('autoRvMode').value='off';      syncRender(); const off=seen();
+  $('autoRvMode').value='confirm';  syncRender(); const cf=seen();
+  $('autoRvMode').value='auto';     syncRender(); const au=seen();
+  /* auto のときに選んでいたら「すべて」に戻る */
+  $('autoRvMode').value='off'; syncRender(); syncFilterSet('review');
+  const picked=$('syncFilter').value;
+  $('autoRvMode').value='auto'; syncRender();
+  const after=$('syncFilter').value;
+  $('autoRvMode').value='confirm'; syncRender();
+  return { off:off.indexOf('review')>=0, cf:cf.indexOf('review')>=0,
+    au:au.indexOf('review')>=0, picked:picked, after:after }; });
+console.log('   '+JSON.stringify(rv));
+ok(rv.off===true,'★★「オフ」のときは出す（人が見て承認する）');
+ok(rv.cf===true,'★★★「確認モード」のときは出す');
+ok(rv.au===false,'★★★「自動実行」のときだけ隠す（pj-sync が勝手に反映する）');
+ok(rv.picked==='review'&&rv.after==='all',
+   '★★選んでいる途中で auto にしたら「すべて」に戻る');
+
+console.log('=== 再調達CSV は消した（6.99）===');
 await setup({});
 await openCsvBoxes(p);
 let csv=await p.evaluate(()=>{
   syncFilterSet('pbplan');
-  return getComputedStyle($('syncRestockBox')).display; });
-ok(csv==='block','★★まとめ先の絞り込みで出す');
-csv=await p.evaluate(()=>{
-  syncFilterSet('all');
-  return getComputedStyle($('syncRestockBox')).display; });
-ok(csv==='none','★ほかの絞り込みでは出さない');
+  return { box:!!$('syncRestockBox'), bar:!!$('syncBarRestock'),
+    btn:!!$('syncRestock'),
+    /* 選んだ件数の表示は残す（箱の中にあったので外に出した）。 */
+    pick:!!$('syncPickNote') }; });
+console.log('   '+JSON.stringify(csv));
+ok(csv.box===false&&csv.btn===false,
+   '★★★再調達で出し直すCSVの箱とボタンは無い（Worker が直接書き込むため）');
+ok(csv.bar===false,'★★操作バーのボタンも無い');
+ok(csv.pick===true,'★★選んだ件数の表示は残っている');
 
 console.log('=== 絞り込みの中身は変えていない ===');
 await setup({});

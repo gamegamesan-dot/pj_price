@@ -5700,3 +5700,43 @@ MWで欠品
 > （既定値は新しい端末にだけ効きます）。欄の下に理由も書いた。
 
 Worker 側の既定も `MW_STOCK_MIN`（5）にそろえた（`stock_min` を送らないときに使う）。
+
+## 6.99 文言の直しと、使わない絞り込み・箱の片付け（2026-10-26・sw.js v195）
+
+### (a) フェイズBの文言
+
+行の「在庫0時の動作」を**再調達**に切り替えたときの1行。
+
+| | |
+| --- | --- |
+| 前 | FBAで売れたら数量0 → 承認すると**推奨売値で再出品します** |
+| いま | FBAで売れたら数量0 → 承認すると**推奨売値に直して数量を1に戻します** |
+
+実際は `ReviseInventoryStatus` で**同じ出品の売値と数量を直す**だけで、
+出品し直すわけではない（v179 で「在庫補充」に直したのと同じ理由）。
+`tests/phasebui.js` に「**「再出品」とは書かない**」も足した。
+
+### (b) 片付けた絞り込みと箱
+
+| | もの | 判断 | した事 |
+| --- | --- | --- | --- |
+| ① | 絞り込み **再調達中** | **残す** | 変更なし（再調達中の行だけを見たい場面があるため） |
+| ② | 絞り込み **eBay出品の候補**（`fba_not_listed`） | **消す** | `SYNC_FILTERS` と見出しの並びから削除。件数は上のまとめ「在庫ありeBay未出品 n件」に出ているので情報は失われない |
+| ③ | 絞り込み **売値の見直し**（`review`） | **auto のときだけ隠す** | `hide:function(){ return autoRvMode()==='auto'; }`。「オフ」「確認モード」では人が承認するので出す |
+| ④ | 箱 **再調達で出し直すCSV**（`#syncRestockBox`） | **消す** | 箱・操作バーのボタン・CSVを作る処理（143行）をまとめて削除 |
+
+④ で消したもの：`#syncRestockBox`・`#syncRestock`・`#syncBarRestock`、
+`syncRestockBuild` / `syncZeroBuild` / `syncZeroAsk` / `syncRestockMark`、
+`body.staff #syncRestockBox` の CSS、バーの出し入れ。
+再調達は Worker（フェイズB）が `ReviseInventoryStatus` で直接書き込むので、
+CSV を書き出してアップロードする手順はもう要らない。
+
+**消さずに残したもの**：箱の中にあった「**選んだ件数**」の表示。
+`#syncPickNote` に名前を変えて、箱の外（いつでも見えるところ）に出した
+（再調達CSVの案内文だけ外した）。
+
+③ は 0件でも選べる仕組み（`SYNC_FILTER_KEEP`）と同じく、
+**選んでいる途中で auto にしたら「すべて」に戻る**（`syncFilterOpts`）。
+
+テストは `tests/syncfilter.js`（31→35件）・`tests/synctidy.js`・
+`tests/staffui.js`・`tests/syncbox.js`・`tests/phasebui.js` を現状に合わせた。
