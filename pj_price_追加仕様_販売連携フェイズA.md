@@ -4738,3 +4738,40 @@ ALLOWED に足したのは Catalog Items の**読み取り1本**だけ。
 `getItemOffersBatch` は0.1回/秒・バースト1なので、1周に実時間で15分ほどかかる。
 
 テストは `tests/mwamz.mjs`（52件）。
+
+## 7.67 JAN から ASIN を引く（`jan_map`・2026-10-26・sw.js v191）
+
+6.92 の受け口。**`items` に JAN の列は無く、足せない。**
+
+### なぜ別表にするか（調査の結果）
+
+`items` は **ちょうど100列**で、これは D1 が1つの結果に返せる上限（7.55）。
+列を1つ足すと `/status` と Cron の各ジョブが
+`too many columns in result set` で落ちる（v176 で実際に起きた）。
+JAN は1商品に1つなので、別表に出しても引き当ては1対1で済む。
+
+```sql
+CREATE TABLE jan_map (
+  jan TEXT PRIMARY KEY, asin TEXT, name TEXT, rank INTEGER, rank_cat TEXT,
+  src TEXT,            -- 'catalog' / 'mw' / 'hand'
+  err TEXT, at TEXT, created_at TEXT
+);
+```
+
+### `GET /find?jan=…`（`jans=` でカンマ区切り・最大20件）
+
+1. **`jan_map` を引く**
+2. **`mw_amz` も引く**（MW の取り込みで分かっている分。`src='mw'`）
+3. それでも足りない分だけ **Catalog Items（`identifiersType=EAN`）** を呼ぶ
+4. 引けた分・引けなかった分の**両方**を `jan_map` に控える
+
+見つからなかった控えは `JAN_MISS_TTL_D`（**7日**）たったら調べ直す。
+見つかった対応は**期限なし**（JAN と ASIN の対応は変わらない）。
+
+`mwAsinFind()`（7.66）も `jan_map` に控えるようにしたので、
+MW の Amazon 価格取得を回すほど検索も速くなる（API を呼ばずに済む）。
+
+読み取りだけなので**作業者のキーでも引ける**。
+
+テストは `tests/janfind.mjs`（32件）。
+`items` がちょうど100列で JAN の列が無いことも、テストで固定している。

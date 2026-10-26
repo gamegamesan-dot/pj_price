@@ -4703,8 +4703,105 @@ async function mwAsinFind(env, run, jans) {
       /* identifiers が返らないときは、要求が1件なら取り違えようがない。 */
       if (!jset.length && part.length === 1 && !out[part[0]]) out[part[0]] = rec;
     }
+    /* 引けた分・引けなかった分を jan_map に控える（7.67）。
+       次からは API を呼ばずに済む。 */
+    await janMapPut(env, part.map((j) => Object.assign({ jan: j },
+      out[j] || { asin: "", err: "ASINが見つかりません" })), "catalog");
   }
   return { map: out, calls };
+}
+/* ---- JAN → ASIN の控え（7.67）----
+   items は**すでにちょうど100列**（D1 の上限・7.55）なので jan の列を足せない。
+   そのため別表 jan_map に持つ。 */
+const JAN_MISS_TTL_D = 7;            // 見つからなかった JAN を調べ直すまでの日数
+function janOk(v) { return /^\d{13}$/.test(String(v || "").replace(/\D/g, "")); }
+async function janMapPut(env, list, src) {
+  const stmts = [];
+  const at = nowIso();
+  for (const r of (list || [])) {
+    const jan = String((r && r.jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) continue;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO jan_map (jan,asin,name,rank,rank_cat,src,err,at,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)
+       ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
+         name=COALESCE(NULLIF(excluded.name,''), jan_map.name),
+         rank=COALESCE(excluded.rank, jan_map.rank),
+         rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), jan_map.rank_cat),
+         src=excluded.src, err=excluded.err, at=excluded.at`)
+      .bind(jan, String(r.asin || "") || null, String(r.name || ""),
+            Number(r.rank) || null, String(r.rank_cat || ""),
+            String(src || "catalog"), String(r.err || ""), at));
+  }
+  if (stmts.length) {
+    for (let i = 0; i < stmts.length; i += 50)
+      await env.DB.batch(stmts.slice(i, i + 50));
+  }
+}
+/* ---- GET /find?jan=… ----
+   JAN から ASIN を返す。控えにあれば **API を呼ばない**。
+   見つからなかった控えは JAN_MISS_TTL_D 日たったら調べ直す。
+   jans=… でカンマ区切りで複数（最大20件）。 */
+async function janFind(env, url) {
+  const run = newRun("jan-find");
+  const res = { ok: false, rows: [], asked: 0, cached: 0, looked: 0, calls: 0 };
+  try {
+    const p = url.searchParams;
+    const raw = String(p.get("jans") || p.get("jan") || "").split(",");
+    const jans = [];
+    for (const x of raw) {
+      const j = String(x).replace(/\D/g, "");
+      if (janOk(j) && jans.indexOf(j) < 0) jans.push(j);
+    }
+    if (!jans.length) { res.error = "bad_jan"; return Object.assign(await saveRun(env, run), res); }
+    const ask = jans.slice(0, 20);
+    res.asked = ask.length;
+    /* ① 控えを引く（jan_map と、MW で分かっている分）。 */
+    const have = {};
+    const q = await env.DB.prepare(
+      `SELECT jan, asin, name, rank, rank_cat, src, err, at FROM jan_map
+        WHERE jan IN (${ask.map(() => "?").join(",")})`).bind(...ask).all();
+    for (const r of (q && q.results) || []) have[r.jan] = r;
+    const q2 = await env.DB.prepare(
+      `SELECT jan, asin, name, rank, rank_cat FROM mw_amz
+        WHERE COALESCE(asin,'')<>'' AND jan IN (${ask.map(() => "?").join(",")})`)
+      .bind(...ask).all();
+    for (const r of (q2 && q2.results) || []) {
+      if (!have[r.jan] || !have[r.jan].asin)
+        have[r.jan] = Object.assign({}, r, { src: "mw", err: "", at: "" });
+    }
+    /* ② 足りない分だけ Catalog を呼ぶ（見つからない控えは期限つきで使い回す）。 */
+    const miss = new Date(Date.now() - JAN_MISS_TTL_D * 86400000).toISOString();
+    const todo = ask.filter((j) => {
+      const h = have[j];
+      if (h && h.asin) return false;                 // 分かっている
+      if (h && !h.asin && String(h.at || "") > miss) return false;  // 最近調べて無かった
+      return true;
+    });
+    res.cached = ask.length - todo.length;
+    if (todo.length) {
+      const f = await mwAsinFind(env, run, todo);
+      res.looked = todo.length;
+      res.calls = f.calls;
+      for (const j of todo) {
+        const g = f.map[j];
+        have[j] = g ? Object.assign({ jan: j, src: "catalog", err: "" }, g)
+                    : { jan: j, asin: "", src: "catalog",
+                        err: "ASINが見つかりません" };
+      }
+    }
+    res.rows = ask.map((j) => {
+      const h = have[j] || {};
+      return { jan: j, asin: String(h.asin || ""), name: String(h.name || ""),
+               rank: Number(h.rank) || 0, rank_cat: String(h.rank_cat || ""),
+               src: String(h.src || ""), err: String(h.err || "") };
+    });
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("jan-find: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 /* ---- POST /mw/amz ----
    候補のうち、Amazon の値段をまだ見ていない／古いものを古い順に調べる。 */
@@ -6763,6 +6860,8 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await mwAmzRun(env, b), 200, origin);
       }
+      if (request.method === "GET" && url.pathname === "/find")
+        return json(await janFind(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/amz")
         return json(await mwAmzList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/market") {
@@ -6919,6 +7018,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         BO_ERR, PIC_ERR, TEMP_ERR, whyKey, whyTop, whyLine,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
+                        janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwAmzRun, mwAmzList, mwAsinFind, amazonLowest,
                         amzSelf, fbaN, buyBox,
                         offerN, MW_AMZ_MAX, MW_AMZ_TTL_D, AMZ_SELF_ID,

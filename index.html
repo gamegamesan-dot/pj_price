@@ -758,6 +758,18 @@ body.staff #syncOnHandFix{display:none !important}
     <details id="csvListBox" data-box="1">
       <summary>一覧を表示</summary>
       <div style="padding:0 13px 12px">
+        <!-- 商品を探す（6.92）。販売連携と同じ仕組み -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+          <input type="search" id="csvFind" placeholder="商品名・ASIN・JAN・SKU で探す" style="flex:1 1 0;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search">
+          <button class="btn" id="csvFindCam" style="flex:0 0 auto;padding:9px 10px" title="バーコードを読む">📷</button>
+          <button class="btn" id="csvFindClear" style="flex:0 0 auto;padding:9px 10px;display:none" title="検索を消す">×</button>
+        </div>
+        <div class="note2" id="csvFindNote" style="margin:0 0 4px;display:none"></div>
+        <div id="csvFindCamBox" style="display:none;margin:0 0 6px">
+          <video id="csvFindVideo" playsinline muted style="width:100%;max-height:240px;background:#000;border-radius:6px"></video>
+          <div class="note2" id="csvFindCamNote" style="margin:2px 0 0"></div>
+          <button class="btn" id="csvFindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
+        </div>
         <!-- R2に残っている写真を行に付け直す（行ごと消してしまったときの戻し方）。 -->
         <details id="csvPicFindBox" data-box="1" style="margin-bottom:8px">
           <summary class="note2" style="margin:0;cursor:pointer">写真から戻す（R2に残っている写真を行に付ける）</summary>
@@ -978,6 +990,18 @@ body.staff #syncOnHandFix{display:none !important}
   <details id="syncListBox" data-box="1" open>
     <summary style="padding:11px 13px;font-size:13px;font-weight:700;cursor:pointer">一覧</summary>
     <div class="body" style="padding-top:0">
+      <!-- 商品を探す（6.92）。絞り込みと組み合わせて使える -->
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+        <input type="search" id="syncFind" placeholder="商品名・ASIN・JAN・ItemID・SKU で探す" style="flex:1 1 0;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search">
+        <button class="btn" id="syncFindCam" style="flex:0 0 auto;padding:9px 10px" title="バーコードを読む">📷</button>
+        <button class="btn" id="syncFindClear" style="flex:0 0 auto;padding:9px 10px;display:none" title="検索を消す">×</button>
+      </div>
+      <div class="note2" id="syncFindNote" style="margin:0 0 4px;display:none"></div>
+      <div id="syncFindCamBox" style="display:none;margin:0 0 6px">
+        <video id="syncFindVideo" playsinline muted style="width:100%;max-height:240px;background:#000;border-radius:6px"></video>
+        <div class="note2" id="syncFindCamNote" style="margin:2px 0 0"></div>
+        <button class="btn" id="syncFindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
+      </div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
         <span class="note2" style="margin:0;flex:0 0 auto">絞り込み</span>
         <!-- 選択肢は件数つきで syncFilterOpts() が作り直す -->
@@ -6306,9 +6330,11 @@ function csvRender(){
      2ページ目から先は、押したときに初めて描く。 */
   var keep=[];
   csvSorted().forEach(function(r){
-    if(csvMatchFilter(r))keep.push(r); else hidden++;
+    /* 絞り込みと検索（6.92）を両方満たす行だけ。 */
+    if(csvMatchFilter(r)&&findMatchCsv(r))keep.push(r); else hidden++;
   });
   shown=keep.length;
+  findNoteRender('csv',shown,csvList.length);   // 検索の件数と「×」（6.92）
   var cPer=pagePer('csvPerPage');
   csvPage=pageClamp(csvPage,shown,cPer);
   var cFrom=(csvPage-1)*cPer;
@@ -6478,6 +6504,7 @@ function csvRender(){
     +hidden+'件は非表示）</div>'+h;
   $('csvList').innerHTML=h||'<div class="note2">'
     +(hidden?('絞り込みに当てはまる行がありません（'+hidden+'件は非表示）'):'リストは空です。')+'</div>';
+  findOpenOne('csv');             // 1件に絞れたら開く（6.92・書いたあとに呼ぶ）
   var cBar=pageBarHtml('c',csvPage,shown,cPer);
   $('csvPagerTop').innerHTML=cBar;
   $('csvPagerBot').innerHTML=cBar;
@@ -8710,6 +8737,37 @@ function mwImportRun(text,fi){
 }
 $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
 /* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
+/* ---- 商品を探す（6.92）の結び付け ---- */
+(function(){
+  var deb={};
+  var on=function(which){
+    var id=(which==='csv')?'csvFind':'syncFind';
+    /* 打つたびに作り直すと重いので、少し待ってから1回だけ走らせる。 */
+    $(id).addEventListener('input',function(){
+      clearTimeout(deb[which]);
+      deb[which]=setTimeout(function(){ findRun(which); },180);
+    });
+    /* 変換確定（Enter）はすぐ走らせる。 */
+    $(id).addEventListener('change',function(){
+      clearTimeout(deb[which]); findRun(which);
+    });
+    $(id).addEventListener('keydown',function(e){
+      if(e.key==='Enter'){ clearTimeout(deb[which]); findRun(which); }
+    });
+    $((which==='csv')?'csvFindClear':'syncFindClear').onclick=function(){
+      findClear(which);
+    };
+    $((which==='csv')?'csvFindCam':'syncFindCam').onclick=function(){
+      findCamStart(which);
+    };
+    $((which==='csv')?'csvFindCamStop':'syncFindCamStop').onclick=findCamStop;
+  };
+  on('sync'); on('csv');
+  /* タブを移ったらカメラを止める（撮り続けない）。 */
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden)findCamStop();
+  });
+})();
 $('csvMwLoad').onclick=mwListRun;
 $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
@@ -11564,6 +11622,8 @@ function detHtml(tab,key,body){
 document.addEventListener('toggle',function(e){
   var t=e.target;
   if(!t||!t.getAttribute||!t.getAttribute('data-det'))return;
+  /* 検索で1件に絞れたときにこちらが開けた分は覚えない（6.92）。 */
+  if(t.getAttribute('data-detauto')){ t.removeAttribute('data-detauto'); return; }
   detSet(t.getAttribute('data-det'),t.getAttribute('data-detk'),t.open);
   // 英題の欄は閉じているあいだ高さが測れないので、開いたときに合わせ直す
   if(t.open&&typeof csvTaFitAll==='function')csvTaFitAll();
@@ -13048,7 +13108,229 @@ function syncFilterHas(v){
   for(var i=0;i<SYNC_FILTERS.length;i++)if(SYNC_FILTERS[i].v===v)return true;
   return false;
 }
-function syncMatch(r){ return syncFilterBy($('syncFilter').value).f(r); }
+/* ===== 商品を探す（6.92）=====
+   販売連携と出品CSVで同じ仕組みを使う。
+   ・対象：商品名（日本語・英題）・ASIN・JAN・eBay の ItemID・CustomLabel／SKU
+   ・大文字小文字・全角半角を区別しない。空白で区切ると AND
+   ・JAN は items に列が無いので、pj-sync の /find で ASIN に直してから当てる
+     （一度引いた対応は D1 に控えるので、次からは API を呼ばない） */
+var FIND_JAN={};              // jan -> asin（この画面で引いた分の控え）
+var FIND_ASIN={};             // asin -> jan（逆引き。行に JAN を出すため）
+/* 探す文字をそろえる：全角→半角、大文字→小文字、記号を落とす。 */
+function findNorm(v){
+  var t=String(v==null?'':v);
+  /* 全角の英数字・記号を半角に。 */
+  t=t.replace(/[！-～]/g,function(c){
+    return String.fromCharCode(c.charCodeAt(0)-0xFEE0); });
+  t=t.replace(/　/g,' ');                 // 全角空白
+  t=t.replace(/[‐‑‒–—―ー−]/g,'-');        // いろいろなハイフン
+  return t.toLowerCase().trim();
+}
+/* 探す言葉を空白で切る（AND 検索）。 */
+function findTerms(q){
+  return findNorm(q).split(/\s+/).filter(Boolean).slice(0,8);
+}
+/* 13桁の数字だけ取り出す（JAN とみなせるか）。 */
+function findJanOf(q){
+  var d=String(q||'').replace(/\D/g,'');
+  return (d.length===13)?d:'';
+}
+/* 言葉が全部入っているか（AND）。 */
+function findHit(hay,terms){
+  if(!terms.length)return true;
+  var h=findNorm(hay);
+  for(var i=0;i<terms.length;i++)if(h.indexOf(terms[i])<0)return false;
+  return true;
+}
+/* 販売連携の行から、探す対象の文字を組む。 */
+function findHaySync(r){
+  var o=r||{};
+  var jan=FIND_ASIN[String(o.asin||'')]||'';
+  return [ o.title, o.title_en, o.english_name, o.asin, o.ebay_item_id,
+    o.custom_label, o.sku, o.prefix, jan ].filter(Boolean).join(' ');
+}
+/* 出品CSVの行から、探す対象の文字を組む。 */
+function findHayCsv(r){
+  var o=r||{};
+  return [ o.name, o.title, o.titleEn, o.asin, o.jan, o.sku, o.itemId,
+    (typeof csvCustomLabel==='function')?csvCustomLabel(o):''
+  ].filter(Boolean).join(' ');
+}
+/* いまの検索の中身（両タブ共通）。 */
+function findState(which){
+  var id=(which==='csv')?'csvFind':'syncFind';
+  var q=String($(id).value||'');
+  var terms=findTerms(q);
+  var jan=findJanOf(q);
+  /* JAN を入れたときは、対応する ASIN も当てる対象に足す。 */
+  var asin=jan?(FIND_JAN[jan]||''):'';
+  return { q:q, terms:terms, jan:jan, asin:asin, on:!!terms.length };
+}
+/* 1行が当たるか。JAN で引けた ASIN も見る。 */
+function findMatchRow(which,r,hay){
+  var st=findState(which);
+  if(!st.on)return true;
+  if(st.jan&&st.asin){
+    var a=findNorm((which==='csv')?((r||{}).asin||''):((r||{}).asin||''));
+    if(a&&a===findNorm(st.asin))return true;
+  }
+  return findHit(hay,st.terms);
+}
+function findMatchSync(r){ return findMatchRow('sync',r,findHaySync(r)); }
+function findMatchCsv(r){ return findMatchRow('csv',r,findHayCsv(r)); }
+/* 件数と「×」の出し入れ。 */
+/* ヒットが1件なら、その行の折りたたみを開いた状態で出す。
+   自動で開いた分は覚えない（boxQuietOpen と同じ考え方）。 */
+function findOpenOne(which){
+  var st=findState(which);
+  if(!st.on)return;
+  var box=(which==='csv')?$('csvList'):$('syncList');
+  if(!box)return;
+  var dets=box.querySelectorAll('details.det');
+  if(dets.length!==1)return;
+  var d=dets[0];
+  if(!d.open){ d.setAttribute('data-detauto','1'); d.open=true; }
+}
+function findNoteRender(which,shown,total){
+  var pre=(which==='csv')?'csvFind':'syncFind';
+  var st=findState(which);
+  var note=$(pre+'Note'), clr=$(pre+'Clear');
+  clr.style.display=st.on?'':'none';
+  if(!st.on){ note.style.display='none'; note.textContent=''; return; }
+  var msg='「'+esc(st.q.trim())+'」に当たったのは <b>'+shown+'件</b>'
+    +'（全'+total+'件）';
+  if(st.jan&&!st.asin)
+    msg+='<br>この JAN に当たる行がありません。<b>JAN から ASIN を調べています…</b>';
+  else if(st.jan&&st.asin)
+    msg+='<br>JAN '+esc(st.jan)+' → ASIN <b>'+esc(st.asin)+'</b>';
+  if(!shown)msg+='<br>見つかりません。言葉を減らすか、絞り込みを「すべて」にしてください。';
+  note.innerHTML=msg;
+  note.style.display='';
+}
+/* JAN を入れたのに当たらないときだけ、pj-sync に ASIN を聞く。 */
+var findAsking={};
+function findAskJan(which,jan){
+  if(!jan||FIND_JAN[jan]!==undefined||findAsking[jan])return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey())return;
+  findAsking[jan]=1;
+  fetch(syncUrl()+'/find?jan='+encodeURIComponent(jan),
+    {headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ return res.ok?res.json():null; })
+    .then(function(d){
+      var r=(d&&d.rows&&d.rows[0])||null;
+      FIND_JAN[jan]=(r&&r.asin)||'';
+      if(r&&r.asin)FIND_ASIN[r.asin]=jan;
+      delete findAsking[jan];
+      findRun(which);
+    })
+    ['catch'](function(){ FIND_JAN[jan]=''; delete findAsking[jan]; findRun(which); });
+}
+/* 検索を実行（一覧を作り直す）。 */
+function findRun(which){
+  var st=findState(which);
+  if(st.jan)findAskJan(which,st.jan);
+  if(which==='csv')csvRender(); else syncRender();
+}
+function findClear(which){
+  var id=(which==='csv')?'csvFind':'syncFind';
+  $(id).value='';
+  findRun(which);
+}
+/* ---- バーコード（JAN）をカメラで読む ----
+   iPhone の Safari には BarcodeDetector が無いので @zxing/browser を使う。
+   **版を固定**して読み込み、押したときだけ起動する。 */
+var ZXING_URL='https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js';
+var findZx=null, findCtl=null, findCamWhich='';
+function findZxLoad(){
+  if(window.ZXingBrowser)return Promise.resolve(window.ZXingBrowser);
+  if(findZx)return findZx;
+  findZx=new Promise(function(res,rej){
+    var s=document.createElement('script');
+    s.src=ZXING_URL; s.async=true;
+    s.onload=function(){ res(window.ZXingBrowser); };
+    s.onerror=function(){ findZx=null; rej(new Error('読み取りの部品を取れませんでした')); };
+    document.head.appendChild(s);
+  });
+  return findZx;
+}
+/* EAN-13 のチェックデジットを確かめる（読み間違いを弾く）。 */
+function findEanOk(code){
+  var d=String(code||'').replace(/\D/g,'');
+  if(d.length!==13)return false;
+  var sum=0;
+  for(var i=0;i<12;i++)sum+=(+d.charAt(i))*((i%2)?3:1);
+  return ((10-(sum%10))%10)===(+d.charAt(12));
+}
+function findCamNote(which,msg){
+  var pre=(which==='csv')?'csvFind':'syncFind';
+  $(pre+'CamNote').innerHTML=msg||'';
+}
+function findCamStop(){
+  try{ if(findCtl&&findCtl.stop)findCtl.stop(); }catch(e){}
+  findCtl=null;
+  ['syncFind','csvFind'].forEach(function(pre){
+    var v=$(pre+'Video');
+    if(v&&v.srcObject){
+      try{ v.srcObject.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+      v.srcObject=null;
+    }
+    $(pre+'CamBox').style.display='none';
+  });
+  findCamWhich='';
+}
+function findCamStart(which){
+  var pre=(which==='csv')?'csvFind':'syncFind';
+  if(findCamWhich)findCamStop();
+  findCamWhich=which;
+  $(pre+'CamBox').style.display='';
+  var manual='カメラが使えません。<b>検索欄に JAN を手で入れて</b>探してください。';
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    findCamNote(which,'⚠ この端末ではカメラを使えません。'+manual); return;
+  }
+  if(location.protocol!=='https:'&&location.hostname!=='localhost'){
+    findCamNote(which,'⚠ カメラは https のページでしか使えません。'+manual); return;
+  }
+  findCamNote(which,'読み取りの部品を読み込んでいます…');
+  findZxLoad().then(function(Z){
+    findCamNote(which,'バーコードをわくの中に入れてください。');
+    /* 1次元コード専用の読み取り（JAN＝EAN-13 はここに入る）。 */
+    var reader=new Z.BrowserMultiFormatOneDReader(undefined,
+      { delayBetweenScanAttempts:120 });
+    return reader.decodeFromConstraints(
+      { video:{ facingMode:{ ideal:'environment' } } },
+      $(pre+'Video'),
+      function(result,err){
+        if(!result)return;
+        var code=String(result.getText?result.getText():(result.text||''));
+        var d=code.replace(/\D/g,'');
+        /* 13桁でチェックデジットが合うものだけ採る（読み間違いを弾く）。 */
+        if(!findEanOk(d)){
+          if(d.length===8){
+            findCamNote(which,'8桁のコード（'+esc(d)+'）です。JAN（13桁）を写してください。');
+          }
+          return;
+        }
+        findCamStop();
+        $(pre==='csvFind'?'csvFind':'syncFind').value=d;
+        findRun(which);
+      })
+      .then(function(ctl){ findCtl=ctl; });
+  })
+  ['catch'](function(e){
+    var m=String((e&&e.message)||e);
+    if(/Permission|NotAllowed|denied/i.test(m))
+      findCamNote(which,'⚠ カメラの使用が許可されませんでした。'+manual
+        +'<br>Safari の「設定 → このWebサイトの設定」でカメラを許可できます。');
+    else if(/NotFound|NotReadable|Overconstrained/i.test(m))
+      findCamNote(which,'⚠ カメラが見つかりませんでした。'+manual);
+    else findCamNote(which,'⚠ '+esc(m)+'<br>'+manual);
+  });
+}
+/* 絞り込み（選択肢）と検索（6.92）を **両方**満たす行だけ出す。 */
+function syncMatch(r){
+  return syncFilterBy($('syncFilter').value).f(r) && findMatchSync(r);
+}
 /* 選択肢を見出しつき・件数つきで作り直す。いま選んでいる項目は保つ。
    削除した絞り込み（restock／markdown など）が選ばれていた端末は
    「すべて」に戻す（6.71）。 */
@@ -13708,6 +13990,7 @@ function syncRender(){
       var x=syncMdDueAt(a), y=syncMdDueAt(b);
       return ((x===null)?Infinity:x)-((y===null)?Infinity:y); });
   shown=keep.length;
+  findNoteRender('sync',shown,rows.length);     // 検索の件数と「×」（6.92）
   var sPer=pagePer('syncPerPage');
   syncPage=pageClamp(syncPage,shown,sPer);
   var sFrom=(syncPage-1)*sPer;
@@ -13718,6 +14001,7 @@ function syncRender(){
     h+='<div class="lcard" data-srow="'+esc(key)+'">'+syncRowHtml(r,key)+'</div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
+  findOpenOne('sync');            // 1件に絞れたら開く（6.92・書いたあとに呼ぶ）
   var sBar=pageBarHtml('s',syncPage,shown,sPer);
   $('syncPagerTop').innerHTML=sBar;
   $('syncPagerBot').innerHTML=sBar;
@@ -14901,7 +15185,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v190';   // sw.js の const V と必ず同じ値にする
+var APP_V='v191';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

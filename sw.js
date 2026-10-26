@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v190';
+const V = 'pj-pricing-v191';
 const ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,14 @@ const ASSETS = [
   './favicon-32.png'
 ];
 
+/* バーコードの読み取りの部品（6.92）。版を固定して jsdelivr から読む。
+   ・**別に入れて、失敗しても install を止めない**（CDN が落ちている日に
+     アプリ全体が入らなくなるのを避ける）
+   ・内容は版で固定されているので、取れたらキャッシュ優先で返す */
+const EXTRA = [
+  'https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js'
+];
+
 /* 先読みは必ずサーバーから取り直す（cache:'reload'）。
    素の addAll はブラウザのHTTPキャッシュを通すので、Pages が付ける短い max-age の
    あいだは古い index.html が新しいキャッシュに入ってしまい、
@@ -20,6 +28,11 @@ const ASSETS = [
 self.addEventListener('install', e => {
   const reqs = ASSETS.map(u => new Request(u, { cache: 'reload' }));
   e.waitUntil(caches.open(V).then(c => c.addAll(reqs)).then(() => self.skipWaiting()));
+  /* 外から読む部品は**別に**入れる。1つでも失敗すると addAll は全部やめて
+     しまうので、本体（ASSETS）と同じ待ち受けに混ぜない。 */
+  e.waitUntil(caches.open(V).then(c => Promise.all(
+    EXTRA.map(u => c.add(new Request(u, { cache: 'reload', mode: 'cors' }))
+      .catch(() => {})))));
 });
 
 self.addEventListener('activate', e => {
@@ -52,6 +65,17 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   // 外部API（為替の自動取得など）はSWを素通りさせる。キャッシュに載せる意味がなく、
   // 失敗時にこのSWが index.html を返すとJSONの取得失敗と区別できなくなるため。
+  /* 外から読む部品（EXTRA）だけは、キャッシュ優先で返す（版で固定されている）。
+     圏外でもカメラの読み取りが使えるようにするため。 */
+  if (EXTRA.indexOf(e.request.url) >= 0) {
+    e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)
+      .then(res => {
+        const copy = res.clone();
+        caches.open(V).then(c => c.put(e.request, copy)).catch(() => {});
+        return res;
+      })));
+    return;
+  }
   if (new URL(e.request.url).origin !== self.location.origin) return;
   /* 画面そのもの（HTML）は、ブラウザのHTTPキャッシュを通さずに取り直す。
      通してしまうと古いHTMLが返り、SWだけ新しい状態になることがある。 */

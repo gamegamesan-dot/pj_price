@@ -566,3 +566,18 @@ CREATE TABLE IF NOT EXISTS mw_amz_runs (
   note       TEXT,
   created_at TEXT
 );
+
+/* ===== JAN から ASIN を引く控え（7.67）===== */
+CREATE TABLE IF NOT EXISTS jan_map (
+  jan        TEXT PRIMARY KEY,
+  asin       TEXT,      -- 見つかった ASIN（見つからなければ NULL）
+  name       TEXT,      -- Amazon の商品名
+  rank       INTEGER,
+  rank_cat   TEXT,
+  src        TEXT,      -- どこで分かったか（'catalog' / 'mw' / 'hand'）
+  err        TEXT,      -- 見つからなかった理由
+  at         TEXT,      -- 最後に調べた時刻
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jan_map_asin ON jan_map(asin);
+CREATE INDEX IF NOT EXISTS idx_jan_map_at   ON jan_map(at);

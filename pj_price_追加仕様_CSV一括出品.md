@@ -5368,3 +5368,94 @@ JAN, ASIN, 商品名（MW）, Amazon商品名, 新・中, 社, 掲載数, 出荷
 - ファイル名は `mw_fba_YYYYMMDD.csv`（日本時間の日付）
 
 テストは `tests/mwamzui.js`（54件）。
+
+## 6.92 商品を探す（検索欄とバーコード・2026-10-26・sw.js v191）
+
+販売連携タブと出品CSVタブの一覧の上に、検索欄を1つ置いた。**仕組みは共通**。
+
+| 部品 | 販売連携 | 出品CSV |
+| --- | --- | --- |
+| 検索欄 | `#syncFind` | `#csvFind` |
+| カメラ | `#syncFindCam` | `#csvFindCam` |
+| 消す「×」 | `#syncFindClear` | `#csvFindClear` |
+| 件数 | `#syncFindNote` | `#csvFindNote` |
+
+### 探せるもの
+
+| | 販売連携 | 出品CSV |
+| --- | --- | --- |
+| 商品名（日本語） | `title` | `name` |
+| 英題 | `title_en` | `titleEn` |
+| ASIN | ○ | ○ |
+| **JAN** | /find で ASIN に直して当てる | 行がそのまま持っている |
+| eBay の ItemID | `ebay_item_id` | `itemId` |
+| CustomLabel／SKU | `custom_label`・`sku`・`prefix` | `csvCustomLabel()`・`sku` |
+
+### 文字のそろえ方（`findNorm`）
+
+- **全角→半角**（`！-～` を一括変換）、全角空白→半角空白
+- **大文字→小文字**
+- いろいろなハイフン（`‐ ‑ ‒ – — ― ー −`）を `-` にそろえる
+
+**空白で区切ると AND**（最大8語・語順は自由）。
+`findHit()` が「全部入っているか」を見る。
+
+### 絞り込みと組み合わせられる
+
+```js
+function syncMatch(r){
+  return syncFilterBy($('syncFilter').value).f(r) && findMatchSync(r);
+}
+```
+
+絞り込みで外れた行は、検索しても戻ってこない（**AND**）。これをテストで固定した。
+
+### ヒットが1件なら開く
+
+`#syncList` / `#csvList` を書いたあとに `findOpenOne()` を呼び、
+その行の「計算の詳細」を開く。
+**自動で開いた分は覚えない**（`data-detauto` を付けて、
+開閉を控える側で読み飛ばす。6.80 の `boxQuietOpen` と同じ考え方）。
+
+### JAN は ASIN に直してから当てる
+
+`items` に JAN の列は**無い**（7.67 の理由）。
+13桁の数字を入れたときだけ `GET /find?jan=…` で ASIN を聞き、
+**画面にも控えて同じ JAN は2回聞かない**。
+「JAN 4902370550467 → ASIN B0PLAN00001」と画面に出す。
+見つからないときは「見つかりません」と出す。
+
+### バーコード（JAN）をカメラで読む
+
+iPhone の Safari には `BarcodeDetector` が無いので **`@zxing/browser@0.2.1`**
+（版を固定・jsdelivr・UMD・`@zxing/library` 同梱で自己完結）を使う。
+
+```
+https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js
+```
+
+- **押したときだけ**読み込んで起動する（最初から読み込まない。441KB）
+- `BrowserMultiFormatOneDReader`（1次元コード専用）＋ `decodeFromConstraints`
+  で背面カメラ（`facingMode: environment`）を使う
+- **EAN-13 のチェックデジットを自分で確かめる**。合わないものは採らない
+  （読み間違いでいきなり別の商品が出るのを防ぐ）。8桁を写したときは
+  「JAN（13桁）を写してください」と出す
+- 読めたら **その場で止めて**検索欄に入れて検索する
+- `controls.stop()` と `track.stop()` の両方で止める。
+  画面を離れた（`visibilitychange`）ときも止める
+- **使えないとき・許可されなかったときは、検索欄に手で入れる案内**を出す
+  （`getUserMedia` が無い／https でない／`NotAllowedError` などを見分ける）
+
+### sw.js のキャッシュ
+
+```js
+const EXTRA = ['https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js'];
+```
+
+**本体（`ASSETS`）とは別の `waitUntil` で入れ、失敗しても install を止めない。**
+`addAll` は1つでも失敗すると全部やめてしまうので、
+CDN が落ちている日にアプリ全体が入らなくなるのを避ける。
+`fetch` では **この1本だけ**キャッシュ優先で返す（版で固定されているため。
+ほかの外部URLは今までどおり素通り）。
+
+テストは `tests/findui.js`（54件）。
