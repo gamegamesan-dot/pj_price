@@ -35,7 +35,15 @@ body{
 header{background:var(--ink);padding:calc(10px + env(safe-area-inset-top)) 0 0}
 .tag{background:var(--label);border-bottom:3px solid var(--label-edge);padding:9px 14px 8px}
 .t1{font-size:11px;letter-spacing:.14em;font-weight:700;color:#6b5c00}
-.t2{font-size:19px;font-weight:800;letter-spacing:-.01em;margin-top:1px}
+.t2{font-size:19px;font-weight:800;letter-spacing:-.01em;margin-top:1px;
+     display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 7px}
+/* 版の表示（6.104）。タイトルを押しのけないよう、入らなければ下の行に回る。 */
+.t2n{flex:0 1 auto;min-width:0}
+.tver{flex:0 0 auto;font-size:11px;font-weight:700;letter-spacing:.02em;
+      color:#6b5c00;font-variant-numeric:tabular-nums}
+/* 更新待ちのときだけ押せる見た目にする */
+.tver.up{color:#3a3200;background:#fff;border:1px solid var(--label-edge);
+         border-radius:3px;padding:1px 6px;cursor:pointer;white-space:normal}
 .barcode{height:16px;display:flex;gap:1px;margin-top:7px;opacity:.85}
 .barcode i{background:var(--ink);display:block}
 section{background:var(--card);border:1px solid var(--line);border-radius:3px;margin-top:12px;overflow:hidden}
@@ -224,7 +232,12 @@ body.staff #syncOnHandFix{display:none !important}
 <header>
   <div class="tag">
     <div class="t1">PLAY JAPAN / AKIHABARA</div>
-    <div class="t2">Play Japan 出品ツール</div>
+    <div class="t2">
+      <span class="t2n">Play Japan 出品ツール</span>
+      <!-- 版は APP_V から出す（sw.js の const V と必ず同じ値・6.104）。
+           フッターまでスクロールせずに確かめられるようにここに置く。 -->
+      <span class="tver" id="appVer"></span>
+    </div>
     <div class="barcode" id="bc"></div>
   </div>
 </header>
@@ -1552,8 +1565,7 @@ body.staff #syncOnHandFix{display:none !important}
 <footer>
     日本郵便 2026-08-07 時点の料金表を内蔵<br>
     国際エアパケット / EMS・第1〜第5地帯<br>
-    <span id="netstate"></span><br>
-    <span id="appVer"></span>
+    <span id="netstate"></span>
   </footer>
 </div>
 
@@ -15918,7 +15930,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v196';   // sw.js の const V と必ず同じ値にする
+var APP_V='v197';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
@@ -15940,10 +15952,24 @@ function appVerNewer(sw){
   var a=appVerNum(sw), b=appVerNum(APP_V);
   return a>0&&b>0&&a>b;
 }
-/* フッターの表示。出すのはこのHTML自身の版。SW側が新しいときだけ添える。 */
+/* ヘッダーの表示（6.104）。出すのはこのHTML自身の版（APP_V）。
+   SW側が新しいときだけ「更新があります」を添え、**タップで読み込み直す**。
+   以前はフッターに出していたので、確かめるたびに一番下まで送る必要があった。 */
 function appVerShow(sw){
   var el=$('appVer'); if(!el)return;
-  el.textContent='バージョン '+APP_V+(appVerNewer(sw)?('（新しい版 '+sw+' があります）'):'');
+  var up=appVerNewer(sw);
+  el.className='tver'+(up?' up':'');
+  el.textContent=up?(APP_V+' 更新があります（タップで再読み込み）'):APP_V;
+  el.title=up?('新しい版 '+sw+' があります（いまは '+APP_V+'）'):('いまの版 '+APP_V);
+  if(up){
+    el.setAttribute('role','button'); el.setAttribute('tabindex','0');
+    el.onclick=function(){ appVerReload(); return false; };
+    el.onkeydown=function(e){
+      if(e.key==='Enter'||e.key===' '){ e.preventDefault(); appVerReload(); } };
+  }else{
+    el.removeAttribute('role'); el.removeAttribute('tabindex');
+    el.onclick=null; el.onkeydown=null;
+  }
 }
 /* いま動いているSWに直接聞く（これが本当に動いている版）。
    返事が無ければ空を返して、キャッシュ名 → sw.js の順に回す。 */

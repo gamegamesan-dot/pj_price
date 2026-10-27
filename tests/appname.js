@@ -17,13 +17,16 @@ console.log('=== 名前 ===');
 const name=await p.evaluate(()=>({
   title:document.title,
   apple:(document.querySelector('meta[name="apple-mobile-web-app-title"]')||{}).content,
-  head:$('tabCfg')?document.querySelector('header .t2').textContent:'',
+  /* 版をタイトルの横に出したので（6.104）、見出しそのものは .t2n を見る。 */
+  head:$('tabCfg')?document.querySelector('header .t2n').textContent:'',
+  ver:(document.querySelector('header #appVer')||{}).textContent||'',
   t1:document.querySelector('header .t1').textContent,
   manifest:(document.querySelector('link[rel="manifest"]')||{}).getAttribute('href') }));
 console.log('   '+JSON.stringify(name));
 ok(name.title==='Play Japan 出品ツール','★<title> は「Play Japan 出品ツール」');
 ok(name.apple==='PJ出品','★★iPhoneのホーム画面の名前は「PJ出品」');
 ok(name.head==='Play Japan 出品ツール','★★画面上部の見出しも「Play Japan 出品ツール」');
+ok(/^v\d+$/.test(name.ver),'★★見出しの横に版が出る（6.104・くわしくは appver.js）');
 ok(!/値付け計算機/.test(name.title+name.apple+name.head),'★古い名前は残っていない');
 
 console.log('\n=== manifest ===');

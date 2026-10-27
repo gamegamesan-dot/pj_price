@@ -153,11 +153,13 @@ ok(kept.base==='2800','★詳細設定は残る（v118 の保存）');
 ok(kept.pack==='33','★出品CSVタブの設定も残る');
 ok(kept.tab==='tabD','★開き直すとまた「出品CSV」から始まる');
 
-console.log('\n=== フッターの版・更新の帯 ===');
+console.log('\n=== ヘッダーの版・更新の帯 ===');
+/* 版はヘッダーの黄色い帯に移した（6.104）。細かい確かめは tests/appver.js。 */
 const ver=await p.evaluate(()=>({foot:$('appVer').textContent,
+  head:!!$('appVer').closest('header'),
   bar:!!document.getElementById('appVerBar')}));
 console.log('   '+JSON.stringify(ver));
-ok(/v\d+/.test(ver.foot),'★フッターに版が出る');
+ok(/v\d+/.test(ver.foot)&&ver.head===true,'★ヘッダーに版が出る');
 ok(ver.bar===false,'版がそろっているので更新の帯は出ない');
 await T.done();
 })();
