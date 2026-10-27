@@ -1260,7 +1260,10 @@ const EV_TEXT = {
     + d.amount + (d.currency === "USD" ? "" : " " + d.currency)
     + (d.sku ? (" / SKU " + d.sku) : " / SKUなし")
     + "。注文 " + d.order_id + "。FBAに無い商品なので手元から発送してください",
-  OVERSELL_RISK: (d) => "売り越しの恐れ：" + d.title + "（FBA 0 / eBay " + d.ebay_qty + "）",
+  OVERSELL_RISK: (d) => "売り越しの恐れ：" + d.title + "（FBA 0 / eBay " + d.ebay_qty + "）"
+    /* フェイズBがこの行をどうするか（7.80）。
+       対象外なら理由を書く。理由が分かればその場で直せる。 */
+    + (d.pb_text ? ("\nフェイズB：" + d.pb_text) : ""),
   QTY_MISMATCH: (d) => "数量の食い違い：" + d.title + "（FBA " + d.fba_available
     + " / eBay " + d.ebay_qty + "）",
   INBOUND_LISTED: (d) => "納品待ちの商品がeBayに出ています：" + d.title,
@@ -1307,9 +1310,29 @@ function daysLeft(iso) {
   return Math.ceil((t - Date.now()) / 86400000);
 }
 
+/* 「売り越しの恐れ」にフェイズBの見立てを書き足す（7.80）。
+   v199 まではこの通知を見ても、なぜ eBay が直らないのか分からなかった。
+   pbTarget() と同じ判定をここでも通して、**対象外なら理由**を出す。
+   pb は ⚙設定（{mode, restock}）。渡さなければ設定の行は書かない。 */
+function pbNoteFor(r, pb) {
+  const mode = String((pb && pb.mode) || "");
+  if (mode === "off")
+    return "オフなので eBay は直りません"
+      + "（⚙設定の「FBAで売れたときの動作」を「数量0にする」にしてください）";
+  const t = pbTarget(r);
+  if (!t.act) return "対象外：" + t.why + "（この行は直りません）";
+  if (t.act === "unknown")
+    return "予約済みの内訳を確かめています（" + t.why + "）";
+  if (mode === "plan")
+    return "予定だけなので eBay は直りません（" + t.why + "）。"
+      + "⚙設定の「FBAで売れたときの動作」を「数量0にする」にしてください";
+  if (t.act === "restock")
+    return "次の回（15分ごと）に数量0にして、再調達の予定に載せます（" + t.why + "）";
+  return "次の回（15分ごと）に数量を0にします（" + t.why + "）";
+}
 /* 在庫・出品の状態から食い違い系のイベントを作る。
    同じ日に同じ内容は1回だけ（dedup_key に日付を入れる）。 */
-function stateEvents(env, rows) {
+function stateEvents(env, rows, pb) {
   const out = [];
   for (const r of rows) {
     if (r.scope !== "ebay") continue;                 // eBay対象外・不明は通知しない
@@ -1372,8 +1395,15 @@ function stateEvents(env, rows) {
       continue;
     }
     // 手元在庫あり（on_hand）は、FBAが0でも売り越しではない
-    if (!onHand && av === 0 && q >= 1 && (r.mode === "hold" || r.mode === "end" || !r.mode))
-      out.push(evStmt(env, "OVERSELL_RISK", "OVERSELL_RISK" + base, r, d));
+    if (!onHand && av === 0 && q >= 1 && (r.mode === "hold" || r.mode === "end" || !r.mode)) {
+      /* フェイズBがこの行をどうするか（7.80）。
+         dedup_key には入れないので、同じ日の2通目は届かない。 */
+      const t = pbTarget(r);
+      out.push(evStmt(env, "OVERSELL_RISK", "OVERSELL_RISK" + base, r,
+        Object.assign({}, d, { pb_act: t.act || "", pb_why: t.why || "",
+                               pb_mode: String((pb && pb.mode) || ""),
+                               pb_text: pbNoteFor(r, pb) })));
+    }
     if (av > 0 && q > 0 && av < q)
       out.push(evStmt(env, "QTY_MISMATCH", "QTY_MISMATCH" + base, r, d));
     /* 納品待ちで出品中。配送ポリシーが再調達用（W2000）の行は運用どおりなので
@@ -2160,7 +2190,8 @@ async function restockWatch(env, run) {
     `SELECT ${ITEM_COLS} FROM items
       WHERE scope='ebay' AND restocking=1 AND ebay_qty>=1`).all();
   const rows = (q && q.results) || [];
-  const stmts = stateEvents(env, rows);     // 再調達中の行では RESTOCK_LOSS だけを作る
+  const stmts = stateEvents(env, rows, await pbSettings(env));
+  /* 再調達中の行では RESTOCK_LOSS だけを作る */
   await runBatch(env, run, stmts);
   run.notes.push("再調達中 " + rows.length + "件（異変 " + stmts.length + "件）");
   return rows.length;
@@ -2185,7 +2216,7 @@ async function jobHourly(env) {
     const b = await syncEbayActive(env, run);
     const keys = a.concat(b);
     const items = await itemsByKeys(env, keys);
-    await runBatch(env, run, stateEvents(env, items));
+    await runBatch(env, run, stateEvents(env, items, await pbSettings(env)));
     await restockWatch(env, run);
     await flushEvents(env, run, false);     // まとめて通知
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
@@ -2196,7 +2227,7 @@ async function jobDaily(env) {
   try {
     const keys = await syncRollcall(env, run);
     const items = await itemsByKeys(env, keys);
-    await runBatch(env, run, stateEvents(env, items));
+    await runBatch(env, run, stateEvents(env, items, await pbSettings(env)));
     await syncPricing(env, run);
     await restockWatch(env, run);           // 新しい最安値で赤字を見る
     await syncUnmatched(env, run);
@@ -2211,7 +2242,7 @@ async function jobSweep(env, days) {
     res = await syncSweep(env, run, days);
     // スイープで名簿が増えるので、そのぶんの食い違いも見ておく
     const items = await itemsByKeys(env, res.keys || []);
-    await runBatch(env, run, stateEvents(env, items));
+    await runBatch(env, run, stateEvents(env, items, await pbSettings(env)));
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   const info = await saveRun(env, run);
   // sweep_done が false のあいだは、もう一度同じコマンドを実行する
@@ -7912,7 +7943,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
-                        isDropship, isRestock, stateEvents, EV_TEXT, daysLeft, dueText,
+                        isDropship, isRestock, stateEvents, pbNoteFor, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
