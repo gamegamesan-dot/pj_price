@@ -58,8 +58,13 @@ const setup=async()=>await p.evaluate((META)=>{
     if(/\/mw\/amz/.test(url)){
       window.__posts.push({url:url,body:b});
       if(i&&i.method==='POST')
-        return new Response(JSON.stringify({ok:true,asked:4,done:4,asin_ok:3,
-          asin_ng:1,priced:3,none:0,failed:0,left:120,calls_cat:1,calls_prc:1}),{status:200});
+        /* 返りは段ごと（7.79）。①ASIN → ②可否 → ③価格 */
+        return new Response(JSON.stringify({ok:true,left:120,stopped:'time',
+          asin:{asked:4,done:4,ok_n:3,ng:1,calls:1,left:0,stopped:''},
+          rst:{asked:4,done:4,ok_n:2,approval:1,blocked:1,failed:0,calls:4,
+               left:0,stopped:'',rows:[],fails:[],why:''},
+          price:{asked:3,done:3,priced:3,none:0,skipped_red:1,calls:1,
+                 left:120,stopped:'limit'}}),{status:200});
       return new Response(JSON.stringify(META),{status:200});
     }
     return real(u,i);
@@ -98,8 +103,8 @@ ok(pp.body.note_ng.indexOf('ダメージ')>=0&&pp.body.note_all===0,
    '★★備考の除外も同じ条件で送る');
 let n=await p.evaluate(()=>$('csvMwAmzNote').textContent);
 console.log('   '+n.replace(/\s+/g,' '));
-ok(/調べた/.test(n)&&/ASIN が引けた 3/.test(n),'★ASIN の結果を出す');
-ok(/呼び出し/.test(n)&&/値段 1回/.test(n),'★★呼び出し回数を出す');
+ok(/① ASIN引き 4件/.test(n)&&/取れた 3/.test(n),'★ASIN の結果を出す');
+ok(/呼び出し/.test(n)&&/価格 1回/.test(n),'★★呼び出し回数を出す');
 ok(/まだ 120件/.test(n),'★★残りと押し直しを知らせる');
 
 console.log('\n=== 利益の計算（ジャンルで手数料が変わる）===');

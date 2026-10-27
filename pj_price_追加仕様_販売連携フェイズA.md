@@ -5197,3 +5197,63 @@ const MW_RST_FAIL_STOP = 5;        // 続けて5件失敗したら止める
   （たまたまの1件で止めない）
 * 429／500／503 は今までどおり1件で止める（`stopped:"amazon"`）。
   判定は `err` の形が変わったので `/^HTTP (429|500|503)\b/` に直した
+
+## 7.79 「Amazonで調べる」1つのボタンで3段（2026-10-27・sw.js v199）
+
+「Amazonの実売価格を取る」と「出品の可否を調べる」を1つにまとめた。
+`POST /mw/amz` が1回で次の順に進む（管理者キーのみ・`ctx.waitUntil` で抱える）。
+
+| 段 | 対象 | API | 速さ |
+| --- | --- | --- | --- |
+| ① JAN → ASIN | **ASIN がまだ無い行**（引けなかった行は24時間後に再挑戦） | `searchCatalogItems` | 5回/秒・1回20件 |
+| ② 出品の可否 | まだ・期限切れの行（緑30日／それ以外7日・7.76） | `getListingsRestrictions` | 5回/秒・1回1件 |
+| ③ 実売価格 | ASIN がある行のうち **赤（出品できない）を外した**行（3日） | `getItemOffersBatch` | **0.1回/秒**・1回20件 |
+
+```js
+const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
+```
+
+3段で**同じ期限**（`Date.now() + MW_SCAN_BUDGET_MS`）を使い、各段は自分の
+番が来た時点で時間が無ければ呼ばずに残りを返す。返りは段ごと：
+
+```json
+{ "ok":true, "left":12, "stopped":"time",
+  "asin":{"asked":3,"done":3,"ok_n":3,"ng":0,"calls":2,"left":0,"stopped":""},
+  "rst":{"asked":3,"done":3,"ok_n":1,"approval":1,"blocked":1,"failed":0,…},
+  "price":{"asked":2,"done":2,"priced":2,"none":0,"skipped_red":1,"calls":1,…} }
+```
+
+### ②は「段」として呼ぶ
+
+`mwRestrictRun(env, body, { run, deadline })`。`opt.run` を渡すと自分の記録
+（`mw_rst_runs`）を作らず、呼んだ側の記録に足す。`POST /mw/restrict` も
+今までどおり残してある（画面のボタンは無いが、手で叩けば可否だけ調べられる）。
+
+### 赤を飛ばす
+
+```sql
+LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
+ WHERE … AND COALESCE(r.state,'') <> 'blocked'
+```
+
+* 赤の行は③で**1回も呼ばない**（`price_at` も入れない）
+* 飛ばした件数は `price.skipped_red` で返して画面に出す
+* **黄（許可が要る）は価格を取る**（申請が下りれば出せるので知りたい）
+* 可否をまだ調べていない行も取る（赤と分からないものを落とさない）
+* あとで赤が緑に変われば、次に押したときに価格を取る。②が③より先なので、
+  **同じ押しの中で緑になった行はその場で価格を取る**
+
+### 段ごとに時刻を分ける（マイグレーション 0030）
+
+```sql
+ALTER TABLE mw_amz ADD COLUMN asin_at  TEXT;   -- ①を最後に試した時刻
+ALTER TABLE mw_amz ADD COLUMN price_at TEXT;   -- ③を最後に試した時刻
+```
+
+1つの `checked_at` だと、①で ASIN を引いた行が「さっき調べた行」になって
+③の対象から外れ、**値段が一度も取れない**。引き継ぎは
+「①は `checked_at`、③は ASIN が入っている行だけ `checked_at`」とする
+（ASIN が無い行は値段を試したことが無いので NULL）。
+
+ASIN は変わらないので、①は**ASIN が入っている行を引き直さない**。
+その代わりランキング・商品名は引き直されない（必要になれば別に作る）。

@@ -48,24 +48,32 @@ const setup=async()=>await p.evaluate((META)=>{
   const real=window.fetch;
   window.fetch=async(u,i)=>{
     const url=String(u), b=(i&&i.body&&typeof i.body==='string')?JSON.parse(i.body):null;
-    if(/\/mw\/restrict/.test(url)){
+    /* 可否は「Amazonで調べる」の②段（7.79）。返りは段ごとに入る。 */
+    if(/\/mw\/amz/.test(url)&&i&&i.method==='POST'){
       window.__posts.push({url:url,body:b});
+      const wrap=(rst,price)=>new Response(JSON.stringify({ok:true,
+        left:(rst.left||0)+(price.left||0),stopped:rst.stopped||'',
+        asin:{asked:0,done:0,ok_n:0,ng:0,calls:0,left:0,stopped:''},
+        rst:rst,price:price}),{status:200});
       if(window.__mode==='fail')
-        return new Response(JSON.stringify({ok:true,asked:158,done:5,ok_n:0,
-          approval:0,blocked:0,failed:5,left:153,stopped:'fail',
+        return wrap({asked:158,done:5,ok_n:0,approval:0,blocked:0,failed:5,
+          left:153,stopped:'fail',calls:5,
           why:'失敗が5件続いたので止めました（HTTP 400 InvalidInput: '
             +'Invalid request parameters: sellerId is required）',
           fails:[{asin:'B003Y2WDAG',
             err:'HTTP 400 InvalidInput: Invalid request parameters: '
-              +'sellerId is required'}]}),{status:200});
+              +'sellerId is required'}]},
+          {asked:0,done:0,priced:0,none:0,skipped_red:0,calls:0,left:0,stopped:''});
       if(window.__mode==='nokey')
-        return new Response(JSON.stringify({ok:true,asked:0,done:0,ok_n:0,
-          approval:0,blocked:0,failed:0,left:0,stopped:'no_seller_id',
+        return wrap({asked:0,done:0,ok_n:0,approval:0,blocked:0,failed:0,
+          left:0,stopped:'no_seller_id',calls:0,
           why:'出品者トークン（SP_SELLER_ID）が入っていません。pj-sync に '
             +'npx wrangler secret put SP_SELLER_ID で入れてください。',
-          fails:[]}),{status:200});
-      return new Response(JSON.stringify({ok:true,asked:4,done:4,ok_n:1,
-        approval:1,blocked:1,failed:1,left:7}),{status:200});
+          fails:[]},
+          {asked:0,done:0,priced:0,none:0,skipped_red:0,calls:0,left:0,stopped:''});
+      return wrap({asked:4,done:4,ok_n:1,approval:1,blocked:1,failed:1,
+        left:7,stopped:'limit',calls:4,fails:[],why:''},
+        {asked:2,done:2,priced:2,none:0,skipped_red:1,calls:1,left:0,stopped:''});
     }
     if(/\/mw\/buy/.test(url)){
       window.__posts.push({url:url,body:b});
@@ -80,49 +88,62 @@ const setup=async()=>await p.evaluate((META)=>{
   switchTab('D'); roleApply('admin'); csvRender();
 },META);
 
-console.log('=== ボタンが結ばれているか ===');
+console.log('=== 1つのボタンにまとまっている（6.106）===');
 await setup();
 await openCsvBoxes(p);
-ok(await p.evaluate(()=>typeof $('csvMwRst').onclick==='function'),
-   '★★「出品の可否を調べる」が結ばれている');
+ok(await p.evaluate(()=>typeof $('csvMwAmz').onclick==='function'),
+   '★★「Amazonで調べる」が結ばれている');
+ok(await p.evaluate(()=>$('csvMwAmz').textContent)==='Amazonで調べる',
+   '★★★ボタンは1つ「Amazonで調べる」');
+ok(await p.evaluate(()=>!document.getElementById('csvMwRst')),
+   '★★★「出品の可否を調べる」のボタンは消した');
+ok(await p.evaluate(()=>!/実売価格を取る/.test(
+     document.getElementById('csvMwAmzBox').innerHTML)),
+   '★★「Amazonの実売価格を取る」のボタンも消した');
 
-console.log('\n=== 押すと /mw/restrict を呼ぶ ===');
-await p.evaluate(()=>{ $('csvMwRst').click(); });
+console.log('\n=== 押すと ①②③ を順に進める ===');
+await p.evaluate(()=>{ $('csvMwAmz').click(); });
 await p.waitForTimeout(500);
-let pp=await p.evaluate(()=>window.__posts.filter((x)=>/restrict/.test(x.url))[0]);
+let pp=await p.evaluate(()=>window.__posts.filter((x)=>/\/mw\/amz/.test(x.url))[0]);
 console.log('   送った: '+JSON.stringify(pp&&pp.body));
-ok(!!pp,'★★★押すと /mw/restrict を呼ぶ');
+ok(!!pp,'★★★押すと /mw/amz を呼ぶ（1回で3段）');
 ok(pp.body.kishu.indexOf('NS')>=0&&pp.body.ship_max===4&&pp.body.stock_min===5,
    '★★候補と同じ絞り込みを送る');
 ok(pp.body.note_ng.indexOf('ダメージ')>=0&&pp.body.note_all===0,
    '★備考の除外も送る');
-let n=await p.evaluate(()=>$('csvMwRstNote').textContent);
+let n=await p.evaluate(()=>$('csvMwAmzNote').textContent);
 console.log('   '+n.replace(/\s+/g,' '));
-ok(/出せる 1/.test(n)&&/許可が要る 1/.test(n)&&/出せない 1/.test(n),
-   '★★3つに分けた件数を出す');
-ok(/まだ 7件/.test(n),'★★残りと押し直しを知らせる');
+ok(/① ASIN引き/.test(n)&&/② 可否/.test(n)&&/③ 価格/.test(n),
+   '★★★段ごとに1行ずつ出す');
+ok(/緑 1/.test(n)&&/黄 1/.test(n)&&/赤 1/.test(n)&&/失敗 1/.test(n),
+   '★★★可否は緑・黄・赤・失敗に分けて出す');
+ok(/赤は取っていません 1件/.test(n),'★★★赤を飛ばした件数を出す');
+ok(/まだ 7件/.test(n)&&/もう一度押すと続きます/.test(n),
+   '★★残りと押し直しを知らせる');
 
 console.log('\n=== 失敗の理由を出す（6.105）===');
 /* 全件失敗が続いて途中で止まったとき */
-await p.evaluate(()=>{ window.__mode='fail'; $('csvMwRst').click(); });
+await p.evaluate(()=>{ window.__mode='fail'; $('csvMwAmz').click(); });
 await p.waitForTimeout(500);
-let fn=await p.evaluate(()=>$('csvMwRstNote').textContent);
+let fn=await p.evaluate(()=>$('csvMwAmzNote').textContent);
 console.log('   '+fn.replace(/\s+/g,' ').slice(0,200));
 ok(/失敗 5/.test(fn),'★★失敗の件数を出す');
 ok(/HTTP 400/.test(fn),'★★★HTTP の番号を出す');
 ok(/InvalidInput/.test(fn),'★★★Amazon のエラーコードを出す');
 ok(/B003Y2WDAG/.test(fn),'★★どの ASIN で失敗したか出す');
 ok(/失敗が5件続いたので止めました/.test(fn),'★★★止めた理由を出す');
-ok(/これ以上は呼んでいません/.test(fn),'★★★むだに呼び続けないと伝える');
-ok(/まだ 153件/.test(fn)===false,'★★止めたときは「もう一度押す」と出さない');
+ok(/可否はこれ以上呼んでいません/.test(fn),'★★★むだに呼び続けないと伝える');
+ok(/まだ 153件/.test(fn)===false,'★★止めた段は押し直しの件数に数えない');
+ok(/もう一度押すと続きます/.test(fn)===false,
+   '★★★進まないときは「もう一度押す」と出さない');
 /* 出品者トークンが入っていないとき */
-await p.evaluate(()=>{ window.__mode='nokey'; $('csvMwRst').click(); });
+await p.evaluate(()=>{ window.__mode='nokey'; $('csvMwAmz').click(); });
 await p.waitForTimeout(500);
-let kn=await p.evaluate(()=>$('csvMwRstNote').textContent);
+let kn=await p.evaluate(()=>$('csvMwAmzNote').textContent);
 console.log('   '+kn.replace(/\s+/g,' ').slice(0,160));
 ok(/SP_SELLER_ID/.test(kn)&&/出品者トークン/.test(kn),
    '★★★トークンが無いことと入れ方を出す');
-ok(/これ以上は呼んでいません/.test(kn),'★★呼ばずに止めたと伝える');
+ok(/可否はこれ以上呼んでいません/.test(kn),'★★呼ばずに止めたと伝える');
 await p.evaluate(()=>{ window.__mode=''; });
 
 console.log('\n=== 行の色（緑・黄・赤・灰）===');

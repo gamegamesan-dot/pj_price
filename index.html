@@ -720,21 +720,23 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 国内 Amazon FBA の実売価格（7.66）。eBay とは別の出口 -->
         <details id="csvMwAmzBox" data-box="1" style="margin-top:10px">
           <summary class="h" style="cursor:pointer;font-size:13px">国内 Amazon FBA で見る（テスト仕入れ用）</summary>
-          <div class="note2" style="margin:4px 0 0">候補の JAN から <b>ASIN</b> を引き、
-            <b>Amazon の実売価格</b>（カートか最安）で FBA の利益を出します。
-            定価の見積りではありません。<b>ランキング・新品出品者数・Amazon本体の有無</b>も出します。
-            1回に <b id="csvMwAmzMax">120</b>件まで（値段の取得が10秒に1回のため）。</div>
-          <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonの実売価格を取る</button>
-          <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
-          <!-- 出品の可否（6.101）。要許可・出品不可を先に外してから仕入れる -->
-          <div class="note2" style="margin:8px 0 0">各行が <b>出品できる</b>か調べます。
-            <b style="color:var(--good)">緑</b>＝出せる、
-            <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）、
-            <b style="color:var(--bad)">赤</b>＝出せない。
+          <!-- 1つのボタンで ①ASIN → ②可否 → ③価格（6.106） -->
+          <div class="note2" style="margin:4px 0 0">1回押すと、この順に進みます。
+            <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）
+            <br>② <b>出品の可否</b>を調べる（
+            <b style="color:var(--good)">緑</b>＝出せる・
+            <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）・
+            <b style="color:var(--bad)">赤</b>＝出せない）。
             赤い行には「仕入れる」を付けられません。
-            調べ直しは出せる行が30日、それ以外は7日です。</div>
-          <button class="btn" id="csvMwRst" style="width:100%;margin-top:6px">出品の可否を調べる（ASIN・新品）</button>
-          <div class="note2" id="csvMwRstNote" style="margin-top:2px"></div>
+            調べ直しは緑が30日、それ以外は7日です
+            <br>③ <b>Amazon の実売価格</b>（カートか最安）を取る。
+            <b>赤の行は取りません</b>（呼び出しを減らすため。あとで緑に変われば次に取ります）
+            <div style="margin-top:3px">定価の見積りではありません。<b>ランキング・
+            新品出品者数・Amazon本体の有無</b>も出します。
+            60秒で区切るので、残りがあれば<b>もう一度押すと続きます</b>
+            （値段の取得が10秒に1回・1回 <b id="csvMwAmzMax">120</b>件まで）。</div></div>
+          <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
+          <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
           <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
           <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
           <div style="display:flex;gap:6px;margin-top:6px">
@@ -8980,7 +8982,6 @@ $('csvMwPush').onclick=mwPushRun;
 $('syncMwPlan').onclick=function(){ mwDropAct(false); };
 $('syncMwGo').onclick=function(){ mwDropAct(true); };
 $('csvMwAmz').onclick=mwAmzRunGo;
-$('csvMwRst').onclick=mwRstGo;
 $('csvMwReg').onclick=mwRegGo;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
@@ -9342,22 +9343,65 @@ function mwAmzRunGo(){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
   var btn=$('csvMwAmz'); btn.disabled=true;
-  note.textContent='Amazon の実売価格を取っています…（値段の取得は10秒に1回なので時間がかかります）';
+  note.textContent='Amazon で調べています…（①ASIN → ②出品の可否 → ③実売価格の順。'
+    +'値段の取得は10秒に1回なので時間がかかります）';
   mwPost('/mw/amz',{ kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
     ship_max:mwShipMax(), stock_min:mwStockMin(),
     note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
-      note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
-        +'（ASIN が引けた '+(d.asin_ok||0)+'／引けなかった '+(d.asin_ng||0)
-        +'／値段あり '+(d.priced||0)+'／Amazon に出品なし '+(d.none||0)+'）'
-        +'<br>呼び出し：ASIN引き '+(d.calls_cat||0)+'回／値段 '+(d.calls_prc||0)+'回'
-        +(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。もう一度押すと続きを調べます。')
-          :'<br>調べ終わりました。');
+      note.innerHTML=mwScanNote(d);
       mwAmzLoad();
     })
     ['catch'](function(e){ note.textContent='⚠ 取れませんでした：'+e.message; })
     .then(function(){ btn.disabled=false; });
+}
+/* 段ごとの進み具合を1行ずつ出す（6.106）。
+   どの段で止まったか・あと何件残っているかが分かるようにする。 */
+function mwScanLeft(st){
+  var n=+((st||{}).left)||0;
+  return n?('　<b>残り '+n+'件</b>'):'';
+}
+function mwScanNote(d){
+  var a=d.asin||{}, r=d.rst||{}, p=d.price||{};
+  var out=[];
+  /* ① ASIN */
+  out.push('① ASIN引き <b>'+(+a.done||0)+'件</b>'
+    +'（取れた '+(+a.ok_n||0)+'／取れなかった '+(+a.ng||0)+'）'
+    +mwScanLeft(a));
+  /* ② 出品の可否 */
+  out.push('② 可否 <b>'+(+r.done||0)+'件</b>'
+    +'（<span style="color:var(--good)">緑 '+(+r.ok_n||0)+'</span>'
+    +'／<span style="color:#a86b00">黄 '+(+r.approval||0)+'</span>'
+    +'／<span style="color:var(--bad)">赤 '+(+r.blocked||0)+'</span>'
+    +'／失敗 '+(+r.failed||0)+'）'+mwScanLeft(r));
+  /* 可否の失敗の理由（HTTP の番号と Amazon のエラーコード・6.105） */
+  var why=String(r.why||'');
+  if(why)out.push('　⚠ '+esc(why));
+  (r.fails||[]).forEach(function(x){
+    out.push('　'+esc(String(x.asin||''))+'：'+esc(String(x.err||'').slice(0,80))); });
+  /* 同じ理由で失敗し続ける段は、押し直しても進まないのでそう書く。 */
+  var rstDead=(r.stopped==='fail'||r.stopped==='no_seller_id');
+  if(r.stopped==='no_seller_id')
+    out.push('　<b>可否はこれ以上呼んでいません。</b>出品者トークンを入れてください。');
+  else if(r.stopped==='fail')
+    out.push('　<b>可否はこれ以上呼んでいません</b>（同じ理由で失敗し続けるため）。');
+  /* ③ 実売価格 */
+  out.push('③ 価格 <b>'+(+p.done||0)+'件</b>'
+    +'（値段あり '+(+p.priced||0)+'／Amazon に出品なし '+(+p.none||0)+'）'
+    +((+p.skipped_red)?('　赤は取っていません '+(+p.skipped_red)+'件'):'')
+    +mwScanLeft(p));
+  out.push('呼び出し：ASIN引き '+(+a.calls||0)+'回／可否 '+(+r.calls||0)
+    +'回／価格 '+(+p.calls||0)+'回');
+  /* 残りと止まった理由。押し直しても進まない段（可否が止まった分）は
+     「もう一度押すと続きます」の件数から外す。 */
+  var left=(+d.left||0)-(rstDead?(+r.left||0):0);
+  if(left>0)
+    out.push('まだ <b>'+left+'件</b>残っています。'
+      +'<b>もう一度押すと続きます。</b>'
+      +(/time/.test(String(d.stopped||''))?'（60秒で区切りました）':''));
+  else if(!rstDead)out.push('調べ終わりました。');
+  return out.join('<br>');
 }
 function mwAmzQuery(priced){
   return '?kishu='+encodeURIComponent(mwKishuList().join(','))
@@ -9433,39 +9477,6 @@ function mwRstLine(r){
     +'</div>';
 }
 /* 可否を調べる。1回の件数と時間で区切り、残りを出す。 */
-function mwRstGo(){
-  var note=$('csvMwRstNote');
-  csvSecretFill();
-  if(!syncUrl()||!syncApiKey()){
-    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
-  }
-  var btn=$('csvMwRst'); btn.disabled=true;
-  note.textContent='出品の可否を調べています…（1件ずつ聞く API なので時間がかかります）';
-  mwPost('/mw/restrict',{ kishu:mwKishuList().join(','), new_only:mwNewOnly()?1:0,
-    ship_max:mwShipMax(), stock_min:mwStockMin(),
-    note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
-    .then(function(d){
-      if(!d||d.ok!==true)throw new Error((d&&d.error)||'調べられませんでした');
-      /* 失敗の理由（HTTP の番号と Amazon のエラーコード）を短く添える。
-         全件失敗が続いたときは Worker が途中で止めて why を返す（6.105）。 */
-      var why=String(d.why||'');
-      var fails=(d.fails||[]).map(function(x){
-        return esc(String(x.asin||''))+'：'+esc(String(x.err||'').slice(0,80)); });
-      note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
-        +'（出せる '+(d.ok_n||0)+'／許可が要る '+(d.approval||0)
-        +'／出せない '+(d.blocked||0)+'／<b>失敗 '+(d.failed||0)+'</b>）'
-        +(why?('<br>⚠ '+esc(why)):'')
-        +(fails.length?('<br>失敗の理由：'+fails.join('<br>　')):'')
-        +((d.stopped==='fail'||d.stopped==='no_seller_id')
-          ?'<br>これ以上は呼んでいません（同じ理由で失敗し続けるため）。'
-          :(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。'
-              +'もう一度押すと続きを調べます。')
-            :'<br>調べ終わりました。'));
-      mwAmzLoad();
-    })
-    ['catch'](function(e){ note.textContent='⚠ 調べられませんでした：'+e.message; })
-    .then(function(){ btn.disabled=false; });
-}
 /* ---- 並べ替えと絞り込み（6.93）---- */
 function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
 function mwAmzFilters(){
@@ -15947,7 +15958,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v198';   // sw.js の const V と必ず同じ値にする
+var APP_V='v199';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

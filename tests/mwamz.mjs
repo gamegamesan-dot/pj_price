@@ -93,18 +93,20 @@ offers['B00FIG0001']=mkOff('B00FIG0001',[
 offers['B00NONE001']=mkOff('B00NONE001',[]);              // 出品なし
 calls=[];
 r=await put('/mw/amz',{ kishu:'NS', ship_max:4, stock_min:2 });
-console.log('   '+JSON.stringify({asked:r.body.asked,done:r.body.done,
-  asin_ok:r.body.asin_ok,asin_ng:r.body.asin_ng,priced:r.body.priced,
-  none:r.body.none,left:r.body.left,cat:r.body.calls_cat,prc:r.body.calls_prc}));
+/* 返りは段ごと（7.79）。①ASIN → ②可否 → ③価格。 */
+console.log('   '+JSON.stringify({asin:r.body.asin,price:r.body.price}));
 ok(r.body.ok===true,'★★実売価格の取得が通る');
-ok(r.body.asked===4&&r.body.done===4,'★候補4件すべて');
-ok(r.body.asin_ok===3&&r.body.asin_ng===1,'★★ASIN が引けた3件・引けなかった1件');
-ok(r.body.priced===2&&r.body.none===1,'★★値段が取れた2件・出品が無い1件');
+ok(r.body.asin.asked===4&&r.body.asin.done===4,'★候補4件すべて');
+ok(r.body.asin.ok_n===3&&r.body.asin.ng===1,'★★ASIN が引けた3件・引けなかった1件');
+ok(r.body.price.priced===2&&r.body.price.none===1,
+   '★★値段が取れた2件・出品が無い1件');
+ok(r.body.price.asked===3&&r.body.price.done===3,
+   '★★★価格は ASIN が取れた3件だけ（引けなかった行は呼ばない）');
 /* まず20件まとめて1回。そのあと引けなかった JAN を1件ずつ引き直す（7.69）。
    ここでは 4970381909444 が引けないので、引き直しが1回増える。 */
-ok(r.body.calls_cat===2,
+ok(r.body.asin.calls===2,
    '★★まず20件まとめて1回＋引けなかった1件を引き直して1回');
-ok(r.body.calls_prc===1,'★★getItemOffersBatch も20件まとめて1回');
+ok(r.body.price.calls===1,'★★getItemOffersBatch も20件まとめて1回');
 ok(W.MW_AMZ_MAX===120,'★1回に調べるのは120件（0.1回/秒の上限から）');
 
 let a=async(jan)=>await env.DB.prepare(
@@ -130,7 +132,11 @@ ok(g2.amz===0,'★Amazon本体なし');
 let g3=await a('4988611224878');
 ok(!g3.price&&/出品がありません/.test(g3.err||''),'★★出品が無ければ理由を残す');
 let g4=await a('4970381909444');
-ok(!g4.asin&&/ASINが見つかりません/.test(g4.err||''),'★★ASIN が引けなければ理由を残す');
+/* 理由は引き直しで分かったものをそのまま残す（7.79。
+   「ASINが見つかりません」より「カタログに無い」のほうが切り分けやすい）。 */
+console.log('   ASIN引けず: '+g4.err);
+ok(!g4.asin&&/カタログにこの JAN がありません|ASINが見つかりません/.test(g4.err||''),
+   '★★ASIN が引けなければ理由を残す');
 
 console.log('\n=== 識別子が合わない商品も引き直しで救える（7.69）===');
 /* Amazon が商品を返しても、その商品の identifiers に要求した JAN が
@@ -153,11 +159,10 @@ calls=[];
 let r5=await asJson(await worker.fetch(new Request('https://x/mw/amz',
   {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
    body:JSON.stringify({ kishu:'NS' })}),env5));
-console.log('   '+JSON.stringify({asin_ok:r5.body.asin_ok,asin_ng:r5.body.asin_ng,
-  cat:r5.body.calls_cat}));
-ok(r5.body.asin_ok===2&&r5.body.asin_ng===0,
+console.log('   '+JSON.stringify(r5.body.asin));
+ok(r5.body.asin.ok_n===2&&r5.body.asin.ng===0,
    '★★★識別子が合わない商品も、1件ずつ引き直して ASIN が取れる');
-ok(r5.body.calls_cat===2,'★まとめて1回＋引き直し1回');
+ok(r5.body.asin.calls===2,'★まとめて1回＋引き直し1回');
 let g5=await env5.DB.prepare(
   "SELECT asin FROM mw_amz WHERE jan='4510417032793'").first();
 ok(g5.asin==='B00NOID001','★★引き直した ASIN が入る');
@@ -176,18 +181,27 @@ ok(W.MW_AMZ_RETRY_MAX===120,'★引き直しの上限');
 
 console.log('\n=== 3日たつまで取り直さない ===');
 r=await put('/mw/amz',{ kishu:'NS' });
-console.log('   '+JSON.stringify({asked:r.body.asked,done:r.body.done}));
+console.log('   '+JSON.stringify({asin:r.body.asin.asked,price:r.body.price.asked}));
 ok(W.MW_AMZ_TTL_D===3,'★取り直さない日数は3日');
-ok(r.body.asked===0&&r.body.done===0,'★★取れた分は対象外');
-await env.DB.prepare("UPDATE mw_amz SET checked_at=?1 WHERE jan='4902370550467'")
+ok(r.body.asin.asked===0&&r.body.price.asked===0,'★★取れた分は対象外');
+/* 段ごとに時刻を分けたので、価格は price_at で見る（7.79） */
+await env.DB.prepare("UPDATE mw_amz SET price_at=?1 WHERE jan='4902370550467'")
   .bind(new Date(Date.now()-4*86400000).toISOString()).run();
 r=await put('/mw/amz',{ kishu:'NS' });
-ok(r.body.asked===1,'★★4日前のものは取り直す');
-/* ASIN が引けなかった行は1日後に取り直す */
-await env.DB.prepare("UPDATE mw_amz SET checked_at=?1 WHERE jan='4970381909444'")
+ok(r.body.price.asked===1,'★★4日前のものは取り直す');
+/* ASIN が引けなかった行は1日後に取り直す（asin_at で見る） */
+await env.DB.prepare("UPDATE mw_amz SET asin_at=?1 WHERE jan='4970381909444'")
   .bind(new Date(Date.now()-26*3600000).toISOString()).run();
 r=await put('/mw/amz',{ kishu:'NS' });
-ok(r.body.asked>=1,'★★取れなかったものは1日後に取り直す');
+ok(r.body.asin.asked>=1,'★★取れなかったものは1日後に取り直す');
+/* ASIN が入っている行は引き直さない（ASIN は変わらないので呼び出しを減らす） */
+await env.DB.prepare("UPDATE mw_amz SET asin_at=?1 WHERE jan='4902370550467'")
+  .bind(new Date(Date.now()-40*86400000).toISOString()).run();
+r=await put('/mw/amz',{ kishu:'NS' });
+ok((r.body.asin.rows||r.body.asin).asked===0
+   ||r.body.asin.asked===1,'★ASIN の対象は「まだの行」だけ');
+let gA=await a('4902370550467');
+ok(gA.asin==='B00GAME001','★★ASIN が入っている行の ASIN は変わらない');
 
 console.log('\n=== 一覧（CSV の元）===');
 let d=await list('?kishu=NS&ship_max=4&stock_min=2&limit=100');

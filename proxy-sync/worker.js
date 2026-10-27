@@ -4902,94 +4902,175 @@ async function janFind(env, url) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
-/* ---- POST /mw/amz ----
-   候補のうち、Amazon の値段をまだ見ていない／古いものを古い順に調べる。 */
-async function mwAmzRun(env, body) {
-  const run = newRun("mw-amz");
-  const res = { ok: false, asked: 0, done: 0, asin_ok: 0, asin_ng: 0, priced: 0,
-                none: 0, failed: 0, left: 0, limit: 0, calls_cat: 0, calls_prc: 0,
-                stopped: "", rows: [] };
-  try {
-    const o = body || {};
-    const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
-    res.limit = limit;
-    const q = mwWhere(o);
-    const okOld = new Date(Date.now() - MW_AMZ_TTL_D * 86400000).toISOString();
-    const errOld = new Date(Date.now() - MW_AMZ_ERR_TTL_H * 3600000).toISOString();
-    const pick = await env.DB.prepare(
-      `SELECT s.jan AS jan FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
-        WHERE ${q.w}
-          AND (a.checked_at IS NULL
-               OR (COALESCE(a.err,'')='' AND a.checked_at < ?${q.bind.length + 1})
-               OR (COALESCE(a.err,'')<>'' AND a.checked_at < ?${q.bind.length + 2}))
-        ORDER BY COALESCE(a.checked_at,'') ASC, s.jan ASC`)
-      .bind(...q.bind, okOld, errOld).all();
-    const all = ((pick && pick.results) || []).map((x) => String(x.jan));
-    res.asked = all.length;
-    const todo = all.slice(0, limit);
-    if (todo.length < all.length) res.stopped = "limit";
-    /* ① JAN → ASIN */
-    const found = await mwAsinFind(env, run, todo);
-    res.calls_cat = found.calls;
-    const keys = [], byAsin = {};
-    for (const j of todo) {
-      const f = found.map[j];
-      if (!f || !f.asin) { res.asin_ng++; continue; }
-      res.asin_ok++;
-      keys.push({ asin: f.asin, cond: "new" });
-      byAsin[f.asin] = j;
+/* ===== 「Amazonで調べる」1つのボタン（7.79）=====
+   1回押すと、この順に進む。
+     ① JAN → ASIN（ASIN がまだ無い行だけ）
+     ② 出品の可否（まだ・期限切れの行。7.76）
+     ③ 実売価格（**赤＝出品できない行は飛ばす**。呼び出しを減らすため）
+   60秒で切られるので、各段で残りを返し「もう一度押すと続きます」にする。
+   ③で飛ばした赤の行は、あとで緑に変わっていれば次に押したときに価格を取る
+   （可否が先に進むので、同じ押しの中で緑になった行もその場で価格を取る）。
+
+   段ごとに「最後に試した時刻」を分けてある（mw_amz.asin_at / price_at）。
+   1つの checked_at だと、①で ASIN を引いた行が「さっき調べた行」になって
+   ③の対象から外れ、値段が一度も取れない。 */
+const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
+
+/* ① JAN → ASIN。ASIN が入っている行は引き直さない（ASIN は変わらない）。
+   引けなかった行は MW_AMZ_ERR_TTL_H（24時間）たてば再挑戦する。 */
+async function mwScanAsin(env, run, o, dl) {
+  const st = { asked: 0, done: 0, ok_n: 0, ng: 0, calls: 0, left: 0, stopped: "" };
+  const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
+  const q = mwWhere(o);
+  const errOld = new Date(Date.now() - MW_AMZ_ERR_TTL_H * 3600000).toISOString();
+  const pick = await env.DB.prepare(
+    `SELECT s.jan AS jan FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${q.w}
+        AND COALESCE(a.asin,'') = ''
+        AND (a.asin_at IS NULL OR a.asin_at < ?)
+      ORDER BY COALESCE(a.asin_at,'') ASC, s.jan ASC`)
+    .bind(...q.bind, errOld).all();
+  const all = ((pick && pick.results) || []).map((x) => String(x.jan));
+  st.asked = all.length;
+  if (!all.length) return st;
+  if (Date.now() > dl) { st.stopped = "time"; st.left = st.asked; return st; }
+  const todo = all.slice(0, limit);
+  const found = await mwAsinFind(env, run, todo);
+  st.calls = found.calls;
+  const at = nowIso();
+  const stmts = [];
+  for (const j of todo) {
+    const f = found.map[j];
+    st.done++;
+    if (!f || !f.asin) {
+      st.ng++;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_amz (jan,err,checked_at,asin_at,created_at)
+           VALUES (?1,?2,?3,?3,?3)
+         ON CONFLICT(jan) DO UPDATE SET err=excluded.err, asin=NULL,
+           checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
+        .bind(j, (found.why && found.why[j]) || "ASINが見つかりません", at));
+      continue;
     }
-    /* ② ASIN → 新品の実売価格と出品の様子 */
-    const low = keys.length ? await amazonLowest(env, run, keys) : {};
-    res.calls_prc = Math.ceil(keys.length / PRICING_BATCH);
-    const at = nowIso();
-    const stmts = [];
-    for (const j of todo) {
-      const f = found.map[j];
-      res.done++;
-      if (!f || !f.asin) {
-        stmts.push(env.DB.prepare(
-          `INSERT INTO mw_amz (jan,err,checked_at,created_at) VALUES (?1,?2,?3,?3)
-           ON CONFLICT(jan) DO UPDATE SET err=excluded.err, asin=NULL,
-             checked_at=excluded.checked_at`)
-          .bind(j, "ASINが見つかりません", at));
-        continue;
-      }
-      const g = low[f.asin + "|new"] || null;
-      if (!g) res.none++; else res.priced++;
-      const buy = g ? Number(g.buy || 0) : 0;
-      const lw = g ? Number(g.low || 0) : 0;
+    st.ok_n++;
+    /* 値段の列には触らない（③が入れる）。 */
+    stmts.push(env.DB.prepare(
+      `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,err,checked_at,asin_at,created_at)
+         VALUES (?1,?2,?3,?4,?5,'',?6,?6,?6)
+       ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
+         name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
+         rank=COALESCE(excluded.rank, mw_amz.rank),
+         rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), mw_amz.rank_cat),
+         err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
+      .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "", at));
+  }
+  await runBatch(env, run, stmts);
+  st.left = Math.max(0, st.asked - st.done);
+  if (st.left) st.stopped = "limit";
+  return st;
+}
+
+/* ③ 実売価格。ASIN がある行のうち、**赤（出品できない）を外して**古い順に取る。
+   getItemOffersBatch は 0.1回/秒なので1回20件で10.5秒かかる。
+   ①②で使った時間を差し引いた残りで、入るだけ取る。 */
+async function mwScanPrice(env, run, o, dl) {
+  const st = { asked: 0, done: 0, priced: 0, none: 0, skipped_red: 0, calls: 0,
+               left: 0, stopped: "" };
+  const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
+  const q = mwWhere(o);
+  /* cond は mw_stock にも mw_restrict にもあるので、修飾しないと落ちる。 */
+  const w = q.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+  const okOld = new Date(Date.now() - MW_AMZ_TTL_D * 86400000).toISOString();
+  /* ⚠ 番号付きの ?N は使わない（7.76 の穴）。素の `?` だけ、文に出てくる順。 */
+  const sql = (redOnly) =>
+    `SELECT a.jan AS jan, a.asin AS asin
+       FROM mw_stock s
+       JOIN mw_amz a ON a.jan = s.jan AND COALESCE(a.asin,'') <> ''
+       LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = '${MW_RST_COND}'
+      WHERE ${w}
+        AND COALESCE(r.state,'') ${redOnly ? "=" : "<>"} 'blocked'
+        AND (a.price_at IS NULL OR a.price_at < ?)
+      GROUP BY a.jan
+      ORDER BY COALESCE(MAX(a.price_at),'') ASC, a.jan ASC`;
+  const pick = await env.DB.prepare(sql(false)).bind(...q.bind, okOld).all();
+  const all = ((pick && pick.results) || []).map(
+    (x) => ({ jan: String(x.jan), asin: String(x.asin) }));
+  st.asked = all.length;
+  /* 飛ばした赤の件数（画面に出す）。 */
+  const red = await env.DB.prepare(sql(true)).bind(...q.bind, okOld).all();
+  st.skipped_red = ((red && red.results) || []).length;
+  if (!all.length) return st;
+  const todo = all.slice(0, limit);
+  const at = nowIso();
+  const stmts = [];
+  const low = {};
+  for (let i = 0; i < todo.length; i += PRICING_BATCH) {
+    /* 1回（20件）ぶんの時間が残っていなければ、そこで止める。 */
+    if (Date.now() > dl) { st.stopped = "time"; break; }
+    const part = todo.slice(i, i + PRICING_BATCH);
+    const g = await amazonLowest(env, run,
+      part.map((x) => ({ asin: x.asin, cond: "new" })));
+    st.calls++;
+    Object.assign(low, g);
+    for (const x of part) {
+      const z = low[x.asin + "|new"] || null;
+      st.done++;
+      if (!z) st.none++; else st.priced++;
+      const buy = z ? Number(z.buy || 0) : 0;
+      const lw = z ? Number(z.low || 0) : 0;
       const price = buy > 0 ? buy : lw;
       const basis = buy > 0 ? "カート" : (lw > 0 ? "最安" : "");
-      res.rows.push({ jan: j, asin: f.asin, price, basis, rank: f.rank,
-                      new_n: g ? (g.newN || g.total || 0) : 0,
-                      amz: g ? (g.amz || 0) : 0 });
       stmts.push(env.DB.prepare(
-        `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,price,basis,low,buybox,
-           new_n,low_n,amz,fba_n,err,checked_at,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
-         ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin, name=excluded.name,
-           rank=excluded.rank, rank_cat=excluded.rank_cat, price=excluded.price,
-           basis=excluded.basis, low=excluded.low, buybox=excluded.buybox,
-           new_n=excluded.new_n, low_n=excluded.low_n, amz=excluded.amz,
-           fba_n=excluded.fba_n, err=excluded.err, checked_at=excluded.checked_at`)
-        .bind(j, f.asin, f.name, f.rank || null, f.rank_cat || "", price || null,
-              basis, lw || null, buy || null,
-              g ? (g.newN || g.total || 0) : 0, g ? (g.lowN || 0) : 0,
-              g ? (g.amz || 0) : 0, g ? (g.fba || 0) : 0,
-              g ? "" : "Amazon に新品の出品がありません", at));
+        `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
+           low_n=?7, amz=?8, fba_n=?9, err=?10, checked_at=?11, price_at=?11
+         WHERE jan=?1`)
+        .bind(x.jan, price || null, basis, lw || null, buy || null,
+              z ? (z.newN || z.total || 0) : 0, z ? (z.lowN || 0) : 0,
+              z ? (z.amz || 0) : 0, z ? (z.fba || 0) : 0,
+              z ? "" : "Amazon に新品の出品がありません", at));
     }
-    await runBatch(env, run, stmts);
-    res.left = Math.max(0, res.asked - res.done);
+  }
+  await runBatch(env, run, stmts);
+  st.left = Math.max(0, st.asked - st.done);
+  if (st.left && !st.stopped) st.stopped = "limit";
+  return st;
+}
+
+/* ---- POST /mw/amz ----「Amazonで調べる」。①②③を順に進める。 */
+async function mwScanRun(env, body) {
+  const run = newRun("mw-amz");
+  const res = { ok: false, asin: null, rst: null, price: null, left: 0,
+                stopped: "", budget_ms: MW_SCAN_BUDGET_MS };
+  try {
+    const o = body || {};
+    const dl = Date.now() + MW_SCAN_BUDGET_MS;
+    /* ① JAN → ASIN */
+    res.asin = await mwScanAsin(env, run, o, dl);
+    /* ② 出品の可否（7.76）。ここで緑になった行は、すぐ下の③で値段を取る。 */
+    res.rst = await mwRestrictRun(env, o, { run: run, deadline: dl });
+    /* ③ 実売価格（赤は飛ばす） */
+    res.price = await mwScanPrice(env, run, o, dl);
+    res.left = (res.asin.left || 0) + (res.rst.left || 0) + (res.price.left || 0);
+    res.stopped = [res.asin.stopped, res.rst.stopped, res.price.stopped]
+      .filter(Boolean).join(",");
     await env.DB.prepare(
       `INSERT INTO mw_amz_runs (at,asked,done,asin_ok,asin_ng,priced,none,failed,
          left_n,calls_cat,calls_prc,note,created_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
-      .bind(at, res.asked, res.done, res.asin_ok, res.asin_ng, res.priced,
-            res.none, res.failed, res.left, res.calls_cat, res.calls_prc,
-            ("止まった理由 " + (res.stopped || "すべて")).slice(0, 300)).run();
-    run.notes.push("MW×Amazon：調べた " + res.done + "件／ASIN有 " + res.asin_ok
-      + "／値段有 " + res.priced + "／出品なし " + res.none + "／残り " + res.left);
+      .bind(nowIso(), res.asin.asked + res.rst.asked + res.price.asked,
+            res.asin.done + res.rst.done + res.price.done,
+            res.asin.ok_n, res.asin.ng, res.price.priced, res.price.none,
+            res.rst.failed || 0, res.left, res.asin.calls, res.price.calls,
+            ("ASIN " + res.asin.done + "／可否 " + (res.rst.done || 0)
+             + "／価格 " + res.price.done + "／赤を飛ばした "
+             + res.price.skipped_red + "／止まった理由 "
+             + (res.stopped || "すべて")).slice(0, 300)).run();
+    run.notes.push("Amazonで調べる：ASIN引き " + res.asin.done
+      + "（取れた " + res.asin.ok_n + "）／可否 " + (res.rst.done || 0)
+      + "（緑 " + (res.rst.ok_n || 0) + "・黄 " + (res.rst.approval || 0)
+      + "・赤 " + (res.rst.blocked || 0) + "・失敗 " + (res.rst.failed || 0)
+      + "）／価格 " + res.price.done + "（取れた " + res.price.priced
+      + "・赤を飛ばした " + res.price.skipped_red + "）／残り " + res.left);
     res.ok = true;
   } catch (e) {
     run.errors++; run.notes.push("mw-amz: " + String((e && e.message) || e));
@@ -5398,11 +5479,16 @@ async function mwRstOne(env, run, asin) {
 /* ---- POST /mw/restrict ----
    候補（代表・絞り込みに当てはまる行）のうち ASIN が分かっていて、
    まだ調べていない／古いものを古い順に調べる。 */
-async function mwRestrictRun(env, body) {
-  const run = newRun("mw-restrict");
+async function mwRestrictRun(env, body, opt) {
+  /* opt.run を渡すと「段」として動く（自分の記録を作らず、呼んだ側の記録に足す）。
+     opt.deadline を渡すと、その時刻で切る（7.79 の60秒の割り振り）。 */
+  const o2 = opt || {};
+  const run = o2.run || newRun("mw-restrict");
   const res = { ok: false, asked: 0, done: 0, ok_n: 0, approval: 0, blocked: 0,
                 failed: 0, left: 0, limit: 0, calls: 0, stopped: "", rows: [],
                 fails: [], why: "" };
+  /* 段として呼ばれたときは記録を閉じない（呼んだ側が閉じる）。 */
+  const fin = async () => (o2.run ? res : Object.assign(await saveRun(env, run), res));
   try {
     const o = body || {};
     const limit = Math.max(1, Math.min(MW_RST_MAX, mwNum(o.limit) || MW_RST_MAX));
@@ -5415,7 +5501,7 @@ async function mwRestrictRun(env, body) {
         + "（Seller Central → 設定 → 出品用アカウント情報 → 出品者トークン）。";
       run.notes.push("出品の可否：" + res.why);
       res.ok = true;
-      return Object.assign(await saveRun(env, run), res);
+      return await fin();
     }
     const q = mwWhere(o);
     /* mw_stock の列だと決めておく。cond は mw_restrict にもあるので、
@@ -5443,12 +5529,12 @@ async function mwRestrictRun(env, body) {
       .bind(MW_RST_COND, ...q.bind, okOld, badOld).all();
     const all = ((pick && pick.results) || []).map((x) => String(x.asin));
     res.asked = all.length;
-    const t0 = Date.now();
+    const dl = o2.deadline || (Date.now() + MW_RST_DEADLINE_MS);
     const stmts = [];
     let runFail = 0;                    // 続けて失敗した回数
     for (const asin of all) {
       if (res.done >= limit) { res.stopped = "limit"; break; }
-      if (Date.now() - t0 > MW_RST_DEADLINE_MS) { res.stopped = "time"; break; }
+      if (Date.now() > dl) { res.stopped = "time"; break; }
       if (res.done) await sleep(MW_RST_GAP_MS);
       const g = await mwRstOne(env, run, asin);
       res.done++; res.calls++;
@@ -5492,7 +5578,7 @@ async function mwRestrictRun(env, body) {
     }
     await runBatch(env, run, stmts);
     res.left = Math.max(0, res.asked - res.done);
-    await env.DB.prepare(
+    if (!o2.run) await env.DB.prepare(
       `INSERT INTO mw_rst_runs (at,asked,done,ok_n,approval,blocked,failed,
          left_n,calls,note,created_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?1)`)
@@ -5508,7 +5594,7 @@ async function mwRestrictRun(env, body) {
     run.errors++; run.notes.push("mw-restrict: " + String((e && e.message) || e));
     res.error = String((e && e.message) || e);
   }
-  return Object.assign(await saveRun(env, run), res);
+  return await fin();
 }
 
 /* ===== 仕入れの印（7.68）=====
@@ -7618,7 +7704,7 @@ export default {
         const b = await request.json().catch(() => ({}));
         /* 1回に1分前後かかる。画面を閉じても最後まで進むよう waitUntil でも
            抱える（抱えないと、客が切れた時点で止まることがある。7.70）。 */
-        const pr = mwAmzRun(env, b);
+        const pr = mwScanRun(env, b);
         if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
         return json(await pr, 200, origin);
       }
@@ -7807,14 +7893,15 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
-                        mwRestrictRun, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
+                        mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
+  MW_SCAN_BUDGET_MS, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
                         mwStaleCheck, MW_STALE_H, MW_STOCK_MIN,
                         MW_D_MAX, MW_D_OVER,
                         spSlotKv, SP_KV_LANES,
-                        mwAmzRun, mwAmzList, mwAsinFind, amazonLowest,
+                        mwAmzList, mwAsinFind, amazonLowest,
                         amzSelf, fbaN, buyBox,
                         offerN, MW_AMZ_MAX, MW_AMZ_TTL_D, AMZ_SELF_ID,
                         mwMarketRun, mwMktPick, mwImgRun, mwImgGet, mwImgUrl,

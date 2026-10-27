@@ -549,11 +549,17 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   fba_n      INTEGER,   -- FBA の出品者数
   err        TEXT,      -- 取れなかった理由（次は1日後に取り直す）
   checked_at TEXT,
+  /* 段ごとの時刻（7.79）。1つの checked_at だと、①で ASIN を引いた行が
+     「さっき調べた行」になって③の価格の対象から外れてしまう。 */
+  asin_at    TEXT,      -- ① JAN→ASIN を最後に試した時刻
+  price_at   TEXT,      -- ③ 実売価格を最後に試した時刻
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_amz_at    ON mw_amz(checked_at);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_price ON mw_amz(price);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_asin  ON mw_amz(asin);
+CREATE INDEX IF NOT EXISTS idx_mw_amz_asin_at  ON mw_amz(asin_at);
+CREATE INDEX IF NOT EXISTS idx_mw_amz_price_at ON mw_amz(price_at);
 
 CREATE TABLE IF NOT EXISTS mw_amz_runs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
