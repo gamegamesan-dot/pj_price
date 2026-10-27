@@ -29,7 +29,12 @@ const ROWS=[
    rst_at:'2026-10-27T01:00:00Z' }),
  Object.assign({},base,{ jan:'4444444444444', mw_name:'まだ調べていない商品',
    wholesale:3000, asin:'B00RSTUN01', amz_name:'まだ調べていない商品',
-   price:9200, rst:'', rst_why:'', rst_link:'', rst_at:null })];
+   price:9200, rst:'', rst_why:'', rst_link:'', rst_at:null }),
+ /* 調べようとして失敗した行（6.105） */
+ Object.assign({},base,{ jan:'4555555555555', mw_name:'調べられなかった商品',
+   wholesale:3000, asin:'B00RSTER01', amz_name:'調べられなかった商品',
+   price:9300, rst:'', rst_why:'', rst_link:'', rst_at:null,
+   rst_err:'HTTP 400 InvalidInput: Invalid request parameters: sellerId is required' })];
 const META={ ok:true, n:4, rows:ROWS, seen:4, priced:4, left:0, per_run:120,
   ttl_days:3, limit:3000 };
 
@@ -45,6 +50,20 @@ const setup=async()=>await p.evaluate((META)=>{
     const url=String(u), b=(i&&i.body&&typeof i.body==='string')?JSON.parse(i.body):null;
     if(/\/mw\/restrict/.test(url)){
       window.__posts.push({url:url,body:b});
+      if(window.__mode==='fail')
+        return new Response(JSON.stringify({ok:true,asked:158,done:5,ok_n:0,
+          approval:0,blocked:0,failed:5,left:153,stopped:'fail',
+          why:'失敗が5件続いたので止めました（HTTP 400 InvalidInput: '
+            +'Invalid request parameters: sellerId is required）',
+          fails:[{asin:'B003Y2WDAG',
+            err:'HTTP 400 InvalidInput: Invalid request parameters: '
+              +'sellerId is required'}]}),{status:200});
+      if(window.__mode==='nokey')
+        return new Response(JSON.stringify({ok:true,asked:0,done:0,ok_n:0,
+          approval:0,blocked:0,failed:0,left:0,stopped:'no_seller_id',
+          why:'出品者トークン（SP_SELLER_ID）が入っていません。pj-sync に '
+            +'npx wrangler secret put SP_SELLER_ID で入れてください。',
+          fails:[]}),{status:200});
       return new Response(JSON.stringify({ok:true,asked:4,done:4,ok_n:1,
         approval:1,blocked:1,failed:1,left:7}),{status:200});
     }
@@ -83,6 +102,29 @@ ok(/出せる 1/.test(n)&&/許可が要る 1/.test(n)&&/出せない 1/.test(n),
    '★★3つに分けた件数を出す');
 ok(/まだ 7件/.test(n),'★★残りと押し直しを知らせる');
 
+console.log('\n=== 失敗の理由を出す（6.105）===');
+/* 全件失敗が続いて途中で止まったとき */
+await p.evaluate(()=>{ window.__mode='fail'; $('csvMwRst').click(); });
+await p.waitForTimeout(500);
+let fn=await p.evaluate(()=>$('csvMwRstNote').textContent);
+console.log('   '+fn.replace(/\s+/g,' ').slice(0,200));
+ok(/失敗 5/.test(fn),'★★失敗の件数を出す');
+ok(/HTTP 400/.test(fn),'★★★HTTP の番号を出す');
+ok(/InvalidInput/.test(fn),'★★★Amazon のエラーコードを出す');
+ok(/B003Y2WDAG/.test(fn),'★★どの ASIN で失敗したか出す');
+ok(/失敗が5件続いたので止めました/.test(fn),'★★★止めた理由を出す');
+ok(/これ以上は呼んでいません/.test(fn),'★★★むだに呼び続けないと伝える');
+ok(/まだ 153件/.test(fn)===false,'★★止めたときは「もう一度押す」と出さない');
+/* 出品者トークンが入っていないとき */
+await p.evaluate(()=>{ window.__mode='nokey'; $('csvMwRst').click(); });
+await p.waitForTimeout(500);
+let kn=await p.evaluate(()=>$('csvMwRstNote').textContent);
+console.log('   '+kn.replace(/\s+/g,' ').slice(0,160));
+ok(/SP_SELLER_ID/.test(kn)&&/出品者トークン/.test(kn),
+   '★★★トークンが無いことと入れ方を出す');
+ok(/これ以上は呼んでいません/.test(kn),'★★呼ばずに止めたと伝える');
+await p.evaluate(()=>{ window.__mode=''; });
+
 console.log('\n=== 行の色（緑・黄・赤・灰）===');
 await p.evaluate((R)=>{ mwAmzRows=R; mwAmzMeta={n:4,seen:4,priced:4,left:0};
   mwBuyMap={}; mwAmzRender(); },ROWS);
@@ -104,6 +146,11 @@ let ngc=await card('4333333333333');
 ok(/出品できない/.test(ngc),'★★★赤の行に「出品できない」');
 let unc=await card('4444444444444');
 ok(/未調査/.test(unc),'★★調べていない行は「未調査」');
+let erc=await card('4555555555555');
+ok(/可否を調べられず/.test(erc),'★★★失敗した行は「未調査」と分ける');
+ok(/HTTP 400/.test(erc)&&/InvalidInput/.test(erc),
+   '★★★行にも失敗の理由（HTTP とコード）を出す');
+ok(/未調査/.test(erc)===false,'★★失敗した行に「未調査」とは出さない');
 
 console.log('\n=== 赤は「仕入れる」を付けられない ===');
 let dis=await p.evaluate(()=>({
@@ -111,11 +158,12 @@ let dis=await p.evaluate(()=>({
   ngQty:$('mwBuyQty_4333333333333').disabled,
   okay:$('mwBuyChk_4111111111111').disabled,
   ap:$('mwBuyChk_4222222222222').disabled,
-  un:$('mwBuyChk_4444444444444').disabled }));
+  un:$('mwBuyChk_4444444444444').disabled,
+  er:$('mwBuyChk_4555555555555').disabled }));
 console.log('   '+JSON.stringify(dis));
 ok(dis.ng===true&&dis.ngQty===true,'★★★赤の行は押せない');
-ok(dis.okay===false&&dis.ap===false&&dis.un===false,
-   '★★緑・黄・未調査は押せる');
+ok(dis.okay===false&&dis.ap===false&&dis.un===false&&dis.er===false,
+   '★★緑・黄・未調査・失敗は押せる（止めるのは赤だけ）');
 /* 画面を書き換えても保存されないこと（保存側でも止める） */
 await p.evaluate(()=>{ window.__posts=[]; mwBuySet('4333333333333',3); });
 await p.waitForTimeout(300);
@@ -141,7 +189,7 @@ ok(left.length===1&&left[0]==='4111111111111',
    '★★★出せる行だけ残る（未調査も隠す）');
 await p.evaluate(()=>{ $('csvMwAmzRstOk').checked=false; mwAmzRender(); });
 await p.waitForTimeout(120);
-ok((await p.evaluate(()=>mwAmzPicked().length))===4,'★外せば全部出る');
+ok((await p.evaluate(()=>mwAmzPicked().length))===5,'★外せば全部出る');
 
 await T.done();
 })();

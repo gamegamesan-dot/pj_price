@@ -150,6 +150,7 @@ npx wrangler secret put EBAY_CLIENT_SECRET       # pj-title と同じ値
 npx wrangler secret put EBAY_USER_REFRESH_TOKEN  # 1-3 で取得
 npx wrangler secret put DISCORD_WEBHOOK_URL      # keepa-hunter とは別チャンネル推奨
 npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・無くても動く）
+npx wrangler secret put SP_SELLER_ID             # 出品者トークン（7.78・出品の可否で必須）
 ```
 
 ### 作業者用のキー（STAFF_KEY・7.40）

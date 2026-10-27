@@ -9407,11 +9407,19 @@ function mwRstBadge(r){
     return ' <span class="badge" style="background:#a86b00">許可が要る</span>';
   if(st==='blocked')
     return ' <span class="badge" style="background:var(--bad)">出品できない</span>';
+  /* 調べようとして失敗した行は「未調査」と分ける（6.105）。 */
+  if(String((r||{}).rst_err||''))
+    return ' <span class="badge" style="background:#8a8a8a">可否を調べられず</span>';
   return ' <span class="badge" style="background:#8a8a8a">可否は未調査</span>';
 }
 /* 黄のときだけ出す、申請ページへの行。リンクが無いこともある。 */
 function mwRstLine(r){
   var st=mwRstOf(r);
+  /* 失敗した行は HTTP の番号と Amazon のエラーコードをそのまま出す（6.105）。
+     次に同じことが起きたとき、すぐ切り分けられるようにする。 */
+  if(st!=='approval'&&st!=='blocked'&&String((r||{}).rst_err||''))
+    return '<div class="note2" style="margin:2px 0 0;color:var(--bad)">'
+      +'可否を調べられませんでした：'+esc(String(r.rst_err).slice(0,120))+'</div>';
   if(st!=='approval'&&st!=='blocked')return '';
   var why=esc(String(r.rst_why||'').slice(0,60));
   var lk=String(r.rst_link||'');
@@ -9438,12 +9446,21 @@ function mwRstGo(){
     note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'調べられませんでした');
+      /* 失敗の理由（HTTP の番号と Amazon のエラーコード）を短く添える。
+         全件失敗が続いたときは Worker が途中で止めて why を返す（6.105）。 */
+      var why=String(d.why||'');
+      var fails=(d.fails||[]).map(function(x){
+        return esc(String(x.asin||''))+'：'+esc(String(x.err||'').slice(0,80)); });
       note.innerHTML='調べた <b>'+(d.done||0)+'件</b>'
         +'（出せる '+(d.ok_n||0)+'／許可が要る '+(d.approval||0)
-        +'／出せない '+(d.blocked||0)+'／失敗 '+(d.failed||0)+'）'
-        +(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。'
-          +'もう一度押すと続きを調べます。')
-          :'<br>調べ終わりました。');
+        +'／出せない '+(d.blocked||0)+'／<b>失敗 '+(d.failed||0)+'</b>）'
+        +(why?('<br>⚠ '+esc(why)):'')
+        +(fails.length?('<br>失敗の理由：'+fails.join('<br>　')):'')
+        +((d.stopped==='fail'||d.stopped==='no_seller_id')
+          ?'<br>これ以上は呼んでいません（同じ理由で失敗し続けるため）。'
+          :(d.left?('<br>まだ <b>'+d.left+'件</b>残っています。'
+              +'もう一度押すと続きを調べます。')
+            :'<br>調べ終わりました。'));
       mwAmzLoad();
     })
     ['catch'](function(e){ note.textContent='⚠ 調べられませんでした：'+e.message; })
@@ -15930,7 +15947,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v197';   // sw.js の const V と必ず同じ値にする
+var APP_V='v198';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -5347,6 +5347,8 @@ function jstDate10(iso) {
 const MW_RST_GAP_MS = 250;         // 5回/秒の上限に余裕をみて4回/秒
 const MW_RST_MAX = 400;            // 1回に調べる件数の上限
 const MW_RST_DEADLINE_MS = 60000;  // 1回の実行で使う時間の上限
+/* 失敗が続いたら止める件数（全件失敗で無駄に呼び続けないため・7.78）。 */
+const MW_RST_FAIL_STOP = 5;
 const MW_RST_TTL_D = 30;           // 「出品できる」を調べ直さない日数
 const MW_RST_BAD_TTL_D = 7;        // 「許可が要る」「出品できない」を調べ直す日数
 const MW_RST_COND = "new_new";     // 新品（MW は新品だけ）
@@ -5374,12 +5376,23 @@ function mwRstPick(d) {
   return { state: (approval || link) ? "approval" : "blocked",
            reasons: why.join(" / ").slice(0, 300), link: link.slice(0, 500) };
 }
+/* 出品者トークン（Seller Central の「出品者トークン」）。
+   getListingsRestrictions は **sellerId が必須**。入れずに呼ぶと全件 HTTP 400
+   になる（v196 で 158件すべて失敗した原因）。
+   自動で引ける API が無いので ⚙ ではなく Worker の値として持つ：
+     npx wrangler secret put SP_SELLER_ID */
+function spSellerId(env) { return String((env && env.SP_SELLER_ID) || "").trim(); }
 async function mwRstOne(env, run, asin) {
-  const q = new URLSearchParams({ asin: String(asin), conditionType: MW_RST_COND,
-                                  marketplaceIds: MP_FE });
+  const q = new URLSearchParams({ asin: String(asin), sellerId: spSellerId(env),
+                                  marketplaceIds: MP_FE,
+                                  conditionType: MW_RST_COND });
   const r = await spCall(env, run, "/listings/2021-08-01/restrictions?" + q.toString(),
                          { label: "getListingsRestrictions" });
-  if (!r.ok) return { ok: false, err: "restrictions_" + r.status };
+  /* 失敗の理由は HTTP の番号と Amazon のエラーコードを残す。
+     「restrictions_400」だけでは次に同じことが起きたとき切り分けられない。 */
+  if (!r.ok)
+    return { ok: false, status: r.status,
+             err: ("HTTP " + r.status + " " + String(r.err || "")).trim().slice(0, 300) };
   return Object.assign({ ok: true }, mwRstPick(r.data));
 }
 /* ---- POST /mw/restrict ----
@@ -5388,11 +5401,22 @@ async function mwRstOne(env, run, asin) {
 async function mwRestrictRun(env, body) {
   const run = newRun("mw-restrict");
   const res = { ok: false, asked: 0, done: 0, ok_n: 0, approval: 0, blocked: 0,
-                failed: 0, left: 0, limit: 0, calls: 0, stopped: "", rows: [] };
+                failed: 0, left: 0, limit: 0, calls: 0, stopped: "", rows: [],
+                fails: [], why: "" };
   try {
     const o = body || {};
     const limit = Math.max(1, Math.min(MW_RST_MAX, mwNum(o.limit) || MW_RST_MAX));
     res.limit = limit;
+    /* 出品者トークンが無ければ **1回も呼ばない**（全件 HTTP 400 になるだけ）。 */
+    if (!spSellerId(env)) {
+      res.stopped = "no_seller_id";
+      res.why = "出品者トークン（SP_SELLER_ID）が入っていません。"
+        + "pj-sync に npx wrangler secret put SP_SELLER_ID で入れてください"
+        + "（Seller Central → 設定 → 出品用アカウント情報 → 出品者トークン）。";
+      run.notes.push("出品の可否：" + res.why);
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
     const q = mwWhere(o);
     /* mw_stock の列だと決めておく。cond は mw_restrict にもあるので、
        修飾しないと「あいまいな列名」で落ちる（mwAmzList と同じ処理）。 */
@@ -5421,6 +5445,7 @@ async function mwRestrictRun(env, body) {
     res.asked = all.length;
     const t0 = Date.now();
     const stmts = [];
+    let runFail = 0;                    // 続けて失敗した回数
     for (const asin of all) {
       if (res.done >= limit) { res.stopped = "limit"; break; }
       if (Date.now() - t0 > MW_RST_DEADLINE_MS) { res.stopped = "time"; break; }
@@ -5430,6 +5455,8 @@ async function mwRestrictRun(env, body) {
       const at = nowIso();
       if (!g.ok) {
         res.failed++;
+        runFail++;
+        if (res.fails.length < 3) res.fails.push({ asin: asin, err: g.err });
         stmts.push(env.DB.prepare(
           /* 失敗したときは checked_at を**動かさない**（新しい行は NULL のまま）。
              ここを今の時刻で埋めると、state が NULL のため下の3つの条件
@@ -5440,9 +5467,16 @@ async function mwRestrictRun(env, body) {
              VALUES (?1,?2,NULL,'','',?3,NULL,?4)
            ON CONFLICT(asin,cond) DO UPDATE SET err=excluded.err`)
           .bind(asin, MW_RST_COND, String(g.err), at));
-        if (/_(429|500|503)$/.test(String(g.err))) { res.stopped = "amazon"; break; }
+        if (/^HTTP (429|500|503)\b/.test(String(g.err))) { res.stopped = "amazon"; break; }
+        /* 続けて失敗するなら、残りを呼んでも同じなので止める（7.78）。 */
+        if (runFail >= MW_RST_FAIL_STOP) {
+          res.stopped = "fail";
+          res.why = "失敗が" + runFail + "件続いたので止めました（" + String(g.err) + "）";
+          break;
+        }
         continue;
       }
+      runFail = 0;                      // 1件でも通れば数え直す
       if (g.state === "ok") res.ok_n++;
       else if (g.state === "approval") res.approval++;
       else res.blocked++;
@@ -5466,7 +5500,9 @@ async function mwRestrictRun(env, body) {
             res.failed, res.left, res.calls,
             ("止まった理由 " + (res.stopped || "すべて")).slice(0, 300)).run();
     run.notes.push("出品の可否：出せる " + res.ok_n + "／許可が要る " + res.approval
-      + "／出せない " + res.blocked + "／失敗 " + res.failed + "／残り " + res.left);
+      + "／出せない " + res.blocked + "／失敗 " + res.failed + "／残り " + res.left
+      + (res.why ? ("　" + res.why) : "")
+      + (res.fails.length ? ("　理由 " + res.fails[0].err) : ""));
     res.ok = true;
   } catch (e) {
     run.errors++; run.notes.push("mw-restrict: " + String((e && e.message) || e));
@@ -5527,7 +5563,7 @@ async function mwBuyList(env, url) {
             a.basis AS basis, a.rank AS rank, a.rank_cat AS rank_cat,
             a.new_n AS new_n, a.amz AS amz,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
-            r.checked_at AS rst_at
+            r.checked_at AS rst_at, r.err AS rst_err
        FROM mw_buy b
        LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
        LEFT JOIN mw_amz   a ON a.jan = b.jan
@@ -5619,7 +5655,7 @@ async function mwAmzList(env, url) {
             a.checked_at AS amz_at,
             COALESCE(b.qty,0) AS buy_qty,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
-            r.checked_at AS rst_at
+            r.checked_at AS rst_at, r.err AS rst_err
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
             LEFT JOIN mw_buy b ON b.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
@@ -7771,7 +7807,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
-                        mwRestrictRun, mwRstPick, mwRegSave, MW_REG_MAX,
+                        mwRestrictRun, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,

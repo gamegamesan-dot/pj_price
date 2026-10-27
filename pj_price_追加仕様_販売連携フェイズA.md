@@ -5139,3 +5139,61 @@ function skuSrcOf(prefix) { ... }   // 'mw' / 'other'
 **空で送り直しても控えた中身は消えない**。
 `buy_src` は在庫レポートの取り込み（`writeInventory`）と名簿の送信でも
 SKU の接頭辞から入れ直す。
+
+## 7.78 出品の可否が全件失敗していた（2026-10-27・sw.js v198）
+
+v196 で「出品の可否を調べる」を押すと **158件すべて失敗**し、`mw_restrict` の
+`err` は `restrictions_400`、`state` は NULL のままだった。
+
+### 原因：`sellerId` が必須なのに付けていなかった
+
+`getListingsRestrictions` の必須の引数は **`asin` ・ `sellerId` ・
+`marketplaceIds`** の3つ（`conditionType` と `reasonLocale` は任意）。
+v196 は `asin` ・ `conditionType` ・ `marketplaceIds` だけを送っていたので、
+Amazon は全件 **HTTP 400 `InvalidInput`** を返していた。
+権限（Product Listing）・ALLOWED・認証はどれも問題ではなかった。
+
+出品者トークンは API では引けないので、Worker の値として持つ：
+
+```
+cd proxy-sync
+npx wrangler secret put SP_SELLER_ID
+```
+
+値は Seller Central → 設定 → 出品用アカウント情報 → **出品者トークン**。
+コード・リポジトリ・会話には書かない。
+
+```js
+function spSellerId(env) { return String((env && env.SP_SELLER_ID) || "").trim(); }
+const q = new URLSearchParams({ asin, sellerId: spSellerId(env),
+                                marketplaceIds: MP_FE, conditionType: MW_RST_COND });
+```
+
+### 失敗の理由を残す
+
+`spCall` は Amazon のエラー本文（`errors[].code` / `message` / `details`）を
+`err` に入れて返していたのに、`mwRstOne` が `"restrictions_" + status` に
+捨てていた。**HTTP の番号と Amazon のコードを両方残す**ようにした。
+
+```
+HTTP 400 InvalidInput: Invalid request parameters: sellerId is required
+```
+
+* `mw_restrict.err` にこの文字列を控える
+* `GET /mw/amz` と `GET /mw/buy` が `rst_err` として行ごとに返す
+* `POST /mw/restrict` は `fails`（先頭3件の ASIN と理由）と `why` を返す
+* 取得の記録（`mw_rst_runs.note`）にも理由を入れる
+
+### 無駄に呼び続けない
+
+```js
+const MW_RST_FAIL_STOP = 5;        // 続けて5件失敗したら止める
+```
+
+* **出品者トークンが無ければ1回も呼ばない**（`stopped:"no_seller_id"`）。
+  入れ方を `why` に出す
+* 続けて `MW_RST_FAIL_STOP` 件失敗したら止め、`stopped:"fail"` と
+  「失敗が5件続いたので止めました（理由）」を返す。**1件でも通れば数え直す**
+  （たまたまの1件で止めない）
+* 429／500／503 は今までどおり1件で止める（`stopped:"amazon"`）。
+  判定は `err` の形が変わったので `/^HTTP (429|500|503)\b/` に直した

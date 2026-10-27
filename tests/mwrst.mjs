@@ -8,7 +8,8 @@ const T=harness('Worker：出品の可否');
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('mwrst');
 const env=makeEnv({ STAFF_KEY:'staff-key-123',
-  LWA_CLIENT_ID:'a', LWA_CLIENT_SECRET:'b', LWA_REFRESH_TOKEN:'c' });
+  LWA_CLIENT_ID:'a', LWA_CLIENT_SECRET:'b', LWA_REFRESH_TOKEN:'c',
+  SP_SELLER_ID:'A1SELLER9999' });
 let calls=[], rst={};
 globalThis.fetch=async(u)=>{
   const url=String(u); calls.push(url);
@@ -17,7 +18,11 @@ globalThis.fetch=async(u)=>{
   if(/listings\/2021-08-01\/restrictions/.test(url)){
     const a=new URL(url).searchParams.get('asin');
     const v=rst[a];
-    if(typeof v==='number')return new Response('ng',{status:v});
+    /* Amazon が実際に返す形。sellerId を付けずに呼ぶと 400 でこれが返る。 */
+    if(typeof v==='number')return new Response(JSON.stringify({errors:[
+      { code:'InvalidInput',
+        message:'Invalid request parameters',
+        details:'sellerId is required' }]}),{status:v});
     return new Response(JSON.stringify(v||{restrictions:[]}),{status:200});
   }
   if(/discord/.test(url))return new Response(null,{status:204});
@@ -95,7 +100,7 @@ ok(g1.state==='approval'&&/apply\/1/.test(g1.link),'★★★申請リンクを�
 let g2=await g('B00RST0002');
 ok(g2.state==='blocked','★★出品できないを控える');
 let g3=await g('B00RST0003');
-ok(/restrictions_503/.test(g3.err||''),'★★失敗の理由を控える');
+ok(/^HTTP 503/.test(g3.err||''),'★★失敗の理由を控える（HTTP の番号つき）');
 
 console.log('\n=== 調べ直す間隔（出品できる30日・それ以外7日）===');
 ok(W.MW_RST_TTL_D===30&&W.MW_RST_BAD_TTL_D===7,'★★30日と7日');
@@ -150,6 +155,93 @@ ok(okRow&&okRow.rst==='ok','★★出品できる行');
 console.log('\n=== 作業者のキー ===');
 r=await post('/mw/restrict',{ kishu:'NS' },'staff-key-123');
 ok(r.status===403,'★★作業者では調べられない');
+
+console.log('\n=== sellerId（v196 の全件失敗の原因・7.78）===');
+ok(calls.filter((u)=>/sellerId=A1SELLER9999/.test(u)).length>0,
+   '★★★sellerId を付けて呼ぶ（必須。付けないと全件 HTTP 400）');
+ok(calls.filter((u)=>/restrictions/.test(u))
+     .every((u)=>/[?&]sellerId=[^&]+/.test(u)),
+   '★★★どの呼び出しにも sellerId が入る');
+/* 出品者トークンが無いときは **1回も呼ばない** */
+const env2=makeEnv({ STAFF_KEY:'s', LWA_CLIENT_ID:'a', LWA_CLIENT_SECRET:'b',
+  LWA_REFRESH_TOKEN:'c' });
+await env2.DB.prepare(
+  `INSERT INTO mw_stock (jan,sha,idx,kishu,name,list_price,release,cond,wholesale,
+     stock,note,ship_text,ship_days,row_hash,pick,seen_at,created_at)
+   VALUES ('4902370550467','M200',0,'NS','x',5000,'2025/01/01','新品',3000,9,'',
+     '即日出荷',0,'h',1,'x','x')`).run();
+await env2.DB.prepare(
+  `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,amz,checked_at,created_at)
+   VALUES ('4902370550467','B00RSTZZ01','x',1000,'カート',2,0,'x','x')`).run();
+calls=[];
+let r2=await asJson(await worker.fetch(new Request('https://x/mw/restrict',
+  {method:'POST',headers:{'X-PJ-Key':'k','content-type':'application/json'},
+   body:JSON.stringify({ kishu:'NS', stock_min:5 })}),env2));
+console.log('   '+JSON.stringify({stopped:r2.body.stopped,done:r2.body.done,
+  why:String(r2.body.why||'').slice(0,60)}));
+ok(r2.body.stopped==='no_seller_id','★★★トークンが無ければ止める');
+ok(calls.filter((u)=>/restrictions/.test(u)).length===0,
+   '★★★トークンが無ければ1回も呼ばない（158件むだ打ちしない）');
+ok(/SP_SELLER_ID/.test(r2.body.why)&&/出品者トークン/.test(r2.body.why),
+   '★★★入れ方を理由に出す');
+
+console.log('\n=== 失敗の理由を残す（HTTP の番号と Amazon のコード）===');
+rst['B00RST0000']={restrictions:[]};
+rst['B00RST0001']=400;              // sellerId 不足のときに返る番号
+await env.DB.prepare("DELETE FROM mw_restrict").run();
+calls=[];
+r=await post('/mw/restrict',{ kishu:'NS', stock_min:5 });
+let e1=await g('B00RST0001');
+console.log('   '+JSON.stringify({err:e1.err,fails:r.body.fails}));
+ok(/^HTTP 400/.test(String(e1.err||'')),'★★★HTTP の番号を残す');
+ok(/InvalidInput/.test(String(e1.err||'')),'★★★Amazon のエラーコードも残す');
+ok(/sellerId/.test(String(e1.err||'')),'★★くわしい内容も残す');
+ok((r.body.fails||[]).length>0&&/^HTTP 400/.test(r.body.fails[0].err),
+   '★★★画面に出せるよう理由を返す');
+let d2=(await asJson(await worker.fetch(
+  get('/mw/amz?kishu=NS&stock_min=5&limit=100'),env))).body;
+let bad=d2.rows.filter((x)=>x.asin==='B00RST0001')[0];
+ok(bad&&/^HTTP 400/.test(String(bad.rst_err||'')),
+   '★★★行にも失敗の理由を返す');
+
+console.log('\n=== 全件失敗が続いたら止める ===');
+ok(W.MW_RST_FAIL_STOP===5,'★5件続いたら止める');
+['B00RST0000','B00RST0001','B00RST0002','B00RST0003'].forEach((a)=>{ rst[a]=400; });
+/* 6件以上を対象にする */
+const MORE=['4902370550468','4902370550469','4902370550470','4902370550471'];
+for(let i=0;i<MORE.length;i++){
+  await post('/mw/stock',{ at:'2026-11-04T00:00:00Z', part:1, parts:1,
+    rows:[row(MORE[i])] });
+  await env.DB.prepare(
+    `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,amz,checked_at,created_at)
+     VALUES (?1,?2,'x',1000,'カート',2,0,'x','x')`)
+    .bind(MORE[i],'B00RSTX'+String(i).padStart(3,'0')).run();
+  rst['B00RSTX'+String(i).padStart(3,'0')]=400;
+}
+await env.DB.prepare("DELETE FROM mw_restrict").run();
+calls=[];
+r=await post('/mw/restrict',{ kishu:'NS', stock_min:5 });
+let nc2=calls.filter((u)=>/restrictions/.test(u)).length;
+console.log('   '+JSON.stringify({asked:r.body.asked,done:r.body.done,
+  failed:r.body.failed,stopped:r.body.stopped,calls:nc2,
+  why:String(r.body.why||'').slice(0,50)}));
+ok(r.body.asked>=8,'★対象は8件以上ある');
+ok(r.body.stopped==='fail','★★★失敗が続いたら止める');
+ok(nc2===5,'★★★5回で止める（残りは呼ばない）');
+ok(/失敗が5件続いたので止めました/.test(String(r.body.why||'')),
+   '★★★止めた理由を返す');
+ok(/HTTP 400/.test(String(r.body.why||'')),'★★理由に HTTP の番号を入れる');
+ok(r.body.left>0,'★残りの件数も返す');
+/* 1件でも通れば数え直す（たまたま1件失敗しただけで止めない） */
+rst['B00RST0000']={restrictions:[]};
+await env.DB.prepare("DELETE FROM mw_restrict").run();
+calls=[];
+r=await post('/mw/restrict',{ kishu:'NS', stock_min:5 });
+console.log('   '+JSON.stringify({done:r.body.done,ok_n:r.body.ok_n,
+  failed:r.body.failed,stopped:r.body.stopped}));
+ok(r.body.ok_n===1,'★★通る1件は取れる');
+ok(r.body.failed>=5&&r.body.stopped==='fail',
+   '★★★通ったあとに続けて5件失敗すれば止める');
 
 console.log('\n=== 呼び出しの間隔 ===');
 ok(W.SP_KV_LANES&&!W.SP_KV_LANES.getListingsRestrictions,
