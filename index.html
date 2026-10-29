@@ -892,7 +892,8 @@ body.staff #syncOnHandFix{display:none !important}
       </div>
       <!-- 1つのボタンで ①ASIN → ②可否 → ③価格（6.106） -->
       <div class="note2 cfgprice" style="margin:4px 0 0">1回押すと、この順に進みます。
-        <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）
+        <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）。
+        ランキングと Amazon の商品名は<b>3日ごとに引き直します</b>（6.121）
         <br>② <b>出品の可否</b>を調べる（
         <b style="color:var(--good)">緑</b>＝出せる・
         <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）・
@@ -942,6 +943,7 @@ body.staff #syncOnHandFix{display:none !important}
         <select id="csvMwAmzSort" style="flex:1 1 0;min-width:0">
           <option value="net" selected>粗利（税抜）順（全ジャンル）</option>
           <option value="margin">利益率順</option>
+          <option value="rank">ランキング順（大分類・売れている順）</option>
           <option value="genre">ジャンルごと</option>
         </select>
       </div>
@@ -952,6 +954,11 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
       <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
+      <!-- ランキングがこれ以下（大分類の順位・6.121）。0 は見ない -->
+      <div class="row"><label>ランキングがこれ以下</label><input type="number" id="csvMwAmzMaxRank" value="0" step="10000" min="0" max="9999999" inputmode="numeric"><span class="unit">位</span></div>
+      <div class="note2" style="margin:0 0 4px">0 なら見ません。出しているのは
+        <b>大きい分類</b>（ホビー・ゲームなど）の順位で、せどりすと と同じです。
+        順位がまだ取れていない行は、ここに数を入れると隠れます。</div>
       <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
       <div id="csvMwAmzList" style="margin-top:6px"></div>
     </div>
@@ -4371,7 +4378,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // マッチングワールド（MW）の無在庫（6.85）
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
-                 'csvMwAmzSort','csvMwAmzMinM','mwUnder',
+                 'csvMwAmzSort','csvMwAmzMinM','csvMwAmzMaxRank','mwUnder',
                  'csvShipProfileMw','csvShipDaysMw'];
 
 var csvList=[], csvLog=[];
@@ -9093,7 +9100,7 @@ $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
 $('csvMwBuyCsv').onclick=mwBuyCsvGo;
 ['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
- 'csvMwAmzDup','csvMwAmzMinM']
+ 'csvMwAmzDup','csvMwAmzMinM','csvMwAmzMaxRank']
   .forEach(function(id){
     $(id).addEventListener('change',function(){ mwAmzRender(); });
   });
@@ -9557,6 +9564,8 @@ function mwScanNote(d){
   out.push('① ASIN引き <b>'+(+a.done||0)+'件</b>'
     +'（取れた '+(+a.ok_n||0)+'／取れなかった '+(+a.ng||0)
     +((+a.dup)?('／<span style="color:var(--bad)">JAN重複 '+(+a.dup)+'</span>'):'')
+    /* 引き直しで引けなかった行は、前の ASIN をそのまま使う（6.121・7.91）。 */
+    +((+a.kept)?('／前の ASIN のまま '+(+a.kept)):'')
     +'）'+mwScanLeft(a)+mwScanMs(a,sh.asin));
   /* ② 出品の可否 */
   out.push('② 可否 <b>'+(+r.done||0)+'件</b>'
@@ -9674,6 +9683,24 @@ function mwRstLine(r){
         +' style="text-decoration:underline">申請ページを開く</a>'):'')
     +'</div>';
 }
+/* ---- ランキング（6.121・7.91）----
+   出すのは**大きい分類**の順位（ホビー・ゲームなど）。せどりすと と同じ見え方。
+   小分類の順位だと売れ行きが良く見えすぎて、仕入れの判断に使えない。
+     例：チョイプラ アモデウス 948,040位（ホビー）／小分類 11,481位
+   並べ替え・絞り込みもこの大分類の順位を使う。 */
+function mwRankOf(r){ return +((r||{}).rank)||0; }
+function mwRankText(r){
+  var n=mwRankOf(r);
+  if(!(n>0))return '—';
+  var t='<b>'+Number(n).toLocaleString('ja-JP')+'位</b>'
+    +((r.rank_cat)?('（'+esc(r.rank_cat)+'）'):'');
+  /* 小分類は添える程度（無い商品もある）。 */
+  if(+r.rank_sub>0)
+    t+=' <span class="note2" style="opacity:.7">小分類 '
+      +Number(+r.rank_sub).toLocaleString('ja-JP')+'位'
+      +((r.rank_sub_cat)?('・'+esc(String(r.rank_sub_cat).slice(0,20))):'')+'</span>';
+  return t;
+}
 /* 可否を調べる。1回の件数と時間で区切り、残りを出す。 */
 /* ---- JAN重複（6.109・7.84）----
    同じ JAN に ASIN が複数あるときは自動で決めず、人が選ぶ。
@@ -9755,6 +9782,9 @@ function mwAmzFilters(){
            noAmz:!!$('csvMwAmzNoAmz').checked,
            rstOk:!!$('csvMwAmzRstOk').checked,
            dup:!!$('csvMwAmzDup').checked,
+           /* ランキングがこれ以下（大分類の順位・6.121）。0 は「見ない」。 */
+           maxRank:(function(){ var n=+$('csvMwAmzMaxRank').value;
+             return (isFinite(n)&&n>0)?n:0; })(),
            minM:(function(){ var n=+$('csvMwAmzMinM').value; return isFinite(n)?n:0; })() };
 }
 /* 絞り込みを当てた行（計算つき）を返す。 */
@@ -9773,6 +9803,12 @@ function mwAmzPicked(){
       if(f.multi&&(+x.r.new_n||0)<2)return false;
       if(f.noAmz&&(+x.r.amz))return false;
       if(f.rstOk&&mwRstOf(x.r)!=='ok')return false;
+      /* ランキングがこれ以下（順位が小さいほど売れている）。
+         順位がまだ取れていない行は外す（判断できないので）。 */
+      if(f.maxRank){
+        var rk=mwRankOf(x.r);
+        if(!(rk>0)||rk>f.maxRank)return false;
+      }
       if(f.minM&&x.c.margin<f.minM)return false;
       return true;
     });
@@ -10271,6 +10307,12 @@ function mwAmzRender(){
   var k=function(x,key){ return x.c?(+x.c[key]||0):-Infinity; };
   var kk=function(x){ return k(x,'net'); };
   if(sort==='margin')list.sort(function(a,b){ return k(b,'margin')-k(a,'margin'); });
+  /* ランキング順（6.121）。順位が小さいほど売れているので昇順。
+     順位が取れていない行は後ろへ。 */
+  else if(sort==='rank')list.sort(function(a,b){
+    var ra=mwRankOf(a.r)||Infinity, rb=mwRankOf(b.r)||Infinity;
+    return ra-rb;
+  });
   else list.sort(function(a,b){ return k(b,'net')-k(a,'net'); });  // 既定：粗利（税抜）順
   var line=function(x){
     var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
@@ -10315,8 +10357,7 @@ function mwAmzRender(){
       /* 手数料の内訳（6.108）。せどりすと の内訳と並べて見られる */
       +mwAmzBreak(r,c)
       +'<div class="note2" style="margin:2px 0 0">ランキング '
-      +((+r.rank>0)?(Number(r.rank).toLocaleString('ja-JP')
-        +(r.rank_cat?('（'+esc(r.rank_cat)+'）'):'')):'—')
+      +mwRankText(r)
       +'　新品出品者 '+(+r.new_n||0)+'人'
       /* MW の数字には「MW」を付けて、Amazon の数字と混ざらないようにする */
       +'　<b>MW在庫</b> '+(+r.stock||0)+'点'
@@ -16473,7 +16514,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v207';   // sw.js の const V と必ず同じ値にする
+var APP_V='v208';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

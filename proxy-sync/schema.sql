@@ -537,8 +537,12 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   jan        TEXT PRIMARY KEY,
   asin       TEXT,      -- JAN から引いた ASIN
   name       TEXT,      -- Amazon の商品名
-  rank       INTEGER,   -- ランキング（いちばん細かい分類のもの）
-  rank_cat   TEXT,      -- その分類の名前
+  /* ランキングは**大きい分類**（displayGroupRanks。ホビー・ゲームなど）。
+     せどりすと と同じ見え方にする（7.91）。小分類は rank_sub に別に持つ。 */
+  rank       INTEGER,   -- 大分類の順位
+  rank_cat   TEXT,      -- 大分類の名前（例：ホビー）
+  rank_sub     INTEGER, -- 小分類の順位（添える程度）
+  rank_sub_cat TEXT,    -- 小分類の名前
   price      INTEGER,   -- 販売価格（円・送料込み）
   basis      TEXT,      -- 'カート' か '最安'
   low        INTEGER,   -- 新品の最安値（送料込み）
@@ -564,6 +568,7 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_amz_fee_at ON mw_amz(fee_at);
+CREATE INDEX IF NOT EXISTS idx_mw_amz_rank  ON mw_amz(rank);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_at    ON mw_amz(checked_at);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_price ON mw_amz(price);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_asin  ON mw_amz(asin);
@@ -628,8 +633,10 @@ CREATE TABLE IF NOT EXISTS jan_map (
   jan        TEXT PRIMARY KEY,
   asin       TEXT,      -- 見つかった ASIN（見つからなければ NULL）
   name       TEXT,      -- Amazon の商品名
-  rank       INTEGER,
-  rank_cat   TEXT,
+  rank         INTEGER,   -- 大分類の順位（7.91）
+  rank_cat     TEXT,
+  rank_sub     INTEGER,   -- 小分類の順位
+  rank_sub_cat TEXT,
   src        TEXT,      -- どこで分かったか（'catalog' / 'mw' / 'hand'）
   err        TEXT,      -- 見つからなかった理由
   at         TEXT,      -- 最後に調べた時刻

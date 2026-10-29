@@ -5837,3 +5837,68 @@ SP_GAP.putListingsItem = 250;          // 5回/秒
 （`WARNING` だけなら通った）。行ごとに `mw_reg_log` に残し、
 通った行は `skus` にも控える（仕入れ元・社・JAN・仕入値）。
 `GET /mw/put` が記録と **通った件数（`sent_ok`）** を返す。
+
+## 7.91 大分類の順位と、3日ごとの引き直し（2026-10-29・sw.js v208）
+
+### どの順位を取るか（`rankPick(it)`）
+Catalog API の `salesRanks[0]` には2種類の順位が入る。
+
+```
+displayGroupRanks   : [{ title:'ホビー', rank:948040 }]              ← 大分類
+classificationRanks : [{ title:'おもちゃ', rank:92000 },
+                       { title:'ロボットのプラモデル・模型', rank:11481 }]  ← 小分類
+```
+
+- `rank`・`rank_cat` ＝ **大分類**（`displayGroupRanks` の、0 でない最初のもの）。
+- `rank_sub`・`rank_sub_cat` ＝ **小分類**（`classificationRanks` の、
+  0 でない**一番細かいもの**＝最後のもの）。
+- 大分類が無い商品は、小分類を `rank` に入れ、`rank_sub` は**空にする**
+  （同じ数を二重に持たない）。
+- 分類名は60文字で切る。順位が 0 の分類は飛ばす。
+- 入れる先は `mw_amz` と `jan_map` の両方。`/mw/amz`（GET）も
+  `rank_sub`・`rank_sub_cat` を返す（画面で小さく添えるため）。
+
+### ランキング・商品名を3日ごとに引き直す
+①（JAN→ASIN）の対象を選ぶ条件に、3つめの枝を足した。
+
+```
+(COALESCE(a.asin,'') = '' AND (a.asin_at IS NULL OR a.asin_at < ?))  -- まだ ASIN が無い
+OR (COALESCE(a.asin,'') <> '' AND m.cand_at IS NULL)                 -- 候補が未控え（7.84）
+OR (COALESCE(a.asin,'') <> '' AND (a.asin_at IS NULL OR a.asin_at < ?))  -- 3日ごと（7.91）
+```
+
+- 日数は `MW_AMZ_TTL_D`（＝3日。値段の取り直しと同じ）。
+- 古い順（`COALESCE(a.asin_at,'') ASC`）に、1回 `MW_AMZ_MAX` 件まで。
+- 自動の回（毎時 :37・`jobMwAuto`）でも**①を先に回す**（`MW_AUTO_ASIN_N = 20`）。
+  記録の文は `ASIN・順位 n件／価格 …`。
+  Catalog は 5回/秒・1回20件なので、20件なら呼び出し1回・0.2秒で、
+  既存の処理（日次の自動値下げ・3時間ごとの hot）とはぶつからない。
+- ⚠ `?` は素のものだけ（7.76 の穴）。文に出てくる順に渡す。
+
+### 引き直せなくても、前の ASIN は消さない
+引き直しは**すでに ASIN がある行**を呼ぶので、v207 までの「引けなければ
+`asin=NULL`」をそのまま使うと、Catalog が一時的に返さなかっただけで
+**値段・可否・手数料をまとめて失う**（①が ASIN を消すと②③の対象から外れる）。
+そこで `mw_amz.asin` を持っている行は、引けなくても ASIN を残し、
+`err` に「引き直せませんでした（前の ASIN を使います）：…」と控えて
+`asin_at` だけ進める（次の引き直しは3日後）。
+**JAN重複のときは別**で、今までどおり ASIN を外す（人が選ぶまで値段を
+取らないため・7.84）。件数は `kept` で数える。
+
+### 引き直しても、人が選んだ ASIN は守る
+`mwAsinFind(env, run, jans, dl, keep)` の `keep` は `{JAN: 人が選んだ ASIN}`。
+候補が2件以上あっても、`keep` にある ASIN が候補に入っていればそれを使い、
+**「JAN重複（要確認）」に戻さない**（7.84 で人が選んだ答えを消さないため）。
+`keep` は `mwScanAsin` の選ぶ SQL が `jan_map.picked_at` のある行から作る。
+
+### マイグレーション 0033（デプロイの前に流す）
+`proxy-sync/migrate-0033-rank-group.sql`（10文）。
+
+1. `mw_amz`・`jan_map` に `rank_sub`・`rank_sub_cat` を足す
+2. 今ある `rank`・`rank_cat`（＝小分類）を `rank_sub` へ**移す**
+3. `rank`・`rank_cat` を空にする（大分類が入るまで「—」と出る）
+4. `mw_amz.asin_at` を `2020-01-01` に戻して**全件引き直し**にする
+5. `idx_mw_amz_rank`（ランキングの並べ替え・絞り込み用）
+
+ASIN がある行はこれで①の対象になるので、「Amazonで調べる」か
+自動の回（毎時 :37・20件）で順に埋まる。1,000件なら自動だけで約2日。

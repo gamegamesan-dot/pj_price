@@ -4916,8 +4916,42 @@ async function mwFeeFind(env, run, items) {
   return { map: out, calls };
 }
 
+/* ---- ランキングの取り出し（7.91）----
+   せどりすと と同じ見え方にするため、**大きい分類（displayGroupRanks）を主**に使う。
+   小分類（classificationRanks）の順位だと売れ行きが良く見えすぎて、
+   仕入れの判断に使えない。
+     例：チョイプラ アモデウス（JAN 4580033110113）
+         小分類 11,481位（ロボットのプラモデル・模型）
+         大分類 948,040位（ホビー）  ← せどりすと はこちら
+   大分類が返らない商品もあるので、そのときだけ小分類で代わりにする
+   （どちらで出したかは rank_cat の名前で分かる）。 */
+function rankPick(it) {
+  const sr = ((it && it.salesRanks) || [])[0] || {};
+  const pick = (list) => {
+    for (const g of (list || []))
+      if (Number(g.rank) > 0)
+        return { rank: Number(g.rank), cat: String(g.title || "").slice(0, 60) };
+    return null;
+  };
+  /* 小分類は**いちばん細かいもの**（並びは大→細）。 */
+  const subs = (sr.classificationRanks || []).filter((g) => Number(g.rank) > 0);
+  const sub = subs.length
+    ? { rank: Number(subs[subs.length - 1].rank),
+        cat: String(subs[subs.length - 1].title || "").slice(0, 60) }
+    : null;
+  const grp = pick(sr.displayGroupRanks);
+  return { rank: grp ? grp.rank : (sub ? sub.rank : 0),
+           rank_cat: grp ? grp.cat : (sub ? sub.cat : ""),
+           /* 大分類が無くて小分類で代わりにしたときは、小分類を二重に出さない。 */
+           rank_sub: grp && sub ? sub.rank : 0,
+           rank_sub_cat: grp && sub ? sub.cat : "" };
+}
+
 /* JAN から ASIN・商品名・ランキングを引く。20件ずつ。 */
-async function mwAsinFind(env, run, jans, dl) {
+/* keep … { JAN: 人が選んだ ASIN }（7.91）。
+   引き直しのときに候補が2件以上あっても、人が選んだ行はその ASIN を使う
+   （そうしないと、選び直しを求める状態に戻ってしまう）。 */
+async function mwAsinFind(env, run, jans, dl, keep) {
   const out = {};
   /* 候補の全部（7.84）。同じ JAN に ASIN が複数当たることがある
      （例：JAN 4573102666987 にウルトラマンとスター・ウォーズ）。
@@ -4956,21 +4990,9 @@ async function mwAsinFind(env, run, jans, dl) {
         }
       }
       const sum = (it.summaries || [])[0] || {};
-      /* ランキングは「いちばん細かい分類」を採る（表示順＝大分類から細かい順）。 */
-      let rank = 0, rankCat = "";
-      const sr = (it.salesRanks || [])[0] || {};
-      for (const g of (sr.classificationRanks || [])) {
-        if (Number(g.rank) > 0) { rank = Number(g.rank); rankCat = String(g.title || ""); }
-      }
-      if (!rank) {
-        for (const g of (sr.displayGroupRanks || [])) {
-          if (Number(g.rank) > 0 && !rank) {
-            rank = Number(g.rank); rankCat = String(g.title || "");
-          }
-        }
-      }
-      const rec = { asin, name: String(sum.itemName || "").slice(0, 300),
-                    rank, rank_cat: rankCat.slice(0, 60) };
+      const rk = rankPick(it);
+      const rec = Object.assign(
+        { asin, name: String(sum.itemName || "").slice(0, 300) }, rk);
       for (const j of jset) if (part.indexOf(j) >= 0) {
         addCand(j, rec);
         if (!out[j]) out[j] = rec;
@@ -5007,21 +5029,16 @@ async function mwAsinFind(env, run, jans, dl) {
     const asin = String(it.asin || "");
     if (!asin) { why[j] = "ASIN が返りませんでした"; continue; }
     const sum = (it.summaries || [])[0] || {};
-    let rank = 0, rankCat = "";
-    const sr = (it.salesRanks || [])[0] || {};
-    for (const g of (sr.classificationRanks || []))
-      if (Number(g.rank) > 0) { rank = Number(g.rank); rankCat = String(g.title || ""); }
-    if (!rank) for (const g of (sr.displayGroupRanks || []))
-      if (Number(g.rank) > 0 && !rank) { rank = Number(g.rank); rankCat = String(g.title || ""); }
-    out[j] = { asin, name: String(sum.itemName || "").slice(0, 300),
-               rank, rank_cat: rankCat.slice(0, 60), retried: 1 };
+    out[j] = Object.assign(
+      { asin, name: String(sum.itemName || "").slice(0, 300), retried: 1 },
+      rankPick(it));
     /* 1件ずつの引き直しでも候補を控える（まとめ引きで漏れた分の補い）。 */
     for (const it2 of items) {
       const a2 = String(it2.asin || "");
       if (!a2) continue;
       const s2 = (it2.summaries || [])[0] || {};
-      addCand(j, { asin: a2, name: String(s2.itemName || "").slice(0, 300),
-                   rank: 0, rank_cat: "" });
+      addCand(j, Object.assign(
+        { asin: a2, name: String(s2.itemName || "").slice(0, 300) }, rankPick(it2)));
     }
   }
   for (const j of miss.slice(MW_AMZ_RETRY_MAX))
@@ -5030,13 +5047,16 @@ async function mwAsinFind(env, run, jans, dl) {
   /* 候補が2件以上ある JAN は**自動で決めない**（7.84）。
      印を付けて人に選んでもらう。map からも外して ASIN を入れない。 */
   let dup = 0;
+  const kp = keep || {};
   for (const j of jans) {
     const l = cands[j] || [];
-    if (l.length >= 2) {
-      dup++;
-      delete out[j];
-      why[j] = "JAN重複（要確認）：候補 " + l.length + "件";
-    }
+    if (l.length < 2) continue;
+    /* 人が選んだ行は、その ASIN の候補をそのまま使う（7.91）。 */
+    const mine = kp[j] ? l.filter((x) => String(x.asin) === String(kp[j]))[0] : null;
+    if (mine) { out[j] = mine; continue; }
+    dup++;
+    delete out[j];
+    why[j] = "JAN重複（要確認）：候補 " + l.length + "件";
   }
   if (dup) run.notes.push("JAN重複（要確認）" + dup + "件");
   /* 引けた分・引けなかった分を jan_map に控える（7.67）。
@@ -5059,9 +5079,9 @@ async function janMapPut(env, list, src) {
     if (!janOk(jan)) continue;
     stmts.push(env.DB.prepare(
       /* 候補（7.84）。人が選んだ行（picked_at あり）は ASIN を上書きしない。 */
-      `INSERT INTO jan_map (jan,asin,name,rank,rank_cat,src,err,at,
-         cands,cand_n,cand_at,created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?8,?8)
+      `INSERT INTO jan_map (jan,asin,name,rank,rank_cat,rank_sub,rank_sub_cat,
+         src,err,at,cands,cand_n,cand_at,created_at)
+       VALUES (?1,?2,?3,?4,?5,?11,?12,?6,?7,?8,?9,?10,?8,?8)
        ON CONFLICT(jan) DO UPDATE SET
          asin=CASE WHEN COALESCE(jan_map.picked_at,'')<>'' THEN jan_map.asin
                    ELSE excluded.asin END,
@@ -5071,12 +5091,15 @@ async function janMapPut(env, list, src) {
          name=COALESCE(NULLIF(excluded.name,''), jan_map.name),
          rank=COALESCE(excluded.rank, jan_map.rank),
          rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), jan_map.rank_cat),
+         rank_sub=COALESCE(excluded.rank_sub, jan_map.rank_sub),
+         rank_sub_cat=COALESCE(NULLIF(excluded.rank_sub_cat,''), jan_map.rank_sub_cat),
          src=excluded.src, err=excluded.err, at=excluded.at`)
       .bind(jan, String(r.asin || "") || null, String(r.name || ""),
             Number(r.rank) || null, String(r.rank_cat || ""),
             String(src || "catalog"), String(r.err || ""), at,
             Array.isArray(r.cands) ? JSON.stringify(r.cands.slice(0, 12)) : null,
-            Array.isArray(r.cands) ? r.cands.length : null));
+            Array.isArray(r.cands) ? r.cands.length : null,
+            Number(r.rank_sub) || null, String(r.rank_sub_cat || "")));
   }
   if (stmts.length) {
     for (let i = 0; i < stmts.length; i += 50)
@@ -5174,14 +5197,19 @@ const MW_PRICE_CALL_MS = 11000;
 /* ① JAN → ASIN。ASIN が入っている行は引き直さない（ASIN は変わらない）。
    引けなかった行は MW_AMZ_ERR_TTL_H（24時間）たてば再挑戦する。 */
 async function mwScanAsin(env, run, o, dl) {
-  const st = { asked: 0, done: 0, ok_n: 0, ng: 0, dup: 0, calls: 0, left: 0,
-               stopped: "" };
+  const st = { asked: 0, done: 0, ok_n: 0, ng: 0, dup: 0, kept: 0, calls: 0,
+               left: 0, stopped: "" };
   const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
   const q = mwWhere(o);
   const errOld = new Date(Date.now() - MW_AMZ_ERR_TTL_H * 3600000).toISOString();
+  /* ランキングと商品名は動くので、**3日ごとに引き直す**（7.91）。
+     大分類の順位（displayGroupRanks）を既存の行に埋めるためにも要る。 */
+  const oldAt = new Date(Date.now() - MW_AMZ_TTL_D * 86400000).toISOString();
   /* ⚠ 素の `?` だけ（7.76 の穴）。文に出てくる順で渡す。 */
   const pick = await env.DB.prepare(
-    `SELECT s.jan AS jan FROM mw_stock s
+    `SELECT s.jan AS jan, a.asin AS had,
+            m.asin AS picked, m.picked_at AS picked_at
+       FROM mw_stock s
        LEFT JOIN mw_amz a ON a.jan = s.jan
        LEFT JOIN jan_map m ON m.jan = s.jan
       WHERE ${q.w}
@@ -5193,17 +5221,29 @@ async function mwScanAsin(env, run, o, dl) {
           (COALESCE(a.asin,'') = '' AND (a.asin_at IS NULL OR a.asin_at < ?))
           /* ASIN はあるが候補をまだ控えていない行を、少しずつ引き直す（7.84） */
           OR (COALESCE(a.asin,'') <> '' AND m.cand_at IS NULL)
+          /* ランキング・商品名を3日ごとに引き直す（7.91） */
+          OR (COALESCE(a.asin,'') <> '' AND (a.asin_at IS NULL OR a.asin_at < ?))
         )
       ORDER BY (CASE WHEN COALESCE(a.asin,'') = '' THEN 0 ELSE 1 END) ASC,
                COALESCE(a.asin_at,'') ASC, s.jan ASC`)
-    .bind(...q.bind, errOld).all();
-  const all = ((pick && pick.results) || []).map((x) => String(x.jan));
+    .bind(...q.bind, errOld, oldAt).all();
+  const rows0 = (pick && pick.results) || [];
+  const all = rows0.map((x) => String(x.jan));
+  /* すでに ASIN を持っている行（引き直し）。引けなくても消さない（7.91）。 */
+  const had = {};
+  for (const x of rows0)
+    if (String(x.had || "")) had[String(x.jan)] = String(x.had);
+  /* 人が選んだ ASIN を守る（引き直しで選び直しに戻さない・7.91）。 */
+  const keep = {};
+  for (const x of rows0)
+    if (String(x.picked_at || "") && String(x.picked || ""))
+      keep[String(x.jan)] = String(x.picked);
   st.asked = all.length;
   if (!all.length) return st;
   if (Date.now() > dl) { st.stopped = "time"; st.left = st.asked; return st; }
   const todo = all.slice(0, limit);
   /* 持ち時間を渡す。足りなければ引き直しを打ち切って残りを次回に回す（7.82）。 */
-  const found = await mwAsinFind(env, run, todo, dl);
+  const found = await mwAsinFind(env, run, todo, dl, keep);
   st.calls = found.calls;
   if (found.cut) st.stopped = "time";
   const at = nowIso();
@@ -5214,6 +5254,17 @@ async function mwScanAsin(env, run, o, dl) {
     if (!f || !f.asin) {
       const w = (found.why && found.why[j]) || "ASINが見つかりません";
       if (/JAN重複/.test(w)) st.dup++; else st.ng++;
+      /* 引き直し（7.91）で引けなかっただけなら、**前の ASIN は消さない**。
+         Catalog が一時的に返さないこともあり、消すと値段も可否も手数料も
+         失う。時刻だけ進めて、次の引き直し（3日後）に回す。
+         JAN重複のときは別（人が選ぶまで ASIN を外す・7.84）。 */
+      if (had[j] && !/JAN重複/.test(w)) {
+        st.kept++;
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_amz SET err=?2, asin_at=?3 WHERE jan=?1`)
+          .bind(j, "引き直せませんでした（前の ASIN を使います）：" + w, at));
+        continue;
+      }
       /* 候補が2件以上の行は ASIN を入れない（人が選ぶまで）。
          すでに入っていた ASIN も外す（取り違えたまま値段を取らないため）。 */
       stmts.push(env.DB.prepare(
@@ -5227,14 +5278,18 @@ async function mwScanAsin(env, run, o, dl) {
     st.ok_n++;
     /* 値段の列には触らない（③が入れる）。 */
     stmts.push(env.DB.prepare(
-      `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,err,checked_at,asin_at,created_at)
-         VALUES (?1,?2,?3,?4,?5,'',?6,?6,?6)
+      `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,rank_sub,rank_sub_cat,
+         err,checked_at,asin_at,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8)
        ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
          name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
          rank=COALESCE(excluded.rank, mw_amz.rank),
          rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), mw_amz.rank_cat),
+         rank_sub=COALESCE(excluded.rank_sub, mw_amz.rank_sub),
+         rank_sub_cat=COALESCE(NULLIF(excluded.rank_sub_cat,''), mw_amz.rank_sub_cat),
          err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
-      .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "", at));
+      .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
+            f.rank_sub || null, f.rank_sub_cat || "", at));
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
@@ -6016,6 +6071,7 @@ async function mwBuyList(env, url) {
    ・既存の日次（JST 3時台 :07）と3時間ごとの hot（:07）とは**分（:37）で分ける**。
      getItemOffersBatch は10秒に1回の間隔を KV で守るので、重なっても待つだけ。 */
 const MW_AUTO_MODES = { off: 1, on: 1 };
+const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き直す件数（7.91）
 const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数
 const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数
 const MW_AUTO_BUDGET_MS = 45000;    // 1回の持ち時間（60秒の手前）
@@ -6034,7 +6090,7 @@ async function mwAutoSettings(env) {
 }
 async function jobMwAuto(env, opt) {
   const run = newRun("mw-auto");
-  const res = { ok: false, mode: "off", price_n: 0, fee_n: 0, rst_n: 0,
+  const res = { ok: false, mode: "off", asin_n: 0, price_n: 0, fee_n: 0, rst_n: 0,
                 calls: 0, left: 0, note: "" };
   try {
     const st = await mwAutoSettings(env);
@@ -6046,19 +6102,25 @@ async function jobMwAuto(env, opt) {
     }
     const t0 = Date.now();
     const dl = t0 + MW_AUTO_BUDGET_MS;
-    /* ① 価格（＋手数料）。優先順は上のとおり。 */
+    /* ① ASIN・ランキング・商品名の引き直し（7.91）。
+       Catalog は 5回/秒で軽いので、ここでも少しずつ進める。 */
+    const sa = await mwScanAsin(env, run,
+      Object.assign({}, st.opt, { limit: MW_AUTO_ASIN_N }), dl);
+    res.asin_n = sa.done; res.calls += sa.calls || 0; res.left += sa.left || 0;
+    /* ② 価格（＋手数料）。優先順は上のとおり。 */
     const o = Object.assign({}, st.opt, { limit: MW_AUTO_PRICE_N, order: "auto" });
     const pr = await mwScanPrice(env, run, o, dl);
     res.price_n = pr.done; res.fee_n = pr.fee_ok; res.left = pr.left;
     res.calls += (pr.calls || 0) + (pr.fee_calls || 0);
-    /* ② 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
+    /* ③ 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
     const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
       { limit: MW_AUTO_RST_N }), { run: run, deadline: dl });
     res.rst_n = rr.done || 0;
     res.calls += rr.calls || 0;
     res.left += rr.left || 0;
-    res.note = "価格 " + res.price_n + "件（手数料 " + res.fee_n + "）／可否 "
-      + res.rst_n + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
+    res.note = "ASIN・順位 " + res.asin_n + "件／価格 " + res.price_n
+      + "件（手数料 " + res.fee_n + "）／可否 " + res.rst_n
+      + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
     await env.DB.prepare(
       `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,created_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
@@ -6370,7 +6432,8 @@ async function mwAmzList(env, url) {
             s.stock AS stock, s.note AS note, s.ship_text AS ship_text,
             s.ship_days AS ship_days,
             a.asin AS asin, a.name AS amz_name, a.rank AS rank,
-            a.rank_cat AS rank_cat, a.price AS price, a.basis AS basis,
+            a.rank_cat AS rank_cat, a.rank_sub AS rank_sub,
+            a.rank_sub_cat AS rank_sub_cat, a.price AS price, a.basis AS basis,
             a.low AS low, a.buybox AS buybox, a.new_n AS new_n, a.low_n AS low_n,
             a.amz AS amz, a.fba_n AS fba_n, a.err AS amz_err,
             a.checked_at AS amz_at,
@@ -8574,9 +8637,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
-  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   MW_PUT_MAX, jobMwAuto, mwAutoSettings,
-  MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,
+  MW_AUTO_ASIN_N, MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
