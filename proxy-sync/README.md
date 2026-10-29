@@ -153,6 +153,58 @@ npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40�
 npx wrangler secret put SP_SELLER_ID             # 出品者トークン（7.78・出品の可否で必須）
 ```
 
+## マイグレーションの流し方（`--file` が通らないとき）
+
+`npx wrangler d1 execute pj-sync --remote --file=…` が
+**`/import failed: Authentication error [code: 10000]`** で落ちることがある。
+`--file` だけは D1 の **import の API** を使い、そこのスコープが足りないと落ちる
+（`--command` が使う query の API は同じログインで通る）。`wrangler login` を
+やり直すと通るのは、入り直しでスコープが取り直されるから。
+
+### 方法1（おすすめ）：API トークンにする
+
+`wrangler login`（OAuth）のトークンは期限があり、import に要るスコープが
+入らないことがある。**アカウントの API トークン**なら期限が来ない。
+
+1. ダッシュボード → マイプロフィール → API トークン → **アカウントのトークン**として作る
+2. 権限：**アカウント → D1 → 編集**（Workers を同じトークンで出すなら
+   「Workers スクリプト → 編集」も足す）
+3. 使うときに環境変数で渡す（PowerShell。この窓の中だけ有効）
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = "（作ったトークン）"
+$env:CLOUDFLARE_ACCOUNT_ID = "（アカウントID）"
+npx wrangler d1 execute pj-sync --remote --file=./migrate-0031-jan-dup-fees.sql
+```
+
+**トークンの値はこのリポジトリにも会話にも書かない。**
+`CLOUDFLARE_API_TOKEN` があると wrangler は `wrangler login` の分より
+こちらを先に使うので、ログインし直さなくてよくなる。
+
+### 方法2：`--file` を使わず1文ずつ流す
+
+`--command`（query の API）だけで流す道具を置いた（7.87）。
+**import の API をまったく使わない**ので、上の認証の問題に当たらない。
+
+```powershell
+cd C:\dev\pj-price\proxy-sync
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql --dry-run   # 流す文を見るだけ
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql             # 本番に流す
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql --local      # 手元のDBに流す
+```
+
+* SQL を1文ずつに分けて `--command` で流す（文字列の中の `;` や `--` では切らない）
+* 各文は1行に詰める（Windows の `npx.cmd` に渡すときの引用符の事故を避ける）
+* **`ALTER TABLE … ADD COLUMN` は2回流せない**ので、
+  「すでに同じ列がある」で落ちた文は **済み** として飛ばす。
+  そのため**途中で失敗しても、そのまま流し直せる**
+* 失敗した文はその場で止めて、何文目かと D1 の返事を出す
+
+分け方のテストは `tests/d1exec.mjs`（実物のマイグレーション31本ぜんぶを確かめる）。
+
+```
+```
+
 ### 作業者用のキー（STAFF_KEY・7.40）
 
 知人と pj_price を共有するために、キーを2本にしてある。

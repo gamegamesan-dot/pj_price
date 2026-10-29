@@ -5621,3 +5621,47 @@ const MW_AUTO_BUDGET_MS = 45000; // 1回の持ち時間
 `getItemOffersBatch` は10秒に1回なので理論上1日8,640回。
 増えて62回でも**上限の0.7%**。10秒レーンの占有は1日あたり＋4.2分。
 eBay API・D1 の書き込み（20行/時）はいずれも影響なし。
+
+## 7.87 マイグレーションを1文ずつ流す道具（2026-10-29）
+
+`npx wrangler d1 execute pj-sync --remote --file=…` が
+**`/import failed: Authentication error [code: 10000]`** で落ちることがある。
+
+**原因は認証が切れているのではなく、`--file` だけが別の API を使っていること。**
+
+| 流し方 | 使う API | 様子 |
+| --- | --- | --- |
+| `--command` | D1 の **query** | 同じログインで通る |
+| `--file` | D1 の **import**（署名URLへ上げてから取り込む） | ここだけ 10000 で落ちる |
+
+`wrangler login` をやり直すと通るのは、入り直しで OAuth のスコープが
+取り直されるから。`tokens/verify` が通っても権限は見ていないので、
+「トークンは生きているのに 10000」が起きる。
+
+### 対処1：アカウントの API トークンにする（根本）
+
+OAuth のトークンには期限があり、import に要るスコープが入らないことがある。
+**アカウントのトークン**（ユーザーのトークンではなく）に
+**D1 → 編集**を付け、`CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` で渡す。
+これがあると wrangler は `wrangler login` の分よりこちらを先に使う。
+
+### 対処2：`proxy-sync/d1-exec.mjs`（import を使わない）
+
+```
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql [--dry-run] [--local] [--db 名前]
+```
+
+* `splitSql()` が SQL を1文ずつに分ける。
+  **文字列（`'…'`）の中の `;` や `--` では切らない**。`''`（文字としての `'`）も越えない。
+  `--` の行コメントと `/* */` のブロックコメントは落とす
+* 各文は**1行に詰める**。Windows の `npx.cmd` は引数を読み直すので、
+  改行が混ざると壊れやすい。引数は `spawnSync` に**配列で**渡す（shell を通さない）
+* **`ALTER TABLE … ADD COLUMN` は2回流せない**ので、
+  `duplicate column name` ／ `already exists` で落ちた文は **済み**として飛ばす。
+  そのため**途中で失敗してもそのまま流し直せる**
+* `--yes` は wrangler の版によって無いので、弾かれたら自動で外して続ける
+* 失敗した文はその場で止めて、何文目かと D1 の返事を出す
+
+テストは `tests/d1exec.mjs`。分け方のほか、**実物のマイグレーション31本ぜんぶ**に
+ついて「改行が残っていない・コメントが文になっていない・`'` が奇数にならない」を
+確かめる。
