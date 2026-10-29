@@ -553,8 +553,17 @@ CREATE TABLE IF NOT EXISTS mw_amz (
      「さっき調べた行」になって③の価格の対象から外れてしまう。 */
   asin_at    TEXT,      -- ① JAN→ASIN を最後に試した時刻
   price_at   TEXT,      -- ③ 実売価格を最後に試した時刻
+  /* 商品ごとの手数料（Product Fees API・7.85）。一律の率とは別に持つ。 */
+  fee_ref    INTEGER,   -- 販売手数料（税抜）
+  fee_fba    INTEGER,   -- FBA手数料（配送代行＋在庫管理）
+  fee_tax    INTEGER,   -- 手数料の消費税
+  fee_total  INTEGER,   -- 合計（Amazon が返す総額）
+  fee_base   INTEGER,   -- その手数料を出したときの売値
+  fee_at     TEXT,
+  fee_err    TEXT,
   created_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_mw_amz_fee_at ON mw_amz(fee_at);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_at    ON mw_amz(checked_at);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_price ON mw_amz(price);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_asin  ON mw_amz(asin);
@@ -578,6 +587,21 @@ CREATE TABLE IF NOT EXISTS mw_amz_runs (
   created_at TEXT
 );
 
+/* ===== MW の自動の取り直しの記録（7.86）===== */
+CREATE TABLE IF NOT EXISTS mw_auto_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT,
+  kind       TEXT,        -- 'cron' / 'hand'
+  price_n    INTEGER,
+  fee_n      INTEGER,
+  rst_n      INTEGER,
+  calls      INTEGER,
+  left_n     INTEGER,
+  note       TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mw_auto_at ON mw_auto_runs(at);
+
 /* ===== JAN から ASIN を引く控え（7.67）===== */
 CREATE TABLE IF NOT EXISTS jan_map (
   jan        TEXT PRIMARY KEY,
@@ -588,10 +612,18 @@ CREATE TABLE IF NOT EXISTS jan_map (
   src        TEXT,      -- どこで分かったか（'catalog' / 'mw' / 'hand'）
   err        TEXT,      -- 見つからなかった理由
   at         TEXT,      -- 最後に調べた時刻
+  /* JAN 1つに ASIN が複数あるとき（7.84）。自動で決めず、人が選ぶ。 */
+  cands      TEXT,      -- 候補（JSON 配列）
+  cand_n     INTEGER,   -- 候補の件数（0=未確認）
+  cand_at    TEXT,      -- 候補を控えた時刻
+  picked_at  TEXT,      -- 人が選んだ時刻
+  picked_by  TEXT,      -- 'hand'
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jan_map_asin ON jan_map(asin);
 CREATE INDEX IF NOT EXISTS idx_jan_map_at   ON jan_map(at);
+CREATE INDEX IF NOT EXISTS idx_jan_map_candn  ON jan_map(cand_n);
+CREATE INDEX IF NOT EXISTS idx_jan_map_candat ON jan_map(cand_at);
 
 /* ===== MW の仕入れの印（7.68）===== */
 CREATE TABLE IF NOT EXISTS mw_buy (

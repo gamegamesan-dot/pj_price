@@ -737,6 +737,8 @@ body.staff #syncOnHandFix{display:none !important}
             （値段の取得が10秒に1回・1回 <b id="csvMwAmzMax">120</b>件まで）。</div></div>
           <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
           <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+          <!-- JAN重複を決めたときの案内（6.109）。一覧の取り込みで消えない場所に置く -->
+          <div class="note2" id="csvMwDupNote" style="margin-top:2px;color:var(--good)"></div>
           <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
           <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
           <div style="display:flex;gap:6px;margin-top:6px">
@@ -747,6 +749,9 @@ body.staff #syncOnHandFix{display:none !important}
             <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
             <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
           </div>
+          <!-- 仕入れる行の JAN だけをコピー（6.110） -->
+          <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
+          <div class="note2" id="csvMwJanNote" style="margin-top:2px;color:var(--good)"></div>
           <!-- Amazon 登録用ファイル（6.103）。せどりすと と同じ形 -->
           <div class="note2" style="margin:8px 0 0">仕入れる印の付いた行から、
             セラーセントラルの<b>アップロードによる一括商品登録</b>に送るファイルを作ります。
@@ -1161,6 +1166,7 @@ body.staff #syncOnHandFix{display:none !important}
       <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
       <div class="body">
       <div class="rowv cfgprice"><label>FBAで売れたときの動作（フェイズB）</label><select id="pbMode"><option value="off">オフ（今までどおり通知だけ）</option><option value="plan" selected>予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay の数量を0にする）</option></select><div class="note2" style="margin-top:2px">FBAで売れて販売可能が0になった出品を、pj-sync が<b>まず数量0</b>にして売り越しを止めます（出品は残ります。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。「在庫0時：再調達」の行は数量0にしたうえで<b>再調達の予定</b>に載せ、下の設定に従って売値を直して数量を1に戻します。<b>まず「予定だけ表示」で1〜2日ようすを見てから</b>オンにしてください。</div></div>
+      <div class="rowv cfgprice"><label>MWの価格を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
       <div class="rowv cfgprice"><label>再調達の実行方法</label><select id="pbRestock"><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync がそのまま実行）</option></select><div class="note2" style="margin-top:2px">再調達は<b>売値をAmazon最安値基準の推奨売値に直して数量を1に戻す</b>操作です。目標の売値は pj_price が計算して送ります（24時間より古い・最安グループが2人未満・下限利益を割るときは、数量0のままにして理由を出します）。</div></div>
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
@@ -4265,7 +4271,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // 売値の見直しの自動反映（値上げ）
                  'autoRvMode','autoRvMax','autoRvPct',
                  // フェイズB（FBAで売れたときの動作・再調達の実行方法）
-                 'pbMode','pbRestock','autoRkMode',
+                 'pbMode','pbRestock','autoRkMode','mwAutoMode',
                  // 自動処理の広告料率（6.74）／売れたあとの在庫補充（6.77）
                  'autoAdRate','autoSkMode',
                  // マッチングワールド（MW）の無在庫（6.85）
@@ -8983,6 +8989,7 @@ $('syncMwPlan').onclick=function(){ mwDropAct(false); };
 $('syncMwGo').onclick=function(){ mwDropAct(true); };
 $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwReg').onclick=mwRegGo;
+$('csvMwJanCopy').onclick=mwBuyJanCopy;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
@@ -9321,20 +9328,53 @@ function mwAmzFee(r){
   return { rate:mwNum0('amzFeeRate',15), fba:mwNum0('amzFbaFee',400) };
 }
 /* 1行ぶんの利益。値段が取れていない行は null。 */
+/* 商品ごとの手数料（6.108・7.85）。Amazon から取れていればそれを使う。
+   取れていない行は⚙設定の一律の率で出し、画面に「仮の手数料」と出す。
+   せどりすと の内訳と合わせるため、**手数料の消費税も足す**。 */
+function mwFeeOf(r){
+  var real=(+((r||{}).fee_total)||0)>0;
+  if(real){
+    var ref=+r.fee_ref||0, fba=+r.fee_fba||0, tax=+r.fee_tax||0;
+    var tot=+r.fee_total||0;
+    /* 合計が明細より大きいときは、差を消費税に寄せる（明細の形が変わっても
+       合計がずれないように）。 */
+    if(tot>ref+fba+tax)tax=tot-ref-fba;
+    return { ref:ref, fba:fba, tax:tax, fee:ref+fba+tax, real:true,
+             rate:ref&&r.fee_base?Math.round(ref/(+r.fee_base||1)*1000)/10:null,
+             base:+r.fee_base||0, at:r.fee_at||'' };
+  }
+  var f=mwAmzFee(r), price=+((r||{}).price)||0;
+  var ref2=Math.round(price*f.rate/100);
+  return { ref:ref2, fba:f.fba, tax:0, fee:ref2+f.fba, real:false,
+           rate:f.rate, base:price, at:'' };
+}
 function mwAmzCalc(r){
   var price=+((r||{}).price)||0;
   if(!(price>0))return null;
   var cost=mwCost(r);                      // 卸値×1.1＋仕入れ送料（MW と同じ式）
   if(!(cost>0))return null;
-  var f=mwAmzFee(r);
-  var fee=Math.round(price*f.rate/100)+f.fba;
+  var z=mwFeeOf(r);
+  var fee=z.fee;
   var profit=Math.round(price-fee-cost);
-  return { price:price, cost:cost, fee:fee, rate:f.rate, fba:f.fba,
+  return { price:price, cost:cost, fee:fee, rate:z.rate, fba:z.fba,
+           feeRef:z.ref, feeTax:z.tax, feeReal:z.real, feeAt:z.at,
            profit:profit,
            /* 消費税を引いた額。売上の消費税（10/11）ぶんを落とす。 */
            net:Math.round(profit*10/11),
            margin:Math.round(profit/price*1000)/10,
            genre:mwAmzGenre(r) };
+}
+/* 利益の内訳（6.108）。せどりすと の内訳と並べて見られるように出す。 */
+function mwAmzBreak(r,c){
+  if(!c)return '';
+  return '<div class="note2" style="margin:2px 0 0">'
+    +'販売手数料 '+yen(c.feeRef)
+    +(c.rate!=null?('（'+c.rate+'%）'):'')
+    +(c.feeTax?('＋手数料消費税 '+yen(c.feeTax)):'')
+    +'　FBA手数料 '+yen(c.fba)
+    +'　仕入 '+yen(c.cost)
+    +(c.feeReal?'':' <span style="color:var(--bad)">仮の手数料</span>')
+    +'</div>';
 }
 function mwAmzRunGo(){
   var note=$('csvMwAmzNote');
@@ -9377,8 +9417,9 @@ function mwScanNote(d){
   var out=[];
   /* ① ASIN */
   out.push('① ASIN引き <b>'+(+a.done||0)+'件</b>'
-    +'（取れた '+(+a.ok_n||0)+'／取れなかった '+(+a.ng||0)+'）'
-    +mwScanLeft(a)+mwScanMs(a,sh.asin));
+    +'（取れた '+(+a.ok_n||0)+'／取れなかった '+(+a.ng||0)
+    +((+a.dup)?('／<span style="color:var(--bad)">JAN重複 '+(+a.dup)+'</span>'):'')
+    +'）'+mwScanLeft(a)+mwScanMs(a,sh.asin));
   /* ② 出品の可否 */
   out.push('② 可否 <b>'+(+r.done||0)+'件</b>'
     +'（<span style="color:var(--good)">緑 '+(+r.ok_n||0)+'</span>'
@@ -9398,11 +9439,14 @@ function mwScanNote(d){
     out.push('　<b>可否はこれ以上呼んでいません</b>（同じ理由で失敗し続けるため）。');
   /* ③ 実売価格 */
   out.push('③ 価格 <b>'+(+p.done||0)+'件</b>'
-    +'（値段あり '+(+p.priced||0)+'／Amazon に出品なし '+(+p.none||0)+'）'
+    +'（値段あり '+(+p.priced||0)+'／Amazon に出品なし '+(+p.none||0)
+    +'／手数料 '+(+p.fee_ok||0)
+    +((+p.fee_ng)?('・取れず '+(+p.fee_ng)):'')
+    +((+p.fee_left)?('・次回 '+(+p.fee_left)):'')+'）'
     +((+p.skipped_red)?('　赤は取っていません '+(+p.skipped_red)+'件'):'')
     +mwScanLeft(p)+mwScanMs(p,sh.price));
   out.push('呼び出し：ASIN引き '+(+a.calls||0)+'回／可否 '+(+r.calls||0)
-    +'回／価格 '+(+p.calls||0)+'回'
+    +'回／価格 '+(+p.calls||0)+'回／手数料 '+(+p.fee_calls||0)+'回'
     +((+d.ms)?('　合計 '+Math.round((+d.ms)/100)/10+'秒'):''));
   /* 段ごとの持ち時間で切れたときは、そう書く（押し直せば進む）。 */
   if(p.stopped==='time'&&!(+p.done))
@@ -9493,6 +9537,79 @@ function mwRstLine(r){
     +'</div>';
 }
 /* 可否を調べる。1回の件数と時間で区切り、残りを出す。 */
+/* ---- JAN重複（6.109・7.84）----
+   同じ JAN に ASIN が複数あるときは自動で決めず、人が選ぶ。
+   決まるまでは「仕入れる」と「Amazon登録用ファイル」の対象から外す。 */
+function mwJanDup(r){
+  return (+((r||{}).cand_n)||0)>=2 && !String((r||{}).jan_picked_at||'');
+}
+function mwJanCands(r){
+  var c=(r||{}).cands;
+  if(Array.isArray(c))return c;
+  try{ var a=JSON.parse(c||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; }
+}
+/* MW の商品名にどれだけ近いか（0〜1）。2文字ずつの重なりで見る。
+   候補を「近い順」に並べるためだけに使う（決めるのは人）。 */
+function mwNameNear(a,b){
+  var x=String(a||'').toLowerCase().replace(/\s+/g,'');
+  var y=String(b||'').toLowerCase().replace(/\s+/g,'');
+  if(!x||!y)return 0;
+  var g=function(t){ var o={},i; for(i=0;i<t.length-1;i++)o[t.slice(i,i+2)]=1; return o; };
+  var gx=g(x), gy=g(y), hit=0, n=0, k;
+  for(k in gx){ n++; if(gy[k])hit++; }
+  for(k in gy)if(!gx[k])n++;
+  return n?hit/n:0;
+}
+/* 候補を MW の商品名に近い順に並べる。 */
+function mwCandSort(r){
+  var mw=String((r||{}).mw_name||'');
+  return mwJanCands(r).map(function(c){
+    return { asin:String(c.asin||''), name:String(c.name||''),
+             near:mwNameNear(mw,c.name) };
+  }).sort(function(a,b){ return b.near-a.near; });
+}
+/* 候補を選ぶ。選んだら ASIN が入り、次の「Amazonで調べる」で値段を取る。 */
+function mwJanPickGo(jan,asin){
+  /* 一覧を取り込み直すと csvMwAmzListNote は上書きされるので、
+     決めた案内は専用の行（csvMwDupNote）に出す。 */
+  var note=$('csvMwDupNote');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  mwPost('/mw/jan-pick',{ jan:String(jan), asin:String(asin) })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.why)||(d&&d.error)||'決められませんでした');
+      note.innerHTML='✓ JAN '+esc(String(jan))+' を <b>'+esc(String(asin))+'</b> に決めました。'
+        +'「Amazonで調べる」を押すと値段を取ります。';
+      mwAmzLoad();
+    })
+    ['catch'](function(e){ note.textContent='⚠ 決められませんでした：'+e.message; });
+}
+/* 行に出す候補の並び（6.109）。 */
+function mwJanDupLine(r){
+  if(!mwJanDup(r))return '';
+  var jan=String(r.jan||'');
+  var list=mwCandSort(r).slice(0,8);
+  return '<div class="note2" style="margin:3px 0 0;padding:5px;'
+    +'border:1px solid var(--bad);border-radius:5px;background:#fff7f7">'
+    +'<b style="color:var(--bad)">この JAN には Amazon の商品が '
+    +(+r.cand_n||0)+'件あります。</b>どれか選んでください'
+    +'（決まるまで仕入れる・登録ファイルの対象外です）。'
+    +list.map(function(c){
+      return '<div style="display:flex;gap:6px;align-items:center;margin-top:3px">'
+        +'<span style="flex:1 1 0;min-width:0">'
+        +'<a href="https://www.amazon.co.jp/dp/'+esc(c.asin)+'" target="_blank"'
+        +' rel="noopener" style="text-decoration:underline">'+esc(c.asin)+'</a>'
+        +'　'+esc(c.name.slice(0,60))
+        +'<span class="note2" style="opacity:.7">（名前の近さ '
+        +Math.round(c.near*100)+'%）</span></span>'
+        +'<button class="btn" style="flex:0 0 auto;padding:3px 8px"'
+        +' onclick="mwJanPickGo(\''+esc(jan)+'\',\''+esc(c.asin)+'\')">これにする</button>'
+        +'</div>';
+    }).join('')
+    +'</div>';
+}
 /* ---- 並べ替えと絞り込み（6.93）---- */
 function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
 function mwAmzFilters(){
@@ -9551,9 +9668,10 @@ function mwBuySet(jan,qty){
      見た目で止めるだけでなくここでも見る（6.101）。 */
   if(q>0){
     var hit=mwAmzRows.filter(function(r){ return String(r.jan)===String(jan); })[0];
-    if(hit&&mwRstNg(hit)){
-      $('csvMwAmzListNote').textContent=
-        '⚠ この ASIN は Amazon で出品できないため、仕入れる印を付けられません。';
+    if(hit&&(mwRstNg(hit)||mwJanDup(hit))){
+      $('csvMwAmzListNote').textContent=mwJanDup(hit)
+        ? '⚠ この JAN には Amazon の商品が複数あります。どれか選んでから印を付けてください。'
+        : '⚠ この ASIN は Amazon で出品できないため、仕入れる印を付けられません。';
       var box=$('mwBuyChk_'+jan); if(box)box.checked=false;
       return;
     }
@@ -9676,6 +9794,42 @@ function mwBuyCsvGo(){
       +yen(tot)+'）。';
   });
 }
+/* ---- 仕入れる行の JAN をコピー（6.110）----
+   MW の注文画面に貼るために、改行区切りで JAN だけを渡す。 */
+function mwBuyJanCopy(){
+  var note=$('csvMwJanNote');
+  mwBuyLoad(true).then(function(){
+    if(!mwBuyRows.length){ note.textContent='仕入れる印の付いた行がありません。'; return; }
+    /* 一覧に出ている順（印を付けた新しい順）のまま、JAN だけを並べる。 */
+    var jans=[], seen={};
+    mwBuyRows.forEach(function(r){
+      var j=String(r.jan||'').replace(/\D/g,'');
+      if(!j||seen[j])return;
+      seen[j]=1; jans.push(j);
+    });
+    var text=jans.join('\n');
+    var say=function(okay){
+      note.textContent=okay?('✓ '+jans.length+'件の JAN をコピーしました')
+                           :('⚠ コピーできませんでした（'+jans.length+'件）');
+      clearTimeout(mwBuyJanCopy._t);
+      mwBuyJanCopy._t=setTimeout(function(){ note.textContent=''; },2400);
+    };
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ say(true); },
+        function(){ say(false); });
+      return;
+    }
+    /* 古い端末向け。 */
+    try{
+      var ta=document.createElement('textarea');
+      ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      var okay=document.execCommand('copy');
+      document.body.removeChild(ta);
+      say(okay);
+    }catch(e){ say(false); }
+  });
+}
 /* ---- Amazon 登録用ファイル（6.103）----
    せどりすと が出すアップロード用ファイルと同じ形（実物から合わせた）。
    ・UTF-8（BOM なし）・改行 LF・区切りはタブ・31列
@@ -9720,7 +9874,8 @@ function mwRegPick(rows){
   var take=[], skip=[];
   (rows||[]).forEach(function(r){
     var why='';
-    if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||'')))why='ASIN が引けていません';
+    if(mwJanDup(r))why='JAN重複（ASIN を選んでください）';
+    else if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||'')))why='ASIN が引けていません';
     else if(!(+r.price>0))why='Amazon の販売価格が取れていません';
     else if(!(mwCost(r)>0))why='MW の卸値がありません';
     else if(mwRstOf(r)==='blocked')why='この ASIN では出品できません';
@@ -9822,13 +9977,15 @@ function mwAmzRender(){
   var line=function(x){
     var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
     var q=mwBuyQtyOf(jan);
-    var ng=mwRstNg(r);                 // 赤（出品できない）は印を付けられない
+    var ng=mwRstNg(r)||mwJanDup(r);    // 赤・JAN重複は印を付けられない
     return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
       +'border-radius:6px'+(q?';border-color:var(--good);background:#f6fff4':'')+'">'
       +'<b>'+yen(c.net)+'</b>'
       +' <span class="note2">（税抜・税込 '+yen(c.profit)+'・利益率 '+c.margin+'%）</span>'
       +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
       +mwRstBadge(r)
+      +(mwJanDup(r)
+        ?' <span class="badge" style="background:var(--bad)">JAN重複（要確認）</span>':'')
       +(q?' <span class="badge" style="background:var(--good)">仕入れる '+q+'点</span>':'')
       +'<div class="note2" style="margin:2px 0 0">'
       +esc(String(r.amz_name||r.mw_name||'').slice(0,60))+'</div>'
@@ -9840,8 +9997,9 @@ function mwAmzRender(){
         +' style="text-decoration:underline dotted">'+esc(asin)+'</a>'):'')
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'</div>'
       +'<div class="note2" style="margin:2px 0 0">販売価格 <b>'+yen(c.price)+'</b>'
-      +'（'+esc(r.basis||'')+'）　手数料 '+yen(c.fee)
-      +'（'+c.rate+'%＋FBA '+yen(c.fba)+'）　仕入 '+yen(c.cost)+'</div>'
+      +'（'+esc(r.basis||'')+'）　手数料 '+yen(c.fee)+'</div>'
+      /* 手数料の内訳（6.108）。せどりすと の内訳と並べて見られる */
+      +mwAmzBreak(r,c)
       +'<div class="note2" style="margin:2px 0 0">ランキング '
       +((+r.rank>0)?(Number(r.rank).toLocaleString('ja-JP')
         +(r.rank_cat?('（'+esc(r.rank_cat)+'）'):'')):'—')
@@ -9854,6 +10012,7 @@ function mwAmzRender(){
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8"><b>MW備考</b> '
         +esc(String(r.note).slice(0,50))+'</div>'):'')
       +mwRstLine(r)
+      +mwJanDupLine(r)
       /* 外のページを開くボタン */
       +'<div style="display:flex;gap:6px;margin-top:4px">'
       +(asin?('<a class="btn" style="flex:1;text-align:center" target="_blank"'
@@ -9867,7 +10026,9 @@ function mwAmzRender(){
       +'align-items:center"><input type="checkbox" id="mwBuyChk_'+esc(jan)+'"'
       +(q?' checked':'')+(ng?' disabled':'')
       +' onchange="mwBuyToggle(\''+esc(jan)+'\')">'
-      +'<b>仕入れる</b>'+(ng?'（出品できないので選べません）':'')+'</label>'
+      +'<b>仕入れる</b>'
+      +(ng?(mwJanDup(r)?'（JANの重複を決めてから）':'（出品できないので選べません）'):'')
+      +'</label>'
       +'<input type="number" id="mwBuyQty_'+esc(jan)+'" value="'+(q||1)+'"'
       +' min="1" max="99" step="1" inputmode="numeric" style="flex:0 0 72px"'
       +(ng?' disabled':'')
@@ -15974,7 +16135,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v203';   // sw.js の const V と必ず同じ値にする
+var APP_V='v204';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

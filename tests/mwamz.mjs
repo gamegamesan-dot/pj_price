@@ -223,8 +223,15 @@ ok(d.rows[0].price>=d.rows[1].price,'★値段の高い順');
 console.log('\n=== 利益はここでは計算しない ===');
 let cols=Object.keys(one);
 console.log('   '+cols.join(','));
-ok(!cols.some((k)=>/profit|rieki|粗利|fee/i.test(k)),
-   '★★利益や手数料の列は返さない（手数料率は⚙設定で変わるので画面で計算する）');
+ok(!cols.some((k)=>/profit|rieki|粗利|margin|net/i.test(k)),
+   '★★利益の列は返さない（画面で計算する）');
+/* 手数料は「Amazon から取ってきた事実」なので返す（7.85）。
+   率を掛けて出した見込みではない。取れていない行は NULL。 */
+ok(cols.indexOf('fee_ref')>=0&&cols.indexOf('fee_fba')>=0
+   &&cols.indexOf('fee_tax')>=0&&cols.indexOf('fee_total')>=0,
+   '★★★手数料は Amazon から取った事実なので返す（7.85）');
+ok(one.fee_total===null||one.fee_total===undefined
+   ||typeof one.fee_total==='number','★手数料は数か未取得（NULL）');
 
 console.log('\n=== 作業者のキー ===');
 r=await put('/mw/amz',{ kishu:'NS' },'staff-key-123');

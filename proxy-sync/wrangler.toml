@@ -17,7 +17,7 @@ enabled = true
 # 定期実行。15分ごと＝注文、毎時07分＝在庫と出品中リスト。
 # 毎時のうち UTC 18時台（JST 3時台）の回で、日次の名寄せ確認と最安値取得も行う。
 [triggers]
-crons = ["*/15 * * * *", "7 * * * *"]
+crons = ["*/15 * * * *", "7 * * * *", "37 * * * *"]
 
 # D1。事前に `npx wrangler d1 create pj-sync` で作り、出力された database_id を入れる。
 [[d1_databases]]

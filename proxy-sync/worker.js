@@ -48,6 +48,7 @@ const SP_GAP = {
   getInventorySummaries: 600,
   getItemOffersBatch: 10500,
   getListingsRestrictions: 250,      // 5回/秒（7.76）。余裕をみて4回/秒
+  getMyFeesEstimates: 2100,          // 0.5回/秒（7.85）。1回20件
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -149,6 +150,8 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/restrictions\?/ },
   // 価格の照会。読み取りだがPOSTしか用意されていないAPI。
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
+  /* 商品ごとの手数料（7.85）。読み取りだけ（見積りを返すだけで何も変えない）。 */
+  { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/products\/fees\/v0\/feesEstimate$/ },
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/identity\/v1\/oauth2\/token$/ },
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/sell\/fulfillment\/v1\/order\?/ },
   // eBayカタログの照会（JANから候補を探す）。どちらも読み取り。
@@ -4830,9 +4833,93 @@ async function spSlotKv(env, label) {
       { expirationTtl: Math.max(60, Math.ceil(gap / 1000) * 3) });
   } catch (e) { /* KV が使えないときは今までどおり（spLanes だけ） */ }
 }
+/* ===== 商品ごとの手数料（Product Fees API・7.85）=====
+   一律の率（⚙設定の15%・FBA 530円）だと せどりすと の内訳とずれる。
+   例：サイヴァリア3 限定版 PS5（¥9,638）
+     せどりすと … 販売手数料 1,484＋手数料消費税 148＋FBA 441（配送代行425＋在庫管理16）
+     pj（一律）  … 販売手数料 1,446＋FBA 530（消費税は入っていない）
+   `getMyFeesEstimates`（POST /products/fees/v0/feesEstimate）で ASIN ごとに取り、
+   **手数料の消費税も含めて**控える。1回20件・0.5回/秒（＝1回2秒）。
+   取れない行は今までの一律の値を使い、画面に「仮の手数料」と出す。
+
+   IsAmazonFulfilled: true で FBA の手数料を見積もる（出品していない ASIN でも返る）。 */
+const MW_FEE_BATCH = 20;
+const MW_FEE_CALL_MS = 2500;        // 1回ぶんの見込み（0.5回/秒＋余裕）
+/* 手数料の明細から、販売手数料・FBA手数料・消費税に振り分ける。
+   種類の名前は国・時期で変わることがあるので、**消費税だけ名前で拾い、
+   残りは「販売手数料（Referral）」か「それ以外＝FBA」**に寄せる。 */
+function mwFeePick(d) {
+  const r = (d && d.FeesEstimateResult) || {};
+  const st = String(r.Status || "");
+  if (st && st !== "Success")
+    return { ok: false, err: "手数料が返りませんでした（" + st + "）" };
+  const e = r.FeesEstimate || {};
+  const total = Math.round(Number((e.TotalFeesEstimate || {}).Amount) || 0);
+  let ref = 0, fba = 0, tax = 0;
+  for (const x of (e.FeeDetailList || [])) {
+    const t = String(x.FeeType || "");
+    const amt = Math.round(Number((x.FinalFee || x.FeeAmount || {}).Amount) || 0);
+    /* 税が明細の中に入っている形（FeeAmount＋TaxAmount）もあるので、
+       種類を見る**前に**どの明細からも拾う。 */
+    tax += Math.round(Number((x.TaxAmount || {}).Amount) || 0);
+    if (/Tax/i.test(t)) { tax += amt; continue; }   // 税だけの明細
+    if (/Referral/i.test(t)) { ref += amt; continue; }
+    fba += amt;
+  }
+  if (!total && !ref && !fba) return { ok: false, err: "手数料の明細がありません" };
+  return { ok: true, ref, fba, tax, total: total || (ref + fba + tax) };
+}
+/* ASIN をまとめて見積もる。price は売値（円）。 */
+async function mwFeeFind(env, run, items) {
+  const out = {};
+  let calls = 0;
+  for (let i = 0; i < items.length; i += MW_FEE_BATCH) {
+    const part = items.slice(i, i + MW_FEE_BATCH);
+    const body = JSON.stringify({
+      FeesEstimateByIdRequestList: part.map((x) => ({
+        FeesEstimateRequest: {
+          MarketplaceId: MP_FE,
+          IsAmazonFulfilled: true,
+          Identifier: x.asin,
+          PriceToEstimateFees: {
+            ListingPrice: { CurrencyCode: "JPY", Amount: Number(x.price) || 0 },
+          },
+        },
+        IdType: "ASIN",
+        IdValue: x.asin,
+      })),
+    });
+    const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
+                           { method: "POST", body, label: "getMyFeesEstimates" });
+    calls++;
+    if (!r.ok) {
+      for (const x of part)
+        out[x.asin] = { ok: false, err: ("HTTP " + r.status + " "
+          + String(r.err || "")).trim().slice(0, 200) };
+      continue;
+    }
+    for (const z of ((r.data && r.data.FeesEstimateResultList) || [])) {
+      const id = String(((z.FeesEstimateIdentifier || {}).IdValue) || "");
+      if (!id) continue;
+      out[id] = mwFeePick(z);
+    }
+    for (const x of part)
+      if (!out[x.asin]) out[x.asin] = { ok: false, err: "手数料が返りませんでした" };
+  }
+  return { map: out, calls };
+}
+
 /* JAN から ASIN・商品名・ランキングを引く。20件ずつ。 */
 async function mwAsinFind(env, run, jans, dl) {
   const out = {};
+  /* 候補の全部（7.84）。同じ JAN に ASIN が複数当たることがある
+     （例：JAN 4573102666987 にウルトラマンとスター・ウォーズ）。
+     v203 までは最初の1件だけ採って残りを捨てていた。 */
+  const cands = {};
+  const addCand = (j, rec) => {
+    const l = (cands[j] = cands[j] || []);
+    if (!l.some((x) => x.asin === rec.asin)) l.push(rec);
+  };
   let calls = 0;
   /* dl（締め切り）を渡すと、そこで切り上げて残りは次回に回す（7.82）。
      渡さなければ今までどおり最後まで引く。 */
@@ -4877,9 +4964,15 @@ async function mwAsinFind(env, run, jans, dl) {
       }
       const rec = { asin, name: String(sum.itemName || "").slice(0, 300),
                     rank, rank_cat: rankCat.slice(0, 60) };
-      for (const j of jset) if (part.indexOf(j) >= 0 && !out[j]) out[j] = rec;
+      for (const j of jset) if (part.indexOf(j) >= 0) {
+        addCand(j, rec);
+        if (!out[j]) out[j] = rec;
+      }
       /* identifiers が返らないときは、要求が1件なら取り違えようがない。 */
-      if (!jset.length && part.length === 1 && !out[part[0]]) out[part[0]] = rec;
+      if (!jset.length && part.length === 1) {
+        addCand(part[0], rec);
+        if (!out[part[0]]) out[part[0]] = rec;
+      }
     }
     /* 20件まとめて引くと、Amazon が商品を返しても **その商品の識別子に
        要求した JAN が入っていない**ことがあり、どの JAN の答えか決められない。
@@ -4915,15 +5008,36 @@ async function mwAsinFind(env, run, jans, dl) {
       if (Number(g.rank) > 0 && !rank) { rank = Number(g.rank); rankCat = String(g.title || ""); }
     out[j] = { asin, name: String(sum.itemName || "").slice(0, 300),
                rank, rank_cat: rankCat.slice(0, 60), retried: 1 };
+    /* 1件ずつの引き直しでも候補を控える（まとめ引きで漏れた分の補い）。 */
+    for (const it2 of items) {
+      const a2 = String(it2.asin || "");
+      if (!a2) continue;
+      const s2 = (it2.summaries || [])[0] || {};
+      addCand(j, { asin: a2, name: String(s2.itemName || "").slice(0, 300),
+                   rank: 0, rank_cat: "" });
+    }
   }
   for (const j of miss.slice(MW_AMZ_RETRY_MAX))
     why[j] = "引き直しの上限に達しました（次回に回します）";
   if (cut) run.notes.push("ASIN引き：時間が足りず " + cut + "件は次回に回しました");
+  /* 候補が2件以上ある JAN は**自動で決めない**（7.84）。
+     印を付けて人に選んでもらう。map からも外して ASIN を入れない。 */
+  let dup = 0;
+  for (const j of jans) {
+    const l = cands[j] || [];
+    if (l.length >= 2) {
+      dup++;
+      delete out[j];
+      why[j] = "JAN重複（要確認）：候補 " + l.length + "件";
+    }
+  }
+  if (dup) run.notes.push("JAN重複（要確認）" + dup + "件");
   /* 引けた分・引けなかった分を jan_map に控える（7.67）。
      次からは API を呼ばずに済む。 */
   await janMapPut(env, jans.map((j) => Object.assign({ jan: j },
-    out[j] || { asin: "", err: why[j] || "ASINが見つかりません" })), "catalog");
-  return { map: out, calls, retried: miss.length, why, cut };
+    out[j] || { asin: "", err: why[j] || "ASINが見つかりません" },
+    { cands: cands[j] || [] })), "catalog");
+  return { map: out, calls, retried: miss.length, why, cut, dup, cands };
 }
 /* ---- JAN → ASIN の控え（7.67）----
    items は**すでにちょうど100列**（D1 の上限・7.55）なので jan の列を足せない。
@@ -4937,16 +5051,25 @@ async function janMapPut(env, list, src) {
     const jan = String((r && r.jan) || "").replace(/\D/g, "");
     if (!janOk(jan)) continue;
     stmts.push(env.DB.prepare(
-      `INSERT INTO jan_map (jan,asin,name,rank,rank_cat,src,err,at,created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)
-       ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
+      /* 候補（7.84）。人が選んだ行（picked_at あり）は ASIN を上書きしない。 */
+      `INSERT INTO jan_map (jan,asin,name,rank,rank_cat,src,err,at,
+         cands,cand_n,cand_at,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?8,?8)
+       ON CONFLICT(jan) DO UPDATE SET
+         asin=CASE WHEN COALESCE(jan_map.picked_at,'')<>'' THEN jan_map.asin
+                   ELSE excluded.asin END,
+         cands=COALESCE(excluded.cands, jan_map.cands),
+         cand_n=COALESCE(excluded.cand_n, jan_map.cand_n),
+         cand_at=excluded.cand_at,
          name=COALESCE(NULLIF(excluded.name,''), jan_map.name),
          rank=COALESCE(excluded.rank, jan_map.rank),
          rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), jan_map.rank_cat),
          src=excluded.src, err=excluded.err, at=excluded.at`)
       .bind(jan, String(r.asin || "") || null, String(r.name || ""),
             Number(r.rank) || null, String(r.rank_cat || ""),
-            String(src || "catalog"), String(r.err || ""), at));
+            String(src || "catalog"), String(r.err || ""), at,
+            Array.isArray(r.cands) ? JSON.stringify(r.cands.slice(0, 12)) : null,
+            Array.isArray(r.cands) ? r.cands.length : null));
   }
   if (stmts.length) {
     for (let i = 0; i < stmts.length; i += 50)
@@ -5044,16 +5167,28 @@ const MW_PRICE_CALL_MS = 11000;
 /* ① JAN → ASIN。ASIN が入っている行は引き直さない（ASIN は変わらない）。
    引けなかった行は MW_AMZ_ERR_TTL_H（24時間）たてば再挑戦する。 */
 async function mwScanAsin(env, run, o, dl) {
-  const st = { asked: 0, done: 0, ok_n: 0, ng: 0, calls: 0, left: 0, stopped: "" };
+  const st = { asked: 0, done: 0, ok_n: 0, ng: 0, dup: 0, calls: 0, left: 0,
+               stopped: "" };
   const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
   const q = mwWhere(o);
   const errOld = new Date(Date.now() - MW_AMZ_ERR_TTL_H * 3600000).toISOString();
+  /* ⚠ 素の `?` だけ（7.76 の穴）。文に出てくる順で渡す。 */
   const pick = await env.DB.prepare(
-    `SELECT s.jan AS jan FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+    `SELECT s.jan AS jan FROM mw_stock s
+       LEFT JOIN mw_amz a ON a.jan = s.jan
+       LEFT JOIN jan_map m ON m.jan = s.jan
       WHERE ${q.w}
-        AND COALESCE(a.asin,'') = ''
-        AND (a.asin_at IS NULL OR a.asin_at < ?)
-      ORDER BY COALESCE(a.asin_at,'') ASC, s.jan ASC`)
+        /* 候補が2件以上あって、まだ人が選んでいない行は呼ばない（7.84）。
+           呼んでも決めようがないので、呼び出しのむだになる。 */
+        AND NOT (COALESCE(m.cand_n,0) >= 2 AND COALESCE(m.picked_at,'') = '')
+        AND (
+          /* まだ ASIN が無い（引けなかった行は24時間で再挑戦） */
+          (COALESCE(a.asin,'') = '' AND (a.asin_at IS NULL OR a.asin_at < ?))
+          /* ASIN はあるが候補をまだ控えていない行を、少しずつ引き直す（7.84） */
+          OR (COALESCE(a.asin,'') <> '' AND m.cand_at IS NULL)
+        )
+      ORDER BY (CASE WHEN COALESCE(a.asin,'') = '' THEN 0 ELSE 1 END) ASC,
+               COALESCE(a.asin_at,'') ASC, s.jan ASC`)
     .bind(...q.bind, errOld).all();
   const all = ((pick && pick.results) || []).map((x) => String(x.jan));
   st.asked = all.length;
@@ -5070,13 +5205,16 @@ async function mwScanAsin(env, run, o, dl) {
     const f = found.map[j];
     st.done++;
     if (!f || !f.asin) {
-      st.ng++;
+      const w = (found.why && found.why[j]) || "ASINが見つかりません";
+      if (/JAN重複/.test(w)) st.dup++; else st.ng++;
+      /* 候補が2件以上の行は ASIN を入れない（人が選ぶまで）。
+         すでに入っていた ASIN も外す（取り違えたまま値段を取らないため）。 */
       stmts.push(env.DB.prepare(
         `INSERT INTO mw_amz (jan,err,checked_at,asin_at,created_at)
            VALUES (?1,?2,?3,?3,?3)
          ON CONFLICT(jan) DO UPDATE SET err=excluded.err, asin=NULL,
            checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
-        .bind(j, (found.why && found.why[j]) || "ASINが見つかりません", at));
+        .bind(j, w, at));
       continue;
     }
     st.ok_n++;
@@ -5102,6 +5240,7 @@ async function mwScanAsin(env, run, o, dl) {
    ①②で使った時間を差し引いた残りで、入るだけ取る。 */
 async function mwScanPrice(env, run, o, dl) {
   const st = { asked: 0, done: 0, priced: 0, none: 0, skipped_red: 0, calls: 0,
+               fee_ok: 0, fee_ng: 0, fee_calls: 0, fee_left: 0,
                left: 0, stopped: "" };
   const limit = Math.max(1, Math.min(MW_AMZ_MAX, mwNum(o.limit) || MW_AMZ_MAX));
   const q = mwWhere(o);
@@ -5109,16 +5248,30 @@ async function mwScanPrice(env, run, o, dl) {
   const w = q.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const okOld = new Date(Date.now() - MW_AMZ_TTL_D * 86400000).toISOString();
   /* ⚠ 番号付きの ?N は使わない（7.76 の穴）。素の `?` だけ、文に出てくる順。 */
+  /* 自動の取り直し（7.86）は優先順を変える。
+       ①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順
+     ③は手数料が取れている行は**その手数料で**、まだの行は一律の見込みで出す
+     （一律は⚙設定を Worker が持たないので、ゲームの既定 15%＋530円で代用）。 */
+  const auto = String(o.order || "") === "auto";
+  const ordAuto =
+    `(CASE WHEN COALESCE(MAX(b.qty),0) > 0 THEN 0 ELSE 1 END) ASC,
+     (CASE WHEN MAX(a.price_at) IS NULL THEN 0 ELSE 1 END) ASC,
+     (COALESCE(MAX(a.price),0)
+      - COALESCE(MAX(a.fee_total),
+                 ROUND(COALESCE(MAX(a.price),0) * 0.15) + 530)
+      - ROUND(COALESCE(MAX(s.wholesale),0) * 1.1)) DESC,
+     COALESCE(MAX(a.price_at),'') ASC, a.jan ASC`;
   const sql = (redOnly) =>
     `SELECT a.jan AS jan, a.asin AS asin
        FROM mw_stock s
        JOIN mw_amz a ON a.jan = s.jan AND COALESCE(a.asin,'') <> ''
+       LEFT JOIN mw_buy b ON b.jan = s.jan
        LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = '${MW_RST_COND}'
       WHERE ${w}
         AND COALESCE(r.state,'') ${redOnly ? "=" : "<>"} 'blocked'
         AND (a.price_at IS NULL OR a.price_at < ?)
       GROUP BY a.jan
-      ORDER BY COALESCE(MAX(a.price_at),'') ASC, a.jan ASC`;
+      ORDER BY ${auto ? ordAuto : "COALESCE(MAX(a.price_at),'') ASC, a.jan ASC"}`;
   const pick = await env.DB.prepare(sql(false)).bind(...q.bind, okOld).all();
   const all = ((pick && pick.results) || []).map(
     (x) => ({ jan: String(x.jan), asin: String(x.asin) }));
@@ -5131,11 +5284,14 @@ async function mwScanPrice(env, run, o, dl) {
   const at = nowIso();
   const stmts = [];
   const low = {};
+  const fees = [];                 // 手数料を取る行（値段が取れた行だけ）
   for (let i = 0; i < todo.length; i += PRICING_BATCH) {
     /* getItemOffersBatch は 0.1回/秒なので、1回（20件）に約10.5秒かかる。
        **1回ぶんの時間が残っていなければ始めない**（始めると Worker の
        60秒を超える。7.82）。 */
-    if (Date.now() + MW_PRICE_CALL_MS > dl) { st.stopped = "time"; break; }
+    if (Date.now() + MW_PRICE_CALL_MS + MW_FEE_CALL_MS > dl) {
+      st.stopped = "time"; break;
+    }
     const part = todo.slice(i, i + PRICING_BATCH);
     const g = await amazonLowest(env, run,
       part.map((x) => ({ asin: x.asin, cond: "new" })));
@@ -5157,11 +5313,38 @@ async function mwScanPrice(env, run, o, dl) {
               z ? (z.newN || z.total || 0) : 0, z ? (z.lowN || 0) : 0,
               z ? (z.amz || 0) : 0, z ? (z.fba || 0) : 0,
               z ? "" : "Amazon に新品の出品がありません", at));
+      if (price > 0) fees.push({ jan: x.jan, asin: x.asin, price: price });
+    }
+    /* 値段が取れた行の手数料を、同じ段で続けて取る（7.85）。
+       1回20件・2秒なので、値段の10.5秒に比べれば軽い。
+       1回ぶんの余裕が無ければ次の回に回す（手数料だけ遅れても
+       「仮の手数料」で計算できる）。 */
+    if (fees.length >= MW_FEE_BATCH || i + PRICING_BATCH >= todo.length) {
+      if (Date.now() + MW_FEE_CALL_MS <= dl) {
+        /* どの売値で出した手数料かを控えるため、送った中身を手元に残す。 */
+        const sent = fees.splice(0, MW_FEE_BATCH);
+        const byAsin = {};
+        for (const y of sent) byAsin[y.asin] = y;
+        const fr = await mwFeeFind(env, run, sent);
+        st.fee_calls += fr.calls;
+        for (const asin of Object.keys(fr.map)) {
+          const g = fr.map[asin];
+          const row = byAsin[asin];
+          if (g.ok) st.fee_ok++; else st.fee_ng++;
+          stmts.push(env.DB.prepare(
+            `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
+               fee_base=?6, fee_at=?7, fee_err=?8 WHERE asin=?1`)
+            .bind(asin, g.ok ? g.ref : null, g.ok ? g.fba : null,
+                  g.ok ? g.tax : null, g.ok ? g.total : null,
+                  (row && row.price) || null, at, g.ok ? "" : String(g.err || "")));
+        }
+      } else { st.fee_left += fees.length; fees.length = 0; }
     }
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
   if (st.left && !st.stopped) st.stopped = "limit";
+  st.fee_left += fees.length;
   return st;
 }
 
@@ -5792,10 +5975,12 @@ async function mwBuyList(env, url) {
             a.basis AS basis, a.rank AS rank, a.rank_cat AS rank_cat,
             a.new_n AS new_n, a.amz AS amz,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
-            r.checked_at AS rst_at, r.err AS rst_err
+            r.checked_at AS rst_at, r.err AS rst_err,
+            COALESCE(m.cand_n,0) AS cand_n, m.picked_at AS jan_picked_at
        FROM mw_buy b
        LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
        LEFT JOIN mw_amz   a ON a.jan = b.jan
+       LEFT JOIN jan_map  m ON m.jan = b.jan
        LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
       ORDER BY b.at DESC`).all();
   const rows = (q && q.results) || [];
@@ -5808,6 +5993,154 @@ async function mwBuyList(env, url) {
   }
   return { ok: true, rows, n: rows.length, qty: n, yen,
            gone: rows.filter((r) => r.gone_at).length };
+}
+
+/* ===== 自動の取り直し（毎時 :37・7.86）=====
+   「Amazonで調べる」を押さないと価格が古いままなので、1時間に1回だけ
+   少しずつ取り直す。既定はオフ（⚙設定「MWの価格を自動で取り直す」）。
+
+   ・価格 20件（getItemOffersBatch 1回＝10.5秒）＋手数料（1回2秒）
+   ・可否 20件（getListingsRestrictions 20回＝5秒）
+   ・優先順：①仕入れる印あり ②まだ値段が無い ③粗利の大きい順
+     （手数料が取れている行は**その手数料で**、まだの行は一律の見込みで）
+     ④価格が古い順
+   ・既存の日次（JST 3時台 :07）と3時間ごとの hot（:07）とは**分（:37）で分ける**。
+     getItemOffersBatch は10秒に1回の間隔を KV で守るので、重なっても待つだけ。 */
+const MW_AUTO_MODES = { off: 1, on: 1 };
+const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数
+const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数
+const MW_AUTO_BUDGET_MS = 45000;    // 1回の持ち時間（60秒の手前）
+async function mwAutoSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const m = String(st.mwAutoMode || "off");
+  return {
+    mode: MW_AUTO_MODES[m] ? m : "off",
+    /* 画面の絞り込みと同じ条件を使う（⚙設定に保存されている）。 */
+    opt: { kishu: String(st.mwKishu || ""), new_only: 1,
+           ship_max: Number(st.mwShipMax) || MW_SHIP_OK,
+           stock_min: Number(st.mwStockMin) || MW_STOCK_MIN,
+           note_ng: String(st.mwNoteNg || ""), note_all: 0 },
+  };
+}
+async function jobMwAuto(env, opt) {
+  const run = newRun("mw-auto");
+  const res = { ok: false, mode: "off", price_n: 0, fee_n: 0, rst_n: 0,
+                calls: 0, left: 0, note: "" };
+  try {
+    const st = await mwAutoSettings(env);
+    res.mode = st.mode;
+    if (st.mode !== "on" && !(opt && opt.force)) {
+      run.notes.push("MWの自動の取り直しはオフ（⚙設定）");
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const t0 = Date.now();
+    const dl = t0 + MW_AUTO_BUDGET_MS;
+    /* ① 価格（＋手数料）。優先順は上のとおり。 */
+    const o = Object.assign({}, st.opt, { limit: MW_AUTO_PRICE_N, order: "auto" });
+    const pr = await mwScanPrice(env, run, o, dl);
+    res.price_n = pr.done; res.fee_n = pr.fee_ok; res.left = pr.left;
+    res.calls += (pr.calls || 0) + (pr.fee_calls || 0);
+    /* ② 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
+    const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
+      { limit: MW_AUTO_RST_N }), { run: run, deadline: dl });
+    res.rst_n = rr.done || 0;
+    res.calls += rr.calls || 0;
+    res.left += rr.left || 0;
+    res.note = "価格 " + res.price_n + "件（手数料 " + res.fee_n + "）／可否 "
+      + res.rst_n + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
+    await env.DB.prepare(
+      `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
+      .bind(nowIso(), (opt && opt.kind) || "cron", res.price_n, res.fee_n,
+            res.rst_n, res.calls, res.left, res.note.slice(0, 300)).run();
+    run.notes.push("MWの自動の取り直し：" + res.note);
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-auto: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
+/* ===== JAN重複：人が選んだ ASIN を控える（7.84）=====
+   候補が2件以上ある JAN は自動で決めない。画面で選んだ ASIN をここで控え、
+   jan_map（picked_at）と mw_amz（asin）の両方に入れる。
+   そうすると①がこの JAN をもう呼ばず、③が値段を取れるようになる。
+   **管理者だけ**（仕入れの判断に直結するため）。 */
+async function mwJanPick(env, body) {
+  const run = newRun("mw-jan-pick");
+  const res = { ok: false, jan: "", asin: "", why: "" };
+  try {
+    const jan = String((body && body.jan) || "").replace(/\D/g, "");
+    const asin = String((body && body.asin) || "").trim().toUpperCase();
+    res.jan = jan; res.asin = asin;
+    if (!janOk(jan)) { res.why = "JAN が13桁ではありません"; return await saveRun(env, run), res; }
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) {
+      res.why = "ASIN の形が違います"; return await saveRun(env, run), res;
+    }
+    const m = await env.DB.prepare(
+      `SELECT cands FROM jan_map WHERE jan=?1`).bind(jan).first();
+    const list = (() => {
+      try { return JSON.parse((m && m.cands) || "[]") || []; } catch (e) { return []; }
+    })();
+    /* 候補に無い ASIN は受けない（打ち間違い・取り違えを防ぐ）。 */
+    const hit = list.filter((x) => String(x && x.asin) === asin)[0];
+    if (!hit) { res.why = "候補にない ASIN です"; return await saveRun(env, run), res; }
+    const at = nowIso();
+    await runBatch(env, run, [
+      env.DB.prepare(
+        `UPDATE jan_map SET asin=?2, name=COALESCE(NULLIF(?3,''), name),
+           err='', picked_at=?4, picked_by='hand', at=?4 WHERE jan=?1`)
+        .bind(jan, asin, String(hit.name || ""), at),
+      /* ③が値段を取れるように、ASIN を入れて価格の時刻を空にする。 */
+      env.DB.prepare(
+        `INSERT INTO mw_amz (jan,asin,name,err,checked_at,asin_at,created_at)
+           VALUES (?1,?2,?3,'',?4,?4,?4)
+         ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
+           name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
+           err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at,
+           price=NULL, basis='', price_at=NULL,
+           fee_ref=NULL, fee_fba=NULL, fee_tax=NULL, fee_total=NULL,
+           fee_base=NULL, fee_at=NULL, fee_err=''`)
+        .bind(jan, asin, String(hit.name || ""), at),
+    ]);
+    run.notes.push("JAN重複を決めました " + jan + " → " + asin);
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-jan-pick: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* JAN重複の行を一覧で返す（画面の「要確認」）。 */
+async function mwJanDups(env, url) {
+  const lim = Math.max(1, Math.min(500, mwNum(url.searchParams.get("limit")) || 200));
+  const q = await env.DB.prepare(
+    `SELECT m.jan AS jan, m.cands AS cands, m.cand_n AS cand_n,
+            m.picked_at AS picked_at, s.name AS mw_name, s.sha AS sha,
+            s.kishu AS kishu, s.wholesale AS wholesale
+       FROM jan_map m LEFT JOIN mw_stock s ON s.jan = m.jan AND s.pick = 1
+      WHERE COALESCE(m.cand_n,0) >= 2 AND COALESCE(m.picked_at,'') = ''
+      ORDER BY m.cand_n DESC, m.jan ASC LIMIT ?1`).bind(lim).all();
+  const rows = ((q && q.results) || []).map((r) => {
+    let c = [];
+    try { c = JSON.parse(r.cands || "[]") || []; } catch (e) { c = []; }
+    return { jan: String(r.jan), cand_n: Number(r.cand_n || 0), cands: c,
+             mw_name: r.mw_name || "", sha: r.sha || "", kishu: r.kishu || "",
+             wholesale: Number(r.wholesale || 0) };
+  });
+  const all = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM jan_map
+      WHERE COALESCE(cand_n,0) >= 2 AND COALESCE(picked_at,'') = ''`).first();
+  const seen = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM jan_map WHERE cand_at IS NOT NULL`).first();
+  const left = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM jan_map WHERE cand_at IS NULL`).first();
+  return { ok: true, rows, n: Number((all && all.n) || 0),
+           checked: Number((seen && seen.n) || 0),
+           not_checked: Number((left && left.n) || 0) };
 }
 
 /* ===== Amazon に登録した SKU を控える（7.77）=====
@@ -5882,11 +6215,19 @@ async function mwAmzList(env, url) {
             a.low AS low, a.buybox AS buybox, a.new_n AS new_n, a.low_n AS low_n,
             a.amz AS amz, a.fba_n AS fba_n, a.err AS amz_err,
             a.checked_at AS amz_at,
+            /* 商品ごとの手数料（7.85）。取れていない行は NULL。 */
+            a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
+            a.fee_total AS fee_total, a.fee_base AS fee_base,
+            a.fee_at AS fee_at, a.fee_err AS fee_err,
             COALESCE(b.qty,0) AS buy_qty,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
-            r.checked_at AS rst_at, r.err AS rst_err
+            r.checked_at AS rst_at, r.err AS rst_err,
+            /* JAN重複（7.84）。候補が2件以上で、まだ選んでいない行に印を付ける。 */
+            COALESCE(m.cand_n,0) AS cand_n, m.cands AS cands,
+            m.picked_at AS jan_picked_at
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
             LEFT JOIN mw_buy b ON b.jan = s.jan
+            LEFT JOIN jan_map m ON m.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
       WHERE ${w}${only}
       ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
@@ -7635,7 +7976,8 @@ export default {
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
             || url.pathname === "/mw/img" || url.pathname === "/mw/amz"
-            || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"))
+            || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
+            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"))
       return forbidStaff("MW の取り込み・相場・画像は管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
@@ -7841,6 +8183,18 @@ export default {
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await mwStockPut(env, body), 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/mw/auto") {
+        const b = await request.json().catch(() => ({}));
+        const pr = jobMwAuto(env, { kind: "hand", force: !!(b && b.force) });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mw/jan-pick") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwJanPick(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/jan-dup")
+        return json(await mwJanDups(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/reg") {
         const b = await request.json().catch(() => ({}));
         return json(await mwRegSave(env, b), 200, origin);
@@ -7984,6 +8338,12 @@ export default {
       })());
       return;
     }
+    /* 毎時 :37。MW の価格・手数料・可否を少しずつ取り直す（7.86）。
+       既存の毎時（:07）と分で分けて、10秒に1回の間隔の取り合いを避ける。 */
+    if (cron.indexOf("37 ") === 0) {
+      ctx.waitUntil(jobMwAuto(env, { kind: "cron" }));
+      return;
+    }
     // 毎時。UTC 18時台（JST 3時台）の回で日次処理も回す。
     ctx.waitUntil((async () => {
       await jobHourly(env);
@@ -8045,7 +8405,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
-  MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
+  MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, jobMwAuto, mwAutoSettings,
+  MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
