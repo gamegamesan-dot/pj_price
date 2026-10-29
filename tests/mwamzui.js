@@ -60,11 +60,12 @@ const setup=async()=>await p.evaluate((META)=>{
       if(i&&i.method==='POST')
         /* 返りは段ごと（7.79）。①ASIN → ②可否 → ③価格 */
         return new Response(JSON.stringify({ok:true,left:120,stopped:'time',
-          asin:{asked:4,done:4,ok_n:3,ng:1,calls:1,left:0,stopped:''},
+          ms:41200,share_ms:{asin:20000,rst:10000,price:25000},
+          asin:{asked:4,done:4,ok_n:3,ng:1,calls:1,left:0,stopped:'',ms:1800},
           rst:{asked:4,done:4,ok_n:2,approval:1,blocked:1,failed:0,calls:4,
-               left:0,stopped:'',rows:[],fails:[],why:''},
+               left:0,stopped:'',rows:[],fails:[],why:'',ms:1100},
           price:{asked:3,done:3,priced:3,none:0,skipped_red:1,calls:1,
-                 left:120,stopped:'limit'}}),{status:200});
+                 left:120,stopped:'limit',ms:38300}}),{status:200});
       return new Response(JSON.stringify(META),{status:200});
     }
     return real(u,i);
@@ -105,6 +106,30 @@ let n=await p.evaluate(()=>$('csvMwAmzNote').textContent);
 console.log('   '+n.replace(/\s+/g,' '));
 ok(/① ASIN引き 4件/.test(n)&&/取れた 3/.test(n),'★ASIN の結果を出す');
 ok(/呼び出し/.test(n)&&/価格 1回/.test(n),'★★呼び出し回数を出す');
+/* 段ごとの持ち時間と、かかった時間（6.107・7.82） */
+ok(/1\.8秒／20秒まで/.test(n),'★★★①にかかった時間と持ち時間を出す');
+ok(/1\.1秒／10秒まで/.test(n),'★★②も出す');
+ok(/38\.3秒／25秒まで/.test(n),'★★③も出す');
+ok(/合計 41\.2秒/.test(n),'★★合計の時間も出す');
+
+console.log('\n=== ③が時間切れで動けなかったとき ===');
+await p.evaluate(()=>{ window.__slow=1; });
+await p.evaluate(()=>{
+  const d={ok:true,left:300,stopped:'time',ms:55000,
+    share_ms:{asin:20000,rst:10000,price:25000},
+    asin:{asked:600,done:400,ok_n:380,ng:20,calls:21,left:200,stopped:'time',ms:21000},
+    rst:{asked:50,done:40,ok_n:30,approval:5,blocked:5,failed:0,calls:40,
+         left:10,stopped:'time',ms:10200,rows:[],fails:[],why:''},
+    price:{asked:90,done:0,priced:0,none:0,skipped_red:0,calls:0,left:90,
+           stopped:'time',ms:20}};
+  $('csvMwAmzNote').innerHTML=mwScanNote(d);
+});
+let sn=await p.evaluate(()=>$('csvMwAmzNote').textContent);
+console.log('   '+sn.replace(/\s+/g,' ').slice(0,220));
+ok(/③ は時間が足りなくて動けませんでした/.test(sn),
+   '★★★③が動けなかったときはそう書く');
+ok(/もう一度押すと価格から進みます/.test(sn),'★★★押し直せば進むと伝える');
+ok(/21秒／20秒まで/.test(sn),'★★①が持ち時間を使い切ったのが分かる');
 ok(/まだ 120件/.test(n),'★★残りと押し直しを知らせる');
 
 console.log('\n=== 利益の計算（ジャンルで手数料が変わる）===');

@@ -150,8 +150,65 @@ ok(r.body.price.skipped_red===0,'★飛ばす赤はもう無い');
 gRed=await g(JANS[1]);
 ok(gRed.price===14000,'★★★価格が入る');
 
-console.log('\n=== 60秒で区切る ===');
+console.log('\n=== 持ち時間を段ごとに分ける（7.82）===');
 ok(W.MW_SCAN_BUDGET_MS===55000,'★★60秒の手前（55秒）で切る');
+const SH=W.MW_SCAN_SHARE;
+console.log('   '+JSON.stringify(SH));
+ok(SH.asin===20000&&SH.rst===10000&&SH.price===25000,
+   '★★★①20秒・②10秒・③25秒');
+ok(SH.asin+SH.rst+SH.price===W.MW_SCAN_BUDGET_MS,
+   '★★★3段の合計が持ち時間と同じ');
+ok(W.MW_PRICE_CALL_MS===11000,'★価格は1回ぶん（約11秒）の余裕を見る');
+/* 段ごとにかかった時間を返すこと（画面に出す） */
+r=await post({ kishu:'NS', stock_min:5 });
+console.log('   '+JSON.stringify({ms:r.body.ms,a:r.body.asin.ms,
+  rr:r.body.rst.ms,p:r.body.price.ms,share:r.body.share_ms}));
+ok(typeof r.body.asin.ms==='number'&&typeof r.body.rst.ms==='number'
+   &&typeof r.body.price.ms==='number','★★★段ごとにかかった時間を返す');
+ok(r.body.share_ms&&r.body.share_ms.price===25000,'★★持ち時間も返す（画面に出す）');
+ok(typeof r.body.ms==='number','★合計の時間も返す');
+
+console.log('\n=== ①が持ち時間を使い切っても②③に時間が残る ===');
+/* ①の締め切りを過ぎた状態で③を呼んでも、③の締め切りは別なので動ける。
+   締め切りは「開始からの積み上げ」なので、①の余りは次の段に繰り越される。 */
+const envS=makeEnv({ LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs',
+  LWA_REFRESH_TOKEN:'rt', SP_SELLER_ID:'A1SELLER9999' });
+await stock(JANS.map((j)=>row(j)),envS);
+for(let i=0;i<JANS.length;i++)
+  await envS.DB.prepare(
+    `INSERT INTO mw_amz (jan,asin,name,checked_at,asin_at,created_at)
+     VALUES (?1,?2,'x','x','x','x')`)
+    .bind(JANS[i],'B00SCAN00'+(i+1)).run();
+const runS={ kind:'t', subrequests:0, pages:0, errors:0, notes:[], rows:0 };
+calls=[];
+/* ③に1回ぶん（11秒）より少ない時間しか無ければ、**始めない** */
+let sp=await W.mwScanPrice(envS,runS,{ kishu:'NS', stock_min:5 },Date.now()+5000);
+console.log('   残り5秒: '+JSON.stringify({done:sp.done,stopped:sp.stopped}));
+ok(sp.stopped==='time'&&sp.done===0,
+   '★★★1回ぶんの時間が無ければ価格を始めない（60秒超えを防ぐ）');
+ok(calls.filter((u)=>/itemOffers/.test(u)).length===0,'★★呼ばない');
+/* 1回ぶんの時間があれば動く */
+calls=[];
+sp=await W.mwScanPrice(envS,runS,{ kishu:'NS', stock_min:5 },Date.now()+25000);
+console.log('   残り25秒: '+JSON.stringify({done:sp.done,calls:sp.calls}));
+ok(sp.done>0&&sp.calls===1,'★★★25秒あれば1回ぶん取る');
+
+console.log('\n=== ①も自分の持ち時間で切り上げる ===');
+/* 引き直しは1件ずつなので、時間が来たら残りを次回に回す */
+const envC=makeEnv({ LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs',
+  LWA_REFRESH_TOKEN:'rt', SP_SELLER_ID:'A1SELLER9999' });
+const runC={ kind:'t', subrequests:0, pages:0, errors:0, notes:[], rows:0 };
+calls=[];
+let f=await W.mwAsinFind(envC,runC,['4999999999001','4999999999002'],Date.now()-1);
+console.log('   '+JSON.stringify({cut:f.cut,why:Object.keys(f.why||{}).length}));
+ok(f.cut===2,'★★★時間が無ければ1件も引かずに次回へ回す');
+ok(calls.filter((u)=>/catalog/.test(u)).length===0,'★★カタログを呼ばない');
+ok(runC.notes.some((x)=>/次回に回しました/.test(x)),'★記録に残す');
+/* 締め切りを渡さなければ今までどおり最後まで引く */
+calls=[];
+f=await W.mwAsinFind(envC,runC,['4999999999003']);
+ok(f.cut===0&&calls.filter((u)=>/catalog/.test(u)).length>0,
+   '★★締め切りを渡さなければ今までどおり');
 /* 期限が切れていれば、価格は1回も呼ばずに残りを返す */
 const envT=makeEnv({ LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs',
   LWA_REFRESH_TOKEN:'rt', SP_SELLER_ID:'A1SELLER9999' });

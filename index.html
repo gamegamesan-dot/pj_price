@@ -9362,19 +9362,29 @@ function mwScanLeft(st){
   var n=+((st||{}).left)||0;
   return n?('　<b>残り '+n+'件</b>'):'';
 }
+/* 段ごとの持ち時間と、実際にかかった時間（6.107）。
+   「①で時間を使い切って③が動かない」が見て分かるようにする。 */
+function mwScanMs(st,share){
+  var used=+((st||{}).ms)||0;
+  if(!used&&!share)return '';
+  var s1=share?(Math.round(share/1000)+'秒まで'):'';
+  return '　<span class="note2">'+(used?(Math.round(used/100)/10+'秒'):'0秒')
+    +(s1?('／'+s1):'')+'</span>';
+}
 function mwScanNote(d){
   var a=d.asin||{}, r=d.rst||{}, p=d.price||{};
+  var sh=d.share_ms||{};
   var out=[];
   /* ① ASIN */
   out.push('① ASIN引き <b>'+(+a.done||0)+'件</b>'
     +'（取れた '+(+a.ok_n||0)+'／取れなかった '+(+a.ng||0)+'）'
-    +mwScanLeft(a));
+    +mwScanLeft(a)+mwScanMs(a,sh.asin));
   /* ② 出品の可否 */
   out.push('② 可否 <b>'+(+r.done||0)+'件</b>'
     +'（<span style="color:var(--good)">緑 '+(+r.ok_n||0)+'</span>'
     +'／<span style="color:#a86b00">黄 '+(+r.approval||0)+'</span>'
     +'／<span style="color:var(--bad)">赤 '+(+r.blocked||0)+'</span>'
-    +'／失敗 '+(+r.failed||0)+'）'+mwScanLeft(r));
+    +'／失敗 '+(+r.failed||0)+'）'+mwScanLeft(r)+mwScanMs(r,sh.rst));
   /* 可否の失敗の理由（HTTP の番号と Amazon のエラーコード・6.105） */
   var why=String(r.why||'');
   if(why)out.push('　⚠ '+esc(why));
@@ -9390,9 +9400,15 @@ function mwScanNote(d){
   out.push('③ 価格 <b>'+(+p.done||0)+'件</b>'
     +'（値段あり '+(+p.priced||0)+'／Amazon に出品なし '+(+p.none||0)+'）'
     +((+p.skipped_red)?('　赤は取っていません '+(+p.skipped_red)+'件'):'')
-    +mwScanLeft(p));
+    +mwScanLeft(p)+mwScanMs(p,sh.price));
   out.push('呼び出し：ASIN引き '+(+a.calls||0)+'回／可否 '+(+r.calls||0)
-    +'回／価格 '+(+p.calls||0)+'回');
+    +'回／価格 '+(+p.calls||0)+'回'
+    +((+d.ms)?('　合計 '+Math.round((+d.ms)/100)/10+'秒'):''));
+  /* 段ごとの持ち時間で切れたときは、そう書く（押し直せば進む）。 */
+  if(p.stopped==='time'&&!(+p.done))
+    out.push('③ は時間が足りなくて動けませんでした'
+      +'（値段の取得は1回20件で約11秒かかります）。'
+      +'<b>もう一度押すと価格から進みます。</b>');
   /* 残りと止まった理由。押し直しても進まない段（可否が止まった分）は
      「もう一度押すと続きます」の件数から外す。 */
   var left=(+d.left||0)-(rstDead?(+r.left||0):0);
@@ -15958,7 +15974,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v201';   // sw.js の const V と必ず同じ値にする
+var APP_V='v202';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

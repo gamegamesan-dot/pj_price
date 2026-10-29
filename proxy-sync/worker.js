@@ -4826,10 +4826,15 @@ async function spSlotKv(env, label) {
   } catch (e) { /* KV が使えないときは今までどおり（spLanes だけ） */ }
 }
 /* JAN から ASIN・商品名・ランキングを引く。20件ずつ。 */
-async function mwAsinFind(env, run, jans) {
+async function mwAsinFind(env, run, jans, dl) {
   const out = {};
   let calls = 0;
+  /* dl（締め切り）を渡すと、そこで切り上げて残りは次回に回す（7.82）。
+     渡さなければ今までどおり最後まで引く。 */
+  const over = () => !!dl && Date.now() > dl;
+  let cut = 0;
   for (let i = 0; i < jans.length; i += MW_AMZ_CAT_BATCH) {
+    if (over()) { cut = jans.length - i; break; }
     const part = jans.slice(i, i + MW_AMZ_CAT_BATCH);
     const q = new URLSearchParams({
       identifiers: part.join(","), identifiersType: "EAN",
@@ -4881,6 +4886,8 @@ async function mwAsinFind(env, run, jans) {
   const miss = jans.filter((j) => !out[j]);
   const why = {};
   for (const j of miss.slice(0, MW_AMZ_RETRY_MAX)) {
+    /* 引き直しは1件1回（200ms）。時間が来たら残りは次回に回す。 */
+    if (over()) { why[j] = "時間が足りないので次回に回します"; continue; }
     const q = new URLSearchParams({
       identifiers: j, identifiersType: "EAN", marketplaceIds: MP_FE,
       includedData: "summaries,salesRanks,identifiers",
@@ -4906,11 +4913,12 @@ async function mwAsinFind(env, run, jans) {
   }
   for (const j of miss.slice(MW_AMZ_RETRY_MAX))
     why[j] = "引き直しの上限に達しました（次回に回します）";
+  if (cut) run.notes.push("ASIN引き：時間が足りず " + cut + "件は次回に回しました");
   /* 引けた分・引けなかった分を jan_map に控える（7.67）。
      次からは API を呼ばずに済む。 */
   await janMapPut(env, jans.map((j) => Object.assign({ jan: j },
     out[j] || { asin: "", err: why[j] || "ASINが見つかりません" })), "catalog");
-  return { map: out, calls, retried: miss.length, why };
+  return { map: out, calls, retried: miss.length, why, cut };
 }
 /* ---- JAN → ASIN の控え（7.67）----
    items は**すでにちょうど100列**（D1 の上限・7.55）なので jan の列を足せない。
@@ -5018,6 +5026,15 @@ async function janFind(env, url) {
    1つの checked_at だと、①で ASIN を引いた行が「さっき調べた行」になって
    ③の対象から外れ、値段が一度も取れない。 */
 const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
+/* 段ごとの持ち時間（7.82）。合わせて MW_SCAN_BUDGET_MS になる。
+   1つの締め切りを3段で分け合うと、①の残りが多い回に②③へ時間が回らず
+   価格が1件も取れないことがあった（2026-10-29 の報告）。
+   **締め切りは「開始からの積み上げ」**にする。①が早く終われば、
+   その余りはそのまま②③の締め切りに残る（次の段へ繰り越される）。 */
+const MW_SCAN_SHARE = { asin: 20000, rst: 10000, price: 25000 };
+/* getItemOffersBatch 1回ぶんの見込み（0.1回/秒＋余裕）。
+   これだけ残っていないと③を始めない。 */
+const MW_PRICE_CALL_MS = 11000;
 
 /* ① JAN → ASIN。ASIN が入っている行は引き直さない（ASIN は変わらない）。
    引けなかった行は MW_AMZ_ERR_TTL_H（24時間）たてば再挑戦する。 */
@@ -5038,8 +5055,10 @@ async function mwScanAsin(env, run, o, dl) {
   if (!all.length) return st;
   if (Date.now() > dl) { st.stopped = "time"; st.left = st.asked; return st; }
   const todo = all.slice(0, limit);
-  const found = await mwAsinFind(env, run, todo);
+  /* 持ち時間を渡す。足りなければ引き直しを打ち切って残りを次回に回す（7.82）。 */
+  const found = await mwAsinFind(env, run, todo, dl);
   st.calls = found.calls;
+  if (found.cut) st.stopped = "time";
   const at = nowIso();
   const stmts = [];
   for (const j of todo) {
@@ -5108,8 +5127,10 @@ async function mwScanPrice(env, run, o, dl) {
   const stmts = [];
   const low = {};
   for (let i = 0; i < todo.length; i += PRICING_BATCH) {
-    /* 1回（20件）ぶんの時間が残っていなければ、そこで止める。 */
-    if (Date.now() > dl) { st.stopped = "time"; break; }
+    /* getItemOffersBatch は 0.1回/秒なので、1回（20件）に約10.5秒かかる。
+       **1回ぶんの時間が残っていなければ始めない**（始めると Worker の
+       60秒を超える。7.82）。 */
+    if (Date.now() + MW_PRICE_CALL_MS > dl) { st.stopped = "time"; break; }
     const part = todo.slice(i, i + PRICING_BATCH);
     const g = await amazonLowest(env, run,
       part.map((x) => ({ asin: x.asin, cond: "new" })));
@@ -5143,16 +5164,30 @@ async function mwScanPrice(env, run, o, dl) {
 async function mwScanRun(env, body) {
   const run = newRun("mw-amz");
   const res = { ok: false, asin: null, rst: null, price: null, left: 0,
-                stopped: "", budget_ms: MW_SCAN_BUDGET_MS };
+                stopped: "", ms: 0, budget_ms: MW_SCAN_BUDGET_MS,
+                share_ms: Object.assign({}, MW_SCAN_SHARE) };
   try {
     const o = body || {};
-    const dl = Date.now() + MW_SCAN_BUDGET_MS;
+    const t0 = Date.now();
+    /* 段ごとの締め切り。積み上げなので、前の段が早く終わればその分だけ
+       次の段の締め切りが先になる（余りが繰り越される・7.82）。 */
+    const dlAsin = t0 + MW_SCAN_SHARE.asin;
+    const dlRst = dlAsin + MW_SCAN_SHARE.rst;
+    const dlPrice = dlRst + MW_SCAN_SHARE.price;
+    res.share_ms = Object.assign({}, MW_SCAN_SHARE);
     /* ① JAN → ASIN */
-    res.asin = await mwScanAsin(env, run, o, dl);
+    const m1 = Date.now();
+    res.asin = await mwScanAsin(env, run, o, dlAsin);
+    res.asin.ms = Date.now() - m1;
     /* ② 出品の可否（7.76）。ここで緑になった行は、すぐ下の③で値段を取る。 */
-    res.rst = await mwRestrictRun(env, o, { run: run, deadline: dl });
+    const m2 = Date.now();
+    res.rst = await mwRestrictRun(env, o, { run: run, deadline: dlRst });
+    res.rst.ms = Date.now() - m2;
     /* ③ 実売価格（赤は飛ばす） */
-    res.price = await mwScanPrice(env, run, o, dl);
+    const m3 = Date.now();
+    res.price = await mwScanPrice(env, run, o, dlPrice);
+    res.price.ms = Date.now() - m3;
+    res.ms = Date.now() - t0;
     res.left = (res.asin.left || 0) + (res.rst.left || 0) + (res.price.left || 0);
     res.stopped = [res.asin.stopped, res.rst.stopped, res.price.stopped]
       .filter(Boolean).join(",");
@@ -7997,7 +8032,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
-  MW_SCAN_BUDGET_MS, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
+  MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick, mwRegSave, MW_REG_MAX, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
