@@ -186,11 +186,30 @@ npx wrangler d1 execute pj-sync --remote --file=./migrate-0031-jan-dup-fees.sql
 `--command`（query の API）だけで流す道具を置いた（7.87）。
 **import の API をまったく使わない**ので、上の認証の問題に当たらない。
 
+**先に1回だけ**（これをやると確実に動く。Windows は特に）
+
 ```powershell
 cd C:\dev\pj-price\proxy-sync
+npm i -D wrangler
+```
+
+**Windows の落とし穴**：Node は `.cmd` / `.bat` を shell なしで起動できない
+（CVE-2024-27980 の対策。Node 18.20.2／20.12.2／21.7.3 以降）。
+`npx.cmd` を直に起動すると **EINVAL** になり、終了コードも出力も `null` に
+なるので「理由が何も出ない」状態になる。`npm i -D wrangler` で入れておくと、
+この道具は **wrangler の中身（JS）を node で直に動かす**ので `.cmd` を通らない。
+
+```powershell
 node d1-exec.mjs migrate-0031-jan-dup-fees.sql --dry-run   # 流す文を見るだけ
 node d1-exec.mjs migrate-0031-jan-dup-fees.sql             # 本番に流す
-node d1-exec.mjs migrate-0031-jan-dup-fees.sql --local      # 手元のDBに流す
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql --local     # 手元のDBに流す
+node d1-exec.mjs migrate-0031-jan-dup-fees.sql --debug     # 起動する中身も出す
+```
+
+最初の行に、どちらの方法で動かすかが出る。
+
+```
+wrangler: C:\dev\pj-price\proxy-sync\node_modules\wrangler\bin\wrangler.js（node で直に動かす）
 ```
 
 * SQL を1文ずつに分けて `--command` で流す（文字列の中の `;` や `--` では切らない）
@@ -198,7 +217,13 @@ node d1-exec.mjs migrate-0031-jan-dup-fees.sql --local      # 手元のDBに流�
 * **`ALTER TABLE … ADD COLUMN` は2回流せない**ので、
   「すでに同じ列がある」で落ちた文は **済み** として飛ばす。
   そのため**途中で失敗しても、そのまま流し直せる**
-* 失敗した文はその場で止めて、何文目かと D1 の返事を出す
+* 失敗した文はその場で止めて、**終了コード・起動の例外（EINVAL／ENOENT）・
+  起動した中身・stdout・stderr をぜんぶ**出す
+* `node_modules` に wrangler が無いときは `npx` 経由（shell）に落ちる。
+  そのときは引数を自分で囲む（`shell:true` では Node が囲んでくれない）。
+  ただし **Windows の cmd は `"` で囲んでも `%…%` を展開する**ので、
+  `%` を含む文（`migrate-0022` と `backfill-0023`）は断って
+  `npm i -D wrangler` を案内する
 
 分け方のテストは `tests/d1exec.mjs`（実物のマイグレーション31本ぜんぶを確かめる）。
 

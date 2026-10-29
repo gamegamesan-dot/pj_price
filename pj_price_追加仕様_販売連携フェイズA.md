@@ -5665,3 +5665,66 @@ node d1-exec.mjs migrate-0031-jan-dup-fees.sql [--dry-run] [--local] [--db 名�
 テストは `tests/d1exec.mjs`。分け方のほか、**実物のマイグレーション31本ぜんぶ**に
 ついて「改行が残っていない・コメントが文になっていない・`'` が奇数にならない」を
 確かめる。
+
+## 7.88 d1-exec.mjs が Windows で動かなかった（2026-10-29）
+
+報告：`--dry-run` は17文を正しく出すのに、本番は1文目で止まり**理由が何も出ない**。
+
+```
+  ❌ 1/17 ALTER TABLE jan_map ADD COLUMN cands TEXT
+  ここで止めました。…
+```
+
+### 原因：Node は Windows で `.cmd` を shell なしで起動できない
+
+CVE-2024-27980 の対策で、**Node 18.20.2／20.12.2／21.7.3 以降**は
+`.cmd` / `.bat` を `shell: true` なしで `spawn` すると **`EINVAL`** になる。
+7.87 は `spawnSync("npx.cmd", …)` を shell なしで呼んでいたので、
+
+* `status` が `null`（0 でも1でもない）
+* `stdout` / `stderr` が `null` → 空文字に直していたので**何も出ない**
+* `r.error`（EINVAL）を**見ていなかった**
+
+の3つが重なって「理由が出ないまま止まる」になっていた。
+
+### 直したこと
+
+**① wrangler の中身（JS）を node で直に動かす。** `.cmd` を通らないので
+shell も引用符も要らず、Windows でも Mac でも同じ動きになる。
+
+```js
+export function findWrangler(from) { /* require で解く → 上の node_modules を順に見る */ }
+// 見つかったら： spawnSync(process.execPath, [wrangler.js, "d1", "execute", …])
+```
+
+`proxy-sync` で **`npm i -D wrangler` を1回**流しておけば確実に当たる。
+最初の行にどちらで動かすかを出す。
+
+**② 見つからないときは `npx` 経由（shell）。** `shell: true` のとき
+**Node は引数を囲んでくれない**ので、自分で囲む（`shQuote`）。
+Windows は `"` で囲んで内側の `"` を2つ重ね、Mac/Linux は `'` で囲む。
+ただし **cmd は `"` で囲んでも `%…%` を展開する**ので、`%` を含む文は断って
+`npm i -D wrangler` を案内する（`migrate-0022` と `backfill-0023` が該当）。
+
+**③ 失敗したら分かることを全部出す。**
+
+```
+  ❌ 1/17 ALTER TABLE jan_map ADD COLUMN cands TEXT
+    終了コード: なし
+    起動そのものに失敗: EINVAL spawnSync npx.cmd EINVAL
+    （Windows の Node は .cmd を shell なしで起動できません。…）
+    起動した中身: npx.cmd ["--yes","wrangler",…]
+    --- stderr ---
+    ✘ [ERROR] Authentication error [code: 10000]
+```
+
+* 終了コードは `null` を隠さず「なし」と出す
+* `r.error` の `code` と `message` をそのまま出し、`EINVAL`／`ENOENT` は
+  直し方も添える
+* 起動した中身（ファイルと引数）を出す
+* stdout と stderr をそのまま出し、**どちらも空なら `--debug` を案内する**
+* `--debug` で、流す前に起動する中身を出す
+
+テストは `tests/d1exec.mjs`（25→60件）。偽の wrangler（JS）を作って
+**本当に1文ずつ流せること**まで確かめる。EINVAL・ENOENT・stderr あり・
+出力なしの4通りの出方も検査する。
