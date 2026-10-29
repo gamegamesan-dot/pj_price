@@ -587,6 +587,27 @@ CREATE TABLE IF NOT EXISTS mw_amz_runs (
   created_at TEXT
 );
 
+/* ===== Amazon への登録の記録（putListingsItem・7.90）===== */
+CREATE TABLE IF NOT EXISTS mw_reg_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,
+  sku        TEXT NOT NULL,
+  asin       TEXT,
+  jan        TEXT,
+  price      INTEGER,
+  cond       TEXT,
+  ok         INTEGER NOT NULL DEFAULT 0,
+  status     TEXT,              -- Amazon の status（ACCEPTED / INVALID）
+  sub_id     TEXT,              -- submissionId
+  issues     TEXT,              -- 指摘（JSON 配列）
+  err        TEXT,
+  by_role    TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mw_reg_log_at  ON mw_reg_log(at);
+CREATE INDEX IF NOT EXISTS idx_mw_reg_log_sku ON mw_reg_log(sku, at);
+CREATE INDEX IF NOT EXISTS idx_mw_reg_log_ok  ON mw_reg_log(ok, at);
+
 /* ===== MW の自動の取り直しの記録（7.86）===== */
 CREATE TABLE IF NOT EXISTS mw_auto_runs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

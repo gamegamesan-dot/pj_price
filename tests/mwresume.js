@@ -45,7 +45,7 @@ const setup=async()=>await p.evaluate(()=>{
       return new Response(JSON.stringify({ok:true,rows:[],n:0}),{status:200});
     return real(u,i);
   };
-  switchTab('D'); roleApply('admin'); csvRender();
+  switchTab('D'); roleApply(); csvRender();
 });
 
 console.log('=== 取り込み中の案内 ===');

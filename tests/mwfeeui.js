@@ -68,7 +68,7 @@ const setup=async()=>await p.evaluate((META)=>{
   };
   Object.defineProperty(navigator,'clipboard',{configurable:true,
     value:{ writeText:function(t){ window.__copied=t; return Promise.resolve(); } }});
-  switchTab('D'); roleApply('admin'); csvRender();
+  switchTab('D'); roleApply(); csvRender();
 },META);
 
 console.log('=== 手数料の内訳（6.108）===');

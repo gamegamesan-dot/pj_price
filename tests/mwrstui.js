@@ -85,7 +85,7 @@ const setup=async()=>await p.evaluate((META)=>{
       return new Response(JSON.stringify(META),{status:200});
     return real(u,i);
   };
-  switchTab('D'); roleApply('admin'); csvRender();
+  switchTab('D'); roleApply(); csvRender();
 },META);
 
 console.log('=== 1つのボタンにまとまっている（6.106）===');

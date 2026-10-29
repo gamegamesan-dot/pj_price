@@ -1,6 +1,6 @@
 /* 画面：国内 Amazon FBA で見る（6.91）
    ・利益＝販売価格−（販売手数料＋FBA手数料）−仕入値（式は画面で持つ）
-   ・粗利（税抜）＝粗利×10/11 も出す
+   ・粗利（税抜）も出す（式は⚙設定。既定は せどりすと方式＝粗利×0.9・6.111）
    ・ランキング・新品出品者数・Amazon本体の有無を出す
    ・ジャンル（ゲーム／フィギュア／その他）で手数料率が変わる
    ・CSV は 10/7 の利益計算ファイルと同じ列で書き出す */
@@ -154,8 +154,9 @@ ok(c.game.cost===Math.round(12000*1.1)+176,
 ok(c.game.fee===Math.round(24829*0.15)+530,'★★手数料＝販売価格×率＋FBA');
 ok(c.game.profit===24829-c.game.fee-c.game.cost,
    '★★粗利＝販売価格−手数料−仕入値');
-ok(c.game.net===Math.round(c.game.profit*10/11),
-   '★★★粗利（税抜）＝粗利×10/11');
+/* 税抜の式は⚙設定で選ぶ（6.111）。既定は せどりすと方式（×0.9）。 */
+ok(c.game.net===Math.round(c.game.profit*0.9),
+   '★★★粗利（税抜）は既定で せどりすと方式（粗利×0.9）');
 ok(c.game.net<c.game.profit,'★税抜は税込より小さい');
 ok(c.game.margin===Math.round(c.game.profit/24829*1000)/10,'★利益率');
 ok(c.red.profit<0,'★★赤字の行は赤字と出る');
@@ -255,7 +256,7 @@ ok(again.rate===8&&again.fba===0,
    '★★⚙設定の値がそのまま効く（**0 を入れても既定値に戻らない**）');
 ok(again.fee===Math.round(24829*0.08),'★★手数料が計算し直される');
 ok(again.profit>c.game.profit,'★★利益も計算し直される（取り直し不要）');
-ok(again.net===Math.round(again.profit*10/11),'★税抜も付いてくる');
+ok(again.net===Math.round(again.profit*0.9),'★税抜も付いてくる');
 
 await T.done();
 })();

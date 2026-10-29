@@ -76,7 +76,7 @@ const setup=async()=>await p.evaluate((BUY)=>{
           return c===0x0D&&u[i+1]===0x0A; }) });
     });
   };
-  switchTab('D'); roleApply('admin'); csvRender();
+  switchTab('D'); roleApply(); csvRender();
 },BUY);
 
 console.log('=== ボタンが結ばれているか ===');

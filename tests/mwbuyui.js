@@ -212,7 +212,8 @@ ok(/送料無料/.test(buy.bar)&&/まであと/.test(buy.bar),
    '★★★送料無料（5万円）まであといくらを出す');
 let row=await p.evaluate(()=>{
   const d=$('csvMwAmzList').querySelector('div[style*="--good"]');
-  return d?d.textContent.slice(0,60):''; });
+  /* 1行目に税抜の式（6.111）が入って長くなったので、札の全文を見る。 */
+  return d?d.textContent:''; });
 ok(/仕入れる 3点/.test(row),'★★印の付いた行に数量のバッジを出す');
 
 console.log('\n=== 印を外す ===');

@@ -5768,3 +5768,68 @@ id = "28a081b66712442a8ca25b40167a2ef1"
   Node の ESM の自動判別が止まって `proxy-sync/worker.js`（`export default`）が
   読めなくなる。書かなければ `.mjs` は ESM・`.js` は中身で判別のまま
   （実際に `"type":"module"` を入れたら `tests/*.js` が全滅した）
+
+## 7.90 Amazon への登録（putListingsItem・2026-10-29・sw.js v205）
+
+### フラットファイルのフィードは使えない
+
+`POST_FLAT_FILE_LISTINGS_DATA` は **2025年7月31日に廃止**され、Feeds API に
+投げても `getFeed` が `fatal` を返す。いま作っている TSV（`TemplateType=Offer`）は
+**API では送れない**（セラーセントラルの手動アップロードでは今後も使える）。
+
+### JSON_LISTINGS_FEED と putListingsItem の比べ
+
+| | `JSON_LISTINGS_FEED` | **`putListingsItem`（採用）** |
+| --- | --- | --- |
+| 流れ | `createFeedDocument` → 署名URLへ上げる → `createFeed` → `getFeed` を**ポーリング** → `getFeedDocument` → gzip を解いてレポートを解析 | **1件 1回の PUT。応答に結果が入る** |
+| 速さ | 数分（Amazon の処理待ち） | **即時（5回/秒）** |
+| 結果 | processingReport を解析 | **応答の `issues` に行ごとの指摘** |
+| 上限 | `createFeed` は **0.0083回/秒**（約2分に1回） | 5回/秒 |
+| 向く規模 | 数百〜数千件 | **数件〜数十件** |
+
+1日数件〜数十件なので `putListingsItem` にした。
+
+### 作り
+
+```js
+const MW_PUT_MAX = 30;                 // 1回に送る上限
+const MW_PUT_DEADLINE_MS = 50000;      // 1回の持ち時間
+SP_GAP.putListingsItem = 250;          // 5回/秒
+```
+
+`PUT /listings/2021-08-01/items/{出品者トークン}/{SKU}?marketplaceIds=…&issueLocale=ja_JP`
+
+```json
+{ "productType": "PRODUCT", "requirements": "LISTING_OFFER_ONLY",
+  "attributes": {
+    "merchant_suggested_asin": [{ "value": "<ASIN>", "marketplace_id": "A1VC38T7YXB528" }],
+    "condition_type": [{ "value": "new_new", … }],
+    "condition_note": [{ "value": "<新品の定型文>", … }],
+    "fulfillment_availability": [{ "fulfillment_channel_code": "AMAZON_JP" }],
+    "purchasable_offer": [{ "currency": "JPY",
+      "our_price": [{ "schedule": [{ "value_with_tax": 9638 }] }], … }] } }
+```
+
+* `LISTING_OFFER_ONLY` ＝ **相乗り出品**（商品情報は作らない）。
+  いまの TSV（`TemplateType=Offer`）と同じ意味
+* **数量は送らない**（FBA なので在庫は納品で決まる）
+* 必要な権限は **Product Listing**。`searchCatalogItems` と
+  `getListingsRestrictions` が通っているので、**ロールの変更は不要**
+
+### 安全のための決まり
+
+* **ALLOWED でこの1本だけが `write: true`**（この表で唯一の書き込み）。
+  呼ぶ側が `write: true` と明示しないと `assertReadOnly` が止める
+* **管理者だけ**（作業者のキーは 403）
+* 送る前に **SKU の形・SKU の中の ASIN が合っているか・売値があるか**を確かめ、
+  おかしい行は**1回も呼ばずに**理由を返す（取り違えたまま登録しないため）
+* 出品者トークンが無ければ1回も送らず、入れ方を返す
+* `putListingsItem` は**べき等**なので、失敗した行だけ送り直せる
+
+### 結果
+
+`status`（`ACCEPTED` / `INVALID`）と `issues`（`code`・`severity`・`message`）を
+そのまま持ち帰る。**`ACCEPTED` で `ERROR` の指摘が無ければ通った**扱い
+（`WARNING` だけなら通った）。行ごとに `mw_reg_log` に残し、
+通った行は `skus` にも控える（仕入れ元・社・JAN・仕入値）。
+`GET /mw/put` が記録と **通った件数（`sent_ok`）** を返す。

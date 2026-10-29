@@ -49,6 +49,7 @@ const SP_GAP = {
   getItemOffersBatch: 10500,
   getListingsRestrictions: 250,      // 5回/秒（7.76）。余裕をみて4回/秒
   getMyFeesEstimates: 2100,          // 0.5回/秒（7.85）。1回20件
+  putListingsItem: 250,              // 5回/秒（7.90）。余裕をみて4回/秒
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -152,6 +153,11 @@ const ALLOWED = [
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
   /* 商品ごとの手数料（7.85）。読み取りだけ（見積りを返すだけで何も変えない）。 */
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/products\/fees\/v0\/feesEstimate$/ },
+  /* ★★ Amazon への登録（7.90）。**この表で唯一の書き込み** 。
+     出品者トークンと SKU をパスに入れる。相乗り出品（価格と数量だけ）で、
+     商品情報は作らない（requirements: LISTING_OFFER_ONLY）。 */
+  { m: "PUT", write: true,
+    re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/items\/[A-Z0-9]+\/[^/?]+\?/ },
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/identity\/v1\/oauth2\/token$/ },
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/sell\/fulfillment\/v1\/order\?/ },
   // eBayカタログの照会（JANから候補を探す）。どちらも読み取り。
@@ -523,7 +529,8 @@ async function spCall(env, run, path, opt) {
     await spSlotKv(env, o.label);        // 実行をまたいだ間隔（7.70）
     let resp, text = "";
     try {
-      resp = await net(run, url, { method: o.method || "GET", headers, body: o.body });
+      resp = await net(run, url, { method: o.method || "GET", headers, body: o.body,
+                                   write: !!o.write });
       text = await resp.text();
     } catch (e) {
       run.errors++; run.notes.push(o.label + "_error " + e.message);
@@ -6064,6 +6071,156 @@ async function jobMwAuto(env, opt) {
   return Object.assign(await saveRun(env, run), res);
 }
 
+/* ===== Amazon への登録（putListingsItem・7.90）=====
+   **フラットファイル（POST_FLAT_FILE_LISTINGS_DATA）は 2025-07-31 に廃止**され、
+   Feeds API では投げても fatal が返る。そこで Listings Items API で1件ずつ PUT する。
+   1日数件〜数十件なので、ポーリングも解凍も要らず、**その場で行ごとの結果**が出る
+   こちらのほうが確実（createFeed は 0.0083回/秒＝約2分に1回でむしろ待たされる）。
+
+   ・相乗り出品（商品情報は作らない）＝ requirements: "LISTING_OFFER_ONLY"
+   ・**管理者だけ**。ALLOWED でもこの1本だけが write:true（唯一の書き込み）
+   ・1回に送る件数の上限。最初は画面から「1件だけ送る」で始める
+   ・putListingsItem は**べき等**（同じ SKU に同じ中身を送っても二重にならない）
+     ので、失敗した行だけ送り直せる */
+const MW_PUT_MAX = 30;                 // 1回に送る上限
+const MW_PUT_DEADLINE_MS = 50000;      // 1回の持ち時間
+/* 送る中身。いまの TSV の列から機械的に作れる分だけを入れる。 */
+function mwPutBody(x) {
+  const mp = MP_FE;
+  const price = Math.round(Number(x.price) || 0);
+  const a = {
+    merchant_suggested_asin: [{ value: String(x.asin), marketplace_id: mp }],
+    condition_type: [{ value: String(x.cond || MW_RST_COND), marketplace_id: mp }],
+    fulfillment_availability: [{ fulfillment_channel_code: "AMAZON_JP" }],
+    purchasable_offer: [{
+      currency: "JPY", marketplace_id: mp,
+      our_price: [{ schedule: [{ value_with_tax: price }] }],
+    }],
+  };
+  if (String(x.note || ""))
+    a.condition_note = [{ value: String(x.note).slice(0, 2000), marketplace_id: mp }];
+  return { productType: "PRODUCT", requirements: "LISTING_OFFER_ONLY", attributes: a };
+}
+/* 1件 PUT する。返りの issues をそのまま持ち帰る。 */
+async function mwPutOne(env, run, x) {
+  const sku = String(x.sku || "");
+  const q = new URLSearchParams({ marketplaceIds: MP_FE, issueLocale: "ja_JP" });
+  const path = "/listings/2021-08-01/items/" + encodeURIComponent(spSellerId(env))
+    + "/" + encodeURIComponent(sku) + "?" + q.toString();
+  const r = await spCall(env, run, path, {
+    method: "PUT", body: JSON.stringify(mwPutBody(x)),
+    label: "putListingsItem", write: true,
+  });
+  if (!r.ok)
+    return { ok: false, status: "", issues: [],
+             err: ("HTTP " + r.status + " " + String(r.err || "")).trim().slice(0, 300) };
+  const d = r.data || {};
+  const issues = (d.issues || []).map((y) => ({
+    code: String(y.code || ""), severity: String(y.severity || ""),
+    message: String(y.message || "").slice(0, 300),
+    attrs: (y.attributeNames || []).slice(0, 6),
+  }));
+  const bad = issues.filter((y) => /ERROR/i.test(y.severity));
+  const st = String(d.status || "");
+  /* ACCEPTED で ERROR が無ければ通った。 */
+  return { ok: /ACCEPTED/i.test(st) && !bad.length, status: st,
+           sub_id: String(d.submissionId || ""), issues,
+           err: bad.length ? bad.map((y) => y.code + ": " + y.message).join(" | ")
+                             .slice(0, 300) : "" };
+}
+async function mwPutRun(env, body, role) {
+  const run = newRun("mw-put");
+  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, rows: [], why: "" };
+  try {
+    const o = body || {};
+    if (!spSellerId(env)) {
+      res.why = "出品者トークン（SP_SELLER_ID）が入っていません。"
+        + "pj-sync に npx wrangler secret put SP_SELLER_ID で入れてください。";
+      run.notes.push("Amazon登録：" + res.why);
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const list = (Array.isArray(o.rows) ? o.rows : []).slice(0, MW_PUT_MAX);
+    if (!list.length) { res.why = "送る行がありません"; res.ok = true;
+      return Object.assign(await saveRun(env, run), res); }
+    const dl = Date.now() + MW_PUT_DEADLINE_MS;
+    const at = nowIso();
+    const stmts = [];
+    for (const x of list) {
+      if (Date.now() > dl) { res.why = "時間が足りないので残りは次回にしました"; break; }
+      const sku = String(x.sku || "").trim();
+      const p = parseSku(sku);
+      /* SKU の形と ASIN を先に確かめる（送ってから弾かれないように）。 */
+      if (!p.ok || !/^B[0-9A-Z]{9}$/.test(String(x.asin || "")) || p.asin !== x.asin) {
+        res.ng++;
+        res.rows.push({ sku, ok: false,
+          err: !p.ok ? "SKU の形が違います" : "SKU の中の ASIN と合いません" });
+        continue;
+      }
+      if (!(Number(x.price) > 0)) {
+        res.ng++; res.rows.push({ sku, ok: false, err: "売値がありません" });
+        continue;
+      }
+      if (res.sent) await sleep(SP_GAP.putListingsItem);
+      const g = await mwPutOne(env, run, Object.assign({}, x, { sku, cond: p.cond === "new" ? "new_new" : MW_RST_COND }));
+      res.sent++;
+      if (g.ok) res.ok_n++; else res.ng++;
+      res.rows.push({ sku, asin: String(x.asin), ok: g.ok, status: g.status,
+                      issues: g.issues, err: g.err });
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
+           issues,err,by_role,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
+        .bind(at, sku, String(x.asin || ""), String(x.jan || ""),
+              Math.round(Number(x.price) || 0), p.cond === "new" ? "new_new" : MW_RST_COND,
+              g.ok ? 1 : 0, g.status || "", g.sub_id || "",
+              JSON.stringify(g.issues || []).slice(0, 2000), g.err || "",
+              String(role || "admin")));
+      /* 通った行は skus にも控える（仕入れ元・社・JAN・仕入値）。 */
+      if (g.ok)
+        stmts.push(env.DB.prepare(
+          `INSERT INTO skus (seller_sku, asin, cond, cond_code, prefix, scope,
+             purchased_on, cost, title, active, updated_at, buy_src, jan, mw_sha, cost_src)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,?11,?12,?13,?14)
+           ON CONFLICT(seller_sku) DO UPDATE SET
+             title=COALESCE(NULLIF(excluded.title,''), skus.title),
+             buy_src=excluded.buy_src,
+             jan=COALESCE(NULLIF(excluded.jan,''), skus.jan),
+             mw_sha=COALESCE(NULLIF(excluded.mw_sha,''), skus.mw_sha),
+             cost_src=COALESCE(excluded.cost_src, skus.cost_src),
+             updated_at=excluded.updated_at`)
+          .bind(sku, p.asin, p.cond, p.condCode, p.prefix, p.scope, p.purchasedOn,
+                p.cost, String(x.title || "").slice(0, 300), at,
+                skuSrcOf(p.prefix), String(x.jan || ""), String(x.sha || ""),
+                Number(x.cost_src) || null));
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("Amazon登録：送った " + res.sent + "件（通った " + res.ok_n
+      + "／だめ " + res.ng + "）" + (res.why ? ("　" + res.why) : ""));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-put: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 登録の記録（画面の「結果」）。通った件数も返す
+   （1件でも通ってから「まとめて送る」を出すため）。 */
+async function mwPutLog(env, url) {
+  const lim = Math.max(1, Math.min(200, mwNum(url.searchParams.get("limit")) || 50));
+  const q = await env.DB.prepare(
+    `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err
+       FROM mw_reg_log ORDER BY id DESC LIMIT ?1`).bind(lim).all();
+  const rows = ((q && q.results) || []).map((r) => {
+    let is = [];
+    try { is = JSON.parse(r.issues || "[]") || []; } catch (e) { is = []; }
+    return Object.assign({}, r, { issues: is, ok: Number(r.ok || 0) });
+  });
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_reg_log WHERE ok=1`).first();
+  return { ok: true, rows, sent_ok: Number((n && n.n) || 0), max: MW_PUT_MAX };
+}
+
 /* ===== JAN重複：人が選んだ ASIN を控える（7.84）=====
    候補が2件以上ある JAN は自動で決めない。画面で選んだ ASIN をここで控え、
    jan_map（picked_at）と mw_amz（asin）の両方に入れる。
@@ -7977,7 +8134,8 @@ export default {
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
             || url.pathname === "/mw/img" || url.pathname === "/mw/amz"
             || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
-            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"))
+            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
+            || url.pathname === "/mw/put"))
       return forbidStaff("MW の取り込み・相場・画像は管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
@@ -8183,6 +8341,14 @@ export default {
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
         return json(await mwStockPut(env, body), 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/mw/put") {
+        const b = await request.json().catch(() => ({}));
+        const pr = mwPutRun(env, b, role);
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/put")
+        return json(await mwPutLog(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/auto") {
         const b = await request.json().catch(() => ({}));
         const pr = jobMwAuto(env, { kind: "hand", force: !!(b && b.force) });
@@ -8406,7 +8572,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
-  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, jobMwAuto, mwAutoSettings,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
+  MW_PUT_MAX, jobMwAuto, mwAutoSettings,
   MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
