@@ -1,0 +1,17 @@
+{
+  "name": "pj-price",
+  "private": true,
+  "version": "1.0.0",
+  "description": "eBay/Shopee の値付けと出品を手伝う道具（index.html と Cloudflare Workers）",
+  "scripts": {
+    "test": "sh tests/run.sh",
+    "d1": "node proxy-sync/d1-exec.mjs",
+    "deploy:sync": "wrangler deploy --cwd proxy-sync",
+    "deploy:price": "wrangler deploy --cwd proxy",
+    "deploy:img": "wrangler deploy --cwd proxy-img",
+    "deploy:title": "wrangler deploy --cwd proxy-title"
+  },
+  "devDependencies": {
+    "wrangler": "4.153.0"
+  }
+}

@@ -10,10 +10,13 @@ compatibility_date = "2025-09-01"
 workers_dev = true
 
 # 生成結果とアクセストークンのキャッシュ。
-# 事前に `wrangler kv namespace create TITLE_CACHE` で作り、出力された id を入れる。
+# `wrangler kv namespace create TITLE_CACHE` で作った id。
+# **KV の id は秘密ではない**（これだけでは誰も読めない。読み書きには
+# アカウントの認証が要る）のでリポジトリに入れる。
+# 入れておかないと、手元で書き換えるたびに git pull でぶつかる。
 [[kv_namespaces]]
 binding = "TITLE_CACHE"
-id = "ここにKV namespace idを入れる"
+id = "28a081b66712442a8ca25b40167a2ef1"
 
 # account_id は `wrangler` が対話補完するか、環境変数 CLOUDFLARE_ACCOUNT_ID で渡す。
 # 秘密情報ではないが、リポジトリに固定しないでおく。

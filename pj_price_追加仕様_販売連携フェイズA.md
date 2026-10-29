@@ -5728,3 +5728,43 @@ Windows は `"` で囲んで内側の `"` を2つ重ね、Mac/Linux は `'` で�
 テストは `tests/d1exec.mjs`（25→60件）。偽の wrangler（JS）を作って
 **本当に1文ずつ流せること**まで確かめる。EINVAL・ENOENT・stderr あり・
 出力なしの4通りの出方も検査する。
+
+## 7.89 置き場の決まり（npm と wrangler.toml）（2026-10-29）
+
+### KV の id はリポジトリに入れる
+
+`proxy-title/wrangler.toml` の `kv_namespaces` の `id` が
+「ここにKV namespace idを入れる」のままで、手元だけ実際の id に
+書き換えてあったので、`git pull` のたびにぶつかっていた。
+
+**KV の id は秘密ではない**（id だけでは誰も読めない。読み書きには
+アカウントの認証が要る）ので、リポジトリに入れる。
+
+```toml
+[[kv_namespaces]]
+binding = "TITLE_CACHE"
+id = "28a081b66712442a8ca25b40167a2ef1"
+```
+
+`proxy-sync` は前から入っていた。`proxy` と `proxy-img` は KV を使わない。
+`account_id` はコメントのまま（`CLOUDFLARE_ACCOUNT_ID` で渡す）。
+
+**秘密（APIキー・トークン・パスワード）は今までどおり `wrangler secret put`。**
+`[vars]` にもリポジトリにも書かない。`tests/regress.js` が
+「仮の文字が残っていない」「`[vars]` に TOKEN/SECRET/PASSWORD/KEY を書いていない」
+を見張る。
+
+### npm
+
+いちばん上に `package.json` と `package-lock.json` を置き、
+`node_modules/` は `.gitignore` に入れる。
+
+* `wrangler` は**いちばん上に1回だけ**（`npm ci`）。`node_modules` は
+  上の階層へたどって見つかるので、`proxy-sync` からも使える
+  （`d1-exec.mjs` の `findWrangler` が8階層まで見る）
+* 版は**固定**（`"wrangler": "4.153.0"`。`^` を付けない）
+* **`"type"` を書かない。** `"type":"module"` にすると `tests/*.js`
+  （CommonJS・`require`）が全部壊れ、`"type":"commonjs"` にすると
+  Node の ESM の自動判別が止まって `proxy-sync/worker.js`（`export default`）が
+  読めなくなる。書かなければ `.mjs` は ESM・`.js` は中身で判別のまま
+  （実際に `"type":"module"` を入れたら `tests/*.js` が全滅した）

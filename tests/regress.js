@@ -105,5 +105,41 @@ const c=(html.match(/var APP_V='(v\d+)'/)||[])[1];
 console.log('   sw.js='+a+' / APP_V='+c);
 ok(!!a&&a===c,'★sw.js と APP_V が同じ番号');
 
+console.log('\n=== Worker の設定に仮の文字が残っていないか ===');
+/* KV の id は秘密ではない（それだけでは誰も読めない。読み書きには
+   アカウントの認証が要る）。リポジトリに入れておかないと、手元で
+   書き換えるたびに git pull でぶつかる。 */
+{
+  const path2=require('path');
+  const dirs=['proxy','proxy-img','proxy-title','proxy-sync'];
+  const bad=[], kvs=[];
+  for(const d of dirs){
+    const f=path2.join(ROOT,d,'wrangler.toml');
+    if(!fs.existsSync(f))continue;
+    const t=fs.readFileSync(f,'utf8');
+    /* コメント（#）の行は見ない。account_id の例はコメントのままで良い。 */
+    const live=t.split('\n').filter((x)=>!/^\s*#/.test(x)).join('\n');
+    if(/ここに|<your|YOUR_|xxxxxxxx/.test(live))bad.push(d);
+    const m=live.match(/^\s*id\s*=\s*"([0-9a-f]{32})"/mg)||[];
+    m.forEach((x)=>kvs.push(d+':'+(x.match(/"([0-9a-f]{32})"/)||[])[1]));
+  }
+  console.log('   KV: '+JSON.stringify(kvs));
+  console.log('   仮のまま: '+JSON.stringify(bad));
+  ok(bad.length===0,'★★★仮の文字（ここに…を入れる）が残っていない');
+  const title=fs.readFileSync(path2.join(ROOT,'proxy-title','wrangler.toml'),'utf8');
+  ok(/id = "28a081b66712442a8ca25b40167a2ef1"/.test(title),
+     '★★pj-title の KV の id が入っている');
+  const sync=fs.readFileSync(path2.join(ROOT,'proxy-sync','wrangler.toml'),'utf8');
+  ok(/id = "[0-9a-f]{32}"/.test(sync),'★pj-sync の KV の id も入っている');
+  /* 秘密は入っていないこと（トークン・パスワードの形） */
+  for(const d of dirs){
+    const f=path2.join(ROOT,d,'wrangler.toml');
+    if(!fs.existsSync(f))continue;
+    const t=fs.readFileSync(f,'utf8');
+    ok(/\[vars\][\s\S]*(TOKEN|SECRET|PASSWORD|KEY)\s*=/.test(t)===false,
+       '★★'+d+'：秘密を vars に書いていない（secret put で入れる）');
+  }
+}
+
 await T.done();
 })();

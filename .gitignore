@@ -1,2 +1,13 @@
+# npm で入れたもの（package-lock.json で版を固定するので、中身は入れない）
+node_modules/
 
+# wrangler の作業用（手元の D1・KV の控えなど）
 .wrangler/
+
+# 端末が勝手に作るもの
+.DS_Store
+Thumbs.db
+
+# 置き場（取り込んだCSVや書き出したファイルを置いても入らないように）
+tmp/
+*.local.*

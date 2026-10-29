@@ -224,6 +224,46 @@ ok(pct.length===2,'★★% を含むマイグレーションは2本（0022 と b
 ok(pct.indexOf('migrate-0031-jan-dup-fees.sql')<0,
    '★★★0031 には % が無い（そのまま流せる）');
 
+console.log('\n=== 置き場（リポジトリの作り）===');
+/* wrangler はリポジトリの**いちばん上**に1回入れる（package.json）。
+   node_modules は上の階層へたどって見つかるので、proxy-sync からでも当たる。 */
+{
+  const top=mkdtempSync(path.join(os.tmpdir(),'d1top-'));
+  mkdirSync(path.join(top,'node_modules','wrangler','bin'),{recursive:true});
+  writeFileSync(path.join(top,'node_modules','wrangler','bin','wrangler.js'),'');
+  mkdirSync(path.join(top,'proxy-sync'),{recursive:true});
+  const h=findWrangler(path.join(top,'proxy-sync'));
+  console.log('   proxy-sync から: '+h.kind);
+  ok(h.kind==='node','★★★上の階層に入れた wrangler を proxy-sync から見つける');
+  ok(h.path===path.join(top,'node_modules','wrangler','bin','wrangler.js'),
+     '★★いちばん上の node_modules を使う');
+}
+/* package.json と package-lock.json は入れる。node_modules は入れない。 */
+{
+  const pkg=JSON.parse(readFileSync(path.join(ROOT,'package.json'),'utf8'));
+  console.log('   wrangler: '+pkg.devDependencies.wrangler);
+  ok(pkg.private===true,'★★private（間違って npm publish しない）');
+  ok(!!pkg.devDependencies.wrangler,'★★★wrangler の版を package.json で決める');
+  ok(/^\d+\.\d+\.\d+$/.test(pkg.devDependencies.wrangler),
+     '★★版を固定する（^ や ~ を付けない）');
+  ok(pkg.scripts.test==='sh tests/run.sh','★npm test でテストが走る');
+  /* package.json に "type" を**書かない**（6.111／7.89）。
+     "type":"module" にすると tests/*.js（CommonJS・require）が全部壊れ、
+     "type":"commonjs" にすると Node の ESM の自動判別が止まって
+     proxy-sync/worker.js（export default）を読めなくなる。
+     書かなければ、.mjs は ESM、.js は中身で判別、という今の形のまま。 */
+  ok(pkg.type===undefined,
+     '★★★package.json に "type" を書かない（.js と .mjs の両方が動く形）');
+  const lock=JSON.parse(readFileSync(path.join(ROOT,'package-lock.json'),'utf8'));
+  ok(lock.lockfileVersion>=3,'★★package-lock.json がある');
+  ok(lock.packages['node_modules/wrangler'].version
+     ===pkg.devDependencies.wrangler,
+     '★★★lock の版が package.json と同じ');
+  const ig=readFileSync(path.join(ROOT,'.gitignore'),'utf8');
+  ok(/^node_modules\/$/m.test(ig),'★★★.gitignore に node_modules/');
+  ok(/^\.wrangler\/$/m.test(ig),'★.wrangler/ も');
+}
+
 console.log('\n=== 流し直せること（済みは飛ばす）===');
 const src=readFileSync(path.join(DIR,'d1-exec.mjs'),'utf8');
 ok(/duplicate column name/.test(src),
