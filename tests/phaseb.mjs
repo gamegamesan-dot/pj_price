@@ -133,7 +133,10 @@ ok(st.mode==='plan'&&st.restock==='confirm','★既定は「予定だけ表示�
 ok(W.PB_ZERO_MAX===20&&W.PB_RESTOCK_MAX===30,'★上限は数量0が20件・再調達が30件');
 
 console.log('\n=== 対象にするか（2章）===');
-const t=(x)=>W.pbTarget(Object.assign({ebay_item_id:'1',ebay_qty:1,fba_available:0,
+/* scope は実際の行には必ず入っている（候補を選ぶ SQL も scope='ebay'）。
+   7.81 で判定を pbRisky にまとめたので、ここでも入れておく。 */
+const t=(x)=>W.pbTarget(Object.assign({scope:'ebay',ebay_item_id:'1',ebay_qty:1,
+  fba_available:0,
   fba_inbound:0,fba_reserved:0,fba_seen_at:now,on_hand:0,one_off:0,one_off_known:1,
   dropship:0,restocking:0,ebay_sale:0,mode:'hold',cond:'used'},x));
 console.log('   寝かせる: '+JSON.stringify(t({})));
@@ -172,10 +175,15 @@ await seed('B0PHB00002',{mode:'restock'});      // 再調達
 await seed('B0PHB00003',{on_hand:1});           // 対象外
 let res=await pb();
 console.log('   '+JSON.stringify({mode:res.mode,picked:res.picked,zero:res.zero_plan,
-  restock:res.restock_plan,skipped:res.skipped}));
+  restock:res.restock_plan,skipped:res.skipped,risky:res.risky}));
 let a=await row('B0PHB00001'), b=await row('B0PHB00002');
 console.log('   '+JSON.stringify({a:a.pb_act,b:b.pb_act,qty:a.ebay_qty}));
-ok(res.zero_plan===1&&res.restock_plan===1&&res.skipped===1,'★予定を数える');
+ok(res.zero_plan===1&&res.restock_plan===1,'★予定を数える');
+/* 7.81：手元在庫ありの行は **SQL の段階で** 外れるので、数えない。
+   「対象外」に数えるのは「売り越しの恐れはあるが動かさない行」だけにする
+   （先頭400件が対象外で埋まって401件目以降が見られない、を防ぐため）。 */
+ok(res.risky===2,'★★★売り越しの恐れがある行だけを SQL で取る（手元在庫ありは外す）');
+ok(res.skipped===0,'★★対象外に数えるのは「恐れはあるが動かさない行」だけ');
 ok(a.pb_act==='zero'&&b.pb_act==='restock','★★予定を残す');
 ok(Number(a.ebay_qty)===1&&!calls.some((c)=>/Revise/.test(c.name)),
    '★★予定だけのときは eBay を1回も変えない');
@@ -278,7 +286,8 @@ a=await row('B0PHB00071');
 console.log('   '+JSON.stringify({fail:a.pb_fail,err:String(a.revise_err||'').slice(0,40)}));
 ok(Number(a.pb_fail)===3&&/数量0にできません/.test(String(a.revise_err||'')),
    '★★失敗の回数と理由を残す');
-ok(W.pbTarget(Object.assign({},{ebay_item_id:id6,ebay_qty:1,fba_available:0,
+ok(W.pbTarget(Object.assign({},{scope:'ebay',ebay_item_id:id6,ebay_qty:1,
+  fba_available:0,
   fba_inbound:0,fba_reserved:0,fba_seen_at:now,on_hand:0,pb_fail:3})).act==='',
    '★★3回失敗したら対象から外す（対応が必要）');
 

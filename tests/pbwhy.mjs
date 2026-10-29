@@ -125,7 +125,18 @@ ok(/オフなので/.test(t)===false,'★★設定が無いのに「オフ」と
 
 console.log('\n=== 判定そのものは変えていない ===');
 ok(typeof W.pbNoteFor==='function','★理由を作る関数がある');
-ok(W.pbNoteFor({ ebay_item_id:'1', ebay_qty:1, on_hand:1 },{ mode:'on' })
+/* 実際の行には scope と fba_seen_at が必ず入っている（7.81 の pbRisky が見る）。 */
+ok(W.pbNoteFor({ scope:'ebay', ebay_item_id:'1', ebay_qty:1, fba_seen_at:now,
+                 fba_available:0, on_hand:1 },{ mode:'on' })
    .indexOf('手元在庫あり')>=0,'★★★手元在庫は理由に出る（pbTarget と同じ判定）');
+/* 条件が1か所にまとまっていること（7.81）。 */
+ok(typeof W.pbRisky==='function','★★判定は pbRisky に1つだけ');
+ok(W.pbRisky({ scope:'ebay', ebay_qty:1, fba_seen_at:now, fba_available:0 })===true,
+   '★★恐れのある行');
+ok(W.pbRisky({ scope:'ebay', ebay_qty:1, fba_seen_at:now, fba_available:0,
+               on_hand:1 })===false,'★手元在庫ありは恐れなし');
+ok(W.pbRisky({ scope:'ebay', ebay_qty:1, fba_seen_at:now, fba_available:0,
+               fba_inbound:3 })===true,
+   '★★★納品待ちでも「恐れ」はある（動かさない理由は別に出す）');
 
 await T.done();

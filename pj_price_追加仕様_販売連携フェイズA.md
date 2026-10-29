@@ -5319,3 +5319,73 @@ FBA受領処理中・FC移管中** を外す。さらに ⚙設定「FBAで売�
   Revise をかけて失敗する、ということは起きない）
 * いまの画面では「数量0（フェイズBが0にした）」と「終了（手で終わらせた）」が
   **同じ見え方**になる。見分けたいなら `ListingStatus` を控える列が必要
+
+## 7.81 401件目以降が一度も判断されていなかった（2026-10-27・sw.js v201）
+
+`pb_runs` が15分ごとに **picked=0・skipped=400** を繰り返し、
+`items` 約1,180件のうち 401件目以降（巴マミ・B005LMX2HA など）は
+`pb_why` も `pb_at` も NULL のままだった。
+
+### 原因は2つ
+
+**① 絞る前に上限をかけていた。**
+
+```sql
+-- v200 まで
+SELECT … FROM items
+ WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND COALESCE(ebay_qty,0)>=1
+ ORDER BY COALESCE(pb_at,'') ASC LIMIT 400
+```
+
+「eBayに出ていて数量≧1」は**出品中のほぼ全部**なので、
+売り越しの恐れが無い行（FBA在庫あり）で枠が埋まっていた。
+
+**② 対象外の行に何も書いていなかったので、窓が進まなかった。**
+
+```js
+if (!t.act) {
+  res.skipped++;
+  if (String(r.pb_act || "") && r.pb_act !== "restock") { …予定を消す… }
+  continue;        // ← pb_act が空の行には何も書かない
+}
+```
+
+`pb_at` が NULL のままだと `ORDER BY COALESCE(pb_at,'') ASC` で
+**いつも同じ400件が先頭**に来る。①と②が重なって、同じ400件を15分ごとに
+見ては捨てる、が続いていた。
+
+### 直したこと
+
+**判定を1か所に集めた。** JS と SQL が同じ中身になるように並べて置く。
+
+```js
+function pbRisky(r) { … }          // 通知（stateEvents）と pbTarget が使う
+const PB_SQL_RISKY = `scope='ebay'
+      AND COALESCE(ebay_qty,0) >= 1
+      AND COALESCE(on_hand,0) = 0
+      AND COALESCE(cond,'') NOT IN ('cart','loose')
+      AND COALESCE(dropship,0) = 0
+      AND COALESCE(restocking,0) = 0
+      AND fba_seen_at IS NOT NULL
+      AND COALESCE(fba_available,0) = 0`;
+```
+
+* 候補は `WHERE ${PB_SQL_RISKY}` で**先に絞ってから** `LIMIT 400`。
+  `ORDER BY COALESCE(pb_at,'') ASC, asin ASC, cond ASC` で順番を決めきる
+* 恐れのある件数（`risky`）を数え、上限を超えたら `pick_capped` で知らせる
+  （`pb_runs.note` と Discord にも出す）
+* **対象外の行にも `pb_why` と `pb_at` を残す**（理由が変わったときだけ書く）。
+  これで窓が必ず進む
+* `ebay_item_id` が空の行も候補に入れる（判断して「出品していません」を残す）
+
+**「納品待ち」「セール中」「今回は動かさない」「続けて失敗」「出品していません」は
+`pbRisky` に入れない。** 売り越しの恐れ自体はあるので通知は出し、
+フェイズBが動かない理由（7.80）として出す。`skipped` が数えるのは
+「恐れはあるが動かさない行」だけになり、件数が読める数字になった。
+
+**通知の条件も `pbRisky` にそろえた。** v200 までは通知だけが
+「在庫0時の動作が hold／end／未設定」で絞っていたので、
+**再調達の行は恐れがあっても通知が出なかった**（逆向きのずれ）。
+これも直したので、通知が出る行とフェイズBが判断する行は必ず同じになる。
+
+`ITEM_COLS` に `pb_why` を足した（83列。上限100に余裕あり）。

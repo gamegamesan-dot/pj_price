@@ -1394,8 +1394,10 @@ function stateEvents(env, rows, pb) {
       if (resSold(r)) out.push(evStmt(env, "RESERVED_ONLY", "RESERVED_ONLY" + base, r, d));
       continue;
     }
-    // 手元在庫あり（on_hand）は、FBAが0でも売り越しではない
-    if (!onHand && av === 0 && q >= 1 && (r.mode === "hold" || r.mode === "end" || !r.mode)) {
+    /* 売り越しの恐れの判定はフェイズBと同じ関数（7.81）。
+       以前はここだけ「在庫0時の動作が hold/end/未設定」で絞っていたので、
+       再調達の行は恐れがあっても通知が出なかった（条件のずれ）。 */
+    if (pbRisky(r)) {
       /* フェイズBがこの行をどうするか（7.80）。
          dedup_key には入れないので、同じ日の2通目は届かない。 */
       const t = pbTarget(r);
@@ -1460,7 +1462,7 @@ const ITEM_COLS = `
   amazon_new_low, amazon_new_n, restocking, restock_price, restock_max_cost,
   restock_skip_acc, dropship, hand_qty, weight_g, cost_yen, sold_usd,
   ebay_first, mark_at, mark_stop, md_step, md_start, md_floor, md_n, md_done,
-  ebay_sale, pics_eps, pb_act, pb_at, pb_fail, pb_skip, pb_want, pb_max_cost,
+  ebay_sale, pics_eps, pb_act, pb_at, pb_why, pb_fail, pb_skip, pb_want, pb_max_cost,
   pb_want_at, search_kw, rv_want, rv_floor, rv_kind, rv_max_cost, rv_at,
   rk_want, rk_floor, rk_low, rk_n, rk_max_cost, rk_want_at, sold_keep,
   sold_price, sk_act, sk_why, sk_fail, mw_low, mw_low_at, mw_n, mw_stock,
@@ -3871,6 +3873,42 @@ async function jobSoldKeep(env, opt) {
    ・書き込みの前に GetItem で今の数量・売値を確かめ、判定時と違えば実行しない
    ・数量0の直後にも GetItem で ListingStatus を見て、Active のままかを確かめる
      （Out-of-stock control が効いていないと出品が終了してしまうため） */
+/* ===== 売り越しの恐れ：通知とフェイズBで同じ条件を使う（7.81）=====
+   v200 までは「通知を出す条件」と「フェイズBが拾う条件」が別に書かれていた。
+   そのため通知が出た行がフェイズBでは**一度も判断されない**ことが起きた
+   （2026-10-27：picked=0・skipped=400 が15分ごとに続き、401件目以降の
+   B005LMX2HA などは pb_why も pb_at も NULL のままだった）。
+   判定はここ1か所に置き、JS（pbRisky）と SQL（PB_SQL_RISKY）を同じ中身にする。
+
+   入れるもの … FBAの販売可能が0で eBay に数量が残っている（＝売り越しの恐れ）
+   外すもの   … 手元在庫あり／-C・-L（手元から発送）／無在庫／再調達中は
+                「在庫を持たないのが正常」。FBAの記録がまだ無い行（過去の出品）も外す
+
+   **「納品待ち」「セール中」「今回は動かさない」「続けて失敗」「出品していません」は
+   ここに入れない。** 売り越しの恐れ自体はあるので通知は出し、フェイズBが動かない
+   理由（pbTarget の why）として出す。 */
+function pbRisky(r) {
+  return String(r.scope || "") === "ebay"
+      && Number(r.ebay_qty || 0) >= 1
+      && !Number(r.on_hand || 0)
+      && !isCart(r)
+      && !isDropship(r)
+      && !isRestocking(r)
+      && r.fba_seen_at != null
+      && Number(r.fba_available || 0) === 0;
+}
+/* 上と同じ条件の SQL。候補を選ぶときは**数える前にここで絞る**。
+   以前は絞らずに先頭400件を取っていたので、その400件が全部対象外だと
+   401件目以降が永久に見られなかった。 */
+const PB_SQL_RISKY = `scope='ebay'
+      AND COALESCE(ebay_qty,0) >= 1
+      AND COALESCE(on_hand,0) = 0
+      AND COALESCE(cond,'') NOT IN ('cart','loose')
+      AND COALESCE(dropship,0) = 0
+      AND COALESCE(restocking,0) = 0
+      AND fba_seen_at IS NOT NULL
+      AND COALESCE(fba_available,0) = 0`;
+
 const PB_MODES = { off: 1, plan: 1, on: 1 };
 const PB_RESTOCK_MODES = { confirm: 1, auto: 1 };
 const PB_ZERO_MAX = 20;                      // 1回に数量0にする上限
@@ -3897,17 +3935,25 @@ async function pbSettings(env) {
    act=''        … 対象外（why に理由） */
 function pbTarget(r) {
   const no = (why) => ({ act: "", why: why });
-  if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
   if (Number(r.ebay_qty || 0) < 1) return no("すでに数量0");
+  /* 売り越しの恐れの判定は pbRisky に1か所だけ置く（7.81）。
+     通知と同じ関数なので、条件がずれて「通知は出たのに判断されない」が起きない。 */
+  if (!pbRisky(r)) {
+    if (String(r.scope || "") !== "ebay") return no("eBay対象外");
+    if (Number(r.on_hand || 0)) return no("手元在庫あり");
+    if (isCart(r)) return no("手元から発送（-C／-L）");
+    if (isDropship(r)) return no("無在庫");
+    if (isRestocking(r)) return no("再調達中");
+    if (r.fba_seen_at == null) return no("FBAの記録がありません");
+    if (Number(r.fba_available || 0) > 0) return no("FBA在庫あり");
+    return no("対象外");
+  }
+  /* ここからは「売り越しの恐れはあるが、いま動かさない」理由。
+     通知は出す（恐れはあるので）。pbRisky には入れない。 */
+  if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
   if (Number(r.pb_skip || 0)) return no("今回は動かさない");
   if (Number(r.pb_fail || 0) >= PB_FAIL_WARN) return no("続けて失敗（対応が必要）");
-  if (Number(r.on_hand || 0)) return no("手元在庫あり");
-  if (isCart(r)) return no("手元から発送（-C／-L）");
-  if (isDropship(r)) return no("無在庫");
-  if (isRestocking(r)) return no("再調達中");
   if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
-  if (r.fba_seen_at == null) return no("FBAの記録がありません");
-  if (Number(r.fba_available || 0) > 0) return no("FBA在庫あり");
   if (Number(r.fba_inbound || 0) > 0) return no("納品待ち");
   const rv = Number(r.fba_reserved || 0);
   if (rv > 0) {
@@ -3991,7 +4037,9 @@ async function pbLogRun(env, run, st, res) {
          capped, note, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?1)`
     ).bind(nowIso(), res.mode, res.picked, res.zeroed, res.restocked, res.failed,
            res.skipped, res.capped,
-           ("再調達の実行方法 " + st.restock + "／数量0は1回 " + PB_ZERO_MAX
+           ("売り越しの恐れ " + (res.risky || 0) + "件"
+            + (res.pick_capped ? ("（1回で見る上限を " + res.pick_capped + "件超過）") : "")
+            + "／再調達の実行方法 " + st.restock + "／数量0は1回 " + PB_ZERO_MAX
             + "件・再調達は1日 " + PB_RESTOCK_MAX + "件").slice(0, 500)).run();
   } catch (e) { run.notes.push("pb_runs に残せません：" + e.message); }
 }
@@ -4042,6 +4090,8 @@ function pbNotifyText(res, st) {
     t.push("📦 FBAで売れた：数量0 " + res.zeroed + "件／再調達 " + res.restocked
       + "件／失敗 " + res.failed + "件"
       + (res.capped ? ("／上限で次回に回した " + res.capped + "件") : ""));
+    t.push("売り越しの恐れがある行 " + (res.risky || 0) + "件を見ました（対象外 "
+      + res.skipped + "件）");
   }
   if (res.bofix)
     t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
@@ -4073,7 +4123,7 @@ async function pbNotify(env, run, res, st, text) {
 async function jobPhaseB(env, opt) {
   const approve = !!(opt && opt.approve);
   const run = newRun("phaseb");
-  const res = { bofix: 0, temp: 0, fails: [],
+  const res = { bofix: 0, temp: 0, fails: [], risky: 0, pick_capped: 0,
                 mode: "off", restock_mode: "confirm", picked: 0, zero_plan: 0,
                 restock_plan: 0, zeroed: 0, restocked: 0, failed: 0, skipped: 0,
                 capped: 0, unknown: 0, unknown_old: 0, ended: 0, used: 0,
@@ -4087,10 +4137,24 @@ async function jobPhaseB(env, opt) {
       return Object.assign(await saveRun(env, run), res);
     }
     const at = nowIso();
+    /* **数える前に SQL で絞る**（7.81）。
+       以前は「eBayに出ていて数量≧1」だけで先頭400件を取っていたので、
+       その400件が全部対象外だと401件目以降が永久に判断されなかった。
+       いまは売り越しの恐れがある行だけを取るので、上限に当たらない。
+       並びは pb_at の古い順＋ASIN（同じ値でも順番が決まるようにする）。 */
+    const cnt = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE ${PB_SQL_RISKY}`).first();
+    res.risky = Number((cnt && cnt.n) || 0);
     const q = await env.DB.prepare(
       `SELECT ${ITEM_COLS} FROM items
-        WHERE scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND COALESCE(ebay_qty,0)>=1
-        ORDER BY COALESCE(pb_at,'') ASC LIMIT ${PB_PICK_LIMIT}`).all();
+        WHERE ${PB_SQL_RISKY}
+        ORDER BY COALESCE(pb_at,'') ASC, asin ASC, cond ASC
+        LIMIT ${PB_PICK_LIMIT}`).all();
+    if (res.risky > PB_PICK_LIMIT) {
+      res.pick_capped = res.risky - PB_PICK_LIMIT;
+      run.notes.push("⚠ 売り越しの恐れが " + res.risky + "件あり、1回で見る "
+        + PB_PICK_LIMIT + "件を超えました（残りは次の回・古い順に進みます）");
+    }
     /* 再調達の売値（pb_want）を自分で計算して埋める（7.52）。
        pj_price が30分以内に送った値はそのまま使う。 */
     const selfP = await selfFill(env, run, (q && q.results) || []);
@@ -4118,7 +4182,15 @@ async function jobPhaseB(env, opt) {
         /* 対象でなくなった行の予定は消す（内訳が分かった・在庫が戻ったなど）。 */
         if (String(r.pb_act || "") && r.pb_act !== "restock")
           stmts.push(env.DB.prepare(
-            `UPDATE items SET pb_act=NULL, pb_why=?3, updated_at=?4
+            `UPDATE items SET pb_act=NULL, pb_why=?3, pb_at=?4, updated_at=?4
+              WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, t.why, at));
+        /* 予定が無い行でも**理由と見た時刻を残す**（7.81）。
+           以前はここで何も書かなかったので pb_at が NULL のままになり、
+           pb_at の古い順に並べても同じ行をずっと見続けていた。
+           理由が変わっていないときは書かない（毎回の書き込みを増やさない）。 */
+        else if (!r.pb_at || String(r.pb_why || "") !== t.why)
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET pb_why=?3, pb_at=?4, updated_at=?4
               WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, t.why, at));
         continue;
       }
@@ -7943,7 +8015,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
-                        isDropship, isRestock, stateEvents, pbNoteFor, EV_TEXT, daysLeft, dueText,
+                        isDropship, isRestock, stateEvents, pbNoteFor, pbRisky, PB_SQL_RISKY,
+                        PB_PICK_LIMIT, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
                         invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
