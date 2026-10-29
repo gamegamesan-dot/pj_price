@@ -153,9 +153,12 @@ ok(gRed.price===14000,'★★★価格が入る');
 console.log('\n=== 持ち時間を段ごとに分ける（7.82）===');
 ok(W.MW_SCAN_BUDGET_MS===55000,'★★60秒の手前（55秒）で切る');
 const SH=W.MW_SCAN_SHARE;
+const MW_PRICE_FITS=3;        // 40秒なら 20件×3回＝60件まで取れる
 console.log('   '+JSON.stringify(SH));
-ok(SH.asin===20000&&SH.rst===10000&&SH.price===25000,
-   '★★★①20秒・②10秒・③25秒');
+ok(SH.asin===10000&&SH.rst===5000&&SH.price===40000,
+   '★★★①10秒・②5秒・③40秒');
+ok(SH.price>=MW_PRICE_FITS*W.MW_PRICE_CALL_MS,
+   '★★★価格は1回ぶん（約11秒）が'+MW_PRICE_FITS+'回入る');
 ok(SH.asin+SH.rst+SH.price===W.MW_SCAN_BUDGET_MS,
    '★★★3段の合計が持ち時間と同じ');
 ok(W.MW_PRICE_CALL_MS===11000,'★価格は1回ぶん（約11秒）の余裕を見る');
@@ -165,7 +168,7 @@ console.log('   '+JSON.stringify({ms:r.body.ms,a:r.body.asin.ms,
   rr:r.body.rst.ms,p:r.body.price.ms,share:r.body.share_ms}));
 ok(typeof r.body.asin.ms==='number'&&typeof r.body.rst.ms==='number'
    &&typeof r.body.price.ms==='number','★★★段ごとにかかった時間を返す');
-ok(r.body.share_ms&&r.body.share_ms.price===25000,'★★持ち時間も返す（画面に出す）');
+ok(r.body.share_ms&&r.body.share_ms.price===40000,'★★持ち時間も返す（画面に出す）');
 ok(typeof r.body.ms==='number','★合計の時間も返す');
 
 console.log('\n=== ①が持ち時間を使い切っても②③に時間が残る ===');

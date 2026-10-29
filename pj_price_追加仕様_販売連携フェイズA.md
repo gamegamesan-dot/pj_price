@@ -5430,3 +5430,68 @@ const dlPrice = dlRst + MW_SCAN_SHARE.price;  // t0+55秒
 段ごとに `ms`（かかった時間）、全体に `ms` と `share_ms`（持ち時間）を足した。
 画面は「1.8秒／20秒まで」の形で出す（6.107）。
 ③が1件も動けなかったときは、そう書いて押し直しを促す。
+
+## 7.83 持ち時間の配分と、予約済みの扱い（2026-10-29・sw.js v203）
+
+### 配分を価格に寄せた
+
+```js
+const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 40000 };   // 合計55秒
+```
+
+価格は `getItemOffersBatch` が 0.1回/秒なので **1回20件で約10.5秒**。
+40秒あれば **20件×3回＝60件**まで取れる（25秒のときは20件だった）。
+①②が早く終われば余りは繰り越されるので、さらに取れる回もある。
+
+### 予約済み（fba_reserved）の扱い
+
+| 内訳 | 判定 | 理由 |
+| --- | --- | --- |
+| 顧客注文あり（`fba_res_cust` ≧ 1） | **数量0の対象** | 売れている。売り越しを止める |
+| **FC間の移動だけ**（`trans` > 0・`cust` = 0・`proc` = 0） | 対象外「FC間の移動中」 | 売れていないし、在庫は戻ってくる |
+| 受領処理中（`fba_res_proc` > 0・`cust` = 0） | **数量0の対象** | いま売れる在庫が無い。eBay に数量が残れば売り越し |
+| 移動と受領処理が混ざる（`cust` = 0・`trans` > 0・`proc` > 0） | **数量0の対象** | 受領処理中のぶんが売れないため |
+| 内訳が取れていない／合計に足りない | 「予約済み（内訳不明）」 | 決めつけない。24時間たったら知らせる |
+
+```js
+function resMoveOnly(r) {
+  const b = resBreak(r);
+  return b.known && b.total > 0 && b.cust === 0 && b.proc === 0 && b.trans > 0;
+}
+```
+
+v202 までは `isFcProcessing`（`cust` = 0 なら全部）で**受領処理中も外して**いた。
+受領処理中の行は「もうFBAに届いているが、まだ売れない」状態なので、
+eBay に数量1で出ていれば売り越しになる。そこで**FC間の移動だけ**を外すように変えた。
+
+受領処理中は数日で販売可能になるので、数量0にしたあと在庫が戻ったら
+数量を1に戻す必要がある（「売れたあとの在庫補充」7.53 と同じ手順、
+または行の操作）。**FBAに届いた直後の行が一時的に数量0になる**のは、
+売り越しを止めることと引き換えになる。
+
+`isFcProcessing` は `/status` の `fc_processing` と `resWarn` でそのまま使う
+（画面の言葉は変えていない）。
+
+### 予約済みの行の内訳を見る SQL
+
+```sql
+SELECT asin, cond, title, ebay_qty, fba_available, fba_inbound,
+       fba_reserved        AS 予約済み,
+       fba_res_cust        AS 顧客注文,
+       fba_res_trans       AS FC間の移動,
+       fba_res_proc        AS 受領処理中,
+       CASE
+         WHEN fba_res_cust IS NULL AND fba_res_trans IS NULL
+              AND fba_res_proc IS NULL                      THEN '内訳なし'
+         WHEN COALESCE(fba_res_cust,0)+COALESCE(fba_res_trans,0)
+              +COALESCE(fba_res_proc,0) < fba_reserved       THEN '内訳が足りない'
+         WHEN COALESCE(fba_res_cust,0) >= 1                  THEN '売れた（数量0の対象）'
+         WHEN COALESCE(fba_res_proc,0) >= 1                  THEN '受領処理中（数量0の対象）'
+         ELSE 'FC間の移動だけ（対象外）'
+       END AS 区分,
+       pb_act, pb_why, pb_at
+  FROM items
+ WHERE scope='ebay' AND COALESCE(ebay_qty,0) >= 1
+   AND COALESCE(fba_available,0) = 0 AND COALESCE(fba_reserved,0) > 0
+ ORDER BY 区分, asin;
+```

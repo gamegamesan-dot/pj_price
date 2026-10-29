@@ -3957,8 +3957,13 @@ function pbTarget(r) {
   if (Number(r.fba_inbound || 0) > 0) return no("納品待ち");
   const rv = Number(r.fba_reserved || 0);
   if (rv > 0) {
-    if (isFcProcessing(r)) return no("FBA受領処理中・FC移管中");
-    if (!resSold(r)) return { act: "unknown", why: "予約済み（内訳不明）" };
+    /* 顧客注文の出荷待ち（fba_res_cust≧1）は「売れた」とみなして数量0にする。
+       **FC間の移動だけ**の行は外す。受領処理中（fba_res_proc）は、いま売れる
+       在庫が無いので数量0の対象に入れる（7.83）。 */
+    if (resMoveOnly(r)) return no("FC間の移動中");
+    const rb2 = resBreak(r);
+    if (!rb2.known && !resSold(r))
+      return { act: "unknown", why: "予約済み（内訳不明）" };
   }
   /* ここまで来たら「FBAで売れた」。まず数量0にする。 */
   const wantRestock = String(r.mode || "") === "restock";
@@ -5031,7 +5036,7 @@ const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
    価格が1件も取れないことがあった（2026-10-29 の報告）。
    **締め切りは「開始からの積み上げ」**にする。①が早く終われば、
    その余りはそのまま②③の締め切りに残る（次の段へ繰り越される）。 */
-const MW_SCAN_SHARE = { asin: 20000, rst: 10000, price: 25000 };
+const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 40000 };
 /* getItemOffersBatch 1回ぶんの見込み（0.1回/秒＋余裕）。
    これだけ残っていないと③を始めない。 */
 const MW_PRICE_CALL_MS = 11000;
@@ -6836,6 +6841,14 @@ function resUnknown(r) {
   return b.total > 0 && !b.known && !resSold(r);
 }
 /* FBAの受領処理中・FC移管だけの行。納品した直後の正常な状態なので、警告も通知もしない。 */
+/* **FC間の移動だけ**の行（7.83）。顧客注文も受領処理中も無く、予約済みの全部が
+   FC間の移動中。売れていないし在庫は戻ってくるので、数量0にしない。
+   受領処理中（fcProcessingQuantity）は**外さない**：いま売れる在庫が無いので
+   eBay に数量が残っていれば売り越しになる。 */
+function resMoveOnly(r) {
+  const b = resBreak(r);
+  return b.known && b.total > 0 && b.cust === 0 && b.proc === 0 && b.trans > 0;
+}
 function isFcProcessing(r) {
   const b = resBreak(r);
   return b.known && b.total > 0 && b.cust === 0;
@@ -8052,7 +8065,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         isShipRestock, shipKindOf, shipNamesLoad,
                         isDropship, isRestock, stateEvents, pbNoteFor, pbRisky, PB_SQL_RISKY,
                         PB_PICK_LIMIT, EV_TEXT, daysLeft, dueText,
-                        resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing,
+                        resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing, resMoveOnly,
                         invRow, writeInventory,
                         gtinJp, catFromCatalog, catFromBrowse, isCart, cartMismatch,
                         lowestReqs, lowestKey, restockLowest, restockTrouble,

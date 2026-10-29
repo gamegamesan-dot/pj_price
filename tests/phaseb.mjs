@@ -165,8 +165,30 @@ console.log('   予約済み（顧客注文）: '+JSON.stringify(t({fba_reserved
 ok(t({fba_reserved:1,fba_res_cust:1,fba_res_trans:0,fba_res_proc:0}).act==='zero',
    '★★予約済みでも顧客注文があれば「売れた」とみなす');
 ok(t({fba_reserved:1,fba_res_cust:0,fba_res_trans:1,fba_res_proc:0}).act==='',
-   '★★FC移管・受領処理中だけなら対象外');
+   '★★FC間の移動だけなら対象外（7.83）');
+ok(/FC間の移動中/.test(
+     t({fba_reserved:1,fba_res_cust:0,fba_res_trans:1,fba_res_proc:0}).why),
+   '★理由も「FC間の移動中」');
+/* 受領処理中（FC処理中）は**数量0の対象に入れる**（7.83）。
+   いま売れる在庫が無いので、eBay に数量が残っていれば売り越しになる。 */
+ok(t({fba_reserved:1,fba_res_cust:0,fba_res_trans:0,fba_res_proc:1}).act==='zero',
+   '★★★受領処理中だけなら数量0の対象');
+ok(t({fba_reserved:2,fba_res_cust:0,fba_res_trans:1,fba_res_proc:1}).act==='zero',
+   '★★★移動と受領処理が混ざっていたら数量0の対象');
+ok(t({fba_reserved:3,fba_res_cust:1,fba_res_trans:1,fba_res_proc:1}).act==='zero',
+   '★★顧客注文が混ざっていれば当然「売れた」');
 ok(t({fba_reserved:1}).act==='unknown','★★内訳不明は動かさない');
+/* 内訳の合計が予約済みに届かない行も内訳不明（説明のつかない残りがある） */
+ok(t({fba_reserved:3,fba_res_cust:0,fba_res_trans:1,fba_res_proc:0}).act==='unknown',
+   '★★内訳が足りない行も内訳不明');
+console.log('   FC間の移動だけ: '+JSON.stringify(W.resMoveOnly(
+  {fba_reserved:1,fba_res_cust:0,fba_res_trans:1,fba_res_proc:0})));
+ok(W.resMoveOnly({fba_reserved:1,fba_res_cust:0,fba_res_trans:1,fba_res_proc:0})===true,
+   '★★resMoveOnly は移動だけの行で true');
+ok(W.resMoveOnly({fba_reserved:1,fba_res_cust:0,fba_res_trans:0,fba_res_proc:1})===false,
+   '★★★受領処理中は resMoveOnly にしない');
+ok(W.resMoveOnly({fba_reserved:1,fba_res_cust:1,fba_res_trans:0,fba_res_proc:0})===false,
+   '★顧客注文は resMoveOnly にしない');
 
 console.log('\n=== 予定だけ表示（eBayを変えない）===');
 await wipe(); await setCfg({pbMode:'plan'});
