@@ -183,6 +183,19 @@ console.log('   '+JSON.stringify(cfg));
 ok(cfg.has===true,'★設定がある');
 ok(cfg.v==='off','★★★既定はオフ');
 ok(cfg.opts==='off,on','★オフとオンの2つ');
+/* 「MW の在庫CSVを自動で取り込む」と読み違えやすいので、名前と説明で分ける。 */
+let lab=await p.evaluate(()=>{
+  const row=$('mwAutoMode').closest('.rowv');
+  return { label:row.querySelector('label').textContent,
+           note:row.querySelector('.note2').textContent };
+});
+console.log('   '+lab.label);
+ok(/MW候補の Amazon 価格/.test(lab.label),
+   '★★★名前は「MW候補の Amazon 価格（手数料・可否）」');
+ok(/手数料/.test(lab.label)&&/可否/.test(lab.label),'★★何を取り直すか名前に入れる');
+ok(/在庫CSV/.test(lab.label)===false,'★★名前に「在庫CSV」を入れない');
+ok(/MW の在庫CSVの取り込みは手動のままです/.test(lab.note),
+   '★★★説明に「在庫CSVの取り込みは手動のまま」と書く');
 
 await T.done();
 })();

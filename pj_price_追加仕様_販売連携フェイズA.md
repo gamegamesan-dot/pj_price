@@ -5598,7 +5598,11 @@ const MW_AUTO_RST_N = 20;        // 出品の可否
 const MW_AUTO_BUDGET_MS = 45000; // 1回の持ち時間
 ```
 
-* ⚙設定「**MWの価格を自動で取り直す**」（`mwAutoMode`）。**既定はオフ**
+* ⚙設定「**MW候補の Amazon 価格（手数料・可否）を自動で取り直す**」
+  （`mwAutoMode`）。**既定はオフ**。
+  「MW の在庫CSVを自動で取り込む」と読み違えやすいので、この名前にして
+  説明に「**MW の在庫CSVの取り込みは手動のままです**」と添えた
+  （この Cron は `mw_stock` を触らない）
 * 絞り込みは**画面と同じ条件**（`mwKishu`・`mwShipMax`・`mwStockMin`・`mwNoteNg`
   は D1 の設定に保存されているので、そこから読む）
 * 優先順（`mwScanPrice` に `order:"auto"` を渡す）
