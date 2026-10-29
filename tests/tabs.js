@@ -11,12 +11,17 @@ const p=await T.open();
 await p.waitForTimeout(400);
 
 console.log('=== 並びと初期表示 ===');
-const bar=await p.$$eval('.tabbar .tabs button',bs=>bs.map(b=>b.id+':'+b.textContent
-  +':'+b.getAttribute('aria-pressed')));
+/* 見えているタブだけを見る（Shopee はタブから外した・6.116。
+   中身は残してあるので switchTab('C') では今までどおり開ける）。 */
+const bar=await p.$$eval('.tabbar .tabs button',bs=>bs
+  .filter(b=>getComputedStyle(b).display!=='none')
+  .map(b=>b.id+':'+b.textContent+':'+b.getAttribute('aria-pressed')));
 console.log('   '+JSON.stringify(bar));
 ok(bar.length===5,'★タブは4つ＋⚙設定（出品文は eBay の中に入れた）');
-ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|Shopee|⚙',
-   '★並びは 出品CSV ― 販売連携 ― eBay ― Shopee ― ⚙設定');
+ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|Amazon刈取|⚙',
+   '★★★並びは 出品CSV ― 販売連携 ― eBay ― Amazon刈取 ― ⚙設定');
+ok((await p.evaluate(()=>getComputedStyle($('tabC')).display))==='none',
+   '★★Shopee のボタンは出さない（中身は残す）');
 ok(bar[0].indexOf(':true')>0&&bar.slice(1).every(x=>x.indexOf(':false')>0),
    '★開いたときは「出品CSV」が選ばれている');
 const vis=()=>p.evaluate(()=>{
@@ -144,14 +149,30 @@ console.log('   '+JSON.stringify(cfg));
 ok(cfg.cfgShown==='block'&&cfg.has,'★⚙設定にすべての設定がある');
 ok(cfg.csvShown==='none','★ほかのタブでは設定画面を出さない');
 ok(/梱包マージン ゲーム33g/.test(cfg.line),'★各タブにはいまの値を1行だけ出す');
+/* 最後に開いていたタブから始める（6.118）。⚙は覚えない。 */
+await p.evaluate(()=>{ switchTab('F'); });
+await p.waitForTimeout(150);
 await p.reload(); await p.waitForTimeout(500);
-const kept=await p.evaluate(()=>({base:$('baseProfit').value,pack:$('csvPackGame').value,
-  tab:['tabD','tabE','tabA','tabC','tabG'].filter(x=>$(x)
+let kept=await p.evaluate(()=>({base:$('baseProfit').value,pack:$('csvPackGame').value,
+  tab:['tabD','tabE','tabA','tabF','tabC','tabG'].filter(x=>$(x)
     &&$(x).getAttribute('aria-pressed')==='true').join()}));
 console.log('   開き直し: '+JSON.stringify(kept));
 ok(kept.base==='2800','★詳細設定は残る（v118 の保存）');
 ok(kept.pack==='33','★出品CSVタブの設定も残る');
-ok(kept.tab==='tabD','★開き直すとまた「出品CSV」から始まる');
+ok(kept.tab==='tabF','★★★最後に開いていたタブ（Amazon刈取）から始まる');
+/* ⚙を開いたまま閉じても、次は⚙からは始まらない */
+await p.evaluate(()=>{ switchTab('D'); switchTab('G'); });
+await p.waitForTimeout(150);
+await p.reload(); await p.waitForTimeout(500);
+kept=await p.evaluate(()=>({ tab:['tabD','tabE','tabA','tabF','tabC','tabG']
+  .filter(x=>$(x)&&$(x).getAttribute('aria-pressed')==='true').join() }));
+console.log('   ⚙のあと: '+JSON.stringify(kept));
+ok(kept.tab==='tabD','★★★⚙は覚えない（その前のタブから始まる）');
+/* 覚えがなければ「出品CSV」 */
+await p.evaluate(()=>{ localStorage.removeItem('pj:tab:v1'); });
+await p.reload(); await p.waitForTimeout(500);
+ok((await p.evaluate(()=>$('tabD').getAttribute('aria-pressed')))==='true',
+   '★★覚えがなければ「出品CSV」から始まる');
 
 console.log('\n=== ヘッダーの版・更新の帯 ===');
 /* 版はヘッダーの黄色い帯に移した（6.104）。細かい確かめは tests/appver.js。 */

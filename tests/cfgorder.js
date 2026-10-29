@@ -31,13 +31,14 @@ const band=await p.evaluate(()=>Array.from(document.querySelectorAll('#tabCfg .c
 console.log('   帯: '+JSON.stringify(band));
 ok(band.length===3&&/よく変える/.test(band[0])&&/ときどき変える/.test(band[1])
    &&/ほぼ触らない/.test(band[2]),'★「よく変える／ときどき変える／ほぼ触らない」の3段');
-ok(g.map(x=>x.k).join()==='goal,md,rv,sold,tune,list,conn,fee,policy,sync,ops,man,ui',
+ok(g.map(x=>x.k).join()
+   ==='goal,md,rv,sold,tune,list,amz,conn,fee,policy,sync,ops,man,ui',
    '★上から 値付けの目標→自動値下げ→自動反映→相場→（中）→（下）の順');
 
 console.log('\n=== 上の4つは初期から開く ===');
 ok(['goal','md','rv','sold'].every(k=>byKey(g,k).open===true),
    '★値付けの目標・自動値下げ・売値の自動反映・相場の扱いは開いて始まる');
-ok(['tune','list','fee','policy','sync','ops','man','ui']
+ok(['tune','list','amz','fee','policy','sync','ops','man','ui']
    .every(k=>byKey(g,k).open===false),
    '★中・下のグループは畳んで始まる（接続設定はキーが空なので別に見る）');
 
@@ -55,6 +56,10 @@ ok(has('sold','syncSoldCut')&&has('sold','syncSkipAcc')&&has('sold','syncTol'),
 ok(has('tune','csvReviewAbs')&&has('tune','csvReviewPct')&&has('tune','syncWeightGame')
    &&has('tune','syncWeight')&&has('tune','csvPackGame')&&has('tune','csvPackFig'),
    '★ときどき：見直しのしきい値・既定重量（ゲーム／ホビー）・梱包マージン');
+/* Amazon刈取（6.119）の設定はこのまとまりに入れる。 */
+ok(has('amz','mwAmzFeeGame')&&has('amz','mwAmzFbaGame')&&has('amz','mwAmzFeeHobby')
+   &&has('amz','mwAmzFbaHobby')&&has('amz','mwNetMode')&&has('amz','mwAutoMode'),
+   '★★★Amazon刈取：手数料・税抜の粗利の出し方・自動の取り直し');
 ok(has('list','csvOriginDefault')&&has('list','csvCatCustom'),
    '★ときどき：原産国の既定値・よく使うeBayカテゴリ');
 ok(has('conn','csvTitleApi')&&has('conn','csvTitleKey')&&has('conn','syncApi')

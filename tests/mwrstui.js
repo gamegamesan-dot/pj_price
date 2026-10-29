@@ -97,8 +97,9 @@ ok(await p.evaluate(()=>$('csvMwAmz').textContent)==='Amazonで調べる',
    '★★★ボタンは1つ「Amazonで調べる」');
 ok(await p.evaluate(()=>!document.getElementById('csvMwRst')),
    '★★★「出品の可否を調べる」のボタンは消した');
+/* v207 で Amazon刈取タブに移した（6.116）。箱（csvMwAmzBox）はもう無い。 */
 ok(await p.evaluate(()=>!/実売価格を取る/.test(
-     document.getElementById('csvMwAmzBox').innerHTML)),
+     document.getElementById('tabAmz').innerHTML)),
    '★★「Amazonの実売価格を取る」のボタンも消した');
 
 console.log('\n=== 押すと ①②③ を順に進める ===');

@@ -12,9 +12,13 @@ await p.waitForTimeout(300);
 
 console.log('=== どのタブも例外なく開く ===');
 // タブは 出品CSV ― 販売連携 ― eBay ― Shopee。eBayの中は 値付け｜出品文
-for(const t of ['tabD','tabE','tabA','tabC','tabG']){
+/* Shopee（tabC）はタブから外した（6.116）。ボタンは隠れているので、
+   中身が今までどおり開くことは switchTab で確かめる。 */
+for(const t of ['tabD','tabE','tabA','tabF','tabG']){
   await p.click('#'+t); await p.waitForTimeout(150);
 }
+await p.evaluate(()=>{ switchTab('C'); }); await p.waitForTimeout(150);
+await p.evaluate(()=>{ switchTab('D'); }); await p.waitForTimeout(150);
 await p.click('#tabA'); await p.waitForTimeout(150);
 await p.click('#ebSubList'); await p.waitForTimeout(150);
 await p.click('#ebSubPrice'); await p.waitForTimeout(150);

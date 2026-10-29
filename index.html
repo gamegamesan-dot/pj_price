@@ -110,7 +110,14 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
         box-shadow:0 2px 4px rgba(26,26,26,.10)}
 .tabs{display:flex;border:1px solid var(--ink);border-radius:2px;overflow:hidden;margin-top:12px}
 .tabbar .tabs{margin-top:0}
-.tabs button{flex:1;padding:12px 4px;font-size:14px;font-weight:800;border:0;background:#fff;color:var(--ink);font-family:inherit}
+.tabs button{flex:1 1 0;min-width:0;padding:12px 2px;font-size:13px;font-weight:800;
+  border:0;background:#fff;color:var(--ink);font-family:inherit;
+  /* 5つ（出品CSV・販売連携・eBay・Amazon刈取・⚙）を1行に収める。
+     字が入らない幅では詰める（折り返さない）。 */
+  white-space:nowrap;letter-spacing:-.02em}
+/* 360px より狭いときはもう少し詰める */
+@media (max-width:379px){ .tabs button{font-size:12px;padding:12px 1px;letter-spacing:-.04em} }
+@media (max-width:339px){ .tabs button{font-size:11px} }
 .tabs button[aria-pressed=true]{background:var(--label);color:var(--ink)}
 td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 /* 一覧の1件分。商品ごとの区切りが分かるように枠で囲む（出品CSVタブ・販売連携タブ共通）。
@@ -246,15 +253,31 @@ body.staff #syncOnHandFix{display:none !important}
 <div class="tabbar">
   <div class="wrap">
     <div class="tabs">
-      <!-- 並びは使う順。開いたときは「出品CSV」を出す。
-           「出品文」は eBay タブの中（値付け｜出品文）に入れてある。 -->
+      <!-- 並びは使う順。最後に開いていたタブを覚えて、次はそこから始める（6.118）。
+           「出品文」は eBay タブの中（値付け｜出品文）に入れてある。
+           Shopee は**タブから外した**（中身は残してあるので、いつでも戻せる・6.116）。 -->
       <button id="tabD" aria-pressed="true">出品CSV</button>
       <button id="tabE" aria-pressed="false">販売連携</button>
       <button id="tabA" aria-pressed="false">eBay</button>
+      <button id="tabF" aria-pressed="false">Amazon刈取</button>
+      <!-- Shopee は**既定で隠す**（6.116）。隠し方は前からある⚙設定の
+           「Shopee タブを隠す」の仕組みをそのまま使うので、いつでも戻せる。 -->
       <button id="tabC" aria-pressed="false">Shopee</button>
       <!-- 設定はこの⚙に全部まとめてある（各タブには置かない） -->
-      <button id="tabG" aria-pressed="false" aria-label="設定" title="設定" style="flex:0 0 auto;padding:12px 13px">⚙</button>
+      <button id="tabG" aria-pressed="false" aria-label="設定" title="設定" style="flex:0 0 auto;padding:12px 10px">⚙</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== MW の在庫CSV（6.117）=====
+     どのタブからでも取り込めるように、タブの上に置く。
+     ボタンは出品CSVタブの中のものと**同じ処理**（同じファイル選択を開く）。
+     前回の取り込みと、24時間を過ぎたときの催促もここに出す。 -->
+<div class="wrap" id="mwTopWrap">
+  <div id="mwTopStale" class="warn" style="display:none;margin-top:8px"></div>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+    <button class="btn primary" id="mwTopImport" style="flex:1 1 0;min-width:0;padding:9px 4px">MWの在庫CSVを取り込む</button>
+    <span class="note2" id="mwTopNote" style="flex:1 1 0;min-width:0;margin:0"></span>
   </div>
 </div>
 
@@ -718,71 +741,6 @@ body.staff #syncOnHandFix{display:none !important}
           <div id="csvMwShipList" style="margin-top:4px"></div>
         </details>
         <!-- 国内 Amazon FBA の実売価格（7.66）。eBay とは別の出口 -->
-        <details id="csvMwAmzBox" data-box="1" style="margin-top:10px">
-          <summary class="h" style="cursor:pointer;font-size:13px">国内 Amazon FBA で見る（テスト仕入れ用）</summary>
-          <!-- 1つのボタンで ①ASIN → ②可否 → ③価格（6.106） -->
-          <div class="note2" style="margin:4px 0 0">1回押すと、この順に進みます。
-            <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）
-            <br>② <b>出品の可否</b>を調べる（
-            <b style="color:var(--good)">緑</b>＝出せる・
-            <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）・
-            <b style="color:var(--bad)">赤</b>＝出せない）。
-            赤い行には「仕入れる」を付けられません。
-            調べ直しは緑が30日、それ以外は7日です
-            <br>③ <b>Amazon の実売価格</b>（カートか最安）を取る。
-            <b>赤の行は取りません</b>（呼び出しを減らすため。あとで緑に変われば次に取ります）
-            <div style="margin-top:3px">定価の見積りではありません。<b>ランキング・
-            新品出品者数・Amazon本体の有無</b>も出します。
-            60秒で区切るので、残りがあれば<b>もう一度押すと続きます</b>
-            （値段の取得が10秒に1回・1回 <b id="csvMwAmzMax">120</b>件まで）。</div></div>
-          <button class="btn" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
-          <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
-          <!-- JAN重複を決めたときの案内（6.109）。一覧の取り込みで消えない場所に置く -->
-          <div class="note2" id="csvMwDupNote" style="margin-top:2px;color:var(--good)"></div>
-          <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
-          <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
-          <div style="display:flex;gap:6px;margin-top:6px">
-            <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
-            <button class="btn" id="csvMwBuyShow" style="flex:1">仕入れる一覧</button>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:6px">
-            <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
-            <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
-          </div>
-          <!-- 仕入れる行の JAN だけをコピー（6.110） -->
-          <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
-          <div class="note2" id="csvMwJanNote" style="margin-top:2px;color:var(--good)"></div>
-          <!-- Amazon 登録用ファイル（6.103）。せどりすと と同じ形 -->
-          <div class="note2" style="margin:8px 0 0">仕入れる印の付いた行から、
-            セラーセントラルの<b>アップロードによる一括商品登録</b>に送るファイルを作ります。
-            <b>出品できる（緑）行だけ</b>が入ります。
-            納品はセラーセントラル、価格改定はマカドで今までどおり行ってください。</div>
-          <button class="btn" id="csvMwReg" style="width:100%;margin-top:6px">Amazon登録用ファイルを作る</button>
-          <div class="note2" id="csvMwRegNote" style="margin-top:2px"></div>
-          <!-- API で直に登録（6.113）。確認してから・管理者だけ -->
-          <div class="note2 cfgprice" style="margin:8px 0 0">ファイルを使わず、<b>pj-sync から Amazon に直に登録</b>することもできます（相乗り出品・価格と数量だけ）。<b>送る前に必ず確認の画面</b>が出ます。最初は<b>1件だけ</b>送って、セラーセントラルで見え方を確かめてください。</div>
-          <button class="btn cfgprice" id="csvMwPut" style="width:100%;margin-top:6px">Amazon に登録する（確認してから）</button>
-          <div class="note2" id="csvMwPutNote" style="margin-top:2px"></div>
-          <div id="csvMwPutBox" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
-          <!-- 並べ替えと絞り込み（6.93） -->
-          <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
-            <span class="note2" style="margin:0;flex:0 0 auto">並べ替え</span>
-            <select id="csvMwAmzSort" style="flex:1 1 0;min-width:0">
-              <option value="net" selected>粗利（税抜）順（全ジャンル）</option>
-              <option value="margin">利益率順</option>
-              <option value="genre">ジャンルごと</option>
-            </select>
-          </div>
-          <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
-          <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上</label></div>
-          <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし</label></div>
-          <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）</label></div>
-          <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
-          <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
-          <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
-          <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
-          <div id="csvMwAmzList" style="margin-top:6px"></div>
-        </details>
         <!-- eBay の相場（4章の6）。1回の件数で区切って、押すたびに進む -->
         <div class="row" style="margin-top:10px"><label>1回に調べる件数</label>
           <input type="number" id="csvMwMktLimit" value="120" step="10" min="1" max="400" inputmode="numeric"><span class="unit">件</span></div>
@@ -908,6 +866,96 @@ body.staff #syncOnHandFix{display:none !important}
     </details>
   </section>
 
+
+  </div>
+
+
+  <!-- ===== Amazon刈取（6.116）=====
+       出品CSVタブの「国内 Amazon FBA で見る」をここに移した（機能は同じ）。
+       MW の eBay 無在庫は Amazon の利益と関係なく出すので、出品CSVタブに残す。 -->
+  <div id="tabAmz" style="display:none">
+
+  <section>
+    <div class="h">MW の候補を Amazon（国内FBA）で見る</div>
+    <div class="body">
+      <!-- 商品を探す（6.115）。出品CSV・販売連携と同じ仕組み -->
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+        <input type="search" id="mwAmzFind" placeholder="商品名・ASIN・JAN・社 で探す" style="flex:1 1 0;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search">
+        <button class="btn" id="mwAmzFindCam" style="flex:0 0 auto;padding:9px 10px" title="バーコードを読む">📷</button>
+        <button class="btn" id="mwAmzFindClear" style="flex:0 0 auto;padding:9px 10px;display:none" title="検索を消す">×</button>
+      </div>
+      <div class="note2" id="mwAmzFindNote" style="margin:0 0 4px;display:none"></div>
+      <div id="mwAmzFindCamBox" style="display:none;margin:0 0 6px">
+        <video id="mwAmzFindVideo" playsinline muted style="width:100%;max-height:240px;background:#000;border-radius:6px"></video>
+        <div class="note2" id="mwAmzFindCamNote" style="margin:2px 0 0"></div>
+        <button class="btn" id="mwAmzFindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
+      </div>
+      <!-- 1つのボタンで ①ASIN → ②可否 → ③価格（6.106） -->
+      <div class="note2 cfgprice" style="margin:4px 0 0">1回押すと、この順に進みます。
+        <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）
+        <br>② <b>出品の可否</b>を調べる（
+        <b style="color:var(--good)">緑</b>＝出せる・
+        <b style="color:#a86b00">黄</b>＝許可が要る（申請リンク）・
+        <b style="color:var(--bad)">赤</b>＝出せない）。
+        赤い行には「仕入れる」を付けられません。
+        調べ直しは緑が30日、それ以外は7日です
+        <br>③ <b>Amazon の実売価格</b>（カートか最安）を取る。
+        <b>赤の行は取りません</b>（呼び出しを減らすため。あとで緑に変われば次に取ります）
+        <div style="margin-top:3px">定価の見積りではありません。<b>ランキング・
+        新品出品者数・Amazon本体の有無</b>も出します。
+        60秒で区切るので、残りがあれば<b>もう一度押すと続きます</b>
+        （値段の取得が10秒に1回・1回 <b id="csvMwAmzMax">120</b>件まで）。</div></div>
+      <!-- 「Amazonで調べる」は Worker 側も管理者だけ（403）なので、
+           作業者には出さない（6.120）。見る・印・JANコピー・注文用CSVは出す。 -->
+      <button class="btn cfgprice" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
+      <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+      <!-- JAN重複を決めたときの案内（6.109）。一覧の取り込みで消えない場所に置く -->
+      <div class="note2" id="csvMwDupNote" style="margin-top:2px;color:var(--good)"></div>
+      <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
+      <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
+        <button class="btn" id="csvMwBuyShow" style="flex:1">仕入れる一覧</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
+        <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
+      </div>
+      <!-- 仕入れる行の JAN だけをコピー（6.110） -->
+      <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
+      <div class="note2" id="csvMwJanNote" style="margin-top:2px;color:var(--good)"></div>
+      <!-- Amazon 登録用ファイル（6.103）。せどりすと と同じ形 -->
+      <div class="note2" style="margin:8px 0 0">仕入れる印の付いた行から、
+        セラーセントラルの<b>アップロードによる一括商品登録</b>に送るファイルを作ります。
+        <b>出品できる（緑）行だけ</b>が入ります。
+        納品はセラーセントラル、価格改定はマカドで今までどおり行ってください。</div>
+      <button class="btn" id="csvMwReg" style="width:100%;margin-top:6px">Amazon登録用ファイルを作る</button>
+      <div class="note2" id="csvMwRegNote" style="margin-top:2px"></div>
+      <!-- API で直に登録（6.113）。確認してから・管理者だけ -->
+      <div class="note2 cfgprice" style="margin:8px 0 0">ファイルを使わず、<b>pj-sync から Amazon に直に登録</b>することもできます（相乗り出品・価格と数量だけ）。<b>送る前に必ず確認の画面</b>が出ます。最初は<b>1件だけ</b>送って、セラーセントラルで見え方を確かめてください。</div>
+      <button class="btn cfgprice" id="csvMwPut" style="width:100%;margin-top:6px">Amazon に登録する（確認してから）</button>
+      <div class="note2" id="csvMwPutNote" style="margin-top:2px"></div>
+      <div id="csvMwPutBox" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
+      <!-- 並べ替えと絞り込み（6.93） -->
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+        <span class="note2" style="margin:0;flex:0 0 auto">並べ替え</span>
+        <select id="csvMwAmzSort" style="flex:1 1 0;min-width:0">
+          <option value="net" selected>粗利（税抜）順（全ジャンル）</option>
+          <option value="margin">利益率順</option>
+          <option value="genre">ジャンルごと</option>
+        </select>
+      </div>
+      <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上</label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし</label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）</label></div>
+      <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
+      <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
+      <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
+      <div id="csvMwAmzList" style="margin-top:6px"></div>
+    </div>
+  </section>
 
   </div>
 
@@ -1173,8 +1221,6 @@ body.staff #syncOnHandFix{display:none !important}
       <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
       <div class="body">
       <div class="rowv cfgprice"><label>FBAで売れたときの動作（フェイズB）</label><select id="pbMode"><option value="off">オフ（今までどおり通知だけ）</option><option value="plan" selected>予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay の数量を0にする）</option></select><div class="note2" style="margin-top:2px">FBAで売れて販売可能が0になった出品を、pj-sync が<b>まず数量0</b>にして売り越しを止めます（出品は残ります。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。「在庫0時：再調達」の行は数量0にしたうえで<b>再調達の予定</b>に載せ、下の設定に従って売値を直して数量を1に戻します。<b>まず「予定だけ表示」で1〜2日ようすを見てから</b>オンにしてください。</div></div>
-      <div class="rowv cfgprice"><label>税抜の粗利の出し方</label><select id="mwNetMode"><option value="sedori" selected>せどりすと方式（粗利×0.9）</option><option value="exact">税込から税抜へ（粗利×10/11）</option></select><div class="note2" style="margin-top:2px">国内FBAの<b>粗利（税抜）</b>の出し方です（6.111）。<b>せどりすと方式</b>は「粗利の10%を納付消費税として引く」やり方で、せどりすと の内訳（サイヴァリア3：税込粗利 2,615円 → 納付消費税 261円・粗利 <b>2,353円</b>）と合います。<b>×10/11</b> は税込→税抜の算数として正しい変換で、同じ例で <b>2,377円</b>（24円高く出ます）。<b>せどりすと と数字を合わせたいなら前者</b>、消費税の計算として正確にしたいなら後者です。赤字の行はどちらでも引きません。</div></div>
-      <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
       <div class="rowv cfgprice"><label>再調達の実行方法</label><select id="pbRestock"><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync がそのまま実行）</option></select><div class="note2" style="margin-top:2px">再調達は<b>売値をAmazon最安値基準の推奨売値に直して数量を1に戻す</b>操作です。目標の売値は pj_price が計算して送ります（24時間より古い・最安グループが2人未満・下限利益を割るときは、数量0のままにして理由を出します）。</div></div>
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
@@ -1276,14 +1322,26 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" style="margin:0 0 2px">eBay の最安値（送料込みの総額）のこの割合で出します。それでも目標利益を割るときは<b>目標利益の売値</b>にします。相場が無い行は目標利益の売値です。</div>
       <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
       <div class="chk"><input type="checkbox" id="mwNoteAll"><label for="mwNoteAll" style="flex:1">状態に注意の行も候補に含める</label></div>
-      <div class="note2" style="margin:8px 0 2px"><b>国内 Amazon FBA の手数料</b>（実売価格で利益を出すときに使います。10/7 の利益計算ファイルから読み取った値を既定にしています）</div>
-      <div class="row"><label>販売手数料（ゲーム）</label><input type="number" id="mwAmzFeeGame" value="15" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="row"><label>FBA手数料（ゲーム）</label><input type="number" id="mwAmzFbaGame" value="530" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="row"><label>販売手数料（ホビー）</label><input type="number" id="mwAmzFeeHobby" value="10" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
-      <div class="row"><label>FBA手数料（ホビー）</label><input type="number" id="mwAmzFbaHobby" value="580" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="note2" style="margin-top:2px">そのほかの機種は⚙設定の「Amazon販売手数料」「FBA配送代行手数料」を使います。FBA手数料は実際には商品の大きさで変わるので、発注前に Amazon の料金シミュレーターで確かめてください。</div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
       <div class="note2" style="margin-top:0">ふだんは使わないので隠しています。オンにすると出品CSVタブに「無在庫（新品・カタログ画像）で出す」の欄（①〜④とスコープの確認）が出ます。しくみは消していないので、いつでも戻せます。</div>
+      </div>
+    </details>
+    <details class="cfgg" id="cfgAmzBox" data-cfgg="amz">
+      <!-- ===== Amazon刈取（6.119）=====
+           国内FBAの手数料・税抜の粗利の出し方・自動の取り直しをここにまとめた。 -->
+      <summary class="cfggsum">Amazon刈取（国内FBA）<span class="cfggn"></span></summary>
+      <div class="body">
+        <div class="note2" style="margin:4px 0 2px">「Amazon刈取」タブで使う設定です。
+          手数料は <b>Amazon から商品ごとに取れた値</b>を優先し、取れていない行だけ
+          下の一律の値で計算します（画面に「仮の手数料」と出ます・7.85）。</div>
+        <div class="note2" style="margin:8px 0 2px"><b>国内 Amazon FBA の手数料</b>（実売価格で利益を出すときに使います。10/7 の利益計算ファイルから読み取った値を既定にしています）</div>
+        <div class="row"><label>販売手数料（ゲーム）</label><input type="number" id="mwAmzFeeGame" value="15" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="row"><label>FBA手数料（ゲーム）</label><input type="number" id="mwAmzFbaGame" value="530" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>販売手数料（ホビー）</label><input type="number" id="mwAmzFeeHobby" value="10" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="row"><label>FBA手数料（ホビー）</label><input type="number" id="mwAmzFbaHobby" value="580" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin-top:2px">そのほかの機種は⚙設定の「Amazon販売手数料」「FBA配送代行手数料」を使います。FBA手数料は実際には商品の大きさで変わるので、発注前に Amazon の料金シミュレーターで確かめてください。</div>
+        <div class="rowv cfgprice"><label>税抜の粗利の出し方</label><select id="mwNetMode"><option value="sedori" selected>せどりすと方式（粗利×0.9）</option><option value="exact">税込から税抜へ（粗利×10/11）</option></select><div class="note2" style="margin-top:2px">国内FBAの<b>粗利（税抜）</b>の出し方です（6.111）。<b>せどりすと方式</b>は「粗利の10%を納付消費税として引く」やり方で、せどりすと の内訳（サイヴァリア3：税込粗利 2,615円 → 納付消費税 261円・粗利 <b>2,353円</b>）と合います。<b>×10/11</b> は税込→税抜の算数として正しい変換で、同じ例で <b>2,377円</b>（24円高く出ます）。<b>せどりすと と数字を合わせたいなら前者</b>、消費税の計算として正確にしたいなら後者です。赤字の行はどちらでも引きません。</div></div>
+        <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
       </div>
     </details>
   </section>
@@ -1519,7 +1577,9 @@ body.staff #syncOnHandFix{display:none !important}
           <option value="10" selected>10件</option><option value="25">25件</option><option value="50">50件</option><option value="100">100件</option>
         </select></div>
       <div class="note2" style="margin-top:0">一覧は1ページずつ出します。2ページ目から先は、押したときに初めて描きます（最初に全部を描かないので、出品が増えても重くなりません）。一覧の上でも選べます。</div>
-      <div class="chk"><input type="checkbox" id="uiHideShopee"><label for="uiHideShopee" style="flex:1">Shopee タブを隠す</label></div>
+      <div class="chk"><input type="checkbox" id="uiHideShopee" checked><label for="uiHideShopee" style="flex:1">Shopee タブを隠す</label></div>
+      <div class="note2" style="margin:0 0 4px">既定で隠しています（6.116）。
+        外すと今までどおり Shopee タブが出ます（中身は残してあります）。</div>
       <div class="chk"><input type="checkbox" id="uiHideEbay"><label for="uiHideEbay" style="flex:1">eBay タブ（値付け・出品文）を隠す</label></div>
       <div class="note2" style="margin-top:0">出品CSVと販売連携は隠せません（毎日使うため）。隠したタブの設定も、この画面から消えます。</div>
       </div>
@@ -2638,6 +2698,7 @@ $('tabA').onclick=function(){switchTab(EB_SUB);};
 $('tabC').onclick=function(){switchTab('C');};
 $('tabD').onclick=function(){switchTab('D');};
 $('tabE').onclick=function(){switchTab('E');};
+$('tabF').onclick=function(){switchTab('F');};
 $('tabG').onclick=function(){switchTab('G');};
 /* eBayタブの中の切り替え。'A'＝値付け／'B'＝出品文。
    外から switchTab('B') を呼べばこれまでどおり出品文側が開く
@@ -2815,6 +2876,7 @@ function switchTab(t){
   $('tabCfg').style.display=t==='G'?'block':'none';
   $('tabD').setAttribute('aria-pressed',t==='D');
   $('tabE').setAttribute('aria-pressed',t==='E');
+  $('tabF').setAttribute('aria-pressed',t==='F');   // Amazon刈取（6.116）
   $('ebSubBar').style.display=eb?'flex':'none';
   $('ebSubPrice').setAttribute('aria-pressed',eb&&EB_SUB==='A');
   $('ebSubList').setAttribute('aria-pressed',eb&&EB_SUB==='B');
@@ -2823,6 +2885,7 @@ function switchTab(t){
   $('tabShopee').style.display=t==='C'?'block':'none';
   $('tabCsv').style.display=t==='D'?'block':'none';
   $('tabSync').style.display=t==='E'?'block':'none';
+  $('tabAmz').style.display=t==='F'?'block':'none';
   /* 販売連携タブを開いたら、MW の取り込みの古さを見に行く（6.97）。
      1分に1回までにして、タブを往復しても鳴らし続けない。 */
   if(t==='E'&&typeof mwStaleLoad==='function'
@@ -2833,7 +2896,7 @@ function switchTab(t){
   var sb=$('syncBar'); if(sb&&t!=='E')sb.style.display='none';
   /* 出品CSVタブと販売連携タブでは計算機の「商品」欄を使わない
      （どちらも行ごとの値で計算する）。タブより上が長いと一覧が見づらいので隠す。 */
-  $('itemBox').style.display=(t==='D'||t==='E'||t==='G')?'none':'block';
+  $('itemBox').style.display=(t==='D'||t==='E'||t==='F'||t==='G')?'none':'block';
   /* 設定は⚙設定画面に集めた。eBay専用の項目は、eBayタブを隠しているときだけ隠す。 */
   $('ebayOnly').style.display=$('uiHideEbay').checked?'none':'block';
   $('ebayNote').style.display=$('uiHideEbay').checked?'none':'block';
@@ -2842,8 +2905,31 @@ function switchTab(t){
   if(t==='C'){ buildShopee(); fetchSpFx(); }
   if(t==='D')csvRender();
   if(t==='E')syncRender();
+  /* Amazon刈取（6.116）。一覧を描き直し、MW の取り込みの古さも見に行く。 */
+  if(t==='F'){
+    if(typeof mwAmzRender==='function')mwAmzRender();
+    if(typeof mwStaleLoad==='function'
+       &&(Date.now()-(switchTab._mw||0))>60000){
+      switchTab._mw=Date.now(); mwStaleLoad();
+    }
+  }
   if(t==='G')cfgLineRender();
+  /* 最後に開いていたタブを覚える（6.118）。⚙は覚えない
+     （次に開いたとき設定画面から始まると分かりにくいため）。 */
+  if(t!=='G')tabSave(t);
   window.scrollTo(0,0);
+}
+/* ---- 最後に開いていたタブ（6.118）---- */
+var TAB_KEY='pj:tab:v1';
+var TAB_OK={ D:1, E:1, A:1, B:1, C:1, F:1 };
+function tabSave(t){
+  try{ localStorage.setItem(TAB_KEY,String(t)); }catch(e){}
+}
+function tabLoad(){
+  try{
+    var v=String(localStorage.getItem(TAB_KEY)||'');
+    return TAB_OK[v]?v:'D';
+  }catch(e){ return 'D'; }
 }
 
 var CONDLABEL={
@@ -8959,12 +9045,15 @@ document.addEventListener('visibilitychange',function(){
   mwSendResume();
 });
 $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
+/* タブの上のボタン（6.117）。中のボタンと**同じファイル選択**を開くので、
+   取り込みの処理は1つだけ（二重に作らない）。 */
+$('mwTopImport').onclick=function(){ $('csvMwFile').click(); };
 /* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
 /* ---- 商品を探す（6.92）の結び付け ---- */
 (function(){
   var deb={};
   var on=function(which){
-    var id=(which==='csv')?'csvFind':'syncFind';
+    var id=findPre(which);
     /* 打つたびに作り直すと重いので、少し待ってから1回だけ走らせる。 */
     $(id).addEventListener('input',function(){
       clearTimeout(deb[which]);
@@ -8977,15 +9066,15 @@ $('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
     $(id).addEventListener('keydown',function(e){
       if(e.key==='Enter'){ clearTimeout(deb[which]); findRun(which); }
     });
-    $((which==='csv')?'csvFindClear':'syncFindClear').onclick=function(){
+    $(findPre(which)+'Clear').onclick=function(){
       findClear(which);
     };
-    $((which==='csv')?'csvFindCam':'syncFindCam').onclick=function(){
+    $(findPre(which)+'Cam').onclick=function(){
       findCamStart(which);
     };
-    $((which==='csv')?'csvFindCamStop':'syncFindCamStop').onclick=findCamStop;
+    $(findPre(which)+'CamStop').onclick=findCamStop;
   };
-  on('sync'); on('csv');
+  on('sync'); on('csv'); on('amz');
   /* タブを移ったらカメラを止める（撮り続けない）。 */
   document.addEventListener('visibilitychange',function(){
     if(document.hidden)findCamStop();
@@ -9155,26 +9244,45 @@ function mwStaleLoad(){
     .then(function(res){ return res.ok?res.json():null; })
     .then(function(d){
       if(d&&d.last&&d.last.at)mwStaleAt=d.last.at;
+      /* 行数も出すので、前回の取り込みの中身ごと控える（6.117）。
+         **無いときは消す**（一度も取り込んでいない状態に戻せるように）。 */
+      if(d)mwStaleLast=d.last||null;
       if(d&&d.stale_h)MW_STALE_H=+d.stale_h||24;
       mwStaleRender();
     })
     ['catch'](function(){});
 }
 function mwStaleRender(){
-  var el=$('syncMwStale'); if(!el)return;
-  var at=(mwLast&&mwLast.at)||mwStaleAt||'';
-  if(!at){ el.style.display='none'; return; }
-  var ms=Date.now()-new Date(at).getTime();
-  if(!isFinite(ms)||ms<MW_STALE_H*3600000){ el.style.display='none'; return; }
-  var h=Math.floor(ms/3600000);
-  el.innerHTML='⏰ <b>MW の在庫CSVを取り込んでください</b>'
-    +'　最後の取り込みは '+esc(jstShort(at))+'（'+h+'時間前）です。'
-    +'<br>取り込まないと <b>MW の欠品が分からず、売り越し</b>になります。'
-    +'出品CSVタブの「MWの在庫CSVを取り込む」から入れてください。';
-  el.style.display='';
+  var lastRun=mwLast||mwStaleLast||null;
+  var at=(lastRun&&lastRun.at)||mwStaleAt||'';
+  var ms=at?(Date.now()-new Date(at).getTime()):NaN;
+  var old=at&&isFinite(ms)&&ms>=MW_STALE_H*3600000;
+  var h=isFinite(ms)?Math.floor(ms/3600000):0;
+  var msg=old
+    ?('⏰ <b>MW の在庫CSVを取り込んでください</b>'
+      +'　最後の取り込みは '+esc(jstShort(at))+'（'+h+'時間前）です。'
+      +'<br>取り込まないと <b>MW の欠品が分からず、売り越し</b>になります。'
+      +'画面の上の「MWの在庫CSVを取り込む」から入れてください。')
+    :'';
+  /* 販売連携タブと、タブの上（6.117）の両方に出す。 */
+  [ $('syncMwStale'), $('mwTopStale') ].forEach(function(el){
+    if(!el)return;
+    if(!msg){ el.style.display='none'; el.innerHTML=''; return; }
+    el.innerHTML=msg; el.style.display='';
+  });
+  /* 前回の取り込み（日時・行数）はいつでも出す（6.117）。 */
+  var n=$('mwTopNote');
+  if(n){
+    n.innerHTML=at
+      ?('前回の取り込み '+esc(jstShort(at))
+        +((lastRun&&+lastRun.rows_in)
+          ?('・'+Number(lastRun.rows_in).toLocaleString('ja-JP')+'行'):'')
+        +(old?'　<b style="color:var(--bad)">'+h+'時間前</b>':''))
+      :'まだ取り込んでいません';
+  }
 }
 /* 取り込みの時刻は候補一覧からも販売連携からも拾えるようにする。 */
-var mwStaleAt='';
+var mwStaleAt='', mwStaleLast=null;
 /* ===== MW の候補を出品リストに入れる（6.96）=====
    写真が付いた「① 出品候補」の行を、既存の出品リスト（csvList）に足す。
    こうすると英題生成・Item Specifics・原産国・書き出し（File Exchange）は
@@ -9654,6 +9762,8 @@ function mwAmzPicked(){
   var f=mwAmzFilters();
   return mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
     .filter(function(x){
+      /* 検索欄（6.115）。当たらない行は先に外す。 */
+      if(!findMatchAmz(x.r))return false;
       /* 「JAN重複だけ」のときは重複の行だけ（値段が無くても出す・6.112）。 */
       if(f.dup)return mwJanDup(x.r);
       /* JAN重複の行は ASIN が無いので値段も利益も出ない。
@@ -10138,6 +10248,7 @@ function mwAmzRender(){
   var f=mwAmzFilters(), sort=mwAmzSort();
   var dn=$('csvMwAmzDupN');
   if(dn)dn.textContent=mwJanDupN()?('（'+mwJanDupN()+'件）'):'';
+  findNoteRender('amz',list.length,mwAmzRows.length);   // 検索の件数と「×」（6.115）
   note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
     +'　値段あり '+(d.priced||0)
     +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
@@ -14456,8 +14567,17 @@ function findHayCsv(r){
   ].filter(Boolean).join(' ');
 }
 /* いまの検索の中身（両タブ共通）。 */
+/* 検索欄の id の頭（6.115）。出品CSV・販売連携・Amazon刈取 の3か所で同じ仕組みを使う。
+   **var の表にしないこと**。結び付け（on('sync')）はこの行より**前**で走るので、
+   var だと巻き上げで undefined のまま読まれて読み込みが止まる（実際に踏んだ）。
+   関数宣言は巻き上がるので、中で判断する。 */
+function findPre(which){
+  if(which==='sync')return 'syncFind';
+  if(which==='amz')return 'mwAmzFind';
+  return 'csvFind';
+}
 function findState(which){
-  var id=(which==='csv')?'csvFind':'syncFind';
+  var id=findPre(which);
   var q=String($(id).value||'');
   var terms=findTerms(q);
   var jan=findJanOf(q);
@@ -14477,6 +14597,12 @@ function findMatchRow(which,r,hay){
 }
 function findMatchSync(r){ return findMatchRow('sync',r,findHaySync(r)); }
 function findMatchCsv(r){ return findMatchRow('csv',r,findHayCsv(r)); }
+/* Amazon刈取の行（6.115）。MW の商品名・Amazon の商品名・JAN・ASIN・社で探す。 */
+function findHayAmz(r){
+  return [ (r||{}).mw_name, (r||{}).amz_name, (r||{}).jan, (r||{}).asin,
+           (r||{}).sha, (r||{}).kishu ].filter(Boolean).join(' ');
+}
+function findMatchAmz(r){ return findMatchRow('amz',r,findHayAmz(r)); }
 /* 件数と「×」の出し入れ。 */
 /* ヒットが1件なら、その行の折りたたみを開いた状態で出す。
    自動で開いた分は覚えない（boxQuietOpen と同じ考え方）。 */
@@ -14491,7 +14617,7 @@ function findOpenOne(which){
   if(!d.open){ d.setAttribute('data-detauto','1'); d.open=true; }
 }
 function findNoteRender(which,shown,total){
-  var pre=(which==='csv')?'csvFind':'syncFind';
+  var pre=findPre(which);
   var st=findState(which);
   var note=$(pre+'Note'), clr=$(pre+'Clear');
   clr.style.display=st.on?'':'none';
@@ -14529,10 +14655,12 @@ function findAskJan(which,jan){
 function findRun(which){
   var st=findState(which);
   if(st.jan)findAskJan(which,st.jan);
-  if(which==='csv')csvRender(); else syncRender();
+  if(which==='csv')csvRender();
+  else if(which==='amz')mwAmzRender();
+  else syncRender();
 }
 function findClear(which){
-  var id=(which==='csv')?'csvFind':'syncFind';
+  var id=findPre(which);
   $(id).value='';
   findRun(which);
 }
@@ -14562,7 +14690,7 @@ function findEanOk(code){
   return ((10-(sum%10))%10)===(+d.charAt(12));
 }
 function findCamNote(which,msg){
-  var pre=(which==='csv')?'csvFind':'syncFind';
+  var pre=findPre(which);
   $(pre+'CamNote').innerHTML=msg||'';
 }
 function findCamStop(){
@@ -14579,7 +14707,7 @@ function findCamStop(){
   findCamWhich='';
 }
 function findCamStart(which){
-  var pre=(which==='csv')?'csvFind':'syncFind';
+  var pre=findPre(which);
   if(findCamWhich)findCamStop();
   findCamWhich=which;
   $(pre+'CamBox').style.display='';
@@ -16324,10 +16452,12 @@ csvRender();
 /* 詳細設定を pj-sync と突き合わせる。pj-sync のURL・キーは csvLoad() で入るので、
    そのあとで呼ぶ。届かなくても端末に保存した値でそのまま動く。 */
 advSyncInit();
-/* 開いたときは「出品CSV」を出す（いちばん使うタブ）。
+/* タブの上の「前回の取り込み」を出す（6.117）。キーが入っていれば見に行く。 */
+try{ mwStaleRender(); if(typeof mwStaleLoad==='function')mwStaleLoad(); }catch(e){}
+/* 最後に開いていたタブから始める（6.118。覚えていなければ「出品CSV」）。
    タブの中身の出し分けは switchTab にまとめてあるので、ここから1回呼ぶ。
    出品リストの読み込み（csvLoad）より後に呼ぶこと。 */
-switchTab('D');
+switchTab(tabLoad());
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -16343,7 +16473,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v206';   // sw.js の const V と必ず同じ値にする
+var APP_V='v207';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
