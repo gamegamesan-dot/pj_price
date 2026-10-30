@@ -128,26 +128,32 @@ ok(one.open===false&&!/要対応/.test(one.sum),
    '★pj-sync のキーだけ空なら（英題のキーで足りるので）開かない');
 
 console.log('\n=== ⚙設定：使い方マニュアル ===');
+/* 中身（章立て・作業の流れ・管理者だけの印）は tests/manual.js で見る。
+   ここでは置き場所と「畳んである」ことだけ確かめる。 */
 const man=await p.evaluate(()=>{
   switchTab('G'); $('cfgManBox').open=true;
   const box=$('cfgManBox');
   return { inCfg:$('tabCfg').contains(box),
     inCsv:$('tabCsv').contains(box),
-    heads:Array.from(box.querySelectorAll('h4')).map(h=>h.textContent),
+    chaps:Array.from(box.querySelectorAll('details.manc>summary'))
+      .map(x=>x.textContent.trim()),
+    shut:Array.from(box.querySelectorAll('details.manc')).every(d=>!d.open),
     lis:box.querySelectorAll('li').length,
-    long:Array.from(box.querySelectorAll('li')).filter(x=>x.textContent.length>160).length,
-    text:box.innerText };
+    long:Array.from(box.querySelectorAll('li')).filter(x=>x.textContent.length>260).length,
+    /* 畳んだままだと innerText に出ないので、中身を読むときだけ開ける。 */
+    text:(function(){
+      box.querySelectorAll('details.manc').forEach(function(d){ d.open=true; });
+      const t=box.innerText;
+      box.querySelectorAll('details.manc').forEach(function(d){ d.open=false; });
+      return t;
+    })() };
 });
-console.log('   見出し: '+JSON.stringify(man.heads));
+console.log('   章: '+JSON.stringify(man.chaps));
 ok(man.inCfg&&!man.inCsv,'★⚙設定の中にある');
-const need=['せどりすとCSVの取り込み','英題と出品文','写真','CSVの書き出し',
-  'アップロード結果の取り込み','名簿の送信','FBA納品の判断','再調達','自動値下げ'];
-ok(need.every(s=>man.heads.some(h=>h.indexOf(s)>=0)),
-   '★9つの手順（取り込み→英題→写真→書き出し→結果→名簿→FBA→再調達→自動値下げ）がある');
-ok(['①','②','③','④','⑤','⑥','⑦','⑧','⑨'].every((n,i)=>(man.heads[i]||'').indexOf(n)===0),
-   '★順番に番号が付いている');
-ok(man.lis>=20&&man.long===0,'★短い箇条書きで書く（長い行なし）');
-ok(/CP932/.test(man.text)&&/File Exchange/.test(man.text)&&/500px/.test(man.text),
+ok(man.chaps.length===5,'★★章は5つ（毎日／Amazon刈取／eBay出品／販売連携／困ったとき）');
+ok(man.shut,'★★章は畳んである（スマホで長い文を一度に見せない）');
+ok(man.lis>=40&&man.long===0,'★短い箇条書きで書く（長すぎる行なし）');
+ok(/Shift_JIS/.test(man.text)&&/File Exchange/.test(man.text)&&/500px/.test(man.text),
    '★画面から外した説明（文字コード・File Exchange・写真の大きさ）が入っている');
 
 await T.done();
