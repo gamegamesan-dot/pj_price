@@ -111,27 +111,51 @@ ok(ord[0]==='4988611224878'&&ord[1]==='4902370550467',
 ok(ord[2]==='4580033110113','★★大分類の順位で並ぶ（小分類 11,481 では3番目）');
 ok(ord[3]==='4970381909444','★★★順位が取れていない行は後ろにまとめる');
 
-console.log('\n=== 絞り込み：ランキングがこれ以下 ===');
+console.log('\n=== 絞り込み：大分類ごとの上限（6.124）===');
+/* 上限は⚙設定の表（大分類ごと）。細かい確かめは tests/mwrankcap.js。 */
 await setF('csvMwAmzSort','net');
-ok(await p.evaluate(()=>!!$('csvMwAmzMaxRank')),'★★絞り込みの欄がある');
-ok(await p.evaluate(()=>$('csvMwAmzMaxRank').value)==='0','★既定は0（見ない）');
-await setF('csvMwAmzMaxRank','0');
-await p.waitForTimeout(300);
-ok((await names()).length===4,'★★★0 なら全部出す');
-await setF('csvMwAmzMaxRank','2000');
-await p.waitForTimeout(300);
+const caps=(o)=>p.evaluate((o)=>{
+  mwRankCapSet(o); mwAmzRender();
+}, o);
+await caps({});
+await p.waitForTimeout(200);
+ok((await names()).length===4,'★★★どの分類も制限なしなら全部出す');
+await caps({ 'ホビー':2000 });
+await p.waitForTimeout(200);
 let few=await names();
-console.log('   2000位以下: '+JSON.stringify(few));
-ok(few.length===2&&few.indexOf('4988611224878')>=0
-   &&few.indexOf('4902370550467')>=0,
-   '★★★2,000位以下の2行だけ残る（649・1,200）');
+console.log('   ホビー 2,000位まで: '+JSON.stringify(few));
 ok(few.indexOf('4580033110113')<0,
-   '★★★小分類が 11,481位でも、大分類 948,040位なので外れる');
-ok(few.indexOf('4970381909444')<0,'★★順位が取れていない行は外す（判断できない）');
-await setF('csvMwAmzMaxRank','1000000');
-await p.waitForTimeout(300);
-console.log('   100万位以下: '+JSON.stringify(await names()));
-ok((await names()).length===3,'★★★100万位以下ならチョイプラも入る');
+   '★★★ホビーの上限（2,000位）を超えた 948,040位は隠れる');
+ok(few.indexOf('4902370550467')>=0,
+   '★★★ゲームは制限なしなので、同じ上限では隠れない（行ごとに自分の分類で見る）');
+ok(few.indexOf('4970381909444')<0,
+   '★★上限を入れているあいだは、順位が無い行は隠す');
+let hid=await p.evaluate(()=>($('csvMwAmzListNote').textContent||'')
+  .replace(/\s+/g,' '));
+console.log('   '+hid.slice(hid.indexOf('ランキング')).slice(0,40));
+ok(/ランキングの基準で隠した行 2件/.test(hid),
+   '★★★一覧の上に「ランキングの基準で隠した行 n件」を出す');
+await p.evaluate(()=>{ $('csvMwAmzNoRank').checked=true;
+  $('csvMwAmzNoRank').dispatchEvent(new Event('change')); });
+await p.waitForTimeout(200);
+let withNo=await names();
+console.log('   順位が無い行も表示: '+JSON.stringify(withNo));
+ok(withNo.indexOf('4970381909444')>=0,
+   '★★★「順位が無い行も表示」で、順位が無い行を出せる');
+ok(withNo.indexOf('4580033110113')<0,'★上限を超えた行は出さないまま');
+await p.evaluate(()=>{ $('csvMwAmzNoRank').checked=false;
+  $('csvMwAmzNoRank').dispatchEvent(new Event('change')); });
+await caps({ 'ホビー':1000000, 'ゲーム':1000 });
+await p.waitForTimeout(200);
+let two=await names();
+console.log('   ホビー100万・ゲーム1,000: '+JSON.stringify(two));
+ok(two.indexOf('4580033110113')>=0,'★★★ホビーは100万位までなので残る');
+ok(two.indexOf('4902370550467')<0,'★★★ゲームは1,000位までなので 1,200位は隠れる');
+ok(two.indexOf('4988611224878')>=0,
+   '★大分類が無い（Nintendo Switch ソフト）行は、その名前の上限が無いので残る');
+await caps({});
+await p.waitForTimeout(200);
+ok((await names()).length===4,'★上限を消せば全部戻る');
 
 console.log('\n=== ①の知らせ：前の ASIN をそのまま使った件数 ===');
 /* 引き直しで引けなかった行は、前の ASIN・順位をそのまま使う（6.121・7.91）。 */
@@ -163,12 +187,5 @@ const note0=await p.evaluate(()=>{
 });
 ok(!/前の ASIN のまま/.test(note0),'★0件のときは出さない');
 
-console.log('\n=== 覚えておく ===');
-await setF('csvMwAmzMaxRank','5000');
-await p.waitForTimeout(400);
-await p.reload(); await p.waitForTimeout(600);
-const kept=await p.evaluate(()=>$('csvMwAmzMaxRank').value);
-console.log('   開き直し: '+kept);
-ok(kept==='5000','★★入れた数は次に開いたときも残る');
 await T.done();
 })();
