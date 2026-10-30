@@ -296,9 +296,19 @@ body.staff #syncOnHandFix{display:none !important}
 <div class="wrap" id="mwTopWrap">
   <div id="mwTopStale" class="warn" style="display:none;margin-top:8px"></div>
   <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+    <!-- ファイル選択はここに置く（6.123）。隠れたタブの中（display:none の親）に
+         あると、iPhone ではファイルを選べず「押しても何も起きない」になる。
+         ボタンは2つ（ここと出品CSVタブの中）だが、選ぶ口と処理は1つだけ。 -->
+    <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
     <button class="btn primary" id="mwTopImport" style="flex:1 1 0;min-width:0;padding:9px 4px">MWの在庫CSVを取り込む</button>
     <span class="note2" id="mwTopNote" style="flex:1 1 0;min-width:0;margin:0"></span>
   </div>
+  <!-- 取り込みの知らせ（6.123）。出品CSVタブの中と**同じ中身**を、
+       どのタブからでも見えるこちらにも出す。 -->
+  <div class="warn" id="mwTopSendBar" style="display:none;margin-top:6px"></div>
+  <div class="note2" id="mwTopRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
+  <div class="note2" id="mwTopMsg" style="display:none;margin-top:2px"></div>
+  <div class="warn" id="mwTopWarn" style="display:none;margin-top:8px"></div>
 </div>
 
 <div class="wrap">
@@ -747,7 +757,8 @@ body.staff #syncOnHandFix{display:none !important}
           読み込み、JANごとに使う仕入れ元を1つ選んで<b>候補一覧</b>に出します。
           仕入値は<b>卸値×1.1＋1点あたりの仕入れ送料</b>で計算します（⚙設定）。
           <b>この段では出品しません</b>（写真はまだ付きません）。</div>
-        <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
+        <!-- ファイル選択（csvMwFile）はタブの上（#mwTopWrap）に置いてある。
+             隠れたタブの中にあると、iPhone ではファイルを選べない（6.123）。 -->
         <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
         <div class="warn" id="csvMwSendBar" style="display:none;margin-top:6px"></div>
         <div class="note2" id="csvMwRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
@@ -9181,27 +9192,56 @@ function mwShipBadRender(){
       +esc(k)+'</code></div>'; }).join('');
   box.style.display='';
 }
+/* ---- 取り込みの知らせ（6.123）----
+   取り込みのボタンは2つ（タブの上と出品CSVタブの中）あるので、
+   知らせも**両方に同じ中身**を出す。片方（出品CSVタブの中）は
+   ほかのタブを見ているあいだ display:none で見えないため、
+   そこだけに出すと「押しても何も起きない」ように見える。 */
+var MW_OUT={ note:['csvMwNote','mwTopMsg'], warn:['csvMwWarn','mwTopWarn'],
+             read:['csvMwRead','mwTopRead'], bar:['csvMwSendBar','mwTopSendBar'] };
+function mwOut(which){
+  var els=(MW_OUT[which]||[]).map(function(id){ return $(id); })
+    .filter(function(e){ return !!e; });
+  var put=function(k,v){
+    els.forEach(function(e){
+      e[k]=v;
+      e.style.display=String(v||'')?'':'none';   // 空なら場所も取らない
+    });
+  };
+  return {
+    text:function(v){ put('textContent',v); },
+    html:function(v){ put('innerHTML',v); },
+    hide:function(){ put('innerHTML',''); },
+    els:els
+  };
+}
+/* 取り込み中はどちらのボタンも押せないようにする（二重に送らない）。 */
+function mwImportBusy(on){
+  ['csvMwImport','mwTopImport'].forEach(function(id){
+    var b=$(id); if(b)b.disabled=!!on;
+  });
+}
 /* ---- 取り込み（分けて送る）---- */
 function mwImportRun(text,fi){
-  var note=$('csvMwNote'), warn=$('csvMwWarn');
-  warn.style.display='none'; warn.textContent='';
+  var note=mwOut('note'), warn=mwOut('warn');
+  warn.hide();
   var d=mwParse(text);
   mwShipBadRender();
-  if(d.err){ note.textContent='⚠ '+d.err; return; }
+  if(d.err){ note.text('⚠ '+d.err); return; }
   mwReadNote(d,fi);                      // 送る前に読んだ結果を出す（6.88）
-  if(!d.rows.length){ note.textContent='⚠ 取り込める行がありませんでした。'; return; }
+  if(!d.rows.length){ note.text('⚠ 取り込める行がありませんでした。'); return; }
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
-    note.textContent='pj-sync のURLと管理者キーを⚙設定の「接続設定」に入れてください。';
+    note.text('pj-sync のURLと管理者キーを⚙設定の「接続設定」に入れてください。');
     return;
   }
-  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  if(isStaff()){ note.text('この操作は管理者用のキーが必要です。'); return; }
   var parts=[];
   for(var i=0;i<d.rows.length;i+=MW_SEND_MAX)parts.push(d.rows.slice(i,i+MW_SEND_MAX));
   var at=new Date().toISOString();
   var pi=0, sum={ added:0, changed:0, same:0, skipped:0, gone:0, back:0,
                   picked:0, seen:0, warn:'' };
-  var btn=$('csvMwImport'); btn.disabled=true;
+  mwImportBusy(true);
   mwSendBarShow(true);                   // 「開いたままにしてください」（6.100）
   /* 送り直しの控え。step() の中の pi を直に書き換えないよう、
      再開する便は step(from) で渡す（閉じ込めた pi は「次に送る便」なので、
@@ -9212,10 +9252,10 @@ function mwImportRun(text,fi){
   function step(from){
     if(typeof from==='number')pi=from;
     if(pi>=parts.length){
-      btn.disabled=false;
+      mwImportBusy(false);
       if(mwSend===st)
         { mwSend=null; mwSendBarShow(false); }
-      note.textContent='✓ '+d.rows.length+'行を送りました（足した '+sum.added
+      note.text('✓ '+d.rows.length+'行を送りました（足した '+sum.added
         +'／変わった '+sum.changed+'／同じ '+sum.same+'／欠品 '+sum.gone
         +'／戻った '+sum.back+'）。JANごとの代表 '+sum.picked+'件。'
         +(d.ng?('　JANが13桁でない行 '+d.ng+'件は除きました。'):'')
@@ -9223,14 +9263,14 @@ function mwImportRun(text,fi){
         +(d.many?('　列が多い行 '+d.many+'件は先頭'+d.cols+'列を使いました。'):'')
         +(d.dup?('　同じJAN・社の行 '+d.dup+'件は別の行として残しました。'):'')
         +(d.empty?('　出荷日が空欄の '+d.empty+'行は 99（無在庫に使わない）です。'):'')
-        +(d.unread?('　出荷日が読めなかった '+d.unread+'行も 99 扱いです（下の一覧）。'):'');
-      if(sum.warn){ warn.style.display=''; warn.textContent='⚠ '+sum.warn; }
+        +(d.unread?('　出荷日が読めなかった '+d.unread+'行も 99 扱いです（下の一覧）。'):''));
+      if(sum.warn)warn.text('⚠ '+sum.warn);
       mwListRun();                 // 続けて候補一覧を出す
       return;
     }
     var part=parts[pi++];
     st.pi=pi-1; st.why='';
-    note.textContent='送信中… '+pi+'／'+parts.length+'便（'+part.length+'行）';
+    note.text('送信中… '+pi+'／'+parts.length+'便（'+part.length+'行）');
     syncJsonPost('/mw/stock',{ at:at, part:pi, parts:parts.length, rows:part,
       rows_in:d.rows.length, unreadable:d.unread },function(x){
       ['added','changed','same','skipped','gone','back','picked','seen']
@@ -9240,15 +9280,15 @@ function mwImportRun(text,fi){
       st.pi=pi;                              // ここまでは送れた
       step();
     },function(why){
-      btn.disabled=false;
+      mwImportBusy(false);
       /* 失敗した便を覚えておく（6.100）。iPhone でアプリを切り替えると
          通信が切られて「Load failed」になるので、画面に戻ったら
          **その便から**自動で送り直す。 */
       st.pi=pi-1; st.why=why;
       if(mwSend!==st)return;                 // 新しい取り込みが始まっていたら触らない
-      note.innerHTML='⚠ '+pi+'便目で失敗しました：'+esc(why)
+      note.html('⚠ '+pi+'便目で失敗しました：'+esc(why)
         +'<br><b>画面に戻ると、この便から自動で送り直します。</b>'
-        +'（すぐ送り直すなら「続きから送り直す」を押してください）';
+        +'（すぐ送り直すなら「続きから送り直す」を押してください）');
       mwSendBarShow(true,true);
     });
   }
@@ -9265,24 +9305,31 @@ function mwImportRun(text,fi){
      **その便から**自動で送り直す */
 var mwSend=null;
 function mwSendBarShow(on,failed){
-  var el=$('csvMwSendBar'); if(!el)return;
-  if(!on){ el.style.display='none'; el.innerHTML=''; return; }
-  el.innerHTML=failed
-    ? ('⚠ <b>取り込みが途中で止まりました。</b>画面に戻ると自動で送り直します。'
-       +'　<button class="btn" id="csvMwResume" style="padding:4px 8px">続きから送り直す</button>')
-    : '⏳ <b>取り込み中はこの画面を開いたままにしてください。</b>'
-      +'ほかのアプリに切り替えると通信が切れて止まります（戻れば続きから送り直します）。';
-  el.style.display='';
-  var b=$('csvMwResume');
-  if(b)b.onclick=mwSendResume;
+  /* 2か所（出品CSVタブの中とタブの上）に同じ案内を出す（6.123）。
+     「続きから送り直す」はどちらからでも押せるようにする。 */
+  [['csvMwSendBar','csvMwResume'],['mwTopSendBar','mwTopResume']]
+    .forEach(function(x){
+      var el=$(x[0]); if(!el)return;
+      if(!on){ el.style.display='none'; el.innerHTML=''; return; }
+      el.innerHTML=failed
+        ? ('⚠ <b>取り込みが途中で止まりました。</b>画面に戻ると自動で送り直します。'
+           +'　<button class="btn" id="'+x[1]+'" style="padding:4px 8px">'
+           +'続きから送り直す</button>')
+        : '⏳ <b>取り込み中はこの画面を開いたままにしてください。</b>'
+          +'ほかのアプリに切り替えると通信が切れて止まります'
+          +'（戻れば続きから送り直します）。';
+      el.style.display='';
+      var b=$(x[1]);
+      if(b)b.onclick=mwSendResume;
+    });
 }
 function mwSendResume(){
   if(!mwSend||!mwSend.step)return;
   var m=mwSend;
   if(m.pi>=m.parts.length)return;
-  $('csvMwImport').disabled=true;
+  mwImportBusy(true);
   mwSendBarShow(true);
-  $('csvMwNote').textContent='送り直しています… '+(m.pi+1)+'／'+m.parts.length+'便';
+  mwOut('note').text('送り直しています… '+(m.pi+1)+'／'+m.parts.length+'便');
   m.step(m.pi);                       // 覚えた便から（次の便からではない）
 }
 /* 画面に戻ったら、止まっていた取り込みを続ける。 */
@@ -9296,11 +9343,35 @@ document.addEventListener('visibilitychange',function(){
   mwSend.why='';
   mwSendResume();
 });
-$('csvMwImport').onclick=function(){ $('csvMwFile').click(); };
-/* タブの上のボタン（6.117）。中のボタンと**同じファイル選択**を開くので、
-   取り込みの処理は1つだけ（二重に作らない）。 */
-$('mwTopImport').onclick=function(){ $('csvMwFile').click(); };
-/* v186 ではこの2つを結び忘れていた（押しても何も起きなかった）。 */
+/* 取り込みのボタンは2つ（タブの上と出品CSVタブの中）。
+   **同じファイル選択（csvMwFile）と同じ処理（mwFilePick）**につなぐ。
+   v186 ではこの2つを結び忘れ、v207 ではタブの上のボタンが
+   隠れたタブの中のファイル選択を開いていて、どちらも
+   「押しても何も起きない」になっていた（6.123）。 */
+['csvMwImport','mwTopImport'].forEach(function(id){
+  $(id).onclick=function(){ $('csvMwFile').click(); };
+});
+/* ファイルを選んだとき。**同じ名前のファイルを選び直しても取り込める**ように、
+   読み終える前に input の値を空に戻す（戻さないと change が出ない）。 */
+function mwFilePick(inp){
+  var f=inp&&inp.files&&inp.files[0];
+  inp.value='';
+  if(!f)return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    /* MW の在庫CSV は Shift_JIS。化けたら UTF-8 として読み直す。 */
+    var buf=new Uint8Array(fr.result), text;
+    try{ text=new TextDecoder('shift_jis').decode(buf); }
+    catch(e){ text=new TextDecoder('utf-8').decode(buf); }
+    if(text.indexOf('�')>=0){
+      try{ text=new TextDecoder('utf-8').decode(buf); }catch(e2){}
+    }
+    if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+    mwImportRun(text,{ name:f.name, size:f.size, bytes:buf.length });
+  };
+  fr.readAsArrayBuffer(f);
+}
+$('csvMwFile').addEventListener('change',function(){ mwFilePick(this); });
 /* ---- 商品を探す（6.92）の結び付け ---- */
 (function(){
   var deb={};
@@ -9350,32 +9421,15 @@ $('csvMwBuyCsv').onclick=mwBuyCsvGo;
     $(id).addEventListener('change',function(){ mwAmzRender(); });
   });
 $('csvMwMkt').onclick=mwMktRun;
-$('csvMwFile').addEventListener('change',function(){
-  var f=this.files&&this.files[0]; this.value='';
-  if(!f)return;
-  var fr=new FileReader();
-  fr.onload=function(){
-    /* MW の在庫CSV は Shift_JIS。化けたら UTF-8 として読み直す。 */
-    var buf=new Uint8Array(fr.result), text;
-    try{ text=new TextDecoder('shift_jis').decode(buf); }
-    catch(e){ text=new TextDecoder('utf-8').decode(buf); }
-    if(text.indexOf('�')>=0){
-      try{ text=new TextDecoder('utf-8').decode(buf); }catch(e2){}
-    }
-    if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
-    mwImportRun(text,{ name:f.name, size:f.size, bytes:buf.length });
-  };
-  fr.readAsArrayBuffer(f);
-});
 /* 送る前に「読んだ結果」を必ず画面に出す（6.88）。
    v187 では 12,062行あるのに 3,802行で静かに終わっていたので、
    ファイルの大きさ・読んだ行数・列の数が合わない行を先に見せる。 */
 function mwReadNote(d,fi){
   var kb=function(n){ return n>=1048576?((n/1048576).toFixed(2)+'MB')
     :((Math.round(n/1024))+'KB'); };
-  var el=$('csvMwRead');
+  var el=mwOut('read');
   var warn=(d.few||d.many)?' style="color:var(--bad)"':'';
-  el.innerHTML='<b>読んだ結果</b>'
+  var h='<b>読んだ結果</b>'
     +(fi?('<br>ファイル '+esc(fi.name||'')+'　<b>'+kb(fi.size||fi.bytes||0)+'</b>'):'')
     +'<br>読んだ行数 <b>'+(d.lines||0)+'行</b>'
     +'（見出し1行＋中身 '+(d.data||0)+'行'
@@ -9387,11 +9441,11 @@ function mwReadNote(d,fi){
       +'）'):'')+'</span>'
     +'<br>送る行 <b>'+d.rows.length+'行</b>'
     +'（JANが13桁でない '+(d.ng||0)+'行を除いた）';
-  el.style.display='';
   /* 読んだ中身と送る行の数が合わない分は、ここで必ず説明が付くようにする。 */
   var lost=(d.data||0)-d.rows.length-(d.ng||0)-(d.blank||0)-(d.few||0);
-  if(lost>0)el.innerHTML+='<br><span style="color:var(--bad)">'
+  if(lost>0)h+='<br><span style="color:var(--bad)">'
     +'説明の付かない行が '+lost+'行あります（読み込みの不具合です）。</span>';
+  el.html(h);
 }
 /* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
 var mwRows=[], mwLast=null, mwMkt=null;
@@ -16759,7 +16813,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v209';   // sw.js の const V と必ず同じ値にする
+var APP_V='v210';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
