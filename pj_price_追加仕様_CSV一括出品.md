@@ -6256,3 +6256,45 @@ v186 の「ボタンを結び忘れた」・v207 の「隠れた口を開いて�
   検索の件数の下に**「絞り込みで隠れている n件」**と出す
   （探し物が出てこない理由が、言葉のせいか絞り込みのせいか分かるように）。
   `mwAmzPicked()` から検索以外の絞り込みを `mwAmzKeep(x,f)` に分けた。
+
+## 6.126 説明文を畳む／一覧のすぐ上の検索欄／並べ替えの見出し（2026-10-31・sw.js v213）
+
+### 長い説明文は「説明 ▸」の1行に畳む
+- 対象は**ボタンや一覧の前にある静かな説明文**（`details.exp` で包む）。
+  Amazon刈取（`amzGo`＝①②③の進め方／`amzReg`＝Amazon登録用ファイル／
+  `amzPut`＝API で直に登録／`amzRank`＝ランキングの上限）、
+  出品CSV（`csvMwDrop`／`csvNew`／`csvPicR2`）、
+  販売連携（`syncFlow`／`syncSpec`／`syncPics`／`syncItem`／`syncMw`）、
+  eBay（`ebSold`／`ebSku`／`ebAdd`）の**15か所**。
+- **既定は畳んだ状態**。開いたかどうかは端末に覚える
+  （`localStorage` の `pj:exp:v1`・`data-exp` のキーごと）。
+- **畳まないもの**：ボタンの名前、件数・進み具合・エラーの知らせ
+  （`csvMwAmzNote`・`csvMwAmzListNote`・`csvMwRegNote`・`csvMwPutNote`・
+  `csvMwJanNote`・`csvMwBuyBar`・検索の件数など）。テストで確かめている。
+- `cfgprice` の付いた説明文は、包んだ `details` にも同じ class を付ける
+  （作業者用の端末では今までどおり出さない）。
+
+### 一覧のすぐ上にも検索欄（📷つき）
+- `#mwAmz2FindBar`（`mwAmz2Find`／`mwAmz2FindCam`／`mwAmz2FindClear`／
+  `mwAmz2FindNote`／カメラの箱）を**一覧のすぐ上**に置いた。
+  `position:sticky; top:60px`（タブ帯の高さ）なので、
+  **一覧を下にスクロールしても画面の上に残る**。
+- タブの上の検索欄と**連動**する。`findPre('amz2')`＝`mwAmz2Find` を足し、
+  `findTwin(which)` が値をうつし合う（どちらに入れても同じ結果）。
+  件数と「×」は `findNoteAmz()` で**両方に**出す。
+  判定（`findMatchRow`）は `amz` 側の状態を見る（2つは同じ中身）。
+- 「一覧を出す」のリストと「仕入れる一覧」の**両方**で効く（6.125 の続き）。
+- **直したこと**：カメラで読んだ JAN を入れる先が
+  `$(pre==='csvFind'?'csvFind':'syncFind')` になっていて、
+  **Amazon刈取で📷を押すと販売連携の検索欄に入っていた**（この一覧では何も
+  起きなかった）。`$(pre).value=d` に直した。
+
+### 並べ替えの見出しをそろえる
+- 見出しを `mwAmzSortName(sort)` から出すようにした
+  （粗利（税抜）の高い順／利益率の高い順／**ランキング順（大分類・売れている順）**／
+  ジャンルごと）。「ランキング順」に変えても
+  「粗利（税抜）の高い順」のままだったのを直した。
+- 並べ替え・絞り込みを変えたときは**候補の一覧を出し直す**
+  （`mwAmzRender()`）。仕入れる一覧を見ている最中に並べ替えを変えても、
+  その場で候補の一覧が並べ直って見える。検索はどちらの一覧でも効くので
+  今までどおり**見ている側**を出し直す（`mwViewRender()`）。

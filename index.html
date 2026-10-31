@@ -139,6 +139,16 @@ td.ok{color:var(--good);font-weight:700;text-align:right;white-space:nowrap}
 .mbmain{font-size:clamp(13px,4vw,20px);font-weight:800;line-height:1.25;
         white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
 .mbnum{white-space:nowrap}
+/* 長い説明文は「説明 ▸」の1行に畳む（6.126）。
+   ボタンの名前と、件数・進み具合・エラーの知らせは畳まない（いつも見える）。
+   開いたかどうかは端末に覚える（data-exp のキーごと）。 */
+details.exp{margin:4px 0}
+details.exp>summary{list-style:none;cursor:pointer;display:block;
+        font-size:11.5px;color:var(--mute);padding:1px 0}
+details.exp>summary::-webkit-details-marker{display:none}
+details.exp>summary::after{content:' ▸'}
+details.exp[open]>summary::after{content:' ▾'}
+details.exp>summary:active{opacity:.6}
 /* 使い方マニュアル（6.46）。スマホで読めるよう行間を広めに、箇条書きは詰める。 */
 .man h4{font-size:13.5px;margin:12px 0 4px;padding-bottom:3px;
         border-bottom:1px solid var(--line)}
@@ -380,6 +390,7 @@ body.staff #syncOnHandFix{display:none !important}
     </div>
     <details id="soldGuide">
       <summary>相場の調べ方</summary>
+      <details class="exp" data-exp="ebSold"><summary>説明</summary>
       <div class="note">
         <ol style="margin:0;padding-left:20px;line-height:1.7">
           <li>eBayアプリでSoldに絞り、発送元「アジア」で検索する（写真検索可）</li>
@@ -390,6 +401,7 @@ body.staff #syncOnHandFix{display:none !important}
         </ol>
         <p style="margin:8px 0 0">注意：米国住所は配送先に追加するだけで、既定の住所にはしない。支払い方法も保存しない。</p>
       </div>
+      </details>
     </details>
     <!-- 設定は⚙設定画面にまとめた。ここには今の値だけ出す。 -->
     <div class="note2" id="cfgLineEbay" style="margin:8px 13px 12px"></div>
@@ -580,9 +592,11 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn primary" id="copySku" style="width:100%;margin-top:8px">SKUをコピー</button>
       <div class="note2" id="skuHist" style="margin-top:6px"></div>
     </div>
+    <details class="exp" data-exp="ebSku"><summary>説明</summary>
     <div class="note">
       YYMMDD-端末記号HHMM-仕入値。eBayタブの「出品文」を開いたときに自動で発番します。手で書き換えても構いません。
     </div>
+    </details>
   </section>
 
   <section>
@@ -619,7 +633,9 @@ body.staff #syncOnHandFix{display:none !important}
       </div>
       <div class="rowv"><label>JAN（任意・13桁）</label><input type="text" id="addCsvJan" inputmode="numeric" placeholder="C:MPN に入ります。無ければ空欄"></div>
       <button class="btn primary" id="addToCsv" style="width:100%">この内容で出品リストに追加</button>
+      <details class="exp" data-exp="ebAdd"><summary>説明</summary>
       <div class="note2">いまのタイトル・説明文・SKU・推奨売値・最低売値をそのまま使います。追加後は「出品CSV」タブで確認・書き出しできます。</div>
+      </details>
     </div>
   </section>
 
@@ -753,10 +769,12 @@ body.staff #syncOnHandFix{display:none !important}
     <details id="csvMwBox" data-box="1">
       <summary class="h" style="cursor:pointer">マッチングワールド（MW）の無在庫</summary>
       <div class="body">
+        <details class="exp" data-exp="csvMwDrop"><summary>説明</summary>
         <div class="note2" style="margin-top:0">MW の在庫CSV（<b>Shift_JIS</b>・約12,200行）を
           読み込み、JANごとに使う仕入れ元を1つ選んで<b>候補一覧</b>に出します。
           仕入値は<b>卸値×1.1＋1点あたりの仕入れ送料</b>で計算します（⚙設定）。
           <b>この段では出品しません</b>（写真はまだ付きません）。</div>
+        </details>
         <!-- ファイル選択（csvMwFile）はタブの上（#mwTopWrap）に置いてある。
              隠れたタブの中にあると、iPhone ではファイルを選べない（6.123）。 -->
         <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
@@ -793,7 +811,9 @@ body.staff #syncOnHandFix{display:none !important}
     <details id="csvNewBox" data-box="1">
       <summary class="h" style="cursor:pointer">無在庫（新品・カタログ画像）で出す</summary>
       <div class="body">
+        <details class="exp" data-exp="csvNew"><summary>説明</summary>
         <div class="note2" style="margin-top:0">一覧で選んだ行を、せどりすとの状態や仕入値に関係なく<b>新品</b>として出します。売値は<b>Amazonの新品最安値（送料込み）を仕入値とみなして</b>計算します（再調達と同じ計算）。SKUは変えず、CustomLabel は M-&lt;ASIN&gt;、配送ポリシーは再調達用（既定 W2000）です。</div>
+        </details>
         <button class="btn" id="csvNewLow" style="width:100%;margin-top:8px">① 選んだ行の新品最安値を取る</button>
         <div class="note2" id="csvNewLowNote"></div>
         <button class="btn" id="csvNewCat" style="width:100%;margin-top:8px">② 選んだ行のeBayカタログを照合（JAN）</button>
@@ -829,7 +849,9 @@ body.staff #syncOnHandFix{display:none !important}
         <details id="csvPicFindBox" data-box="1" style="margin-bottom:8px">
           <summary class="note2" style="margin:0;cursor:pointer">写真から戻す（R2に残っている写真を行に付ける）</summary>
           <div style="padding:6px 0 0">
+            <details class="exp" data-exp="csvPicR2"><summary>説明</summary>
             <div class="note2" style="margin:0 0 6px">行を消すと写真のURLも一緒に消えますが、写真そのもの（R2）は残しています。上げた日で探して、行に付け直せます。<br><b>日付は世界標準時（UTC）です。</b>日本時間の朝9時より前に上げた写真は、1日前の日付に入っています。</div>
+            </details>
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
               <input type="date" id="csvPicFindDay" style="flex:1 1 0;min-width:0;padding:6px;font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">
               <button class="btn" id="csvPicFind" style="flex:0 0 auto;white-space:nowrap">写真を探す</button>
@@ -922,6 +944,7 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="mwAmzFindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
       </div>
       <!-- 1つのボタンで ①ASIN → ②可否 → ③価格（6.106） -->
+      <details class="exp cfgprice" data-exp="amzGo"><summary>説明</summary>
       <div class="note2 cfgprice" style="margin:4px 0 0">1回押すと、この順に進みます。
         <br>① 候補の JAN から <b>ASIN</b> を引く（まだの行だけ）。
         ランキングと Amazon の商品名は<b>3日ごとに引き直します</b>（6.121）
@@ -937,6 +960,7 @@ body.staff #syncOnHandFix{display:none !important}
         新品出品者数・Amazon本体の有無</b>も出します。
         60秒で区切るので、残りがあれば<b>もう一度押すと続きます</b>
         （値段の取得が10秒に1回・1回 <b id="csvMwAmzMax">120</b>件まで）。</div></div>
+      </details>
       <!-- 「Amazonで調べる」は Worker 側も管理者だけ（403）なので、
            作業者には出さない（6.120）。見る・印・JANコピー・注文用CSVは出す。 -->
       <button class="btn cfgprice" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
@@ -957,14 +981,18 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
       <div class="note2" id="csvMwJanNote" style="margin-top:2px;color:var(--good)"></div>
       <!-- Amazon 登録用ファイル（6.103）。せどりすと と同じ形 -->
+      <details class="exp" data-exp="amzReg"><summary>説明</summary>
       <div class="note2" style="margin:8px 0 0">仕入れる印の付いた行から、
         セラーセントラルの<b>アップロードによる一括商品登録</b>に送るファイルを作ります。
         <b>出品できる（緑）行だけ</b>が入ります。
         納品はセラーセントラル、価格改定はマカドで今までどおり行ってください。</div>
+      </details>
       <button class="btn" id="csvMwReg" style="width:100%;margin-top:6px">Amazon登録用ファイルを作る</button>
       <div class="note2" id="csvMwRegNote" style="margin-top:2px"></div>
       <!-- API で直に登録（6.113）。確認してから・管理者だけ -->
+      <details class="exp cfgprice" data-exp="amzPut"><summary>説明</summary>
       <div class="note2 cfgprice" style="margin:8px 0 0">ファイルを使わず、<b>pj-sync から Amazon に直に登録</b>することもできます（相乗り出品・価格と数量だけ）。<b>送る前に必ず確認の画面</b>が出ます。最初は<b>1件だけ</b>送って、セラーセントラルで見え方を確かめてください。</div>
+      </details>
       <button class="btn cfgprice" id="csvMwPut" style="width:100%;margin-top:6px">Amazon に登録する（確認してから）</button>
       <div class="note2" id="csvMwPutNote" style="margin-top:2px"></div>
       <div id="csvMwPutBox" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
@@ -987,12 +1015,31 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
       <!-- 順位が無い行の出し入れ（6.124）。上限は⚙設定（大分類ごと）で決める -->
       <div class="chk"><input type="checkbox" id="csvMwAmzNoRank"><label for="csvMwAmzNoRank" style="flex:1">順位が無い行も表示</label></div>
+      <details class="exp" data-exp="amzRank"><summary>説明</summary>
       <div class="note2" style="margin:0 0 4px">ランキングの上限は
         <b>⚙設定の「Amazon刈取」</b>で<b>大分類ごと</b>に決めます
         （ホビーは90万位まで、ゲームは8万位まで など）。
         出しているのは<b>大きい分類</b>の順位で、せどりすと と同じです。
         上限を入れているあいだは、<b>順位がまだ取れていない行</b>は隠します
         （この印を付けると出します）。</div>
+      </details>
+      <!-- 一覧のすぐ上の検索欄（6.126）。タブの上の検索欄と**連動**する
+           （どちらに入れても同じ結果）。下にスクロールしても画面の上に残る
+           ので、長い一覧の途中でも探し直せる。 -->
+      <div id="mwAmz2FindBar" style="position:sticky;top:60px;z-index:12;
+           background:var(--card);padding:6px 0 2px;margin-top:8px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="search" id="mwAmz2Find" placeholder="この一覧から探す（商品名・ASIN・JAN・社）" style="flex:1 1 0;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <button class="btn" id="mwAmz2FindCam" style="flex:0 0 auto;padding:9px 10px" title="バーコードを読む">📷</button>
+          <button class="btn" id="mwAmz2FindClear" style="flex:0 0 auto;padding:9px 10px;display:none" title="検索を消す">×</button>
+        </div>
+        <div class="note2" id="mwAmz2FindNote" style="margin:2px 0 0;display:none"></div>
+        <div id="mwAmz2FindCamBox" style="display:none;margin:4px 0 0">
+          <video id="mwAmz2FindVideo" playsinline muted style="width:100%;max-height:240px;background:#000;border-radius:6px"></video>
+          <div class="note2" id="mwAmz2FindCamNote" style="margin:2px 0 0"></div>
+          <button class="btn" id="mwAmz2FindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
+        </div>
+      </div>
       <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"></div>
       <div id="csvMwAmzList" style="margin-top:6px"></div>
     </div>
@@ -1016,7 +1063,9 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn primary" id="syncLoad" style="width:100%">状況を取り込む</button>
       <div class="note2" id="syncNote"></div>
       <!-- 今日やること。押すとその絞り込みになる（0件は薄く出す）。 -->
+      <details class="exp" data-exp="syncFlow"><summary>説明</summary>
       <div class="note2" style="margin:8px 0 0"><b>毎日</b>　状況を取り込む → 対応が必要を確認 → 発送　／　<b>3日ごと</b>　値下げの時期 → CSV → アップロード　／　<b>ときどき</b>　再調達の候補・FBA納品の判断・売値の見直し</div>
+      </details>
       <div class="todo" id="syncTodo"></div>
       <!-- 操作の履歴（6.69）。押した印を新しい順に出し、1件ずつ戻せる。 -->
       <details id="syncHistBox" data-box="1" style="margin-top:8px">
@@ -1046,7 +1095,9 @@ body.staff #syncOnHandFix{display:none !important}
       <details id="syncPriceBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer" id="syncPriceSum">価格の操作</summary>
         <div style="padding:6px 0 0">
+          <details class="exp" data-exp="syncSpec"><summary>説明</summary>
           <div class="note2" style="margin:0 0 6px">実重量・仕入値・相場は出品CSVの書き出し・名簿送信のときに pj-sync に残してあるので、<b>出品リストを空にしても</b>ここで値付けを動かせます。</div>
+          </details>
           <!-- 自動値下げ（pj-sync が eBay を直接変える）。オフのときは出さない -->
           <div id="syncMdBar" style="display:none;margin-bottom:8px">
             <div class="note2" id="syncMdNote" style="margin:0 0 4px"></div>
@@ -1103,13 +1154,17 @@ body.staff #syncOnHandFix{display:none !important}
       <details id="syncPicsBox" data-box="1" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer">写真を eBay 保管に切り替え</summary>
         <div style="padding:6px 0 0">
+          <details class="exp" data-exp="syncPics"><summary>説明</summary>
           <div class="note2" style="margin:0 0 6px">eBayアプリで価格を直すと<b>メイン画像だけ</b>エラーになる出品を直します。出品に残っている<b>自前ホスト（pj-img）の写真の紐づけ</b>を外し、写真を eBay 保管だけにします。<b>写真以外（価格・数量・タイトル）は送りません。</b>pj-img の写真は消しません（差し替えや再出品に使います）。</div>
+          </details>
           <div style="display:flex;gap:6px;align-items:center">
             <input id="syncPicsId" inputmode="numeric" placeholder="ItemID（例 880025406600）"
                    style="flex:1 1 0;min-width:0">
             <button class="btn" id="syncPicsOne" style="flex:0 0 auto;padding:9px 10px">1件お試し</button>
           </div>
+          <details class="exp" data-exp="syncItem"><summary>説明</summary>
           <div class="note2" style="margin:4px 0 6px"><b>ItemID を入れるだけ</b>で使えます（出品リストに行が無くてもかまいません）。新しい出品は「状況を取り込む」のときに自動で切り替わるので、ふつうは押さなくて大丈夫です。写真は<b>1枚ずつ eBay に預け直して</b>から入れ替えます。元は<b>出品リストの写真（1枚目がメイン）</b>を使い、残っていない行は今の eBay の写真を作り直します。切り替えたあとに<b>写真が減っていたら「写真が減りました」と出して止めます</b>。切り替えた行には「eBay 保管済み」の印が付き、二度切り替えません。</div>
+          </details>
           <button class="btn" id="syncPicsBulk" style="width:100%" disabled>選んだ行をまとめて切り替え</button>
           <div class="note2" id="syncPicsGate" style="margin-top:2px"></div>
           <div class="note2" id="syncPicsNote" style="margin-top:4px"></div>
@@ -1128,7 +1183,9 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn" id="syncPush" style="width:100%">出品リストの名簿を送る（手元在庫の印つき）</button>
           <!-- 段取り D：MW の無在庫（6.97）。管理者だけ -->
           <div id="syncMwBox" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px">
+            <details class="exp" data-exp="syncMw"><summary>説明</summary>
             <div class="note2" style="margin:0 0 4px"><b>無在庫（MW）の見直し</b>　MW の在庫に合わせて eBay の数量・売値を直します。<b>欠品の数量0は取り込みのたびに自動</b>で行います。ここでは<b>値上げと数量1に戻す</b>分を見ます。</div>
+            </details>
             <div style="display:flex;gap:6px">
               <button class="btn" id="syncMwPlan" style="flex:1">無在庫の予定を見る</button>
               <button class="btn primary" id="syncMwGo" style="flex:1">実行する</button>
@@ -9408,6 +9465,29 @@ function mwFilePick(inp){
   fr.readAsArrayBuffer(f);
 }
 $('csvMwFile').addEventListener('change',function(){ mwFilePick(this); });
+/* ---- 長い説明文の開閉（6.126）----
+   既定は畳んだ状態。開いたら端末に覚えて、次に開いたときもそのまま。
+   知らせ（件数・進み具合・エラー）は畳まないので、ここには入れない。 */
+var EXP_KEY='pj:exp:v1';
+function expState(){
+  try{ var o=JSON.parse(localStorage.getItem(EXP_KEY)||'{}');
+       return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; }
+}
+function expSave(o){ try{ localStorage.setItem(EXP_KEY,JSON.stringify(o||{})); }catch(e){} }
+function expInit(){
+  var st=expState();
+  Array.prototype.forEach.call(document.querySelectorAll('details.exp[data-exp]'),
+    function(d){
+      var k=d.getAttribute('data-exp');
+      d.open=!!st[k];
+      d.addEventListener('toggle',function(){
+        var o=expState(); 
+        if(d.open)o[k]=1; else delete o[k];
+        expSave(o);
+      });
+    });
+}
+expInit();
 /* ---- 商品を探す（6.92）の結び付け ---- */
 (function(){
   var deb={};
@@ -9433,7 +9513,7 @@ $('csvMwFile').addEventListener('change',function(){ mwFilePick(this); });
     };
     $(findPre(which)+'CamStop').onclick=findCamStop;
   };
-  on('sync'); on('csv'); on('amz');
+  on('sync'); on('csv'); on('amz'); on('amz2');
   /* タブを移ったらカメラを止める（撮り続けない）。 */
   document.addEventListener('visibilitychange',function(){
     if(document.hidden)findCamStop();
@@ -9457,7 +9537,9 @@ $('csvMwBuyCsv').onclick=mwBuyCsvGo;
 ['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
  'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank']
   .forEach(function(id){
-    $(id).addEventListener('change',function(){ mwViewRender(); });
+    /* 並べ替えと絞り込みは候補の一覧だけのものなので、
+       仕入れる一覧を見ているときは候補の一覧に戻して並べ直す（6.126）。 */
+    $(id).addEventListener('change',function(){ mwAmzRender(); });
   });
 /* ランキングの上限の表（6.124）。欄は出し直すたびに作るので、
    1つずつ結ばずに箱で受ける。保存先は pj-sync（端末ごとではない）。 */
@@ -10214,6 +10296,13 @@ function mwAmzFilters(){
            noRank:!!$('csvMwAmzNoRank').checked,
            minM:(function(){ var n=+$('csvMwAmzMinM').value; return isFinite(n)?n:0; })() };
 }
+/* 並べ替えの名前（一覧の見出しと同じ言い方にする・6.126）。 */
+function mwAmzSortName(sort){
+  if(sort==='margin')return '利益率の高い順';
+  if(sort==='rank')return 'ランキング順（大分類・売れている順）';
+  if(sort==='genre')return 'ジャンルごと';
+  return '粗利（税抜）の高い順';
+}
 /* ランキングの基準で隠した行の数（一覧の上に出す・6.124）。 */
 var mwRankHid=0;
 /* 検索には当たっているのに、絞り込みで消えた行の数（6.125）。 */
@@ -10412,8 +10501,8 @@ function mwBuyRender(){
   mwAmzView='buy';
   var el=$('csvMwAmzList'), note=$('csvMwAmzListNote');
   var list=mwBuyPicked();
-  /* 検索の件数と「×」は一覧と同じ出し方（6.115）。 */
-  findNoteRender('amz',list.length,mwBuyRows.length);
+  /* 検索の件数と「×」は一覧と同じ出し方（6.115）。2つの欄に出す（6.126）。 */
+  findNoteAmz(list.length,mwBuyRows.length);
   note.innerHTML='<b>仕入れる '+mwBuyRows.length+'件</b>'
     +'（印を付けた順）　<a href="#" onclick="mwAmzRender();return false"'
     +' style="text-decoration:underline">候補の一覧に戻る</a>'
@@ -10839,8 +10928,9 @@ function mwAmzRender(){
   var f=mwAmzFilters(), sort=mwAmzSort();
   var dn=$('csvMwAmzDupN');
   if(dn)dn.textContent=mwJanDupN()?('（'+mwJanDupN()+'件）'):'';
-  /* 検索の件数と「×」（6.115）。絞り込みで隠れている件数も出す（6.125）。 */
-  findNoteRender('amz',list.length,mwAmzRows.length,mwFindHid);
+  /* 検索の件数と「×」（6.115）。絞り込みで隠れている件数も出す（6.125）。
+     検索欄は2つあるので両方に出す（6.126）。 */
+  findNoteAmz(list.length,mwAmzRows.length,mwFindHid);
   note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
     +'　値段あり '+(d.priced||0)
     +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
@@ -10969,9 +11059,10 @@ function mwAmzRender(){
     });
     el.innerHTML=html;
   }else{
+    /* 見出しは**いまの並べ替え**に合わせる（6.126）。
+       「ランキング順」に変えたのに「粗利の高い順」と出ていた。 */
     el.innerHTML='<div class="note2" style="margin:0 0 4px">'
-      +((sort==='margin')?'<b>利益率の高い順</b>':'<b>粗利（税抜）の高い順</b>')
-      +'（全ジャンル）</div>'
+      +'<b>'+mwAmzSortName(sort)+'</b>（全ジャンル）</div>'
       +listMoreHtml('mwamzall',list.map(line),'',10);
   }
   mwBuyBarRender();
@@ -15180,7 +15271,23 @@ function findHayCsv(r){
 function findPre(which){
   if(which==='sync')return 'syncFind';
   if(which==='amz')return 'mwAmzFind';
+  /* Amazon刈取の検索欄は2つ（タブの上と一覧のすぐ上・6.126）。
+     どちらに入れても同じ結果になるよう、値をうつし合う（findTwin）。 */
+  if(which==='amz2')return 'mwAmz2Find';
   return 'csvFind';
+}
+/* 連動する相手（6.126）。Amazon刈取の2つの検索欄だけ。 */
+var FIND_TWIN={ amz:'amz2', amz2:'amz' };
+function findTwin(which){
+  var tw=FIND_TWIN[which]; if(!tw)return '';
+  var a=$(findPre(which)), b=$(findPre(tw));
+  if(a&&b&&b.value!==a.value)b.value=a.value;
+  return tw;
+}
+/* Amazon刈取の件数と「×」は、2つの検索欄の両方に出す（6.126）。 */
+function findNoteAmz(shown,total,hidden){
+  findNoteRender('amz',shown,total,hidden);
+  findNoteRender('amz2',shown,total,hidden);
 }
 function findState(which){
   var id=findPre(which);
@@ -15193,7 +15300,8 @@ function findState(which){
 }
 /* 1行が当たるか。JAN で引けた ASIN も見る。 */
 function findMatchRow(which,r,hay){
-  var st=findState(which);
+  /* amz2 は amz と同じ中身（findTwin でそろえる）。判定は amz 側で行う。 */
+  var st=findState((which==='amz2')?'amz':which);
   if(!st.on)return true;
   if(st.jan&&st.asin){
     var a=findNorm((which==='csv')?((r||{}).asin||''):((r||{}).asin||''));
@@ -15264,10 +15372,12 @@ function findAskJan(which,jan){
 }
 /* 検索を実行（一覧を作り直す）。 */
 function findRun(which){
-  var st=findState(which);
-  if(st.jan)findAskJan(which,st.jan);
+  findTwin(which);                        // 2つの検索欄をそろえる（6.126）
+  var st=findState((which==='amz2')?'amz':which);
+  if(st.jan)findAskJan((which==='amz2')?'amz':which,st.jan);
   if(which==='csv')csvRender();
-  else if(which==='amz')mwViewRender();   // 仕入れる一覧を見ていればそちら（6.125）
+  /* 仕入れる一覧を見ていればそちら（6.125）。どちらの欄から来ても同じ。 */
+  else if(which==='amz'||which==='amz2')mwViewRender();
   else syncRender();
 }
 function findClear(which){
@@ -15350,7 +15460,10 @@ function findCamStart(which){
           return;
         }
         findCamStop();
-        $(pre==='csvFind'?'csvFind':'syncFind').value=d;
+        /* 読んだ JAN は**押した欄**に入れる（6.126）。
+           v212 までは csvFind 以外すべて syncFind に入れていたので、
+           Amazon刈取で📷を押しても、この一覧では何も起きなかった。 */
+        $(pre).value=d;
         findRun(which);
       })
       .then(function(ctl){ findCtl=ctl; });
@@ -17084,7 +17197,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v212';   // sw.js の const V と必ず同じ値にする
+var APP_V='v213';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
