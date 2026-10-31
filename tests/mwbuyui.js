@@ -245,7 +245,10 @@ ok(/仕入れる 1件/.test(other.bar),'★★帯にも出る');
 console.log('\n=== 仕入れる一覧と注文用CSV ===');
 await p.evaluate(()=>{ $('csvMwBuyShow').click(); });
 await p.waitForTimeout(400);
-let only=await p.evaluate(()=>$('csvMwAmzList').textContent);
+/* 件数は一覧の**上**（csvMwAmzListNote）に出す（6.125）。
+   一覧の中には「すべて外す」と行が並ぶ。 */
+let only=await p.evaluate(()=>($('csvMwAmzListNote').textContent||'')
+  +' | '+($('csvMwAmzList').textContent||''));
 console.log('   '+only.replace(/\s+/g,' ').slice(0,140));
 ok(/仕入れる 1件/.test(only),'★★印を付けた行だけの一覧が出る');
 ok(/グリザイア/.test(only)&&!/千銃士/.test(only),'★★印の無い行は出ない');

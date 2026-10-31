@@ -1909,6 +1909,15 @@ body.staff #syncOnHandFix{display:none !important}
   <button class="btn" id="syncUndoClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
 </div>
 
+<!-- 仕入れる印を外した直後に出る帯（6.125）。数秒だけ出て、押せば戻せる -->
+<div id="mwBuyUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:62;
+     background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
+     align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
+  <span id="mwBuyUndoText" style="flex:1 1 0;min-width:0"></span>
+  <button class="btn" id="mwBuyUndoBtn" style="flex:0 0 auto;padding:6px 10px;font-size:13px">元に戻す</button>
+  <button class="btn" id="mwBuyUndoClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
+</div>
+
 <div id="csvUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;
      background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
      align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
@@ -3193,7 +3202,7 @@ function switchTab(t){
   if(t==='E')syncRender();
   /* Amazon刈取（6.116）。一覧を描き直し、MW の取り込みの古さも見に行く。 */
   if(t==='F'){
-    if(typeof mwAmzRender==='function')mwAmzRender();
+    if(typeof mwViewRender==='function')mwViewRender();
     if(typeof mwStaleLoad==='function'
        &&(Date.now()-(switchTab._mw||0))>60000){
       switchTab._mw=Date.now(); mwStaleLoad();
@@ -9441,11 +9450,14 @@ $('csvMwPut').onclick=mwPutShow;
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
+/* 「元に戻す」の帯（6.125）。 */
+$('mwBuyUndoBtn').onclick=mwBuyUndoGo;
+$('mwBuyUndoClose').onclick=mwBuyUndoHide;
 $('csvMwBuyCsv').onclick=mwBuyCsvGo;
 ['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
  'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank']
   .forEach(function(id){
-    $(id).addEventListener('change',function(){ mwAmzRender(); });
+    $(id).addEventListener('change',function(){ mwViewRender(); });
   });
 /* ランキングの上限の表（6.124）。欄は出し直すたびに作るので、
    1つずつ結ばずに箱で受ける。保存先は pj-sync（端末ごとではない）。 */
@@ -9975,6 +9987,7 @@ function mwAmzLoad(){
     })
     .then(function(d){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
+      mwAmzView='list';                 // 候補の一覧を出す（6.125）
       $('csvMwAmzMax').textContent=String(d.per_run||120);
       /* 行に入っている仕入れの印（端末をまたいで見える）を読み込む。 */
       mwBuyMap={};
@@ -10203,14 +10216,26 @@ function mwAmzFilters(){
 }
 /* ランキングの基準で隠した行の数（一覧の上に出す・6.124）。 */
 var mwRankHid=0;
-/* 絞り込みを当てた行（計算つき）を返す。 */
+/* 検索には当たっているのに、絞り込みで消えた行の数（6.125）。 */
+var mwFindHid=0;
+/* 絞り込みを当てた行（計算つき）を返す。
+   検索（6.115）と絞り込み（黒字のみ・ランキングの上限など）は**組み合わせ**で効く。
+   検索に当たったのに絞り込みで消えた行は mwFindHid に数えて、
+   「絞り込みで隠れている n件」と出す（探し物が見つからない理由が分かるように）。 */
 function mwAmzPicked(){
   var f=mwAmzFilters();
-  mwRankHid=0;
+  mwRankHid=0; mwFindHid=0;
   return mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
     .filter(function(x){
-      /* 検索欄（6.115）。当たらない行は先に外す。 */
+      /* 検索欄（6.115）。当たらない行は先に外す（絞り込みの数にも入れない）。 */
       if(!findMatchAmz(x.r))return false;
+      var keep=mwAmzKeep(x,f);
+      if(!keep)mwFindHid++;
+      return keep;
+    });
+}
+/* 検索以外の絞り込み。残すなら true。 */
+function mwAmzKeep(x,f){
       /* 「JAN重複だけ」のときは重複の行だけ（値段が無くても出す・6.112）。 */
       if(f.dup)return mwJanDup(x.r);
       /* JAN重複の行は ASIN が無いので値段も利益も出ない。
@@ -10232,7 +10257,6 @@ function mwAmzPicked(){
       }
       if(f.minM&&x.c.margin<f.minM)return false;
       return true;
-    });
 }
 /* いま持っている行のうち JAN重複の件数（絞り込みの案内に出す）。 */
 function mwJanDupN(){
@@ -10266,6 +10290,12 @@ function mwCopy(text,label){
 }
 /* ---- 仕入れる印（6.93）---- */
 var mwBuyMap={}, mwBuyRows=[], mwBuyMeta=null;
+/* いま出しているのは「一覧を出す」（list）か「仕入れる一覧」（buy）か（6.125）。
+   印を外したあとや検索したあとに、**見ている側を出し直す**ために持つ。 */
+var mwAmzView='list';
+function mwViewRender(){
+  if(mwAmzView==='buy')mwBuyRender(); else mwAmzRender();
+}
 function mwBuyFeeFree(){ return 50000; }      // 送料無料になる額（MW）
 function mwBuyQtyOf(jan){ return +mwBuyMap[String(jan)]||0; }
 function mwBuySet(jan,qty){
@@ -10291,8 +10321,32 @@ function mwBuySet(jan,qty){
   mwBuyBarRender();                        // 先に見た目を直す（待たせない）
   mwPost('/mw/buy',{ jan:String(jan), qty:q })
     .then(function(){
-      /* 行の印（バッジ・枠の色）を出すために一覧も描き直す。 */
-      return mwBuyLoad(true).then(function(){ mwAmzRender(); });
+      /* 行の印（バッジ・枠の色）を出すために、見ている側を描き直す。 */
+      return mwBuyLoad(true).then(function(){ mwViewRender(); });
+    })
+    ['catch'](function(e){
+      $('csvMwAmzListNote').textContent='⚠ 印を保存できませんでした：'+e.message;
+    });
+}
+/* まとめて付け外しする（6.125）。/mw/buy は items で**1回**に受けてくれる
+   （200件まで）ので、すべて外す・まとめて戻すは1回の呼び出しで済ます。 */
+function mwBuySetMany(list){
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    $('csvMwAmzListNote').textContent='pj-sync のURLとキーを⚙設定に入れてください。';
+    return Promise.resolve();
+  }
+  var items=(list||[]).map(function(x){
+    return { jan:String(x.jan||''), qty:Math.max(0,Math.min(99,+x.qty||0)) };
+  }).filter(function(x){ return /^[0-9]{13}$/.test(x.jan); });
+  if(!items.length)return Promise.resolve();
+  items.forEach(function(x){
+    if(x.qty)mwBuyMap[x.jan]=x.qty; else delete mwBuyMap[x.jan];
+  });
+  mwBuyBarRender();                      // 先に見た目を直す（待たせない）
+  return mwPost('/mw/buy',{ items:items })
+    .then(function(){
+      return mwBuyLoad(true).then(function(){ mwViewRender(); });
     })
     ['catch'](function(e){
       $('csvMwAmzListNote').textContent='⚠ 印を保存できませんでした：'+e.message;
@@ -10345,34 +10399,111 @@ function mwBuyLoad(quiet){
     })
     ['catch'](function(){});
 }
-/* 印を付けた行だけの一覧。 */
+/* 印を付けた行だけの一覧。検索（6.115）はこちらでも効く（6.125）。 */
 function mwBuyShow(){
-  mwBuyLoad(true).then(function(){
-    var el=$('csvMwAmzList');
-    if(!mwBuyRows.length){
-      el.innerHTML='<div class="note2">仕入れる印の付いた行はありません。</div>';
-      return;
-    }
-    el.innerHTML='<div class="note2" style="margin:0 0 4px"><b>仕入れる '
-      +mwBuyRows.length+'件</b>（印を付けた順）</div>'
-      +mwBuyRows.map(function(r){
-        var cost=Math.round((+r.wholesale||0)*1.1);
-        return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
-          +'border-radius:6px'+(r.gone_at?';border-color:var(--bad)':'')+'">'
-          +'<b>'+(+r.qty||0)+'点</b>　'+esc(String(r.mw_name||r.jan).slice(0,50))
-          +(r.gone_at?' <span class="badge" style="background:var(--bad)">MWで欠品</span>':'')
-          +'<div class="note2" style="margin:2px 0 0">JAN '+esc(r.jan)
-          +'　社 '+esc(r.sha||'')+'　MW在庫 '+(+r.stock||0)+'点'
-          +'　MW出荷 '+(+r.ship_days||0)+'営業日</div>'
-          +'<div class="note2" style="margin:2px 0 0">卸値 '+yen(+r.wholesale||0)
-          +'（税抜）→ <b>'+yen(cost)+'</b>×'+(+r.qty||0)+' ＝ '
-          +yen(cost*(+r.qty||0))+'</div>'
-          +(r.asin?('<div class="note2" style="margin:2px 0 0">ASIN '+esc(r.asin)
-            +(r.price?('　Amazon '+yen(+r.price)):'')+'</div>'):'')
-          +'</div>';
-      }).join('');
+  mwAmzView='buy';
+  mwBuyLoad(true).then(function(){ mwBuyRender(); });
+}
+/* 検索に当たった行だけ（検索が空なら全部）。 */
+function mwBuyPicked(){
+  return mwBuyRows.filter(function(r){ return findMatchAmz(r); });
+}
+function mwBuyRender(){
+  mwAmzView='buy';
+  var el=$('csvMwAmzList'), note=$('csvMwAmzListNote');
+  var list=mwBuyPicked();
+  /* 検索の件数と「×」は一覧と同じ出し方（6.115）。 */
+  findNoteRender('amz',list.length,mwBuyRows.length);
+  note.innerHTML='<b>仕入れる '+mwBuyRows.length+'件</b>'
+    +'（印を付けた順）　<a href="#" onclick="mwAmzRender();return false"'
+    +' style="text-decoration:underline">候補の一覧に戻る</a>'
+    +((mwBuyMeta&&mwBuyMeta.gone)
+      ?('<br><span style="color:var(--bad)">印を付けたあとに MW で欠品した行が '
+        +mwBuyMeta.gone+'件あります</span>'):'');
+  if(!mwBuyRows.length){
+    el.innerHTML='<div class="note2">仕入れる印の付いた行はありません。</div>';
     mwBuyBarRender();
-  });
+    return;
+  }
+  /* 発注が終わったあとにまとめて消す（確認の画面を出す・6.125）。 */
+  el.innerHTML='<div style="display:flex;gap:6px;align-items:center;margin:0 0 6px">'
+    +'<button class="btn" onclick="mwBuyOffAll();return false"'
+    +' style="flex:1 1 0;min-width:0">すべて外す（'+mwBuyRows.length+'件）</button>'
+    +'<span class="note2" style="flex:1 1 0;min-width:0;margin:0">'
+    +'発注が終わったら、まとめて外せます（確認します）。</span></div>'
+    +(list.length?'':'<div class="note2">検索に当たった行がありません。</div>')
+    +list.map(function(r){
+      var cost=Math.round((+r.wholesale||0)*1.1);
+      var jan=String(r.jan||'');
+      return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+        +'border-radius:6px'+(r.gone_at?';border-color:var(--bad)':'')+'">'
+        +'<div style="display:flex;gap:6px;align-items:flex-start">'
+        +'<div style="flex:1 1 0;min-width:0">'
+        +'<b>'+(+r.qty||0)+'点</b>　'+esc(String(r.mw_name||r.jan).slice(0,50))
+        +(r.gone_at?' <span class="badge" style="background:var(--bad)">MWで欠品</span>':'')
+        +'</div>'
+        /* 外す（6.125）。確認は出さず、数秒だけ「元に戻す」を出す。 */
+        +'<button class="btn" data-buyoff="'+esc(jan)+'"'
+        +' onclick="mwBuyOff(\''+esc(jan)+'\');return false"'
+        +' style="flex:0 0 auto;padding:4px 10px;font-size:12px">外す</button>'
+        +'</div>'
+        +'<div class="note2" style="margin:2px 0 0">JAN '+esc(jan)
+        +'　社 '+esc(r.sha||'')+'　MW在庫 '+(+r.stock||0)+'点'
+        +'　MW出荷 '+(+r.ship_days||0)+'営業日</div>'
+        +'<div class="note2" style="margin:2px 0 0">卸値 '+yen(+r.wholesale||0)
+        +'（税抜）→ <b>'+yen(cost)+'</b>×'+(+r.qty||0)+' ＝ '
+        +yen(cost*(+r.qty||0))+'</div>'
+        +(r.asin?('<div class="note2" style="margin:2px 0 0">ASIN '+esc(r.asin)
+          +(r.price?('　Amazon '+yen(+r.price)):'')+'</div>'):'')
+        +'</div>';
+    }).join('');
+  mwBuyBarRender();
+}
+/* ---- 仕入れる印を外す（6.125）----
+   発注が終わったあとや、付け間違いのときに使う。
+   ・1件ずつの「外す」は**確認を出さない**。代わりに数秒だけ「元に戻す」を出す
+   ・「すべて外す」は**確認を出す**（戻すのが大変なので）
+   ・サーバー（mw_buy）から外すので、ほかの端末でも消える
+   ・合計・送料無料までの残り・注文用CSV・JANコピーは mwBuyMap と mwBuyRows を
+     見ているので、外した時点でそろって変わる
+   ・作業者用の端末でも使える（印を付けられるのと同じ扱い） */
+var mwBuyUndo=[], mwBuyUndoT=0;
+function mwBuyUndoHide(){
+  if(mwBuyUndoT){ clearTimeout(mwBuyUndoT); mwBuyUndoT=0; }
+  mwBuyUndo=[];
+  var b=$('mwBuyUndoBar'); if(b)b.style.display='none';
+}
+function mwBuyUndoShow(list,label){
+  mwBuyUndo=list.slice();
+  $('mwBuyUndoText').textContent=label;
+  $('mwBuyUndoBar').style.display='flex';
+  if(mwBuyUndoT)clearTimeout(mwBuyUndoT);
+  mwBuyUndoT=setTimeout(mwBuyUndoHide,7000);
+}
+function mwBuyUndoGo(){
+  var list=mwBuyUndo.slice();
+  mwBuyUndoHide();
+  if(!list.length)return;
+  /* 数量も元のまま戻す（まとめて1回で送る）。 */
+  mwBuySetMany(list);
+}
+function mwBuyOff(jan){
+  var j=String(jan||''), q=mwBuyQtyOf(j);
+  if(!q)return;
+  var hit=mwBuyRows.filter(function(r){ return String(r.jan)===j; })[0]
+    ||mwAmzRows.filter(function(r){ return String(r.jan)===j; })[0]||{};
+  var name=String(hit.mw_name||hit.amz_name||j).slice(0,24);
+  mwBuySet(j,0);
+  mwBuyUndoShow([{ jan:j, qty:q }],'「'+name+'」の仕入れる印を外しました');
+}
+function mwBuyOffAll(){
+  var list=Object.keys(mwBuyMap).map(function(j){
+    return { jan:j, qty:+mwBuyMap[j]||0 }; });
+  if(!list.length)return;
+  if(!confirm('仕入れる印を '+list.length+'件すべて外します。\n'
+      +'（合計も0に戻ります。すぐなら「元に戻す」で戻せます）'))return;
+  mwBuySetMany(list.map(function(x){ return { jan:x.jan, qty:0 }; }));
+  mwBuyUndoShow(list,'仕入れる印を '+list.length+'件すべて外しました');
 }
 /* 注文用のCSV（吉田さんに渡す形）。 */
 function mwBuyCsvGo(){
@@ -10697,6 +10828,7 @@ function mwRegGo(){
   });
 }
 function mwAmzRender(){
+  mwAmzView='list';
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
   /* ⚙の「ランキングの上限」の表は、いまの一覧の大分類と件数で作る（6.124）。 */
   try{ mwRankCapRender(); }catch(e){}
@@ -10707,7 +10839,8 @@ function mwAmzRender(){
   var f=mwAmzFilters(), sort=mwAmzSort();
   var dn=$('csvMwAmzDupN');
   if(dn)dn.textContent=mwJanDupN()?('（'+mwJanDupN()+'件）'):'';
-  findNoteRender('amz',list.length,mwAmzRows.length);   // 検索の件数と「×」（6.115）
+  /* 検索の件数と「×」（6.115）。絞り込みで隠れている件数も出す（6.125）。 */
+  findNoteRender('amz',list.length,mwAmzRows.length,mwFindHid);
   note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
     +'　値段あり '+(d.priced||0)
     +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
@@ -14998,7 +15131,11 @@ var FIND_ASIN={};             // asin -> jan（逆引き。行に JAN を出す�
 /* 探す文字をそろえる：全角→半角、大文字→小文字、記号を落とす。 */
 function findNorm(v){
   var t=String(v==null?'':v);
-  /* 全角の英数字・記号を半角に。 */
+  /* 全角と半角をそろえる（6.125）。NFKC は
+     「ｸﾞﾘｻﾞｲｱ」→「グリザイア」・「ＡＳＩＮ」→「asin」・「㈱」→「(株)」まで
+     まとめてそろえてくれる（iPhone の Safari でも使える）。 */
+  try{ if(t.normalize)t=t.normalize('NFKC'); }catch(e){}
+  /* 念のため、NFKC が使えない端末でも全角の英数字・記号は半角に。 */
   t=t.replace(/[！-～]/g,function(c){
     return String.fromCharCode(c.charCodeAt(0)-0xFEE0); });
   t=t.replace(/　/g,' ');                 // 全角空白
@@ -15085,7 +15222,9 @@ function findOpenOne(which){
   var d=dets[0];
   if(!d.open){ d.setAttribute('data-detauto','1'); d.open=true; }
 }
-function findNoteRender(which,shown,total){
+/* hidden … 検索に当たったのに**絞り込みで**消えた件数（6.125・Amazon刈取で使う）。
+   探しているのに出てこない理由が、言葉のせいか絞り込みのせいか分かるようにする。 */
+function findNoteRender(which,shown,total,hidden){
   var pre=findPre(which);
   var st=findState(which);
   var note=$(pre+'Note'), clr=$(pre+'Clear');
@@ -15093,6 +15232,9 @@ function findNoteRender(which,shown,total){
   if(!st.on){ note.style.display='none'; note.textContent=''; return; }
   var msg='「'+esc(st.q.trim())+'」に当たったのは <b>'+shown+'件</b>'
     +'（全'+total+'件）';
+  if(+hidden>0)
+    msg+='<br><b>絞り込みで隠れている '+(+hidden)+'件</b>'
+      +'（並べ替え・絞り込みをゆるめると出ます）';
   if(st.jan&&!st.asin)
     msg+='<br>この JAN に当たる行がありません。<b>JAN から ASIN を調べています…</b>';
   else if(st.jan&&st.asin)
@@ -15125,7 +15267,7 @@ function findRun(which){
   var st=findState(which);
   if(st.jan)findAskJan(which,st.jan);
   if(which==='csv')csvRender();
-  else if(which==='amz')mwAmzRender();
+  else if(which==='amz')mwViewRender();   // 仕入れる一覧を見ていればそちら（6.125）
   else syncRender();
 }
 function findClear(which){
@@ -16942,7 +17084,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v211';   // sw.js の const V と必ず同じ値にする
+var APP_V='v212';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
