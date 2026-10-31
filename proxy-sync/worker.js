@@ -50,6 +50,7 @@ const SP_GAP = {
   getListingsRestrictions: 250,      // 5回/秒（7.76）。余裕をみて4回/秒
   getMyFeesEstimates: 2100,          // 0.5回/秒（7.85）。1回20件
   putListingsItem: 250,              // 5回/秒（7.90）。余裕をみて4回/秒
+  getDefinitionsProductType: 250,    // 5回/秒（7.92）。余裕をみて4回/秒
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -153,6 +154,12 @@ const ALLOWED = [
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
   /* 商品ごとの手数料（7.85）。読み取りだけ（見積りを返すだけで何も変えない）。 */
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/products\/fees\/v0\/feesEstimate$/ },
+  /* 商品の種類ごとの必須項目（7.92）。読み取りだけ。
+     getDefinitionsProductType は**項目表（スキーマ）の場所（URL）**を返すので、
+     その URL も読む。署名付きの配布URL（CloudFront）なので、
+     ホストは cloudfront.net に限って読み取りだけ許す。 */
+  { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/definitions\/2020-09-01\/productTypes\/[A-Za-z0-9_]+\?/ },
+  { m: "GET",  re: /^https:\/\/[A-Za-z0-9.-]+\.cloudfront\.net\/[^\s]+$/ },
   /* ★★ Amazon への登録（7.90）。**この表で唯一の書き込み** 。
      出品者トークンと SKU をパスに入れる。相乗り出品（価格と数量だけ）で、
      商品情報は作らない（requirements: LISTING_OFFER_ONLY）。 */
@@ -6146,10 +6153,161 @@ async function jobMwAuto(env, opt) {
    ・1回に送る件数の上限。最初は画面から「1件だけ送る」で始める
    ・putListingsItem は**べき等**（同じ SKU に同じ中身を送っても二重にならない）
      ので、失敗した行だけ送り直せる */
+/* ===== 商品の種類と必須項目（7.92）=====
+   v213 の「1件だけ送る」が INVALID 90220 で断られた。
+     '電池本体、電池が必要な商品' は必須ですが、入力されていません。
+     '危険物規制' は必須ですが、入力されていません。
+   相乗り出品（LISTING_OFFER_ONLY）でも、**商品の種類によっては**
+   電池と危険物の申告が必須になる。種類は ASIN ごとに違うので、
+   ・Catalog（productTypes）で**その ASIN の本当の種類**を引く
+   ・Product Type Definitions（LISTING_OFFER_ONLY）で**その種類の必須項目**を引く
+   ・申告は、安心して決められる種類だけ自動で付ける（それ以外は人が選ぶ）
+   の順で進める。どちらの結果も控える（同じ種類を何度も聞かない）。 */
+const MW_PT_TTL_D = 14;                // 種類の必須項目を控えておく日数
+/* 自動で「電池なし・危険物に該当しない」と付けてよい種類（7.92）。
+   フィギュア・プラモデル・ゲームソフト（ディスク・カートリッジ）だけ。
+   ここに無い種類は、人が確認の画面で選ぶ。 */
+const MW_DG_SAFE_PT = {
+  TOYS_AND_GAMES: 1, TOY_FIGURE: 1, COLLECTIBLE_FIGURINE: 1, ACTION_FIGURE: 1,
+  DOLL: 1, TOY_BUILDING_BLOCK: 1, MODEL_KIT: 1, TOY_VEHICLE: 1,
+  VIDEO_GAMES: 1, VIDEO_GAME: 1, VIDEO_GAME_ACCESSORIES: 0,   // 周辺機器は人が選ぶ
+  HOME_FURNITURE_AND_DECOR: 0,
+};
+/* 商品名にこれが入っていたら、種類が安心でも**人が選ぶ**（7.92）。
+   電池や発光する部品が入っている見込みがあるもの。 */
+const MW_DG_WORD = /LED|ＬＥＤ|電池|乾電池|電源|発光|光る|電動|充電|バッテリー|モーター|モータ|ライト|ランプ|レーザー|スピーカー|イヤホン|充電器|ACアダプタ|アダプター/i;
+/* pj 側の分類（機種・SKUの接頭辞）から見た「安心な種類」。
+   Catalog の種類と**両方**そろったときだけ自動で付ける。 */
+function mwDgSafeCat(x) {
+  const k = String((x && x.kishu) || "").toLowerCase();
+  /* 画面から来る行は SKU しか持たないので、接頭辞は SKU から読む
+     （mwgame-… はゲームソフト、mwhobby-… はフィギュア・プラモデル）。 */
+  let pre = String((x && x.prefix) || "");
+  if (!pre) {
+    const p0 = parseSku(String((x && x.sku) || ""));
+    if (p0.ok) pre = String(p0.prefix || "");
+  }
+  pre = pre.toLowerCase();
+  if (/plasticmodel|figure|fig|gf|doll|hobby/.test(k)) return "フィギュア・プラモデル";
+  if (/^(ns|ns2|ns2h|p5|p4|p3|sw|3ds|ps5|ps4)$/.test(k)) return "ゲームソフト";
+  if (/hobby|figure/.test(pre)) return "フィギュア・プラモデル";
+  if (/game/.test(pre)) return "ゲームソフト";
+  return "";
+}
+/* 電池・危険物の申告をどうするか（7.92）。
+   auto=true … 既定（電池なし・該当しない）で送る
+   auto=false … 確認の画面で人が選ぶまで送らない（why に理由） */
+function mwDgPlan(x, ptype) {
+  const name = String((x && (x.name || x.title || x.mw_name)) || "");
+  const pt = String(ptype || "");
+  const cat = mwDgSafeCat(x);
+  if (MW_DG_WORD.test(name))
+    return { auto: false, batteries: null, dg: "",
+             why: "商品名に電池・発光などの言葉があります（電池の申告を選んでください）" };
+  if (!pt)
+    return { auto: false, batteries: null, dg: "",
+             why: "商品の種類が分かりません（Amazonで調べると引けます）" };
+  if (!MW_DG_SAFE_PT[pt] || !cat)
+    return { auto: false, batteries: null, dg: "",
+             why: "この種類（" + pt + "）は自動で付けません（人が選んでください）" };
+  return { auto: true, batteries: false, dg: "not_applicable",
+           why: cat + "なので「電池なし・危険物に該当しない」で送ります" };
+}
+/* ASIN の本当の種類を Catalog から引く（7.92）。20件ずつ。控えは mw_amz.ptype。 */
+async function mwPtypeFind(env, run, asins) {
+  const out = {};
+  const want = [];
+  for (const a of asins) {
+    const s0 = String(a || "");
+    if (/^B[0-9A-Z]{9}$/.test(s0) && want.indexOf(s0) < 0) want.push(s0);
+  }
+  if (!want.length) return { map: out, calls: 0 };
+  /* まず控えを見る。 */
+  const q = await env.DB.prepare(
+    `SELECT asin, ptype FROM mw_amz
+      WHERE COALESCE(ptype,'') <> '' AND asin IN (${want.map(() => "?").join(",")})`)
+    .bind(...want).all();
+  for (const r of (q && q.results) || []) out[String(r.asin)] = String(r.ptype);
+  const todo = want.filter((a) => !out[a]);
+  let calls = 0;
+  for (let i = 0; i < todo.length; i += MW_AMZ_CAT_BATCH) {
+    const part = todo.slice(i, i + MW_AMZ_CAT_BATCH);
+    const u = new URLSearchParams({
+      identifiers: part.join(","), identifiersType: "ASIN",
+      marketplaceIds: MP_FE, includedData: "productTypes,summaries",
+    });
+    const r = await spCall(env, run, "/catalog/2022-04-01/items?" + u.toString(),
+                           { label: "searchCatalogItems" });
+    calls++;
+    if (!r.ok) { run.notes.push("種類引き -> " + r.status); continue; }
+    const stmts = [];
+    for (const it of (r.data && r.data.items) || []) {
+      const asin = String(it.asin || "");
+      const pt = String((((it.productTypes || [])[0]) || {}).productType || "");
+      if (!asin || !pt) continue;
+      out[asin] = pt;
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET ptype=?2 WHERE asin=?1`).bind(asin, pt));
+    }
+    if (stmts.length) await runBatch(env, run, stmts);
+  }
+  return { map: out, calls: calls };
+}
+/* 種類ごとの必須項目を引く（7.92）。
+   getDefinitionsProductType は**項目表（スキーマ）の URL**を返すので、
+   その URL も読んで required と項目名を取り出す。控えは amz_ptype（14日）。 */
+async function mwPtypeDef(env, run, ptype) {
+  const pt = String(ptype || "");
+  if (!pt) return null;
+  const old = new Date(Date.now() - MW_PT_TTL_D * 86400000).toISOString();
+  const hit = await env.DB.prepare(
+    `SELECT * FROM amz_ptype WHERE ptype=?1 AND at >= ?2`).bind(pt, old).first();
+  if (hit) {
+    let req = [], props = [];
+    try { req = JSON.parse(hit.req || "[]"); } catch (e) { req = []; }
+    try { props = JSON.parse(hit.props || "[]"); } catch (e) { props = []; }
+    return { ptype: pt, req: req, props: props, at: String(hit.at || ""),
+             cached: true, err: String(hit.err || "") };
+  }
+  const u = new URLSearchParams({
+    marketplaceIds: MP_FE, requirements: "LISTING_OFFER_ONLY",
+    locale: "ja_JP", sellerId: spSellerId(env),
+  });
+  const r = await spCall(env, run,
+    "/definitions/2020-09-01/productTypes/" + encodeURIComponent(pt)
+      + "?" + u.toString(), { label: "getDefinitionsProductType" });
+  const save = async (req, props, err) => {
+    const at = nowIso();
+    await env.DB.prepare(
+      `INSERT INTO amz_ptype (ptype,req,props,err,at,created_at)
+         VALUES (?1,?2,?3,?4,?5,?5)
+       ON CONFLICT(ptype) DO UPDATE SET req=excluded.req, props=excluded.props,
+         err=excluded.err, at=excluded.at`)
+      .bind(pt, JSON.stringify(req || []), JSON.stringify(props || []),
+            String(err || ""), at).run();
+    return { ptype: pt, req: req || [], props: props || [], at: at,
+             cached: false, err: String(err || "") };
+  };
+  if (!r.ok)
+    return await save([], [], "HTTP " + r.status + " " + String(r.err || ""));
+  const link = (((r.data || {}).schema || {}).link || {}).resource || "";
+  if (!/^https:\/\//.test(String(link)))
+    return await save([], [], "項目表の場所が返りませんでした");
+  let sc = null;
+  try {
+    const resp = await net(run, String(link), { method: "GET" });
+    sc = await resp.json();
+  } catch (e) {
+    return await save([], [], "項目表を読めません：" + String((e && e.message) || e));
+  }
+  const req = (sc && Array.isArray(sc.required)) ? sc.required.map(String) : [];
+  const props = (sc && sc.properties) ? Object.keys(sc.properties) : [];
+  return await save(req, props, "");
+}
 const MW_PUT_MAX = 30;                 // 1回に送る上限
 const MW_PUT_DEADLINE_MS = 50000;      // 1回の持ち時間
 /* 送る中身。いまの TSV の列から機械的に作れる分だけを入れる。 */
-function mwPutBody(x) {
+function mwPutBody(x, dg, def) {
   const mp = MP_FE;
   const price = Math.round(Number(x.price) || 0);
   const a = {
@@ -6163,16 +6321,58 @@ function mwPutBody(x) {
   };
   if (String(x.note || ""))
     a.condition_note = [{ value: String(x.note).slice(0, 2000), marketplace_id: mp }];
-  return { productType: "PRODUCT", requirements: "LISTING_OFFER_ONLY", attributes: a };
+  /* 電池と危険物の申告（7.92）。
+     **その種類の項目表にある名前だけ**入れる（無い名前を送ると弾かれる）。
+     項目表が引けていないときは、よく使う名前をそのまま入れる。 */
+  const d = dg || {};
+  const has = (k) => !def || !def.props || !def.props.length
+    || def.props.indexOf(k) >= 0;
+  if (d.batteries === false || d.batteries === true) {
+    const v = !!d.batteries;
+    if (has("batteries_required"))
+      a.batteries_required = [{ value: v, marketplace_id: mp }];
+    if (has("batteries_included"))
+      a.batteries_included = [{ value: v, marketplace_id: mp }];
+  }
+  if (String(d.dg || "") && has("supplier_declared_dg_hz_regulation"))
+    a.supplier_declared_dg_hz_regulation =
+      [{ value: String(d.dg), marketplace_id: mp }];
+  /* 種類は Catalog で引けたものを使う（引けなければ今までどおり PRODUCT）。 */
+  const pt = String((dg && dg.ptype) || "") || "PRODUCT";
+  return { productType: pt, requirements: "LISTING_OFFER_ONLY", attributes: a };
+}
+/* 断られた理由から「何を足せばよいか」の案内を作る（7.92）。 */
+function mwPutHint(issues) {
+  const out = [];
+  const names = [];
+  for (const y of (issues || [])) {
+    const a = (y.attrs || []).map(String);
+    for (const k of a) if (names.indexOf(k) < 0) names.push(k);
+    const t = String(y.message || "");
+    if (/batteries|電池/i.test(a.join(" ") + t))
+      out.push("電池の申告が要ります（確認の画面で「電池は入っていない」などを選べます）");
+    else if (/dg_hz|危険物/i.test(a.join(" ") + t))
+      out.push("危険物の申告が要ります（確認の画面で「該当しない」を選べます）");
+    else if (/90220|必須/.test(String(y.code || "") + t))
+      out.push("必須の項目が足りません："
+        + (a.length ? a.join("・") : t.slice(0, 60))
+        + "（この項目は pj からは送れないので、セラーセントラルの商品編集で"
+        + "入れてから、同じ SKU で送り直してください）");
+  }
+  const uniq = [];
+  for (const t of out) if (uniq.indexOf(t) < 0) uniq.push(t);
+  return { hint: uniq.join(" / ").slice(0, 400), missing: names.slice(0, 8) };
 }
 /* 1件 PUT する。返りの issues をそのまま持ち帰る。 */
-async function mwPutOne(env, run, x) {
+async function mwPutOne(env, run, x, dg, def) {
   const sku = String(x.sku || "");
   const q = new URLSearchParams({ marketplaceIds: MP_FE, issueLocale: "ja_JP" });
+  /* 同じ SKU に同じ PUT を送るので**べき等**（二重に増えない・7.90）。
+     断られた行は、直してから同じ SKU でそのまま送り直せる。 */
   const path = "/listings/2021-08-01/items/" + encodeURIComponent(spSellerId(env))
     + "/" + encodeURIComponent(sku) + "?" + q.toString();
   const r = await spCall(env, run, path, {
-    method: "PUT", body: JSON.stringify(mwPutBody(x)),
+    method: "PUT", body: JSON.stringify(mwPutBody(x, dg, def)),
     label: "putListingsItem", write: true,
   });
   if (!r.ok)
@@ -6186,15 +6386,18 @@ async function mwPutOne(env, run, x) {
   }));
   const bad = issues.filter((y) => /ERROR/i.test(y.severity));
   const st = String(d.status || "");
+  const g = mwPutHint(bad);
   /* ACCEPTED で ERROR が無ければ通った。 */
   return { ok: /ACCEPTED/i.test(st) && !bad.length, status: st,
            sub_id: String(d.submissionId || ""), issues,
+           hint: g.hint, missing: g.missing,
            err: bad.length ? bad.map((y) => y.code + ": " + y.message).join(" | ")
                              .slice(0, 300) : "" };
 }
 async function mwPutRun(env, body, role) {
   const run = newRun("mw-put");
-  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, rows: [], why: "" };
+  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, rows: [], why: "",
+                calls_cat: 0, plan: [] };
   try {
     const o = body || {};
     if (!spSellerId(env)) {
@@ -6210,6 +6413,50 @@ async function mwPutRun(env, body, role) {
     const dl = Date.now() + MW_PUT_DEADLINE_MS;
     const at = nowIso();
     const stmts = [];
+    /* ---- 送る前に、種類と必須項目を調べる（7.92）----
+       check=1 のときは**ここまでで返す**（確認の画面がこれを出す）。 */
+    const pt = await mwPtypeFind(env, run, list.map((x) => String(x.asin || "")));
+    res.calls_cat = pt.calls;
+    const defs = {};
+    for (const x of list) {
+      const t = pt.map[String(x.asin || "")] || "";
+      if (!t || defs[t] !== undefined) continue;
+      defs[t] = await mwPtypeDef(env, run, t);
+      await sleep(SP_GAP.getDefinitionsProductType);
+    }
+    /* 人が選んだ申告（確認の画面から来る）。SKU ごと。 */
+    const pick = (o.dg && typeof o.dg === "object") ? o.dg : {};
+    const planOf = (x) => {
+      const t = pt.map[String(x.asin || "")] || "";
+      const p0 = mwDgPlan(x, t);
+      const mine = pick[String(x.sku || "")];
+      if (mine && typeof mine === "object"
+          && (mine.batteries === true || mine.batteries === false)) {
+        return { auto: true, hand: true, ptype: t,
+                 batteries: !!mine.batteries,
+                 dg: String(mine.dg || "not_applicable"),
+                 why: "確認の画面で選びました" };
+      }
+      return Object.assign({ ptype: t, hand: false }, p0);
+    };
+    res.plan = list.map((x) => {
+      const q0 = planOf(x);
+      const d0 = defs[q0.ptype] || null;
+      return { sku: String(x.sku || ""), asin: String(x.asin || ""),
+               ptype: q0.ptype, auto: !!q0.auto, hand: !!q0.hand,
+               batteries: q0.batteries, dg: q0.dg, why: q0.why,
+               req: d0 ? d0.req : [], def_err: d0 ? d0.err : "",
+               /* 電池・危険物が**この種類で必須か**（項目表から）。 */
+               need_batt: !!(d0 && d0.req
+                 && d0.req.some((k) => /batter/i.test(String(k)))),
+               need_dg: !!(d0 && d0.req
+                 && d0.req.some((k) => /dg_hz/i.test(String(k)))) };
+    });
+    if (o.check) {
+      res.ok = true;
+      run.notes.push("Amazon登録（下調べ）：" + list.length + "件");
+      return Object.assign(await saveRun(env, run), res);
+    }
     for (const x of list) {
       if (Date.now() > dl) { res.why = "時間が足りないので残りは次回にしました"; break; }
       const sku = String(x.sku || "").trim();
@@ -6225,12 +6472,27 @@ async function mwPutRun(env, body, role) {
         res.ng++; res.rows.push({ sku, ok: false, err: "売値がありません" });
         continue;
       }
+      /* 電池・危険物の申告が決まっていない行は送らない（7.92）。
+         確認の画面で人が選んでから、同じ SKU で送り直す。 */
+      const plan = planOf(x);
+      if (!plan.auto) {
+        res.ng++;
+        res.rows.push({ sku, asin: String(x.asin), ok: false, ptype: plan.ptype,
+          err: "電池・危険物の申告が決まっていません",
+          hint: plan.why + "（確認の画面で選んでから送ってください）" });
+        continue;
+      }
       if (res.sent) await sleep(SP_GAP.putListingsItem);
-      const g = await mwPutOne(env, run, Object.assign({}, x, { sku, cond: p.cond === "new" ? "new_new" : MW_RST_COND }));
+      const g = await mwPutOne(env, run,
+        Object.assign({}, x, { sku, cond: p.cond === "new" ? "new_new" : MW_RST_COND }),
+        plan, defs[plan.ptype] || null);
       res.sent++;
       if (g.ok) res.ok_n++; else res.ng++;
       res.rows.push({ sku, asin: String(x.asin), ok: g.ok, status: g.status,
-                      issues: g.issues, err: g.err });
+                      issues: g.issues, err: g.err, hint: g.hint || "",
+                      missing: g.missing || [], ptype: plan.ptype,
+                      dg: { batteries: plan.batteries, dg: plan.dg,
+                            hand: !!plan.hand } });
       stmts.push(env.DB.prepare(
         `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
            issues,err,by_role,created_at)
@@ -8638,6 +8900,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
+  mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwPutHint,
+  MW_DG_SAFE_PT, MW_DG_WORD, MW_PT_TTL_D,
   MW_PUT_MAX, jobMwAuto, mwAutoSettings,
   MW_AUTO_ASIN_N, MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,
   skuCatOf, skuSrcOf, PREFIX_CAT, MW_RST_MAX, MW_RST_TTL_D,

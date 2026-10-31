@@ -29,6 +29,24 @@ globalThis.fetch=async(u,i)=>{
     return new Response(JSON.stringify(v||{status:'ACCEPTED',submissionId:'s1',
       issues:[]}),{status:200});
   }
+  /* 送る前の下調べ（7.92）。ASIN の種類と、その種類の必須項目。 */
+  if(/catalog\/2022-04-01\/items/.test(url)){
+    const ids=new URL(url).searchParams.get('identifiers').split(',');
+    return new Response(JSON.stringify({ items:ids.map((a)=>({ asin:a,
+      productTypes:[{ productType:'VIDEO_GAMES', marketplaceId:'A1VC38T7YXB528' }],
+      summaries:[{ itemName:'テストの商品' }] })) }),{status:200});
+  }
+  if(/definitions\/2020-09-01\/productTypes/.test(url))
+    return new Response(JSON.stringify({ productType:'VIDEO_GAMES',
+      schema:{ link:{ resource:'https://d1.cloudfront.net/schema/VIDEO_GAMES.json' } }
+    }),{status:200});
+  if(/cloudfront\.net\/schema/.test(url))
+    return new Response(JSON.stringify({ required:['merchant_suggested_asin',
+      'condition_type','batteries_required','supplier_declared_dg_hz_regulation'],
+      properties:{ merchant_suggested_asin:{}, condition_type:{},
+        fulfillment_availability:{}, purchasable_offer:{}, condition_note:{},
+        batteries_required:{}, batteries_included:{},
+        supplier_declared_dg_hz_regulation:{} } }),{status:200});
   if(/discord/.test(url))return new Response(null,{status:204});
   throw new Error('外へ出てはいけない: '+url);
 };

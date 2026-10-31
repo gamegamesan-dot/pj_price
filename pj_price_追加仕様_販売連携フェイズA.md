@@ -5902,3 +5902,63 @@ OR (COALESCE(a.asin,'') <> '' AND (a.asin_at IS NULL OR a.asin_at < ?))  -- 3日
 
 ASIN がある行はこれで①の対象になるので、「Amazonで調べる」か
 自動の回（毎時 :37・20件）で順に埋まる。1,000件なら自動だけで約2日。
+
+## 7.92 電池と危険物の申告・種類ごとの必須項目（2026-10-31・sw.js v214）
+
+v213 の「1件だけ送る」が断られた。
+
+```
+mwhobby-20261031-N-B091VLKFVC-11713（怪物事変 日下夏羽 1/8 フィギュア）
+INVALID　90220: '電池本体、電池が必要な商品' は必須ですが、入力されていません。
+        90220: '危険物規制' は必須ですが、入力されていません。
+```
+
+### 原因
+相乗り出品（`LISTING_OFFER_ONLY`）でも、**商品の種類（productType）によっては**
+電池と危険物の申告が必須になる。v213 は `productType: "PRODUCT"` 固定で送り、
+申告も付けていなかった。
+
+### 直し方（送る前に調べる）
+1. **ASIN の本当の種類**を Catalog で引く
+   （`searchCatalogItems` に `identifiersType=ASIN`・`includedData=productTypes`）。
+   控えは `mw_amz.ptype`（`mwPtypeFind`）。
+2. **その種類の必須項目**を Product Type Definitions で引く
+   （`getDefinitionsProductType`・`requirements=LISTING_OFFER_ONLY`・`locale=ja_JP`）。
+   この API は**項目表（スキーマ）の URL**を返すので、その URL も読んで
+   `required`（必須の項目名）と `properties`（その種類にある項目名）を取り出す。
+   控えは `amz_ptype`（**種類ごと**・14日・`mwPtypeDef`）。
+3. `productType` は**引けた本当の種類**で送る（`PRODUCT` ではない）。
+4. 申告は**その種類にある名前だけ**入れる（無い名前を送ると弾かれる）。
+
+### 電池と危険物の申告（`mwDgPlan`）
+| 行 | どうするか |
+|---|---|
+| フィギュア・プラモデル・ゲームソフト（`MW_DG_SAFE_PT` の種類＋pj 側の分類） | 自動で `batteries_required=false`・`batteries_included=false`・`supplier_declared_dg_hz_regulation=not_applicable` |
+| それ以外の種類／種類が引けない | **人が選ぶまで送らない** |
+| 商品名に `LED・電池・発光・電動・充電・バッテリー・モーター・ライト…`（`MW_DG_WORD`） | 種類が安心でも**人が選ぶまで送らない** |
+
+pj 側の分類は `mwDgSafeCat()`（MW の機種、または **SKU の接頭辞**
+`mwhobby`＝フィギュア・プラモデル／`mwgame`＝ゲームソフト）。
+人が選んだ申告は `POST /mw/put` の `dg`（SKU ごと）で渡す。
+
+### 確認の画面（6.127）
+- `POST /mw/put` に **`check:1`**（下調べ）を足した。送らずに
+  種類・必須項目・申告の計画（`plan`）だけ返す。確認の画面はこれを出す。
+- 行ごとに **種類／付ける申告（自動か、選んだか）／なぜそうなるか／
+  その種類で必須の項目** を出す。
+- 選ぶ必要がある行には選ぶ欄を出し、**選ぶまでその行は送らない**
+  （「1件だけ送る」は申告の決まった行だけを送る）。
+- 結果には**何を足せばよいかの案内**（`hint`）と**足りない項目名**（`missing`）、
+  「直したら**同じ SKU のまま**送り直せる」ことを出す。
+
+### べき等（送り直し）
+`putListingsItem` は**同じ SKU のパスに PUT する**ので、直してから同じ SKU で
+送り直しても二重にならない（`mw_reg_log` には試した回数ぶん残る）。
+テスト（`mwdg.mjs`）で「だめ → 直す → 同じ SKU で通る」を確かめている。
+
+### ALLOWED に足したもの（どちらも読み取り）
+- `GET /definitions/2020-09-01/productTypes/{productType}?…`
+- `GET https://*.cloudfront.net/…`（項目表の置き場。署名付きの配布URL）
+
+### マイグレーション 0034（デプロイの前に流す）
+`mw_amz.ptype` と `amz_ptype`（種類ごとの必須項目の控え）。

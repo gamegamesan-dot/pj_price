@@ -41,10 +41,21 @@ const setup=async()=>await p.evaluate((META)=>{
     const url=String(u), b=(i&&i.body&&typeof i.body==='string')?JSON.parse(i.body):null;
     if(/\/mw\/put/.test(url)){
       if(i&&i.method==='POST'){
+        /* 送る前の下調べ（7.92）。送った数には数えない。 */
+        if(b&&b.check){
+          window.__checks=(window.__checks||0)+1;
+          return new Response(JSON.stringify({ok:true,sent:0,ok_n:0,ng:0,rows:[],
+            plan:(b.rows||[]).map((x)=>({ sku:x.sku, asin:x.asin,
+              ptype:'VIDEO_GAMES', auto:true, hand:false, batteries:false,
+              dg:'not_applicable', why:'ゲームソフトなので「電池なし・危険物に'
+                +'該当しない」で送ります', req:['batteries_required'],
+              def_err:'', need_batt:true, need_dg:true }))}),{status:200});
+        }
         window.__posts.push({url:url,body:b});
         return new Response(JSON.stringify(window.__putReply||{ok:true,sent:1,
           ok_n:1,ng:0,rows:[{sku:b.rows[0].sku,asin:b.rows[0].asin,ok:true,
-            status:'ACCEPTED',issues:[],err:''}]}),{status:200});
+            status:'ACCEPTED',issues:[],err:'',ptype:'VIDEO_GAMES',
+            dg:{batteries:false,dg:'not_applicable',hand:false}}]}),{status:200});
       }
       return new Response(JSON.stringify({ok:true,rows:window.__log,
         sent_ok:window.__sentOk,max:30}),{status:200});

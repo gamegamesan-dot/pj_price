@@ -543,6 +543,9 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   rank_cat   TEXT,      -- 大分類の名前（例：ホビー）
   rank_sub     INTEGER, -- 小分類の順位（添える程度）
   rank_sub_cat TEXT,    -- 小分類の名前
+  /* Amazon の商品の種類（productTypes の先頭・7.92）。
+     相乗り出品のときに「この種類で必須の項目」を引くのに使う。 */
+  ptype      TEXT,
   price      INTEGER,   -- 販売価格（円・送料込み）
   basis      TEXT,      -- 'カート' か '最安'
   low        INTEGER,   -- 新品の最安値（送料込み）
@@ -696,3 +699,19 @@ CREATE TABLE IF NOT EXISTS mw_rst_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_skus_src ON skus(buy_src);
 CREATE INDEX IF NOT EXISTS idx_skus_jan ON skus(jan);
+
+/* ===== 商品の種類ごとの必須項目（7.92）=====
+   相乗り出品（LISTING_OFFER_ONLY）でも、種類によっては電池・危険物の申告が
+   必須になる。Product Type Definitions API（getDefinitionsProductType）の
+   結果を**種類ごとに**控える（14日）。
+   ・req   … その種類で必須の項目名（項目表の required）
+   ・props … その種類にある項目名（ここに無い名前を送ると弾かれる）
+   ・err   … 引けなかった理由（引けた日時も at に残す） */
+CREATE TABLE IF NOT EXISTS amz_ptype (
+  ptype      TEXT PRIMARY KEY,
+  req        TEXT,
+  props      TEXT,
+  err        TEXT,
+  at         TEXT,
+  created_at TEXT
+);

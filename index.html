@@ -10628,6 +10628,44 @@ function mwBuyCsvGo(){
    ・最初は「1件だけ送る」。1件でも通ってから「残りをまとめて送る」が出る
    ・結果は行ごとに出し、D1（mw_reg_log）にも残す */
 var mwPutList=[], mwPutSentOk=0;
+/* 送る前の下調べの結果（SKUごと・7.92）と、人が選んだ申告。 */
+var mwPutPlan={}, mwPutHand={};
+/* 申告の決まり方を日本語で出す。 */
+function mwDgText(x){
+  if(!x)return '調べていません';
+  var b=(x.batteries===false)?'電池なし':((x.batteries===true)?'電池あり':'未定');
+  var d=String(x.dg||'')==='not_applicable'?'危険物に該当しない'
+       :(String(x.dg||'')?String(x.dg):'未定');
+  return b+'／'+d;
+}
+/* 確認の画面のボタンと選択を結ぶ。 */
+function mwPutBind(){
+  var box=$('csvMwPutBox');
+  var one=$('csvMwPutOne'); if(one)one.onclick=function(){ mwPutGo(1); };
+  var all=$('csvMwPutAll'); if(all)all.onclick=function(){ mwPutGo(0); };
+  var cl=$('csvMwPutClose'); if(cl)cl.onclick=function(){
+    box.style.display='none'; box.innerHTML=''; };
+  var bk=$('csvMwPutBack'); if(bk)bk.onclick=mwPutShow;
+  /* 人が選ぶ行（電池の有無）。選ぶと送れるようになる。 */
+  Array.prototype.forEach.call(box.querySelectorAll('select[data-dgsku]'),
+    function(sel){
+      sel.onchange=function(){
+        var k=sel.getAttribute('data-dgsku'), v=sel.value;
+        if(v==='')delete mwPutHand[k];
+        else mwPutHand[k]={ batteries:(v==='yes'), dg:'not_applicable' };
+        box.innerHTML=mwPutHtml(mwRegPick(mwBuyRows),mwPutLogLast||[],mwPutWhyLast||'');
+        mwPutBind();
+      };
+    });
+}
+var mwPutLogLast=[], mwPutWhyLast='';
+/* 送れる行（申告が決まっている行）だけ。 */
+function mwPutReady(){
+  return mwPutList.filter(function(x){
+    var p=mwPutPlan[String(x.sku)];
+    return !!(mwPutHand[String(x.sku)]||(p&&p.auto));
+  });
+}
 /* 登録に回せる行（登録ファイルと同じ判定）から、送る中身を作る。 */
 function mwPutRows(){
   var ymd=new Date(Date.now()+9*3600000).toISOString().slice(0,10).replace(/-/g,'');
@@ -10647,7 +10685,7 @@ function mwPutShow(){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
   if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
-  note.textContent='確かめています…';
+  note.textContent='確かめています…（商品の種類と必須の項目を調べます）';
   mwBuyLoad(true).then(function(){
     var pk=mwRegPick(mwBuyRows);
     mwPutList=mwPutRows();
@@ -10656,17 +10694,32 @@ function mwPutShow(){
       .then(function(res){ return res.ok?res.json():{ok:false,rows:[],sent_ok:0}; })
       .then(function(d){
         mwPutSentOk=+((d||{}).sent_ok)||0;
+        /* 送る前の下調べ（7.92）。ASIN の本当の種類と、その種類で必須の項目を
+           Amazon に聞いて、電池・危険物の申告をどうするかまで決める。 */
+        if(!mwPutList.length)return { ok:true, plan:[], log:(d||{}).rows||[] };
+        return mwPost('/mw/put',{ check:1, rows:mwPutList })
+          .then(function(c){
+            return { ok:true, plan:((c||{}).plan)||[], log:(d||{}).rows||[],
+                     why:(c||{}).why||'' };
+          })
+          ['catch'](function(e){
+            return { ok:true, plan:[], log:(d||{}).rows||[],
+                     why:'種類を調べられませんでした：'+e.message };
+          });
+      })
+      .then(function(r){
+        mwPutPlan={};
+        (r.plan||[]).forEach(function(x){ mwPutPlan[String(x.sku)]=x; });
+        mwPutHand={};                       // 人が選んだ申告（SKUごと）
         note.textContent='';
         box.style.display='';
-        box.innerHTML=mwPutHtml(pk,(d||{}).rows||[]);
-        var one=$('csvMwPutOne'); if(one)one.onclick=function(){ mwPutGo(1); };
-        var all=$('csvMwPutAll'); if(all)all.onclick=function(){ mwPutGo(0); };
-        var cl=$('csvMwPutClose'); if(cl)cl.onclick=function(){
-          box.style.display='none'; box.innerHTML=''; };
+        box.innerHTML=mwPutHtml(pk,r.log||[],r.why||'');
+        mwPutBind();
       });
   })['catch'](function(e){ note.textContent='⚠ 出せませんでした：'+e.message; });
 }
-function mwPutHtml(pk,log){
+function mwPutHtml(pk,log,why){
+  mwPutLogLast=log||[]; mwPutWhyLast=why||'';
   var n=mwPutList.length;
   var h='<div class="note2" style="margin:0 0 4px"><b>Amazon に登録します（確認）</b></div>';
   if(!n){
@@ -10679,25 +10732,56 @@ function mwPutHtml(pk,log){
       +' style="width:100%">閉じる</button></div>';
     return h;
   }
+  var ready=mwPutReady().length, hand=n-ready;
   h+='<div class="note2" style="margin:0 0 4px">送るのは <b>'+n+'件</b>'
     +(pk.skip.length?('／外した '+pk.skip.length+'件'):'')
     +'　相乗り出品（価格と数量だけ。商品情報は作りません）'
-    +'　コンディションは<b>新品</b>・FBA（AMAZON_JP）</div>';
-  h+='<div style="max-height:240px;overflow:auto;border:1px solid var(--line);'
+    +'　コンディションは<b>新品</b>・FBA（AMAZON_JP）</div>'
+    +(why?('<div class="note2" style="margin:0 0 4px;color:var(--bad)">⚠ '
+      +esc(why)+'</div>'):'')
+    +(hand?('<div class="warn" style="margin:0 0 4px"><b>'+hand+'件</b>は'
+      +'<b>電池・危険物の申告</b>を選んでください（選ぶまで送りません）。'
+      +'フィギュア・プラモデル・ゲームソフトは自動で'
+      +'「電池なし・危険物に該当しない」になります。</div>'):'');
+  h+='<div style="max-height:260px;overflow:auto;border:1px solid var(--line);'
     +'border-radius:4px;padding:4px">'
     +mwPutList.map(function(x,i){
+      var p=mwPutPlan[String(x.sku)]||null;
+      var my=mwPutHand[String(x.sku)]||null;
+      var dg=my||p;
+      var okDg=!!(my||(p&&p.auto));
       return '<div class="note2" style="margin:0 0 3px;padding:3px 0;'
         +(i?'border-top:1px solid var(--line)':'')+'">'
         +'<b>'+yen(x.price)+'</b>　'+esc(x.asin)
+        +((p&&p.ptype)?('　種類 '+esc(p.ptype)):'')
         +'<br><span style="font-family:ui-monospace,monospace">'+esc(x.sku)+'</span>'
-        +'<br>'+esc(x.name.slice(0,44))+'</div>';
+        +'<br>'+esc(x.name.slice(0,44))
+        /* 付ける申告を行ごとに出す（7.92）。 */
+        +'<br>申告：'+(okDg
+          ?('<b>'+esc(mwDgText(dg))+'</b>'+(my?'（選びました）':'（自動）'))
+          :'<b style="color:var(--bad)">選んでください</b>')
+        +((p&&p.why&&!my)?('<br><span style="opacity:.75">'+esc(p.why)+'</span>'):'')
+        +((p&&(p.need_batt||p.need_dg))
+          ?('<br><span style="opacity:.75">この種類で必須：'
+            +(p.need_batt?'電池':'')+((p.need_batt&&p.need_dg)?'・':'')
+            +(p.need_dg?'危険物':'')+'</span>'):'')
+        +((p&&p.def_err)
+          ?('<br><span style="color:var(--bad)">必須の項目を調べられませんでした：'
+            +esc(String(p.def_err).slice(0,80))+'</span>'):'')
+        +(okDg?'':('<br><select data-dgsku="'+esc(x.sku)+'" style="width:100%">'
+          +'<option value="">電池の申告を選ぶ…</option>'
+          +'<option value="no">電池は入っていない（危険物に該当しない）</option>'
+          +'<option value="yes">電池が入っている（危険物に該当しない）</option>'
+          +'</select>'))
+        +'</div>';
     }).join('')+'</div>';
   /* 最初は「1件だけ送る」。1件でも通ってから「まとめて送る」を出す。 */
   h+='<div style="display:flex;gap:6px;margin-top:6px">'
-    +'<button class="btn" id="csvMwPutOne" style="flex:1">1件だけ送る</button>'
-    +(mwPutSentOk>0
+    +'<button class="btn" id="csvMwPutOne" style="flex:1"'
+    +(ready?'':' disabled')+'>1件だけ送る</button>'
+    +((mwPutSentOk>0&&ready)
       ?('<button class="btn" id="csvMwPutAll" style="flex:1">残りをまとめて送る（'
-        +n+'件）</button>')
+        +ready+'件）</button>')
       :'')
     +'<button class="btn" id="csvMwPutClose" style="flex:0 0 auto">閉じる</button>'
     +'</div>';
@@ -10720,8 +10804,17 @@ function mwPutLogHtml(log){
         +'　<span style="font-family:ui-monospace,monospace">'
         +esc(String(r.sku||''))+'</span>　'+yen(+r.price||0)
         +(r.status?('　'+esc(String(r.status))):'')
+        +(r.ptype?('　種類 '+esc(String(r.ptype))):'')
+        +((r.dg&&(r.dg.batteries===true||r.dg.batteries===false))
+          ?('　申告 '+esc(mwDgText(r.dg))):'')
         +(r.err?('<br>　'+esc(String(r.err).slice(0,140))):'')
         +(is.length?('<br>　'+is.join('<br>　')):'')
+        /* 何を足せばよいか（7.92）。足りない項目名もそのまま出す。 */
+        +(r.hint?('<br>　<b>→ '+esc(String(r.hint).slice(0,240))+'</b>'):'')
+        +(((r.missing||[]).length)
+          ?('<br>　足りない項目：'+esc((r.missing||[]).join('・'))):'')
+        +((!+r.ok)?('<br>　<span style="opacity:.75">直したら'
+          +'<b>同じ SKU のまま</b>もう一度送れます（二重になりません）。</span>'):'')
         +'</div>';
     }).join('');
 }
@@ -10729,12 +10822,19 @@ function mwPutLogHtml(log){
 function mwPutGo(one){
   var box=$('csvMwPutBox'), note=$('csvMwPutNote');
   if(!mwPutList.length)return;
-  var rows=one?mwPutList.slice(0,1):mwPutList.slice(0);
+  /* 電池・危険物の申告が決まっている行だけ送る（7.92）。 */
+  var ok=mwPutReady();
+  if(!ok.length){
+    note.textContent='電池・危険物の申告を選んでください（選ぶまで送りません）。';
+    return;
+  }
+  var rows=one?ok.slice(0,1):ok.slice(0);
   if(!one&&!confirm('Amazon に '+rows.length+'件を登録します。よろしいですか。'))return;
   var b1=$('csvMwPutOne'), b2=$('csvMwPutAll');
   if(b1)b1.disabled=true; if(b2)b2.disabled=true;
   note.textContent='Amazon に送っています…（1件ずつ送るので件数ぶん待ちます）';
-  mwPost('/mw/put',{ rows:rows })
+  /* 人が選んだ申告も一緒に送る（SKUごと）。 */
+  mwPost('/mw/put',{ rows:rows, dg:mwPutHand })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'送れませんでした');
       if(d.why&&!d.sent){ note.innerHTML='⚠ '+esc(d.why); return; }
@@ -10746,7 +10846,9 @@ function mwPutGo(one){
         +mwPutLogHtml((d.rows||[]).map(function(x){
           return { ok:x.ok?1:0, sku:x.sku, price:(mwPutList.filter(function(y){
             return y.sku===x.sku; })[0]||{}).price||0,
-            status:x.status, err:x.err, issues:x.issues }; }))
+            status:x.status, err:x.err, issues:x.issues,
+            /* 何を足せばよいかの案内（7.92）。 */
+            hint:x.hint, missing:x.missing, ptype:x.ptype, dg:x.dg }; }))
         +'<div style="display:flex;gap:6px;margin-top:6px">'
         +'<button class="btn" id="csvMwPutBack" style="flex:1">確認に戻る</button>'
         +'<button class="btn" id="csvMwPutClose" style="flex:0 0 auto">閉じる</button>'
@@ -17197,7 +17299,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v213';   // sw.js の const V と必ず同じ値にする
+var APP_V='v214';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
