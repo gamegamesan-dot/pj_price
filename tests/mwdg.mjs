@@ -33,6 +33,11 @@ globalThis.fetch=async(u,i)=>{
       summaries:[{ itemName:'カタログの名前' }] })) }),{status:200});
   }
   if(/definitions\/2020-09-01\/productTypes\?/.test(url)){
+    /* 商品名を渡したときは「その商品に近い種類」を返す（7.95）。 */
+    if(/itemName=/.test(url))
+      return new Response(JSON.stringify({ productTypes:[
+        { name:'ABIS_VIDEO_GAMES' },{ name:'VIDEO_GAMES' },
+        { name:'VIDEO_GAME_ACCESSORIES' }] }),{status:200});
     return new Response(JSON.stringify({ productTypes:[
       { name:'FIGURINE' },{ name:'ABIS_VIDEO_GAMES' },{ name:'TOY_FIGURE' },
       { name:'HOME_FURNITURE_AND_DECOR' },{ name:'ABIS_DRUGSTORE' }] }),
@@ -55,7 +60,8 @@ globalThis.fetch=async(u,i)=>{
   if(/listings\/2021-08-01\/items/.test(url)){
     const sku=decodeURIComponent((url.split('/items/')[1]||'').split('?')[0]
       .split('/')[1]||'');
-    const v=put[sku];
+    let v=put[sku];
+    if(Array.isArray(v))v=v.length?v.shift():null;
     if(v)return new Response(JSON.stringify(v),{status:200});
     return new Response(JSON.stringify({status:'ACCEPTED',submissionId:'s1',
       issues:[]}),{status:200});
@@ -178,13 +184,20 @@ ok(r.body.rows[0].dg&&r.body.rows[0].dg.batteries===false,
    '★行ごとに付けた申告を返す（画面に出す）');
 
 console.log('\n=== 項目表に無い名前は送らない ===');
-schema['ABIS_VIDEO_GAMES']={ required:['merchant_suggested_asin'],
+/* そのまま送る種類（ABIS_ でない種類）で確かめる。
+   ABIS_ は PRODUCT で送るので、見るのは PRODUCT の項目表になる（7.95）。 */
+schema['COLLECTIBLE_FIGURINE']={ required:['merchant_suggested_asin'],
   properties:{ merchant_suggested_asin:{}, condition_type:{},
     fulfillment_availability:{}, purchasable_offer:{}, condition_note:{} } };
+ptype['B0FIG00002']='COLLECTIBLE_FIGURINE';
+const FIG2={ sku:'mwhobby-20261031-N-B0FIG00002-5000', asin:'B0FIG00002',
+  jan:'4580590170022', sha:'MC02', price:9800, cost_src:5000,
+  title:'ふつうのフィギュア2', name:'ふつうのフィギュア2' };
 calls=[];
-r=await post('/mw/put',{ rows:[GAME] });
+r=await post('/mw/put',{ rows:[FIG2] });
 const b2=JSON.parse((calls.filter((c)=>/listings\/2021-08-01/.test(c.url))[0]||{}).body||'{}');
-console.log('   '+Object.keys(b2.attributes||{}).join(','));
+console.log('   '+b2.productType+' / '+Object.keys(b2.attributes||{}).join(','));
+ok(b2.productType==='COLLECTIBLE_FIGURINE','★★ABIS_ でない種類はそのまま送る');
 ok(!('batteries_required' in b2.attributes),
    '★★★その種類に無い項目は送らない（送ると弾かれる）');
 ok(r.body.ok_n===1,'★それでも通る');
@@ -255,15 +268,21 @@ ok((log.results||[]).length===2&&(log.results||[]).map((x)=>x.ok).join()==='0,1'
    '★★記録は2回ぶん残る（だめ → 通った）');
 
 console.log('\n=== 必須項目を引けなかったとき ===');
-defs['ABIS_DRUGSTORE']=503;
-ptype['B0NODEF001']='ABIS_DRUGSTORE';
+defs['NO_SUCH_TYPE']=404;
+ptype['B0NODEF001']='NO_SUCH_TYPE';
 const ND={ sku:'mwhobby-20261031-N-B0NODEF001-5000', asin:'B0NODEF001',
   jan:'4580590170021', sha:'MC02', price:7800, cost_src:5000,
   title:'ふつうのフィギュア', name:'ふつうのフィギュア' };
+calls=[];
 r=await post('/mw/put',{ check:1, rows:[ND] });
 pl=r.body.plan[0];
-console.log('   '+JSON.stringify({err:pl.def_err,auto:pl.auto}));
-ok(/HTTP 503/.test(String(pl.def_err)),'★★引けなかった理由を返す（画面に出す）');
+console.log('   '+JSON.stringify({pt:pl.ptype,send:pl.ptype_send,
+  err:pl.def_err,auto:pl.auto}));
+ok(calls.some((c)=>/productTypes\/NO_SUCH_TYPE/.test(c.url)),
+   '★★引けるかどうかは一度確かめる');
+ok(pl.ptype_send==='PRODUCT',
+   '★★★項目表が引けない（404・無効）種類は PRODUCT で送る（7.95）');
+ok(!pl.def_err,'★★PRODUCT の項目表は読めているので、必須は分かる');
 ok(pl.auto===true&&/フィギュア/.test(String(pl.why)),
    '★★★項目表が引けなくても、MW の機種・SKU の接頭辞で分かれば自動（7.93）');
 
@@ -399,4 +418,116 @@ rs=await post('/settings',{ at:new Date(Date.now()+2000).toISOString(),
   settings:{ mwDgTypes:{ FIGURINE:0 } } },'staff-key-123');
 console.log('   作業者の保存: '+JSON.stringify(rs.status));
 ok(rs.status===403,'★★★作業者用のキーでは表を変えられない（管理者だけ）');
+/* ========== ここから v217（7.95）==========
+   v215 の実地で、東方少女綺想譚（mwgame-20261105-N-B0H8D9NY89-7843）が
+     4000003: 指定したAmazonの商品タイプが無効であるか、サポートされていません。
+   と断られた（種類 ABIS_VIDEO_GAMES・申告は付いていた）。
+   Catalog の種類は「その商品が何か」の名前で、**出品に使える種類とは別**のことがある。 */
+console.log('\n=== 送る種類の決め方（mwPutType）===');
+ok(W.mwPutType('ABIS_VIDEO_GAMES',{ err:'',props:[] })==='PRODUCT',
+   '★★★ABIS_ で始まる種類は PRODUCT で送る');
+ok(W.mwPutType('ABIS_DRUGSTORE',{})==='PRODUCT','★ABIS_ はどれも PRODUCT');
+ok(W.mwPutType('FIGURINE',{ err:'',props:['x'] })==='FIGURINE',
+   '★★★通った種類（FIGURINE）はそのまま送る');
+ok(W.mwPutType('FIGURINE',{ err:'HTTP 404 ' })==='PRODUCT',
+   '★★★項目表が引けない（404・無効）種類は PRODUCT で送る');
+ok(W.mwPutType('',null)==='PRODUCT','★★種類が分からなければ PRODUCT');
+ok(W.mwPutTypeBad([{ code:'4000003', message:'指定したAmazonの商品タイプが無効' }])===true,
+   '★★★4000003 は「種類が違う」と分かる');
+ok(W.mwPutTypeBad([{ code:'90220', message:"'原産国' は必須です" }])===false,
+   '★★ほかのエラーは種類のせいにしない');
+
+console.log('\n=== ABIS_ の商品を送る（東方少女綺想譚）===');
+const SW={ sku:'mwgame-20261105-N-B0H8D9NY89-7843', asin:'B0H8D9NY89',
+  jan:'4580589360090', sha:'M200', price:11800, cost_src:7843,
+  title:'東方少女綺想譚 Nintendo Switch版', name:'東方少女綺想譚 Nintendo Switch版' };
+ptype['B0H8D9NY89']='ABIS_VIDEO_GAMES';
+await env.DB.prepare(
+  `INSERT INTO mw_amz (jan,asin,name,checked_at,created_at)
+   VALUES ('4580589360090','B0H8D9NY89','東方少女綺想譚','x','x')`).run();
+calls=[];
+r=await post('/mw/put',{ check:1, rows:[SW] });
+pl=r.body.plan[0];
+console.log('   '+JSON.stringify({ptype:pl.ptype,send:pl.ptype_send,auto:pl.auto}));
+ok(pl.ptype==='ABIS_VIDEO_GAMES','★Catalog の種類はそのまま持つ（画面に出す）');
+ok(pl.ptype_send==='PRODUCT','★★★送る種類は PRODUCT に置き換える');
+ok(pl.auto===true&&pl.batteries===false,'★★申告は付けたまま');
+calls=[];
+r=await post('/mw/put',{ rows:[SW] });
+let b4=JSON.parse((calls.filter((c)=>/listings\/2021-08-01/.test(c.url))[0]||{}).body||'{}');
+console.log('   '+JSON.stringify({pt:b4.productType,
+  batt:b4.attributes.batteries_required,dg:!!b4.attributes.supplier_declared_dg_hz_regulation}));
+ok(r.body.ok_n===1,'★★★通る');
+ok(b4.productType==='PRODUCT','★★★productType は PRODUCT で送る');
+ok(b4.attributes.batteries_required[0].value===false
+   &&b4.attributes.batteries_included[0].value===false,
+   '★★★電池の申告は付けたまま（付けないと 90220 で断られる）');
+ok(b4.attributes.supplier_declared_dg_hz_regulation[0].value==='not_applicable',
+   '★★★危険物の申告も付けたまま');
+let lg=await env.DB.prepare(
+  `SELECT ptype,ptype_try FROM mw_reg_log WHERE sku=?1 ORDER BY id DESC`)
+  .bind(SW.sku).first();
+console.log('   記録: '+JSON.stringify(lg));
+ok(String(lg.ptype)==='PRODUCT','★★★どの種類で送ったかを mw_reg_log に残す');
+
+console.log('\n=== それでも断られたら、種類を探して送り直す ===');
+/* 1回目（PRODUCT）は 4000003、2回目は通る、という場面にする。 */
+put[SW.sku]=[{ status:'INVALID', submissionId:'s7', issues:[
+  { code:'4000003', severity:'ERROR', attributeNames:[],
+    message:'指定したAmazonの商品タイプが無効であるか、サポートされていません。' }]}];
+calls=[];
+r=await post('/mw/put',{ rows:[SW] });
+const puts=calls.filter((c)=>/listings\/2021-08-01/.test(c.url));
+const pts=puts.map((c)=>JSON.parse(c.body||'{}').productType);
+console.log('   送った順: '+JSON.stringify(pts)+' / '+JSON.stringify(r.body.rows[0]&&
+  {ok:r.body.rows[0].ok,used:r.body.rows[0].ptype_used,try:r.body.rows[0].ptype_try}));
+ok(pts.length===2&&pts[0]==='PRODUCT','★★★1回目は PRODUCT で送る');
+ok(calls.some((c)=>/productTypes\?.*itemName=/.test(c.url)),
+   '★★★商品名で出品用の種類を探す（searchDefinitionsProductTypes）');
+ok(pts[1]==='VIDEO_GAMES',
+   '★★★見つかった種類（VIDEO_GAMES）で同じ SKU に送り直す（ABIS_ は選ばない）');
+ok(r.body.ok_n===1&&r.body.alt===1,'★★★2回目で通る');
+ok(r.body.rows[0].ptype_used==='VIDEO_GAMES'
+   &&r.body.rows[0].ptype_try==='PRODUCT > VIDEO_GAMES',
+   '★★★どちらで通ったかを返す');
+ok(/4000003/.test(String(r.body.rows[0].first_err||'')),
+   '★★1回目に断られた理由も返す');
+lg=await env.DB.prepare(
+  `SELECT ptype,ptype_try,ok FROM mw_reg_log WHERE sku=?1 ORDER BY id DESC`)
+  .bind(SW.sku).first();
+console.log('   記録: '+JSON.stringify(lg));
+ok(String(lg.ptype)==='VIDEO_GAMES'&&String(lg.ptype_try)==='PRODUCT > VIDEO_GAMES'
+   &&Number(lg.ok)===1,'★★★どちらで通ったかを mw_reg_log に残す');
+const pathsAll=puts.map((c)=>c.url.split('?')[0].split('/items/')[1]);
+ok(pathsAll.length===2&&pathsAll[0]===pathsAll[1]
+   &&puts.every((c)=>c.method==='PUT'),
+   '★★★送り直しも同じ SKU の PUT（べき等。二重に作らない）');
+
+console.log('\n=== 種類が見つからなければ、1回で止める ===');
+put[SW.sku]=[{ status:'INVALID', submissionId:'s8', issues:[
+  { code:'4000003', severity:'ERROR', attributeNames:[],
+    message:'指定したAmazonの商品タイプが無効であるか、サポートされていません。' }]},
+  { status:'INVALID', submissionId:'s9', issues:[
+  { code:'4000003', severity:'ERROR', attributeNames:[],
+    message:'指定したAmazonの商品タイプが無効であるか、サポートされていません。' }]}];
+calls=[];
+r=await post('/mw/put',{ rows:[Object.assign({},SW,{ title:'', name:'' })] });
+console.log('   '+JSON.stringify({sent:r.body.sent,ok:r.body.ok_n,
+  try:r.body.rows[0].ptype_try}));
+ok(calls.filter((c)=>/listings\/2021-08-01/.test(c.url)).length===1,
+   '★★★商品名が無ければ探さない（送り直さない）');
+ok(r.body.ng===1&&/4000003/.test(String(r.body.rows[0].err)),
+   '★★断られた理由を返す');
+
+console.log('\n=== 直してから同じ SKU で送り直せる ===');
+delete put[SW.sku];
+calls=[];
+r=await post('/mw/put',{ rows:[SW] });
+console.log('   '+JSON.stringify({ok:r.body.ok_n,used:r.body.rows[0].ptype_used}));
+ok(r.body.ok_n===1,'★★★同じ SKU で送り直すと通る');
+const hist=await env.DB.prepare(
+  `SELECT ok,ptype FROM mw_reg_log WHERE sku=?1 ORDER BY id`).bind(SW.sku).all();
+console.log('   記録: '+JSON.stringify((hist.results||[])
+  .map((x)=>x.ok+':'+x.ptype)));
+ok((hist.results||[]).length>=4,'★★記録は送った回数ぶん残る');
 await T.done();

@@ -610,6 +610,8 @@ CREATE TABLE IF NOT EXISTS mw_reg_log (
   issues     TEXT,              -- 指摘（JSON 配列）
   err        TEXT,
   by_role    TEXT,
+  ptype      TEXT,              -- 送った productType（7.95。PRODUCT のことも）
+  ptype_try  TEXT,              -- 試した順（"ABIS_VIDEO_GAMES > PRODUCT"）
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_reg_log_at  ON mw_reg_log(at);

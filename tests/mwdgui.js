@@ -230,5 +230,48 @@ pp=await p.evaluate(()=>window.__posts[0]);
 console.log('   送った dg: '+JSON.stringify(pp&&pp.dg));
 const k2=Object.keys((pp&&pp.dg)||{}).filter((x)=>/B0LED00001/.test(x))[0]||'';
 ok(!!k2&&pp.dg[k2].batteries===false,'★★★選び直した申告で送る');
+
+/* ===== v217（7.95）：どの種類で送ったか ===== */
+console.log('\n=== 送る種類が置き換わるとき ===');
+await p.evaluate(()=>{
+  /* Catalog の種類は ABIS_VIDEO_GAMES、送るのは PRODUCT という場面。 */
+  const real=window.fetch;
+  window.fetch=async(u,i)=>{
+    const url=String(u), b=(i&&i.body&&typeof i.body==='string')
+      ?JSON.parse(i.body):null;
+    if(/\/mw\/put/.test(url)&&i&&i.method==='POST'&&b&&b.check)
+      return new Response(JSON.stringify({ok:true,plan:(b.rows||[]).map((x)=>
+        ({ sku:x.sku, asin:x.asin, ptype:'ABIS_VIDEO_GAMES',
+           ptype_send:'PRODUCT', auto:true, hand:false, prev:false,
+           batteries:false, dg:'not_applicable',
+           why:'ゲームソフトなので「電池なし・危険物に該当しない」で送ります',
+           req:[], def_err:'', need_batt:false, need_dg:false }))}),{status:200});
+    if(/\/mw\/put/.test(url)&&i&&i.method==='POST'){
+      window.__posts.push(b);
+      return new Response(JSON.stringify({ ok:true, sent:1, ok_n:1, ng:0, alt:1,
+        rows:[{ sku:(b.rows||[])[0].sku, asin:(b.rows||[])[0].asin, ok:true,
+          status:'ACCEPTED', issues:[], err:'', ptype:'ABIS_VIDEO_GAMES',
+          ptype_used:'VIDEO_GAMES', ptype_try:'PRODUCT > VIDEO_GAMES',
+          first_err:'4000003: 指定したAmazonの商品タイプが無効であるか…',
+          dg:{batteries:false,dg:'not_applicable',hand:false} }] }),{status:200});
+    }
+    return real(u,i);
+  };
+});
+v=await show();
+console.log('   '+v.text.slice(0,200));
+ok(/種類 ABIS_VIDEO_GAMES/.test(v.text),'★Catalog の種類を出す');
+ok(/送る種類 PRODUCT/.test(v.text),
+   '★★★ABIS_ の種類は「送る種類 PRODUCT」と出す（7.95）');
+await p.evaluate(()=>{ window.__posts=[]; $('csvMwPutOne').click(); });
+await p.waitForTimeout(600);
+const res2=await p.evaluate(()=>({ text:($('csvMwPutBox').innerText||'')
+  .replace(/\s+/g,' ') }));
+console.log('   '+res2.text.slice(0,240));
+ok(/通った/.test(res2.text),'★通ったと出す');
+ok(/送った種類 VIDEO_GAMES/.test(res2.text),
+   '★★★結果に「どの種類で通ったか」を出す');
+ok(/試した種類：PRODUCT > VIDEO_GAMES/.test(res2.text),
+   '★★★試した順も出す');
 await T.done();
 })();

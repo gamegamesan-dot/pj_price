@@ -6481,6 +6481,49 @@ async function mwPtypeDefNew(env, run, pt) {
   const props = (sc && sc.properties) ? Object.keys(sc.properties) : [];
   return await save(req, props, "");
 }
+/* 送る productType の決め方（7.95）。
+   ABIS_VIDEO_GAMES（東方少女綺想譚）で
+     4000003: 指定したAmazonの商品タイプが無効であるか、サポートされていません。
+   と断られた。**Catalog の種類は「その商品が何か」を表す名前**で、
+   出品に使える種類とは別物のことがある（ABIS_ で始まるものは特にそう）。
+   ・ABIS_ で始まる種類 → PRODUCT で送る
+   ・項目表が引けない（404・無効）種類 → PRODUCT で送る
+   いずれも**電池・危険物の申告は付けたまま**（付けないと 90220 で断られる）。 */
+const MW_PT_OFFER_NG = /^ABIS_/;
+function mwPutType(ptype, def) {
+  const pt = String(ptype || "");
+  if (!pt) return "PRODUCT";
+  if (MW_PT_OFFER_NG.test(pt)) return "PRODUCT";
+  if (def && String(def.err || "")) return "PRODUCT";
+  return pt;
+}
+/* 「種類が違う」と断られたか（4000003）。これだけは種類を変えて送り直す。 */
+function mwPutTypeBad(issues) {
+  return (issues || []).some((y) =>
+    String(y.code || "") === "4000003"
+    || /商品タイプ|product type/i.test(String(y.message || "")));
+}
+/* その商品に合う**出品用の**種類を探す（7.95）。
+   searchDefinitionsProductTypes に商品名を渡すと、近い種類を返す。
+   ABIS_ で始まるものと、いま試した種類は外す。 */
+async function mwPtypeGuess(env, run, x, skip) {
+  const name = String((x && (x.title || x.name || x.mw_name)) || "").slice(0, 200);
+  if (!name) return "";
+  const u = new URLSearchParams({ marketplaceIds: MP_FE, locale: "ja_JP",
+    searchLocale: "ja_JP", itemName: name });
+  const r = await spCall(env, run, "/definitions/2020-09-01/productTypes?"
+    + u.toString(), { label: "searchDefinitionsProductTypes" });
+  if (!r.ok) {
+    run.notes.push("種類さがし -> " + r.status);
+    return "";
+  }
+  for (const it of (r.data && r.data.productTypes) || []) {
+    const n = String((it && it.name) || "");
+    if (!n || n === skip || n === "PRODUCT" || MW_PT_OFFER_NG.test(n)) continue;
+    return n;
+  }
+  return "";
+}
 const MW_PUT_MAX = 30;                 // 1回に送る上限
 const MW_PUT_DEADLINE_MS = 50000;      // 1回の持ち時間
 /* 送る中身。いまの TSV の列から機械的に作れる分だけを入れる。 */
@@ -6514,8 +6557,9 @@ function mwPutBody(x, dg, def) {
   if (String(d.dg || "") && has("supplier_declared_dg_hz_regulation"))
     a.supplier_declared_dg_hz_regulation =
       [{ value: String(d.dg), marketplace_id: mp }];
-  /* 種類は Catalog で引けたものを使う（引けなければ今までどおり PRODUCT）。 */
-  const pt = String((dg && dg.ptype) || "") || "PRODUCT";
+  /* 送る種類（7.95）。ptype_send が決まっていればそれを送る
+     （ABIS_ や項目表が引けない種類は PRODUCT に置き換わっている）。 */
+  const pt = String((dg && dg.ptype_send) || (dg && dg.ptype) || "") || "PRODUCT";
   return { productType: pt, requirements: "LISTING_OFFER_ONLY", attributes: a };
 }
 /* 断られた理由から「何を足せばよいか」の案内を作る（7.92）。 */
@@ -6573,7 +6617,7 @@ async function mwPutOne(env, run, x, dg, def) {
 }
 async function mwPutRun(env, body, role) {
   const run = newRun("mw-put");
-  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, rows: [], why: "",
+  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, alt: 0, rows: [], why: "",
                 calls_cat: 0, plan: [] };
   try {
     const o = body || {};
@@ -6608,11 +6652,12 @@ async function mwPutRun(env, body, role) {
     const mem = await mwDgMemGet(env, list.map((x) => String(x.asin || "")));
     const planOf = (x) => {
       const t = pt.map[String(x.asin || "")] || "";
+      const send = mwPutType(t, defs[t]);
       const p0 = mwDgPlan(x, t, over);
       const mine = pick[String(x.sku || "")];
       if (mine && typeof mine === "object"
           && (mine.batteries === true || mine.batteries === false)) {
-        return { auto: true, hand: true, ptype: t,
+        return { auto: true, hand: true, ptype: t, ptype_send: send,
                  batteries: !!mine.batteries,
                  dg: String(mine.dg || "not_applicable"),
                  why: "確認の画面で選びました" };
@@ -6621,15 +6666,27 @@ async function mwPutRun(env, body, role) {
       const old = mem[String(x.asin || "")];
       if (old)
         return { auto: true, hand: true, prev: true, ptype: t,
+                 ptype_send: send,
                  batteries: !!old.batteries, dg: String(old.dg),
                  why: "前回の選択を使用（" + String(old.at || "").slice(0, 10) + "に選びました）" };
-      return Object.assign({ ptype: t, hand: false }, p0);
+      return Object.assign({ ptype: t, ptype_send: send, hand: false }, p0);
     };
+    /* 送る種類（7.95）と、**その種類の**項目表をそろえる。
+       ABIS_ や項目表が引けない種類は PRODUCT で送るので、
+       申告の名前は PRODUCT の項目表で見る（付けたまま送るため）。 */
+    for (const x of list) {
+      const t = pt.map[String(x.asin || "")] || "";
+      const send = mwPutType(t, defs[t]);
+      if (defs[send] !== undefined) continue;
+      defs[send] = await mwPtypeDef(env, run, send);
+      await sleep(SP_GAP.getDefinitionsProductType);
+    }
     res.plan = list.map((x) => {
       const q0 = planOf(x);
-      const d0 = defs[q0.ptype] || null;
+      const d0 = defs[q0.ptype_send] || defs[q0.ptype] || null;
       return { sku: String(x.sku || ""), asin: String(x.asin || ""),
-               ptype: q0.ptype, auto: !!q0.auto, hand: !!q0.hand,
+               ptype: q0.ptype, ptype_send: q0.ptype_send,
+               auto: !!q0.auto, hand: !!q0.hand,
                prev: !!q0.prev, batteries: q0.batteries, dg: q0.dg, why: q0.why,
                req: d0 ? d0.req : [], def_err: d0 ? d0.err : "",
                /* 電池・危険物が**この種類で必須か**（項目表から）。 */
@@ -6669,14 +6726,38 @@ async function mwPutRun(env, body, role) {
         continue;
       }
       if (res.sent) await sleep(SP_GAP.putListingsItem);
-      const g = await mwPutOne(env, run,
-        Object.assign({}, x, { sku, cond: p.cond === "new" ? "new_new" : MW_RST_COND }),
-        plan, defs[plan.ptype] || null);
+      const row = Object.assign({}, x,
+        { sku, cond: p.cond === "new" ? "new_new" : MW_RST_COND });
+      let g = await mwPutOne(env, run, row, plan,
+        defs[plan.ptype_send] || defs[plan.ptype] || null);
+      const tried = [plan.ptype_send || "PRODUCT"];
+      /* 「種類が違う」と断られたときだけ（4000003・7.95）、
+         その商品に合う出品用の種類を探して**同じ SKU で**もう1回送る。 */
+      if (!g.ok && mwPutTypeBad(g.issues)) {
+        const alt = await mwPtypeGuess(env, run, x, tried[0]);
+        if (alt && tried.indexOf(alt) < 0) {
+          if (defs[alt] === undefined) {
+            defs[alt] = await mwPtypeDef(env, run, alt);
+            await sleep(SP_GAP.getDefinitionsProductType);
+          }
+          await sleep(SP_GAP.putListingsItem);
+          const g2 = await mwPutOne(env, run, row,
+            Object.assign({}, plan, { ptype_send: alt }), defs[alt] || null);
+          tried.push(alt);
+          g2.first_err = g.err;
+          g = g2;
+          res.alt++;
+        }
+      }
+      g.ptype_used = tried[tried.length - 1];
+      g.ptype_try = tried.join(" > ");
       res.sent++;
       if (g.ok) res.ok_n++; else res.ng++;
       res.rows.push({ sku, asin: String(x.asin), ok: g.ok, status: g.status,
                       issues: g.issues, err: g.err, hint: g.hint || "",
                       missing: g.missing || [], ptype: plan.ptype,
+                      ptype_used: g.ptype_used || "", ptype_try: g.ptype_try || "",
+                      first_err: g.first_err || "",
                       dg: { batteries: plan.batteries, dg: plan.dg,
                             hand: !!plan.hand, prev: !!plan.prev } });
       /* 確認の画面で人が選んだ申告は、ASIN ごとに控えて次回に使う（7.93）。 */
@@ -6684,13 +6765,15 @@ async function mwPutRun(env, body, role) {
         stmts.push(mwDgMemSet(env, String(x.asin), plan.batteries, plan.dg, role));
       stmts.push(env.DB.prepare(
         `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
-           issues,err,by_role,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
+           issues,err,by_role,ptype,ptype_try,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?1)`)
         .bind(at, sku, String(x.asin || ""), String(x.jan || ""),
               Math.round(Number(x.price) || 0), p.cond === "new" ? "new_new" : MW_RST_COND,
               g.ok ? 1 : 0, g.status || "", g.sub_id || "",
               JSON.stringify(g.issues || []).slice(0, 2000), g.err || "",
-              String(role || "admin")));
+              String(role || "admin"),
+              /* どの種類で送ったか・何を試したか（7.95）。 */
+              String(g.ptype_used || ""), String(g.ptype_try || "")));
       /* 通った行は skus にも控える（仕入れ元・社・JAN・仕入値）。 */
       if (g.ok)
         stmts.push(env.DB.prepare(
@@ -6724,7 +6807,7 @@ async function mwPutRun(env, body, role) {
 async function mwPutLog(env, url) {
   const lim = Math.max(1, Math.min(200, mwNum(url.searchParams.get("limit")) || 50));
   const q = await env.DB.prepare(
-    `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err
+    `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err,ptype,ptype_try
        FROM mw_reg_log ORDER BY id DESC LIMIT ?1`).bind(lim).all();
   const rows = ((q && q.results) || []).map((r) => {
     let is = [];
@@ -9098,7 +9181,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   mwDgOver, mwDgMemGet, mwDgMemSet, mwPtypeAll, mwPtypeList, MW_DG_SAFE_RE,
-  mwDgNoPt,
+  mwDgNoPt, mwPutType, mwPutTypeBad, mwPtypeGuess, MW_PT_OFFER_NG,
   MW_PT_ERR_MIN,
   MW_DG_SAFE_PT, MW_DG_WORD, MW_PT_TTL_D,
   MW_PUT_MAX, jobMwAuto, mwAutoSettings,

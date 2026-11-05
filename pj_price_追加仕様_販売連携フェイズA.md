@@ -6043,6 +6043,11 @@ GET https://s3[.<region>].amazonaws.com/selling-partner-definitions-prod<区>/�
 
 ### マイグレーション 0035（デプロイの前に流す）
 `amz_dg`（電池・危険物の申告を ASIN ごとに覚える表）。
+```
+cd proxy-sync && node d1-exec.mjs migrate-0035-amz-dg.sql
+```
+（D1 の名前は **pj-sync**。`wrangler d1 execute --file` は import の API を使うため
+通らないことがあるので、**`d1-exec.mjs`（1文ずつ `--command`）で流す**・7.87／7.88）
 
 ## 7.94 写真の口を作業者用のキーでも使えるようにする（2026-11-05・sw.js v216）
 
@@ -6060,3 +6065,63 @@ MW の写真の半自動（6.129）を**作業者用の端末でも使う**た�
   `/mw/reg`・`/mw/jan-pick`・`/mw/auto`・`/mw/put`。
 - ブックマークレットは pj を開いて渡すので、**pj-sync には MW の画面から直接送らない**
   （CORS の許可は `https://gamegamesan-dot.github.io` のまま。増やしていない）。
+
+## 7.95 出品に使える種類で送る（4000003・2026-11-05・sw.js v217）
+
+7.93（v215）で申告は付くようになったが、東方少女綺想譚
+（`mwgame-20261105-N-B0H8D9NY89-7843`・種類 `ABIS_VIDEO_GAMES`）が
+
+```
+4000003: 指定したAmazonの商品タイプが無効であるか、サポートされていません。
+```
+
+で断られた（怪物事変 日下夏羽・`FIGURINE` は通った）。
+
+**原因**：Catalog（`productTypes`）が返すのは「**その商品が何か**」を表す名前で、
+**出品（listings）に使える種類とは別**のことがある。
+`ABIS_` で始まる名前（Amazon Browse / ABIS 由来の分類名）は特にそうで、
+`putListingsItem` の `productType` には使えない。
+
+### 1. 送る種類の決め方（`mwPutType`）
+
+| Catalog の種類 | 送る種類 |
+| --- | --- |
+| `ABIS_` で始まる（`ABIS_VIDEO_GAMES` など） | **`PRODUCT`** |
+| 項目表が引けない（404・無効・読めない） | **`PRODUCT`** |
+| それ以外（`FIGURINE` など） | そのまま |
+| 空（種類が分からない） | `PRODUCT` |
+
+- **電池・危険物の申告は付けたまま**送る。付けないと 90220 で断られる（7.92）。
+- 申告の名前を入れてよいかは、**実際に送る種類の項目表**で見る
+  （`PRODUCT` で送るなら `PRODUCT` の項目表）。
+- 確認の画面には「種類 ABIS_VIDEO_GAMES　**送る種類 PRODUCT**」と出す。
+
+### 2. それでも断られたとき（種類を探して送り直す）
+
+`4000003`（または「商品タイプ」を含むエラー）だけは、**同じ SKU で1回だけ**送り直す。
+
+1. `searchDefinitionsProductTypes` に**商品名**（`itemName`）を渡して、
+   その商品に近い種類を引く。
+2. `ABIS_` で始まるもの・いま試した種類・`PRODUCT` を**外して**、最初の1つを使う
+   （東方少女綺想譚なら `VIDEO_GAMES`）。
+3. その種類の項目表を引いてから、**同じ SKU の PUT** で送り直す（べき等）。
+4. 商品名が無い・見つからないときは送り直さない（空振りを増やさない）。
+
+### 3. どちらで通ったかを残す
+
+`mw_reg_log` に2列足した（マイグレーション 0036）。
+
+| 列 | 中身 |
+| --- | --- |
+| `ptype` | **実際に送った種類**（`PRODUCT`・`VIDEO_GAMES` など） |
+| `ptype_try` | 試した順（`"PRODUCT > VIDEO_GAMES"`） |
+
+画面の「これまでの結果」にも「**送った種類 VIDEO_GAMES**」「試した種類：PRODUCT > VIDEO_GAMES」と出す。
+`res.alt` に送り直した件数を返す。
+
+### マイグレーション 0036（デプロイの前に流す）
+```
+cd proxy-sync && node d1-exec.mjs migrate-0036-reg-ptype.sql
+```
+（D1 の名前は **pj-sync**。`wrangler d1 execute --file` は import の API を使うため
+通らないことがあるので、**`d1-exec.mjs`（1文ずつ `--command`）で流す**・7.87／7.88）

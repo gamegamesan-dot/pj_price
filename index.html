@@ -10999,6 +10999,8 @@ function mwPutHtml(pk,log,why){
         +(i?'border-top:1px solid var(--line)':'')+'">'
         +'<b>'+yen(x.price)+'</b>　'+esc(x.asin)
         +((p&&p.ptype)?('　種類 '+esc(p.ptype)):'')
+        +((p&&p.ptype_send&&p.ptype_send!==p.ptype)
+          ?('　<b>送る種類 '+esc(p.ptype_send)+'</b>'):'')
         +'<br><span style="font-family:ui-monospace,monospace">'+esc(x.sku)+'</span>'
         +'<br>'+esc(x.name.slice(0,44))
         /* 付ける申告を行ごとに出す（7.92）。 */
@@ -11054,6 +11056,12 @@ function mwPutLogHtml(log){
         +esc(String(r.sku||''))+'</span>　'+yen(+r.price||0)
         +(r.status?('　'+esc(String(r.status))):'')
         +(r.ptype?('　種類 '+esc(String(r.ptype))):'')
+        /* どの種類で送って通ったか（7.95）。
+           ABIS_… は出品に使えないので PRODUCT で送り直す。 */
+        +((r.ptype_used&&r.ptype_used!==r.ptype)
+          ?('　<b>送った種類 '+esc(String(r.ptype_used))+'</b>'):'')
+        +((r.ptype_try&&String(r.ptype_try).indexOf('>')>0)
+          ?('<br>　試した種類：'+esc(String(r.ptype_try))):'')
         +((r.dg&&(r.dg.batteries===true||r.dg.batteries===false))
           ?('　申告 '+esc(mwDgText(r.dg))):'')
         +(r.err?('<br>　'+esc(String(r.err).slice(0,140))):'')
@@ -11097,7 +11105,8 @@ function mwPutGo(one){
             return y.sku===x.sku; })[0]||{}).price||0,
             status:x.status, err:x.err, issues:x.issues,
             /* 何を足せばよいかの案内（7.92）。 */
-            hint:x.hint, missing:x.missing, ptype:x.ptype, dg:x.dg }; }))
+            hint:x.hint, missing:x.missing, ptype:x.ptype,
+            ptype_used:x.ptype_used, ptype_try:x.ptype_try, dg:x.dg }; }))
         +'<div style="display:flex;gap:6px;margin-top:6px">'
         +'<button class="btn" id="csvMwPutBack" style="flex:1">確認に戻る</button>'
         +'<button class="btn" id="csvMwPutClose" style="flex:0 0 auto">閉じる</button>'
@@ -17710,7 +17719,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v216';   // sw.js の const V と必ず同じ値にする
+var APP_V='v217';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
