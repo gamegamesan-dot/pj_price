@@ -253,6 +253,67 @@ ok((w.w.match(/NOT LIKE \? ESCAPE/g)||[]).length===8,
    '★★言葉ごとに ESCAPE 付きの NOT LIKE を1つずつ足す');
 ok(w.bind.filter((x)=>String(x).indexOf('%')===0).length===8,'★当てる文字を渡す');
 
+console.log('\n=== 写真を取り込んだ行を先に調べる（7.99）===');
+/* 写真があるのに相場が未調査だと、出品リストに入れられず止まる。
+   だから相場の調べる順番は「写真あり」を先頭に回す。
+   ここでは 4902370550467 に写真の控えがある（上の画像の節で入れた）。
+   JAN の並びでは 4580416924740 のほうが先なので、
+   順番を変えていなければそちらが先に調べられる。 */
+await env.DB.prepare('DELETE FROM mw_market').run();
+const pics=await env.DB.prepare(
+  `SELECT jan, COUNT(*) AS n FROM mw_img WHERE ok=1 GROUP BY jan`).all();
+console.log('   写真のある JAN: '+JSON.stringify(pics.results));
+ok((pics.results||[]).some((x)=>String(x.jan)==='4902370550467'),
+   '★写真の控えがある行がある（この節の前提）');
+calls=[];
+r=await put('/mw/market',{ limit:1, kishu:'NS', stock_min:1 });
+const got=await env.DB.prepare(
+  `SELECT jan FROM mw_market`).all();
+console.log('   調べた JAN: '+JSON.stringify((got.results||[]).map((x)=>x.jan)));
+ok((got.results||[]).length===1
+   &&String((got.results||[])[0].jan)==='4902370550467',
+   '★★★写真がある行を先に調べる（JAN の並びでは後ろでも）');
+/* 写真が無い行も、そのあと順に調べる（飛ばさない）。 */
+r=await put('/mw/market',{ limit:10, kishu:'NS', stock_min:1 });
+const all2=await env.DB.prepare(`SELECT COUNT(*) AS n FROM mw_market`).first();
+console.log('   そのあと: '+JSON.stringify(all2));
+ok(Number(all2.n)>=3,'★★写真が無い行もあとから調べる（飛ばさない）');
+
+console.log('\n=== 候補の件数を数えるだけの口（7.100）===');
+/* 条件を変えたら候補が何件になるかを、実データで見るための読み取り専用の口。
+   候補の決め方（mwWhere）は変えない。 */
+const cnt=async(q)=>(await asJson(await worker.fetch(
+  new Request('https://x/mw/count'+(q||''),{headers:{'X-PJ-Key':'k'}}),env))).body;
+let c1=await cnt('?kishu=NS&ship_max=4&stock_min=5');
+let c2=await cnt('?ship_max=14&stock_min=1');
+console.log('   いまの条件: '+JSON.stringify({n:c1.n,asin:c1.asin_ok,
+  priced:c1.priced,spread:c1.spread}));
+console.log('   広げた条件: '+JSON.stringify({n:c2.n,by_ship:c2.by_ship,
+  by_stock:c2.by_stock}));
+ok(c1.ok===true&&typeof c1.n==='number','★★★件数を返す');
+ok(c2.n>=c1.n,'★★★条件を広げると件数は減らない');
+ok(typeof c1.alive==='number'&&typeof c1.jan==='number',
+   '★★生きている行と代表の件数も返す（母数が分かる）');
+ok(typeof c1.asin_ok==='number'&&typeof c1.priced==='number',
+   '★★★ASIN 済み・値段済みの件数も返す（増える呼び出しの見積りに使う）');
+ok(Array.isArray(c2.by_ship)&&Array.isArray(c2.by_stock)
+   &&Array.isArray(c2.by_kishu),
+   '★★★出荷日数・在庫・機種ごとの内訳を返す');
+ok(c1.spread&&typeof c1.spread.plus1k==='number',
+   '★★★定価×0.85−卸値×1.1 の見込み（1,000円超）の件数を返す');
+ok(c1.cond&&c1.cond.ship_max===4&&c1.cond.stock_min===5,
+   '★どの条件で数えたかも返す');
+/* 数えるだけ。候補の決め方も、控えも変えない。 */
+const cntBefore=await env.DB.prepare(
+  `SELECT COUNT(*) AS n FROM mw_amz`).first();
+await cnt('?ship_max=14&stock_min=1');
+const cntAfter=await env.DB.prepare(
+  `SELECT COUNT(*) AS n FROM mw_amz`).first();
+ok(Number(cntBefore.n)===Number(cntAfter.n),'★★★数えるだけ（何も変えない）');
+const staffC=await worker.fetch(new Request('https://x/mw/count?ship_max=14',
+  {headers:{'X-PJ-Key':'staff-key-123'}}),env);
+ok(staffC.status===200,'★★作業者用のキーでも数えられる（見るだけ）');
+
 console.log('\n=== 作業者のキー ===');
 r=await put('/mw/market',{ limit:1 },'staff-key-123');
 ok(r.status===403&&r.body.error==='forbidden_for_staff','★★相場は作業者では引けない');

@@ -1507,6 +1507,15 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="mwDgTypeNote" style="margin-top:2px"></div>
         <!-- 中身は {"FIGURINE":1,"TOY_VEHICLE":0} の形（既定への足し引き） -->
         <input type="hidden" id="mwDgTypes" value="">
+        <!-- 候補の条件を変えたときの件数（6.137）。数えるだけ・何も変えない。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>候補の件数を数える（下調べ）</b>
+          ：Amazon刈取の候補の条件を<b>無在庫と別にする</b>かどうかを決めるために、
+          条件ごとの件数を<b>数えるだけ</b>見ます（候補の決め方は変えません）。
+          1回につき D1 を数回読むだけで、Amazon は呼びません。</div>
+        <div style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwCountBtn" style="flex:1">候補の件数を数える</button>
+        </div>
+        <div class="note2" id="mwCountOut" style="margin-top:2px"></div>
         <!-- MW の写真の半自動（6.129）。ブックマークレットを作る。 -->
         <div class="note2" style="margin:10px 0 2px"><b>MW の写真を半自動で取り込む（ブックマークレット）</b>
           ：一覧の行の「<b>MW で検索</b>」で会員サイトを開き、<b>自分でログインして</b>
@@ -9749,7 +9758,8 @@ expInit();
   });
 })();
 $('csvMwLoad').onclick=mwListRun;
-$('csvMwPush').onclick=mwPushRun;
+/* 引数なしで呼ぶ（クリックの Event が JAN として渡らないように・6.136）。 */
+$('csvMwPush').onclick=function(){ mwPushRun(); };
 $('syncMwPlan').onclick=function(){ mwDropAct(false); };
 $('syncMwGo').onclick=function(){ mwDropAct(true); };
 $('csvMwAmz').onclick=mwAmzRunGo;
@@ -9801,6 +9811,9 @@ $('mwPicRead').onclick=mwPicClip;
 $('mwPicTake').onclick=mwPicPasteGo;
 $('mwPicIn').addEventListener('input',function(){ mwPicInNote(); });
 $('mwPicIn').addEventListener('paste',function(){ setTimeout(mwPicInNote,0); });
+/* 候補の件数を数える（6.137）。いまの無在庫の条件と、Amazon刈取で考えている
+   条件（機種すべて・新品・14営業日以内・在庫1点以上）を並べて数える。 */
+$('mwCountBtn').onclick=mwCountRun;
 /* MW の写真の受け取りとブックマークレット（6.129）。 */
 $('mwPicClose').onclick=mwPicBarHide;
 $('mwPicGo').onclick=mwPicGo;
@@ -9834,6 +9847,12 @@ $('mwDgTypeBox').addEventListener('change',function(e){
   if(el.id==='mwDgTypeAdd')mwDgTypeAdd(el);
 });
 $('csvMwMkt').onclick=mwMktRun;
+/* 行の「出品リストに入れる」（6.136）。行は作り直すので箱で受ける。 */
+$('csvMwList').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var jan=t.getAttribute('data-mwpush'); if(!jan)return;
+  mwPushRun(jan);
+});
 /* 送る前に「読んだ結果」を必ず画面に出す（6.88）。
    v187 では 12,062行あるのに 3,802行で静かに終わっていたので、
    ファイルの大きさ・読んだ行数・列の数が合わない行を先に見せる。 */
@@ -10049,21 +10068,73 @@ function mwListRow(r,pics,n){
             gameName:'', publisher:'', franchise:'', character:'', model:'',
             genre:'', year:'' } };
 }
-function mwPushRun(){
+/* ---- 出品リストに入れられるか（6.136）----
+   対象は **①出品候補 と ②相場なし**（相場なしは目標利益の売値で出す）。
+   ③後回し（相場の115%超）は外す。入らない行は**理由を返す**。
+   '' を返したら入れられる。 */
+function mwPushWhy(r){
+  if(!r)return '行がありません';
+  if(!((+r.pics_ok||0)>0))return '写真なし（先に写真を取り込んでください）';
+  var rec=mwRec(r);
+  if(!rec)return '値段を出せません（卸値が読めません）';
+  var j=mwMktJudge(r,rec);
+  if(j.k==='none')return '相場をまだ調べていません（「eBayの相場を調べる」）';
+  if(j.k==='err')return '相場を調べられませんでした（次の調査でやり直します）';
+  if(j.k==='high')return '後回し（相場の'+(j.pct||'')+'%）';
+  /* 無在庫の配送ポリシー（6.134）。どちらのポリシーでも間に合わない行は出せない。 */
+  var need=(+r.ship_days||0)+2;
+  var pk=csvShipMwPick(need);
+  if(!pk.name)return pk.why+'（MW '+(+r.ship_days||0)+'営業日＋2日＝'+need+'日）';
+  var jan=String(r.jan||'');
+  if(csvList.some(function(x){
+       return String(x.buySource||'')==='mw'&&String(x.jan||'')===jan; }))
+    return 'すでに出品リストにあります';
+  return '';
+}
+/* 入れられる行（①②で写真があり、ポリシーも間に合う行）。 */
+function mwPushPick(){
+  var take=[], skip=[];
+  (mwRows||[]).forEach(function(r){
+    var why=mwPushWhy(r);
+    if(why)skip.push({ r:r, why:why }); else take.push(r);
+  });
+  return { take:take, skip:skip };
+}
+function mwPushRun(one){
   var note=$('csvMwPushNote');
+  /* 1件だけ入れるときの JAN。13桁の数字でなければ「まとめて」。 */
+  one=/^\d{13}$/.test(String(one||''))?String(one):'';
   if(!mwRows.length){
     note.textContent='先に「候補一覧を取り込む」を押してください。'; return;
   }
-  /* ① 出品候補（相場の115%以内）で、写真が付いている行。 */
-  var cand=mwRows.filter(function(r){
-    var rec=mwRec(r);
-    if(!rec)return false;
-    if(mwMktJudge(r,rec).k!=='ok')return false;
-    return (+r.pics_ok||0)>0;
-  });
+  var pk=mwPushPick();
+  var cand=pk.take, skip=pk.skip;
+  /* 1件だけ入れるとき（行のボタン）。 */
+  if(one){
+    var hit=(mwRows||[]).filter(function(r){ return String(r.jan||'')===String(one); })[0];
+    var why=mwPushWhy(hit);
+    if(why){
+      note.innerHTML='<b>'+esc(String(one))+'</b> は入れられません：'+esc(why);
+      return;
+    }
+    cand=[hit];
+    skip=[];
+  }
   if(!cand.length){
-    note.innerHTML='出品候補のうち<b>写真が付いている行がありません</b>。'
-      +'先に行の「写真（MWの商品IDか画像URLを貼る）」で画像を取り込んでください。';
+    /* なぜ1件も入らないのか、理由ごとに件数を出す（6.136）。 */
+    var by={};
+    skip.forEach(function(x){
+      var k=String(x.why).replace(/（.*$/,'');
+      (by[k]=by[k]||[]).push(String(x.r.jan||''));
+    });
+    var ks=Object.keys(by);
+    note.innerHTML='<b>入れられる行がありません。</b>'
+      +(ks.length?('<br>'+ks.map(function(k){
+        return esc(k)+' <b>'+by[k].length+'件</b>'
+          +'<span style="opacity:.75">（'+by[k].slice(0,3).map(esc).join('・')
+          +(by[k].length>3?' ほか':'')+'）</span>'; }).join('<br>')):'')
+      +'<br>写真が無い行は、Amazon刈取タブの'
+      +'<b>「MW の写真を貼り付けて取り込む」</b>で取り込めます。';
     return;
   }
   /* すでに出品リストに入っている JAN は足さない（二重に出さない）。 */
@@ -10106,6 +10177,8 @@ function mwPushRun(){
         +(dup?('<br>すでに出品リストにある '+dup+'件は飛ばしました。'):'')
         +(cut?('<br><b>無在庫の上限（'+max+'件）で '+cut+'件を見送りました</b>'
           +'（いま '+(now+added)+'件）。'):'')
+        /* 入らなかった行の理由（6.136）。JAN ごとに分かるように出す。 */
+        +mwPushSkipHtml(skip)
         +'<br>このあと出品CSVタブの<b>「英語タイトル生成」</b>→'
         +'<b>原産国・カテゴリの確認</b>→<b>「CSVを書き出す」</b>で出せます。';
       csvRender();
@@ -10129,6 +10202,40 @@ function mwPushRun(){
       ['catch'](function(){ out.push({ r:r, pics:[] }); step(); });
   }
   step();
+}
+/* 行の「出品リストに入れる」（6.136）。①②の行に出す。
+   入れられない行は、押せない形にして理由をそのまま出す。 */
+function mwPushBtn(r){
+  var jan=String((r||{}).jan||'');
+  if(!jan)return '';
+  var rec=mwRec(r);
+  var k=rec?mwMktJudge(r,rec).k:'';
+  /* ③後回しの行には出さない（入れない決まりなので・6.136）。 */
+  if(k==='high')return '';
+  var why=mwPushWhy(r);
+  if(!why)
+    return '<div style="display:flex;gap:6px;margin-top:4px">'
+      +'<button class="btn primary" style="flex:1" data-mwpush="'+esc(jan)+'">'
+      +'出品リストに入れる</button></div>';
+  return '<div class="note2" style="margin:4px 0 0;opacity:.85">'
+    +'出品リストに入れられません：'+esc(why)+'</div>';
+}
+/* 入らなかった行の理由（6.136）。理由ごとにまとめ、JAN も少しだけ出す。 */
+function mwPushSkipHtml(skip){
+  if(!skip||!skip.length)return '';
+  var by={};
+  skip.forEach(function(x){
+    var k=String(x.why);
+    (by[k]=by[k]||[]).push(String(x.r.jan||''));
+  });
+  var ks=Object.keys(by).sort(function(a,b){ return by[b].length-by[a].length; });
+  return '<br><span style="opacity:.85">入れなかった行（'+skip.length+'件）：</span><br>'
+    +ks.slice(0,6).map(function(k){
+      return '・'+esc(k)+' <b>'+by[k].length+'件</b>'
+        +'<span style="opacity:.75">（'+by[k].slice(0,3).map(esc).join('・')
+        +(by[k].length>3?(' ほか'+(by[k].length-3)+'件'):'')+'）</span>';
+    }).join('<br>')
+    +((ks.length>6)?('<br>・ほか '+(ks.length-6)+'とおりの理由'):'');
 }
 /* ===== 国内 Amazon FBA で見る（6.91・7.66）=====
    候補の JAN から ASIN を引き、**Amazon の実売価格**で FBA の利益を出す。
@@ -10533,6 +10640,97 @@ function mwRankCapNote(){
     +'<br>この値は<b>pj-sync に保存</b>します（端末ごとではありません）。'
     +(isStaff()?'　<b>変更は管理者だけです</b>（見るだけ）。'
               :'　作業者用の端末でも同じ基準で絞り込まれます。');
+}
+/* ===== 候補の件数の下調べ（6.137）=====
+   条件を変えたら候補が何件になるかを、**実データで**見るためだけの口。
+   候補の決め方は変えない（数えるだけ）。 */
+var MW_COUNT_SETS=[
+  { name:'いまの無在庫の条件', q:function(){
+      return { kishu:mwKishuList().join(','), new_only:1,
+               ship_max:mwShipMax(), stock_min:mwStockMin(),
+               note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 }; } },
+  { name:'機種すべて・14営業日・在庫1点', q:function(){
+      return { kishu:'', new_only:1, ship_max:14, stock_min:1,
+               note_ng:mwNoteNgList().join(','), note_all:0 }; } },
+  { name:'機種すべて・14営業日・在庫3点', q:function(){
+      return { kishu:'', new_only:1, ship_max:14, stock_min:3,
+               note_ng:mwNoteNgList().join(','), note_all:0 }; } },
+  { name:'機種すべて・7営業日・在庫1点', q:function(){
+      return { kishu:'', new_only:1, ship_max:7, stock_min:1,
+               note_ng:mwNoteNgList().join(','), note_all:0 }; } },
+  { name:'いまの機種・14営業日・在庫1点', q:function(){
+      return { kishu:mwKishuList().join(','), new_only:1, ship_max:14, stock_min:1,
+               note_ng:mwNoteNgList().join(','), note_all:0 }; } }
+];
+function mwCountUrl(q){
+  var p=[];
+  Object.keys(q).forEach(function(k){
+    p.push(encodeURIComponent(k)+'='+encodeURIComponent(String(q[k]==null?'':q[k])));
+  });
+  return syncUrl()+'/mw/count?'+p.join('&');
+}
+/* 1周にかかる日数の見込み。
+   ・毎時37分の自動：価格 MW_AUTO_PRICE_N 件／時（24回/日）
+   ・「Amazonで調べる」を押したとき：1回60件 */
+function mwCountDays(n){
+  var perHour=20, perDay=perHour*24;        // 毎時37分の自動（価格20件）
+  return { auto:Math.ceil(n/perDay), hand:Math.ceil(n/60) };
+}
+function mwCountRun(){
+  var out=$('mwCountOut'), btn=$('mwCountBtn');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    out.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  btn.disabled=true; out.textContent='数えています…';
+  var rows=[];
+  MW_COUNT_SETS.reduce(function(chain,s2){
+    return chain.then(function(){
+      return fetch(mwCountUrl(s2.q()),{headers:{'X-PJ-Key':syncApiKey()}})
+        .then(function(r){ return r.json(); })
+        .then(function(d){ rows.push({ name:s2.name, d:d||{} }); });
+    });
+  },Promise.resolve()).then(function(){
+    var d0=(rows[0]||{}).d||{};
+    out.innerHTML='<b>候補の件数（数えただけ。条件は変えていません）</b>'
+      +'<br>MW の生きている行 '+(d0.alive||0)+'件／JAN ごとの代表 '+(d0.jan||0)+'件'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px;'
+      +'margin-top:4px"><tr><th style="text-align:left">条件</th>'
+      +'<th style="text-align:right">候補</th><th style="text-align:right">ASIN済</th>'
+      +'<th style="text-align:right">値段済</th>'
+      +'<th style="text-align:right">見込みあり</th>'
+      +'<th style="text-align:right">1周（自動）</th></tr>'
+      +rows.map(function(x){
+        var n=+x.d.n||0, sp=x.d.spread||{};
+        var dd=mwCountDays(n);
+        return '<tr><td>'+esc(x.name)+'</td>'
+          +'<td style="text-align:right"><b>'+n.toLocaleString('ja-JP')+'</b></td>'
+          +'<td style="text-align:right">'+(+x.d.asin_ok||0).toLocaleString('ja-JP')+'</td>'
+          +'<td style="text-align:right">'+(+x.d.priced||0).toLocaleString('ja-JP')+'</td>'
+          +'<td style="text-align:right">'+(+sp.plus1k||0).toLocaleString('ja-JP')+'</td>'
+          +'<td style="text-align:right">'+dd.auto+'日</td></tr>';
+      }).join('')+'</table>'
+      +'<div style="margin-top:4px">「見込みあり」＝ MW の定価×0.85 − 卸値×1.1 が'
+      +'<b>1,000円より大きい</b>行（Amazon を呼ばずに出せる粗い当たり）。'
+      +'<br>「1周（自動）」＝ 毎時37分の自動の取り直し（価格20件/時＝480件/日）で'
+      +'一周する日数。「Amazonで調べる」を押すと1回60件まで進みます。</div>'
+      +mwCountDetail(rows);
+  })['catch'](function(e){ out.textContent='数えられませんでした：'+e.message; })
+  .then(function(){ btn.disabled=false; });
+}
+/* 内訳（出荷日数・在庫・機種）。どこを緩めると何件増えるかが分かる。 */
+function mwCountDetail(rows){
+  var d=(rows[1]||rows[0]||{}).d||{};
+  var li=function(t,a){
+    return '<br><b>'+t+'</b>：'+((a||[]).map(function(x){
+      return esc(String(x.k))+' '+(+x.n||0).toLocaleString('ja-JP')+'件';
+    }).join('　')||'—');
+  };
+  return '<div style="margin-top:4px">'
+    +li('出荷日数（新品・代表の行）',d.by_ship)
+    +li('在庫（新品・代表の行）',d.by_stock)
+    +li('機種（機種すべて・14営業日・在庫1点の上位）',(d.by_kishu||[]).slice(0,12))
+    +'</div>';
 }
 /* ===== 自動で申告を付けてよい種類の表（6.128）=====
    Amazon の productType の名前は公開されていないので、**出てきた名前**を
@@ -12377,6 +12575,8 @@ function mwListRender(){
       +(o.ng.length?('<div class="note2" style="margin:2px 0 0;color:var(--bad)">'
         +'状態に注意：備考に「'+esc(o.ng.join('」「'))+'」'
         +'（⚙設定で候補に含められます）</div>'):'')
+      /* 1件ずつ出品リストに入れる（6.136）。入れられない行は理由を出す。 */
+      +mwPushBtn(r)
       /* 写真を貼る口（6.1 の①）。商品IDか画像URLを改行で最大12枚。 */
       +'<details data-box="1" style="margin-top:4px"><summary class="note2"'
       +' style="margin:0;cursor:pointer">写真（MWの商品IDか画像URLを貼る）'
@@ -18242,7 +18442,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v223';   // sw.js の const V と必ず同じ値にする
+var APP_V='v224';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

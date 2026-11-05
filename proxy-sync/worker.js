@@ -7266,6 +7266,83 @@ function mwWhere(opt) {
            ngWords, noteAll };
 }
 
+/* ---- 候補の件数を数えるだけの口（GET /mw/count・7.100）----
+   「条件を変えたら候補が何件になるか」を**実データで**見るための読み取り専用の口。
+   候補の決め方（mwWhere）は何も変えない。数えるだけ。
+     ?ship_max=14&stock_min=1&kishu=&note_all=0  のように条件を渡す
+   返すもの
+     ・n        … その条件での候補の件数
+     ・now      … いまの無在庫の条件（既定）での件数（比べるため）
+     ・asin_ok  … そのうち ASIN が引けている件数（Amazon の呼び出しが要らない分）
+     ・by_ship  … 出荷日数ごとの件数（0・1-2・3-4・5-7・8-14・15以上）
+     ・by_stock … 在庫ごとの件数（1・2-4・5以上）
+     ・by_kishu … 機種ごとの件数（多い順に30まで）
+     ・spread   … 定価×0.85 −卸値×1.1 の見込み差（0より大きい件数と、その合計）*/
+async function mwCountRun(env, url) {
+  const p = url.searchParams;
+  const o = { kishu: p.get("kishu"), new_only: p.get("new_only"),
+              ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
+              note_ng: p.get("note_ng"), note_all: p.get("note_all") };
+  const q = mwWhere(o);
+  const one = async (sql, bind) => {
+    const r = await env.DB.prepare(sql).bind(...(bind || [])).first();
+    return Number((r && r.n) || 0);
+  };
+  const res = { ok: false, cond: { kishu: q.kishu, new_only: q.newOnly,
+    ship_max: q.shipMax, stock_min: q.stockMin, note_ng: q.ngWords.length,
+    note_all: q.noteAll } };
+  try {
+    res.n = await one(`SELECT COUNT(*) AS n FROM mw_stock WHERE ${q.w}`, q.bind);
+    res.alive = await one(`SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`);
+    res.jan = await one(
+      `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL AND pick=1`);
+    res.asin_ok = await one(
+      `SELECT COUNT(*) AS n FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+        WHERE ${q.w} AND COALESCE(a.asin,'')<>''`, q.bind);
+    res.priced = await one(
+      `SELECT COUNT(*) AS n FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+        WHERE ${q.w} AND COALESCE(a.price,0)>0`, q.bind);
+    /* bind が要る問い合わせ（条件つき）と、要らない問い合わせ（新品ぜんぶ）を分ける。
+       要らないほうに bind を渡すと「column index out of range」で落ちる。 */
+    const rows = async (sql, bind) => {
+      const r = await env.DB.prepare(sql).bind(...(bind || [])).all();
+      return (r && r.results) || [];
+    };
+    res.by_ship = await rows(
+      `SELECT CASE WHEN COALESCE(ship_days,99)=0 THEN '0'
+                   WHEN COALESCE(ship_days,99)<=2 THEN '1-2'
+                   WHEN COALESCE(ship_days,99)<=4 THEN '3-4'
+                   WHEN COALESCE(ship_days,99)<=7 THEN '5-7'
+                   WHEN COALESCE(ship_days,99)<=14 THEN '8-14'
+                   ELSE '15+' END AS k, COUNT(*) AS n
+         FROM mw_stock WHERE gone_at IS NULL AND pick=1 AND cond='新品'
+        GROUP BY k ORDER BY k`);
+    res.by_stock = await rows(
+      `SELECT CASE WHEN COALESCE(stock,0)<=1 THEN '1'
+                   WHEN COALESCE(stock,0)<=4 THEN '2-4'
+                   ELSE '5+' END AS k, COUNT(*) AS n
+         FROM mw_stock WHERE gone_at IS NULL AND pick=1 AND cond='新品'
+        GROUP BY k ORDER BY k`);
+    res.by_kishu = await rows(
+      `SELECT kishu AS k, COUNT(*) AS n FROM mw_stock
+        WHERE ${q.w} GROUP BY kishu ORDER BY n DESC LIMIT 30`, q.bind);
+    /* 見込みのある行（MW の定価×0.85 と 卸値×1.1 の差）。
+       仕入れて利益が出そうかの**粗い当たり**。Amazon を呼ばずに出せる。 */
+    const sp = await env.DB.prepare(
+      `SELECT COUNT(*) AS n,
+              SUM(CASE WHEN list_price*0.85 - wholesale*1.1 > 0 THEN 1 ELSE 0 END) AS plus,
+              SUM(CASE WHEN list_price*0.85 - wholesale*1.1 > 1000 THEN 1 ELSE 0 END) AS plus1k,
+              SUM(CASE WHEN list_price*0.85 - wholesale*1.1 > 3000 THEN 1 ELSE 0 END) AS plus3k
+         FROM mw_stock WHERE ${q.w} AND COALESCE(list_price,0)>0
+           AND COALESCE(wholesale,0)>0`).bind(...q.bind).first();
+    res.spread = { n: Number((sp && sp.n) || 0), plus: Number((sp && sp.plus) || 0),
+                   plus1k: Number((sp && sp.plus1k) || 0),
+                   plus3k: Number((sp && sp.plus3k) || 0) };
+    res.ok = true;
+  } catch (e) { res.error = String((e && e.message) || e); }
+  return res;
+}
+
 /* ---- eBay の相場を1件引く（4章の6・7.62）----
    JAN（GTIN）で Browse API を検索し、**即決の出品**の最安値を送料込みで出す。
    ・新品の最安値（low）と、状態を問わない最安値（low_any）を1回の検索で両方出す
@@ -7334,15 +7411,20 @@ async function mwMarketRun(env, body) {
     const q = mwWhere(o);
     const okOld = new Date(Date.now() - MW_MKT_TTL_D * 86400000).toISOString();
     const errOld = new Date(Date.now() - MW_MKT_ERR_TTL_H * 3600000).toISOString();
-    /* 代表の JAN のうち、控えが無い／古いものだけ。古い順（NULL が先）。 */
+    /* 代表の JAN のうち、控えが無い／古いものだけ。
+       **写真を取り込んだ行を先頭に回す**（7.99）。
+       写真があるのに相場が未調査だと、出品リストに入れられず止まるため。
+       そのあとは今までどおり古い順（NULL が先）。 */
     const pick = await env.DB.prepare(
-      `SELECT s.jan AS jan, m.checked_at AS checked_at
+      `SELECT s.jan AS jan, m.checked_at AS checked_at,
+              (SELECT COUNT(*) FROM mw_img g WHERE g.jan = s.jan AND g.ok = 1)
+                AS pics_ok
          FROM mw_stock s LEFT JOIN mw_market m ON m.jan = s.jan
         WHERE ${q.w}
           AND (m.checked_at IS NULL
                OR (COALESCE(m.err,'')='' AND m.checked_at < ?${q.bind.length + 1})
                OR (COALESCE(m.err,'')<>'' AND m.checked_at < ?${q.bind.length + 2}))
-        ORDER BY COALESCE(m.checked_at,'') ASC, s.jan ASC`)
+        ORDER BY pics_ok > 0 DESC, COALESCE(m.checked_at,'') ASC, s.jan ASC`)
       .bind(...q.bind, okOld, errOld).all();
     const all = (pick && pick.results) || [];
     res.asked = all.length;
@@ -9256,6 +9338,9 @@ export default {
         return json(await mwPutLog(env, url), 200, origin);
       /* 自動で申告を付けてよい種類の表（6.128／7.93）。見るのは誰でも、
          変えるのは⚙の設定（POST /settings）側で管理者だけ。 */
+      /* 候補の件数を数えるだけ（7.100）。条件の見直しの見込みに使う。 */
+      if (request.method === "GET" && url.pathname === "/mw/count")
+        return json(await mwCountRun(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/ptypes")
         return json(await mwPtypeList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/auto") {
@@ -9481,6 +9566,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
+  mwCountRun,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,

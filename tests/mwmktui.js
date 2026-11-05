@@ -38,6 +38,14 @@ const setup=async(o)=>await p.evaluate((o)=>{
     }
     if(/\/mw\/img/.test(url)){
       window.__posts.push({url:url,body:body});
+      /* 控えを聞かれたとき（GET）は、控えてある公開URLを返す。 */
+      if(!i||i.method!=='POST'){
+        const m=/jan=(\d{13})/.exec(url);
+        return new Response(JSON.stringify({ ok:true, jan:m?m[1]:'',
+          rows:[{ jan:m?m[1]:'', pos:0, mw_id:'10900001', ok:1, w:1200, h:1200,
+            long_px:1200, url:'https://img.example/i/20261105/'
+              +'1b4e28ba-2fa1-11d2-883f-0016d3cca427.jpg' }] }),{status:200});
+      }
       return new Response(JSON.stringify(o.img||{ok:true}),{status:200});
     }
     if(/\/mw\/list/.test(url)){
@@ -322,6 +330,101 @@ out=await p.evaluate(()=>$('mwImgOut_4902370550467').textContent);
 ok(/画像サーバーURL/.test(out),'★★設定が無いときは理由を出して送らない');
 posts=await p.evaluate(()=>window.__posts);
 ok(posts.filter((x)=>/\/mw\/img/.test(x.url)).length===0,'★★送っていない');
+
+/* ===== v224（6.136）：出品リストに入れる ===== */
+console.log('\n=== ①出品候補と②相場なしを入れる ===');
+await setup({ list:LIST });
+await openCsvBoxes(p);
+await p.evaluate(()=>{
+  /* 「MW の無在庫」の箱を開ける（畳んだままだと innerText が空になる）。 */
+  var b=document.getElementById('csvMwBox'); if(b)b.open=true;
+  /* 配送ポリシーは2つとも入れておく（6.134）。 */
+  $('csvShipProfileMw').value='W2000'; $('csvShipDaysMw').value='3';
+  $('csvShipProfileMw2').value='W2000-MW'; $('csvShipDaysMw2').value='6';
+  $('csvRetProfile').value='R1'; $('csvPayProfile').value='P1';
+  /* ①出品候補 と ②相場なし に写真を付ける。③後回しにも付ける（入らないこと）。 */
+  mwRows[0].pics_ok=2; mwRows[1].pics_ok=1; mwRows[2].pics_ok=1;
+  csvList=[]; csvSaveList();
+  mwListRender();
+});
+await p.waitForTimeout(150);
+let pw=await p.evaluate(()=>({
+  ok:mwPushWhy(mwRows[0]), nomkt:mwPushWhy(mwRows[1]),
+  high:mwPushWhy(mwRows[2]), none:mwPushWhy(mwRows[3]),
+  take:mwPushPick().take.map((r)=>r.jan),
+  skip:mwPushPick().skip.map((x)=>x.r.jan+'='+x.why) }));
+console.log('   '+JSON.stringify(pw));
+ok(pw.ok===''&&pw.nomkt==='',
+   '★★★①出品候補 と ②相場なし はどちらも入れられる');
+ok(/後回し/.test(pw.high),'★★★③後回しは入れない（理由を出す）');
+ok(/相場をまだ調べていません/.test(pw.none),
+   '★★★未調査の行は理由を出す（写真があっても）');
+ok(pw.take.length===2,'★★入れるのは2件');
+/* 行のボタン。 */
+let btns=await p.evaluate(()=>{
+  const d=$('csvMwList');
+  const b=Array.prototype.map.call(d.querySelectorAll('[data-mwpush]'),
+    (x)=>x.getAttribute('data-mwpush'));
+  const txt=(d.textContent||'').replace(/\s+/g,' ');
+  return { b:b, high:/後回し（/.test(txt),
+    why:/出品リストに入れられません/.test(txt) };
+});
+console.log('   '+JSON.stringify(btns));
+ok(btns.b.length===2&&btns.b.indexOf('4902370550467')>=0
+   &&btns.b.indexOf('4580416924740')>=0,
+   '★★★①②の行に「出品リストに入れる」ボタンが出る');
+ok(btns.b.indexOf('4988611224878')<0,'★★★③後回しの行には出さない');
+ok(btns.why===true,'★★入れられない行には理由を出す');
+/* 1件だけ入れる。 */
+await p.evaluate(()=>{
+  document.querySelector('#csvMwList [data-mwpush="4902370550467"]').click(); });
+await p.waitForTimeout(600);
+let one=await p.evaluate(()=>({ n:csvList.length,
+  jan:(csvList[0]||{}).jan, src:(csvList[0]||{}).buySource,
+  note:($('csvMwPushNote').textContent||'').replace(/\s+/g,' ') }));
+console.log('   '+JSON.stringify(one));
+ok(one.n===1&&one.jan==='4902370550467'&&one.src==='mw',
+   '★★★行のボタンで1件だけ入れられる');
+/* まとめて入れる（残り1件＋すでに入れた1件は飛ばす）。 */
+await p.evaluate(()=>{ $('csvMwPush').click(); });
+await p.waitForTimeout(800);
+let all=await p.evaluate(()=>({ n:csvList.length,
+  jans:csvList.map((r)=>r.jan),
+  note:($('csvMwPushNote').textContent||'').replace(/\s+/g,' ') }));
+console.log('   '+JSON.stringify(all).slice(0,300));
+ok(all.n===2&&all.jans.indexOf('4580416924740')>=0,
+   '★★★まとめて押すと②相場なしも入る（前に決めた方針どおり）');
+ok(/すでに出品リストにある/.test(all.note)||/1件/.test(all.note),
+   '★すでに入っている行は飛ばす');
+ok(/入れなかった行/.test(all.note)&&/後回し/.test(all.note)
+   &&/相場をまだ調べていません/.test(all.note),
+   '★★★入らなかった行の理由を JAN ごとに出す');
+
+console.log('\n=== 1件も入らないときも理由を出す ===');
+await p.evaluate(()=>{
+  mwRows.forEach(function(r){ r.pics_ok=0; });
+  csvList=[]; csvSaveList(); mwListRender();
+  $('csvMwPush').click();
+});
+await p.waitForTimeout(400);
+let non=await p.evaluate(()=>($('csvMwPushNote').textContent||'')
+  .replace(/\s+/g,' '));
+console.log('   '+non.slice(0,220));
+ok(/入れられる行がありません/.test(non),'★そう出す');
+ok(/写真なし/.test(non)&&/件/.test(non),
+   '★★★「写真なし n件」と理由と件数を出す（v223 までは理由が無かった）');
+ok(/貼り付けて取り込む/.test(non),'★★どう直すかも書く');
+
+console.log('\n=== 発送日数がポリシーを超える行 ===');
+let far=await p.evaluate(()=>{
+  mwRows[0].pics_ok=2; mwRows[0].ship_days=9;   // 9＋2＝11日 > 6日
+  const w=mwPushWhy(mwRows[0]);
+  mwRows[0].ship_days=0;
+  return w;
+});
+console.log('   '+far);
+ok(/ハンドリングが足りません/.test(far),
+   '★★★発送日数がポリシーを超える行は入れない（理由を出す）');
 
 await T.done();
 })();
