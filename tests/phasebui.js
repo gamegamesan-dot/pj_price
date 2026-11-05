@@ -21,6 +21,7 @@ const setup=async(o)=>await p.evaluate((o)=>{
   $('autoRvMode').value='off'; $('autoMdMode').value='off';
   $('pbMode').value=o.mode||'plan'; $('pbRestock').value=o.restock||'confirm';
   window.__posts=[]; window.__sync=[]; window.__status=0;
+  window.__low=[]; window.__lowNone=false;
   const real=window.fetch;
   window.fetch=function(u,i){
     const url=String(u), body=(i&&i.body)?JSON.parse(i.body):null;
@@ -34,6 +35,17 @@ const setup=async(o)=>await p.evaluate((o)=>{
     if(/\/sync/.test(url)){ window.__sync.push(body);
       return res({mode:'on',zeroed:2,restocked:1,failed:0}); }
     if(/\/ebay\/pics\/switch/.test(url))return res({ok:true,n:1,items:[]});
+    /* 行の「最安値を今すぐ取り直す」（6.132）。 */
+    if(/\/lowest/.test(url)){
+      window.__low.push(body);
+      if(window.__lowNone)return res({ lowest:{}, at:new Date().toISOString() });
+      const o2={};
+      (body.items||[]).forEach(function(x){
+        o2[x.asin+'|'+x.cond]={ low:7777, lowN:2, total:5,
+          offers:[{p:7777,c:'used'},{p:7777,c:'used'}] };
+      });
+      return res({ lowest:o2, at:new Date().toISOString() });
+    }
     return real(u,i);
   };
   const it=(asin,x)=>Object.assign({asin:asin,cond:'used',scope:'ebay',prefix:'game',
@@ -81,8 +93,11 @@ ok(v.zero===2&&v.restock===2&&v.unknown===1,
    '★★数量0・再調達・内訳不明を分けて数える（未設定は寝かせる扱い）');
 ok(/数量0の予定 3件／再調達の予定 2件/.test(v.note),
    '★★件数を出す（最安値が無い行は数量0のほうで数える）');
-ok(/Amazon最安値が未取得・古い 1件/.test(v.note),
-   '★★Amazon最安値が無い行の件数も出す');
+/* 「古い」と「未取得」は手の打ち方が違うので分けて数える（6.132）。 */
+ok(/未取得 1件/.test(v.note)||/Amazon最安値が古い 1件/.test(v.note),
+   '★★Amazon最安値が無い行の件数も出す（古い／未取得を分けて）');
+ok(/最安値を今すぐ取り直す/.test(v.note),
+   '★★★どう直すか（行のボタン）も書く');
 ok(/eBay はまだ変えません/.test(v.note),'★予定だけのときはそう書く');
 ok(/在庫0時の動作が未設定：1件/.test(v.note),'★★未設定の件数も出す');
 ok(/前回/.test(v.note)&&/数量0 2件/.test(v.note),'★前回の結果を出す');
@@ -265,17 +280,63 @@ console.log('\n=== オフ・作業者のキー ===');
 await setup({mode:'off'});
 await p.waitForTimeout(200);
 ok((await view()).bar==='none','★★オフのときは帯を出さない');
+/* ===== v220（6.132）：最安値を今すぐ取り直す ===== */
+console.log('\n=== 行の「最安値を今すぐ取り直す」===');
+await setup({mode:'plan'});
+await openCsvBoxes(p);
+await p.evaluate(()=>{ $('syncFilter').value=''; syncPage=1; syncRender(); });
+await p.waitForTimeout(150);
+let lb=await p.evaluate(()=>{
+  const d=document.querySelector('#syncList [data-srow="B0PBU00006|used"]');
+  const b=d?d.querySelector('[data-slow]'):null;
+  const d2=document.querySelector('#syncList [data-srow="B0PBU00001|used"]');
+  const b2=d2?d2.querySelector('[data-slow]'):null;
+  return { has:!!b, text:b?b.textContent:'', mark:b?/古い/.test(b.textContent):null,
+    fresh:b2?/古い/.test(b2.textContent):null };
+});
+console.log('   '+JSON.stringify(lb));
+ok(lb.has===true,'★★★行に「最安値を今すぐ取り直す」がある');
+ok(lb.mark===true,'★★★最安値が古い・未取得の行は目立たせる（（古い））');
+ok(lb.fresh===false,'★★新しい行には「（古い）」を付けない');
+await p.click('#syncList [data-srow="B0PBU00006|used"] [data-slow]');
+await p.waitForTimeout(400);
+let lr=await p.evaluate(()=>({ low:window.__low,
+  note:$('syncFixNote').innerText.replace(/\s+/g,' '),
+  row:(function(){ const r=syncRowBy('B0PBU00006|used');
+    return { low:r.amazon_lowest, at:!!r.amazon_lowest_at, n:r.amazon_lowest_n }; })(),
+  btn:(function(){ const d=document.querySelector(
+    '#syncList [data-srow="B0PBU00006|used"] [data-slow]');
+    return d?d.textContent:''; })() }));
+console.log('   '+JSON.stringify(lr));
+ok(lr.low.length===1&&lr.low[0].items.length===1
+   &&lr.low[0].items[0].asin==='B0PBU00006',
+   '★★★その行1件だけを /lowest に送る');
+ok(lr.row.low===7777&&lr.row.at===true,
+   '★★★取り直した最安値を画面の控えに入れる');
+ok(/7,777|取り直しました/.test(lr.note),'★★結果を知らせる');
+ok(!/古い/.test(lr.btn),'★★★取り直したらボタンの「（古い）」が消える');
+/* Amazon に出品が無いとき。 */
+await p.evaluate(()=>{ window.__lowNone=true; window.__low=[]; });
+await p.click('#syncList [data-srow="B0PBU00001|used"] [data-slow]');
+await p.waitForTimeout(400);
+ok(/見つかりませんでした/.test(await p.evaluate(()=>$('syncFixNote').innerText)),
+   '★★取れなかったときはそう知らせる');
+
+console.log('\n=== 作業者のキー ===');
 await setup({mode:'plan',role:'staff'});
 await p.waitForTimeout(300);
 const staff=await p.evaluate(()=>{
   const v2=(sel)=>{ const el=document.querySelector(sel);
     return el?el.getClientRects().length>0:null; };
   return { bar:v2('#syncPbBar'), zero:v2('#syncList [data-szero]'),
-    skip:v2('#syncList [data-spbskip]'), body:document.body.className };
+    skip:v2('#syncList [data-spbskip]'), low:v2('#syncList [data-slow]'),
+    body:document.body.className };
 });
 console.log('   '+JSON.stringify(staff));
 ok(staff.bar===false&&staff.zero===false&&staff.skip===false,
    '★★作業者のキーではフェイズBの帯もボタンも出さない');
+ok(staff.low===false,
+   '★★★「最安値を今すぐ取り直す」も作業者のキーでは出さない（管理者だけ）');
 
 T.done();
 })();

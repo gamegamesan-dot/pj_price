@@ -14976,8 +14976,17 @@ function syncPbBarRender(){
   $('syncPbNote').innerHTML=
     '<b>フェイズB：'+(mode==='on'?'オン':'予定だけ表示')+'</b>　'
     +'数量0の予定 '+(zero.length+nolow.length)+'件／再調達の予定 '+rest.length+'件'
-    +(nolow.length?('（<span style="color:var(--bad)">Amazon最安値が未取得・古い '
-      +nolow.length+'件</span>）'):'')
+    /* 「古い」と「未取得」は手の打ち方が違うので分けて数える（6.132）。
+       古い行は、判断の前に pj-sync がその場で取り直すようになった（7.96）。
+       それでも取れなかった行だけここに残る。 */
+    +(nolow.length?('（<span style="color:var(--bad)">'
+      +(function(){
+        var o=nolow.filter(function(r){
+          return /古い/.test(String(syncPbActOf(r).why||'')); }).length;
+        var n=nolow.length-o;
+        return (o?('Amazon最安値が古い '+o+'件'):'')
+          +((o&&n)?'／':'')+(n?('未取得 '+n+'件'):'');
+      })()+'</span>　行の<b>「最安値を今すぐ取り直す」</b>で直せます）'):'')
     +(unk.length?('／内訳不明 '+unk.length+'件'):'')
     +(mode==='plan'?'　<b>eBay はまだ変えません</b>':'')
     +'　<span style="opacity:.8">再調達は'
@@ -16411,6 +16420,59 @@ function syncPbSkipBtn(r,key){
     +(on?';background:#666;color:#fff;border-color:#666':'')+'">'
     +(on?'動かさない（解除する）':'今回は動かさない')+'</button>';
 }
+/* 最安値を今すぐ取り直す（6.132・管理者だけ）。
+   日次（60件）と3時間ごとでは順番が回ってこないことがあり、
+   「Amazon最安値が古い（24時間超）ので再調達しません」で止まる行が出る。
+   その行だけ、その場で取り直せるようにする（1件＝getItemOffersBatch 1回）。 */
+function syncLowBtn(r,key){
+  if(!/^B[0-9A-Z]{9}$/.test(String(r.asin||'')))return '';
+  var lo=syncPbLow(r);
+  var old=!String(r.amazon_lowest_at||'').trim()||!lo.fresh;
+  return '<button class="btn cfgprice" data-slow="'+esc(key)+'"'
+    +' style="padding:5px 8px;font-size:12px'
+    +(old?';background:#8a6d00;color:#fff;border-color:#8a6d00':'')+'">'
+    +'最安値を今すぐ取り直す'+(old?'（古い）':'')+'</button>';
+}
+/* 1行だけ /lowest で取り直して、その行を作り直す。 */
+function syncLowNow(t,r,key){
+  var back=t.textContent;
+  if(!syncKeyReady('syncFixNote'))return;
+  t.disabled=true; t.textContent='取得中…';
+  $('syncFixNote').textContent='Amazonに問い合わせています…（'+(r.title||r.asin)+'）';
+  fetch(syncUrl()+'/lowest',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({ items:[{ asin:r.asin, cond:(r.cond==='new')?'new':'used' }] })})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      var at=d.at||new Date().toISOString();
+      var v=(d.lowest||{})[String(r.asin)+'|'+((r.cond==='new')?'new':'used')];
+      if(!v||!(+v.low>0)){
+        $('syncFixNote').textContent='Amazon に出品が見つかりませんでした（'
+          +(r.title||r.asin)+'）';
+        t.disabled=false; t.textContent=back;
+        return;
+      }
+      /* 画面の控えにも入れて、この行だけ作り直す（ほかの行は触らない）。 */
+      r.amazon_lowest=+v.low||0; r.amazon_lowest_n=+v.lowN||0;
+      r.amazon_offers=+v.total||0; r.amazon_lowest_at=at;
+      if(v.offers)r.amazon_offers_json=JSON.stringify(v.offers);
+      var vn=(d.lowest||{})[String(r.asin)+'|new'];
+      if(vn&&r.cond!=='new'){
+        /* amazon_new_at は /status が返さない列なので持たない（7.87）。 */
+        r.amazon_new_low=+vn.low||0; r.amazon_new_n=+vn.lowN||0;
+      }
+      syncSaveCache();
+      $('syncFixNote').innerHTML='最安値を取り直しました：'+esc(r.title||r.asin)
+        +'　<b>'+yen(+v.low||0)+'</b>（最安グループ '+(+v.lowN||0)+'人／出品 '
+        +(+v.total||0)+'件）';
+      syncRowReplace(key);
+      try{ syncPbBarRender(); }catch(e){}
+    })
+    ['catch'](function(e){
+      t.disabled=false; t.textContent=back;
+      $('syncFixNote').textContent='取得に失敗しました：'+e.message;
+    });
+}
 function syncMarkStopBtn(r,key){
   if(!String(r.ebay_item_id||'').trim())return '';
   var on=syncMarkStopOf(r);
@@ -16782,7 +16844,7 @@ function syncRowHtml(r,key){
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
       +syncSkResumeBtn(r,key)+syncRestockingBtn(r,key)
       +syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)
-      +syncZeroActBtn(r,key)+syncPbSkipBtn(r,key)+'</div>'
+      +syncZeroActBtn(r,key)+syncPbSkipBtn(r,key)+syncLowBtn(r,key)+'</div>'
       +detHtml('sync',key,det)
       +'</div>';
 }
@@ -17441,7 +17503,8 @@ $('syncList').addEventListener('click',function(e){
   var km=t.getAttribute('data-smstop'), kf=t.getAttribute('data-sefirst');
   var kz=t.getAttribute('data-szero'), kp=t.getAttribute('data-spbskip');
   var ks=t.getAttribute('data-sresume');          // 値下げを再開（6.77）
-  var key=kh||ko||kr||kd||km||kf||kz||kp||ks; if(!key)return;
+  var kl=t.getAttribute('data-slow');             // 最安値を今すぐ取り直す（6.132）
+  var key=kh||ko||kr||kd||km||kf||kz||kp||ks||kl; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
   if(!r)return;
@@ -17491,6 +17554,10 @@ $('syncList').addEventListener('click',function(e){
     /* 今回は動かさない（フェイズBの対象から外す）。 */
     if(roleDenyPrice('syncFixNote'))return;
     syncFlagSend(t,r,'pb_skip',!syncPbSkipOf(r),'今回は動かさない');
+  }else if(kl){
+    /* 最安値を今すぐ取り直す（6.132）。管理者だけ・1件ずつ。 */
+    if(roleDenyPrice('syncFixNote'))return;
+    syncLowNow(t,r,key);
   }else{
     syncFlagSend(t,r,'one_off',!Number(r.one_off||0),'一点物');
   }
@@ -17915,7 +17982,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v219';   // sw.js の const V と必ず同じ値にする
+var APP_V='v220';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

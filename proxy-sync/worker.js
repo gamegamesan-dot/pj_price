@@ -2101,15 +2101,21 @@ async function syncPricing(env, run) {
    上限（PRICING_HOT_MAX）を超えた回は、取り切れなかった件数を
    画面（/status の hot_pricing）と Discord に出す。 */
 function pricingHotWhere() {
-  /* 再調達中、またはフェイズBが見る行（FBAの販売可能が0・出品中・
-     手元在庫／無在庫／一点物でない）。pbTarget の細かい条件（予約済みの内訳・
-     入庫中・セール中）まではここで見ない（少し広めに取るだけなので害がない）。 */
-  return `scope='ebay' AND COALESCE(ebay_item_id,'')<>'' AND ebay_qty>0
+  /* 次の3種類。pbTarget の細かい条件（予約済みの内訳・入庫中・セール中）までは
+     ここで見ない（少し広めに取るだけなので害がない）。
+     ① 再調達中（restocking=1）
+     ② フェイズBが見る行（FBAの販売可能が0・数量≧1）
+     ③ **再調達の候補**（在庫0時の動作＝再調達・FBAの販売可能が0・出品あり。7.96）
+        数量0にしたあとの行は ② から外れる（ebay_qty>0 でなくなる）ので、
+        最安値が古いまま「古いので再調達しません」で止まっていた。 */
+  return `scope='ebay' AND COALESCE(ebay_item_id,'')<>''
+            AND COALESCE(on_hand,0)=0
+            AND COALESCE(dropship,0)=0
             AND (restocking=1
                  OR (COALESCE(fba_available,-1)=0
-                     AND COALESCE(on_hand,0)=0
-                     AND COALESCE(dropship,0)=0
-                     AND COALESCE(one_off,0)=0))`;
+                     AND COALESCE(one_off,0)=0
+                     AND (ebay_qty>0 OR COALESCE(mode,'')='restock'))
+                 OR (COALESCE(mode,'')='restock' AND COALESCE(pb_act,'')='restock'))`;
 }
 async function syncPricingHot(env, run) {
   const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0 };
@@ -4002,6 +4008,77 @@ function pbTarget(r) {
   return { act: "zero", why: (String(r.mode || "") === "end") ? "終了の指定（数量0）"
                                                              : "寝かせる" };
 }
+/* ---- 判断の前に最安値をその場で取り直す（7.96）----
+   FBA で売れた直後の行は、日次（60件）と3時間ごと（上限あり）では
+   順番が回ってこないことがあり、「Amazon最安値が古い（24時間超）ので
+   再調達しません」で止まっていた。再調達するかを判断する行だけ、
+   **判断の直前**に getItemOffersBatch で取り直す（1回20件まで）。
+   取り直せなかった行は、今までどおり「古いので再調達しません」とする。 */
+const PB_LOW_MAX = 40;              // 1回に取り直す上限（20件×2回）
+function pbLowFresh(r) {
+  const t = Date.parse(String((r && r.amazon_lowest_at) || ""));
+  return !!t && (Date.now() - t) <= PB_WANT_MS;
+}
+/* 再調達の候補で、最安値が古い（または一度も取っていない）行だけを選ぶ。 */
+function pbLowNeed(rows) {
+  return (rows || []).filter((r) =>
+    String((r && r.mode) || "") === "restock"
+    && !Number((r && r.one_off) || 0) && !Number((r && r.dropship) || 0)
+    && !Number((r && r.on_hand) || 0)
+    && String((r && r.ebay_item_id) || "").trim()
+    && !pbLowFresh(r));
+}
+async function pbLowRefresh(env, run, rows) {
+  const res = { picked: 0, got: 0, left: 0, still: 0, calls: 0 };
+  const need = pbLowNeed(rows);
+  res.picked = need.length;
+  if (!need.length) return res;
+  const list = need.slice(0, PB_LOW_MAX);
+  res.left = need.length - list.length;
+  const keys = list.map((r) => ({ asin: String(r.asin), cond: String(r.cond) }));
+  let low = {};
+  try {
+    low = await amazonLowest(env, run, lowestReqs(keys));
+    res.calls = Math.ceil(keys.length / PRICING_BATCH);
+  } catch (e) {
+    run.notes.push("再調達の前の最安値：取り直せません " + String((e && e.message) || e));
+    res.still = list.length;
+    return res;
+  }
+  const at = nowIso();
+  const stmts = [];
+  for (const r of list) {
+    const v = low[lowestKey(r)];
+    if (!v) { res.still++; continue; }
+    /* この回の判断にすぐ使えるよう、**行の中身も書き換える**。 */
+    r.amazon_lowest = v.low; r.amazon_lowest_n = v.lowN;
+    r.amazon_offers = v.total;
+    r.amazon_offers_json = JSON.stringify(v.offers || []);
+    r.amazon_lowest_at = at;
+    res.got++;
+    stmts.push(env.DB.prepare(
+      `UPDATE items SET amazon_lowest=?3, amazon_lowest_n=?4, amazon_offers=?5,
+         amazon_offers_json=?7, amazon_lowest_at=?6, updated_at=?6
+       WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, v.low, v.lowN, v.total, at,
+         JSON.stringify(v.offers || [])));
+    if (String(r.cond) !== "new") {
+      const vn = low[String(r.asin) + "|new"];
+      if (vn) {
+        /* amazon_new_at は**読まない列**（D1 には書くが行には持たない。7.87）。 */
+        r.amazon_new_low = vn.low; r.amazon_new_n = vn.lowN;
+        stmts.push(env.DB.prepare(
+          `UPDATE items SET amazon_new_low=?3, amazon_new_n=?4, amazon_new_at=?5,
+             updated_at=?5 WHERE asin=?1 AND cond=?2`)
+          .bind(r.asin, r.cond, vn.low, vn.lowN, at));
+      }
+    }
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("再調達の前の最安値：対象 " + res.picked + "件のうち " + res.got
+    + "件を取り直し" + (res.still ? ("／取れなかった " + res.still + "件") : "")
+    + (res.left ? ("／上限 " + PB_LOW_MAX + "件で次回に回した " + res.left + "件") : ""));
+  return res;
+}
 /* 再調達を実行できるか。できないときは理由を返す（数量0のまま）。 */
 function pbRestockWhy(r) {
   const want = Number(r.pb_want || 0);
@@ -4123,6 +4200,14 @@ function pbNotifyText(res, st) {
     t.push("売り越しの恐れがある行 " + (res.risky || 0) + "件を見ました（対象外 "
       + res.skipped + "件）");
   }
+  /* 判断の前に取り直した最安値（7.96）。取り直せず古いままだった件数も出す。 */
+  if (res.low && (res.low.picked || res.low_stale))
+    t.push("Amazon最安値をその場で取り直した " + Number(res.low.got || 0) + "件"
+      + (Number(res.low.still || 0) ? ("／取れなかった " + res.low.still + "件") : "")
+      + (Number(res.low.left || 0)
+         ? ("／上限 " + PB_LOW_MAX + "件で次回に回した " + res.low.left + "件") : "")
+      + (res.low_stale
+         ? ("　⚠️ 最安値が古いままで再調達しなかった " + res.low_stale + "件") : ""));
   if (res.bofix)
     t.push("ベストオファーの自動拒否額を直してやり直した " + res.bofix + "件（22003）");
   const wl = whyLine(res.fails);
@@ -4157,7 +4242,9 @@ async function jobPhaseB(env, opt) {
                 mode: "off", restock_mode: "confirm", picked: 0, zero_plan: 0,
                 restock_plan: 0, zeroed: 0, restocked: 0, failed: 0, skipped: 0,
                 capped: 0, unknown: 0, unknown_old: 0, ended: 0, used: 0,
-                plan: [] };
+                /* 最安値の取り直し（7.96）と、取り直しても古いままだった件数 */
+                low: { picked: 0, got: 0, still: 0, left: 0, calls: 0 },
+                low_stale: 0, plan: [] };
   try {
     const st = await pbSettings(env);
     res.mode = st.mode;
@@ -4185,6 +4272,9 @@ async function jobPhaseB(env, opt) {
       run.notes.push("⚠ 売り越しの恐れが " + res.risky + "件あり、1回で見る "
         + PB_PICK_LIMIT + "件を超えました（残りは次の回・古い順に進みます）");
     }
+    /* 再調達の候補は、**判断の前に最安値を取り直す**（7.96）。
+       pb_want の計算（selfFill）もこの新しい最安値で行う。 */
+    res.low = await pbLowRefresh(env, run, (q && q.results) || []);
     /* 再調達の売値（pb_want）を自分で計算して埋める（7.52）。
        pj_price が30分以内に送った値はそのまま使う。 */
     const selfP = await selfFill(env, run, (q && q.results) || []);
@@ -4315,9 +4405,21 @@ async function jobPhaseB(env, opt) {
               AND COALESCE(pb_skip,0)=0 AND COALESCE(pb_fail,0)<${PB_FAIL_WARN}
             ORDER BY COALESCE(pb_at,'') ASC LIMIT ${left}`).all();
         const rs = (q2 && q2.results) || [];
+        /* 数量0にしたあとの行は3時間ごとの対象から外れていたので、
+           ここでも**判断の直前に取り直す**（7.96）。 */
+        const low2 = await pbLowRefresh(env, run, rs);
+        res.low = { picked: Number((res.low && res.low.picked) || 0) + low2.picked,
+                    got: Number((res.low && res.low.got) || 0) + low2.got,
+                    still: Number((res.low && res.low.still) || 0) + low2.still,
+                    left: Number((res.low && res.low.left) || 0) + low2.left,
+                    calls: Number((res.low && res.low.calls) || 0) + low2.calls };
         const st2 = [];
         for (const r of rs) {
           const why = pbRestockWhy(r);
+          /* 再調達できなかった行のうち、最安値が古いまま（取り直せなかった）もの。
+             最安値が古いと pb_want も計算できないので、理由は
+             「目標の売値が届いていません」になることもある（7.96）。 */
+          if (why && !pbLowFresh(r)) res.low_stale++;
           if (why) {
             st2.push(env.DB.prepare(
               `UPDATE items SET pb_why=?3, updated_at=?4 WHERE asin=?1 AND cond=?2`)
@@ -9180,6 +9282,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
+  pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,
   mwDgOver, mwDgMemGet, mwDgMemSet, mwPtypeAll, mwPtypeList, MW_DG_SAFE_RE,
   mwDgNoPt, mwPutType, mwPutTypeBad, mwPtypeGuess, MW_PT_OFFER_NG,
   MW_PT_ERR_MIN,

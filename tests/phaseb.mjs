@@ -12,11 +12,14 @@ import { harness, loadWorker, makeEnv, post, asJson } from './lib.mjs';
 const T=harness('Worker：フェイズB（FBAで売れたら数量0・再調達）');
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('phaseb');
-const env=makeEnv({ STAFF_KEY:'staff-key-123' });
+/* SP-API の鍵も入れる（7.96 で判断の前に最安値を取り直すため）。 */
+const env=makeEnv({ STAFF_KEY:'staff-key-123',
+  LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs', LWA_REFRESH_TOKEN:'rt' });
 const now=new Date().toISOString();
 
 /* eBay の出品の状態をまねる。calls に呼び出しを積む。 */
 let calls=[], listing={}, endOnZero=false, failIds={}, notes=[];
+let spCalls=[], spLow={};
 const xmlItem=(id)=>{
   const l=listing[id]||{qty:1,price:30,status:'Active'};
   return '<GetItemResponse><Ack>Success</Ack><Item><ItemID>'+id+'</ItemID>'
@@ -78,6 +81,25 @@ globalThis.fetch=async(u,i)=>{
     }
     throw new Error('想定外の呼び出し: '+name);
   }
+  /* Amazon（SP-API）の最安値。7.96 で「判断の直前に取り直す」ようになった。 */
+  if(/o2\/token/.test(url))
+    return new Response(JSON.stringify({access_token:'t',expires_in:3600}),{status:200});
+  if(/itemOffers/.test(url)){
+    const body=JSON.parse(String(o.body||'{}'));
+    spCalls.push(body.requests.map((q)=>String(q.uri||'')).join(','));
+    return new Response(JSON.stringify({ responses:body.requests.map((q)=>{
+      const m=/\/items\/([A-Z0-9]{10})\/offers/.exec(String(q.uri||''));
+      const a=m?m[1]:'';
+      const v=spLow[a];
+      if(v===undefined)return { request:q, body:{ payload:{ ASIN:a, Offers:[] } } };
+      return { request:q, body:{ payload:{ ASIN:a, ItemCondition:q.ItemCondition,
+        Offers:[{ SubCondition:(q.ItemCondition==='New')?'new':'used',
+          ListingPrice:{ Amount:v }, Shipping:{ Amount:0 } },
+          { SubCondition:(q.ItemCondition==='New')?'new':'used',
+          ListingPrice:{ Amount:v }, Shipping:{ Amount:0 } }],
+        Summary:{ TotalOfferCount:2 } } } };
+    })}),{status:200});
+  }
   if(/discord/.test(url)){ notes.push(JSON.parse(String(o.body||'{}')).content||'');
     return new Response('',{status:204}); }
   throw new Error('想定外の通信: '+url);
@@ -116,6 +138,7 @@ const wipe=async()=>{
   await env.DB.prepare('DELETE FROM pb_log').run();
   await env.DB.prepare('DELETE FROM pb_runs').run();
   calls=[]; listing={}; failIds={}; endOnZero=false; notes=[];
+  spCalls=[]; spLow={};
 };
 let atSeq=0;
 const setCfg=async(o)=>await asJson(await worker.fetch(post('/settings',
@@ -345,5 +368,98 @@ const staff2=await asJson(await worker.fetch(new Request('https://x/sync',
   {method:'POST',headers:{'X-PJ-Key':'staff-key-123','content-type':'application/json'},
    body:JSON.stringify({kind:'phaseb',approve:true})}),env));
 ok(staff2.status===403,'★★作業者キーでは実行できない');
+
+/* ========== ここから v220（7.96）==========
+   「Amazon最安値が古い（24時間超）ので再調達しません」で止まる行があった。
+   最安値の取り直しは日次（60件）と3時間ごと（上限あり）だけなので、
+   FBA で売れた直後の行は順番が回ってこない。
+   → 再調達するかを判断する行は、**判断の直前に取り直す**。 */
+console.log('\n=== 判断の前に最安値をその場で取り直す ===');
+ok(W.PB_LOW_MAX===40,'★1回に取り直す上限は40件（getItemOffersBatch 20件×2回）');
+const old2=new Date(Date.now()-3*24*3600000).toISOString();
+ok(W.pbLowFresh({ amazon_lowest_at:now })===true,'★★いま取った行は新しい');
+ok(W.pbLowFresh({ amazon_lowest_at:old2 })===false,'★★3日前の行は古い');
+ok(W.pbLowFresh({})===false,'★★一度も取っていない行も「古い」として扱う');
+/* 取り直す対象は「再調達の候補」だけ（寝かせる・一点物・無在庫は取らない）。 */
+const need=W.pbLowNeed([
+  { asin:'B00AAAAAA1', cond:'used', mode:'restock', ebay_item_id:'1' },
+  { asin:'B00AAAAAA2', cond:'used', mode:'hold', ebay_item_id:'1' },
+  { asin:'B00AAAAAA3', cond:'used', mode:'restock', ebay_item_id:'1', one_off:1 },
+  { asin:'B00AAAAAA4', cond:'used', mode:'restock', ebay_item_id:'1', dropship:1 },
+  { asin:'B00AAAAAA5', cond:'used', mode:'restock', ebay_item_id:'' },
+  { asin:'B00AAAAAA6', cond:'used', mode:'restock', ebay_item_id:'1',
+    amazon_lowest_at:now }]);
+console.log('   '+JSON.stringify(need.map((x)=>x.asin)));
+ok(need.length===1&&need[0].asin==='B00AAAAAA1',
+   '★★★取り直すのは「在庫0時＝再調達・出品あり・最安値が古い」行だけ');
+
+await wipe();
+await setCfg({ pbMode:'on', pbRestock:'auto' });
+/* FBA で売れた直後の行。最安値は3日前のまま（目標の売値もまだ無い）。 */
+const idR=await seed('B00FRESH01',{ mode:'restock', amazon_lowest:3000,
+  amazon_offers:3, ebay_price:30 });
+await env.DB.prepare(
+  `UPDATE items SET amazon_lowest_at=?1, amazon_lowest_n=2, pb_want=NULL,
+     pb_want_at=NULL WHERE asin='B00FRESH01'`).bind(old2).run();
+spLow['B00FRESH01']=3000;
+let rr=await pb();
+console.log('   '+JSON.stringify({low:rr.low, zeroed:rr.zeroed,
+  restocked:rr.restocked, stale:rr.low_stale}));
+console.log('   SP: '+JSON.stringify(spCalls));
+ok(spCalls.length>=1&&/B00FRESH01/.test(spCalls.join(',')),
+   '★★★判断の前に getItemOffersBatch で取り直す');
+ok(rr.low&&rr.low.got>=1,'★★取り直した件数を返す');
+let fr=await env.DB.prepare(
+  `SELECT amazon_lowest, amazon_lowest_at FROM items WHERE asin='B00FRESH01'`).first();
+ok(Date.parse(String(fr.amazon_lowest_at))>Date.parse(old2),
+   '★★★D1 の最安値の時刻が新しくなる');
+let r1=await row('B00FRESH01');
+console.log('   '+JSON.stringify(r1));
+ok(r1.ebay_qty===1&&Number(r1.restocking)===1,
+   '★★★その場で取り直せたので再調達まで進む（古いままで止まらない）');
+ok(!/最安値が古い|目標の売値/.test(String(r1.pb_why||'')),
+   '★★★「古いので再調達しません」にならない');
+ok(rr.low_stale===0,'★古いままだった件数は0');
+
+console.log('\n=== 取り直せなかったときは今までどおり ===');
+await wipe();
+await setCfg({ pbMode:'on', pbRestock:'auto' });
+await seed('B00FRESH02',{ mode:'restock', amazon_lowest:3000, amazon_offers:3 });
+await env.DB.prepare(
+  `UPDATE items SET amazon_lowest_at=?1, pb_want=NULL, pb_want_at=NULL
+     WHERE asin='B00FRESH02'`).bind(old2).run();
+/* Amazon に出品が無い（取り直せない）場面。 */
+rr=await pb();
+console.log('   '+JSON.stringify({low:rr.low, zeroed:rr.zeroed, stale:rr.low_stale}));
+let r2=await row('B00FRESH02');
+console.log('   '+JSON.stringify({qty:r2.ebay_qty, why:r2.pb_why}));
+ok(rr.low&&rr.low.still>=1,'★★取れなかった件数を返す');
+ok(r2.ebay_qty===0&&Number(r2.restocking||0)===0,
+   '★★★取り直せなければ数量0のまま（今までどおり）');
+ok(/再調達しません/.test(String(r2.pb_why||'')),'★★理由を残す');
+ok(rr.low_stale>=1,'★★★古いままで再調達しなかった件数を返す（報告に使う）');
+ok(/最安値が古いまま/.test(notes.join('\n'))
+   ||/取り直した/.test(notes.join('\n')),
+   '★★Discord の知らせにも出す');
+
+console.log('\n=== 3時間ごとの対象に再調達の候補も入れる ===');
+const w=W.pricingHotWhere();
+console.log('   '+w.replace(/\s+/g,' ').slice(0,200));
+ok(/restocking=1/.test(w),'★再調達中は今までどおり対象');
+ok(/mode,''\)='restock'/.test(w),
+   '★★★在庫0時＝再調達の行も対象に入る（数量0にしたあとも）');
+ok(!/AND ebay_qty>0\s*\n?\s*AND \(restocking/.test(w),
+   '★★数量0の行を一律に外さない（v219 はここで外していた）');
+/* 実際に拾えるか（数量0・pb_act=restock の行）。 */
+await wipe();
+await seed('B00HOT00001',{ mode:'restock', ebay_qty:0 });
+await env.DB.prepare(
+  `UPDATE items SET ebay_qty=0, pb_act='restock', amazon_lowest_at=?1
+     WHERE asin='B00HOT00001'`).bind(old2).run();
+const hot=await env.DB.prepare(
+  `SELECT asin FROM items WHERE ${W.pricingHotWhere()}`).all();
+console.log('   '+JSON.stringify((hot.results||[]).map((x)=>x.asin)));
+ok((hot.results||[]).some((x)=>x.asin==='B00HOT00001'),
+   '★★★数量0にした再調達の候補が3時間ごとの対象に入る');
 
 T.done();
