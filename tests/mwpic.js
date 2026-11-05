@@ -2,11 +2,12 @@
    会員サイトの自動取得は作らない方針のまま、**人が見ているページから送る**。
    ・一覧の行に「MW で検索」（/buy/?q=JAN を新しいタブで開く）
    ・ブックマークレットは**開いているページだけ**を読み、
-     商品番号（products/…/NNNNNNNN.jpg）と JAN の組を作って pj に渡す
-   ・JAN が決まらない画面では**何も送らない**
-   ・pj は #mwpic=… を読んで帯を出し、**人が「取り込む」を押してから**
-     今までの口（POST /mw/img）で取り込む
-   ・鍵はブックマークに入れない（pj を開いて渡す） */
+     商品番号（products/…/NNNNNNNN.jpg）と JAN の組を作る
+   ・v219（6.131）：pj は**開かない**。「JAN:商品番号」を**クリップボードにコピー**し、
+     pj の「MW の写真を貼り付けて取り込む」に貼って取り込む
+     （ホーム画面のアプリと Safari では設定が別で、Safari 側の pj では取り込めない）
+   ・JAN が決まらない画面では**何も出さない**
+   ・鍵はブックマークに入れない（送るのは pj の側） */
 const { harness, openCsvBoxes } = require('./lib');
 const T = harness('画面：MW の写真の半自動');
 const ok = T.ok;
@@ -81,10 +82,12 @@ console.log('\n=== ブックマークレット ===');
 const code=await p.evaluate(()=>mwMarkCode());
 console.log('   長さ '+code.length+' / '+code.slice(0,60)+'…');
 ok(code.indexOf('javascript:')===0,'★★★javascript: で始まる1行');
-ok(code.length<2600,'★短い（ブックマークに入る）');
+ok(code.length<5000,'★1行におさまる長さ（ブックマークに入る）');
 const src=decodeURIComponent(code.replace(/^javascript:/,''));
 ok(src.indexOf('syncKey')<0&&src.indexOf('X-PJ-Key')<0&&src.indexOf("'k'")<0,
-   '★★★鍵はブックマークに入らない（pj を開いて渡す）');
+   '★★★鍵はブックマークに入らない（送るのは pj の側）');
+ok(src.indexOf('window.open')<0&&src.indexOf('#mwpic')<0,
+   '★★★pj を開かない（6.131。ホーム画面のアプリと設定が別になる）');
 ok(!/matchingworld\.asia\/(buy|products)/.test(src)
    &&src.indexOf('fetch(')<0&&src.indexOf('XMLHttpRequest')<0,
    '★★★ほかのページを取りに行かない（開いているページだけを読む）');
@@ -105,14 +108,33 @@ const HTML=(rows,extra)=>'<!doctype html><meta charset="utf-8"><body>'
 const ROW=(id,name,jan)=>'<tr><td><a href="#"><img src="/products/'
   +(Math.floor(id/10000)*10000)+'/'+(Math.floor(id/100)*100)+'/'+id+'.jpg"></a></td>'
   +'<td>'+name+(jan?('<br>JAN'+jan):'')+'</td><td>在庫 9</td></tr>';
-const run=async(q)=>await q.evaluate((s)=>{
-  window.__open=null;
-  window.open=function(u){ window.__open=u; return { focus:function(){} }; };
-  window.__alert=null;
-  window.alert=function(m){ window.__alert=m; };
-  eval(s);
-  return { url:window.__open, alert:window.__alert };
-},src);
+const run=async(q,noClip)=>{
+  const out=await q.evaluate(([s,noClip])=>{
+    window.__open=null;
+    window.open=function(u){ window.__open=u; return { focus:function(){} }; };
+    window.__alert=null;
+    window.alert=function(m){ window.__alert=m; };
+    window.__clip=null;
+    /* クリップボードに書けるとき／書けないときの両方を試せるようにする。 */
+    try{
+      Object.defineProperty(navigator,'clipboard',{ configurable:true, value:(noClip
+        ?undefined
+        :{ writeText:function(t){ window.__clip=t; return Promise.resolve(); } }) });
+    }catch(e){}
+    document.execCommand=function(c){ if(c==='copy')window.__exec=1; return false; };
+    eval(s);
+    return true;
+  },[src,!!noClip]);
+  await q.waitForTimeout(120);
+  return await q.evaluate(()=>{
+    const d=document.body.lastElementChild;
+    const t=d&&d.querySelector?d.querySelector('textarea'):null;
+    return { url:window.__open, alert:window.__alert, clip:window.__clip,
+      exec:window.__exec||0, box:t?String(t.value||''):'',
+      msg:d?String(d.textContent||'').replace(/\s+/g,' '):'',
+      sel:!!(t&&document.activeElement===t&&t.selectionEnd>0) };
+  });
+};
 
 const ctx=p.context();
 let q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,
@@ -120,18 +142,30 @@ let q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,
     '<script>var d={jan:"'+JAN+'"};</script>'));
 let r=await run(q);
 console.log('   '+JSON.stringify(r));
-ok(!!r.url&&r.url.indexOf('#mwpic=')>0,'★★★pj を開いて渡す');
-ok(decodeURIComponent(r.url.split('#mwpic=')[1])===JAN+':'+ID,
-   '★★★JAN と商品番号の組を渡す（JAN は検索のアドレスから取る）');
-ok(r.url.indexOf('matchingworld')<0,'★MW のページには何も残さない');
+ok(!r.url,'★★★pj は開かない（ホーム画面のアプリと Safari で設定が別・6.131）');
+ok(r.clip===JAN+':'+ID,
+   '★★★「JAN:商品番号」をクリップボードにコピーする');
+ok(/コピーしました/.test(r.msg)&&/貼り付け/.test(r.msg),
+   '★★★「コピーしました。pj に戻って貼り付けてください」と出す');
+ok(r.box===JAN+':'+ID,'★★枠にも同じ文字を出す（手でコピーできる）');
+await q.close();
+
+console.log('\n=== コピーできない端末 ===');
+q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,
+  HTML(ROW(10970132,'ゼルダの伝説 時のオカリナ')));
+r=await run(q,1);
+console.log('   '+JSON.stringify({sel:r.sel,exec:r.exec,msg:r.msg.slice(0,60)}));
+ok(r.box===JAN+':'+ID,'★★★枠に出す');
+ok(r.sel===true,'★★★選んだ状態にする（長押しで「コピー」が出せる）');
+ok(/長押し/.test(r.msg),'★★どうすればよいかを書く');
 await q.close();
 
 console.log('\n=== 複数の社が出たとき ===');
 q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,
   HTML(ROW(10970132,'ゼルダ（M200）')+ROW(10970140,'ゼルダ（MC02）')));
 r=await run(q);
-console.log('   '+decodeURIComponent(String(r.url).split('#mwpic=')[1]||''));
-ok(decodeURIComponent(r.url.split('#mwpic=')[1])===JAN+':10970132.10970140',
+console.log('   '+String(r.clip));
+ok(r.clip===JAN+':10970132.10970140',
    '★★★同じ JAN の写真はまとめて渡す（社が複数でも）');
 await q.close();
 
@@ -139,8 +173,8 @@ console.log('\n=== JAN が違う行は送らない ===');
 q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,
   HTML(ROW(10970132,'ゼルダ','4902370554922')+ROW(10970999,'別の商品','4902370550467')));
 r=await run(q);
-console.log('   '+decodeURIComponent(String(r.url).split('#mwpic=')[1]||''));
-ok(decodeURIComponent(r.url.split('#mwpic=')[1])===JAN+':'+ID,
+console.log('   '+String(r.clip));
+ok(r.clip===JAN+':'+ID,
    '★★★JAN が一致するものだけを渡す（検索した JAN と違う行は外す）');
 await q.close();
 
@@ -148,8 +182,8 @@ console.log('\n=== JAN が分からない画面では何も送らない ===');
 q=await mwPage(ctx,'https://matchingworld.asia/buy/list/',
   HTML(ROW(10970132,'なにかの商品')));
 r=await run(q);
-console.log('   '+JSON.stringify(r));
-ok(!r.url,'★★★当てずっぽうでは送らない');
+console.log('   '+JSON.stringify({clip:r.clip,alert:r.alert}));
+ok(!r.clip,'★★★当てずっぽうではコピーしない');
 ok(/JAN で検索した画面/.test(String(r.alert)),
    '★★どうすればよいかを知らせる');
 await q.close();
@@ -157,7 +191,7 @@ await q.close();
 console.log('\n=== 写真が1枚も無い画面 ===');
 q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,HTML(''));
 r=await run(q);
-ok(!r.url&&!!r.alert,'★★写真が無ければ送らない');
+ok(!r.clip&&!!r.alert,'★★写真が無ければコピーしない');
 await q.close();
 
 console.log('\n=== pj で受け取る（#mwpic）===');
@@ -203,22 +237,115 @@ await p.evaluate(()=>{ $('mwPicGo').click(); });
 await p.waitForTimeout(100);
 ok(await p.evaluate(()=>$('mwPicBar').style.display==='none'),'★帯を閉じられる');
 
+console.log('\n=== 貼り付けて取り込む（6.131）===');
+/* ブックマークレットがコピーする形を、そのまま貼る。 */
+await p.evaluate(()=>{ switchTab('F'); $('mwPicPasteBox').open=true;
+  $('mwPicIn').value=''; window.__img=[]; window.__up=0; });
+got=await p.evaluate((j)=>mwPicRead(j+':10970132.10970140'),JAN);
+console.log('   '+JSON.stringify(got));
+ok(got.length===1&&got[0].ids.length===2,'★★★貼り付けた形を読める');
+ok(await p.evaluate(()=>mwPicRead('4902370554922:10970132\n4902370550467:10921742')
+     .length)===2,'★★★複数まとめて貼れる（改行区切り）');
+ok(await p.evaluate(()=>mwPicRead(
+     '4902370554922:10970132|4902370550467:10921742').length)===2,
+   '★★| 区切りでも読める');
+ok(await p.evaluate(()=>{
+     const g=mwPicRead('JAN 4902370554922 の写真 10970132, 10970140');
+     return g.length===1&&g[0].ids.length===2; }),
+   '★★★空白やカンマが混じっても読める（手で直せる）');
+ok(await p.evaluate(()=>{
+     const g=mwPicRead('4902370554922:10970132\n4902370554922:10970140');
+     return g.length===1&&g[0].ids.length===2; }),
+   '★★同じ JAN が2行あればまとめる');
+ok(await p.evaluate(()=>mwPicRead('123:10970132').length)===0,
+   '★★13桁でない JAN は受けない');
+ok(await p.evaluate(()=>mwPicRead('4902370554922').length)===0,
+   '★商品番号が無ければ受けない');
+/* 貼ると、取り込む前に中身を知らせる。 */
+await p.evaluate((j)=>{
+  $('mwPicIn').value=j+':10970132';
+  $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
+},JAN);
+await p.waitForTimeout(150);
+let pn=await p.evaluate(()=>({ note:($('mwPicInNote').innerText||'')
+  .replace(/\s+/g,' '), posts:window.__img.length }));
+console.log('   '+JSON.stringify(pn));
+ok(/1件/.test(pn.note)&&/1枚/.test(pn.note)&&new RegExp(JAN).test(pn.note),
+   '★★★貼ったら「何件・何枚」を先に出す');
+ok(pn.posts===0,'★★★押すまで取り込まない');
+await p.evaluate(()=>{ $('mwPicTake').click(); });
+await p.waitForTimeout(900);
+let ps=await p.evaluate(()=>({ posts:window.__img, up:window.__up,
+  note:($('mwPicInNote').innerText||'').replace(/\s+/g,' ') }));
+console.log('   '+JSON.stringify(ps));
+ok(ps.posts.length===2&&ps.posts[0].jan===JAN
+   &&String(ps.posts[0].ids[0])===ID,
+   '★★★今までの口（POST /mw/img）で取り込む');
+ok(ps.up===1,'★★pj-img（R2）にも上げる');
+ok(ps.posts[1].saved&&ps.posts[1].saved.length===1,'★★公開URLを控え直す');
+ok(/取り込みました/.test(ps.note)&&/1枚/.test(ps.note),'★★結果を出す');
+/* 読めない文字を貼ったとき。 */
+await p.evaluate(()=>{
+  $('mwPicIn').value='なにか関係のない文字';
+  $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
+});
+await p.waitForTimeout(150);
+ok(/読めませんでした/.test(await p.evaluate(()=>
+     ($('mwPicInNote').innerText||''))),'★★★読めないときはそう出す');
+/* クリップボードから読む。 */
+await p.evaluate((j)=>{
+  Object.defineProperty(navigator,'clipboard',{ configurable:true,
+    value:{ readText:function(){ return Promise.resolve(j+':10970132'); } } });
+  $('mwPicIn').value='';
+  $('mwPicRead').click();
+},JAN);
+await p.waitForTimeout(300);
+pn=await p.evaluate(()=>({ v:$('mwPicIn').value,
+  note:($('mwPicInNote').innerText||'').replace(/\s+/g,' ') }));
+console.log('   '+JSON.stringify(pn));
+ok(pn.v===JAN+':10970132','★★★「クリップボードから読む」で欄に入る');
+ok(/1件/.test(pn.note),'★★読めた中身を出す');
+
+console.log('\n=== ホーム画面のアプリ（PWA）では Safari で開く ===');
+let urls=await p.evaluate((j)=>({ web:mwSearchUrl(j,false), app:mwSearchUrl(j,true) }),JAN);
+console.log('   '+JSON.stringify(urls));
+ok(urls.web==='https://matchingworld.asia/buy/?q='+JAN,
+   '★ふつうのブラウザではそのまま開く');
+ok(urls.app==='x-safari-https://matchingworld.asia/buy/?q='+JAN,
+   '★★★ホーム画面のアプリからは x-safari-https で Safari 本体を開く');
+ok(await p.evaluate(()=>typeof mwStandalone==='function'),
+   '★ホーム画面のアプリかどうかを見ている');
+ok(await p.evaluate((j)=>{
+     const b=mwFindBtn(j);
+     return b.indexOf('target="_blank"')>0&&b.indexOf('matchingworld')>0;
+   },JAN),'★★行のボタンは新しいタブで開く');
+/* x-safari-https: が効かない端末のために、ふつうに開くリンクも添える。 */
+await p.evaluate(()=>{ window.mwStandalone=function(){ return true; }; });
+let bb=await p.evaluate((j)=>mwFindBtn(j),JAN);
+console.log('   '+bb);
+ok(bb.indexOf('x-safari-https://')>0&&/MW で検索（Safari）/.test(bb),
+   '★★★アプリのときは「MW で検索（Safari）」になる');
+ok((bb.match(/href="/g)||[]).length===2
+   &&bb.indexOf('href="https://matchingworld')>0,
+   '★★★効かない端末のために、ふつうに開くリンクも添える');
+
 console.log('\n=== 作業者用の端末でも送れる（A）===');
 await p.evaluate(()=>{ try{ localStorage.clear(); }catch(e){} });
 await p.reload(); await p.waitForTimeout(300);
 await setup('staff');
 await openCsvBoxes(p);
 await p.evaluate((j)=>{
-  location.hash='#mwpic='+encodeURIComponent(j+':10970132');
-  mwPicHash();
+  switchTab('F'); $('mwPicPasteBox').open=true;
+  $('mwPicIn').value=j+':10970132';
+  $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
 },JAN);
-await p.waitForTimeout(200);
-ok(await p.evaluate(()=>$('mwPicBar').style.display!=='none'),
-   '★★★作業者用の端末でも帯が出る');
-await p.evaluate(()=>{ $('mwPicGo').click(); });
+await p.waitForTimeout(150);
+ok(await p.evaluate(()=>!$('mwPicTake').disabled),
+   '★★★作業者用の端末でも貼り付けの欄が使える');
+await p.evaluate(()=>{ $('mwPicTake').click(); });
 await p.waitForTimeout(900);
 st=await p.evaluate(()=>({ posts:window.__img.length,
-  text:($('mwPicText').innerText||'').replace(/\s+/g,' ') }));
+  text:($('mwPicInNote').innerText||'').replace(/\s+/g,' ') }));
 console.log('   '+JSON.stringify(st));
 ok(st.posts>=1,'★★★作業者用の端末でも取り込める（7.94・選択A）');
 ok(/取り込みました/.test(st.text),'★★結果も出る');
