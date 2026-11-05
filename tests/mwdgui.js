@@ -172,5 +172,63 @@ ok(/同じ SKU のまま/.test(res.text),
    '★★★直したら同じ SKU で送り直せると出す（べき等）');
 ok(/種類 TOY_FIGURE/.test(res.text)&&/申告 電池なし/.test(res.text),
    '★★結果にも種類と付けた申告を出す');
+
+/* ===== v215（7.93）：前回の選択を使う ===== */
+console.log('\n=== 前回の選択を使用（6.128）===');
+await p.evaluate(()=>{
+  window.__putReply=null; window.__posts=[];
+  /* Worker が「前回この ASIN で選んだ申告」を返してくる形。 */
+  window.__prev=true;
+});
+await p.evaluate(()=>{
+  const real=window.fetch;
+  window.fetch=async(u,i)=>{
+    const url=String(u), b=(i&&i.body&&typeof i.body==='string')
+      ?JSON.parse(i.body):null;
+    if(/\/mw\/put/.test(url)&&i&&i.method==='POST'&&b&&b.check)
+      return new Response(JSON.stringify({ok:true,plan:(b.rows||[]).map((x)=>
+        (x.asin==='B0LED00001'
+          ?{ sku:x.sku, asin:x.asin, ptype:'FIGURINE', auto:true, hand:true,
+             prev:true, batteries:true, dg:'not_applicable',
+             why:'前回の選択を使用（2026-11-01に選びました）',
+             req:['batteries_required'], def_err:'', need_batt:true, need_dg:true }
+          :{ sku:x.sku, asin:x.asin, ptype:'FIGURINE', auto:true, hand:false,
+             prev:false, batteries:false, dg:'not_applicable',
+             why:'この種類（FIGURINE）は「電池なし・危険物に該当しない」で送ります',
+             req:[], def_err:'', need_batt:false, need_dg:false }))}),{status:200});
+    return real(u,i);
+  };
+});
+v=await show();
+console.log('   '+v.text.slice(0,260));
+ok(/申告：電池あり／危険物に該当しない（前回の選択を使用）/.test(v.text),
+   '★★★前回の選択を使った行は「前回の選択を使用」と出す');
+ok(/前回の選択を使用した行があります/.test(v.text),
+   '★★一覧の上でも知らせる');
+ok(!/選んでください/.test(v.text),'★★★選び直さなくても送れる（止まらない）');
+ok(v.html.indexOf('data-dgsku="')>=0&&/前回のまま/.test(v.html),
+   '★★★選び直す欄も出す（既定は「前回のまま」）');
+ok(/種類 FIGURINE/.test(v.text),
+   '★実際に返ってくる種類の名前（FIGURINE）をそのまま出す');
+/* 選び直すと、その選択で送る。 */
+await p.evaluate(()=>{
+  const sel=Array.prototype.filter.call(
+    document.querySelectorAll('#csvMwPutBox select[data-dgsku]'),
+    (x)=>/B0LED00001/.test(x.getAttribute('data-dgsku')))[0];
+  sel.value='no'; sel.dispatchEvent(new Event('change'));
+});
+await p.waitForTimeout(300);
+v=await p.evaluate(()=>({ text:($('csvMwPutBox').innerText||'').replace(/\s+/g,' '),
+  html:$('csvMwPutBox').innerHTML }));
+ok(/申告：電池なし／危険物に該当しない（選びました）/.test(v.text),
+   '★★★選び直せる（前回の選択を上書き）');
+const rdy=await p.evaluate(()=>mwPutReady().length);
+ok(rdy===2,'★★前回の選択を使う行も、送る対象に入っている');
+await p.evaluate(()=>{ window.__posts=[]; $('csvMwPutOne').click(); });
+await p.waitForTimeout(600);
+pp=await p.evaluate(()=>window.__posts[0]);
+console.log('   送った dg: '+JSON.stringify(pp&&pp.dg));
+const k2=Object.keys((pp&&pp.dg)||{}).filter((x)=>/B0LED00001/.test(x))[0]||'';
+ok(!!k2&&pp.dg[k2].batteries===false,'★★★選び直した申告で送る');
 await T.done();
 })();

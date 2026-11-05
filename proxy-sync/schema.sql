@@ -715,3 +715,18 @@ CREATE TABLE IF NOT EXISTS amz_ptype (
   at         TEXT,
   created_at TEXT
 );
+
+/* ===== 電池・危険物の申告を ASIN ごとに覚える（7.93）=====
+   確認の画面で人が選んだ申告を控えて、次に同じ ASIN を登録するときは
+   自動で当てる（画面には「前回の選択を使用」と出し、選び直せる）。
+   ・batteries … 電池が必要か（1/0）
+   ・dg        … 危険物の区分（not_applicable など）
+   ・by_role   … 選んだ端末の役（admin / staff） */
+CREATE TABLE IF NOT EXISTS amz_dg (
+  asin       TEXT PRIMARY KEY,
+  batteries  INTEGER,
+  dg         TEXT,
+  by_role    TEXT,
+  at         TEXT,
+  created_at TEXT
+);

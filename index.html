@@ -1452,6 +1452,24 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="mwRankCapNote" style="margin-top:2px"></div>
         <!-- 中身は {"ホビー":900000,...} の形。pj-sync と端末の両方に控える -->
         <input type="hidden" id="mwRankCaps" value="">
+        <!-- 自動で「電池なし・危険物に該当しない」にする種類（6.128）。
+             pj-sync（/settings）に保存。変更は管理者だけ。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>自動で「電池なし・危険物に該当しない」にする種類</b>
+          ：Amazon に登録するとき、この表に<b>印の付いた種類</b>は
+          電池・危険物の申告を<b>自動で付けて送ります</b>。
+          既定は<b>フィギュア・プラモデル・ゲームの種類</b>です
+          （FIGURINE・ABIS_VIDEO_GAMES など。名前に FIGURE・TOY・MODEL_KIT・
+          VIDEO_GAME などが入る種類も自動で入ります）。
+          <b>商品名に LED・電池・発光・電動・充電・バッテリー・モーター・ライト</b>
+          などが入る行は、表に入っている種類でも<b>人が選びます</b>。
+          「種類を読み込む」を押すと、これまでに出てきた種類が件数の多い順に並びます。</div>
+        <div style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwDgTypeBtn" style="flex:1">種類を読み込む</button>
+        </div>
+        <div id="mwDgTypeBox"></div>
+        <div class="note2" id="mwDgTypeNote" style="margin-top:2px"></div>
+        <!-- 中身は {"FIGURINE":1,"TOY_VEHICLE":0} の形（既定への足し引き） -->
+        <input type="hidden" id="mwDgTypes" value="">
         <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
       </div>
     </details>
@@ -2323,7 +2341,7 @@ var ADV_PB=['pbMode','pbRestock','autoRkMode','autoSkMode'];
 /* Amazon刈取のランキングの上限（大分類ごと・6.124）。
    **端末ではなく pj-sync に持つ**ので、作業者用の端末でも同じ基準で絞り込まれる。
    中身は {"ホビー":900000,"ゲーム":80000} の形の文字列（隠し欄に入れてある）。 */
-var ADV_AMZRANK=['mwRankCaps'];
+var ADV_AMZRANK=['mwRankCaps','mwDgTypes'];
 /* ---- 値付けの式が使う設定（6.73）----
    Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
    ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
@@ -2417,6 +2435,7 @@ function advAdopt(d){
   /* ランキングの上限（6.124）が変わっていることがあるので、
      Amazon刈取の一覧と⚙の表も作り直す。 */
   try{ if(typeof mwAmzRender==='function')mwAmzRender(); }catch(e){}
+  try{ if(typeof mwDgTypeRender==='function')mwDgTypeRender(); }catch(e){}
   advNote('ほかの端末で変えた設定に合わせました');
   return true;
 }
@@ -3269,6 +3288,8 @@ function switchTab(t){
     cfgLineRender();
     /* ランキングの上限の表（6.124）は、いまの一覧の件数で並べ直す。 */
     try{ mwRankCapRender(); }catch(e){}
+    /* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。 */
+    try{ mwDgTypeRender(); }catch(e){}
   }
   /* 最後に開いていたタブを覚える（6.118）。⚙は覚えない
      （次に開いたとき設定画面から始まると分かりにくいため）。 */
@@ -4727,7 +4748,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  // マッチングワールド（MW）の無在庫（6.85）
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
-                 'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwUnder',
+                 'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
                  'csvShipProfileMw','csvShipDaysMw'];
 
 var csvList=[], csvLog=[];
@@ -9556,6 +9577,15 @@ $('mwRankCapBox').addEventListener('input',function(e){
   mwRankCapNote();
   try{ mwAmzRender(); }catch(e3){}
 });
+/* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。
+   欄は出し直すたびに作るので、1つずつ結ばずに箱で受ける（6.124と同じ）。 */
+$('mwDgTypeBtn').onclick=mwDgTypeLoad;
+$('mwDgTypeBox').addEventListener('change',function(e){
+  var el=e.target; if(!el||!el.getAttribute)return;
+  if(isStaff())return;                   // 作業者は見るだけ（変更は管理者だけ）
+  if(el.getAttribute('data-dgpt')){ mwDgTypeFlip(el); return; }
+  if(el.id==='mwDgTypeAdd')mwDgTypeAdd(el);
+});
 $('csvMwMkt').onclick=mwMktRun;
 /* 送る前に「読んだ結果」を必ず画面に出す（6.88）。
    v187 では 12,062行あるのに 3,802行で静かに終わっていたので、
@@ -10210,6 +10240,121 @@ function mwRankCapNote(){
     +(isStaff()?'　<b>変更は管理者だけです</b>（見るだけ）。'
               :'　作業者用の端末でも同じ基準で絞り込まれます。');
 }
+/* ===== 自動で申告を付けてよい種類の表（6.128）=====
+   Amazon の productType の名前は公開されていないので、**出てきた名前**を
+   pj-sync から読んで表にし、チェックで足し引きする。
+   中身は {"FIGURINE":1,"TOY_VEHICLE":0}（既定への足し引き）。
+   保存は /settings（サーバー）なので、作業者用の端末でも同じ基準になる。 */
+var mwDgSeen=[], mwDgAll=[], mwDgAllAt='';
+function mwDgTypes(){
+  try{
+    var o=JSON.parse($('mwDgTypes').value||'{}');
+    return (o&&typeof o==='object'&&!Array.isArray(o))?o:{};
+  }catch(e){ return {}; }
+}
+function mwDgTypeSet(o){ $('mwDgTypes').value=JSON.stringify(o||{}); }
+/* いま自動でよい種類か。既定（def_safe・Worker と同じ判定）に足し引きを当てる。 */
+function mwDgTypeOn(x){
+  var o=mwDgTypes(), k=String((x&&x.ptype)||x||'');
+  if(o[k]===1)return true;
+  if(o[k]===0)return false;
+  return !!(x&&x.def_safe);
+}
+/* 種類を読み込む（GET /mw/ptypes）。 */
+function mwDgTypeLoad(){
+  var note=$('mwDgTypeNote'), btn=$('mwDgTypeBtn');
+  if(!syncUrl()||!syncApiKey()){
+    if(note)note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  if(btn){ btn.disabled=true; btn.textContent='読み込み中…'; }
+  fetch(syncUrl()+'/mw/ptypes?all=1',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      mwDgSeen=(d&&d.seen)||[]; mwDgAll=(d&&d.all)||[];
+      mwDgAllAt=String((d&&d.all_at)||'');
+      mwDgTypeRender();
+      if(note&&d&&d.all_err)note.innerHTML='種類の一覧は読めませんでした（'
+        +esc(String(d.all_err).slice(0,80))+'）。出てきた種類だけ出しています。';
+    })
+    ['catch'](function(e){
+      if(note)note.textContent='読み込めませんでした（'+((e&&e.message)||'')+'）';
+    })
+    ['finally'](function(){
+      if(btn){ btn.disabled=false; btn.textContent='種類を読み込む'; }
+    });
+}
+/* 表。作業者用の端末では見るだけ。 */
+function mwDgTypeRender(){
+  var box=$('mwDgTypeBox'); if(!box)return;
+  var ro=isStaff(), o=mwDgTypes(), k;
+  var seen=mwDgSeen.slice();
+  /* 表に足した種類が、まだ一覧に出てきていなくても残す。 */
+  for(k in o)if(!seen.some(function(x){ return x.ptype===k; }))
+    seen.push({ ptype:k, n:0, def_safe:0 });
+  if(!seen.length){
+    box.innerHTML='<div class="note2" style="margin:0">まだ種類が分かりません。'
+      +'<b>「種類を読み込む」</b>を押してください'
+      +'（Amazon に登録するときに種類を調べて控えます）。</div>';
+  }else{
+    box.innerHTML=seen.map(function(x){
+      var on=mwDgTypeOn(x);
+      return '<div class="row"><label>'
+        +'<span style="font-family:ui-monospace,monospace">'+esc(x.ptype)+'</span>'
+        +(x.n?('<span class="note2" style="margin:0 0 0 4px">'
+          +x.n.toLocaleString('ja-JP')+'件</span>'):'')
+        +(x.def_safe?'<span class="note2" style="margin:0 0 0 4px">既定</span>':'')
+        +((x.need_batt||x.need_dg)
+          ?('<span class="note2" style="margin:0 0 0 4px">必須：'
+            +(x.need_batt?'電池':'')+((x.need_batt&&x.need_dg)?'・':'')
+            +(x.need_dg?'危険物':'')+'</span>'):'')
+        +'</label><input type="checkbox" data-dgpt="'+esc(x.ptype)+'"'
+        +(on?' checked':'')+(ro?' disabled':'')+'></div>';
+    }).join('');
+  }
+  if(mwDgAll.length&&!ro){
+    box.innerHTML=box.innerHTML+'<div class="row"><label>種類を名前で足す'
+      +'<span class="note2" style="margin:0 0 0 4px">'
+      +mwDgAll.length.toLocaleString('ja-JP')+'種類</span></label>'
+      +'<input type="text" id="mwDgTypeAdd" list="mwDgTypeAllList"'
+      +' placeholder="FIGURINE" autocapitalize="characters" spellcheck="false">'
+      +'</div><datalist id="mwDgTypeAllList">'
+      +mwDgAll.slice(0,3000).map(function(n){
+        return '<option value="'+esc(n)+'"></option>'; }).join('')+'</datalist>';
+  }
+  mwDgTypeNote();
+}
+/* 名前で足す（表に無い種類でも入れられる）。 */
+function mwDgTypeAdd(el){
+  var v=String(el.value||'').toUpperCase().replace(/[^A-Z0-9_]/g,'');
+  if(!v)return;
+  var o=mwDgTypes(); o[v]=1; mwDgTypeSet(o);
+  if(!mwDgSeen.some(function(x){ return x.ptype===v; }))
+    mwDgSeen.push({ ptype:v, n:0, def_safe:0 });
+  el.value=''; mwDgTypeRender(); mwDgTypeSave();
+}
+function mwDgTypeFlip(el){
+  var k=el.getAttribute('data-dgpt'), o=mwDgTypes();
+  var x=mwDgSeen.filter(function(y){ return y.ptype===k; })[0]||{ ptype:k };
+  /* 既定と同じ向きに戻したら、足し引きは消す（既定に任せる）。 */
+  if(!!el.checked===!!x.def_safe)delete o[k];
+  else o[k]=el.checked?1:0;
+  mwDgTypeSet(o); mwDgTypeNote(); mwDgTypeSave();
+}
+/* 端末に控えて、pj-sync にも保存する（作業者は Worker が 403 で止める）。 */
+function mwDgTypeSave(){
+  try{ csvSaveCfg(); }catch(e){}
+  advTouch();
+}
+function mwDgTypeNote(){
+  var el=$('mwDgTypeNote'); if(!el)return;
+  var o=mwDgTypes(), add=[], off=[], k;
+  for(k in o)(o[k]===1?add:off).push(k);
+  el.innerHTML=(add.length?('足した種類：'+add.map(esc).join('／')):'足した種類：なし')
+    +(off.length?('<br>外した種類：'+off.map(esc).join('／')):'')
+    +'<br>この値は<b>pj-sync に保存</b>します（端末ごとではありません）。'
+    +(isStaff()?'　<b>変更は管理者だけです</b>（見るだけ）。'
+              :'　作業者用の端末でも同じ基準になります。');
+}
 /* ---- JAN重複（6.109・7.84）----
    同じ JAN に ASIN が複数あるときは自動で決めず、人が選ぶ。
    決まるまでは「仕入れる」と「Amazon登録用ファイル」の対象から外す。 */
@@ -10742,7 +10887,12 @@ function mwPutHtml(pk,log,why){
     +(hand?('<div class="warn" style="margin:0 0 4px"><b>'+hand+'件</b>は'
       +'<b>電池・危険物の申告</b>を選んでください（選ぶまで送りません）。'
       +'フィギュア・プラモデル・ゲームソフトは自動で'
-      +'「電池なし・危険物に該当しない」になります。</div>'):'');
+      +'「電池なし・危険物に該当しない」になります。</div>'):'')
+    +(mwPutList.some(function(x){
+        var q=mwPutPlan[String(x.sku)];
+        return !!(q&&q.prev&&!mwPutHand[String(x.sku)]); })
+      ?('<div class="note2" style="margin:0 0 4px"><b>前回の選択を使用</b>した行が'
+        +'あります（印の下の欄で選び直せます）。</div>'):'');
   h+='<div style="max-height:260px;overflow:auto;border:1px solid var(--line);'
     +'border-radius:4px;padding:4px">'
     +mwPutList.map(function(x,i){
@@ -10758,7 +10908,8 @@ function mwPutHtml(pk,log,why){
         +'<br>'+esc(x.name.slice(0,44))
         /* 付ける申告を行ごとに出す（7.92）。 */
         +'<br>申告：'+(okDg
-          ?('<b>'+esc(mwDgText(dg))+'</b>'+(my?'（選びました）':'（自動）'))
+          ?('<b>'+esc(mwDgText(dg))+'</b>'
+            +(my?'（選びました）':((p&&p.prev)?'（前回の選択を使用）':'（自動）')))
           :'<b style="color:var(--bad)">選んでください</b>')
         +((p&&p.why&&!my)?('<br><span style="opacity:.75">'+esc(p.why)+'</span>'):'')
         +((p&&(p.need_batt||p.need_dg))
@@ -10768,8 +10919,11 @@ function mwPutHtml(pk,log,why){
         +((p&&p.def_err)
           ?('<br><span style="color:var(--bad)">必須の項目を調べられませんでした：'
             +esc(String(p.def_err).slice(0,80))+'</span>'):'')
-        +(okDg?'':('<br><select data-dgsku="'+esc(x.sku)+'" style="width:100%">'
-          +'<option value="">電池の申告を選ぶ…</option>'
+        /* 選んでいない行は選ぶ。前回の選択を使う行は**選び直せる**（7.93）。 */
+        +((okDg&&!(p&&p.prev&&!my))?''
+          :('<br><select data-dgsku="'+esc(x.sku)+'" style="width:100%">'
+          +'<option value="">'+((p&&p.prev&&!my)?'前回のまま（'
+            +esc(mwDgText(dg))+'）':'電池の申告を選ぶ…')+'</option>'
           +'<option value="no">電池は入っていない（危険物に該当しない）</option>'
           +'<option value="yes">電池が入っている（危険物に該当しない）</option>'
           +'</select>'))
@@ -14019,6 +14173,7 @@ function roleApply(){
   try{ document.body.classList[isStaff()?'add':'remove']('staff'); }catch(e){}
   /* 作業者用の端末では、ランキングの上限の欄を押せなくする（6.124）。 */
   try{ mwRankCapRender(); }catch(e){}
+  try{ mwDgTypeRender(); }catch(e){}
 }
 /* キーを聞きに行く（起動時と、キーの欄を変えたとき）。 */
 function roleCheck(){
@@ -17299,7 +17454,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v214';   // sw.js の const V と必ず同じ値にする
+var APP_V='v215';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

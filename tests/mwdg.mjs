@@ -17,7 +17,10 @@ const env=makeEnv({ STAFF_KEY:'staff-key-123',
   LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs', LWA_REFRESH_TOKEN:'rt',
   SP_SELLER_ID:'A1SELLER9999' });
 
-let calls=[], ptype={}, defs={}, schema={}, put={};
+let calls=[], ptype={}, defs={}, schema={}, put={}, link={};
+/* 実物の置き場（v214 は CloudFront だと思って許していたので止められていた）。
+     https://selling-partner-definitions-prod-….s3[.region].amazonaws.com/… */
+const SCHEMA_HOST='https://selling-partner-definitions-prod-iad.s3.amazonaws.com';
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   calls.push({url:url,method:o.method||'GET',body:String(o.body||'')});
@@ -29,17 +32,24 @@ globalThis.fetch=async(u,i)=>{
       productTypes:[{ productType:(ptype[a]||'TOYS_AND_GAMES') }],
       summaries:[{ itemName:'カタログの名前' }] })) }),{status:200});
   }
+  if(/definitions\/2020-09-01\/productTypes\?/.test(url)){
+    return new Response(JSON.stringify({ productTypes:[
+      { name:'FIGURINE' },{ name:'ABIS_VIDEO_GAMES' },{ name:'TOY_FIGURE' },
+      { name:'HOME_FURNITURE_AND_DECOR' },{ name:'ABIS_DRUGSTORE' }] }),
+      {status:200});
+  }
   if(/definitions\/2020-09-01\/productTypes/.test(url)){
     const pt=decodeURIComponent((url.split('/productTypes/')[1]||'').split('?')[0]);
     const v=defs[pt];
     if(typeof v==='number')
       return new Response(JSON.stringify({errors:[{code:'x',message:'だめ'}]}),{status:v});
     return new Response(JSON.stringify({ productType:pt,
-      schema:{ link:{ resource:'https://d1.cloudfront.net/schema/'+pt+'.json' } }
+      schema:{ link:{ resource:(link[pt]||SCHEMA_HOST)+'/schema/'+pt+'.json'
+        +'?X-Amz-Expires=604800' } }
     }),{status:200});
   }
-  if(/cloudfront\.net\/schema/.test(url)){
-    const pt=(url.split('/schema/')[1]||'').replace('.json','');
+  if(/\/schema\//.test(url)&&/amazonaws\.com|cloudfront/.test(url)){
+    const pt=(url.split('/schema/')[1]||'').replace('.json','').split('?')[0];
     return new Response(JSON.stringify(schema[pt]||schema['*']),{status:200});
   }
   if(/listings\/2021-08-01\/items/.test(url)){
@@ -75,33 +85,38 @@ const LED={ sku:'mwhobby-20261031-N-B0LED00001-5000', asin:'B0LED00001',
 const ETC={ sku:'mwhobby-20261031-N-B0ETC00001-5000', asin:'B0ETC00001',
   jan:'4580590170020', sha:'MC02', price:7800, cost_src:5000,
   title:'よく分からない商品', name:'よく分からない商品' };
-ptype['B091VLKFVC']='TOY_FIGURE';
-ptype['B0GAME0001']='VIDEO_GAMES';
-ptype['B0LED00001']='TOY_FIGURE';
+/* 実際に返ってきた名前（2026-11-01 の報告）。想定の名前ではない。 */
+ptype['B091VLKFVC']='FIGURINE';
+ptype['B0GAME0001']='ABIS_VIDEO_GAMES';
+ptype['B0LED00001']='FIGURINE';
 ptype['B0ETC00001']='HOME_FURNITURE_AND_DECOR';
 
 console.log('=== 申告をどうするか（mwDgPlan）===');
-let g=W.mwDgPlan(FIG,'TOY_FIGURE');
+let g=W.mwDgPlan(FIG,'FIGURINE');
 console.log('   フィギュア: '+JSON.stringify(g));
 ok(g.auto===true&&g.batteries===false&&g.dg==='not_applicable',
    '★★★フィギュアは「電池なし・該当しない」で自動');
-g=W.mwDgPlan(GAME,'VIDEO_GAMES');
+g=W.mwDgPlan(GAME,'ABIS_VIDEO_GAMES');
 ok(g.auto===true&&g.batteries===false,'★★★ゲームソフトも自動');
-g=W.mwDgPlan(LED,'TOY_FIGURE');
+g=W.mwDgPlan(LED,'FIGURINE');
 console.log('   LED: '+JSON.stringify(g.why));
 ok(g.auto===false&&/電池|発光/.test(g.why),
    '★★★商品名に LED があれば自動で付けない（人が選ぶ）');
 ['電池2本使用','発光ギミック','電動フィギュア','充電式','バッテリー内蔵']
   .forEach(function(t){
-    ok(W.mwDgPlan({ sku:FIG.sku, name:'なにか'+t },'TOY_FIGURE').auto===false,
+    ok(W.mwDgPlan({ sku:FIG.sku, name:'なにか'+t },'FIGURINE').auto===false,
        '★「'+t+'」も人が選ぶ');
   });
 g=W.mwDgPlan(ETC,'HOME_FURNITURE_AND_DECOR');
 console.log('   ほかの種類: '+JSON.stringify(g.why));
 ok(g.auto===false&&/種類/.test(g.why),'★★★安心な種類でなければ人が選ぶ');
 g=W.mwDgPlan(FIG,'');
+console.log('   種類なし（mwhobby）: '+JSON.stringify(g.why));
+ok(g.auto===true&&/フィギュア/.test(g.why),
+   '★★★種類が分からなくても、SKU が mwhobby- なら自動（7.93）');
+g=W.mwDgPlan({ sku:'mwetc-20261031-N-B0ETC00001-100', name:'よく分からない商品' },'');
 ok(g.auto===false&&/種類が分かりません/.test(g.why),
-   '★★種類が分からないときも人が選ぶ');
+   '★★種類も機種も分からないときは人が選ぶ');
 console.log('   分類: '+JSON.stringify([W.mwDgSafeCat(FIG),W.mwDgSafeCat(GAME),
   W.mwDgSafeCat({kishu:'plasticmodel'}),W.mwDgSafeCat({kishu:'seal'})]));
 ok(W.mwDgSafeCat(FIG)==='フィギュア・プラモデル','★SKU の接頭辞から分類が分かる');
@@ -116,23 +131,23 @@ calls=[];
 let r=await post('/mw/put',{ check:1, rows:[FIG] });
 console.log('   '+JSON.stringify(r.body.plan));
 let pl=r.body.plan[0];
-ok(pl.ptype==='TOY_FIGURE','★★★ASIN の本当の種類を Catalog から引く');
+ok(pl.ptype==='FIGURINE','★★★ASIN の本当の種類を Catalog から引く');
 ok(pl.auto===true&&pl.batteries===false&&pl.dg==='not_applicable',
    '★★★付ける申告まで決める');
 ok(pl.need_batt===true&&pl.need_dg===true,
    '★★★その種類で電池・危険物が必須だと分かる（項目表の required）');
-ok(calls.some((c)=>/definitions\/2020-09-01\/productTypes\/TOY_FIGURE/.test(c.url)
+ok(calls.some((c)=>/definitions\/2020-09-01\/productTypes\/FIGURINE/.test(c.url)
    &&/requirements=LISTING_OFFER_ONLY/.test(c.url)),
    '★★★getDefinitionsProductType を LISTING_OFFER_ONLY で呼ぶ');
-ok(calls.some((c)=>/cloudfront\.net\/schema/.test(c.url)),
-   '★★項目表（スキーマ）も読む');
+ok(calls.some((c)=>c.url.indexOf(SCHEMA_HOST)===0),
+   '★★★項目表（スキーマ）も読む（実物の置き場 selling-partner-definitions-prod…）');
 ok(!calls.some((c)=>/listings\/2021-08-01\/items/.test(c.url)),
    '★★★check のときは送らない（下調べだけ）');
 const amz=await env.DB.prepare(
   `SELECT ptype FROM mw_amz WHERE asin='B091VLKFVC'`).first();
-ok(String(amz.ptype)==='TOY_FIGURE','★★種類を mw_amz に控える');
+ok(String(amz.ptype)==='FIGURINE','★★種類を mw_amz に控える');
 const def=await env.DB.prepare(
-  `SELECT * FROM amz_ptype WHERE ptype='TOY_FIGURE'`).first();
+  `SELECT * FROM amz_ptype WHERE ptype='FIGURINE'`).first();
 console.log('   控え: '+JSON.stringify({req:def.req,at:!!def.at}));
 ok(/batteries_required/.test(String(def.req)),'★★★必須項目を amz_ptype に控える');
 ok(/supplier_declared_dg_hz_regulation/.test(String(def.props)),
@@ -150,7 +165,7 @@ console.log('   '+JSON.stringify({sent:r.body.sent,ok_n:r.body.ok_n}));
 ok(r.body.sent===1&&r.body.ok_n===1,'★★★フィギュアはそのまま送れる');
 const body=JSON.parse((calls.filter((c)=>/listings\/2021-08-01/.test(c.url))[0]||{}).body||'{}');
 console.log('   '+JSON.stringify(body).slice(0,400));
-ok(body.productType==='TOY_FIGURE',
+ok(body.productType==='FIGURINE',
    '★★★productType は Catalog の本当の種類を送る（PRODUCT ではない）');
 ok(body.requirements==='LISTING_OFFER_ONLY','★相乗り出品のまま');
 ok(body.attributes.batteries_required[0].value===false,
@@ -163,7 +178,7 @@ ok(r.body.rows[0].dg&&r.body.rows[0].dg.batteries===false,
    '★行ごとに付けた申告を返す（画面に出す）');
 
 console.log('\n=== 項目表に無い名前は送らない ===');
-schema['VIDEO_GAMES']={ required:['merchant_suggested_asin'],
+schema['ABIS_VIDEO_GAMES']={ required:['merchant_suggested_asin'],
   properties:{ merchant_suggested_asin:{}, condition_type:{},
     fulfillment_availability:{}, purchasable_offer:{}, condition_note:{} } };
 calls=[];
@@ -240,8 +255,8 @@ ok((log.results||[]).length===2&&(log.results||[]).map((x)=>x.ok).join()==='0,1'
    '★★記録は2回ぶん残る（だめ → 通った）');
 
 console.log('\n=== 必須項目を引けなかったとき ===');
-defs['TOY_FIGURE2']=503;
-ptype['B0NODEF001']='TOY_FIGURE2';
+defs['ABIS_DRUGSTORE']=503;
+ptype['B0NODEF001']='ABIS_DRUGSTORE';
 const ND={ sku:'mwhobby-20261031-N-B0NODEF001-5000', asin:'B0NODEF001',
   jan:'4580590170021', sha:'MC02', price:7800, cost_src:5000,
   title:'ふつうのフィギュア', name:'ふつうのフィギュア' };
@@ -249,5 +264,139 @@ r=await post('/mw/put',{ check:1, rows:[ND] });
 pl=r.body.plan[0];
 console.log('   '+JSON.stringify({err:pl.def_err,auto:pl.auto}));
 ok(/HTTP 503/.test(String(pl.def_err)),'★★引けなかった理由を返す（画面に出す）');
-ok(pl.auto===false,'★★★引けない種類（表に無い）は人が選ぶ');
+ok(pl.auto===true&&/フィギュア/.test(String(pl.why)),
+   '★★★項目表が引けなくても、MW の機種・SKU の接頭辞で分かれば自動（7.93）');
+
+
+/* ========== ここから v215（7.93）==========
+   v214 の実地で分かったこと：
+   ・返ってきた種類は FIGURINE・ABIS_VIDEO_GAMES（想定の名前ではなかった）
+   ・項目表の置き場は CloudFront ではなく selling-partner-definitions-prod…
+     （v214 は許していなかったので blocked_by_readonly_guard で止まっていた） */
+console.log('\n=== 実際に返ってきた種類の名前（v215）===');
+['FIGURINE','ABIS_VIDEO_GAMES'].forEach(function(t){
+  const g2=W.mwDgPlan({ sku:'mwx-20261031-N-B091VLKFVC-100', name:'ふつうの商品' },t);
+  console.log('   '+t+': '+JSON.stringify(g2.auto));
+  ok(g2.auto===true&&g2.batteries===false&&g2.dg==='not_applicable',
+     '★★★'+t+' は自動で「電池なし・危険物に該当しない」');
+});
+/* 名前の形でも拾う（Amazon が種類の名前を増やしても追いかけられるように）。 */
+[['TOY_FIGURE',1],['COLLECTIBLE_FIGURINE',1],['MODEL_KIT',1],['VIDEO_GAMES',1],
+ ['TOYS_AND_GAMES',1],['ABIS_TOY',1],['PLASTIC_MODEL_KIT',1],['TRADING_CARD',1],
+ ['VIDEO_GAME_ACCESSORIES',0],['TOY_VEHICLE',0],['HOME_FURNITURE_AND_DECOR',0],
+ ['ABIS_DRUGSTORE',0],['CELLULAR_PHONE',0],['POWER_BANK',0]].forEach(function(x){
+  ok(W.mwDgSafePt(x[0],{})===!!x[1],
+     '★'+x[0]+' は自動'+(x[1]?'でよい':'にしない'));
+});
+ok(W.mwDgNoPt('TOY_VEHICLE',{})===true,
+   '★★「自動にしない」とはっきり決めた種類は、接頭辞がフィギュアでも人が選ぶ');
+ok(W.mwDgPlan({ sku:'mwhobby-20261031-N-B091VLKFVC-100', name:'ラジコン' },
+   'TOY_VEHICLE').auto===false,'★★★そのとおり人が選ぶ');
+
+console.log('\n=== ⚙の表で足し引きできる（6.128）===');
+ok(W.mwDgSafePt('ABIS_DRUGSTORE',{ ABIS_DRUGSTORE:1 })===true,
+   '★★★⚙で印を付けた種類は自動になる');
+ok(W.mwDgSafePt('FIGURINE',{ FIGURINE:0 })===false,
+   '★★★⚙で印を外した種類は人が選ぶ');
+const SET={ at:new Date().toISOString(), settings:{ mwDgTypes:{ ABIS_DRUGSTORE:1 } } };
+let rs=await post('/settings',SET);
+ok(rs.body.ok===true,'★⚙の設定を保存できる');
+const ov=await W.mwDgOver(env);
+console.log('   足し引き: '+JSON.stringify(ov));
+ok(ov.ABIS_DRUGSTORE===1,'★★設定から足し引きを読む');
+ok(W.mwDgPlan({ sku:'mwx-20261031-N-B0NODEF001-100', name:'なにか' },
+   'ABIS_DRUGSTORE',ov).auto===true,'★★★⚙で足した種類は自動で送れる');
+/* 文字でも受ける（画面は hidden に JSON の文字で持っている）。 */
+rs=await post('/settings',{ at:new Date(Date.now()+1000).toISOString(),
+  settings:{ mwDgTypes:'{"ABIS_DRUGSTORE":1}' } });
+ok((await W.mwDgOver(env)).ABIS_DRUGSTORE===1,'★★文字の JSON でも読める');
+
+console.log('\n=== 申告を覚える（ASIN ごと・7.93）===');
+await env.DB.prepare(
+  `INSERT INTO mw_amz (jan,asin,name,checked_at,created_at)
+   VALUES ('4580590170019','B0LED00001','LED フィギュア','x','x')`).run();
+const dgL={}; dgL[LED.sku]={ batteries:true, dg:'not_applicable' };
+let r2=await post('/mw/put',{ rows:[LED], dg:dgL });
+ok(r2.body.ok_n===1,'★選んで送れる');
+const mem=await env.DB.prepare(
+  `SELECT * FROM amz_dg WHERE asin='B0LED00001'`).first();
+console.log('   控え: '+JSON.stringify(mem));
+ok(mem&&Number(mem.batteries)===1&&String(mem.dg)==='not_applicable',
+   '★★★人が選んだ申告を ASIN ごとに控える');
+r2=await post('/mw/put',{ check:1, rows:[LED] });
+let pl2=r2.body.plan[0];
+console.log('   次回: '+JSON.stringify(pl2));
+ok(pl2.auto===true&&pl2.prev===true&&pl2.batteries===true,
+   '★★★次に同じ ASIN を登録するときは自動で当てる（選び直さなくてよい）');
+ok(/前回の選択を使用/.test(String(pl2.why)),
+   '★★★画面に出す文に「前回の選択を使用」と入る');
+/* 選び直せる（送った選択で控えを書き換える）。 */
+const dgL2={}; dgL2[LED.sku]={ batteries:false, dg:'not_applicable' };
+r2=await post('/mw/put',{ rows:[LED], dg:dgL2 });
+const mem2=await env.DB.prepare(
+  `SELECT batteries FROM amz_dg WHERE asin='B0LED00001'`).first();
+ok(r2.body.ok_n===1&&Number(mem2.batteries)===0,
+   '★★★選び直したら控えも書き換わる');
+/* 自動で決まる行は覚えない（表の判定だけで足りるので）。 */
+const noMem=await env.DB.prepare(
+  `SELECT COUNT(*) AS n FROM amz_dg WHERE asin='B091VLKFVC'`).first();
+ok(Number(noMem.n)===0,'★自動で決まる行は控えない');
+
+console.log('\n=== 項目表の置き場（ALLOWED・7.93）===');
+const G=(u,m)=>{ try{ W.assertReadOnly(u,m||'GET',{},false); return ''; }
+                 catch(e){ return String(e&&e.message||e); } };
+ok(G(SCHEMA_HOST+'/schema/FIGURINE.json?X-Amz-Expires=604800')==='',
+   '★★★実物の置き場は GET で読める（v214 はここで止まっていた）');
+ok(G('https://selling-partner-definitions-prod-fe.s3.us-west-2.amazonaws.com/x/y.json')==='',
+   '★★地域の入った名前でも読める');
+ok(G('https://s3.ap-northeast-1.amazonaws.com/selling-partner-definitions-prod/x.json')==='',
+   '★★パスにバケット名が入る形でも読める');
+ok(/blocked_by_readonly_guard/.test(G(SCHEMA_HOST+'/schema/x.json','PUT')),
+   '★★★GET だけ（PUT は止める）');
+ok(/blocked_by_readonly_guard/.test(G('https://d1.cloudfront.net/schema/x.json')),
+   '★★★ほかのホスト（CloudFront）は許さない');
+ok(/blocked_by_readonly_guard/.test(
+   G('https://my-bucket.s3.amazonaws.com/x.json')),
+   '★★★ほかの S3 のバケットも許さない');
+ok(G('https://sellingpartnerapi-fe.amazon.com/definitions/2020-09-01/productTypes'
+   +'?marketplaceIds=A1VC38T7YXB528')==='','★★種類の一覧も GET で読める');
+
+console.log('\n=== 読めなかった控えは長く持たない ===');
+ok(W.MW_PT_ERR_MIN<=60,'★しくじりの控えは1時間以内で引き直す');
+await env.DB.prepare(
+  `INSERT INTO amz_ptype (ptype,req,props,err,at,created_at)
+     VALUES ('FIGURINE2','[]','[]','項目表を読めません：むかしのエラー',?1,?1)`)
+  .bind(new Date(Date.now()-3600000).toISOString()).run();
+calls=[];
+let d2=await W.mwPtypeDef(env,{ notes:[], id:'t', kind:'t' },'FIGURINE2');
+console.log('   '+JSON.stringify({err:d2.err,req:d2.req.length}));
+ok(calls.some((c)=>/productTypes\/FIGURINE2/.test(c.url)),
+   '★★★許可を直したあと、古いエラーの控えは引き直す');
+ok(!d2.err&&d2.req.length>0,'★★引き直せたら必須項目が入る');
+
+console.log('\n=== 種類の一覧（GET /mw/ptypes・6.128）===');
+const get=async(path,key)=>asJson(await worker.fetch(new Request('https://x'+path,
+  { headers:{'X-PJ-Key':key||'k'} }),env));
+let rp=await get('/mw/ptypes?all=1');
+console.log('   '+JSON.stringify({seen:rp.body.seen,all:rp.body.all.slice(0,3)}));
+ok(rp.body.ok===true,'★一覧を返す');
+ok(rp.body.seen.some((x)=>x.ptype==='FIGURINE'&&x.n>0),
+   '★★★これまでに出てきた種類を件数つきで返す');
+ok(rp.body.seen.filter((x)=>x.ptype==='FIGURINE')[0].safe===1,
+   '★★いま自動でよいかも返す（⚙の印の付け外しに使う）');
+ok(rp.body.seen.filter((x)=>x.ptype==='FIGURINE')[0].need_batt===true,
+   '★★その種類で電池が必須だったかも返す');
+ok(rp.body.all.indexOf('FIGURINE')>=0&&rp.body.all.length>2,
+   '★★★Amazon の種類の一覧（searchDefinitionsProductTypes）も返す');
+ok(rp.body.over&&rp.body.over.ABIS_DRUGSTORE===1,'★⚙の足し引きも返す');
+calls=[];
+rp=await get('/mw/ptypes?all=1');
+ok(!calls.some((c)=>/productTypes\?/.test(c.url)),'★★一覧は控えから出す（14日）');
+/* 作業者用のキーでも見られる（変更は /settings 側で管理者だけ）。 */
+rp=await get('/mw/ptypes','staff-key-123');
+ok(rp.body.ok===true,'★★作業者用の端末でも表を見られる');
+rs=await post('/settings',{ at:new Date(Date.now()+2000).toISOString(),
+  settings:{ mwDgTypes:{ FIGURINE:0 } } },'staff-key-123');
+console.log('   作業者の保存: '+JSON.stringify(rs.status));
+ok(rs.status===403,'★★★作業者用のキーでは表を変えられない（管理者だけ）');
 await T.done();

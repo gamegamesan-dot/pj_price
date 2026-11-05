@@ -51,6 +51,7 @@ const SP_GAP = {
   getMyFeesEstimates: 2100,          // 0.5回/秒（7.85）。1回20件
   putListingsItem: 250,              // 5回/秒（7.90）。余裕をみて4回/秒
   getDefinitionsProductType: 250,    // 5回/秒（7.92）。余裕をみて4回/秒
+  searchDefinitionsProductTypes: 250,
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -155,11 +156,18 @@ const ALLOWED = [
   /* 商品ごとの手数料（7.85）。読み取りだけ（見積りを返すだけで何も変えない）。 */
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/products\/fees\/v0\/feesEstimate$/ },
   /* 商品の種類ごとの必須項目（7.92）。読み取りだけ。
-     getDefinitionsProductType は**項目表（スキーマ）の場所（URL）**を返すので、
-     その URL も読む。署名付きの配布URL（CloudFront）なので、
-     ホストは cloudfront.net に限って読み取りだけ許す。 */
+     ・種類の一覧（searchDefinitionsProductTypes）
+     ・ひとつの種類の定義（getDefinitionsProductType）
+     定義は**項目表（スキーマ）の場所（URL）**を返すので、その URL も読む。
+     実際に返るのは S3 の署名付きURL（7日で切れる・7.93）で、
+     v214 は CloudFront だと思って許していたため
+     blocked_by_readonly_guard で止まっていた。
+       https://selling-partner-definitions-prod-<区>.s3[.<region>].amazonaws.com/…
+     **GET だけ・このバケットのこの形だけ**を許す。 */
+  { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/definitions\/2020-09-01\/productTypes\?/ },
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/definitions\/2020-09-01\/productTypes\/[A-Za-z0-9_]+\?/ },
-  { m: "GET",  re: /^https:\/\/[A-Za-z0-9.-]+\.cloudfront\.net\/[^\s]+$/ },
+  { m: "GET",  re: /^https:\/\/selling-partner-definitions-prod[a-z0-9-]*\.s3[.a-z0-9-]*\.amazonaws\.com\/[^\s]+$/ },
+  { m: "GET",  re: /^https:\/\/s3[.a-z0-9-]*\.amazonaws\.com\/selling-partner-definitions-prod[a-z0-9-]*\/[^\s]+$/ },
   /* ★★ Amazon への登録（7.90）。**この表で唯一の書き込み** 。
      出品者トークンと SKU をパスに入れる。相乗り出品（価格と数量だけ）で、
      商品情報は作らない（requirements: LISTING_OFFER_ONLY）。 */
@@ -6163,16 +6171,47 @@ async function jobMwAuto(env, opt) {
    ・Product Type Definitions（LISTING_OFFER_ONLY）で**その種類の必須項目**を引く
    ・申告は、安心して決められる種類だけ自動で付ける（それ以外は人が選ぶ）
    の順で進める。どちらの結果も控える（同じ種類を何度も聞かない）。 */
-const MW_PT_TTL_D = 14;                // 種類の必須項目を控えておく日数
-/* 自動で「電池なし・危険物に該当しない」と付けてよい種類（7.92）。
-   フィギュア・プラモデル・ゲームソフト（ディスク・カートリッジ）だけ。
-   ここに無い種類は、人が確認の画面で選ぶ。 */
+const MW_PT_TTL_D = 14;
+const MW_PT_ERR_MIN = 30;              // 読めなかった控えを持つ分数（7.93）                // 種類の必須項目を控えておく日数
+/* 自動で「電池なし・危険物に該当しない」と付けてよい種類（7.92／7.93）。
+   種類の名前は Amazon が決めるもので、一覧は公開されていない
+   （searchDefinitionsProductTypes で引くしかない）。実際に返ってきたのは
+     FIGURINE（フィギュア）・ABIS_VIDEO_GAMES（ゲームソフト）
+   で、v214 の想定（TOY_FIGURE・VIDEO_GAMES）とは違っていた。
+   そこで**名前の形で見る**ことにして、はっきり分かっているものは表にも入れる。
+   足し引きは⚙設定の表（6.128）でできる（mwDgTypes）。 */
+const MW_DG_SAFE_RE = /(FIGURINE|FIGURE|TOY|DOLL|PLUSH|MODEL_KIT|PLASTIC_MODEL|PUZZLE|VIDEO_GAME|GAME_SOFTWARE|TRADING_CARD)/;
 const MW_DG_SAFE_PT = {
-  TOYS_AND_GAMES: 1, TOY_FIGURE: 1, COLLECTIBLE_FIGURINE: 1, ACTION_FIGURE: 1,
-  DOLL: 1, TOY_BUILDING_BLOCK: 1, MODEL_KIT: 1, TOY_VEHICLE: 1,
-  VIDEO_GAMES: 1, VIDEO_GAME: 1, VIDEO_GAME_ACCESSORIES: 0,   // 周辺機器は人が選ぶ
-  HOME_FURNITURE_AND_DECOR: 0,
+  /* 実際に返ってきた名前（2026-11-01 の報告）。 */
+  FIGURINE: 1, ABIS_VIDEO_GAMES: 1,
+  /* よくある名前。名前の形でも拾えるが、はっきりさせるため表にも置く。 */
+  TOYS_AND_GAMES: 1, ABIS_TOY: 1, TOY_FIGURE: 1, COLLECTIBLE_FIGURINE: 1,
+  ACTION_FIGURE: 1, DOLL: 1, TOY_BUILDING_BLOCK: 1, MODEL_KIT: 1,
+  VIDEO_GAMES: 1, VIDEO_GAME: 1,
+  /* 周辺機器・家具は電池や危険物が入りうるので自動で付けない。 */
+  VIDEO_GAME_ACCESSORIES: 0, TOY_VEHICLE: 0, HOME_FURNITURE_AND_DECOR: 0,
 };
+/* 「この種類は自動にしない」とはっきり決めてあるか（表の 0・⚙で外した種類）。
+   はっきり決めてある種類は、MW の機種や SKU の接頭辞でも自動にしない（7.93）。 */
+function mwDgNoPt(ptype, over) {
+  const pt = String(ptype || "");
+  if (!pt) return false;
+  const o = over || {};
+  if (o[pt] === 0 || o[pt] === false) return true;
+  if (o[pt] === 1 || o[pt] === true) return false;
+  return MW_DG_SAFE_PT[pt] === 0;
+}
+/* ⚙設定の足し引き（{PTYPE:1|0}）を当てて、その種類が「自動でよい」かを返す。 */
+function mwDgSafePt(ptype, over) {
+  const pt = String(ptype || "");
+  if (!pt) return false;
+  const o = over || {};
+  if (o[pt] === 1 || o[pt] === true) return true;
+  if (o[pt] === 0 || o[pt] === false) return false;
+  if (MW_DG_SAFE_PT[pt] === 1) return true;
+  if (MW_DG_SAFE_PT[pt] === 0) return false;
+  return MW_DG_SAFE_RE.test(pt);
+}
 /* 商品名にこれが入っていたら、種類が安心でも**人が選ぶ**（7.92）。
    電池や発光する部品が入っている見込みがあるもの。 */
 const MW_DG_WORD = /LED|ＬＥＤ|電池|乾電池|電源|発光|光る|電動|充電|バッテリー|モーター|モータ|ライト|ランプ|レーザー|スピーカー|イヤホン|充電器|ACアダプタ|アダプター/i;
@@ -6197,21 +6236,146 @@ function mwDgSafeCat(x) {
 /* 電池・危険物の申告をどうするか（7.92）。
    auto=true … 既定（電池なし・該当しない）で送る
    auto=false … 確認の画面で人が選ぶまで送らない（why に理由） */
-function mwDgPlan(x, ptype) {
+function mwDgPlan(x, ptype, over) {
   const name = String((x && (x.name || x.title || x.mw_name)) || "");
   const pt = String(ptype || "");
   const cat = mwDgSafeCat(x);
+  /* 商品名に電池・発光などがある行は、種類が安心でも人が選ぶ（変えない）。 */
   if (MW_DG_WORD.test(name))
     return { auto: false, batteries: null, dg: "",
              why: "商品名に電池・発光などの言葉があります（電池の申告を選んでください）" };
+  /* 種類の名前で決まればそれでよい（7.93）。 */
+  if (mwDgSafePt(pt, over))
+    return { auto: true, batteries: false, dg: "not_applicable",
+             why: "この種類（" + pt + "）は「電池なし・危険物に該当しない」で送ります" };
+  /* 「自動にしない」とはっきり決めてある種類（家具・周辺機器など）は、
+     MW の機種や接頭辞がフィギュアでも人が選ぶ。 */
+  if (mwDgNoPt(pt, over))
+    return { auto: false, batteries: null, dg: "",
+             why: "この種類（" + pt + "）は自動で付けません（人が選んでください）" };
+  /* 名前で決めきれないときは、MW の機種と SKU の接頭辞で決める（仕様どおり）。 */
+  if (cat)
+    return { auto: true, batteries: false, dg: "not_applicable",
+             why: cat + "なので「電池なし・危険物に該当しない」で送ります"
+               + (pt ? ("（種類 " + pt + " は表にありません）") : "") };
   if (!pt)
     return { auto: false, batteries: null, dg: "",
              why: "商品の種類が分かりません（Amazonで調べると引けます）" };
-  if (!MW_DG_SAFE_PT[pt] || !cat)
-    return { auto: false, batteries: null, dg: "",
-             why: "この種類（" + pt + "）は自動で付けません（人が選んでください）" };
-  return { auto: true, batteries: false, dg: "not_applicable",
-           why: cat + "なので「電池なし・危険物に該当しない」で送ります" };
+  return { auto: false, batteries: null, dg: "",
+           why: "この種類（" + pt + "）は自動で付けません（人が選んでください）" };
+}
+/* ⚙設定（6.128）の「自動でよい種類」の足し引きを読む（7.93）。
+   設定は画面が /settings に置いた JSON で、{"FIGURINE":1,"TOY_VEHICLE":0} の形。 */
+async function mwDgOver(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  let v = st.mwDgTypes;
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  const out = {};
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    for (const k of Object.keys(v)) {
+      const key = String(k).toUpperCase();
+      if (!/^[A-Z0-9_]{1,60}$/.test(key)) continue;
+      out[key] = (v[k] === 1 || v[k] === true || v[k] === "1") ? 1 : 0;
+    }
+  }
+  return out;
+}
+/* ASIN ごとに、人が選んだ申告を控える（7.93）。次に同じ ASIN を登録するときは
+   これを自動で当てて、確認の画面に「前回の選択を使用」と出す。 */
+async function mwDgMemGet(env, asins) {
+  const want = [];
+  for (const a of asins) {
+    const s0 = String(a || "");
+    if (/^B[0-9A-Z]{9}$/.test(s0) && want.indexOf(s0) < 0) want.push(s0);
+  }
+  const out = {};
+  if (!want.length) return out;
+  const q = await env.DB.prepare(
+    `SELECT asin, batteries, dg, at FROM amz_dg
+      WHERE asin IN (${want.map(() => "?").join(",")})`).bind(...want).all();
+  for (const r of (q && q.results) || [])
+    out[String(r.asin)] = { batteries: Number(r.batteries) ? true : false,
+                            dg: String(r.dg || "not_applicable"),
+                            at: String(r.at || "") };
+  return out;
+}
+function mwDgMemSet(env, asin, batteries, dg, by) {
+  return env.DB.prepare(
+    `INSERT INTO amz_dg (asin,batteries,dg,by_role,at,created_at)
+       VALUES (?1,?2,?3,?4,?5,?5)
+     ON CONFLICT(asin) DO UPDATE SET batteries=excluded.batteries,
+       dg=excluded.dg, by_role=excluded.by_role, at=excluded.at`)
+    .bind(String(asin), batteries ? 1 : 0, String(dg || "not_applicable"),
+          String(by || ""), nowIso());
+}
+/* 種類の一覧（7.93）。Amazon は productType の一覧を公開していないので、
+   searchDefinitionsProductTypes で引いて控える（14日）。 */
+const MW_PT_ALL_KEY = "amz.ptypes";
+async function mwPtypeAll(env, run, force) {
+  const raw = await stateGet(env, MW_PT_ALL_KEY);
+  let cur = null;
+  try { cur = raw ? JSON.parse(raw) : null; } catch (e) { cur = null; }
+  const old = Date.now() - MW_PT_TTL_D * 86400000;
+  if (!force && cur && cur.at && Date.parse(cur.at) > old)
+    return { list: cur.list || [], at: cur.at, cached: true, err: "" };
+  const u = new URLSearchParams({ marketplaceIds: MP_FE, locale: "ja_JP" });
+  const r = await spCall(env, run, "/definitions/2020-09-01/productTypes?"
+    + u.toString(), { label: "searchDefinitionsProductTypes" });
+  if (!r.ok)
+    return { list: (cur && cur.list) || [], at: (cur && cur.at) || "",
+             cached: true, err: "HTTP " + r.status + " " + String(r.err || "") };
+  const list = [];
+  for (const it of (r.data && r.data.productTypes) || []) {
+    const n = String((it && it.name) || "");
+    if (n && list.indexOf(n) < 0) list.push(n);
+  }
+  list.sort();
+  const at = nowIso();
+  await stateSet(env, MW_PT_ALL_KEY, JSON.stringify({ at, list })).run();
+  return { list, at, cached: false, err: "" };
+}
+/* ⚙の表に出す中身（GET /mw/ptypes）。
+   ・seen：これまでに出てきた種類（mw_amz.ptype の件数つき）
+   ・all ：Amazon が持っている種類の一覧（控え）
+   ・どれが「いま自動でよい」か（既定＋⚙の足し引き）も付ける。 */
+async function mwPtypeList(env, url) {
+  const run = newRun("mw-ptypes");
+  const out = { ok: false, seen: [], all: [], all_at: "", all_err: "",
+                over: {}, re: String(MW_DG_SAFE_RE), def: {} };
+  try {
+    out.over = await mwDgOver(env);
+    const q = await env.DB.prepare(
+      `SELECT ptype, COUNT(*) AS n FROM mw_amz
+        WHERE COALESCE(ptype,'') <> '' GROUP BY ptype ORDER BY n DESC`).all();
+    const seen = [];
+    for (const r of (q && q.results) || [])
+      seen.push({ ptype: String(r.ptype), n: Number(r.n) || 0 });
+    /* 定義を引いたときの様子（必須だったか・読めたか）も添える。 */
+    const d = await env.DB.prepare(
+      `SELECT ptype, req, err, at FROM amz_ptype`).all();
+    const dm = {};
+    for (const r of (d && d.results) || []) {
+      let req = []; try { req = JSON.parse(r.req || "[]"); } catch (e) { req = []; }
+      dm[String(r.ptype)] = {
+        at: String(r.at || ""), err: String(r.err || ""),
+        need_batt: req.some((k) => /batter/i.test(String(k))),
+        need_dg: req.some((k) => /dg_hz/i.test(String(k))) };
+    }
+    for (const r of seen) {
+      r.safe = mwDgSafePt(r.ptype, out.over) ? 1 : 0;
+      r.def_safe = mwDgSafePt(r.ptype, {}) ? 1 : 0;
+      Object.assign(r, dm[r.ptype] || {});
+    }
+    out.seen = seen;
+    if (url && url.searchParams.get("all") === "1") {
+      const a = await mwPtypeAll(env, run, url.searchParams.get("force") === "1");
+      out.all = a.list; out.all_at = a.at; out.all_err = a.err;
+    }
+    for (const k of Object.keys(MW_DG_SAFE_PT)) out.def[k] = MW_DG_SAFE_PT[k];
+    out.ok = true;
+  } catch (e) { out.err = String((e && e.message) || e); }
+  return Object.assign(await saveRun(env, run), out);
 }
 /* ASIN の本当の種類を Catalog から引く（7.92）。20件ずつ。控えは mw_amz.ptype。 */
 async function mwPtypeFind(env, run, asins) {
@@ -6262,6 +6426,11 @@ async function mwPtypeDef(env, run, ptype) {
   const old = new Date(Date.now() - MW_PT_TTL_D * 86400000).toISOString();
   const hit = await env.DB.prepare(
     `SELECT * FROM amz_ptype WHERE ptype=?1 AND at >= ?2`).bind(pt, old).first();
+  /* 読めなかった控えは長く持たない（7.93）。許可の直し忘れを直したあと、
+     14日も古いエラーを見せないため、しくじりは MW_PT_ERR_MIN 分だけ。 */
+  if (hit && String(hit.err || "")
+      && Date.parse(String(hit.at || "")) < Date.now() - MW_PT_ERR_MIN * 60000)
+    return await mwPtypeDefNew(env, run, pt);
   if (hit) {
     let req = [], props = [];
     try { req = JSON.parse(hit.req || "[]"); } catch (e) { req = []; }
@@ -6269,6 +6438,10 @@ async function mwPtypeDef(env, run, ptype) {
     return { ptype: pt, req: req, props: props, at: String(hit.at || ""),
              cached: true, err: String(hit.err || "") };
   }
+  return await mwPtypeDefNew(env, run, pt);
+}
+/* 控えを使わずに引き直す（7.93）。 */
+async function mwPtypeDefNew(env, run, pt) {
   const u = new URLSearchParams({
     marketplaceIds: MP_FE, requirements: "LISTING_OFFER_ONLY",
     locale: "ja_JP", sellerId: spSellerId(env),
@@ -6298,7 +6471,11 @@ async function mwPtypeDef(env, run, ptype) {
     const resp = await net(run, String(link), { method: "GET" });
     sc = await resp.json();
   } catch (e) {
-    return await save([], [], "項目表を読めません：" + String((e && e.message) || e));
+    /* どこを読もうとして止められたのかが分かるように、置き場所も書く。 */
+    let host = "";
+    try { host = new URL(String(link)).host; } catch (e2) { host = ""; }
+    return await save([], [], "項目表を読めません：" + String((e && e.message) || e)
+      + (host ? ("（置き場所 " + host + "）") : ""));
   }
   const req = (sc && Array.isArray(sc.required)) ? sc.required.map(String) : [];
   const props = (sc && sc.properties) ? Object.keys(sc.properties) : [];
@@ -6426,9 +6603,12 @@ async function mwPutRun(env, body, role) {
     }
     /* 人が選んだ申告（確認の画面から来る）。SKU ごと。 */
     const pick = (o.dg && typeof o.dg === "object") ? o.dg : {};
+    /* ⚙の「自動でよい種類」の足し引き（6.128）と、前回の選択（7.93）。 */
+    const over = await mwDgOver(env);
+    const mem = await mwDgMemGet(env, list.map((x) => String(x.asin || "")));
     const planOf = (x) => {
       const t = pt.map[String(x.asin || "")] || "";
-      const p0 = mwDgPlan(x, t);
+      const p0 = mwDgPlan(x, t, over);
       const mine = pick[String(x.sku || "")];
       if (mine && typeof mine === "object"
           && (mine.batteries === true || mine.batteries === false)) {
@@ -6437,6 +6617,12 @@ async function mwPutRun(env, body, role) {
                  dg: String(mine.dg || "not_applicable"),
                  why: "確認の画面で選びました" };
       }
+      /* 前回この ASIN で人が選んだ申告があれば、それを自動で当てる。 */
+      const old = mem[String(x.asin || "")];
+      if (old)
+        return { auto: true, hand: true, prev: true, ptype: t,
+                 batteries: !!old.batteries, dg: String(old.dg),
+                 why: "前回の選択を使用（" + String(old.at || "").slice(0, 10) + "に選びました）" };
       return Object.assign({ ptype: t, hand: false }, p0);
     };
     res.plan = list.map((x) => {
@@ -6444,7 +6630,7 @@ async function mwPutRun(env, body, role) {
       const d0 = defs[q0.ptype] || null;
       return { sku: String(x.sku || ""), asin: String(x.asin || ""),
                ptype: q0.ptype, auto: !!q0.auto, hand: !!q0.hand,
-               batteries: q0.batteries, dg: q0.dg, why: q0.why,
+               prev: !!q0.prev, batteries: q0.batteries, dg: q0.dg, why: q0.why,
                req: d0 ? d0.req : [], def_err: d0 ? d0.err : "",
                /* 電池・危険物が**この種類で必須か**（項目表から）。 */
                need_batt: !!(d0 && d0.req
@@ -6492,7 +6678,10 @@ async function mwPutRun(env, body, role) {
                       issues: g.issues, err: g.err, hint: g.hint || "",
                       missing: g.missing || [], ptype: plan.ptype,
                       dg: { batteries: plan.batteries, dg: plan.dg,
-                            hand: !!plan.hand } });
+                            hand: !!plan.hand, prev: !!plan.prev } });
+      /* 確認の画面で人が選んだ申告は、ASIN ごとに控えて次回に使う（7.93）。 */
+      if (plan.hand && !plan.prev)
+        stmts.push(mwDgMemSet(env, String(x.asin), plan.batteries, plan.dg, role));
       stmts.push(env.DB.prepare(
         `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
            issues,err,by_role,created_at)
@@ -8676,6 +8865,10 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/put")
         return json(await mwPutLog(env, url), 200, origin);
+      /* 自動で申告を付けてよい種類の表（6.128／7.93）。見るのは誰でも、
+         変えるのは⚙の設定（POST /settings）側で管理者だけ。 */
+      if (request.method === "GET" && url.pathname === "/mw/ptypes")
+        return json(await mwPtypeList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/auto") {
         const b = await request.json().catch(() => ({}));
         const pr = jobMwAuto(env, { kind: "hand", force: !!(b && b.force) });
@@ -8900,7 +9093,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
-  mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwPutHint,
+  mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
+  mwDgOver, mwDgMemGet, mwDgMemSet, mwPtypeAll, mwPtypeList, MW_DG_SAFE_RE,
+  mwDgNoPt,
+  MW_PT_ERR_MIN,
   MW_DG_SAFE_PT, MW_DG_WORD, MW_PT_TTL_D,
   MW_PUT_MAX, jobMwAuto, mwAutoSettings,
   MW_AUTO_ASIN_N, MW_AUTO_PRICE_N, MW_AUTO_RST_N, MW_AUTO_BUDGET_MS, MW_RST_FAIL_STOP, spSellerId,

@@ -5959,6 +5959,87 @@ pj 側の分類は `mwDgSafeCat()`（MW の機種、または **SKU の接頭辞
 ### ALLOWED に足したもの（どちらも読み取り）
 - `GET /definitions/2020-09-01/productTypes/{productType}?…`
 - `GET https://*.cloudfront.net/…`（項目表の置き場。署名付きの配布URL）
+  → **実物は `selling-partner-definitions-prod…`（S3）だった。v215 で直した（7.93）**
 
 ### マイグレーション 0034（デプロイの前に流す）
 `mw_amz.ptype` と `amz_ptype`（種類ごとの必須項目の控え）。
+
+## 7.93 種類の名前と項目表の置き場を実物に合わせる／申告を覚える（2026-11-05・sw.js v215）
+
+7.92（v214）を実地で動かしたところ、**2件とも「申告：選んでください」**になり、
+どちらも「必須の項目を調べられませんでした」と出た。原因は2つで、どちらも
+**想定で作って実物で確かめていなかった**ことによる。
+
+| 何が | v214（想定） | 実物 |
+| --- | --- | --- |
+| 種類の名前 | `TOY_FIGURE`・`VIDEO_GAMES` | **`FIGURINE`**・**`ABIS_VIDEO_GAMES`** |
+| 項目表の置き場 | `*.cloudfront.net` | **`selling-partner-definitions-prod…`**（S3の署名付きURL） |
+
+置き場が許可に入っていなかったので `ALLOWED` の読み取りガードが止めていた
+（`項目表を読めません：blocked_by_readonly_guard GET https://selling-partner-definitions-prod…`）。
+Amazon の資料は `resource` のホスト名を伏せているので、**実物のホスト名に合わせる**しかない。
+
+### 1. 自動で申告を付ける種類の決め方
+
+`mwDgPlan(x, ptype, over)` は、上から順に見る。
+
+1. **商品名に電池の言葉**（`MW_DG_WORD`：LED・電池・発光・電動・充電・バッテリー・
+   モーター・ライト・ランプ・レーザー・スピーカー・イヤホン・充電器・ACアダプタ）が
+   あれば、**種類が何であっても人が選ぶ**（v214 のまま）。
+2. **種類の名前で「自動でよい」と決まれば自動**（`mwDgSafePt`）。
+   - はっきり分かっている名前は `MW_DG_SAFE_PT`（`FIGURINE`・`ABIS_VIDEO_GAMES`・
+     `TOY_FIGURE`・`COLLECTIBLE_FIGURINE`・`ACTION_FIGURE`・`DOLL`・`MODEL_KIT`・
+     `TOY_BUILDING_BLOCK`・`TOYS_AND_GAMES`・`ABIS_TOY`・`VIDEO_GAMES`・`VIDEO_GAME` =1、
+     `VIDEO_GAME_ACCESSORIES`・`TOY_VEHICLE`・`HOME_FURNITURE_AND_DECOR` =0）。
+   - 名前は Amazon が増やすので、**名前の形**でも拾う
+     （`MW_DG_SAFE_RE`＝`FIGURINE|FIGURE|TOY|DOLL|PLUSH|MODEL_KIT|PLASTIC_MODEL|
+     PUZZLE|VIDEO_GAME|GAME_SOFTWARE|TRADING_CARD`）。
+   - ⚙の表（6.128）の足し引き（`over`）が、この判定に優先する。
+3. **「自動にしない」とはっきり決めてある種類**（表の 0・⚙で印を外した種類）は、
+   ここで人が選ぶ（周辺機器・家具・ラジコンなどが接頭辞で自動にならないように）。
+4. **名前で決めきれないとき**は、**MW の機種と SKU の接頭辞**で決める
+   （`mwDgSafeCat`：`mwhobby`→フィギュア・プラモデル、`mwgame`→ゲームソフト）。
+   v214 は「名前も接頭辞も必要（AND）」だったので FIGURINE で止まっていた。
+   仕様どおり**どちらかで決まればよい（OR）**に直した。
+5. どれでも決まらなければ人が選ぶ。
+
+### 2. 項目表の置き場（ALLOWED・読み取りだけ）
+
+```
+GET https://sellingpartnerapi-fe.amazon.com/definitions/2020-09-01/productTypes?…
+GET https://sellingpartnerapi-fe.amazon.com/definitions/2020-09-01/productTypes/{pt}?…
+GET https://selling-partner-definitions-prod<区>.s3[.<region>].amazonaws.com/…
+GET https://s3[.<region>].amazonaws.com/selling-partner-definitions-prod<区>/…
+```
+
+- **GET だけ**。`PUT` はガードが止める。
+- **このバケットの形だけ**。`*.cloudfront.net` やほかの S3 バケットは**許さない**
+  （v214 の広い許可は外した）。
+- 引けなかった理由には**置き場のホスト名**も書く（次にずれたとき分かるように）。
+- 読めなかった控えは `MW_PT_ERR_MIN`（30分）だけ持つ。許可を直したあと、
+  14日も古いエラーを見せないため。
+
+### 3. 申告を覚える（ASIN ごと）
+
+確認の画面で人が選んだ申告を `amz_dg`（ASIN が主キー）に控え、
+次に**同じ ASIN**を登録するときは自動で当てる。
+
+- 画面に出す文は「**前回の選択を使用**（YYYY-MM-DD に選びました）」。
+  `plan.prev=true` を返すので、画面は「前回の選択を使用」と出し、
+  **選び直す欄**も出す（6.128）。
+- 選び直して送ると、控えも書き換わる。
+- **自動で決まる行は控えない**（表の判定だけで足りるので）。
+
+### 4. 種類の一覧（`GET /mw/ptypes`）
+
+⚙の表（6.128）に出す中身。見るのは作業者用のキーでもよい（変えるのは
+`POST /settings` 側で管理者だけ）。
+
+| 返すもの | 中身 |
+| --- | --- |
+| `seen` | これまでに出てきた種類（`mw_amz.ptype` の件数つき・多い順）。`safe`（いま自動でよいか）・`def_safe`（既定でよいか）・`need_batt`・`need_dg`・`err` も付く |
+| `all` | Amazon が持っている種類の一覧（`searchDefinitionsProductTypes`。`sync_state` に14日控える。`?all=1` のときだけ引く） |
+| `over` | ⚙の足し引き（`settings.mwDgTypes`） |
+
+### マイグレーション 0035（デプロイの前に流す）
+`amz_dg`（電池・危険物の申告を ASIN ごとに覚える表）。

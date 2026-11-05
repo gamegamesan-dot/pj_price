@@ -307,6 +307,10 @@ ok(/COALESCE\(stock,0\)>=2/.test(w2.w),'★★⚙設定で変えられる');
 
 console.log('\n=== 取り込みが24時間止まったら催促する（7.75）===');
 ok(W.MW_STALE_H===24,'★24時間');
+/* 「さっき取り込んだ」状態にする。取り込みの時刻を決め打ちにすると、
+   日が変わるだけでこのテストが落ちる（2026-11-05 に落ちた）。 */
+await env2.DB.prepare("UPDATE mw_runs SET at=?1")
+  .bind(new Date(Date.now()-60000).toISOString()).run();
 notes=[];
 let st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
 console.log('   '+JSON.stringify(st));
