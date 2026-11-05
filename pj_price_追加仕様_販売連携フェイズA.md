@@ -6043,3 +6043,20 @@ GET https://s3[.<region>].amazonaws.com/selling-partner-definitions-prod<区>/�
 
 ### マイグレーション 0035（デプロイの前に流す）
 `amz_dg`（電池・危険物の申告を ASIN ごとに覚える表）。
+
+## 7.94 写真の口を作業者用のキーでも使えるようにする（2026-11-05・sw.js v216）
+
+MW の写真の半自動（6.129）を**作業者用の端末でも使う**ため（選択A）、
+`POST /mw/img` を作業者用のキー（`STAFF_KEY`）でも通す。
+
+- 写真を貼るのは **7.40 でもともと作業者の仕事**。
+- この口がするのは「**MW の画像を取って大きさを測り、控える**」だけで、
+  **値段も数量も動かない**（`mw_img` に書くだけ）。
+- 画像を取りに行く先は `ALLOWED` の
+  `GET https://matchingworld.asia/products/\d+/\d+/\d+\.jpg` **1本だけ**で、
+  **会員サイト（ログインの要るページ）には行かない**。作業者のキーでも変わらない。
+- 管理者だけのまま残すもの（7.60 のとおり）：
+  `POST /mw/stock`（仕入れ値が入る）・`/mw/market`・`/mw/amz`・`/mw/restrict`・
+  `/mw/reg`・`/mw/jan-pick`・`/mw/auto`・`/mw/put`。
+- ブックマークレットは pj を開いて渡すので、**pj-sync には MW の画面から直接送らない**
+  （CORS の許可は `https://gamegamesan-dot.github.io` のまま。増やしていない）。

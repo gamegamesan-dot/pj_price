@@ -256,8 +256,12 @@ ok(w.bind.filter((x)=>String(x).indexOf('%')===0).length===8,'★当てる文字
 console.log('\n=== 作業者のキー ===');
 r=await put('/mw/market',{ limit:1 },'staff-key-123');
 ok(r.status===403&&r.body.error==='forbidden_for_staff','★★相場は作業者では引けない');
+/* 写真は 7.40 でもともと作業者の仕事。MW の写真の半自動（7.94）で
+   作業者用の端末からも送れるようにした（値段は動かない口）。 */
 r=await put('/mw/img',{ jan:'4902370550467', ids:['10921742'] },'staff-key-123');
-ok(r.status===403,'★★画像の取り込みも作業者では使えない');
+ok(r.status===200&&r.body.ok===true,
+   '★★★写真の取り込みは作業者用のキーでも使える（7.94）');
+ok(r.body.n===1,'★★作業者が送っても1枚ぶん測る');
 
 console.log('\n=== base64 ===');
 let bytes=new Uint8Array(300); for(let i=0;i<300;i++)bytes[i]=(i*31+7)&255;

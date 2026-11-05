@@ -8645,14 +8645,17 @@ export default {
        ・設定の送信（POST /settings）… 自動値下げ・自動反映の設定が入る
        ・手動実行（POST /sync）… 「まとめて実行」もこれ
        /listings の中の価格の設定（md_* / rv_*）は、その route で弾く。 */
-    /* MW の在庫の取り込み（7.60）は管理者だけ。無在庫の仕入れ値が入るため。 */
+    /* MW の在庫の取り込み（7.60）は管理者だけ。無在庫の仕入れ値が入るため。
+       **写真（POST /mw/img）は作業者用のキーでもできる（7.94）**。
+       写真を貼るのは 7.40 でもともと作業者の仕事で、この口がするのは
+       「MW の画像を取って大きさを測り、控える」だけ（値段は動かない）。 */
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
-            || url.pathname === "/mw/img" || url.pathname === "/mw/amz"
+            || url.pathname === "/mw/amz"
             || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
             || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
             || url.pathname === "/mw/put"))
-      return forbidStaff("MW の取り込み・相場・画像は管理者用のキーが必要です", [], origin);
+      return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
       return forbidStaff("価格の設定と実行は管理者用のキーが必要です"

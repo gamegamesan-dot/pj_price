@@ -1470,6 +1470,22 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="mwDgTypeNote" style="margin-top:2px"></div>
         <!-- 中身は {"FIGURINE":1,"TOY_VEHICLE":0} の形（既定への足し引き） -->
         <input type="hidden" id="mwDgTypes" value="">
+        <!-- MW の写真の半自動（6.129）。ブックマークレットを作る。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>MW の写真を半自動で取り込む（ブックマークレット）</b>
+          ：一覧の行の「<b>MW で検索</b>」で会員サイトを開き、<b>自分でログインして</b>
+          検索結果が出たら、下のブックマークレットを押します。
+          <b>開いているページだけ</b>を読んで「JAN と商品番号」を pj に渡します
+          （ほかのページには一切アクセスしません。ID・パスワードは pj に持ちません）。
+          <b>鍵はブックマークに入りません</b>（pj を新しいタブで開いて渡すしくみです）。</div>
+        <div style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwMarkCopy" style="flex:1">ブックマークレットをコピー</button>
+          <button class="btn" id="mwMarkShow" style="flex:0 0 auto">中身を見る</button>
+        </div>
+        <div class="note2" id="mwMarkNote" style="margin-top:2px"></div>
+        <textarea id="mwMarkBox" rows="4" readonly style="width:100%;display:none;
+          font-family:ui-monospace,monospace;font-size:11px"></textarea>
+        <div class="note2" style="margin:4px 0 0">iPhone の Safari での入れ方は、
+          <b>使い方マニュアルの「2. Amazon刈取」</b>に書いてあります。</div>
         <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
       </div>
     </details>
@@ -1754,6 +1770,48 @@ body.staff #syncOnHandFix{display:none !important}
               <li>これは<b>Amazon 側を取り直すだけ</b>。
                 <b>MW の在庫CSVの取り込みは手動のまま</b>。</li>
             </ul>
+            <h5>⑥ MW の写真を半自動で取り込む（ブックマークレット）</h5>
+            <ul>
+              <li><b>なぜ半自動か</b>：MW の会員サイトを<b>pj が勝手に見に行くことはしません</b>
+                （MW の許可が出るまでこの方針のままです）。
+                <b>人が開いたページだけ</b>を読んで pj に渡します。
+                ID・パスワードは pj に持ちません（ログインはふだんどおり自分でします）。</li>
+              <li><b>使う流れ</b>：一覧の行の<b>「MW で検索」</b>を押す
+                → 会員サイトの JAN 検索が新しいタブで開く（必要ならログインする）
+                → 商品が出たら<b>ブックマークレットを押す</b>
+                → pj が開いて帯が出る → <b>「取り込む」</b>を押す。</li>
+              <li>写真は<b>長辺 500px 以上</b>のものだけ使えます。
+                取り込んだあとは出品CSVタブの候補の行の<b>「写真」</b>に控えが入ります。</li>
+              <li>同じ JAN で<b>複数の社</b>が出たときは、<b>その JAN の写真をまとめて</b>渡します。
+                検索した JAN と<b>違う商品は渡しません</b>。
+                JAN が分からない画面（一覧など）では<b>何も渡しません</b>
+                （「JAN で検索した画面で押してください」と出ます）。</li>
+              <li><b>作業者用の端末でも取り込めます</b>（写真はもともと作業者の仕事です）。</li>
+            </ul>
+            <h5>⑥-2 ブックマークレットの入れ方（iPhone の Safari）</h5>
+            <ul>
+              <li><b>1.</b> pj の⚙設定 →「Amazon刈取（国内FBA）」→
+                <b>「ブックマークレットをコピー」</b>を押す
+                （コピーできないときは「中身を見る」で出た欄を長押しして全部コピー）。</li>
+              <li><b>2.</b> Safari で<b>どれでもよいので1ページ</b>を開き、
+                下の<b>共有ボタン</b>（□に↑）→<b>「ブックマークを追加」</b>。
+                名前を<b>「MWの写真」</b>にして<b>保存</b>。
+                場所は<b>「お気に入り」</b>にしておくと、あとで押しやすくなります。</li>
+              <li><b>3.</b> 下の<b>ブックマークのボタン</b>（本のアイコン）→
+                <b>「編集」</b>→ いま作った<b>「MWの写真」</b>をタップ。</li>
+              <li><b>4.</b> <b>アドレスの欄</b>（http… と書いてあるところ）を全部消して、
+                <b>1. でコピーした中身を貼り付ける</b>
+                （<code>javascript:</code> で始まる1行です）。<b>完了</b>を押す。</li>
+              <li><b>5.</b> 使うときは、会員サイトの検索結果のページで
+                <b>アドレス欄をタップ</b>→<b>「お気に入り」</b>から
+                <b>「MWの写真」</b>を押します。</li>
+              <li><b>鍵（キー）はブックマークに入りません</b>。
+                pj を開いて渡すしくみなので、ブックマークを誰かに見られても
+                pj には入れません。</li>
+              <li>うまく動かないときは、
+                <b>「javascript:」が消えていないか</b>（貼り付けで消えることがあります）、
+                <b>JAN で検索した画面（/buy/?q=…）で押しているか</b>を確かめてください。</li>
+            </ul>
           </div>
           </details>
 
@@ -1985,6 +2043,19 @@ body.staff #syncOnHandFix{display:none !important}
 </div>
 
 <!-- 仕入れる印を外した直後に出る帯（6.125）。数秒だけ出て、押せば戻せる -->
+<!-- MW の写真の受け取り（6.129）。ブックマークレットが開いたときに出る。 -->
+<div id="mwPicBar" style="display:none;position:fixed;left:0;right:0;top:0;z-index:70;
+     background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
+     flex-direction:column;gap:8px;box-shadow:0 2px 6px rgba(0,0,0,.2);
+     max-height:70vh;overflow:auto">
+  <div style="display:flex;align-items:flex-start;gap:10px">
+    <span id="mwPicText" style="flex:1 1 0;min-width:0"></span>
+    <button class="btn" id="mwPicGo" style="flex:0 0 auto;padding:6px 10px;font-size:13px">取り込む</button>
+    <button class="btn" id="mwPicClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
+  </div>
+  <div id="mwPicOut" style="background:var(--bg);color:var(--ink);border-radius:4px;
+       padding:4px"></div>
+</div>
 <div id="mwBuyUndoBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:62;
      background:var(--ink);color:#fff;padding:10px 12px;font-size:13px;
      align-items:center;gap:10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
@@ -9577,6 +9648,29 @@ $('mwRankCapBox').addEventListener('input',function(e){
   mwRankCapNote();
   try{ mwAmzRender(); }catch(e3){}
 });
+/* MW の写真の受け取りとブックマークレット（6.129）。 */
+$('mwPicClose').onclick=mwPicBarHide;
+$('mwPicGo').onclick=mwPicGo;
+$('mwMarkShow').onclick=function(){
+  var b=$('mwMarkBox');
+  b.value=mwMarkCode();
+  b.style.display=(b.style.display==='none')?'block':'none';
+};
+$('mwMarkCopy').onclick=function(){
+  var code=mwMarkCode(), note=$('mwMarkNote');
+  var ok=function(){ note.innerHTML='<b>コピーしました</b>。'
+    +'Safari のブックマークを1つ作って、アドレスをこれに書き換えてください'
+    +'（名前は「MWの写真」など）。'; };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(code).then(ok)['catch'](function(){
+      $('mwMarkBox').value=code; $('mwMarkBox').style.display='block';
+      note.textContent='コピーできませんでした。下の欄から手でコピーしてください。';
+    });
+  }else{
+    $('mwMarkBox').value=code; $('mwMarkBox').style.display='block';
+    note.textContent='下の欄から手でコピーしてください。';
+  }
+};
 /* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。
    欄は出し直すたびに作るので、1つずつ結ばずに箱で受ける（6.124と同じ）。 */
 $('mwDgTypeBtn').onclick=mwDgTypeLoad;
@@ -10689,6 +10783,7 @@ function mwBuyRender(){
         +yen(cost*(+r.qty||0))+'</div>'
         +(r.asin?('<div class="note2" style="margin:2px 0 0">ASIN '+esc(r.asin)
           +(r.price?('　Amazon '+yen(+r.price)):'')+'</div>'):'')
+        +'<div style="display:flex;gap:6px;margin-top:4px">'+mwFindBtn(jan)+'</div>'
         +'</div>';
     }).join('');
   mwBuyBarRender();
@@ -11279,6 +11374,7 @@ function mwAmzRender(){
         +' rel="noopener" href="https://keepa.com/#!product/5-'+esc(asin)+'">Keepa</a>'
         +'<a class="btn" style="flex:1;text-align:center" target="_blank"'
         +' rel="noopener" href="https://www.amazon.co.jp/dp/'+esc(asin)+'">Amazon</a>'):'')
+      +mwFindBtn(jan)
       +'</div>'
       /* 仕入れる印と数量 */
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
@@ -11506,6 +11602,73 @@ function mwListRun(){
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
+/* ===== MW の写真の半自動（6.129）=====
+   **会員サイトの自動取得は作らない**方針のまま、人が見ているページから送る。
+   ① 行の「MW で検索」で、会員サイトの JAN 検索を新しいタブで開く
+      （ログインは人がふだんどおり行う。ID・パスワードは pj に持たない）
+   ② 検索結果のページで**ブックマークレット**を押すと、
+      **そのページだけ**を読んで「JAN と商品番号」の組を作り、
+      pj に渡す（ほかのページへは一切アクセスしない）
+   ③ pj が今までの口（POST /mw/img）で写真を取り込む（C-① と同じ流れ）
+   ブックマークレットは pj を**新しいタブで開いて渡す**ので、
+   **鍵をブックマークに書かない**（ブックマークは iCloud で同期され、
+   人に見える形で残るため）。 */
+var MW_SITE='https://matchingworld.asia';
+function mwSearchUrl(jan){
+  var j=String(jan||'').replace(/\D/g,'');
+  return MW_SITE+'/buy/?q='+encodeURIComponent(j);
+}
+/* 行に置く「MW で検索」。新しいタブで開く（押した人の操作なので開ける）。 */
+function mwFindBtn(jan){
+  var j=String(jan||'').replace(/\D/g,'');
+  if(j.length!==13)return '';
+  return '<a class="btn" style="flex:1;text-align:center" target="_blank"'
+    +' rel="noopener" href="'+esc(mwSearchUrl(j))+'">MW で検索</a>';
+}
+/* ---- ブックマークレットの中身（6.129）----
+   会員サイトの検索結果のページで押す。読むのは**開いているページだけ**。
+   ・JAN … アドレスの ?q=（JAN で検索した画面なので、これが確かな手がかり）
+            と、行の中に書かれている JAN
+   ・商品番号 … 画像の products/…/NNNNNNNN.jpg
+   組が決まらないときは**何も送らない**（当てずっぽうで入れない）。 */
+function mwMarkCode(){
+  var base=location.origin+location.pathname;
+  /* 読みやすさより短さ（ブックマークに入れるので1行）。 */
+  var src=''
+   +'(function(){'
+   +'var D=document,L=location;'
+   +'var q=(L.search.match(/[?&]q=([0-9]{13})/)||[])[1]||"";'
+   /* 文字の中に正規表現を書くので、\ は2つ重ねる（1つだと落ちる）。 */
+   +'var R=/products\\/\\d+\\/\\d+\\/(\\d{4,12})\\.(?:jpg|jpeg|png|webp)/i;'
+   +'var J=/(^|[^0-9])([49][0-9]{12})([^0-9]|$)/;'
+   +'var ps=[],ids={};'
+   +'var es=D.querySelectorAll("img,a,source");'
+   +'for(var i=0;i<es.length;i++){var e=es[i];'
+   +'var u=e.getAttribute("src")||e.getAttribute("data-src")'
+   +'||e.getAttribute("href")||e.getAttribute("srcset")||"";'
+   +'var m=R.exec(u);if(!m)continue;var id=m[1];if(ids[id])continue;'
+   +'var b=e,n=0,j="";'
+   +'while(b&&n<6){var t=(b.textContent||"");var k=J.exec(t);'
+   +'if(k){j=k[2];break;}b=b.parentElement;n++;}'
+   +'if(!j)j=q;'
+   +'if(!j||(q&&j!==q))continue;'
+   +'ids[id]=1;ps.push({id:id,jan:j});}'
+   +'if(!ps.length){alert("この画面からは「JAN と写真」の組が分かりませんでした。'
+   +'\\nJAN で検索した画面（/buy/?q=JAN）で押してください。");return;}'
+   +'var g={};for(var x=0;x<ps.length;x++){'
+   +'(g[ps[x].jan]=g[ps[x].jan]||[]).push(ps[x].id);}'
+   +'var out=[];for(var k2 in g)out.push(k2+":"+g[k2].slice(0,12).join("."));'
+   +'var U="'+base+'#mwpic="+encodeURIComponent(out.join("|"));'
+   +'var w=window.open(U,"_blank");'
+   +'if(!w){var d=D.createElement("div");'
+   +'d.style.cssText="position:fixed;left:0;right:0;top:0;z-index:99999;'
+   +'background:#111;color:#fff;padding:12px;font:14px sans-serif";'
+   +'d.innerHTML=\'<a href="\'+U+\'" target="_blank" '
+   +'style="color:#9cf">pj で写真を取り込む（'+'\'+ps.length+\'枚）</a>\';'
+   +'D.body.appendChild(d);}'
+   +'})();';
+  return 'javascript:'+encodeURI(src);
+}
 /* ---- MW の画像を貼る口（仕様6.1 の①・6.87）----
    「MW の商品ID」か「画像URL」を改行で区切って最大12枚。1枚目がメイン。
    pj-sync が MW から画像を取って**大きさを測り**、使える画像の中身を返す。
@@ -11537,8 +11700,8 @@ function mwImgSizeHtml(rows){
     }).join('')+'</table>';
 }
 /* 大きさだけ調べる（取り込まない）。写真の方針を決めるための下見。 */
-function mwImgProbe(jan){
-  var out=mwImgOut(jan), ids=mwImgIds(jan);
+function mwImgProbe(jan,ids,out){
+  out=out||mwImgOut(jan); ids=ids||mwImgIds(jan);
   if(!out)return;
   if(!ids.length){ out.innerHTML='<span class="note2">商品IDか画像URLを入れてください。</span>'; return; }
   out.innerHTML='<span class="note2">大きさを調べています…</span>';
@@ -11553,16 +11716,18 @@ function mwImgProbe(jan){
       +esc(e.message)+'</span>'; });
 }
 /* 取り込む：MW から取って測り、使える画像だけ pj-img（R2）に控える。 */
-function mwImgTake(jan){
-  var out=mwImgOut(jan), ids=mwImgIds(jan);
-  if(!out)return;
-  if(!ids.length){ out.innerHTML='<span class="note2">商品IDか画像URLを入れてください。</span>'; return; }
+function mwImgTake(jan,ids,out){
+  out=out||mwImgOut(jan); ids=ids||mwImgIds(jan);
+  if(!out)return Promise.resolve(null);
+  if(!ids.length){ out.innerHTML='<span class="note2">商品IDか画像URLを入れてください。</span>';
+    return Promise.resolve(null); }
   if(!csvImgBase()||!csvImgToken()){
     out.innerHTML='<span class="note2" style="color:var(--bad)">⚙設定の「画像サーバーURL」と'
-      +'「アップロードトークン」を入れてください。</span>'; return;
+      +'「アップロードトークン」を入れてください。</span>';
+    return Promise.resolve(null);
   }
   out.innerHTML='<span class="note2">MW から画像を取っています…</span>';
-  mwPost('/mw/img',{ jan:jan, ids:ids })
+  return mwPost('/mw/img',{ jan:jan, ids:ids })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'+d.n+'枚を取りました'
@@ -11585,7 +11750,7 @@ function mwImgTake(jan){
       });
     })
     .then(function(z){
-      if(!z)return;
+      if(!z)return null;
       var first=z.saved.filter(function(x){ return +x.pos===0; })[0];
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'
         +'<b>'+z.saved.length+'枚</b>を控えました'
@@ -11597,9 +11762,94 @@ function mwImgTake(jan){
             +'</a>'; }).join('　')+'</div>'):'')
         +'<div class="note2" style="margin:4px 0 0;opacity:.8">'
         +'出品（CSVの書き出し）は<b>まだ作っていません</b>。写真の控えだけです。</div>';
+      return z;
     })
     ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
-      +esc(e.message)+'</span>'; });
+      +esc(e.message)+'</span>'; return null; });
+}
+/* ===== ブックマークレットから受け取る（6.129）=====
+   アドレスの #mwpic=JAN:番号.番号|JAN:番号 を読んで、
+   **人が「取り込む」を押してから**取り込む（勝手に取りに行かない）。 */
+var mwPicGot=[];
+function mwPicParse(h){
+  var t=String(h||'').replace(/^#?/,'');
+  var m=/(?:^|[&#])mwpic=([^&#]+)/.exec(t);
+  if(!m)return [];
+  var out=[], seen={};
+  decodeURIComponent(m[1]).split('|').forEach(function(part){
+    var kv=part.split(':');
+    var jan=String(kv[0]||'').replace(/\D/g,'');
+    if(jan.length!==13||seen[jan])return;
+    var ids=String(kv[1]||'').split('.').map(function(x){
+      return String(x||'').replace(/\D/g,''); })
+      .filter(function(x){ return x.length>=4&&x.length<=12; })
+      .slice(0,MW_IMG_MAX);
+    if(!ids.length)return;
+    seen[jan]=1; out.push({ jan:jan, ids:ids });
+  });
+  return out;
+}
+function mwPicHash(){
+  var got=mwPicParse(location.hash);
+  if(!got.length)return false;
+  mwPicGot=got;
+  /* アドレスから消す（読み直しで二度取り込まないため）。 */
+  try{ history.replaceState(null,'',location.pathname+location.search); }
+  catch(e){ location.hash=''; }
+  mwPicBarShow();
+  return true;
+}
+function mwPicBarShow(){
+  var bar=$('mwPicBar'), t=$('mwPicText'); if(!bar||!t)return;
+  var n=mwPicGot.reduce(function(a,x){ return a+x.ids.length; },0);
+  t.innerHTML='MW の写真を受け取りました：<b>'+mwPicGot.length+'件</b>の JAN'
+    +'（写真 <b>'+n+'枚</b>）<br><span style="opacity:.85">'
+    +mwPicGot.slice(0,3).map(function(x){
+      return esc(x.jan)+'（'+x.ids.length+'枚）'; }).join('　')
+    +(mwPicGot.length>3?('　ほか '+(mwPicGot.length-3)+'件'):'')+'</span>';
+  bar.style.display='flex';
+  $('mwPicGo').disabled=false;
+  $('mwPicGo').textContent='取り込む';
+}
+function mwPicBarHide(){
+  var bar=$('mwPicBar'); if(bar)bar.style.display='none';
+  mwPicGot=[];
+}
+/* 取り込む。今までの口（POST /mw/img → pj-img → saved）をそのまま使う。 */
+function mwPicGo(){
+  if(!mwPicGot.length)return;
+  if(!syncUrl()||!syncApiKey()){
+    $('mwPicText').innerHTML='⚠ ⚙設定の「pj-sync のURL」と「キー」を入れてください。';
+    return;
+  }
+  var btn=$('mwPicGo'); btn.disabled=true; btn.textContent='取り込み中…';
+  var out=$('mwPicOut'), done=0, ok=0, ng=0;
+  var list=mwPicGot.slice();
+  out.innerHTML='';
+  list.reduce(function(chain,x){
+    return chain.then(function(){
+      $('mwPicText').innerHTML='取り込んでいます… '+(done+1)+'/'+list.length
+        +'　JAN '+esc(x.jan);
+      var box=document.createElement('div');
+      box.style.cssText='margin-top:4px';
+      out.appendChild(box);
+      box.innerHTML='<span class="note2">JAN '+esc(x.jan)+' …</span>';
+      return mwImgTake(x.jan,x.ids,box).then(function(z){
+        done++;
+        if(z&&z.saved&&z.saved.length)ok+=z.saved.length; else ng++;
+        /* 候補の一覧に出ている行なら、貼り口にも入れておく（やり直せるように）。 */
+        var inp=mwImgIn(x.jan);
+        if(inp&&!String(inp.value||'').trim())inp.value=x.ids.join('\n');
+      });
+    });
+  },Promise.resolve()).then(function(){
+    $('mwPicText').innerHTML='<b>取り込みました</b>：'+done+'件の JAN'
+      +'　控えた写真 <b>'+ok+'枚</b>'+(ng?('　入らなかった '+ng+'件'):'');
+    btn.textContent='閉じる';
+    btn.disabled=false;
+    btn.onclick=mwPicBarHide;
+    try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
+  });
 }
 function mwListRender(){
   var el=$('csvMwList');
@@ -11676,6 +11926,7 @@ function mwListRender(){
       +'<b>1枚目がメイン</b>になります。長辺 '+MW_IMG_MIN+'px 未満は使えません。</div>'
       +'<textarea id="mwImgIn_'+esc(jan)+'" rows="3" style="width:100%"'
       +' placeholder="10921742&#10;10921743"></textarea>'
+      +'<div style="display:flex;gap:6px;margin-top:4px">'+mwFindBtn(jan)+'</div>'
       +'<div style="display:flex;gap:6px;margin-top:4px">'
       +'<button class="btn" style="flex:1" onclick="mwImgProbe(\''+esc(jan)+'\')">'
       +'大きさだけ調べる</button>'
@@ -17439,6 +17690,11 @@ try{ mwStaleRender(); if(typeof mwStaleLoad==='function')mwStaleLoad(); }catch(e
    タブの中身の出し分けは switchTab にまとめてあるので、ここから1回呼ぶ。
    出品リストの読み込み（csvLoad）より後に呼ぶこと。 */
 switchTab(tabLoad());
+/* MW の写真をブックマークレットから受け取ったとき（6.129）。
+   アドレスの #mwpic=… を読んで帯を出す（取り込むのは人が押してから）。
+   すでに開いている pj に戻ってきたときのために hashchange も見る。 */
+try{ mwPicHash(); }catch(e){}
+addEventListener('hashchange',function(){ try{ mwPicHash(); }catch(e){} });
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',function(){navigator.serviceWorker.register('./sw.js')['catch'](function(){});});
@@ -17454,7 +17710,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v215';   // sw.js の const V と必ず同じ値にする
+var APP_V='v216';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
