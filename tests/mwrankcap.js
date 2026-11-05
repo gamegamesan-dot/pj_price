@@ -106,7 +106,9 @@ const setCap=async(cat,v)=>await p.evaluate(([cat,v])=>{
   const el=document.querySelector('#mwRankCapBox input[data-rankcap="'+cat+'"]');
   if(!el)return false;
   el.value=String(v);
+  /* 入力中（input）では何もしない。保存は**入力が終わったとき**（6.130）。 */
   el.dispatchEvent(new Event('input',{bubbles:true}));
+  el.dispatchEvent(new Event('change',{bubbles:true}));
   return true;
 },[cat,v]);
 
