@@ -153,14 +153,17 @@ ok(gRed.price===14000,'★★★価格が入る');
 console.log('\n=== 持ち時間を段ごとに分ける（7.82）===');
 ok(W.MW_SCAN_BUDGET_MS===55000,'★★60秒の手前（55秒）で切る');
 const SH=W.MW_SCAN_SHARE;
-const MW_PRICE_FITS=3;        // 40秒なら 20件×3回＝60件まで取れる
+const MW_PRICE_FITS=3;        // 35秒なら 20件×3回＝60件まで取れる
 console.log('   '+JSON.stringify(SH));
-ok(SH.asin===10000&&SH.rst===5000&&SH.price===40000,
-   '★★★①10秒・②5秒・③40秒');
+/* 7.97 で④手数料を足した（価格は40秒→35秒。1回11秒が3回入るまま）。 */
+ok(SH.asin===10000&&SH.rst===5000&&SH.price===35000&&SH.fee===5000,
+   '★★★①10秒・②5秒・③35秒・④手数料5秒');
 ok(SH.price>=MW_PRICE_FITS*W.MW_PRICE_CALL_MS,
    '★★★価格は1回ぶん（約11秒）が'+MW_PRICE_FITS+'回入る');
-ok(SH.asin+SH.rst+SH.price===W.MW_SCAN_BUDGET_MS,
-   '★★★3段の合計が持ち時間と同じ');
+ok(SH.fee>=2*W.MW_FEE_CALL_MS,
+   '★★★手数料は1回ぶん（2.5秒）が2回入る（20件×2＝40件）');
+ok(SH.asin+SH.rst+SH.price+SH.fee===W.MW_SCAN_BUDGET_MS,
+   '★★★4段の合計が持ち時間と同じ');
 ok(W.MW_PRICE_CALL_MS===11000,'★価格は1回ぶん（約11秒）の余裕を見る');
 /* 段ごとにかかった時間を返すこと（画面に出す） */
 r=await post({ kishu:'NS', stock_min:5 });
@@ -168,7 +171,10 @@ console.log('   '+JSON.stringify({ms:r.body.ms,a:r.body.asin.ms,
   rr:r.body.rst.ms,p:r.body.price.ms,share:r.body.share_ms}));
 ok(typeof r.body.asin.ms==='number'&&typeof r.body.rst.ms==='number'
    &&typeof r.body.price.ms==='number','★★★段ごとにかかった時間を返す');
-ok(r.body.share_ms&&r.body.share_ms.price===40000,'★★持ち時間も返す（画面に出す）');
+ok(r.body.share_ms&&r.body.share_ms.price===35000
+   &&r.body.share_ms.fee===5000,'★★持ち時間も返す（画面に出す）');
+ok(typeof r.body.fee.ms==='number'&&typeof r.body.fee.need==='number',
+   '★★★④手数料の段も時間と件数を返す');
 ok(typeof r.body.ms==='number','★合計の時間も返す');
 
 console.log('\n=== ①が持ち時間を使い切っても②③に時間が残る ===');

@@ -87,7 +87,7 @@ let z3=W.mwFeePick({ FeesEstimateResult:{ Status:'ClientError' } });
 ok(z3.ok===false&&/返りませんでした/.test(z3.err),'★★返らない行は理由を残す');
 ok(W.MW_FEE_BATCH===20,'★1回20件');
 
-console.log('\n=== ③の段で手数料も取る ===');
+console.log('\n=== ④の段で手数料を取る（7.97）===');
 const JAN='4944076005667';            // サイヴァリア3 限定版 PS5
 cat[JAN]=mkCat(JAN,'B0SAIVA001','サイヴァリア3 限定版 PS5');
 offers['B0SAIVA001']=mkOff('B0SAIVA001',9638);
@@ -101,11 +101,12 @@ const post=async(path,body,key)=>asJson(await worker.fetch(new Request('https://
 await post('/mw/stock',{at:'2026-11-07T00:00:00Z',part:1,parts:1,rows:[row(JAN)]});
 calls=[];
 let r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
-console.log('   ③'+JSON.stringify({priced:r.body.price.priced,
-  fee_ok:r.body.price.fee_ok,fee_calls:r.body.price.fee_calls}));
+console.log('   ③'+JSON.stringify({priced:r.body.price.priced})
+  +' ④'+JSON.stringify(r.body.fee));
 ok(r.body.price.priced===1,'★値段が取れる');
-ok(r.body.price.fee_ok===1,'★★★手数料も同じ段で取れる');
-ok(r.body.price.fee_calls===1,'★★呼び出しは1回（20件まとめて）');
+ok(r.body.fee.ok_n===1,'★★★同じ回の④で手数料も取れる');
+ok(r.body.fee.calls===1,'★★呼び出しは1回（20件まとめて）');
+ok(r.body.fee.need>=1&&r.body.fee.done>=1,'★★要る件数と取った件数を返す');
 const fc=calls.filter((x)=>/feesEstimate/.test(x.url));
 ok(fc.length===1,'★★feesEstimate を1回だけ呼ぶ');
 const fb=JSON.parse(fc[0].body);
@@ -142,9 +143,10 @@ await post('/mw/stock',{at:'2026-11-08T00:00:00Z',part:1,parts:1,
   rows:[row(JAN),row(JAN2,{name:'手数料が取れない商品'})]});
 await env.DB.prepare("UPDATE mw_amz SET price_at=NULL WHERE jan=?1").bind(JAN2).run();
 r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
-console.log('   '+JSON.stringify({fee_ok:r.body.price.fee_ok,
-  fee_ng:r.body.price.fee_ng}));
-ok(r.body.price.fee_ng>=1,'★★取れない行を数える');
+console.log('   '+JSON.stringify(r.body.fee));
+ok(r.body.fee.ng>=1,'★★取れない行を数える');
+ok(Object.keys(r.body.fee.whys||{}).length>=1,
+   '★★★理由ごとの件数も返す（報告に使う・7.97）');
 const b=await env.DB.prepare(
   'SELECT * FROM mw_amz WHERE jan=?1').bind(JAN2).first();
 ok(!b.fee_total&&/返りませんでした/.test(String(b.fee_err||'')),
@@ -159,4 +161,76 @@ ok(/products\\\/fees\\\/v0\\\/feesEstimate\$\//.test(src),
    '★★★許可表に POST の1本だけ足す');
 ok(W.MW_FEE_CALL_MS===2500,'★1回ぶんの見込みは2.5秒');
 
+/* ========== ここから v221（7.97）==========
+   「仮の手数料」のままの行が多かった。v220 までは手数料を**③価格の段の中**で
+   「時間が余っていれば」取っていたので、③が持ち時間を使い切った回は
+   取らずに捨てていた（fee_left）。捨てた行は値段を引き直す3日後まで
+   「仮の手数料」のままだった。→ ④として**別の持ち時間**で取る。 */
+console.log('\n=== 手数料だけの段（④）がある ===');
+ok(W.MW_SCAN_SHARE.fee>0,'★★★手数料に持ち時間が割り当てられている');
+ok(W.MW_SCAN_SHARE.asin+W.MW_SCAN_SHARE.rst+W.MW_SCAN_SHARE.price
+   +W.MW_SCAN_SHARE.fee<=W.MW_SCAN_BUDGET_MS,
+   '★★合わせても1回の持ち時間を超えない');
+ok(W.MW_FEE_TTL_D===7&&W.MW_FEE_DIFF===0.1,
+   '★手数料は7日で作り直し、売値が1割ずれたら取り直す');
+
+console.log('\n=== 値段はあるが手数料が無い行を、あとの回で拾う ===');
+/* 値段は取れているが手数料が入っていない行（v220 で捨てられた行）を作る。 */
+await env.DB.prepare(
+  `UPDATE mw_amz SET fee_ref=NULL, fee_fba=NULL, fee_tax=NULL, fee_total=NULL,
+     fee_base=NULL, fee_at=NULL, fee_err='' WHERE jan=?1`).bind(JAN).run();
+/* 値段は新しいまま（＝③は何もしない）。それでも④が拾うこと。 */
+await env.DB.prepare(
+  `UPDATE mw_amz SET price_at=?2 WHERE jan=?1`).bind(JAN, new Date().toISOString()).run();
+calls=[];
+r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
+console.log('   ③'+JSON.stringify({done:r.body.price.done})
+  +' ④'+JSON.stringify(r.body.fee));
+ok(r.body.price.done===0,'★値段は引き直さない（まだ新しい）');
+ok(r.body.fee.ok_n>=1,
+   '★★★値段を引き直さない回でも、手数料だけ取り直す（3日待たない）');
+let a2=await env.DB.prepare(
+  'SELECT fee_total, fee_base FROM mw_amz WHERE jan=?1').bind(JAN).first();
+ok(a2.fee_total===2073&&a2.fee_base===9638,'★★控えが入る');
+
+console.log('\n=== 取れている行は何度も聞かない ===');
+calls=[];
+r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
+console.log('   ④'+JSON.stringify(r.body.fee)
+  +' 呼び出し '+calls.filter((x)=>/feesEstimate/.test(x.url)).length);
+ok(r.body.fee.need===1,
+   '★★取れている行は対象に入らない（取れない1件だけ残る）');
+
+console.log('\n=== 売値が1割ずれたら取り直す ===');
+await env.DB.prepare(
+  `UPDATE mw_amz SET price=12000 WHERE jan=?1`).bind(JAN).run();
+fees['B0SAIVA001']=SAI;
+calls=[];
+r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
+const fb2=calls.filter((x)=>/feesEstimate/.test(x.url))
+  .map((x)=>JSON.parse(x.body).FeesEstimateByIdRequestList
+    .map((y)=>y.FeesEstimateRequest.PriceToEstimateFees.ListingPrice.Amount));
+console.log('   聞いた売値: '+JSON.stringify(fb2)+' / '+JSON.stringify(r.body.fee));
+ok(fb2.some((x)=>x.indexOf(12000)>=0),
+   '★★★売値が1割以上ずれた行は、新しい売値で聞き直す');
+console.log('\n=== 一覧（GET /mw/amz）が様子を返す ===');
+/* 写真の控えを1枚入れる（6.133。Amazon刈取の行に出すため）。 */
+await env.DB.prepare(
+  `INSERT INTO mw_img (jan,pos,mw_id,src,url,w,h,long_px,bytes,ct,ok,err,at,created_at)
+   VALUES (?1,0,'10958868','https://matchingworld.asia/products/1/2/10958868.jpg',
+     NULL,600,600,600,1000,'image/jpeg',1,'',?2,?2)`)
+  .bind(JAN, new Date().toISOString()).run();
+const g=await asJson(await worker.fetch(new Request(
+  'https://x/mw/amz?kishu=PS5&stock_min=5',{headers:{'X-PJ-Key':'k'}}),env));
+const gr=(g.body.rows||[]).filter((x)=>String(x.jan)===JAN)[0]||{};
+console.log('   '+JSON.stringify({pics_ok:gr.pics_ok,pics_n:gr.pics_n,
+  pics_long:gr.pics_long,main:String(gr.pics_main||'').slice(-18)})
+  +' / fee '+JSON.stringify(g.body.fee));
+ok(Number(gr.pics_ok)===1&&Number(gr.pics_n)===1,
+   '★★★行ごとに写真の枚数を返す（6.133）');
+ok(Number(gr.pics_long)===600,'★★★メインの長辺も返す');
+ok(/10958868\.jpg$/.test(String(gr.pics_main||'')),'★★見本に使うURLも返す');
+ok(g.body.fee&&Number(g.body.fee.n)>0,'★★★手数料の様子を返す（7.97）');
+ok(Number(g.body.fee.ok)>=1,'★★実額が取れている件数');
+ok(Array.isArray(g.body.fee.why),'★★だめだった理由の一覧');
 await T.done();

@@ -296,8 +296,10 @@ ok(saved.body.saved.length===2&&saved.body.saved[0].pos===0,
    '★★1枚目を pos=0（メイン）で控える');
 ok(/2枚.*控えました/.test(out.replace(/\s+/g,'')) || /2枚/.test(out),'★控えた枚数を出す');
 ok(/メイン/.test(out),'★メインがどれか出す');
-ok(/まだ作っていません/.test(out),
-   '★★出品（CSVの書き出し）はまだ無いと断る');
+/* v221（6.133）：出品リストに入れられるようになったので、文言を直した。 */
+ok(/出品CSVタブの MW 無在庫/.test(out)&&/出品リストに入れられます/.test(out),
+   '★★★次に何をするか（出品CSVタブから出品リストに入れる）を出す');
+ok(!/まだ作っていません/.test(out),'★★古い文言（まだ作っていません）は出さない');
 
 console.log('\n=== 出品はしない ===');
 let noList=await p.evaluate(()=>{

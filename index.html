@@ -10128,6 +10128,42 @@ function mwNetLabel(){
   return (mwNetMode()==='exact')?'×10/11':'せどりすと方式（×0.9）';
 }
 /* 利益の内訳（6.108）。せどりすと の内訳と並べて見られるように出す。 */
+/* MW の写真の様子（6.133）。取り込めたかどうかを Amazon刈取の行でも出す。
+   いままで写真の控えは出品CSVタブの候補の行だけに出ていたので、
+   Amazon刈取で取り込んでも「入ったのか」が分からなかった。 */
+function mwPicLine(r){
+  var n=+((r||{}).pics_ok)||0, all=+((r||{}).pics_n)||0;
+  var lp=+((r||{}).pics_long)||0, src=String((r||{}).pics_main||'');
+  if(!all){
+    return '<div class="note2" style="margin:2px 0 0;opacity:.75">'
+      +'写真なし（「MW で検索」→ ブックマークレット → '
+      +'「MW の写真を貼り付けて取り込む」）</div>';
+  }
+  return '<div class="note2" style="margin:2px 0 0;display:flex;gap:6px;'
+    +'align-items:center">'
+    +(src?('<img src="'+esc(src)+'" alt="" loading="lazy" width="36" height="36"'
+      +' style="width:36px;height:36px;object-fit:cover;border-radius:4px;'
+      +'border:1px solid var(--line);flex:0 0 auto">'):'')
+    +'<span style="flex:1 1 0;min-width:0">'
+    +(n?('<b style="color:var(--good)">写真あり '+n+'枚</b>'):'<b>写真あり 0枚</b>')
+    +(lp?('・長辺 '+lp+'px'):'')
+    +((all>n)?('　<span style="color:var(--bad)">使えない '+(all-n)+'枚</span>'):'')
+    +(n&&lp&&lp<MW_IMG_MIN?'　<span style="color:var(--bad)">小さすぎます</span>':'')
+    +'</span></div>';
+}
+/* 手数料の様子（6.133）。pj-sync が返す fee の数字をそのまま出す。 */
+function mwFeeNote(f){
+  if(!f||!(+f.n>0))return '';
+  var ok=+f.ok||0, ng=+f.ng||0, none=+f.none||0, n=+f.n||0;
+  var why=(f.why||[]).map(function(x){
+    return esc(String(x.why||'').slice(0,40))+' '+(+x.n||0)+'件'; }).join('／');
+  return '<br>手数料：<b>商品ごとの実額 '+ok+'件</b>'
+    +'　<span'+((ng+none)?' style="color:var(--bad)"':'')+'>仮の手数料 '
+    +(ng+none)+'件</span>'
+    +'（値段あり '+n+'件のうち）'
+    +(none?('　まだ '+none+'件（次の「Amazonで調べる」で取ります）'):'')
+    +(ng?('　だめ '+ng+'件'+(why?('：'+why):'')):'');
+}
 function mwAmzBreak(r,c){
   if(!c)return '';
   return '<div class="note2" style="margin:2px 0 0">'
@@ -11373,6 +11409,9 @@ function mwAmzRender(){
     +(mwRankHid?('　<b>ランキングの基準で隠した行 '+mwRankHid+'件</b>'
       +'（⚙設定の「Amazon刈取」で分類ごとに変えられます）'):'')
     +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'')
+    /* 商品ごとの手数料の様子（6.133／7.97）。
+       「仮の手数料」のままの行が多いときに、何件・なぜかが分かるように。 */
+    +mwFeeNote(d.fee)
     +'<div class="note2" id="csvMwAmzCopyNote" style="display:none;margin:2px 0 0;'
     +'color:var(--good)"></div>';
   if(!list.length){
@@ -11448,6 +11487,7 @@ function mwAmzRender(){
         +esc(String(r.note).slice(0,50))+'</div>'):'')
       +mwRstLine(r)
       +mwJanDupLine(r)
+      +mwPicLine(r)
       /* 外のページを開くボタン */
       +'<div style="display:flex;gap:6px;margin-top:4px">'
       +(asin?('<a class="btn" style="flex:1;text-align:center" target="_blank"'
@@ -11886,7 +11926,8 @@ function mwImgTake(jan,ids,out){
             +'" target="_blank" rel="noopener">'+((+x.pos===0)?'メイン':('#'+(+x.pos+1)))
             +'</a>'; }).join('　')+'</div>'):'')
         +'<div class="note2" style="margin:4px 0 0;opacity:.8">'
-        +'出品（CSVの書き出し）は<b>まだ作っていません</b>。写真の控えだけです。</div>';
+        +'写真が付いた行は、<b>出品CSVタブの MW 無在庫</b>から'
+        +'<b>出品リストに入れられます</b>。</div>';
       return z;
     })
     ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
@@ -17982,7 +18023,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v220';   // sw.js の const V と必ず同じ値にする
+var APP_V='v221';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

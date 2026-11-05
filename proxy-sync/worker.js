@@ -5304,9 +5304,11 @@ const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
 /* 段ごとの持ち時間（7.82）。合わせて MW_SCAN_BUDGET_MS になる。
    1つの締め切りを3段で分け合うと、①の残りが多い回に②③へ時間が回らず
    価格が1件も取れないことがあった（2026-10-29 の報告）。
+   7.97 で**④手数料**を足した（価格は 40秒 → 35秒。1回11秒の価格は
+   3回入るまま。手数料は1回2.5秒なので5秒で2回＝40件取れる）。
    **締め切りは「開始からの積み上げ」**にする。①が早く終われば、
    その余りはそのまま②③の締め切りに残る（次の段へ繰り越される）。 */
-const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 40000 };
+const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 35000, fee: 5000 };
 /* getItemOffersBatch 1回ぶんの見込み（0.1回/秒＋余裕）。
    これだけ残っていないと③を始めない。 */
 const MW_PRICE_CALL_MS = 11000;
@@ -5494,31 +5496,10 @@ async function mwScanPrice(env, run, o, dl) {
               z ? "" : "Amazon に新品の出品がありません", at));
       if (price > 0) fees.push({ jan: x.jan, asin: x.asin, price: price });
     }
-    /* 値段が取れた行の手数料を、同じ段で続けて取る（7.85）。
-       1回20件・2秒なので、値段の10.5秒に比べれば軽い。
-       1回ぶんの余裕が無ければ次の回に回す（手数料だけ遅れても
-       「仮の手数料」で計算できる）。 */
-    if (fees.length >= MW_FEE_BATCH || i + PRICING_BATCH >= todo.length) {
-      if (Date.now() + MW_FEE_CALL_MS <= dl) {
-        /* どの売値で出した手数料かを控えるため、送った中身を手元に残す。 */
-        const sent = fees.splice(0, MW_FEE_BATCH);
-        const byAsin = {};
-        for (const y of sent) byAsin[y.asin] = y;
-        const fr = await mwFeeFind(env, run, sent);
-        st.fee_calls += fr.calls;
-        for (const asin of Object.keys(fr.map)) {
-          const g = fr.map[asin];
-          const row = byAsin[asin];
-          if (g.ok) st.fee_ok++; else st.fee_ng++;
-          stmts.push(env.DB.prepare(
-            `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
-               fee_base=?6, fee_at=?7, fee_err=?8 WHERE asin=?1`)
-            .bind(asin, g.ok ? g.ref : null, g.ok ? g.fba : null,
-                  g.ok ? g.tax : null, g.ok ? g.total : null,
-                  (row && row.price) || null, at, g.ok ? "" : String(g.err || "")));
-        }
-      } else { st.fee_left += fees.length; fees.length = 0; }
-    }
+    /* 手数料は**別の段（④）**で取る（7.97）。
+       v220 までは③の中で「時間が余っていれば」取っていたので、
+       ③が持ち時間を使い切ると取らずに捨てていた（fee_left）。
+       捨てた行は値段を引き直す3日後まで「仮の手数料」のままだった。 */
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
@@ -5526,11 +5507,90 @@ async function mwScanPrice(env, run, o, dl) {
   st.fee_left += fees.length;
   return st;
 }
+/* ---- ④ 商品ごとの手数料（7.97）----
+   値段が取れている行のうち、手数料が
+   ・一度も取れていない（fee_at が無い）
+   ・前に失敗した（fee_err が入っている）
+   ・古い（MW_FEE_TTL_D 日より前）
+   ・**出した売値が今の売値と1割以上ずれた**（fee_base）
+   行を、新しいものから順に取り直す。1回20件・2秒。
+   ③とは別の持ち時間を持つので、③が時間を使い切っても手数料が止まらない。 */
+const MW_FEE_TTL_D = 7;            // 手数料の作り直し（日）
+const MW_FEE_DIFF = 0.1;           // 売値がこれ以上ずれたら取り直す
+async function mwScanFee(env, run, o, dl) {
+  const st = { need: 0, done: 0, ok_n: 0, ng: 0, calls: 0, left: 0, stopped: "",
+               whys: {} };
+  const q0 = mwWhere(o);
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+  const old = new Date(Date.now() - MW_FEE_TTL_D * 86400000).toISOString();
+  const cond = `COALESCE(a.price,0)>0 AND COALESCE(a.asin,'')<>''
+      AND (a.fee_at IS NULL OR COALESCE(a.fee_err,'')<>''
+           OR a.fee_at < ?${q0.bind.length + 1}
+           OR COALESCE(a.fee_total,0)=0
+           OR COALESCE(a.fee_base,0)=0
+           OR abs(COALESCE(a.fee_base,0) - a.price) > a.price * ${MW_FEE_DIFF})`;
+  try {
+    const c = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+        WHERE ${w} AND ${cond}`).bind(...q0.bind, old).first();
+    st.need = Number((c && c.n) || 0);
+  } catch (e) { run.notes.push("手数料：件数が数えられません " + e.message); }
+  if (!st.need) return st;
+  /* この回で取れる件数（持ち時間から決める）。 */
+  const calls = Math.max(1, Math.floor((dl - Date.now()) / MW_FEE_CALL_MS));
+  const take = Math.min(st.need, calls * MW_FEE_BATCH);
+  const q = await env.DB.prepare(
+    /* まだ一度も取っていない行 → 失敗した行 → 古い行 の順。 */
+    `SELECT a.asin AS asin, a.price AS price FROM mw_stock s
+       JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND ${cond}
+      GROUP BY a.asin
+      ORDER BY a.fee_at IS NOT NULL, COALESCE(a.fee_err,'')='' , a.fee_at
+      LIMIT ${take}`).bind(...q0.bind, old).all();
+  const rows = (q && q.results) || [];
+  const at = nowIso();
+  const stmts = [];
+  for (let i = 0; i < rows.length; i += MW_FEE_BATCH) {
+    if (Date.now() + MW_FEE_CALL_MS > dl) { st.stopped = "time"; break; }
+    const part = rows.slice(i, i + MW_FEE_BATCH).map((r) => ({
+      asin: String(r.asin), price: Math.round(Number(r.price) || 0) }));
+    const fr = await mwFeeFind(env, run, part);
+    st.calls += fr.calls;
+    const byAsin = {};
+    for (const y of part) byAsin[y.asin] = y;
+    for (const asin of Object.keys(fr.map)) {
+      const g = fr.map[asin];
+      const row = byAsin[asin];
+      st.done++;
+      if (g.ok) st.ok_n++;
+      else {
+        st.ng++;
+        const k = String(g.err || "理由なし").slice(0, 60);
+        st.whys[k] = (st.whys[k] || 0) + 1;
+      }
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
+           fee_base=?6, fee_at=?7, fee_err=?8 WHERE asin=?1`)
+        .bind(asin, g.ok ? g.ref : null, g.ok ? g.fba : null,
+              g.ok ? g.tax : null, g.ok ? g.total : null,
+              (row && row.price) || null, at, g.ok ? "" : String(g.err || "")));
+    }
+  }
+  await runBatch(env, run, stmts);
+  st.left = Math.max(0, st.need - st.done);
+  if (st.left && !st.stopped) st.stopped = "limit";
+  run.notes.push("手数料：取り直しが要る " + st.need + "件のうち " + st.done
+    + "件（取れた " + st.ok_n + "・だめ " + st.ng + "）"
+    + (st.left ? ("／残り " + st.left + "件は次回") : "")
+    + (st.ng ? ("／理由 " + Object.keys(st.whys).map((k) =>
+        k + " " + st.whys[k] + "件").join("・")) : ""));
+  return st;
+}
 
 /* ---- POST /mw/amz ----「Amazonで調べる」。①②③を順に進める。 */
 async function mwScanRun(env, body) {
   const run = newRun("mw-amz");
-  const res = { ok: false, asin: null, rst: null, price: null, left: 0,
+  const res = { ok: false, asin: null, rst: null, price: null, fee: null, left: 0,
                 stopped: "", ms: 0, budget_ms: MW_SCAN_BUDGET_MS,
                 share_ms: Object.assign({}, MW_SCAN_SHARE) };
   try {
@@ -5541,6 +5601,7 @@ async function mwScanRun(env, body) {
     const dlAsin = t0 + MW_SCAN_SHARE.asin;
     const dlRst = dlAsin + MW_SCAN_SHARE.rst;
     const dlPrice = dlRst + MW_SCAN_SHARE.price;
+    const dlFee = dlPrice + MW_SCAN_SHARE.fee;
     res.share_ms = Object.assign({}, MW_SCAN_SHARE);
     /* ① JAN → ASIN */
     const m1 = Date.now();
@@ -5554,6 +5615,10 @@ async function mwScanRun(env, body) {
     const m3 = Date.now();
     res.price = await mwScanPrice(env, run, o, dlPrice);
     res.price.ms = Date.now() - m3;
+    /* ④ 商品ごとの手数料（7.97）。③とは別の持ち時間で取る。 */
+    const m4 = Date.now();
+    res.fee = await mwScanFee(env, run, o, dlFee);
+    res.fee.ms = Date.now() - m4;
     res.ms = Date.now() - t0;
     res.left = (res.asin.left || 0) + (res.rst.left || 0) + (res.price.left || 0);
     res.stopped = [res.asin.stopped, res.rst.stopped, res.price.stopped]
@@ -5575,7 +5640,10 @@ async function mwScanRun(env, body) {
       + "（緑 " + (res.rst.ok_n || 0) + "・黄 " + (res.rst.approval || 0)
       + "・赤 " + (res.rst.blocked || 0) + "・失敗 " + (res.rst.failed || 0)
       + "）／価格 " + res.price.done + "（取れた " + res.price.priced
-      + "・赤を飛ばした " + res.price.skipped_red + "）／残り " + res.left);
+      + "・赤を飛ばした " + res.price.skipped_red + "）"
+      + "／手数料 " + res.fee.done + "（取れた " + res.fee.ok_n
+      + "・だめ " + res.fee.ng + "・残り " + res.fee.left + "）"
+      + "／残り " + res.left);
     res.ok = true;
   } catch (e) {
     run.errors++; run.notes.push("mw-amz: " + String((e && e.message) || e));
@@ -6192,6 +6260,7 @@ const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き�
 const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数
 const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数
 const MW_AUTO_BUDGET_MS = 45000;    // 1回の持ち時間（60秒の手前）
+const MW_AUTO_FEE_MS = 8000;        // そのうち手数料にあてる分（7.97）
 async function mwAutoSettings(env) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
@@ -6207,7 +6276,8 @@ async function mwAutoSettings(env) {
 }
 async function jobMwAuto(env, opt) {
   const run = newRun("mw-auto");
-  const res = { ok: false, mode: "off", asin_n: 0, price_n: 0, fee_n: 0, rst_n: 0,
+  const res = { ok: false, mode: "off", asin_n: 0, price_n: 0, fee_n: 0,
+                fee_ng: 0, fee_left: 0, rst_n: 0,
                 calls: 0, left: 0, note: "" };
   try {
     const st = await mwAutoSettings(env);
@@ -6224,11 +6294,18 @@ async function jobMwAuto(env, opt) {
     const sa = await mwScanAsin(env, run,
       Object.assign({}, st.opt, { limit: MW_AUTO_ASIN_N }), dl);
     res.asin_n = sa.done; res.calls += sa.calls || 0; res.left += sa.left || 0;
-    /* ② 価格（＋手数料）。優先順は上のとおり。 */
+    /* ② 価格。優先順は上のとおり。手数料は③で別に取る（7.97）。 */
     const o = Object.assign({}, st.opt, { limit: MW_AUTO_PRICE_N, order: "auto" });
-    const pr = await mwScanPrice(env, run, o, dl);
-    res.price_n = pr.done; res.fee_n = pr.fee_ok; res.left = pr.left;
+    const pr = await mwScanPrice(env, run, o, dl - MW_AUTO_FEE_MS);
+    res.price_n = pr.done; res.left = pr.left;
     res.calls += (pr.calls || 0) + (pr.fee_calls || 0);
+    /* ③ 商品ごとの手数料（7.97）。価格の段とは別の持ち時間で取る。
+       v220 までは価格の段の余り時間で取っていたので、
+       時間を使い切った回は手数料を**取らずに捨てていた**（「仮の手数料」のまま）。 */
+    const fe = await mwScanFee(env, run,
+      Object.assign({}, st.opt, { order: "auto" }), dl);
+    res.fee_n = fe.ok_n; res.fee_ng = fe.ng; res.fee_left = fe.left;
+    res.calls += fe.calls || 0;
     /* ③ 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
     const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
       { limit: MW_AUTO_RST_N }), { run: run, deadline: dl });
@@ -6236,7 +6313,8 @@ async function jobMwAuto(env, opt) {
     res.calls += rr.calls || 0;
     res.left += rr.left || 0;
     res.note = "ASIN・順位 " + res.asin_n + "件／価格 " + res.price_n
-      + "件（手数料 " + res.fee_n + "）／可否 " + res.rst_n
+      + "件／手数料 " + res.fee_n + "件（だめ " + (res.fee_ng || 0)
+      + "・残り " + (res.fee_left || 0) + "）／可否 " + res.rst_n
       + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
     await env.DB.prepare(
       `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,created_at)
@@ -7077,6 +7155,9 @@ async function mwAmzList(env, url) {
             a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
             a.fee_total AS fee_total, a.fee_base AS fee_base,
             a.fee_at AS fee_at, a.fee_err AS fee_err,
+            /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
+            COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
+            i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,
             COALESCE(b.qty,0) AS buy_qty,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
             r.checked_at AS rst_at, r.err AS rst_err,
@@ -7087,6 +7168,13 @@ async function mwAmzList(env, url) {
             LEFT JOIN mw_buy b ON b.jan = s.jan
             LEFT JOIN jan_map m ON m.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
+            /* 写真（6.133）。使える枚数・メインの長辺・見本のURL。 */
+            LEFT JOIN (SELECT jan, COUNT(*) AS n,
+                         SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) AS ok_n,
+                         MAX(CASE WHEN pos=0 THEN long_px END) AS long_px,
+                         MAX(CASE WHEN pos=0 THEN COALESCE(url,src) END) AS main,
+                         MAX(at) AS at
+                         FROM mw_img GROUP BY jan) i ON i.jan = s.jan
       WHERE ${w}${only}
       ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
   const n = await env.DB.prepare(
@@ -7099,12 +7187,32 @@ async function mwAmzList(env, url) {
   const last = await env.DB.prepare(
     `SELECT at,asked,done,asin_ok,asin_ng,priced,none,left_n,calls_cat,calls_prc
        FROM mw_amz_runs ORDER BY id DESC LIMIT 1`).first();
+  /* 手数料の様子（7.97）。「仮の手数料」のままの行が多い理由を画面に出す。 */
+  const fee = await env.DB.prepare(
+    `SELECT COUNT(*) AS n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)>0 THEN 1 ELSE 0 END) AS ok_n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_err,'')<>'' THEN 1 ELSE 0 END) AS ng_n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_err,'')='' THEN 1 ELSE 0 END) AS none_n
+       FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND COALESCE(a.price,0)>0`).bind(...q0.bind).first();
+  const feeWhy = await env.DB.prepare(
+    `SELECT substr(COALESCE(a.fee_err,''),1,60) AS why, COUNT(*) AS n
+       FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND COALESCE(a.price,0)>0 AND COALESCE(a.fee_err,'')<>''
+      GROUP BY why ORDER BY n DESC LIMIT 5`).bind(...q0.bind).all();
   return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
            seen: Number((seen && seen.n) || 0),
            priced: Number((seen && seen.priced) || 0),
            left: Math.max(0, Number((n && n.n) || 0) - Number((seen && seen.n) || 0)),
            per_run: MW_AMZ_MAX, ttl_days: MW_AMZ_TTL_D,
            last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
+           /* 手数料（7.97）。値段が取れている行のうち、手数料が取れた／だめ／まだ。 */
+           fee: { n: Number((fee && fee.n) || 0), ok: Number((fee && fee.ok_n) || 0),
+                  ng: Number((fee && fee.ng_n) || 0),
+                  none: Number((fee && fee.none_n) || 0),
+                  why: (feeWhy && feeWhy.results) || [] },
            limit };
 }
 
@@ -9280,7 +9388,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
-  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwScanFee,
+  MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,
   mwDgOver, mwDgMemGet, mwDgMemSet, mwPtypeAll, mwPtypeList, MW_DG_SAFE_RE,

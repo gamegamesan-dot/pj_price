@@ -18,7 +18,11 @@ const ROWS=[
    amz_name:'千銃士:Rhodoknight for Nintendo Switch 限定版', rank:649,
    rank_cat:'Nintendo Switch ソフト', price:24829, basis:'カート', low:24829,
    buybox:24829, new_n:4, low_n:1, amz:1, fba_n:3, amz_err:'',
-   amz_at:'2026-10-27T01:00:00Z' },
+   amz_at:'2026-10-27T01:00:00Z',
+   /* 写真を取り込んだ行（6.133）。10958868 を取り込み済み・長辺600px。 */
+   pics_ok:1, pics_n:1, pics_long:600,
+   pics_main:'https://matchingworld.asia/products/10950000/10958800/10958868.jpg',
+   pics_at:'2026-11-05T01:00:00Z' },
  { jan:'4582292602828', sha:'MC02', kishu:'b2cchara_figure',
    mw_name:'グリザイア:ファントムトリガー トーカ', list_price:18700, cond:'新品',
    wholesale:16082, stock:4, note:'◎値引き商品（2024/10/17）',
@@ -40,7 +44,11 @@ const ROWS=[
 const META={ ok:true, n:4, rows:ROWS, seen:4, priced:3, left:0, per_run:120,
   ttl_days:3, last:{ at:'2026-10-27T01:00:00Z', at_jst:'2026-10-27 10:00',
   asked:4, done:4, asin_ok:3, asin_ng:1, priced:3, none:0, left_n:0,
-  calls_cat:1, calls_prc:1 }, limit:3000 };
+  calls_cat:1, calls_prc:1 },
+  /* 手数料の様子（7.97）。仮の手数料のままの件数と理由。 */
+  fee:{ n:3, ok:1, ng:1, none:1,
+    why:[{ why:'手数料が返りませんでした（ClientError）', n:2 }] },
+  limit:3000 };
 
 const setup=async()=>await p.evaluate((META)=>{
   $('syncApi').value='https://sync.example'; $('syncKey').value='k';
@@ -257,6 +265,38 @@ ok(again.rate===8&&again.fba===0,
 ok(again.fee===Math.round(24829*0.08),'★★手数料が計算し直される');
 ok(again.profit>c.game.profit,'★★利益も計算し直される（取り直し不要）');
 ok(again.net===Math.round(again.profit*0.9),'★税抜も付いてくる');
+
+/* ===== v221（6.133）：写真の様子と手数料の様子 ===== */
+console.log('\n=== 行に写真の様子を出す ===');
+await p.evaluate(()=>{ switchTab('F'); mwAmzRender(); });
+await p.waitForTimeout(150);
+const pics=await p.evaluate(()=>{
+  const d=document.querySelector('#csvMwAmzList');
+  const rows=Array.prototype.map.call(d.querySelectorAll('div'),
+    (x)=>x.innerText||'');
+  const hit=rows.filter((t)=>/千銃士/.test(t))[0]||'';
+  const none=rows.filter((t)=>/グリザイア/.test(t))[0]||'';
+  const img=d.querySelector('img');
+  return { hit:hit.replace(/\s+/g,' '), none:none.replace(/\s+/g,' '),
+    img:img?img.getAttribute('src'):'', w:img?img.getAttribute('width'):'' };
+});
+console.log('   '+JSON.stringify(pics).slice(0,300));
+ok(/写真あり 1枚/.test(pics.hit),'★★★取り込んだ行に「写真あり n枚」を出す');
+ok(/長辺 600px/.test(pics.hit),'★★★長辺も出す');
+ok(/10958868\.jpg/.test(pics.img),'★★★小さな見本（写真）も出す');
+ok(pics.w==='36','★見本は小さく出す');
+ok(/写真なし/.test(pics.none),
+   '★★取り込んでいない行は「写真なし」と出して、やり方を書く');
+
+console.log('\n=== 手数料の様子を出す ===');
+const fn=await p.evaluate(()=>($('csvMwAmzListNote').innerText||'')
+  .replace(/\s+/g,' '));
+console.log('   '+fn.slice(0,300));
+ok(/商品ごとの実額 1件/.test(fn),'★★★実額が取れている件数を出す');
+ok(/仮の手数料 2件/.test(fn),'★★★仮の手数料のままの件数を出す');
+ok(/まだ 1件/.test(fn),'★★まだ取っていない件数も出す');
+ok(/だめ 1件/.test(fn)&&/ClientError/.test(fn),
+   '★★★だめだった件数と理由を出す（報告に使う）');
 
 await T.done();
 })();
