@@ -5238,6 +5238,42 @@ async function janMapPut(env, list, src) {
    JAN から ASIN を返す。控えにあれば **API を呼ばない**。
    見つからなかった控えは JAN_MISS_TTL_D 日たったら調べ直す。
    jans=… でカンマ区切りで複数（最大20件）。 */
+/* ---- この出品が pj に入っているか（GET /find?sku=…／?asin=…・7.101）----
+   「eBay には出ているのに販売連携で見つからない」ときに、
+   **どこで落ちているか**をその場で確かめるための読み取り専用の口。
+   ・items にあるか（あれば eBay の数量・ItemID・SKU・区分を返す）
+   ・無いときは、取り込みで読めなかった出品の件数（ebay.unparsed）も返す */
+async function skuFind(env, url) {
+  const p = url.searchParams;
+  const raw = String(p.get("sku") || p.get("asin") || "").trim();
+  const m = /B[0-9A-Z]{9}/i.exec(raw.toUpperCase());
+  const res = { ok: false, q: raw.slice(0, 60), asin: m ? m[0] : "", rows: [] };
+  if (!res.asin) { res.error = "bad_asin"; return res; }
+  try {
+    const q = await env.DB.prepare(
+      /* ebay_seen_at は /status が返さない列なので、別の名前で返す
+         （画面が「/status の行の列」として読まないようにするため・7.87）。 */
+      `SELECT asin, cond, scope, title, ebay_item_id, ebay_sku, ebay_qty,
+              ebay_price, ebay_seen_at AS seen_at, fba_available, on_hand,
+              dropship, restocking, updated_at
+         FROM items WHERE asin=?1 ORDER BY cond`).bind(res.asin).all();
+    res.rows = (q && q.results) || [];
+    /* SKU をそのまま持つ行（ほかの ASIN の行に付いていないか）も見る。 */
+    if (raw && /^[A-Za-z0-9_-]{4,40}$/.test(raw)) {
+      const q2 = await env.DB.prepare(
+        `SELECT asin, cond, ebay_sku, ebay_item_id, ebay_qty
+           FROM items WHERE ebay_sku=?1 LIMIT 5`).bind(raw).all();
+      res.by_sku = (q2 && q2.results) || [];
+    }
+    res.unparsed = Number(await stateGet(env, "ebay.unparsed") || 0);
+    const n = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM items WHERE scope='ebay' AND ebay_qty IS NOT NULL`)
+      .first();
+    res.ebay_rows = Number((n && n.n) || 0);
+    res.ok = true;
+  } catch (e) { res.error = String((e && e.message) || e); }
+  return res;
+}
 async function janFind(env, url) {
   const run = newRun("jan-find");
   const res = { ok: false, rows: [], asked: 0, cached: 0, looked: 0, calls: 0 };
@@ -9379,8 +9415,12 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/buy")
         return json(await mwBuyList(env, url), 200, origin);
-      if (request.method === "GET" && url.pathname === "/find")
+      if (request.method === "GET" && url.pathname === "/find") {
+        /* SKU・ASIN で聞かれたときは「pj に入っているか」を返す（7.101）。 */
+        if (url.searchParams.get("sku") || url.searchParams.get("asin"))
+          return json(await skuFind(env, url), 200, origin);
         return json(await janFind(env, url), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/mw/amz")
         return json(await mwAmzList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/market") {
@@ -9566,7 +9606,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
-  mwCountRun,
+  mwCountRun, skuFind,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,

@@ -16163,7 +16163,12 @@ function syncSoldLoad(){
 function syncSoldSave(){
   try{ localStorage.setItem(SYNC_SOLD_KEY,JSON.stringify(syncSold)); }catch(e){}
 }
-function syncRowKey(r){ return String(r.asin||'')+'|'+(r.cond==='new'?'new':'used'); }
+/* 一覧のキー（6.138）。**区分をそのまま**使う。
+   以前は new 以外を全部 used にしていたので、カートリッジのみ（cart）と
+   フィギュアのみ（loose）の行は、syncRowBy（asin|cond で引く）と合わず、
+   行のボタン（在庫0時・一点物・最安値を今すぐ取り直す など）が**何も起きなかった**。
+   同じ ASIN に中古と「カートリッジのみ」が両方あるときも、別の行として扱える。 */
+function syncRowKey(r){ return String(r.asin||'')+'|'+String((r||{}).cond||'used'); }
 // 一覧のキー（ASIN|新品/中古）から行を引く
 function syncRowBy(key){
   var hit=null;
@@ -16427,12 +16432,24 @@ function findHit(hay,terms){
   for(var i=0;i<terms.length;i++)if(h.indexOf(terms[i])<0)return false;
   return true;
 }
-/* 販売連携の行から、探す対象の文字を組む。 */
+/* 「pj に入っているか調べる」のボタン（6.138）。知らせは作り直すので箱で受ける。 */
+document.addEventListener('click',function(e){
+  var t=e.target;
+  if(!t||!t.id||t.id!=='syncAskSku')return;
+  var a=findAsinIn($('syncFind')?$('syncFind').value:'');
+  if(a)syncAskSku(a);
+});
+/* 販売連携の行から、探す対象の文字を組む。
+   **eBay の「独自のラベル（SKU）」（ebay_sku）も入れる**（6.138）。
+   eBay のアプリに出ているのはこの文字なので、これで探せないと
+   「販売連携に無い」ように見えてしまう。
+   箱なしの区分（カートリッジのみ／フィギュアのみ）も探せるようにする。 */
 function findHaySync(r){
   var o=r||{};
   var jan=FIND_ASIN[String(o.asin||'')]||'';
   return [ o.title, o.title_en, o.english_name, o.asin, o.ebay_item_id,
-    o.custom_label, o.sku, o.prefix, jan ].filter(Boolean).join(' ');
+    o.ebay_sku, o.custom_label, o.sku, o.prefix, jan,
+    CSV_KIND_NAME[String(o.cond||'')]||'' ].filter(Boolean).join(' ');
 }
 /* 出品CSVの行から、探す対象の文字を組む。 */
 function findHayCsv(r){
@@ -16477,6 +16494,13 @@ function findState(which){
   return { q:q, terms:terms, jan:jan, asin:asin, on:!!terms.length };
 }
 /* 1行が当たるか。JAN で引けた ASIN も見る。 */
+/* 打った言葉から ASIN を取り出す（6.138）。
+   「E-B07MLZ2JKF-C」「M-B07MLZ2JKF」「mwhobby-20261031-N-B091VLKFVC-11713」のように
+   SKU をそのまま貼っても、その ASIN の行に当たるようにする。 */
+function findAsinIn(t){
+  var m=/B[0-9A-Z]{9}/.exec(String(t||'').toUpperCase());
+  return m?m[0]:'';
+}
 function findMatchRow(which,r,hay){
   /* amz2 は amz と同じ中身（findTwin でそろえる）。判定は amz 側で行う。 */
   var st=findState((which==='amz2')?'amz':which);
@@ -16485,7 +16509,14 @@ function findMatchRow(which,r,hay){
     var a=findNorm((which==='csv')?((r||{}).asin||''):((r||{}).asin||''));
     if(a&&a===findNorm(st.asin))return true;
   }
-  return findHit(hay,st.terms);
+  if(findHit(hay,st.terms))return true;
+  /* SKU をそのまま打ったとき（E-…-C など）は、中の ASIN でも当てる。 */
+  var rowAsin=String((r||{}).asin||'').toUpperCase();
+  if(rowAsin&&st.terms.length===1){
+    var want=findAsinIn(st.terms[0]);
+    if(want&&want===rowAsin)return true;
+  }
+  return false;
 }
 function findMatchSync(r){ return findMatchRow('sync',r,findHaySync(r)); }
 function findMatchCsv(r){ return findMatchRow('csv',r,findHayCsv(r)); }
@@ -16525,9 +16556,73 @@ function findNoteRender(which,shown,total,hidden){
     msg+='<br>この JAN に当たる行がありません。<b>JAN から ASIN を調べています…</b>';
   else if(st.jan&&st.asin)
     msg+='<br>JAN '+esc(st.jan)+' → ASIN <b>'+esc(st.asin)+'</b>';
-  if(!shown)msg+='<br>見つかりません。言葉を減らすか、絞り込みを「すべて」にしてください。';
+  if(!shown){
+    msg+='<br>見つかりません。言葉を減らすか、絞り込みを「すべて」にしてください。';
+    /* 販売連携で0件のときは、よくある原因も出す（6.138）。 */
+    if(which==='sync')msg+=findSyncMiss(st);
+  }
   note.innerHTML=msg;
   note.style.display='';
+}
+/* 販売連携で1件も当たらないときの手がかり（6.138）。
+   「eBay には出ているのに pj に無い」ときの原因は、だいたい次のどれか。 */
+function findSyncMiss(st){
+  var d=syncData||{};
+  var c=d.counts||{};
+  var n=((d.items||[]).length)||0;
+  var lim=(typeof syncLimit==='function')?syncLimit():0;
+  var a=findAsinIn(st.q);
+  var t=['<br><span style="opacity:.85">eBay に出ているのに見つからないときは：</span>'];
+  t.push('・SKU（<b>E-…-C</b> など）のままでも探せます'
+    +(a?('（この言葉の ASIN は <b>'+esc(a)+'</b>）'):'')
+    +'。ASIN だけでも試してください');
+  if(+c.ebay_unparsed>0)
+    t.push('・<b>解析不可の出品 '+(+c.ebay_unparsed)+'件</b>があります。'
+      +'CustomLabel が <b>E-&lt;ASIN&gt;</b>／<b>E-&lt;ASIN&gt;-U</b>／'
+      +'<b>-C</b>／<b>-L</b> の形でない出品は取り込めません');
+  if(lim&&n>=lim)
+    t.push('・取り込みが<b>上限の '+lim+'件</b>で切れています。'
+      +'⚙設定の「取り込みの上限」を上げて取り込み直してください');
+  t.push('・取り込みが古いときは、<b>「最新の状態にする」</b>を押してください');
+  if(a)t.push('<button class="btn" id="syncAskSku" style="padding:4px 10px;'
+    +'font-size:12px;margin-top:4px">pj に入っているか調べる（'+esc(a)+'）</button>'
+    +'<span id="syncAskOut"></span>');
+  return t.join('<br>');
+}
+/* 「pj に入っているか調べる」（6.138）。pj-sync に ASIN で聞いて、
+   items にあるか・eBay の数量が入っているかを出す。読むだけ。 */
+function syncAskSku(asin){
+  var out=$('syncAskOut'); if(!out)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ out.textContent='　⚙設定のURLとキーが要ります'; return; }
+  out.textContent='　調べています…';
+  fetch(syncUrl()+'/find?sku='+encodeURIComponent(asin),
+    {headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ out.textContent='　調べられませんでした'; return; }
+      var rows=d.rows||[];
+      if(!rows.length){
+        out.innerHTML='<br><b style="color:var(--bad)">pj にこの ASIN の行がありません。</b>'
+          +'eBay の取り込みで読めていません（CustomLabel の形か、取り込みの上限）。'
+          +'<br>eBay に出ている行 '+(+d.ebay_rows||0)+'件'
+          +'／読めなかった出品 '+(+d.unparsed||0)+'件';
+        return;
+      }
+      out.innerHTML='<br>pj にある行：'
+        +rows.map(function(x){
+          return '<b>'+esc(String(x.cond||''))+'</b>'
+            +'（'+(CSV_KIND_NAME[String(x.cond||'')]||'—')+'）'
+            +'　SKU '+esc(String(x.ebay_sku||'—'))
+            +'　ItemID '+esc(String(x.ebay_item_id||'—'))
+            +'　数量 '+((x.ebay_qty===null||x.ebay_qty===undefined)
+              ?'<b style="color:var(--bad)">取り込めていません</b>':x.ebay_qty)
+            +'　最後に見た '+esc(jstText(x.seen_at||''));
+        }).join('<br>')
+        +'<br><span style="opacity:.8">数量が入っているのに一覧に出ないときは、'
+        +'絞り込みを「すべて」にして、ページをめくってください。</span>';
+    })
+    ['catch'](function(e){ out.textContent='　調べられませんでした：'+e.message; });
 }
 /* JAN を入れたのに当たらないときだけ、pj-sync に ASIN を聞く。 */
 var findAsking={};
@@ -18442,7 +18537,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v224';   // sw.js の const V と必ず同じ値にする
+var APP_V='v225';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

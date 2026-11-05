@@ -124,4 +124,31 @@ let dl=await asJson(await worker.fetch(new Request('https://x/find?jan=490237055
   {headers:{'X-PJ-Key':'staff-key-123'}}),env));
 ok(dl.status===200,'★★作業者のキーでも引ける（読み取りだけ）');
 
+console.log('\n=== この出品が pj に入っているか（7.101）===');
+/* 「eBay には出ているのに販売連携で見つからない」ときの手がかり。
+   SKU（E-…-C）か ASIN で聞くと、items にあるか・数量が入っているかを返す。 */
+await env.DB.prepare(
+  `INSERT INTO items (asin,cond,scope,title,ebay_item_id,ebay_sku,ebay_qty,
+     ebay_price,ebay_seen_at,updated_at)
+   VALUES ('B07MLZ2JKF','cart','ebay','Switch のソフト','180004',
+     'E-B07MLZ2JKF-C',1,37.71,?1,?1)`).bind(new Date().toISOString()).run();
+const ask=async(q)=>(await asJson(await worker.fetch(
+  new Request('https://x/find?'+q,{headers:{'X-PJ-Key':'k'}}),env))).body;
+let f1=await ask('sku=E-B07MLZ2JKF-C');
+console.log('   '+JSON.stringify(f1).slice(0,300));
+ok(f1.ok===true&&f1.asin==='B07MLZ2JKF','★★★SKU（E-…-C）から ASIN を読む');
+ok((f1.rows||[]).length===1&&f1.rows[0].cond==='cart',
+   '★★★その ASIN の行を返す（カートリッジのみ）');
+ok(f1.rows[0].ebay_qty===1&&f1.rows[0].ebay_sku==='E-B07MLZ2JKF-C',
+   '★★★eBay の数量と SKU も返す（取り込めているか分かる）');
+ok(typeof f1.unparsed==='number'&&typeof f1.ebay_rows==='number',
+   '★★読めなかった出品の件数と、eBay に出ている行の件数も返す');
+let f2=await ask('asin=B0NOTHERE1');
+ok(f2.ok===true&&(f2.rows||[]).length===0,
+   '★★★無い ASIN は「行がありません」と分かる');
+let f3=await ask('sku=ただの文字');
+ok(f3.ok!==true&&f3.error==='bad_asin','★ASIN が読めない言葉は断る');
+let f4=await ask('jan=4902370550467');
+ok(Array.isArray(f4.rows),'★★JAN で聞いたときは今までの答えを返す');
+
 await T.done();

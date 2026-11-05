@@ -22,7 +22,12 @@ const ITEMS=[
    prefix:'H', ebay_price:120.00, ebay_qty:1, fba_total:0 },
  { asin:'B0PLAN00003', cond:'used', scope:'ebay', title:'ちいかわ シール',
    ebay_item_id:'180003', custom_label:'E-B0PLAN00003', sku:'H-20250101-U-B0PLAN00003-300',
-   prefix:'H', ebay_price:9.99, ebay_qty:0, fba_total:2 }];
+   prefix:'H', ebay_price:9.99, ebay_qty:0, fba_total:2 },
+ /* カートリッジのみ（-C）の出品（6.138）。名簿が無いので sku も custom_label も空。
+    eBay のアプリに出ているのは ebay_sku の「E-B07MLZ2JKF-C」だけ。 */
+ { asin:'B07MLZ2JKF', cond:'cart', scope:'ebay', title:'Nintendo Switch ソフト',
+   ebay_item_id:'180004', ebay_sku:'E-B07MLZ2JKF-C',
+   ebay_price:37.71, ebay_qty:1, fba_total:0 }];
 
 const setup=async(o)=>await p.evaluate((o)=>{
   $('syncApi').value='https://sync.example'; $('syncKey').value='k';
@@ -76,7 +81,7 @@ const find=async(q)=>await p.evaluate((q)=>{
 let d=await find('ベヨネッタ');
 console.log('   '+JSON.stringify(d.rows)+'　'+d.note.replace(/\s+/g,' '));
 ok(d.rows.join()==='B0PLAN00001','★★商品名（日本語）で当たる');
-ok(/当たったのは 1件/.test(d.note)&&/全3件/.test(d.note),'★★件数を出す');
+ok(/当たったのは 1件/.test(d.note)&&/全4件/.test(d.note),'★★件数を出す');
 ok(d.show!=='none'&&d.clr!=='none','★★件数と「×」を出す');
 d=await find('B0PLAN00002');
 ok(d.rows.join()==='B0PLAN00002','★★ASIN で当たる');
@@ -94,7 +99,7 @@ d=await find('ベヨネッタ ps5');
 ok(d.rows.length===0&&/見つかりません/.test(d.note),
    '★★当たらないときは言葉を減らす案内を出す');
 d=await find('');
-ok(d.rows.length===3&&d.show==='none'&&d.clr==='none',
+ok(d.rows.length===4&&d.show==='none'&&d.clr==='none',
    '★★空にすると全部出て、件数と「×」が消える');
 
 console.log('\n=== 絞り込みと組み合わせる ===');
@@ -119,7 +124,7 @@ let both=await p.evaluate(()=>{
   return { all:all, filt:filt, both:both2, outside:outside, brought:brought };
 });
 console.log('   '+JSON.stringify(both));
-ok(both.all.length===3,'★検索なしで3件');
+ok(both.all.length===4,'★検索なしで4件（-C の行を足した・6.138）');
 ok(both.filt.length<=both.all.length,'★絞り込みで減る（か同じ）');
 ok(both.both.every((a)=>both.filt.indexOf(a)>=0),
    '★★絞り込み＋検索の結果は、絞り込みの結果の中に収まる（AND）');
@@ -132,7 +137,7 @@ await p.evaluate(()=>{ $('syncFind').value='ベヨネッタ'; findRun('sync'); }
 await p.evaluate(()=>{ $('syncFindClear').click(); });
 let cleared=await p.evaluate(()=>({ v:$('syncFind').value,
   nrows:(syncData.items||[]).filter(syncMatch).length }));
-ok(cleared.v===''&&cleared.nrows===3,'★★「×」で検索が消えて全部出る');
+ok(cleared.v===''&&cleared.nrows===4,'★★「×」で検索が消えて全部出る');
 
 console.log('\n=== JAN で探す（items に列が無いので ASIN に直す）===');
 await setup({ items:ITEMS, map:{ '4902370550467':'B0PLAN00001' } });
@@ -243,6 +248,67 @@ let cc=await p.evaluate(()=>({ box:getComputedStyle($('csvFindCamBox')).display,
   clr:typeof $('csvFindClear').onclick==='function' }));
 ok(cc.cam&&cc.clr,'★★カメラと「×」が結ばれている');
 ok(cc.box==='none','★押すまでカメラは起動しない');
+
+/* ===== v225（6.138）：eBay の SKU で探す ===== */
+console.log('\n=== 独自のラベル（SKU）で探せる ===');
+await setup({ items:ITEMS });
+await openCsvBoxes(p);
+const findSync=async(q)=>await p.evaluate((q)=>{
+  switchTab('E');
+  $('syncFind').value=q;
+  $('syncFind').dispatchEvent(new Event('input',{bubbles:true}));
+  return null;
+},q);
+const seen=async()=>await p.evaluate(()=>({
+  n:document.querySelectorAll('#syncList .lcard').length,
+  rows:Array.prototype.map.call(document.querySelectorAll('#syncList [data-srow]'),
+    (x)=>x.getAttribute('data-srow')),
+  note:($('syncFindNote').textContent||'').replace(/\s+/g,' ') }));
+await findSync('E-B07MLZ2JKF-C');
+await p.waitForTimeout(250);
+let v2=await seen();
+console.log('   '+JSON.stringify(v2).slice(0,240));
+ok(v2.rows.indexOf('B07MLZ2JKF|cart')>=0,
+   '★★★eBay の「独自のラベル（SKU）」そのままで見つかる');
+/* 区分をそのままキーにするので、行のボタンから行を引ける（6.138）。 */
+ok(await p.evaluate(()=>!!syncRowBy('B07MLZ2JKF|cart')),
+   '★★★カートリッジのみの行も、キーから引ける（行のボタンが効く）');
+ok(await p.evaluate(()=>syncRowKey({asin:'B0X',cond:'loose'})==='B0X|loose'),
+   '★★フィギュアのみ（-L）も同じ');
+ok(await p.evaluate(()=>syncRowKey({asin:'B0X',cond:'used'})==='B0X|used'
+   &&syncRowKey({asin:'B0X',cond:'new'})==='B0X|new'),
+   '★新品・中古は今までどおり');
+ok(/1件/.test(v2.note),'★★当たった件数を出す');
+/* ASIN だけでも、-C を付けても当たる。 */
+await findSync('B07MLZ2JKF');
+await p.waitForTimeout(250);
+ok((await seen()).n===1,'★★ASIN だけでも見つかる');
+await findSync('e-b07mlz2jkf-c');
+await p.waitForTimeout(250);
+ok((await seen()).n===1,'★★小文字でも見つかる');
+/* 箱なしの区分の名前でも探せる。 */
+await findSync('カートリッジのみ');
+await p.waitForTimeout(250);
+ok((await seen()).n===1,'★★★「カートリッジのみ」でも見つかる');
+
+console.log('\n=== 見つからないときの手がかり ===');
+await p.evaluate(()=>{
+  syncData.counts=Object.assign({},syncData.counts||{},{ebay_unparsed:7});
+  syncRender();
+});
+await findSync('E-B0NOTHERE1-C');
+await p.waitForTimeout(250);
+let v3=await seen();
+console.log('   '+v3.note.slice(0,260));
+ok(v3.n===0,'★当たらない');
+ok(/eBay に出ているのに見つからないとき/.test(v3.note),
+   '★★★よくある原因を出す');
+ok(/B0NOTHERE1/.test(v3.note),
+   '★★★打った言葉から ASIN を取り出して見せる');
+ok(/解析不可の出品 7件/.test(v3.note),
+   '★★★CustomLabel が読めない出品があることを知らせる');
+await findSync('');
+await p.waitForTimeout(150);
 
 await T.done();
 })();
