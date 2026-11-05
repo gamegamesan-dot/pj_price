@@ -8,6 +8,16 @@ const ok=T.ok;
 const { worker, T:W }=await loadWorker('ship');
 const env=makeEnv();
 const now=new Date().toISOString();
+/* Discord の知らせを受け取る（7.98 の確認に使う）。外へは出さない。 */
+let notes=[];
+globalThis.fetch=async(u,i)=>{
+  const url=String(u);
+  if(/discord/.test(url)){
+    notes.push(JSON.parse(String((i||{}).body||'{}')).content||'');
+    return new Response(null,{status:204});
+  }
+  throw new Error('外へ出てはいけない: '+url);
+};
 
 async function seed(asin,extra){
   const d=Object.assign({cond:'used',scope:'ebay',title:asin+'の商品',
@@ -100,4 +110,69 @@ const row=find(st2.items,'B0W2000001');
 console.log('   '+row.title+'：最後に売れた '+row.ebay_sold_at);
 ok(row.ebay_sold_at==='2026-10-09T00:00:00Z','★いちばん新しい注文の日時を返す');
 ok(find(st2.items,'B0W1000001').ebay_sold_at===null,'売れていない行は空');
+
+/* ========== ここから v222（7.98）==========
+   無在庫のポリシーは2つ（W2000＝短い／W2000-MW＝6日）。
+   MW の出荷日数は日によって変わるので、出したあとに
+   「MW の出荷日数＋2日」がいまのポリシーのハンドリングを超えることがある。
+   在庫CSVを取り込むたびに見つけて知らせる。 */
+console.log('\n=== 無在庫の配送ポリシーが足りているか（7.98）===');
+await asJson(await worker.fetch(post('/settings',
+  {at:new Date(Date.now()+5000).toISOString(),
+   settings:{ csvShipProfile:'W1000', csvShipProfileRe:'W2000',
+     csvShipProfileMw:'W2000', csvShipDaysMw:3,
+     csvShipProfileMw2:'W2000-MW', csvShipDaysMw2:6 }}),env));
+await W.shipNamesLoad(env);
+ok(W.MW_SHIP_ADD===2,'★MW の出荷日数に2日足す');
+ok(W.mwShipDaysOf('W2000')===3&&W.mwShipDaysOf('W2000-MW')===6,
+   '★★★ポリシーの名前からハンドリング日数が分かる');
+ok(W.mwShipDaysOf('W1000')===0&&W.mwShipDaysOf('')===0,
+   '★★知らない名前は0（触らない）');
+let f=W.mwShipFit(0,'W2000');
+console.log('   '+JSON.stringify(f));
+ok(f.ok===true&&f.need===2,'★★★即日（0営業日）＋2日＝2日は W2000（3日）で足りる');
+ok(W.mwShipFit(1,'W2000').ok===true,'★1営業日＋2日＝3日もちょうど足りる');
+f=W.mwShipFit(2,'W2000');
+console.log('   '+JSON.stringify(f));
+ok(f.ok===false&&f.need===4,'★★★2営業日＋2日＝4日は W2000（3日）では足りない');
+ok(f.next==='W2000-MW','★★★切り替え先（W2000-MW）を出す');
+ok(W.mwShipFit(4,'W2000-MW').ok===true,'★★4営業日＋2日＝6日は W2000-MW で足りる');
+f=W.mwShipFit(5,'W2000-MW');
+ok(f.ok===false&&!f.next,'★★★5営業日＋2日＝7日はどちらでも足りない（切り替え先なし）');
+ok(W.mwShipFit(9,'知らないポリシー').ok===true,
+   '★★名前が分からないポリシーの行は触らない');
+
+/* 取り込みのたびに見つけて知らせる。 */
+const mwRow=(jan,days)=>({ jan:jan, sha:'M200', idx:0, kishu:'NS',
+  name:jan+'の商品', list_price:5000, release:'2025/01/01', cond:'新品',
+  wholesale:3000, stock:9, note:'', ship_text:days?(days+'営業日'):'即日出荷',
+  ship_days:days });
+await env.DB.prepare(
+  `INSERT INTO items (asin,cond,scope,title,ebay_sku,ebay_item_id,ebay_qty,
+     ebay_price,ebay_ship_profile,dropship,updated_at) VALUES
+   ('B0MWSHIP01','new','ebay','足りなくなる商品','W-4902370554922','180021',1,
+    30,'W2000',1,?1),
+   ('B0MWSHIP02','new','ebay','足りている商品','W-4902370554923','180022',1,
+    30,'W2000',1,?1),
+   ('B0MWSHIP03','new','ebay','長いほうで出した商品','W-4902370554924','180023',1,
+    30,'W2000-MW',1,?1)`).bind(now).run();
+notes=[];
+let r2=await asJson(await worker.fetch(post('/mw/stock',
+  { at:new Date().toISOString(), part:1, parts:1, rows:[
+    mwRow('4902370554922',4),    // 4営業日＋2＝6日 > W2000 の3日 → 足りない
+    mwRow('4902370554923',1),    // 1営業日＋2＝3日 ≤ 3日 → 足りている
+    mwRow('4902370554924',4)     // 4営業日＋2＝6日 ≤ W2000-MW の6日 → 足りている
+  ] }),env));
+console.log('   '+JSON.stringify({over:r2.body.ship_over,seen:r2.body.ship_seen,
+  rows:(r2.body.ship_rows||[]).map((x)=>x.sku+':'+x.prof+'→'+x.next)}));
+ok(r2.body.ship_seen===3,'★★無在庫（W-）の出品を見る');
+ok(r2.body.ship_over===1,'★★★足りない行だけを数える（1件）');
+ok((r2.body.ship_rows||[])[0].sku==='W-4902370554922'
+   &&(r2.body.ship_rows||[])[0].next==='W2000-MW',
+   '★★★どの行をどのポリシーに切り替えればよいか返す');
+console.log('   知らせ: '+notes.join(' / ').slice(0,200));
+ok(/無在庫の配送ポリシーが足りません/.test(notes.join('')),
+   '★★★Discord に知らせる');
+ok(/W2000-MW に切り替え/.test(notes.join('')),'★★切り替え先も書く');
+ok(!/4902370554923/.test(notes.join('')),'★★足りている行は知らせない');
 T.done();

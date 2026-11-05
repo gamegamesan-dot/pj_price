@@ -4792,7 +4792,9 @@ async function mwStockPut(env, body) {
   const run = newRun("mw-stock");
   const res = { ok: false, part: 1, parts: 1, taken: 0, added: 0, changed: 0,
                 same: 0, skipped: 0, gone: 0, back: 0, picked: 0, seen: 0,
-                zeroed: 0, warn: "", at: "" };
+                zeroed: 0, warn: "", at: "",
+                /* 配送ポリシーが足りない無在庫（7.98） */
+                ship_over: 0, ship_seen: 0, ship_rows: [] };
   try {
     const at = String((body && body.at) || "").trim() || nowIso();
     res.at = at;
@@ -4902,6 +4904,15 @@ async function mwStockPut(env, body) {
             run.notes.push("欠品した出品 " + res.zeroed + "件の数量を0にしました");
         }
       } catch (e) { run.notes.push("mw-zero: " + String((e && e.message) || e)); }
+      /* 配送ポリシーが足りなくなった無在庫の出品を知らせる（7.98）。
+         取り込みのたびに見る（MW の出荷日数は日によって変わる）。 */
+      try {
+        await shipNamesLoad(env);
+        const sc = await mwShipCheck(env, run);
+        res.ship_over = sc.over;
+        res.ship_seen = sc.seen;
+        res.ship_rows = sc.rows.slice(0, 20);
+      } catch (e) { run.notes.push("mw-ship: " + String((e && e.message) || e)); }
       await env.DB.prepare(
         `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
            unreadable,warn,note,created_at)
@@ -8258,8 +8269,14 @@ async function shipNamesLoad(env) {
     const o = s ? JSON.parse(s) : null;
     const st = (o && o.settings) || {};
     SHIP_NAMES = { fast: String(st.csvShipProfile || "").trim(),
-                   restock: String(st.csvShipProfileRe || "").trim() };
-  } catch (e) { SHIP_NAMES = { fast: "", restock: "" }; }
+                   restock: String(st.csvShipProfileRe || "").trim(),
+                   /* 無在庫のポリシー2つ（7.98）。名前と、eBay側のハンドリング日数。 */
+                   mw: String(st.csvShipProfileMw || "").trim(),
+                   mw_days: Math.round(Number(st.csvShipDaysMw) || 0),
+                   mw2: String(st.csvShipProfileMw2 || "").trim(),
+                   mw2_days: Math.round(Number(st.csvShipDaysMw2) || 0) };
+  } catch (e) { SHIP_NAMES = { fast: "", restock: "", mw: "", mw_days: 0,
+                               mw2: "", mw2_days: 0 }; }
   return SHIP_NAMES;
 }
 const shipNorm = (v) => String(v || "").trim().toLowerCase();
@@ -8274,6 +8291,82 @@ function shipKindOf(name) {
   if (/2000/.test(v)) return "yes";
   if (/1000/.test(v)) return "no";
   return "";
+}
+/* ---- 無在庫のポリシーが足りているか（7.98）----
+   MW の出荷日数は日によって変わる。出したときは W2000（短いほう）で
+   間に合っていた行が、あとから「MW の出荷日数＋2日」がポリシーの
+   ハンドリングを超えることがある。そのままだと eBay の発送期限に間に合わない。
+   在庫CSVを取り込むたびに見つけて Discord に知らせる（まずは知らせるだけ）。
+   ・対象は CustomLabel が W-<JAN> の無在庫の出品（数量≧1）
+   ・いまの MW の出荷日数（代表の行）＋2日 と、
+     いま出ているポリシーの日数（名前から分かる分）を比べる
+   ・名前が分からないポリシーの行は触らない（勝手に決めない） */
+const MW_SHIP_ADD = 2;              // MW の出荷日数に足す日数（仕様6章）
+const MW_SHIP_WARN_MAX = 50;        // 知らせに並べる件数
+/* その名前のポリシーのハンドリング日数（分からなければ 0）。 */
+function mwShipDaysOf(name) {
+  const v = shipNorm(name);
+  const n = SHIP_NAMES || {};
+  if (!v) return 0;
+  if (n.mw && v === shipNorm(n.mw)) return Math.round(Number(n.mw_days) || 0);
+  if (n.mw2 && v === shipNorm(n.mw2)) return Math.round(Number(n.mw2_days) || 0);
+  return 0;
+}
+/* いまのポリシーで間に合うか。
+   { ok, need, days, name, next } を返す。next は切り替え先（あれば）。 */
+function mwShipFit(shipDays, name) {
+  const need = Math.max(0, Math.round(Number(shipDays) || 0)) + MW_SHIP_ADD;
+  const days = mwShipDaysOf(name);
+  const n = SHIP_NAMES || {};
+  const d2 = Math.round(Number(n.mw2_days) || 0);
+  const next = (n.mw2 && d2 >= need && shipNorm(name) !== shipNorm(n.mw2))
+    ? n.mw2 : "";
+  return { ok: !days || need <= days, need, days, name: String(name || ""), next };
+}
+async function mwShipCheck(env, run) {
+  const res = { seen: 0, over: 0, rows: [], no_name: 0 };
+  const n = SHIP_NAMES || {};
+  /* ポリシーの日数が1つも分からないときは何も言わない（誤報を出さない）。 */
+  if (!(Number(n.mw_days) > 0) && !(Number(n.mw2_days) > 0)) return res;
+  const q = await env.DB.prepare(
+    `SELECT i.asin AS asin, i.cond AS cond, i.title AS title,
+            i.ebay_item_id AS item_id, i.ebay_sku AS sku,
+            i.ebay_ship_profile AS prof, s.ship_days AS ship_days,
+            s.name AS mw_name, s.sha AS sha
+       FROM items i JOIN mw_stock s
+         ON s.jan = substr(i.ebay_sku, 3) AND s.pick = 1 AND s.gone_at IS NULL
+      WHERE i.scope='ebay' AND COALESCE(i.ebay_item_id,'')<>''
+        AND COALESCE(i.ebay_qty,0) >= 1
+        AND i.ebay_sku LIKE 'W-%'
+      LIMIT 2000`).all();
+  for (const r of (q && q.results) || []) {
+    res.seen++;
+    if (!String(r.prof || "").trim()) { res.no_name++; continue; }
+    const f = mwShipFit(r.ship_days, r.prof);
+    if (f.ok) continue;
+    res.over++;
+    if (res.rows.length < MW_SHIP_WARN_MAX)
+      res.rows.push({ asin: String(r.asin), title: String(r.mw_name || r.title || ""),
+                      item_id: String(r.item_id), sku: String(r.sku),
+                      prof: f.name, days: f.days, need: f.need,
+                      ship_days: Math.round(Number(r.ship_days) || 0),
+                      next: f.next });
+  }
+  if (res.over) {
+    const t = ["🚚 無在庫の配送ポリシーが足りません（" + res.over + "件）",
+      "MW の出荷日数が変わって、いまのポリシーのハンドリングを超えました。"
+        + "eBay の発送期限に間に合わないので、ポリシーを切り替えてください。"];
+    for (const x of res.rows.slice(0, 10))
+      t.push("・" + x.title.slice(0, 30) + "（" + x.sku + "）MW " + x.ship_days
+        + "営業日＋" + MW_SHIP_ADD + "日＝" + x.need + "日 > " + x.prof
+        + " の" + x.days + "日"
+        + (x.next ? ("　→ " + x.next + " に切り替え") : "　→ 切り替え先がありません"));
+    if (res.over > 10) t.push("ほか " + (res.over - 10) + "件");
+    await notify(env, run, t.join("\n"));
+    run.notes.push("配送ポリシーが足りない無在庫 " + res.over + "件（見た "
+      + res.seen + "件）");
+  }
+  return res;
 }
 /* 配送ポリシーが再調達用（W2000）で出している行か。
    **eBayから取ったポリシー名があればそれで決める**（2026-10-10）。
@@ -9415,6 +9508,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         epsMaxUrl, epsSize,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
+                        mwShipCheck, mwShipFit, mwShipDaysOf, MW_SHIP_ADD,
                         isDropship, isRestock, stateEvents, pbNoteFor, pbRisky, PB_SQL_RISKY,
                         PB_PICK_LIMIT, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing, resMoveOnly,

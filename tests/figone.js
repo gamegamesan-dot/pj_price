@@ -15,6 +15,8 @@ const setup=async()=>await p.evaluate(()=>{
   $('syncApi').value='https://sync.example'; $('syncKey').value='k';
   $('csvShipProfile').value='W1000'; $('csvShipProfileRe').value='W2000';
   $('csvShipProfileMw').value='W2000'; $('csvShipDaysMw').value='10';
+  /* 無在庫のポリシーは2つ（6.134）。この節では長いほうを使わない形にする。 */
+  $('csvShipProfileMw2').value=''; $('csvShipDaysMw2').value='6';
   $('csvRetProfile').value='R1'; $('csvPayProfile').value='P1';
   $('csvDispatch').value='3';
   csvList=[
@@ -144,15 +146,75 @@ let bad=await p.evaluate(()=>{
 console.log('   '+JSON.stringify(bad.a));
 ok(bad.a.some((x)=>/ハンドリングが足りません/.test(x)),
    '★★★MW の出荷日数＋2日がポリシーを超えたら不備にする');
-ok(bad.a.some((x)=>/11日 > ポリシー 10日/.test(x)),'★★数字を出して分かるようにする');
+ok(bad.a.some((x)=>/11日 > W2000 の10日/.test(x)),'★★数字を出して分かるようにする');
 ok(bad.b.length===0,'★★ポリシーを長くすれば通る');
 let noProf=await p.evaluate(()=>{
-  $('csvShipProfileMw').value='';
+  $('csvShipProfileMw').value=''; $('csvShipProfileMw2').value='';
   const a=csvIssues(csvList[0]);
   $('csvShipProfileMw').value='W2000';
   return a; });
 ok(noProf.some((x)=>/MW用の配送ポリシー名が未設定/.test(x)),
    '★★ポリシー名が空なら不備にする');
+
+/* ===== v222（6.134）：ポリシーを2つで振り分ける ===== */
+console.log('\n=== W2000 と W2000-MW を出荷日数で振り分ける ===');
+const pick=await p.evaluate(()=>{
+  $('csvShipProfileMw').value='W2000'; $('csvShipDaysMw').value='3';
+  $('csvShipProfileMw2').value='W2000-MW'; $('csvShipDaysMw2').value='6';
+  const r=csvList[0];
+  const out={};
+  [0,1,2,4,5].forEach(function(d){
+    r.mwShipDays=d;
+    const pk=csvShipMwPick(csvMwNeedDays(r));
+    out[d]={ name:pk.name, prof:csvShipProfileFor(r),
+      issues:csvIssues(r).filter(function(x){ return /ハンドリング/.test(x); }) };
+  });
+  r.mwShipDays=0;
+  return out;
+});
+console.log('   '+JSON.stringify(pick));
+ok(pick['0'].name==='W2000'&&pick['1'].name==='W2000',
+   '★★★即日・1営業日（＋2日＝2〜3日）は W2000');
+ok(pick['2'].name==='W2000-MW'&&pick['4'].name==='W2000-MW',
+   '★★★2〜4営業日（＋2日＝4〜6日）は W2000-MW');
+ok(pick['5'].name===''&&pick['5'].issues.length===1,
+   '★★★5営業日（＋2日＝7日）はどちらも超えるので書き出さない（理由を出す）');
+ok(pick['0'].prof==='W2000'&&pick['2'].prof==='W2000-MW',
+   '★★★書き出しのポリシー名も振り分けに合う');
+/* 短いほうの日数を入れるまでは、すべて長いほうで出す（安全側）。 */
+const noDays=await p.evaluate(()=>{
+  $('csvShipDaysMw').value='';
+  const r=csvList[0]; r.mwShipDays=0;
+  const a=csvShipMwPick(csvMwNeedDays(r));
+  r.mwShipDays=4;
+  const b=csvShipMwPick(csvMwNeedDays(r));
+  const note=(function(){ csvShipMwNote();
+    return ($('csvShipMwNote').innerText||'').replace(/\s+/g,' '); })();
+  r.mwShipDays=0; $('csvShipDaysMw').value='3';
+  return { a:a, b:b, note:note };
+});
+console.log('   '+JSON.stringify(noDays));
+ok(noDays.a.name==='W2000-MW'&&noDays.b.name==='W2000-MW',
+   '★★★短いほうの日数が未設定なら、すべて W2000-MW（安全側）');
+ok(/未設定/.test(noDays.note)&&/W2000-MW/.test(noDays.note),
+   '★★⚙にもそう書く');
+/* 出品リストの行に、選んだポリシーを出す。 */
+const line=await p.evaluate(()=>{
+  const r=csvList[0]; r.mwShipDays=4;
+  const h=csvShipMwHtml(r);
+  r.mwShipDays=0;
+  return h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+});
+console.log('   '+line);
+ok(/配送ポリシー：/.test(line)&&/W2000-MW/.test(line),
+   '★★★行に選んだポリシーを出す');
+ok(/6日/.test(line)&&/MW出荷 4営業日/.test(line),
+   '★★要る日数とポリシーの日数も出す');
+const note2=await p.evaluate(()=>{ csvShipMwNote();
+  return ($('csvShipMwNote').innerText||'').replace(/\s+/g,' '); });
+console.log('   '+note2);
+ok(/MW 0日→W2000/.test(note2)&&/MW 4日→W2000-MW/.test(note2),
+   '★★★⚙にいまの振り分けを出す（見本つき）');
 
 console.log('\n=== MW の行は一点物にしない ===');
 let mwOne=await p.evaluate(()=>{

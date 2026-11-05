@@ -21,7 +21,12 @@ const ROWS=[{ jan:JAN, sha:'M200', kishu:'NS2', mw_name:'ゼルダの伝説 時�
   ship_text:'即日出荷', ship_days:0, asin:'B0H8D9NY89', price:6500,
   basis:'カート', new_n:4, amz:0, rst:'ok', cond:'新品', list_price:7678,
   rank:1200, rank_cat:'ゲーム' }];
-const META={ ok:true, n:1, rows:ROWS, seen:1, priced:1, left:0, per_run:120,
+/* 候補をもう2件（6.135 の振り分けを確かめるため）。 */
+ROWS.push(Object.assign({},ROWS[0],{ jan:'4902370554923', asin:'B0H8D9NY90',
+  mw_name:'候補2', amz_name:'候補2' }));
+ROWS.push(Object.assign({},ROWS[0],{ jan:'4902370554924', asin:'B0H8D9NY91',
+  mw_name:'候補3', amz_name:'候補3' }));
+const META={ ok:true, n:3, rows:ROWS, seen:3, priced:3, left:0, per_run:120,
   ttl_days:3, limit:3000 };
 
 const setup=async(role)=>await p.evaluate(([META,role])=>{
@@ -35,6 +40,9 @@ const setup=async(role)=>await p.evaluate(([META,role])=>{
     const url=String(u), b=(i&&i.body&&typeof i.body==='string')?JSON.parse(i.body):null;
     if(/\/mw\/img/.test(url)&&i&&i.method==='POST'){
       window.__img.push(b);
+      /* 本物は1件2〜3秒かかる。止められるかを確かめたいので少し待たせる。 */
+      if(window.__slow&&!b.saved)
+        await new Promise((r)=>setTimeout(r,window.__slow));
       if(b.saved)return new Response(JSON.stringify({ok:true,n:b.saved.length}),
         {status:200});
       return new Response(JSON.stringify({ ok:true, jan:b.jan,
@@ -71,7 +79,7 @@ let a=await p.evaluate(()=>Array.prototype.map.call(
   (el)=>({ t:(el.textContent||'').trim(), href:el.getAttribute('href'),
     tgt:el.getAttribute('target') })).filter((x)=>/MW/.test(x.t)));
 console.log('   '+JSON.stringify(a));
-ok(a.length===1,'★★★候補の行に「MW で検索」がある');
+ok(a.length===3,'★★★候補の行に「MW で検索」がある（行ごとに1つ）');
 ok(a[0].href==='https://matchingworld.asia/buy/?q='+JAN,
    '★★★会員サイトの JAN 検索（/buy/?q=JAN）を開く');
 ok(a[0].tgt==='_blank','★★新しいタブで開く（MW の画面を残す）');
@@ -105,6 +113,20 @@ const mwPage=async(ctx,url,html)=>{
 const HTML=(rows,extra)=>'<!doctype html><meta charset="utf-8"><body>'
   +'<img src="/img/logo.png"><table id="searchrslt">'+rows+'</table>'
   +(extra||'')+'</body>';
+/* MW の一覧（詳細検索）に近い形。商品ごとの箱の中に
+   「JAN:13桁 定価:…」の文字と、写真（または No Image）がある。 */
+const BOX=(id,name,jan)=>'<div class="item"><table><tr>'
+  +'<td class="pic">'+(id
+    ?('<img src="/products/'+(Math.floor(id/10000)*10000)+'/'
+      +(Math.floor(id/100)*100)+'/'+id+'.jpg">')
+    :'<span>No Image</span>')+'</td>'
+  +'<td><a href="/buy/detail/?id='+(id||0)+'">'+name+'</a>'
+  +'<div>JAN:'+jan+' 定価:7,800円 （発売日：1994/03/18）</div>'
+  +'<table><tr><td>新品</td><td>B037</td><td>371,850円</td></tr></table>'
+  +'</td></tr></table></div>';
+const LIST=(boxes)=>'<!doctype html><meta charset="utf-8"><body>'
+  +'<div id="side">機種で絞込み TVゲーム（5040）</div>'
+  +'<div id="main">該当件数：5,030件 '+boxes.join('')+'</div></body>';
 const ROW=(id,name,jan)=>'<tr><td><a href="#"><img src="/products/'
   +(Math.floor(id/10000)*10000)+'/'+(Math.floor(id/100)*100)+'/'+id+'.jpg"></a></td>'
   +'<td>'+name+(jan?('<br>JAN'+jan):'')+'</td><td>在庫 9</td></tr>';
@@ -192,6 +214,49 @@ console.log('\n=== 写真が1枚も無い画面 ===');
 q=await mwPage(ctx,'https://matchingworld.asia/buy/?q='+JAN,HTML(''));
 r=await run(q);
 ok(!r.clip&&!!r.alert,'★★写真が無ければコピーしない');
+await q.close();
+
+console.log('\n=== 一覧の画面からまとめて（6.135）===');
+/* 詳細検索の一覧（?q= が無い画面）。4商品のうち2つが No Image。 */
+q=await mwPage(ctx,'https://matchingworld.asia/buy/?mode=detail&hits=100',
+  LIST([ BOX(10958868,'VAMPIRE KILLER','4573419410549'),
+         BOX(0,'ツインクルテール','4934529000011'),
+         BOX(10970132,'ゼルダの伝説 時のオカリナ','4902370554922'),
+         BOX(0,'TATSUJIN','4988611920015') ]));
+r=await run(q);
+console.log('   '+JSON.stringify({clip:r.clip,msg:r.msg.slice(0,120)}));
+ok(r.clip==='4573419410549:10958868\n4902370554922:10970132',
+   '★★★一覧でも、行ごとに JAN と写真を組にしてまとめてコピーする');
+ok(/2件/.test(r.msg),'★★★組にできた件数を出す');
+ok(/写真が無い・組にできなかった 2件/.test(r.msg),
+   '★★★No Image の商品の件数も知らせる');
+await q.close();
+
+console.log('\n=== 100件でも1回で ===');
+const many=[];
+for(let i=0;i<100;i++)
+  many.push(BOX(10900000+i,'商品'+i,'49000000'+String(10000+i)));
+q=await mwPage(ctx,'https://matchingworld.asia/buy/?mode=detail&hits=100',
+  LIST(many));
+r=await run(q);
+const lines=String(r.clip||'').split('\n');
+console.log('   '+lines.length+'行 / 先頭 '+lines[0]+' / 末尾 '+lines[lines.length-1]);
+ok(lines.length===100,'★★★100件でも1回でコピーする');
+ok(lines[0]==='4900000010000:10900000','★★1行1件（JAN:商品番号）');
+await q.close();
+
+console.log('\n=== となりの商品の JAN と取り違えない ===');
+/* 写真の親をたどると2つ以上 JAN が出る形（箱で分かれていない画面）。 */
+q=await mwPage(ctx,'https://matchingworld.asia/buy/?mode=detail',
+  '<!doctype html><meta charset="utf-8"><body><div>'
+  +'<img src="/products/10900000/10900100/10900123.jpg">'
+  +'JAN:4902370554922 と JAN:4573419410549 が同じ箱にある'
+  +'</div></body>');
+r=await run(q);
+console.log('   '+JSON.stringify({clip:r.clip,alert:String(r.alert||'').slice(0,60)}));
+ok(!r.clip,'★★★どちらの JAN か決められない写真は渡さない');
+ok(/JAN は2件見えています|組が分かりませんでした/.test(String(r.alert||'')),
+   '★★なぜ渡せないかを知らせる');
 await q.close();
 
 console.log('\n=== pj で受け取る（#mwpic）===');
@@ -305,6 +370,77 @@ pn=await p.evaluate(()=>({ v:$('mwPicIn').value,
 console.log('   '+JSON.stringify(pn));
 ok(pn.v===JAN+':10970132','★★★「クリップボードから読む」で欄に入る');
 ok(/1件/.test(pn.note),'★★読めた中身を出す');
+
+console.log('\n=== 候補にある JAN だけ取り込む（6.135）===');
+/* 候補（Amazon刈取の一覧）を読み込んだ状態にする。 */
+await p.evaluate(()=>{ switchTab('F'); $('csvMwAmzLoad').click(); });
+await p.waitForTimeout(400);
+await p.evaluate(()=>{ $('mwPicPasteBox').open=true; window.__img=[]; window.__up=0; });
+let sp=await p.evaluate((j)=>{
+  /* 候補の1件目に写真あり、2件目（この JAN）は写真なし。 */
+  mwAmzRows[1].pics_ok=2;
+  $('mwPicIn').value=[ mwAmzRows[1].jan+':10900001',   // すでに写真あり
+    j+':10970132',                                     // 取り込む
+    '4900000000001:10900002' ].join('\n');            // 候補に無い
+  $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
+  return { note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
+    take:mwPicInNote().map((x)=>x.jan) };
+},JAN);
+console.log('   '+JSON.stringify(sp));
+ok(sp.take.length===1&&sp.take[0]===JAN,
+   '★★★候補にあって、まだ写真が無い JAN だけ取り込む');
+ok(/取り込む 1件/.test(sp.note),'★★★取り込む件数を出す');
+ok(/候補に無い 1件/.test(sp.note),'★★★候補に無い件数を出す');
+ok(/すでに写真あり 1件/.test(sp.note),'★★★すでに写真がある件数を出す');
+/* 候補が読めていないときは振り分けない（止めない）。 */
+const noCand=await p.evaluate((j)=>{
+  const keep=mwAmzRows, keep2=mwRows;
+  mwAmzRows=[]; mwRows=[];
+  const r=mwPicSplit(mwPicRead(j+':10900003\n4900000000001:10900004'));
+  mwAmzRows=keep; mwRows=keep2;
+  return { take:r.take.length, cand:r.cand };
+},JAN);
+ok(noCand.cand===0&&noCand.take===2,
+   '★★候補がまだ読めていないときは振り分けずに全部取り込む');
+
+console.log('\n=== 途中で止めて、続きから ===');
+await p.evaluate((j)=>{
+  window.__img=[]; window.__up=0;
+  $('mwPicIn').value=[j+':10970132', mwAmzRows[1].jan+':10970140',
+    mwAmzRows[2].jan+':10970141'].join('\n');
+  mwAmzRows[1].pics_ok=0; mwAmzRows[2].pics_ok=0; mwAmzRows[0].pics_ok=0;
+  $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
+},JAN);
+await p.waitForTimeout(150);
+/* 取り込みを始めて、すぐ「止める」を押す。 */
+await p.evaluate(()=>{ window.__slow=300; $('mwPicTake').click(); });
+await p.waitForTimeout(350);
+await p.evaluate(()=>{ $('mwPicTake').click(); });   // 2回目の押下＝止める
+await p.waitForTimeout(900);
+let qst=await p.evaluate(()=>({
+  note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
+  q:(function(){ try{ return JSON.parse(localStorage.getItem('pj:mwpicq:v1')||'[]'); }
+                 catch(e){ return []; } })(),
+  qn:($('mwPicQNote').innerText||'').replace(/\s+/g,' '),
+  shown:$('mwPicQNote').style.display!=='none',
+  btn:$('mwPicTake').textContent }));
+console.log('   '+JSON.stringify(qst).slice(0,300));
+ok(/止めました/.test(qst.note),'★★★「止める」で中断できる');
+ok(qst.q.length>=1,'★★★残りを端末に覚える（閉じても続きから）');
+ok(qst.shown===true&&/前回の続きが/.test(qst.qn),
+   '★★★残りがあることを知らせる');
+ok(qst.btn==='取り込む','★押せる状態に戻る');
+/* 「続きを取り込む」で残りを片づける。 */
+await p.evaluate(()=>{ window.__slow=0; $('mwPicGoOn').click(); });
+await p.waitForTimeout(1500);
+let fin=await p.evaluate(()=>({
+  note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
+  q:localStorage.getItem('pj:mwpicq:v1'),
+  posts:window.__img.filter((b)=>!b.saved).map((b)=>b.jan) }));
+console.log('   '+JSON.stringify(fin).slice(0,300));
+ok(/取り込みました/.test(fin.note),'★★★続きから最後まで取り込める');
+ok(!fin.q,'★★終わったら残りは消える');
+ok(fin.posts.length>=1,'★★残りの行も POST /mw/img に送られる');
 
 console.log('\n=== ホーム画面のアプリ（PWA）では Safari で開く ===');
 let urls=await p.evaluate((j)=>({ web:mwSearchUrl(j,false), app:mwSearchUrl(j,true) }),JAN);

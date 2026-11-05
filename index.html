@@ -960,6 +960,7 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn primary" id="mwPicTake" style="flex:1">取り込む</button>
         </div>
         <div class="note2" id="mwPicInNote" style="margin-top:2px"></div>
+        <div class="warn" id="mwPicQNote" style="display:none;margin-top:4px"></div>
         <div id="mwPicInOut" style="margin-top:4px"></div>
       </div>
       </details>
@@ -1439,8 +1440,19 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>在庫の下限</label><input type="number" id="mwStockMin" value="5" step="1" min="1" inputmode="numeric"><span class="unit">点</span><div class="note2" style="margin-top:2px">手で取り込む間に売り切れるのを防ぐため、<b>既定は5点</b>です。少なくすると候補は増えますが、欠品の危険も増えます。</div></div>
       <div class="note2" style="margin-top:0">1点しかない商品は売れる前に消えやすいので、既定では2点以上だけを候補にします。</div>
       <div class="chk"><input type="checkbox" id="mwNewOnly" checked><label for="mwNewOnly" style="flex:1">新品だけを候補にする（新古・中古を除く）</label></div>
-      <div class="rowv"><label>MW用の配送ポリシー名</label><input type="text" id="csvShipProfileMw" value="W2000"><div class="note2" style="margin-top:2px">無在庫（MW）の行をこのポリシーで出します。<b>MW の出荷日数＋2日以上</b>のハンドリングタイムが設定されたポリシーを指定してください。</div></div>
-      <div class="row"><label>そのポリシーのハンドリング</label><input type="number" id="csvShipDaysMw" value="10" step="1" min="1" max="30" inputmode="numeric"><span class="unit">日</span><div class="note2" style="margin-top:2px">eBay 側のポリシーに設定した日数を入れてください。<b>MW の出荷日数＋2日</b>がこれを超える行は書き出せません（出荷に間に合わないため）。</div></div>
+      <!-- 無在庫の配送ポリシーは2つ（6.134）。MW の出荷日数で振り分ける。
+           短いほう（W2000）で間に合う行は短いほうで出し、間に合わない行だけ
+           長いほう（W2000-MW・6日）で出す。どちらも超える行は書き出さない。 -->
+      <div class="note2" style="margin:8px 0 2px"><b>無在庫（MW）の配送ポリシー</b>
+        ：行ごとに <b>MW の出荷日数＋2日</b>で振り分けます。
+        <b>短いほうで間に合う行は短いほう</b>、間に合わない行は<b>長いほう</b>、
+        どちらも超える行は<b>書き出しません</b>（出荷に間に合わないため）。
+        <b>短いほうのハンドリングを入れるまでは、すべて長いほうで出します</b>（安全側）。</div>
+      <div class="rowv"><label>短いほうのポリシー名</label><input type="text" id="csvShipProfileMw" value="W2000"><div class="note2" style="margin-top:2px">在庫がすぐ出る行に使います（eBay 側の名前をそのまま）。</div></div>
+      <div class="row"><label>短いほうのハンドリング</label><input type="number" id="csvShipDaysMw" value="0" step="1" min="0" max="30" inputmode="numeric"><span class="unit">日</span><div class="note2" style="margin-top:2px">eBay 側のポリシーに設定した日数を入れてください。<b>0 か空のままなら、すべて長いほうで出します</b>（安全側）。</div></div>
+      <div class="rowv"><label>長いほうのポリシー名</label><input type="text" id="csvShipProfileMw2" value="W2000-MW"><div class="note2" style="margin-top:2px">出荷に日数がかかる行に使います。空なら短いほうだけで振り分けます。</div></div>
+      <div class="row"><label>長いほうのハンドリング</label><input type="number" id="csvShipDaysMw2" value="6" step="1" min="1" max="30" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="note2" id="csvShipMwNote" style="margin:2px 0 0"></div>
       <div class="row"><label>相場より安く出す割合</label><input type="number" id="mwUnder" value="97" step="1" min="50" max="100" inputmode="numeric"><span class="unit">%</span></div>
       <div class="note2" style="margin:0 0 2px">eBay の最安値（送料込みの総額）のこの割合で出します。それでも目標利益を割るときは<b>目標利益の売値</b>にします。相場が無い行は目標利益の売値です。</div>
       <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
@@ -1819,6 +1831,18 @@ body.staff #syncOnHandFix{display:none !important}
                 下の<b>共有ボタン</b>（□に↑）から<b>「Safariで開く」</b>を押してください。</li>
               <li><b>複数まとめて</b>貼れます（改行か <b>|</b> で区切り）。
                 何件か続けて集めてから、まとめて取り込んでもかまいません。</li>
+              <li><b>一覧の画面からまとめて</b>取り込めます（6.135）。MW の
+                <b>詳細検索</b>で<b>「新品」</b>→<b>機種</b>→<b>件数 100</b>で検索します。</li>
+              <li>商品が並んだら<b>ブックマークレットを押す</b>と、
+                そのページの商品ぜんぶの「JAN:商品番号」がコピーされます
+                （<b>No Image</b> の商品は飛ばします）。</li>
+              <li>pj に戻って貼り付け、<b>次のページをめくって</b>また押す、の繰り返しです。</li>
+              <li>pj は、貼られた JAN のうち<b>候補にある行だけ</b>を取り込みます。
+                候補に無い JAN と<b>すでに写真がある JAN</b> は飛ばし、件数だけ出します。</li>
+              <li>100件まとめると<b>5分ほど</b>かかります。進み具合（n/N）と
+                残りの見込みを出します。</li>
+              <li><b>「止める」</b>でいつでも中断できます。<b>残りは覚えている</b>ので、
+                閉じても次に<b>「続きを取り込む」</b>で再開できます。</li>
               <li>写真は<b>長辺 500px 以上</b>のものだけ使えます。
                 取り込んだあとは出品CSVタブの候補の行の<b>「写真」</b>に控えが入ります。</li>
               <li>同じ JAN で<b>複数の社</b>が出たときは、<b>その JAN の写真をまとめて</b>渡します。
@@ -2439,7 +2463,9 @@ const ADV_FIELDS=['targetMode','baseProfit','linkRate','saleRate','usTaxRate'];
    警告にするか情報にするかを、eBayから取ったポリシー名で判定するので、
    どの名前が出品用（即発送）でどれが再調達用かを知る必要がある（2026-10-10）。
    こちらは出品CSVタブの設定なので、戻すときは csvSaveCfg も呼ぶ。 */
-var ADV_SHIP=['csvShipProfile','csvShipProfileRe'];
+var ADV_SHIP=['csvShipProfile','csvShipProfileRe',
+  /* 無在庫のポリシー2つ（6.134）。Worker も知らせに使う。 */
+  'csvShipProfileMw','csvShipDaysMw','csvShipProfileMw2','csvShipDaysMw2'];
 /* Amazonの手数料も pj-sync に送る。Amazon同等ライン（Amazonで売ったときと同じ利益に
    なる eBay の売値）の計算に使うので、どの端末でも同じ値で動かす。 */
 var ADV_AMZ=['amzFeeRate','amzFbaFee'];
@@ -4863,7 +4889,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
-                 'csvShipProfileMw','csvShipDaysMw'];
+                 'csvShipProfileMw','csvShipDaysMw',
+                 'csvShipProfileMw2','csvShipDaysMw2'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -5095,6 +5122,13 @@ advCsvCfg().forEach(function(id){
 ['csvReviewAbs','csvReviewPct'].forEach(function(id){
   $(id).addEventListener('input',function(){ csvRender(); });
 });
+/* 無在庫のポリシー2つ（6.134）。入れ替えたら振り分けの案内と一覧を作り直す。 */
+['csvShipProfileMw','csvShipDaysMw','csvShipProfileMw2','csvShipDaysMw2']
+  .forEach(function(id){
+    $(id).addEventListener('change',function(){
+      csvShipMwNote(); try{ csvRender(); }catch(e){}
+    });
+  });
 $('csvBoCols').addEventListener('change',csvSaveCfg);
 $('syncOnHand').addEventListener('change',csvSaveCfg);
 /* 使わないタブを隠す。切り替えたらすぐ反映する（中身は消さない）。 */
@@ -5591,10 +5625,12 @@ function csvIssues(r){
   /* 無在庫（MW）の行は、MW の出荷日数＋2日がポリシーのハンドリングに収まること（6.96）。
      収まらないと eBay の発送期限に間に合わない。 */
   var need=csvMwNeedDays(r);
-  if(need&&need>csvShipMwDays())
-    a.push('ハンドリングが足りません（MW '+(+r.mwShipDays||0)
-      +'営業日＋2日＝'+need+'日 > ポリシー '+csvShipMwDays()+'日）');
-  if(String(r.buySource||'')==='mw'&&!csvShipMwProfile())
+  if(need){
+    var pk=csvShipMwPick(need);
+    if(!pk.name)
+      a.push(pk.why+'（MW '+(+r.mwShipDays||0)+'営業日＋2日＝'+need+'日）');
+  }
+  if(String(r.buySource||'')==='mw'&&!csvShipMwProfile()&&!csvShipMwProfile2())
     a.push('MW用の配送ポリシー名が未設定');
   /* アップロード失敗は、**失敗したときの中身のまま**なら書き出しを止める
      （同じものを送っても同じ失敗になるため）。
@@ -7050,6 +7086,8 @@ function csvRender(){
       +'<input type="text" inputmode="numeric" data-item="'+r.id+'" value="'
       +esc(r.itemId||'')+'" placeholder="結果ファイルで自動入力" style="flex:1 1 0;min-width:0;padding:6px;'
       +'font-size:14px;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+      /* 無在庫（MW）の行に、どのポリシーで出すかを出す（6.134）。 */
+      +csvShipMwHtml(r)
       /* 出品時の開始価格（Amazon基準から始める行） */
       +csvStartHtml(r)
       /* 値下げ（3日ごと）の案内 */
@@ -8451,12 +8489,68 @@ function csvShipFast(){ return $('csvShipProfile').value||$('csvShipProfileRe').
 function csvShipSlow(){ return $('csvShipProfileRe').value||$('csvShipProfile').value; }
 function csvShipLooseProfile(){ return String($('csvShipProfileLoose').value||'').trim(); }
 function csvShipMwProfile(){ return String($('csvShipProfileMw').value||'').trim(); }
-function csvShipMwDays(){ var n=+$('csvShipDaysMw').value; return (isFinite(n)&&n>0)?n:10; }
+/* 短いほうのハンドリング。**0 か空なら「分からない」**として扱い、
+   すべて長いほうで出す（安全側・6.134）。 */
+function csvShipMwDays(){ var n=+$('csvShipDaysMw').value; return (isFinite(n)&&n>0)?n:0; }
+function csvShipMwProfile2(){ return String($('csvShipProfileMw2').value||'').trim(); }
+/* ⚙の下に、いまの設定でどう振り分かるかを出す（6.134）。 */
+function csvShipMwNote(){
+  var el=$('csvShipMwNote'); if(!el)return;
+  var a=csvShipMwProfile(), ad=csvShipMwDays();
+  var b=csvShipMwProfile2(), bd=csvShipMwDays2();
+  if(!a&&!b){ el.innerHTML='<span style="color:var(--bad)">'
+    +'ポリシー名を入れてください。</span>'; return; }
+  var ex=[0,1,2,3,4,6].map(function(d){
+    var pk=csvShipMwPick(d+2);
+    return 'MW '+d+'日→'+(pk.name?esc(pk.name):'<span style="color:var(--bad)">×</span>');
+  }).join('　');
+  el.innerHTML=(ad>0
+      ?('いまの振り分け：<b>'+esc(a)+'</b>（'+ad+'日）までは短いほう、'
+        +(b?('超えたら <b>'+esc(b)+'</b>（'+bd+'日）'):'超えたら書き出しません'))
+      :('<b style="color:var(--bad)">短いほうのハンドリングが未設定</b>なので、'
+        +(b?('すべて <b>'+esc(b)+'</b>（'+bd+'日）で出します'):'書き出せません')))
+    +'<br>'+ex;
+}
+function csvShipMwDays2(){ var n=+$('csvShipDaysMw2').value; return (isFinite(n)&&n>0)?n:6; }
+/* MW の行に使うポリシーを決める（6.134）。
+   { name, days, why } を返す。name が空なら書き出せない。 */
+function csvShipMwPick(need){
+  var n=+need||0;
+  var a=csvShipMwProfile(), ad=csvShipMwDays();
+  var b=csvShipMwProfile2(), bd=csvShipMwDays2();
+  /* 短いほうのハンドリングを入れるまでは、すべて長いほうで出す（安全側）。 */
+  if(a&&ad>0&&n<=ad)
+    return { name:a, days:ad, why:'MW '+n+'日 ≤ '+a+' の'+ad+'日' };
+  if(b&&n<=bd)
+    return { name:b, days:bd,
+      why:(ad>0?('MW '+n+'日 > '+a+' の'+ad+'日 なので'):'短いほうの日数が未設定なので')
+        +' '+b+'（'+bd+'日）' };
+  /* 長いほうが未設定なら、短いほうだけで判定する（今までの動き）。 */
+  if(!b&&a&&ad>0)
+    return { name:'', days:ad,
+      why:'ハンドリングが足りません（MW '+n+'日 > '+a+' の'+ad+'日）' };
+  return { name:'', days:bd,
+    why:'ハンドリングが足りません（MW '+n+'日 > '+(b||a||'ポリシー')+' の'
+      +(b?bd:ad)+'日）' };
+}
+/* 出品リストの行に出す「選んだポリシー」（6.134）。 */
+function csvShipMwHtml(r){
+  if(!r||String(r.buySource||'')!=='mw')return '';
+  var need=csvMwNeedDays(r), pk=csvShipMwPick(need);
+  return '<div class="note2" style="margin-top:4px">配送ポリシー：'
+    +(pk.name?('<b>'+esc(pk.name)+'</b>（ハンドリング '+pk.days+'日）')
+             :'<b style="color:var(--bad)">書き出せません</b>')
+    +'　MW出荷 '+(+r.mwShipDays||0)+'営業日＋2日＝<b>'+need+'日</b>'
+    +'<br><span style="opacity:.75">'+esc(pk.why)+'</span></div>';
+}
 function csvShipProfileFor(r){
-  /* 無在庫（MW）の行は MW 用のポリシー（6.96）。
-     MW に注文してから届くまでの日数が要るので、ハンドリングが長いものを使う。 */
-  if(r&&String(r.buySource||'')==='mw'&&csvShipMwProfile())
-    return csvShipMwProfile();
+  /* 無在庫（MW）の行は MW 用のポリシー（6.96／6.134）。
+     MW に注文してから届くまでの日数が要るので、出荷日数で振り分ける。 */
+  if(r&&String(r.buySource||'')==='mw'&&(csvShipMwProfile()||csvShipMwProfile2())){
+    var pk=csvShipMwPick(csvMwNeedDays(r));
+    if(pk.name)return pk.name;
+    return csvShipMwProfile2()||csvShipMwProfile();
+  }
   /* フィギュアのみ（箱なし）は封筒で送るので、専用のポリシーを使う。
      ⚙設定が空のときは、これまでどおりのポリシーで出す。 */
   if(r&&r.looseOnly&&csvShipLooseProfile())return csvShipLooseProfile();
@@ -11784,25 +11878,39 @@ function mwMarkCode(){
    +'var q=(L.search.match(/[?&]q=([0-9]{13})/)||[])[1]||"";'
    /* 文字の中に正規表現を書くので、\ は2つ重ねる（1つだと落ちる）。 */
    +'var R=/products\\/\\d+\\/\\d+\\/(\\d{4,12})\\.(?:jpg|jpeg|png|webp)/i;'
-   +'var J=/(^|[^0-9])([49][0-9]{12})([^0-9]|$)/;'
-   +'var ps=[],ids={};'
+   +'var J=/[49][0-9]{12}/g;'
+   /* その箱の中にある JAN（重複は1つに）。1つだけなら、その箱の商品の JAN。 */
+   +'var JS=function(t){var a=(String(t||"").match(J)||[]),o=[],i2;'
+   +'for(i2=0;i2<a.length;i2++)if(o.indexOf(a[i2])<0)o.push(a[i2]);return o;};'
+   +'var ps=[],ids={},bad=0,used={};'
    +'var es=D.querySelectorAll("img,a,source");'
    +'for(var i=0;i<es.length;i++){var e=es[i];'
    +'var u=e.getAttribute("src")||e.getAttribute("data-src")'
    +'||e.getAttribute("href")||e.getAttribute("srcset")||"";'
    +'var m=R.exec(u);if(!m)continue;var id=m[1];if(ids[id])continue;'
+   /* 写真から上へ。**JAN がちょうど1つだけ**になる箱で止める（一覧でも
+      となりの商品の JAN と取り違えない）。2つ以上出たら組にできない。 */
    +'var b=e,n=0,j="";'
-   +'while(b&&n<6){var t=(b.textContent||"");var k=J.exec(t);'
-   +'if(k){j=k[2];break;}b=b.parentElement;n++;}'
+   +'while(b&&n<8){var o2=JS(b.textContent);'
+   +'if(o2.length===1){j=o2[0];break;}'
+   +'if(o2.length>1)break;'
+   +'b=b.parentElement;n++;}'
    +'if(!j)j=q;'
-   +'if(!j||(q&&j!==q))continue;'
-   +'ids[id]=1;ps.push({id:id,jan:j});}'
-   +'if(!ps.length){alert("この画面からは「JAN と写真」の組が分かりませんでした。'
-   +'\\nJAN で検索した画面（/buy/?q=JAN）で押してください。");return;}'
+   +'if(!j){bad++;continue;}'
+   +'if(q&&j!==q){bad++;continue;}'
+   +'ids[id]=1;used[j]=1;ps.push({id:id,jan:j});}'
+   /* 画面に出ている JAN のうち、写真と組にできなかったもの（No Image など）。 */
+   +'var all=JS(D.body?D.body.textContent:""),none=0,i3;'
+   +'for(i3=0;i3<all.length;i3++)if(!used[all[i3]])none++;'
+   +'if(!ps.length){alert("この画面からは「JAN と写真」の組が分かりませんでした"'
+   +'+(all.length?("（JAN は"+all.length+"件見えています。写真が無い商品かもしれません）"):"")'
+   +'+"。\\n商品が並んでいる画面（詳細検索の一覧）か、'
+   +'JAN で検索した画面で押してください。");return;}'
    +'var g={};for(var x=0;x<ps.length;x++){'
    +'(g[ps[x].jan]=g[ps[x].jan]||[]).push(ps[x].id);}'
    +'var out=[];for(var k2 in g)out.push(k2+":"+g[k2].slice(0,12).join("."));'
-   +'var S=out.join("|");'
+   /* 100件でも貼りやすいよう、1行1件（改行区切り）にする。 */
+   +'var S=out.join("\\n");'
    /* 知らせの枠。コピーできた／できないをここに出す。 */
    +'var d=D.createElement("div");'
    +'d.style.cssText="position:fixed;left:0;right:0;top:0;z-index:99999;'
@@ -11818,8 +11926,10 @@ function mwMarkCode(){
    +'x.style.cssText="margin-top:8px;padding:6px 12px;font:14px sans-serif";'
    +'x.onclick=function(){d.remove();};'
    +'d.appendChild(m);d.appendChild(t);d.appendChild(x);D.body.appendChild(d);'
-   +'var okm="コピーしました（"+ps.length+"枚）。pj に戻って'
-   +'「MW の写真を貼り付けて取り込む」に貼り付けてください。";'
+   +'var okm="コピーしました："+out.length+"件（写真 "+ps.length+"枚）"'
+   +'+(none?("／写真が無い・組にできなかった "+none+"件"):"")'
+   +'+(bad?("／読み取れなかった写真 "+bad+"枚"):"")'
+   +'+"。pj に戻って「MW の写真を貼り付けて取り込む」に貼り付けてください。";'
    +'var ngm="下の枠を長押しして「コピー」を選び、pj に戻って'
    +'「MW の写真を貼り付けて取り込む」に貼り付けてください。";'
    +'var sel=function(){try{t.focus();t.setSelectionRange(0,S.length);}catch(e){}};'
@@ -11966,23 +12076,61 @@ function mwPicParse(h){
   if(!m)return [];
   return mwPicRead(decodeURIComponent(m[1]));
 }
-/* 貼り付けの欄（6.131）。読めた中身を先に見せて、押してから取り込む。 */
+/* ---- まとめて貼ったときの振り分け（6.135）----
+   MW の一覧（1ページ100件）をまとめてコピーできるので、
+   **pj の候補にある JAN だけ**を取り込む。
+   ・候補に無い JAN（買わない商品）は飛ばす
+   ・すでに写真がある JAN も飛ばす（取り直しは1件ずつの口で）
+   候補がまだ読めていないときは、振り分けずに全部取り込む（止めない）。 */
+function mwPicCand(){
+  var m={}, has={};
+  var add=function(r){
+    var j=String((r||{}).jan||'').replace(/\D/g,'');
+    if(j.length!==13)return;
+    m[j]=1;
+    if((+((r||{}).pics_ok)||0)>0)has[j]=1;
+  };
+  try{ (mwAmzRows||[]).forEach(add); }catch(e){}
+  try{ (mwRows||[]).forEach(add); }catch(e){}
+  return { known:m, has:has, n:Object.keys(m).length };
+}
+function mwPicSplit(got){
+  var c=mwPicCand();
+  var out={ take:[], unknown:[], already:[], cand:c.n };
+  (got||[]).forEach(function(x){
+    if(!c.n){ out.take.push(x); return; }   // 候補が無いときは振り分けない
+    if(!c.known[x.jan]){ out.unknown.push(x); return; }
+    if(c.has[x.jan]){ out.already.push(x); return; }
+    out.take.push(x);
+  });
+  return out;
+}
+/* 貼り付けの欄（6.131／6.135）。読めた中身を先に見せて、押してから取り込む。 */
 function mwPicInNote(){
   var note=$('mwPicInNote'); if(!note)return [];
   var got=mwPicRead($('mwPicIn').value);
-  if(!String($('mwPicIn').value||'').trim()){ note.textContent=''; return got; }
+  if(!String($('mwPicIn').value||'').trim()){ note.textContent=''; return []; }
   if(!got.length){
     note.innerHTML='<span style="color:var(--bad)">読めませんでした</span>'
       +'（「JAN:商品番号」の形で貼り付けてください。'
       +'JAN は13桁、商品番号は4〜12桁の数字です）';
     return got;
   }
-  var n=got.reduce(function(a,x){ return a+x.ids.length; },0);
-  note.innerHTML='<b>'+got.length+'件</b>の JAN（写真 <b>'+n+'枚</b>）を読みました：'
-    +got.slice(0,4).map(function(x){
-      return esc(x.jan)+'（'+x.ids.length+'枚）'; }).join('　')
-    +(got.length>4?('　ほか '+(got.length-4)+'件'):'');
-  return got;
+  var sp=mwPicSplit(got);
+  var n=sp.take.reduce(function(a,x){ return a+x.ids.length; },0);
+  note.innerHTML='読みました：<b>'+got.length+'件</b>の JAN'
+    +'　→ <b>取り込む '+sp.take.length+'件</b>（写真 '+n+'枚）'
+    +(sp.unknown.length?('　<span style="opacity:.8">候補に無い '
+      +sp.unknown.length+'件</span>'):'')
+    +(sp.already.length?('　<span style="opacity:.8">すでに写真あり '
+      +sp.already.length+'件</span>'):'')
+    +(!sp.cand?'<br><span style="opacity:.8">候補がまだ読めていないので、'
+      +'振り分けずに全部取り込みます（「一覧を出す」を押すと振り分けます）。</span>':'')
+    +(sp.take.length?('<br><span style="opacity:.75">'
+      +sp.take.slice(0,3).map(function(x){
+        return esc(x.jan)+'（'+x.ids.length+'枚）'; }).join('　')
+      +(sp.take.length>3?('　ほか '+(sp.take.length-3)+'件'):'')+'</span>'):'');
+  return sp.take;
 }
 /* クリップボードから読む（iPhone では許可を聞かれる）。 */
 function mwPicClip(){
@@ -12001,38 +12149,105 @@ function mwPicClip(){
       +'欄に貼り付けてください。';
   });
 }
-/* 貼り付けた中身を取り込む。帯と同じ流れを使う。 */
+/* ---- まとめて取り込む（6.135）----
+   1件あたり「MW から取って測る → pj-img に上げる → 公開URLを控える」で
+   2〜3秒かかるので、100件だと5分ほどかかる。
+   ・**残りを端末に覚える**ので、途中で閉じても続きから取り込める
+   ・「止める」でいつでも中断でき、残りは次に続けられる
+   ・進み具合（n/N）を出す */
+var MW_PIC_Q='pj:mwpicq:v1';
+var mwPicStop=false, mwPicRun=false;
+function mwPicQGet(){
+  try{
+    var o=JSON.parse(localStorage.getItem(MW_PIC_Q)||'[]');
+    return (o&&o.length&&o[0]&&o[0].jan)?o:[];
+  }catch(e){ return []; }
+}
+function mwPicQSet(list){
+  try{
+    if(!list||!list.length)localStorage.removeItem(MW_PIC_Q);
+    else localStorage.setItem(MW_PIC_Q,JSON.stringify(list.slice(0,500)));
+  }catch(e){}
+}
+/* 残りがあることを知らせる（起動時と、取り込みが終わったとき）。 */
+function mwPicQNote(){
+  var el=$('mwPicQNote'); if(!el)return;
+  var q=mwPicQGet();
+  if(!q.length||mwPicRun){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='';
+  el.innerHTML='<b>前回の続きが '+q.length+'件</b>あります。'
+    +'<button class="btn" id="mwPicGoOn" style="padding:4px 10px;font-size:12px;'
+    +'margin-left:6px">続きを取り込む</button>'
+    +'<button class="btn" id="mwPicDrop" style="padding:4px 10px;font-size:12px;'
+    +'margin-left:4px">やめる</button>';
+  $('mwPicGoOn').onclick=function(){ mwPicWork(mwPicQGet()); };
+  $('mwPicDrop').onclick=function(){ mwPicQSet([]); mwPicQNote(); };
+}
+/* 貼り付けた中身を取り込む（押したときの入り口）。 */
 function mwPicPasteGo(){
+  if(mwPicRun){ mwPicStop=true; return; }      // 2回目の押下は「止める」
   var got=mwPicInNote();
   if(!got.length)return;
-  var btn=$('mwPicTake'), out=$('mwPicInOut');
   if(!syncUrl()||!syncApiKey()){
     $('mwPicInNote').innerHTML='<span style="color:var(--bad)">'
       +'⚙設定の「pj-sync のURL」と「キー」を入れてください。</span>';
     return;
   }
-  btn.disabled=true; btn.textContent='取り込み中…';
+  mwPicWork(got);
+}
+/* 1件ずつ順に取り込む。残りは毎回ひかえるので、途中で止めても続けられる。 */
+function mwPicWork(list){
+  var btn=$('mwPicTake'), out=$('mwPicInOut');
+  var q=(list||[]).slice();
+  if(!q.length)return;
+  /* 写真を控える先が無いまま始めると、全部失敗になる（6.135）。先に止める。 */
+  if(!csvImgBase()||!csvImgToken()){
+    $('mwPicInNote').innerHTML='<span style="color:var(--bad)">'
+      +'⚙設定の「画像サーバーURL」と「アップロードトークン」を入れてください。</span>';
+    return;
+  }
+  mwPicRun=true; mwPicStop=false;
+  mwPicQSet(q); mwPicQNote();
+  btn.textContent='止める';
   out.innerHTML='';
-  var done=0, ok=0, ng=0;
-  got.reduce(function(chain,x){
-    return chain.then(function(){
-      var box=document.createElement('div');
-      box.style.cssText='margin-top:4px';
-      out.appendChild(box);
-      box.innerHTML='<span class="note2">JAN '+esc(x.jan)+' …</span>';
-      return mwImgTake(x.jan,x.ids,box).then(function(z){
-        done++;
-        if(z&&z.saved&&z.saved.length)ok+=z.saved.length; else ng++;
-        var inp=mwImgIn(x.jan);
-        if(inp&&!String(inp.value||'').trim())inp.value=x.ids.join('\n');
-      });
+  var all=q.length, done=0, ok=0, ng=0, t0=Date.now();
+  var step=function(){
+    if(mwPicStop||!q.length)return Promise.resolve();
+    var x=q[0];
+    $('mwPicInNote').innerHTML='取り込んでいます… <b>'+(done+1)+'/'+all+'</b>'
+      +'　JAN '+esc(x.jan)
+      +(done?('　（1件あたり '+Math.round((Date.now()-t0)/done/100)/10+'秒・'
+        +'残り およそ '+Math.max(1,Math.round((all-done)*((Date.now()-t0)/done)/60000))
+        +'分）'):'');
+    var box=document.createElement('div');
+    box.style.cssText='margin-top:4px';
+    out.appendChild(box);
+    box.innerHTML='<span class="note2">JAN '+esc(x.jan)+' …</span>';
+    return mwImgTake(x.jan,x.ids,box).then(function(z){
+      done++;
+      if(z&&z.saved&&z.saved.length)ok+=z.saved.length; else ng++;
+      var inp=mwImgIn(x.jan);
+      if(inp&&!String(inp.value||'').trim())inp.value=x.ids.join('\n');
+      q.shift(); mwPicQSet(q);        // 済んだ分は残りから消す（続きから再開できる）
+      /* 画面が固まらないよう、1件ごとに間を空ける。 */
+      return new Promise(function(r){ setTimeout(r,60); }).then(step);
+    })['catch'](function(){
+      done++; ng++; q.shift(); mwPicQSet(q);
+      return new Promise(function(r){ setTimeout(r,60); }).then(step);
     });
-  },Promise.resolve()).then(function(){
-    $('mwPicInNote').innerHTML='<b>取り込みました</b>：'+done+'件の JAN'
-      +'　控えた写真 <b>'+ok+'枚</b>'+(ng?('　入らなかった '+ng+'件'):'')
-      +'　（次の商品を貼るときは、欄を空にしてから貼ってください）';
+  };
+  step().then(function(){
+    mwPicRun=false;
+    $('mwPicInNote').innerHTML=(mwPicStop?'<b>止めました</b>：':'<b>取り込みました</b>：')
+      +done+'/'+all+'件の JAN　控えた写真 <b>'+ok+'枚</b>'
+      +(ng?('　入らなかった '+ng+'件'):'')
+      +(q.length?('　<b>残り '+q.length+'件</b>（「続きを取り込む」で再開できます）')
+                :'　（次の商品を貼るときは、欄を空にしてから貼ってください）');
     btn.disabled=false; btn.textContent='取り込む';
+    mwPicQNote();
     try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
+    try{ if(typeof mwAmzRender==='function'&&mwAmzRows.length&&mwAmzView==='list')
+      mwAmzRender(); }catch(e){}
   });
 }
 function mwPicHash(){
@@ -17999,6 +18214,10 @@ csvRender();
 advSyncInit();
 /* タブの上の「前回の取り込み」を出す（6.117）。キーが入っていれば見に行く。 */
 try{ mwStaleRender(); if(typeof mwStaleLoad==='function')mwStaleLoad(); }catch(e){}
+/* 無在庫のポリシーの振り分けの案内（6.134）。 */
+try{ csvShipMwNote(); }catch(e){}
+/* MW の写真の取り込みの残り（6.135）。途中で閉じても続きから。 */
+try{ mwPicQNote(); }catch(e){}
 /* 最後に開いていたタブから始める（6.118。覚えていなければ「出品CSV」）。
    タブの中身の出し分けは switchTab にまとめてあるので、ここから1回呼ぶ。
    出品リストの読み込み（csvLoad）より後に呼ぶこと。 */
@@ -18023,7 +18242,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v221';   // sw.js の const V と必ず同じ値にする
+var APP_V='v223';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
