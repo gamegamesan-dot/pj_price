@@ -801,6 +801,11 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn primary" id="csvMwPush" style="width:100%;margin-top:6px">写真が付いた出品候補を出品リストに入れる</button>
         <div class="note2" id="csvMwPushNote" style="margin-top:2px">①の出品候補のうち、<b>写真が付いている行</b>だけを出品リスト（出品CSV）に入れます。入れたあとは、ふだんの流れ（英題生成 → 原産国・カテゴリ → 書き出し）で出せます。<b>無在庫の上限（⚙設定）を守ります。</b></div>
         <div class="note2" id="csvMwListNote" style="margin-top:2px"></div>
+        <!-- 6.144：候補一覧は長いので、出品リストへ飛べるようにする -->
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn" id="csvMwToList" style="flex:1 1 0;min-width:0">出品リストのカードへ ↓</button>
+          <button class="btn" id="csvMwFold" style="flex:0 0 auto">MW の欄を閉じる</button>
+        </div>
         <div id="csvMwList" style="margin-top:6px"></div>
       </div>
     </details>
@@ -893,6 +898,10 @@ body.staff #syncOnHandFix{display:none !important}
             <option value="50">50件ずつ</option>
             <option value="100">100件ずつ</option>
           </select>
+        </div>
+        <!-- 6.144：MW の候補一覧へ戻る -->
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <button class="btn" id="csvListToMw" style="flex:1 1 0;min-width:0">MW の候補一覧へ ↑</button>
         </div>
         <div id="csvPagerTop"></div>
         <div id="csvList"></div>
@@ -3825,8 +3834,13 @@ function figTitleFrom(used, p, loose){
             ||key(st.chara).indexOf(bk)>=0))st.brand='';
   }
   function join(){
-    return [used?'Used':'', st.brand, st.series, st.chara, st.itemName,
-            st.variant, st.scale, st.line, tail, lo].filter(Boolean).join(' ');
+    var pre=[used?'Used':'', st.brand, st.series, st.chara, st.itemName,
+             st.variant, st.scale, st.line].filter(Boolean).join(' ');
+    /* 6.144：**末尾がもう Figure のときは、種類の Figure を足さない**
+       （例「… World Collectible Figure Figure」）。
+       Figures・figure も同じものとして見る。 */
+    var tl=(tail&&/figures?$/i.test(pre.replace(/[^A-Za-z0-9 ]/g,' ').trim()))?'':tail;
+    return [pre, tl, lo].filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
   // 箱なしの印は残す。長いときは「Loose No Box」→「Loose」に縮める
@@ -5425,6 +5439,62 @@ function csvRecalc(r){
   r.price=p.price; r.floor=p.floor; r.profit=p.profit; r.zone=p.zone;
   return r;
 }
+/* ---- 行き来しやすくする（6.144）----
+   出品CSVタブは MW の候補一覧が長いので、
+   ・MW の欄 ⇄ 出品リストのカード を1押しで行き来できるようにする
+   ・書き出しの見通しの件数（不備・Amazon優先・出品済み）を押すと、
+     その1件目の行まで飛んで数秒光らせる（なぜ0件なのかを追える） */
+var csvJumpIds={ bad:[], amz:[], done:[] };
+function csvScrollTo(el,flash){
+  if(!el)return false;
+  try{ el.scrollIntoView({ behavior:'smooth', block:'center' }); }
+  catch(e){ el.scrollIntoView(); }
+  if(flash){
+    el.style.transition='box-shadow .3s';
+    el.style.boxShadow='0 0 0 3px var(--good)';
+    setTimeout(function(){ el.style.boxShadow=''; },2500);
+  }
+  return true;
+}
+/* その行のカードまで飛ぶ。別のページにいるときはそのページに移る。 */
+function csvJumpRow(id){
+  var go=function(){
+    return csvScrollTo(document.querySelector('#csvList [data-row="'+id+'"]'),1);
+  };
+  var box=$('csvListBox'); if(box&&!box.open)box.open=true;
+  if(go())return true;
+  /* いまのページに無ければ、その行があるページに移って出し直す
+     （6.81 の「履歴からその行へ飛ぶ」と同じ手順）。 */
+  var per=pagePer('csvPerPage'), i=-1;
+  csvSorted().filter(csvMatchFilter).forEach(function(x,k){
+    if(String(x.id)===String(id))i=k; });
+  if(i<0)return false;
+  csvPage=Math.floor(i/per)+1;
+  csvRender();
+  return go();
+}
+$('csvExportNote').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var k=t.getAttribute('data-cjump'); if(!k)return;
+  e.preventDefault();
+  var ids=csvJumpIds[k]||[];
+  if(!ids.length)return;
+  if(!csvJumpRow(ids[0]))
+    $('csvExportNote').innerHTML+='<br>その行が見つかりませんでした'
+      +'（絞り込みを「すべての行を表示」にしてください）。';
+});
+$('csvMwToList').onclick=function(){
+  var box=$('csvListBox'); if(box&&!box.open)box.open=true;
+  csvScrollTo($('csvList'),0);
+};
+$('csvMwFold').onclick=function(){
+  var b=$('csvMwBox'); if(b)b.open=false;
+  csvScrollTo($('csvListBox'),0);
+};
+$('csvListToMw').onclick=function(){
+  var b=$('csvMwBox'); if(b&&!b.open)b.open=true;
+  csvScrollTo($('csvMwList'),0);
+};
 /* ---- eBay優先の判定（6.5.1・相場ベース）----
    しきい値利益 = Amazon粗利 × (1 + 優先マージン率)。ランクが悪い行は緩和して0%。
    相場が入っていれば「相場で売ったときの利益」と比べ、入っていなければ判定しない。
@@ -5473,10 +5543,25 @@ function csvPreBuyRow(r){
 }
 // 'ebay' / 'amazon' / 'none'（未判定）／'pre'（仕入れ前の候補・判定しない）
 function csvVerdict(r){
+  /* 6.144：**無在庫（MW・W-）の行は Amazon と比べない**。
+     Amazon で仕入れていないので「Amazon で売ったときの利益」が無く、
+     粗利0の行として「Amazon優先」になって**書き出しから外れていた**
+     （書き出す行 0件　除外：Amazon優先 1件）。 */
+  /* 仕入れ前の候補（仮の仕入値）が先。無在庫（新品・カタログ画像）の候補も
+     ここに入る（仕入値が決まるまでは判定しない）。 */
   if(csvNoLine(r))return 'pre';
+  if(csvIsDrop(r))return 'drop';
   var pr=csvSoldProfit(r);
   if(pr===null||pr===undefined)return 'none';
   return (pr>csvThreshold(r).v)?'ebay':'amazon';
+}
+/* **MW の無在庫**の行（6.144）。
+   Amazon 無在庫（M-・無在庫（新品・カタログ画像）で出す行）は、
+   売れたら Amazon で買うので「Amazon で売ったときの利益」と比べる意味がある。
+   比べる意味が無いのは **MW から仕入れる無在庫（W-）**だけなので、
+   そちらに限って判定の対象外にする。 */
+function csvIsDrop(r){
+  return !!((r||{}).dropship)&&String((r||{}).buySource||'')==='mw';
 }
 function csvEbayFirst(r){ return csvVerdict(r)==='ebay'; }
 /* 行に出す判定の1行（3か所で同じ文を使う）。
@@ -5484,6 +5569,12 @@ function csvEbayFirst(r){ return csvVerdict(r)==='ebay'; }
 function csvJudgeText(r){
   var v=csvVerdict(r), th=csvThreshold(r), pr=csvSoldProfit(r);
   var hasSold=(pr!==null&&pr!==undefined);
+  /* 6.144：無在庫は Amazon と比べない。相場との関係だけを出す。 */
+  if(v==='drop'){
+    return '無在庫（MW）。Amazon とは比べません'
+      +(hasSold?('　相場 '+usd(+r.sold||0)+' → 利益 '+yen(pr)):'')
+      +'　売値 '+usd(csvStartPrice(r)||0);
+  }
   if(v==='pre'){
     return '仕入れ前の候補（'
       +(csvCostUnknown(r)?'仕入値 未確定':('仮の仕入値 '+yen(csvAmzBase(r))))+'）。'
@@ -5975,6 +6066,8 @@ function csvBadgeHtml(r){
   /* 仕入れ前の候補（v==='pre'）は優先の判定を出さない（「仕入れ前の候補」だけ）。 */
   if(v==='ebay')badge+=b('eBay優先','var(--good)');
   else if(v==='amazon')badge+=b('Amazon優先','#8a6d00');
+  /* 6.144：無在庫は「無在庫（MW）」だけ出す（相場未確認とは書かない）。 */
+  else if(v==='drop')badge+=b('無在庫（MW）','#0b6b8a');
   else if(v!=='pre')badge+=b('相場未確認','#8a6d00');
   if(v==='amazon'&&r.forceEbay)badge+=b('eBayにも出す','#2f6fb0');
   if(r.preBuy)badge+=b('仕入れ前の候補','#1f6f8a');
@@ -7070,12 +7163,13 @@ function csvRender(){
   csvPicFindRows();  // 付け先の行の選択肢も作り直す
   csvFilterOpts();   // 絞り込みの選択肢と件数を先に作り直す
   $('csvCount').textContent=csvList.length;
-  var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0,preN=0;
+  var noEn=0,noDesc=0,ebayN=0,amzN=0,noneN=0,used=0,forceN=0,preN=0,dropN=0;
   csvList.forEach(function(r){
     var v=csvVerdict(r);
     if(v==='ebay')ebayN++;
     else if(v==='amazon'){ amzN++; if(r.forceEbay)forceN++; }
     else if(v==='pre')preN++;        // 仕入れ前の候補（判定しない）
+    else if(v==='drop')dropN++;      // 無在庫（判定しない・6.144）
     else noneN++;
     if(!String(r.titleEn||'').trim())noEn++;
     if(!String(r.descHtml||'').trim())noDesc++;
@@ -7083,6 +7177,7 @@ function csvRender(){
   $('csvSummary').textContent=csvList.length
     ? ('相場未確認 '+noneN+'件　/　eBay優先 '+ebayN+'件　/　Amazon優先 '+amzN+'件'
        +(forceN?('（うちeBayにも出す '+forceN+'件）'):'')
+       +(dropN?('　/　無在庫（MW）'+dropN+'件（判定しません）'):'')
        +(preN?('　/　仕入れ前の候補 '+preN+'件（判定しません）'):'')
        +'　/　英題なし '+noEn+'件　/　説明文なし '+noDesc+'件　/　中古（要撮影）'+used+'件')
     : 'せどりすとCSVを取り込むか、eBayタブの「出品文」から1件ずつ追加してください';
@@ -7091,15 +7186,23 @@ function csvRender(){
   var sp=csvExportSplit(), byCat={};
   sp.rows.forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+1; });
   var catsN=Object.keys(byCat).length;
-  $('csvExportNote').textContent=csvList.length
+  /* 6.144：除外の件数は**押すとその行に飛ぶ**（なぜ0件なのかを追える）。 */
+  csvJumpIds={ bad:sp.bad.map(function(x){ return x.r.id; }),
+               amz:sp.amz.map(function(x){ return x.r.id; }),
+               done:sp.done.map(function(x){ return x.r.id; }) };
+  var jump=function(k,t,n){
+    return n?('<a href="#" data-cjump="'+k+'" style="text-decoration:underline">'
+      +esc(t)+' '+n+'件</a>'):'';
+  };
+  $('csvExportNote').innerHTML=csvList.length
     ? ('書き出す行 '+sp.rows.length+'件'
        +(catsN?('（'+Object.keys(byCat).map(function(k){
-            return csvCatName(k)+' '+byCat[k]+'件'; }).join('　/　')+'）'):'')
+            return esc(csvCatName(k))+' '+byCat[k]+'件'; }).join('　/　')+'）'):'')
        +(catsN>1?'　→ 1つのZIPにまとめます':'')
        +(sp.skip?('　除外：'
-          +[sp.bad.length?('不備 '+sp.bad.length+'件'):'',
-            sp.amz.length?('Amazon優先 '+sp.amz.length+'件'):'',
-            sp.done.length?('出品済み '+sp.done.length+'件'):'']
+          +[jump('bad','不備',sp.bad.length),
+            jump('amz','Amazon優先',sp.amz.length),
+            jump('done','出品済み',sp.done.length)]
             .filter(Boolean).join('／')):''))
     : '';
   /* 設定（下限利益・連動率・売上比下限・税率・送料・為替・梱包）を変えたら、
@@ -9978,11 +10081,19 @@ function mwRec(r){
            target:mwTarget(c), cost:c, weight:w,
            ship:g, total:Math.round((p.price+g)*100)/100 };
 }
-/* その行の請求送料（$）。基準の地帯で別建てしない地帯なら0。 */
+/* その行の請求送料（$・6.144）。
+   相場（eBay の最安値）は**アメリカの総額**なので、比べるときに引くのは
+   **米国向けの請求送料**（⚙「請求送料（米国向け）」＝W2000・W2000-MW が
+   アメリカ向けに請求する額）。
+   以前は**基準の地帯（basisZone）**の請求送料を使っていたので、基準が
+   第1・第2地帯になる行では 0 になり、相場 $32.00 を「送料込みの総額」ではなく
+   「商品代」として扱ってしまっていた。そのため
+   「出す売値 $31.04（相場の97%）」のように**請求送料のぶんだけ高い**売値が
+   出ていた（正しくは 32.00×0.97−15.00＝$16.04）。 */
 function mwShipCharge(cost,weight){
   try{
     var m=PJP.model(pricingSettings(),{ cost:cost, weight:weight, flat:0 });
-    return +m.zoneShipCharge(m.basisZone)||0;
+    return +m.zoneShipCharge(USA_ZONE)||0;
   }catch(e){ return 0; }
 }
 /* pj-sync に POST して Promise で返す（syncJsonPost をそのまま包む）。
@@ -10113,7 +10224,13 @@ function mwListRow(r,pics,n){
     src:'mw', sku:'', jan:jan, asin:String(r.asin||''),
     titleJa:String(r.mw_name||r.name||''), titleEn:'', cat:cat, catFixed:true,
     condId:1000, condErr:false, condSrc:'MW（新品）',
-    descHtml:'', qty:1, cost:rec?rec.cost:0, wRaw:0, rows:1,
+    descHtml:'', qty:1, cost:rec?rec.cost:0,
+    /* 6.144：MW の欄で使った重量（⚙の既定重量。ホビー400g・ゲーム150g）を
+       **そのまま引き継ぐ**。wManual を立てて、一覧の作り直しで
+       「0g＋梱包マージン」に書き替えられないようにする。
+       以前は wRaw:0 のままだったので、MW の欄（400g）とカード（250g）で
+       売値・最低売値・利益が食い違っていた。 */
+    wRaw:rec?rec.weight:0, weight:rec?rec.weight:0, wManual:true, rows:1,
     /* 無在庫の印。仕入れ先は MW。 */
     dropship:true, buySource:'mw', mwSha:String(r.sha||''),
     mwShipDays:+r.ship_days||0, mwShipText:String(r.ship_text||''),
@@ -10615,12 +10732,15 @@ function mwAmzLoad(){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
       mwAmzView='list';                 // 候補の一覧を出す（6.125）
       $('csvMwAmzMax').textContent=String(d.per_run||120);
-      /* 行に入っている仕入れの印（端末をまたいで見える）を読み込む。 */
-      mwBuyMap={};
+      /* 行に入っている仕入れの印（端末をまたいで見える）を先に当てる。
+         6.144：**印の正は D1（mw_buy）**。この一覧に出ていない行の印まで
+         入れるため、読み込んだあとに**もう一度作り直す**。
+         以前は作り直していなかったので、一覧に出ていない行（ランキングの
+         基準で隠れた行など）の印が、その端末では**外れて見えていた**。 */
       mwAmzRows.forEach(function(r){
         if(+r.buy_qty>0)mwBuyMap[String(r.jan)]=+r.buy_qty; });
       mwAmzRender();
-      mwBuyLoad(true);        // 一覧に出ていない行の印も合計に入れる
+      mwBuyLoad(true).then(function(){ mwAmzRender(); });
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
@@ -11221,8 +11341,15 @@ function mwBuyBarRender(){
     else unknown++;
   });
   var left=Math.max(0,mwBuyFeeFree()-sum);
+  /* 6.144：この一覧に出ていない行の印の件数も出す
+     （出ていない＝印が外れた、と見えないようにする）。 */
+  var onPage={};
+  mwAmzRows.forEach(function(r){ onPage[String(r.jan)]=1; });
+  var offPage=jans.filter(function(j){ return !onPage[j]; }).length;
   bar.innerHTML='<b>仕入れる '+jans.length+'件</b>'
     +(qty!==jans.length?('（数量の合計 '+qty+'点）'):'')
+    +(offPage?('<span class="note2">　うち'+offPage
+      +'件はこの一覧に出ていません（「仕入れる一覧」で見られます）</span>'):'')
     +'　合計 <b>'+yen(sum)+'</b>'
     +'<span class="note2">（卸値×1.1）</span>'
     +(unknown?('<span class="note2">　※'+unknown+'件は卸値が分かりません</span>'):'')
@@ -19106,7 +19233,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v230';   // sw.js の const V と必ず同じ値にする
+var APP_V='v231';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
