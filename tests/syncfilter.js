@@ -110,7 +110,11 @@ ok(g[0]==='毎日見る：all,warn,pbplan,on_hand','★★毎日見る：すべ�
 ok(g[1]==='出品：fba_not_listed,picsneed'||g[1]==='出品：picsneed',
    '★★出品：eBay出品の候補／写真が小さい');
 ok(g[2]==='価格：automd,review'||g[2]==='価格：automd','★★価格：自動値下げの予定／売値の見直し');
-ok(g[3]==='状態：restocking,dropship','★★状態：再調達中／無在庫');
+/* 6.139 で「Amazon 無在庫」「在庫の根拠がない出品」を足した。 */
+ok(/^状態：restocking/.test(g[3])&&/dropship/.test(g[3]),
+   '★★状態：再調達中／…／無在庫');
+ok(/amzdrop/.test(g[3])||/nobasis/.test(g[3]),
+   '★★★在庫の根拠がない出品・Amazon 無在庫も「状態」に入る');
 
 console.log('=== 自動値下げがオフのとき ===');
 await setup({md:'off'});

@@ -259,6 +259,8 @@ const STAFF_DENY = ["md_step", "md_floor", "md_n", "md_start",
                     "pb_want", "pb_max_cost", "pb_skip",
                     // 再調達中の売値の追従（7.48）
                     "rk_want", "rk_floor", "rk_low", "rk_n", "rk_max_cost",
+                    // Amazon 無在庫（7.102）。売値の追従と数量0に直結する
+                    "amz_drop",
                     // 売れた値段で保つ印（7.53）。値下げの再開は値段を動かす操作
                     "sold_keep"];
 function staffDenyFields(body) {
@@ -1273,10 +1275,18 @@ const EV_TEXT = {
     + "。フェイズBではここでeBayを更新します",
   /* 無在庫（dropship）の行は、売れた時点で仕入れが必要。先頭に「要仕入れ」を出し、
      Amazonの最安値（送料込み）と、ハンドリング期限までの残り日数を添える。 */
-  EBAY_SOLD: (d) => (d.dropship
-    ? ("要仕入れ：eBayで売れた（無在庫）：" + d.title
+  EBAY_SOLD: (d) => ((d.dropship || d.amz_drop)
+    ? ("要仕入れ：eBayで売れた（" + (d.amz_drop ? "Amazon 無在庫" : "無在庫") + "）："
+       + d.title
        + " / Amazon最安値 " + (d.low > 0 ? ("¥" + d.low + "（送料込み）") : "未取得")
        + " / ハンドリング期限 " + dueText(d)
+       /* Amazon 無在庫（7.102）は、どの状態で買えばよいかとリンクも出す。 */
+       + (d.amz_drop
+          ? (" / ASIN " + d.asin
+             + "（" + (String(d.cond || "") === "new" ? "新品" : "中古（可を除く）")
+             + "以上）"
+             + " / https://www.amazon.co.jp/dp/" + d.asin)
+          : "")
        + "。Amazonで注文して発送してください")
     : ("eBayで売れた：" + d.title + " / FBA販売可能 " + d.fba_available
        + "。MCFでの取り寄せが必要です")),
@@ -1485,7 +1495,13 @@ const ITEM_COLS = `
   fba_seen_at, mode, one_off, one_off_known, fba_link, on_hand, amazon_lowest,
   amazon_lowest_n, amazon_offers, amazon_offers_json, amazon_lowest_at,
   amazon_new_low, amazon_new_n, restocking, restock_price, restock_max_cost,
-  restock_skip_acc, dropship, hand_qty, weight_g, cost_yen, sold_usd,
+  restock_skip_acc, dropship,
+  /* Amazon 無在庫（7.102）。items は100列ちょうどなので別表から引く。 */
+  (SELECT 1 FROM amz_drop d WHERE d.asin=items.asin AND d.cond=items.cond)
+    AS amz_drop,
+  (SELECT d.why FROM amz_drop d WHERE d.asin=items.asin AND d.cond=items.cond)
+    AS amz_drop_why,
+  hand_qty, weight_g, cost_yen, sold_usd,
   ebay_first, mark_at, mark_stop, md_step, md_start, md_floor, md_n, md_done,
   ebay_sale, pics_eps, pb_act, pb_at, pb_why, pb_fail, pb_skip, pb_want, pb_max_cost,
   pb_want_at, search_kw, rv_want, rv_floor, rv_kind, rv_max_cost, rv_at,
@@ -1506,7 +1522,12 @@ const STATUS_COLS = `
   fba_res_trans, fba_res_proc, fba_seen_at, mode, one_off, one_off_known,
   on_hand, amazon_lowest, amazon_lowest_n, amazon_offers, amazon_offers_json,
   amazon_lowest_at, amazon_new_low, amazon_new_n, restocking, restock_at,
-  restock_price, restock_max_cost, restock_skip_acc, dropship, hand_qty,
+  restock_price, restock_max_cost, restock_skip_acc, dropship,
+  (SELECT 1 FROM amz_drop d WHERE d.asin=items.asin AND d.cond=items.cond)
+    AS amz_drop,
+  (SELECT d.why FROM amz_drop d WHERE d.asin=items.asin AND d.cond=items.cond)
+    AS amz_drop_why,
+  hand_qty,
   weight_g, cost_yen, sold_usd, ebay_first, mark_at, mark_stop, md_step,
   md_start, md_floor, md_n, md_done, ebay_sale, ebay_sale_orig, ebay_sale_end,
   pics_eps, pics_eps_at, pics_n, pb_act, pb_fail, pb_skip, search_kw, rv_want, rv_floor,
@@ -1557,7 +1578,7 @@ async function flushEvents(env, run, onlyImmediate) {
     try { d = JSON.parse(x.detail || "{}"); } catch (e) { d = {}; }
     const f = EV_TEXT[x.type];
     const text = f ? f(d) : x.type;
-    return { urgent: x.type === "EBAY_SOLD" && !!d.dropship, text };
+    return { urgent: x.type === "EBAY_SOLD" && !!(d.dropship || d.amz_drop), text };
   });
   const lines = made.filter((m) => m.urgent).concat(made.filter((m) => !m.urgent))
     .map((m) => "・" + m.text);
@@ -1780,10 +1801,15 @@ async function syncOrders(env, run, days, maxItems) {
        ハンドリング期限までの残り日数を通知に入れる。
        印は items の dropship か、CustomLabel が M- かのどちらかで立つ。 */
     const drop = !!Number(it.dropship || 0) || !!s2.dropship;
+    /* Amazon 無在庫（7.102）も「売れたら Amazon で買って送る」なので同じ扱い。
+       どの ASIN をどの状態で買えばよいかを通知に入れる。 */
+    const amzd = !!Number(it.amz_drop || 0);
     ev.push(evStmt(env, "EBAY_SOLD", "EBAY_SOLD|" + s2.orderId + "|" + s2.line, it,
       Object.assign({ title: it.title || s2.asin, fba_available: it.fba_available || 0,
         ebay_qty: it.ebay_qty || 0 },
-        drop ? { dropship: 1, low: Math.round(Number(it.amazon_lowest || 0)),
+        (drop || amzd) ? { dropship: drop ? 1 : 0, amz_drop: amzd ? 1 : 0,
+                 asin: String(it.asin || s2.asin), cond: String(it.cond || s2.cond || ""),
+                 low: Math.round(Number(it.amazon_lowest || 0)),
                  ship_by: s2.shipBy || "", days: daysLeft(s2.shipBy) } : {})));
   }
   /* 売れた行に MW の無在庫（W-<JAN>）があれば、注文の材料を出す（7.72）。
@@ -2103,7 +2129,7 @@ async function syncPricing(env, run) {
 function pricingHotWhere() {
   /* 次の3種類。pbTarget の細かい条件（予約済みの内訳・入庫中・セール中）までは
      ここで見ない（少し広めに取るだけなので害がない）。
-     ① 再調達中（restocking=1）
+     ① 再調達中（restocking=1）／Amazon 無在庫（amz_drop=1・7.102）
      ② フェイズBが見る行（FBAの販売可能が0・数量≧1）
      ③ **再調達の候補**（在庫0時の動作＝再調達・FBAの販売可能が0・出品あり。7.96）
         数量0にしたあとの行は ② から外れる（ebay_qty>0 でなくなる）ので、
@@ -2112,6 +2138,8 @@ function pricingHotWhere() {
             AND COALESCE(on_hand,0)=0
             AND COALESCE(dropship,0)=0
             AND (restocking=1
+                 OR EXISTS (SELECT 1 FROM amz_drop d
+                             WHERE d.asin=items.asin AND d.cond=items.cond)
                  OR (COALESCE(fba_available,-1)=0
                      AND COALESCE(one_off,0)=0
                      AND (ebay_qty>0 OR COALESCE(mode,'')='restock'))
@@ -3176,10 +3204,20 @@ function rkTarget(r) {
   if (Number(r.dropship || 0)) return no("無在庫");
   const now = Math.round(Number(r.ebay_price || 0) * 100) / 100;
   if (!(now > 0)) return no("売値が分かりません");
+  /* Amazon 無在庫（7.102）の行は、最安値が分からなくなったら**数量0**にする
+     （仕入れ先が分からないまま売れてしまうのが一番まずい）。
+     再調達中の行は在庫が手に入る見込みがあるので、今までどおり触らない。 */
+  const amzd = !!Number(r.amz_drop || 0);
+  const qty0 = (why) => (Number(r.ebay_qty || 0) <= 0)
+    ? no("すでに数量0（" + why + "）")
+    : { kind: "zero", from: now, to: 0, want: 0, under: false, held: false, why };
   /* Amazon最安値の鮮度。一度も取っていない行は触らない。 */
   const at = Date.parse(String(r.amazon_lowest_at || ""));
-  if (!at) return no("Amazon最安値が未取得");
-  if (Date.now() - at > RK_LOW_MS) return no("Amazon最安値が古い（24時間超）");
+  if (!at) return amzd ? qty0("Amazon最安値が未取得（Amazon 無在庫）")
+                       : no("Amazon最安値が未取得");
+  if (Date.now() - at > RK_LOW_MS)
+    return amzd ? qty0("Amazon最安値が24時間以上取れません（Amazon 無在庫）")
+                : no("Amazon最安値が古い（24時間超）");
   /* 新しく見にいけたのに最安値が出ない＝Amazon側の在庫が消えた。
      買い直せないので eBay の数量を0にして知らせる（数量0の行はもう済み）。 */
   const low = restockLowest(r);
@@ -3203,7 +3241,12 @@ function rkTarget(r) {
     if (n < RK_MIN_OFFERS)
       return { kind: "", why: "最安グループが" + n + "人なので下げを保留",
                held: true, from: now, want: want };
-    if (fl > 0 && to < fl) { to = fl; under = true; }
+    /* Amazon 無在庫は、下限利益を割るなら出し続けない（数量0）。
+       再調達中は今までどおり下限で止める。 */
+    if (fl > 0 && to < fl) {
+      if (amzd) return qty0("推奨売値が下限利益を割ります（Amazon 無在庫）");
+      to = fl; under = true;
+    }
   }
   const diff = Math.abs(to - now);
   // $1未満 かつ 3%未満のときだけ「差が小さい」として見送る
@@ -8241,6 +8284,158 @@ function stateOf(r) {
 function isRestocking(r) {
   return !!Number(r.restocking || 0) && Number(r.ebay_qty || 0) >= 1;
 }
+/* ===== 在庫の根拠がない出品を「Amazon 無在庫」で続ける（7.102）=====
+   手元にも FBA にも無いのに eBay に出ている行がある
+   （例：E-B07MLZ2JKF-C ヨッシークラフトワールド。手元在庫の印が残ったまま
+   実物が無かった）。数量0にして眠らせるより、**Amazon の中古を仕入れ先**として
+   出し続けたほうがよい（売れてから Amazon で買って送る）。
+
+   対象（AMZD_SQL）：
+     ・eBay に出ていて数量1以上
+     ・手元在庫がオフ
+     ・FBA の販売可能・入庫・予約がすべて0、または FBA と結び付いていない
+     ・MW の無在庫（CustomLabel が W-）ではない／無在庫の印も立っていない
+     ・カートリッジのみ（-C）・箱なし（-L）も**対象にする**
+       （Amazon の中古で仕入れて中身を送れるため）
+
+   切り替えると `amz_drop=1` と **`restocking=1`** を立てる。
+   値段の追従・在庫が消えたときの数量0は、**再調達中の仕組み（7.48・rkTarget）**を
+   そのまま使う（同じ計算・同じ歯止め）。違いは次の2つだけ（rkTarget の中）：
+     ・最安値が24時間以上取れない → **数量0**（再調達中は「そのまま」）
+     ・推奨売値が下限利益を割る   → **数量0**（再調達中は下限で止める）
+
+   ⚙設定 amzDropMode： off ／ plan（予定だけ・既定）／ on（実行）
+   ⚙設定 amzDropPick： keep（Amazon 無在庫で続ける・既定）／ zero（数量0にする）*/
+const AMZD_SQL = `scope='ebay'
+      AND COALESCE(ebay_item_id,'')<>''
+      AND COALESCE(ebay_qty,0) >= 1
+      AND COALESCE(on_hand,0) = 0
+      AND COALESCE(dropship,0) = 0
+      AND COALESCE(ebay_sku,'') NOT LIKE 'W-%'
+      /* もう切り替えた行（amz_drop）と、再調達中の行は別の扱いがあるので外す。 */
+      AND NOT EXISTS (SELECT 1 FROM amz_drop d
+                       WHERE d.asin=items.asin AND d.cond=items.cond)
+      AND COALESCE(restocking,0) = 0
+      AND (fba_seen_at IS NULL
+           OR (COALESCE(fba_available,0)=0 AND COALESCE(fba_inbound,0)=0
+               AND COALESCE(fba_reserved,0)=0))`;
+const AMZD_MODES = { off: 1, plan: 1, on: 1 };
+const AMZD_PICKS = { keep: 1, zero: 1 };
+const AMZD_MAX = 60;                 // 1回に切り替える上限
+const AMZD_PLAN_SHOW = 50;           // 知らせに並べる件数
+const AMZD_NOTE_MS = 24 * 60 * 60 * 1000;   // 予定の知らせは1日1回
+const AMZD_KEY = "amzdrop.last";
+/* 印を付ける／外す（7.102）。items には列を足せないので別表に持つ。 */
+function amzDropSet(env, asin, cond, at, why) {
+  return env.DB.prepare(
+    `INSERT INTO amz_drop (asin,cond,at,why,created_at) VALUES (?1,?2,?3,?4,?3)
+     ON CONFLICT(asin,cond) DO UPDATE SET at=excluded.at, why=excluded.why`)
+    .bind(String(asin), String(cond), at, String(why || ""));
+}
+function amzDropDel(env, asin, cond) {
+  return env.DB.prepare(
+    `DELETE FROM amz_drop WHERE asin=?1 AND cond=?2`).bind(String(asin), String(cond));
+}
+async function amzDropSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const mode = String(st.amzDropMode || "plan");
+  const pick = String(st.amzDropPick || "keep");
+  return { mode: AMZD_MODES[mode] ? mode : "plan",
+           pick: AMZD_PICKS[pick] ? pick : "keep" };
+}
+/* この行を Amazon 無在庫で続けられるか。
+   できないときは理由を返す（数量0にする候補）。 */
+function amzDropWhy(r, S) {
+  const lo = PRICING.lowOf(S, r);
+  if (!lo.has) return "Amazon に出品がありません";
+  if (!lo.fresh) return "Amazon最安値が古い（24時間超）";
+  const rec = PRICING.recommend(S, r);
+  if (!rec) return "推奨売値を計算できません";
+  const now = Math.round(Number(r.ebay_price || 0) * 100) / 100;
+  if (rec.price < rec.floor - 0.001)
+    return "推奨売値が下限利益を割ります（" + usd2(rec.price) + " < "
+      + usd2(rec.floor) + "）";
+  return "";
+}
+const usd2 = (v) => "$" + (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
+async function jobAmzDrop(env, opt) {
+  const run = newRun("amz-drop");
+  const res = { ok: false, mode: "plan", pick: "keep", seen: 0, keep: 0, zero: 0,
+                done: 0, zeroed: 0, failed: 0, plan: [], why: "" };
+  try {
+    const st = await amzDropSettings(env);
+    res.mode = (opt && opt.mode) || st.mode;
+    res.pick = (opt && opt.pick) || st.pick;
+    if (res.mode === "off") {
+      run.notes.push("Amazon 無在庫はオフ（⚙設定）");
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const ps = await pricingSettings(env, run);
+    const q = await env.DB.prepare(
+      `SELECT ${ITEM_COLS} FROM items WHERE ${AMZD_SQL}
+        ORDER BY COALESCE(ebay_seen_at,''), asin LIMIT ${AMZD_MAX}`).all();
+    const rows = (q && q.results) || [];
+    res.seen = rows.length;
+    const at = nowIso();
+    const stmts = [];
+    for (const r of rows) {
+      const why = amzDropWhy(r, ps.S);
+      const act = (!why && res.pick === "keep") ? "keep" : "zero";
+      if (act === "keep") res.keep++; else res.zero++;
+      if (res.plan.length < AMZD_PLAN_SHOW)
+        res.plan.push({ asin: String(r.asin), cond: String(r.cond),
+                        title: String(r.title || r.asin),
+                        sku: String(r.ebay_sku || ""),
+                        item_id: String(r.ebay_item_id || ""),
+                        price: Number(r.ebay_price || 0),
+                        low: Number(PRICING.lowOf(ps.S, r).low || 0),
+                        act, why: why || "Amazon 無在庫で続けます" });
+      if (res.mode !== "on") continue;
+      /* 値段の追従と数量0は、どちらも再調達中の仕組み（rkTarget）に任せる。
+         印は別表（amz_drop）に持ち、items には restocking=1 だけ立てる。 */
+      stmts.push(amzDropSet(env, r.asin, r.cond, at,
+        (act === "keep") ? "在庫の根拠がないので Amazon 無在庫にしました"
+                         : (why || "数量0にします")));
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET restocking=1, updated_at=?3
+          WHERE asin=?1 AND cond=?2`).bind(r.asin, r.cond, at));
+      if (act === "keep") res.done++; else res.zeroed++;
+    }
+    await runBatch(env, run, stmts);
+    /* 知らせ（予定だけのときは1日1回）。 */
+    let prev = null;
+    try { const t = await stateGet(env, AMZD_KEY); prev = t ? JSON.parse(t) : null; }
+    catch (e) { prev = null; }
+    const quiet = res.mode !== "on" && prev && prev.note_at
+      && (Date.now() - Date.parse(prev.note_at) < AMZD_NOTE_MS);
+    if (res.seen && !quiet) {
+      const t = [(res.mode === "on" ? "📦 Amazon 無在庫に切り替えました"
+                                    : "📦 在庫の根拠がない出品（予定だけ）")
+        + "：" + res.seen + "件（続ける " + res.keep + "／数量0 " + res.zero + "）"];
+      if (res.mode !== "on")
+        t.push("⚙設定の「在庫の根拠がない出品」を『実行』にすると切り替えます");
+      for (const x of res.plan.slice(0, 10))
+        t.push("・" + x.title.slice(0, 30) + "（" + x.sku + "）"
+          + (x.act === "keep" ? "続ける" : "数量0") + "：" + x.why
+          + (x.low ? ("／Amazon最安値 ¥" + x.low) : ""));
+      if (res.seen > 10) t.push("ほか " + (res.seen - 10) + "件");
+      await notify(env, run, t.join("\n"));
+    }
+    await stateSet(env, AMZD_KEY, JSON.stringify({
+      at, mode: res.mode, seen: res.seen, keep: res.keep, zero: res.zero,
+      done: res.done,
+      note_at: (res.seen && !quiet) ? at : ((prev && prev.note_at) || "") })).run();
+    run.notes.push("在庫の根拠がない出品：" + res.seen + "件（続ける " + res.keep
+      + "／数量0 " + res.zero + "）" + (res.mode === "on" ? ("／切り替えた " + res.done) : "（予定だけ）"));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("amz-drop: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
 /* 無在庫出品：手元にもFBAにも在庫を持たず、売れてから仕入れる出品。
    この行も「FBAに在庫が無いまま出している」のが正常なので、売り越し系の警告を出さない。
    売れたときに「要仕入れ」を出すのが本来の知らせ方。 */
@@ -8947,7 +9142,9 @@ async function putListings(env, body) {
          on_hand=CASE WHEN ${SQL_IN_STOCK} THEN 0 ELSE COALESCE(?9, on_hand) END,
          /* 再調達中の印と、その監視用の数字。印を下ろしたらまとめて消す。
             送られてこなければ（?13 IS NULL）いまの値をそのまま残す。 */
-         restocking=COALESCE(?13, restocking),
+         /* Amazon 無在庫の印（7.102）は別表（amz_drop）に持つ。
+            立てたら値段の追従も始める（restocking の仕組みをそのまま使う）。 */
+         restocking=CASE WHEN ?45=1 THEN 1 ELSE COALESCE(?13, restocking) END,
          restock_at=CASE WHEN ?13=1 THEN ?8 WHEN ?13=0 THEN NULL ELSE restock_at END,
          -- 印を下ろすときだけ消す。それ以外は送られてきた項目だけを書き替える。
          restock_price=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?10, restock_price) END,
@@ -8980,7 +9177,13 @@ async function putListings(env, body) {
            numOf(x, "rk_want"), numOf(x, "rk_floor"), numOf(x, "rk_low"),
            (x.rk_n === null || x.rk_n === undefined) ? null
              : Math.max(0, Math.round(Number(x.rk_n) || 0)),
-           numOf(x, "rk_max_cost"), flagOf(x, "sold_keep")));
+           numOf(x, "rk_max_cost"), flagOf(x, "sold_keep"),
+           /* ?45：Amazon 無在庫の印（7.102）。 */
+           flagOf(x, "amz_drop")));
+    /* 印そのものは別表に入れる（items は100列ちょうどで足せない）。 */
+    const ad = flagOf(x, "amz_drop");
+    if (ad === 1) stmts.push(amzDropSet(env, k.asin, k.cond, nowIso(), "画面で選びました"));
+    else if (ad === 0) stmts.push(amzDropDel(env, k.asin, k.cond));
   }
   await runBatch(env, run, stmts);
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
@@ -9477,6 +9680,11 @@ export default {
           return json(await jobReview(env, { approve: body.approve === true }), 200, origin);
         /* フェイズB（FBAで売れたら数量0・再調達）。7.47。
            approve:true は販売連携タブの「再調達をまとめて実行」。 */
+        /* 在庫の根拠がない出品（7.102）。既定は「予定だけ」。
+           mode:'on' で切り替える（画面の⚙と、手動実行から）。 */
+        if (kind === "amzdrop")
+          return json(await jobAmzDrop(env, { mode: body.mode, pick: body.pick }),
+            200, origin);
         if (kind === "phaseb")
           return json(await jobPhaseB(env, { approve: body.approve === true }), 200, origin);
         /* 写真の大きさを確かめ直す（7.59）。写真が小さくて弾かれた記録が
@@ -9562,6 +9770,10 @@ export default {
          欠品で売り越すのが一番まずいので、毎時「確認」まで走らせる
          （実際に変えるのは日次、または画面のボタン）。 */
       await jobMwDrop(env, {});
+      /* 在庫の根拠がない出品（7.102）。予定だけのときも毎時数えるが、
+         知らせは1日1回にしてある。 */
+      try { await jobAmzDrop(env, {}); }
+      catch (e) { /* ここで落ちても本体は止めない */ }
       /* 取り込みが24時間止まっていたら催促する（7.75）。 */
       try { await mwStaleCheck(env, newRun("mw-stale")); }
       catch (e) { /* 催促が失敗しても本体は止めない */ }
@@ -9635,6 +9847,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         parseSku, parseLabel, warnOf, noteOf, judgeRow,
                         isShipRestock, shipKindOf, shipNamesLoad,
                         mwShipCheck, mwShipFit, mwShipDaysOf, MW_SHIP_ADD,
+                        jobAmzDrop, amzDropWhy, amzDropSettings, AMZD_SQL,
+                        amzDropSet, amzDropDel,
                         isDropship, isRestock, stateEvents, pbNoteFor, pbRisky, PB_SQL_RISKY,
                         PB_PICK_LIMIT, EV_TEXT, daysLeft, dueText,
                         resBreak, resCust, resSold, resUnknown, resHold, resWarn, isFcProcessing, resMoveOnly,

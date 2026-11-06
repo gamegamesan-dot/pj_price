@@ -732,3 +732,19 @@ CREATE TABLE IF NOT EXISTS amz_dg (
   at         TEXT,
   created_at TEXT
 );
+
+/* ===== 在庫の根拠がない出品を Amazon 無在庫で続ける（7.102）=====
+   手元にも FBA にも無いのに eBay に出ている行を、Amazon の最安値を
+   仕入れ先とみなして出し続ける。
+   **items は D1 の上限（1表100列）ちょうどなので列を足せない**ため、
+   別の表に持つ（/status も ITEM_COLS もここから引いて amz_drop を作る）。
+   ・at  … 切り替えた時刻
+   ・why … 切り替えた理由 */
+CREATE TABLE IF NOT EXISTS amz_drop (
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  at         TEXT,
+  why        TEXT,
+  created_at TEXT,
+  PRIMARY KEY (asin, cond)
+);

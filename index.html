@@ -1344,6 +1344,9 @@ body.staff #syncOnHandFix{display:none !important}
     <details class="cfgg" id="cfgRvBox" data-cfgg="rv" open>
       <summary class="cfggsum">売値の自動反映（値上げ）<span class="cfggn"></span></summary>
       <div class="body">
+      <!-- 在庫の根拠がない出品（6.139）。手元にも FBA にも無い行の扱い。 -->
+      <div class="rowv cfgprice"><label>在庫の根拠がない出品の扱い</label><select id="amzDropMode"><option value="off">オフ（何もしない）</option><option value="plan" selected>予定だけ（Discord に一覧を出す）</option><option value="on">実行（Amazon 無在庫に切り替える）</option></select><div class="note2" style="margin-top:2px"><b>手元にも FBA にも無いのに eBay に出ている行</b>（手元在庫オフ・FBA が0か未連動・MW の無在庫ではない・数量1以上）の扱いです。<b>Amazon 無在庫</b>は、Amazon の最安値（中古は「可」を除く）を仕入れ先とみなして<b>出し続ける</b>やり方で、売値は<b>再調達と同じ計算</b>で自動で追従します。Amazon に出品が無くなった・下限利益を割る・最安値が24時間取れない行は<b>数量0</b>にします。<b>まず「予定だけ」で1〜2日ようすを見てから</b>実行にしてください。</div></div>
+      <div class="rowv cfgprice"><label>手元在庫をオフにしたときの既定</label><select id="amzDropPick"><option value="keep" selected>Amazon 無在庫で続ける</option><option value="zero">数量0にする</option></select><div class="note2" style="margin-top:2px">行の「手元在庫」をオフにしたときに出る確認の画面の、最初に選ばれている側です。</div></div>
       <div class="rowv cfgprice"><label>FBAで売れたときの動作（フェイズB）</label><select id="pbMode"><option value="off">オフ（今までどおり通知だけ）</option><option value="plan" selected>予定だけ表示（eBayは変えない）</option><option value="on">オン（pj-sync が eBay の数量を0にする）</option></select><div class="note2" style="margin-top:2px">FBAで売れて販売可能が0になった出品を、pj-sync が<b>まず数量0</b>にして売り越しを止めます（出品は残ります。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。「在庫0時：再調達」の行は数量0にしたうえで<b>再調達の予定</b>に載せ、下の設定に従って売値を直して数量を1に戻します。<b>まず「予定だけ表示」で1〜2日ようすを見てから</b>オンにしてください。</div></div>
       <div class="rowv cfgprice"><label>再調達の実行方法</label><select id="pbRestock"><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync がそのまま実行）</option></select><div class="note2" style="margin-top:2px">再調達は<b>売値をAmazon最安値基準の推奨売値に直して数量を1に戻す</b>操作です。目標の売値は pj_price が計算して送ります（24時間より古い・最安グループが2人未満・下限利益を割るときは、数量0のままにして理由を出します）。</div></div>
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
@@ -2486,7 +2489,9 @@ var ADV_MD=['autoMdMode','autoMdMax','csvMarkDays'];
 var ADV_RV=['autoRvMode','autoRvMax','autoRvPct','csvReviewAbs','csvReviewPct'];
 /* フェイズB（FBAで売れたら数量0・再調達）。Worker が読む設定（7.47）。 */
 /* 再調達中の売値の追従（6.70／7.48）。Worker が読む設定。 */
-var ADV_PB=['pbMode','pbRestock','autoRkMode','autoSkMode'];
+var ADV_PB=['pbMode','pbRestock','autoRkMode','autoSkMode',
+  /* 在庫の根拠がない出品（6.139／7.102）。Worker が読む。 */
+  'amzDropMode','amzDropPick'];
 /* Amazon刈取のランキングの上限（大分類ごと・6.124）。
    **端末ではなく pj-sync に持つ**ので、作業者用の端末でも同じ基準で絞り込まれる。
    中身は {"ホビー":900000,"ゲーム":80000} の形の文字列（隠し欄に入れてある）。 */
@@ -4899,7 +4904,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
                  'csvShipProfileMw','csvShipDaysMw',
-                 'csvShipProfileMw2','csvShipDaysMw2'];
+                 'csvShipProfileMw2','csvShipDaysMw2',
+                 /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
+                 'amzDropMode','amzDropPick'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -16341,7 +16348,13 @@ var SYNC_FILTERS=[
        この行は写真を入れ替えるまで自動値下げの対象から外れている。 */
     f:function(r){ return syncPicsNeed(r)||syncErrKind(r.revise_err)==='pic'; } },
   { v:'restocking',     label:'再調達中',
-    f:function(r){ return syncIsRestocking(r); } },
+    f:function(r){ return syncIsRestocking(r)&&!syncIsAmzDrop(r); } },
+  /* Amazon 無在庫（6.139）。手元にも FBA にも無いのに出している行を、
+     Amazon の最安値を仕入れ先として出し続ける。 */
+  { v:'amzdrop',        label:'Amazon 無在庫',
+    f:function(r){ return syncIsAmzDrop(r); } },
+  { v:'nobasis',        label:'在庫の根拠がない出品',
+    f:function(r){ return syncNoBasis(r); } },
   /* 無在庫：売れてから仕入れる出品。件数は上限の見張りに使う。 */
   { v:'dropship',       label:'無在庫',
     f:function(r){ return syncIsDropship(r); } },
@@ -16382,7 +16395,7 @@ var SYNC_FILTER_GROUPS=[
   { t:'毎日見る', v:['all','warn','pbplan','on_hand'] },
   { t:'出品',     v:['picsneed'] },
   { t:'価格',     v:['markdown','automd','review'] },
-  { t:'状態',     v:['restocking','dropship','figone'] }
+  { t:'状態',     v:['restocking','amzdrop','nobasis','dropship','figone'] }
 ];
 // 0件でも必ず出す項目
 var SYNC_FILTER_KEEP={ all:1, warn:1 };
@@ -16854,6 +16867,81 @@ function syncOfferNote(r){
 /* 再調達中：再調達CSVで出し直した行（restocking=1）で、まだeBayに出ている。
    FBAに在庫が無いまま出しているのが正常なので、売り越しの恐れ・再調達の候補は出さない。
    出品リストの mode（在庫0のときの動作 hold/restock/end）とは別物なので混ぜない。 */
+/* ---- 在庫の根拠がない出品（6.139）----
+   手元にも FBA にも無いのに eBay に出ている行。
+   ・手元在庫オフ
+   ・FBA の販売可能・入庫・予約がぜんぶ0、または FBA と結び付いていない
+   ・MW の無在庫（W-）ではない／無在庫の印も立っていない
+   ・eBay の数量が1以上
+   Worker の AMZD_SQL と同じ条件（7.102）。 */
+function syncIsAmzDrop(r){ return !!Number((r||{}).amz_drop||0); }
+function syncNoBasis(r){
+  var o=r||{};
+  if(syncIsAmzDrop(o))return false;              // もう切り替えた行は別に数える
+  if(Number(o.restocking||0))return false;       // 再調達中は別の扱いがある
+  if(!String(o.ebay_item_id||'').trim())return false;
+  if(!(syncQtyOf(o)>=1))return false;
+  if(Number(o.on_hand||0))return false;
+  if(syncIsDropship(o))return false;
+  if(/^W-/.test(String(o.ebay_sku||'')))return false;
+  if(!o.fba_seen_at)return true;                 // FBA と結び付いていない
+  return (Number(o.fba_available||0)+Number(o.fba_inbound||0)
+         +Number(o.fba_reserved||0))===0;
+}
+/* 手元在庫をオフにしたら「在庫の根拠がない出品」になるか（6.139）。 */
+function syncNoBasisAfterOff(r){
+  var o=Object.assign({},r||{},{ on_hand:0 });
+  return syncNoBasis(o);
+}
+/* 扱いを選ぶ確認の画面（6.139）。既定は⚙設定（amzDropPick）。 */
+function syncNoBasisAsk(t,r){
+  var def=(($('amzDropPick')||{}).value)||'keep';
+  var low=syncPbLow(r);
+  var msg='手元在庫をオフにします。\n'
+    +'この出品は**手元にも FBA にも在庫がありません**。\n\n'
+    +(r.title||r.asin)+'\n'
+    +'Amazon最安値 '+(low.has?yen(low.low):'未取得')
+    +(low.has&&!low.fresh?'（24時間より古い）':'')+'\n\n'
+    +(def==='keep'
+      ? '「OK」＝Amazon 無在庫で続ける（売値を Amazon最安値の推奨売値に直します）\n'
+        +'「キャンセル」＝数量0にする'
+      : '「OK」＝数量0にする\n'
+        +'「キャンセル」＝Amazon 無在庫で続ける');
+  var yes=confirm(msg.replace(/\*\*/g,''));
+  var keep=(def==='keep')?yes:!yes;
+  syncNoBasisGo(t,r,keep);
+}
+/* 選んだ扱いを送る（6.139）。手元在庫をオフにして、続けるなら印を立てる。
+   数量0にするほうは、印を立てずに「数量0の予定」に任せる
+   （eBay を直接変える口はここでは使わない）。 */
+function syncNoBasisGo(t,r,keep){
+  var note=$('syncFixNote');
+  if(!syncKeyReady('syncFixNote'))return;
+  var back=t.textContent;
+  t.disabled=true; t.textContent='送信中…';
+  fetch(syncUrl()+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({ items:[{ asin:r.asin, cond:r.cond,
+      title:r.title||'', on_hand:0, amz_drop:keep?1:0 }] })})
+    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(function(d){
+      if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
+      r.on_hand=0;
+      r.amz_drop=keep?1:0;
+      if(keep)r.restocking=1;
+      syncSaveCache();
+      note.innerHTML=keep
+        ? ('<b>Amazon 無在庫にしました</b>：'+esc(r.title||r.asin)
+           +'　売値は Amazon最安値の推奨売値に自動で追従します'
+           +'（Amazon に出品が無くなった・下限利益を割る・最安値が24時間取れない'
+           +'ときは数量0にします）。')
+        : ('<b>手元在庫をオフにしました</b>：'+esc(r.title||r.asin)
+           +'　Amazon 無在庫にはしないので、<b>この行は数量0の対象</b>になります。');
+      syncRender();
+    })
+    ['catch'](function(e){ note.textContent='送れませんでした：'+e.message; })
+    .then(function(){ t.disabled=false; t.textContent=back; });
+}
 function syncIsRestocking(r){
   return !!Number(r.restocking||0) && Number(r.ebay_qty||0)>=1;
 }
@@ -17355,7 +17443,22 @@ function syncRowHtml(r,key){
       +syncMdRowHtml(r)
       /* 再調達中の行は、出し直したときの売値と、赤字にならない仕入値の上限を出す。
          いまの最安値がこの上限を超えたら「再調達で赤字」。 */
-      +(syncIsRestocking(r)
+      /* Amazon 無在庫（6.139）。再調達中の仕組みで値段が追従する。 */
+      +(syncIsAmzDrop(r)
+        ? ('<div class="note2" style="margin-top:2px">'
+           +'<b style="color:#1f5fa0">Amazon 無在庫</b>'
+           +'：Amazon の最安値を仕入れ先として出し続けます'
+           +(r.amz_drop_why?('<br><span style="opacity:.75">'
+             +esc(String(r.amz_drop_why).slice(0,60))+'</span>'):'')
+           +'</div>')
+        : (syncNoBasis(r)
+          ? ('<div class="note2" style="margin-top:2px;color:var(--bad)">'
+             +'<b>在庫の根拠がありません</b>'
+             +'（手元にも FBA にも在庫がないのに出ています）'
+             +'<br><span style="opacity:.75">行の「手元在庫」を押して扱いを選ぶか、'
+             +'⚙設定の「在庫の根拠がない出品」を実行にしてください</span></div>')
+          : ''))
+      +(syncIsRestocking(r)&&!syncIsAmzDrop(r)
         ? ('<div class="note2" style="margin-top:2px">再調達中：出し直した売値 '
            +(r.restock_price?usd(+r.restock_price):'—')
            +'　仕入値の上限 '+(r.restock_max_cost?yen(+r.restock_max_cost):'—')
@@ -18061,7 +18164,11 @@ $('syncList').addEventListener('click',function(e){
   if(!r)return;
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
-    syncFlagSend(t,r,'on_hand',!Number(r.on_hand||0),'手元在庫');
+    var toOn=!Number(r.on_hand||0);
+    /* オフにする瞬間に「在庫の根拠がない出品」になるなら、扱いをその場で選ぶ
+       （6.139）。オンにするときは今までどおり。 */
+    if(!toOn&&syncNoBasisAfterOff(r)){ syncNoBasisAsk(t,r); return; }
+    syncFlagSend(t,r,'on_hand',toOn,'手元在庫');
   }else if(kd){
     /* 無在庫の印。オンにすると売り越し系の警告が止まり、売れたときに
        「要仕入れ」の通知が出るようになる。CustomLabel は変えない。 */
@@ -18537,7 +18644,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v225';   // sw.js の const V と必ず同じ値にする
+var APP_V='v226';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
