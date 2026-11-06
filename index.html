@@ -13959,7 +13959,10 @@ function syncMarkHtml(r){
     if(why==='売れたので値下げ停止'||why==='最低売値に着いています'
        ||why==='Amazonの方が得（これ以上は下げません）'||why==='値下げしない')
       return '<div class="note2" style="margin-top:4px">値下げ：'+esc(why)+'</div>';
-    return '';
+    /* 6.140：ほかの理由も必ず出す。「この行は今夜の自動値下げの対象から
+       外れたか」を、行の上だけで確かめられるようにするため。 */
+    return '<div class="note2" style="margin-top:4px">値下げ：対象外（'
+      +esc(why)+'）</div>';
   }
   var now=+r.ebay_price||0, fl=syncMdFloor(r), at=Date.parse(syncMarkAtOf(r));
   var nx='';
@@ -16175,12 +16178,32 @@ function syncSoldSave(){
    フィギュアのみ（loose）の行は、syncRowBy（asin|cond で引く）と合わず、
    行のボタン（在庫0時・一点物・最安値を今すぐ取り直す など）が**何も起きなかった**。
    同じ ASIN に中古と「カートリッジのみ」が両方あるときも、別の行として扱える。 */
-function syncRowKey(r){ return String(r.asin||'')+'|'+String((r||{}).cond||'used'); }
-// 一覧のキー（ASIN|新品/中古）から行を引く
+/* 6.140：**描く側と引く側で、キーの作り方が違っていた**。
+   v225 でこの関数だけ「区分をそのまま使う」に直したが、一覧を描くところは
+   r.asin+'|'+r.cond の生の形のままで、引く側（syncRowBy）も生の形だった。
+   そのため、ここだけが 区分なし→'used' に寄せていて、相場の控えのキーと
+   行のキーが食い違っていた。いまは**この関数が唯一のキーの作り方**。 */
+function syncRowKey(r){ return String((r||{}).asin||'')+'|'+String((r||{}).cond||''); }
+/* 区分の書き方の違いを吸収した形（引き比べ用）。区分が空なら中古として扱う。 */
+function syncRowKeyN(key){
+  var a=String(key||'').split('|');
+  return String(a[0]||'')+'|'+(String(a[1]||'')||'used');
+}
+/* 一覧のキー（ASIN|区分）から行を引く（6.140）。
+   ここが外れると、行のボタンは **押しても黙って何も起きない**（v225 の不具合と
+   同じ形）。もう二度と黙って死なないように、3段構えにする。
+   ① そのままの一致 ② 区分の書き方をそろえた一致
+   ③ その ASIN の行が1つだけなら、それ（古いキーが残っていても拾える） */
 function syncRowBy(key){
-  var hit=null;
-  ((syncData&&syncData.items)||[]).forEach(function(x){ if(x.asin+'|'+x.cond===key)hit=x; });
-  return hit;
+  var k=String(key||''), rows=((syncData&&syncData.items)||[]), hit=null;
+  rows.forEach(function(x){ if(syncRowKey(x)===k)hit=x; });
+  if(hit)return hit;
+  var kn=syncRowKeyN(k);
+  rows.forEach(function(x){ if(syncRowKeyN(syncRowKey(x))===kn)hit=x; });
+  if(hit)return hit;
+  var asin=String(k.split('|')[0]||'');
+  var same=rows.filter(function(x){ return String(x.asin||'')===asin; });
+  return (asin&&same.length===1)?same[0]:null;
 }
 /* 相場（総額$）。この端末の入力を優先し、無ければ D1 に残した値を使う
    （出品CSVタブで入れた相場と、ほかの端末で入れた相場もここで使える）。 */
@@ -17494,7 +17517,8 @@ function syncRowHtml(r,key){
       /* 次にやること（6.48）。いちばん手を動かすべきものを1行だけ出す。 */
       +syncNextHtml(r)
       +syncSoldHtml(r,key)
-      +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
+      /* data-sbtns：押した結果をこの帯の中に出す（6.140）。 */
+      +'<div data-sbtns="'+esc(key)+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
       +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
       +syncSkResumeBtn(r,key)+syncRestockingBtn(r,key)
       +syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)
@@ -17572,9 +17596,9 @@ function syncRender(){
   syncPage=pageClamp(syncPage,shown,sPer);
   var sFrom=(syncPage-1)*sPer;
   var sRows=keep.slice(sFrom,sFrom+sPer);
-  syncPageIds=sRows.map(function(r){ return r.asin+'|'+r.cond; });
+  syncPageIds=sRows.map(syncRowKey);
   sRows.forEach(function(r){
-    var key=r.asin+'|'+r.cond;
+    var key=syncRowKey(r);
     h+='<div class="lcard" data-srow="'+esc(key)+'">'+syncRowHtml(r,key)+'</div>';
   });
   $('syncList').innerHTML=h||'<div class="note2">表示する行がありません。</div>';
@@ -18069,14 +18093,50 @@ function syncModeSend(t,r,want){
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
     });
 }
+/* ---- 行のボタンの結果を、そのボタンのすぐ下に出す（6.140）----
+   いままで結果は一覧の上の案内（#syncFixNote）だけに書いていた。
+   iPhone では画面の外なので、送信に失敗しても・キーが空でも・行を特定
+   できなくても、**押しても何も起きていないように見えた**。 */
+function syncSayBox(box,msg,bad){
+  if(!box)return null;
+  var el=null, i;
+  for(i=0;i<box.children.length;i++)
+    if(box.children[i].getAttribute&&box.children[i].getAttribute('data-sbtnnote'))
+      el=box.children[i];
+  if(!el){
+    el=document.createElement('div');
+    el.setAttribute('data-sbtnnote','1');
+    el.className='note2';
+    el.style.cssText='flex:1 1 100%;margin-top:2px';
+    box.appendChild(el);
+  }
+  el.style.color=bad?'#b00':'';
+  el.textContent=msg||'';
+  return el;
+}
+/* 押したボタンのすぐ下に出す。 */
+function syncBtnSay(t,msg,bad){
+  try{ return syncSayBox(t&&t.parentNode,msg,bad); }catch(e){ return null; }
+}
+/* 作り直したあとでも、キーからその行の帯を探して出す。 */
+function syncKeySay(key,msg,bad){
+  try{
+    var row=$('syncList').querySelector('[data-srow="'+key+'"]');
+    return syncSayBox(row&&row.querySelector('[data-sbtns]'),msg,bad);
+  }catch(e){ return null; }
+}
 function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
-  if(!syncKeyReady('syncFixNote'))return;
+  if(!syncKeyReady('syncFixNote')){
+    syncBtnSay(t,'設定の「pj-sync のキー」が空です。設定画面で入れ直してください。',1);
+    return;
+  }
   var was=syncUndoNow(r,field);          // 押す前の値（6.69）
   var body={asin:r.asin, cond:r.cond, title:r.title||''};
   body[field]=want;
-  var back=t.textContent;
+  var back=t.textContent, bkey=syncRowKey(r);
   t.disabled=true; t.textContent='送信中…';
+  syncBtnSay(t,'送信中…（pj-sync に保存しています）');
   fetch(u+'/listings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:[body]})})
@@ -18094,11 +18154,20 @@ function syncFlagSend(t,r,field,want,label){
         syncUndoPush({ field:field,
           items:[{ asin:r.asin, cond:r.cond, title:r.title||r.asin,
                    from:was, to:(want?1:0) }] });
-      syncRender();
+      /* 作り直しでつまずいても、**保存できたことは残す**（6.140）。
+         いままでは作り直しの失敗が catch に落ちて、
+         保存できているのに「切り替えに失敗しました」に見えていた。 */
+      try{ syncRender(); }
+      catch(e2){
+        $('syncFixNote').textContent=label+'を'+(want?'オン':'オフ')
+          +'にしました（保存は済みました）。表示の作り直しに失敗：'+e2.message;
+      }
+      syncKeySay(bkey,label+'を'+(want?'オン':'オフ')+'にしました（保存しました）。');
     })
     .catch(function(e){
       t.disabled=false; t.textContent=back;
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
+      syncBtnSay(t,'切り替えに失敗しました：'+e.message,1);
     });
 }
 /* Worker 側は印を下ろすと、監視用の数字（上限・売値）もまとめて消す。 */
@@ -18161,7 +18230,12 @@ $('syncList').addEventListener('click',function(e){
   var key=kh||ko||kr||kd||km||kf||kz||kp||ks||kl; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
-  if(!r)return;
+  if(!r){
+    /* 6.140：ここで黙って戻るのが v225 の不具合の形だった。 */
+    syncBtnSay(t,'この行を特定できませんでした（キー '+key+'）。'
+      +'「eBay・Amazonから取り込む」を押して一覧を読み込み直してください。',1);
+    return;
+  }
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
     var toOn=!Number(r.on_hand||0);
@@ -18644,7 +18718,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v226';   // sw.js の const V と必ず同じ値にする
+var APP_V='v227';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
