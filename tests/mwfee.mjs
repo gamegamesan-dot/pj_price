@@ -33,12 +33,23 @@ globalThis.fetch=async(u,i)=>{
   if(/feesEstimate/.test(url)){
     const b=JSON.parse(i.body);
     if(fees.__status)return new Response('ng',{status:fees.__status});
-    return new Response(JSON.stringify({ FeesEstimateResultList:
-      b.FeesEstimateByIdRequestList.map((q)=>{
-        const a=q.IdValue;
-        return Object.assign({ FeesEstimateIdentifier:{ IdType:'ASIN', IdValue:a } },
-          fees[a]||{ FeesEstimateResult:{ Status:'ClientError' } });
-      })}),{status:200});
+    /* 7.104：**本物と同じ**ふるまいにする。
+       getMyFeesEstimates の本文は FeesEstimateByIdRequest の**配列**で、
+       `{"FeesEstimateByIdRequestList":[…]}` で送ると Amazon は
+       HTTP 400 InvalidInput「This is an invalid request」で断る。
+       作り物がその形を受け取ってしまっていたので、1071件が仮の手数料の
+       ままになっていることに気づけなかった。 */
+    if(!Array.isArray(b))
+      return new Response(JSON.stringify({ errors:[{ code:'InvalidInput',
+        message:'This is an invalid request. Please verify your request and try again.',
+        details:'' }] }),{status:400});
+    /* 応答も**配列**（FeesEstimateResult が平たく並ぶ）。 */
+    return new Response(JSON.stringify(b.map((q)=>{
+      const a=q.IdValue;
+      return Object.assign({ FeesEstimateIdentifier:{ IdType:'ASIN', IdValue:a } },
+        fees[a]||{ Status:'ClientError',
+                   Error:{ Type:'Client', Code:'DataNotFound', Message:'no fee' } });
+    })),{status:200});
   }
   if(/discord/.test(url))return new Response(null,{status:204});
   throw new Error('外へ出てはいけない: '+url);
@@ -54,7 +65,7 @@ const mkOff=(asin,yen)=>({ ASIN:asin, Summary:{ TotalOfferCount:2,
   Offers:[{ SubCondition:'new', ListingPrice:{Amount:yen}, Shipping:{Amount:0},
     IsBuyBoxWinner:true, IsFulfilledByAmazon:true, SellerId:'A1X' }] });
 /* せどりすと の実物と同じ内訳を返す（サイヴァリア3） */
-const SAI={ FeesEstimateResult:{ Status:'Success', FeesEstimate:{
+const SAI={ Status:'Success', FeesEstimate:{
   TotalFeesEstimate:{ CurrencyCode:'JPY', Amount:2073 },
   FeeDetailList:[
     { FeeType:'ReferralFee', FinalFee:{ CurrencyCode:'JPY', Amount:1484 } },
@@ -62,7 +73,7 @@ const SAI={ FeesEstimateResult:{ Status:'Success', FeesEstimate:{
     { FeeType:'VariableClosingFee', FinalFee:{ CurrencyCode:'JPY', Amount:0 } },
     { FeeType:'PerItemFee',  FinalFee:{ CurrencyCode:'JPY', Amount:0 } },
     { FeeType:'ReferralFeeTax', FinalFee:{ CurrencyCode:'JPY', Amount:148 } },
-  ] } } };
+  ] } };
 
 console.log('=== 明細の振り分け（mwFeePick）===');
 let z=W.mwFeePick(SAI);
@@ -74,18 +85,37 @@ ok(z.tax===148,'★★★手数料の消費税を取り出す');
 ok(z.total===2073,'★★合計は Amazon の総額をそのまま');
 ok(z.ref+z.fba+z.tax===2073,'★★★内訳の合計が総額と合う（せどりすと と同じ）');
 /* 税が明細の中に入っている形 */
-let z2=W.mwFeePick({ FeesEstimateResult:{ Status:'Success', FeesEstimate:{
+let z2=W.mwFeePick({ Status:'Success', FeesEstimate:{
   TotalFeesEstimate:{ Amount:2200 },
   FeeDetailList:[
     { FeeType:'ReferralFee', FeeAmount:{ Amount:1500 },
       TaxAmount:{ Amount:150 } },
-    { FeeType:'FBAFees', FeeAmount:{ Amount:500 }, TaxAmount:{ Amount:50 } }] } } });
+    { FeeType:'FBAFees', FeeAmount:{ Amount:500 }, TaxAmount:{ Amount:50 } }] } });
 console.log('   '+JSON.stringify(z2));
 ok(z2.ref===1500&&z2.fba===500&&z2.tax===200,
    '★★★明細の中に税がある形も読める');
-let z3=W.mwFeePick({ FeesEstimateResult:{ Status:'ClientError' } });
+let z3=W.mwFeePick({ Status:'ClientError',
+  Error:{ Type:'Client', Code:'InvalidInput', Message:'bad price' } });
 ok(z3.ok===false&&/返りませんでした/.test(z3.err),'★★返らない行は理由を残す');
+ok(/InvalidInput/.test(z3.err)&&/bad price/.test(z3.err),
+   '★★★1件ごとの理由（Error の中身）も残す（7.104）');
+/* 包まれた形（FeesEstimateResult の中）でも読めること（念のため） */
+ok(W.mwFeePick({ FeesEstimateResult:SAI }).ref===1484,
+   '★包まれた形でも読める');
 ok(W.MW_FEE_BATCH===20,'★1回20件');
+
+console.log('\n=== 送る本文・受ける応答の形（7.104）===');
+const fbody=W.mwFeeBody([{asin:'B0SAIVA001',price:9638.4}]);
+ok(Array.isArray(fbody),'★★★本文は**配列そのもの**（これを間違えて全件 400 だった）');
+ok(fbody[0].IdType==='ASIN'&&fbody[0].IdValue==='B0SAIVA001','★IdType と IdValue');
+ok(fbody[0].FeesEstimateRequest.Identifier==='B0SAIVA001','★Identifier も入れる');
+ok(fbody[0].FeesEstimateRequest.PriceToEstimateFees.ListingPrice.Amount===9638,
+   '★★売値は整数（円）にして送る');
+ok(W.mwFeeList([{Status:'Success'}]).length===1,'★★応答が配列でも読める');
+ok(W.mwFeeList({payload:[{Status:'Success'}]}).length===1,'★payload 包みでも読める');
+ok(W.mwFeeList({FeesEstimateResultList:[{Status:'Success'}]}).length===1,
+   '★古い形でも読める');
+ok(W.mwFeeList(null).length===0,'★空は空');
 
 console.log('\n=== ④の段で手数料を取る（7.97）===');
 const JAN='4944076005667';            // サイヴァリア3 限定版 PS5
@@ -110,15 +140,14 @@ ok(r.body.fee.need>=1&&r.body.fee.done>=1,'★★要る件数と取った件数�
 const fc=calls.filter((x)=>/feesEstimate/.test(x.url));
 ok(fc.length===1,'★★feesEstimate を1回だけ呼ぶ');
 const fb=JSON.parse(fc[0].body);
-console.log('   送った: '+JSON.stringify(fb.FeesEstimateByIdRequestList[0]));
-ok(fb.FeesEstimateByIdRequestList[0].IdType==='ASIN','★★★ASIN で聞く');
-ok(fb.FeesEstimateByIdRequestList[0].FeesEstimateRequest.IsAmazonFulfilled===true,
+console.log('   送った: '+JSON.stringify(fb[0]));
+ok(Array.isArray(fb),'★★★配列で送っている（7.104）');
+ok(fb[0].IdType==='ASIN','★★★ASIN で聞く');
+ok(fb[0].FeesEstimateRequest.IsAmazonFulfilled===true,
    '★★★FBA の手数料として聞く');
-ok(fb.FeesEstimateByIdRequestList[0].FeesEstimateRequest
-     .PriceToEstimateFees.ListingPrice.Amount===9638,
+ok(fb[0].FeesEstimateRequest.PriceToEstimateFees.ListingPrice.Amount===9638,
    '★★★いまの売値で聞く');
-ok(fb.FeesEstimateByIdRequestList[0].FeesEstimateRequest.MarketplaceId
-   ==='A1VC38T7YXB528','★★amazon.co.jp');
+ok(fb[0].FeesEstimateRequest.MarketplaceId==='A1VC38T7YXB528','★★amazon.co.jp');
 const a=await env.DB.prepare(
   'SELECT * FROM mw_amz WHERE jan=?1').bind(JAN).first();
 console.log('   控え: '+JSON.stringify({ref:a.fee_ref,fba:a.fee_fba,tax:a.fee_tax,
@@ -208,7 +237,7 @@ fees['B0SAIVA001']=SAI;
 calls=[];
 r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
 const fb2=calls.filter((x)=>/feesEstimate/.test(x.url))
-  .map((x)=>JSON.parse(x.body).FeesEstimateByIdRequestList
+  .map((x)=>JSON.parse(x.body)
     .map((y)=>y.FeesEstimateRequest.PriceToEstimateFees.ListingPrice.Amount));
 console.log('   聞いた売値: '+JSON.stringify(fb2)+' / '+JSON.stringify(r.body.fee));
 ok(fb2.some((x)=>x.indexOf(12000)>=0),

@@ -5027,10 +5027,18 @@ const MW_FEE_CALL_MS = 2500;        // 1回ぶんの見込み（0.5回/秒＋余
    種類の名前は国・時期で変わることがあるので、**消費税だけ名前で拾い、
    残りは「販売手数料（Referral）」か「それ以外＝FBA」**に寄せる。 */
 function mwFeePick(d) {
-  const r = (d && d.FeesEstimateResult) || {};
+  /* 7.104：まとめて聞いたときの応答は **FeesEstimateResult が平たく並ぶ**
+     （Status・FeesEstimateIdentifier・FeesEstimate・Error）。
+     `d.FeesEstimateResult` の形で来る場合も拾えるようにしておく。 */
+  const r = (d && d.FeesEstimateResult) || d || {};
   const st = String(r.Status || "");
-  if (st && st !== "Success")
-    return { ok: false, err: "手数料が返りませんでした（" + st + "）" };
+  if (st && st !== "Success") {
+    /* 1件ごとの理由（Error）も出す。これが分からないと直せない。 */
+    const e0 = r.Error || {};
+    const why = [e0.Type, e0.Code, e0.Message].filter(Boolean).join(": ").slice(0, 300);
+    return { ok: false, err: "手数料が返りませんでした（" + st + "）"
+      + (why ? ("：" + why) : "") };
+  }
   const e = r.FeesEstimate || {};
   const total = Math.round(Number((e.TotalFeesEstimate || {}).Amount) || 0);
   let ref = 0, fba = 0, tax = 0;
@@ -5047,37 +5055,98 @@ function mwFeePick(d) {
   if (!total && !ref && !fba) return { ok: false, err: "手数料の明細がありません" };
   return { ok: true, ref, fba, tax, total: total || (ref + fba + tax) };
 }
+/* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。 */
+function mwFeeBody(part) {
+  return part.map((x) => ({
+    FeesEstimateRequest: {
+      MarketplaceId: MP_FE,
+      IsAmazonFulfilled: true,
+      Identifier: String(x.asin),
+      PriceToEstimateFees: {
+        ListingPrice: { CurrencyCode: "JPY", Amount: Math.round(Number(x.price) || 0) },
+      },
+    },
+    IdType: "ASIN",
+    IdValue: String(x.asin),
+  }));
+}
+/* 応答から結果の一覧を取り出す（7.104）。
+   仕様は配列そのものだが、payload で包まれた形・
+   FeesEstimateResultList の形で返っても拾えるようにしておく。 */
+function mwFeeList(data) {
+  if (Array.isArray(data)) return data;
+  const d = data || {};
+  if (Array.isArray(d.payload)) return d.payload;
+  if (Array.isArray(d.FeesEstimateResultList)) return d.FeesEstimateResultList;
+  const p = d.payload || {};
+  if (Array.isArray(p.FeesEstimateResultList)) return p.FeesEstimateResultList;
+  return [];
+}
+/* ---- 手数料を1件だけ試す（7.104・管理者だけ）----
+   送った本文・HTTP・**理由の全文**・拾えた金額をそのまま返す。
+   D1 は書かない（確かめるだけ）。デプロイ直後の確認に使う。 */
+async function mwFeeTest(env, url) {
+  const run = newRun("fee-test");
+  const asin = String(url.searchParams.get("asin") || "").trim().toUpperCase();
+  const price = Math.round(Number(url.searchParams.get("price") || 0));
+  if (!/^B[0-9A-Z]{9}$/.test(asin))
+    return { ok: false, error: "bad_asin", note: "asin=B0XXXXXXXX の形で指定してください" };
+  if (!(price > 0))
+    return { ok: false, error: "bad_price", note: "price=1980 のように売値（円）を指定してください" };
+  const part = [{ asin, price }];
+  const sent = mwFeeBody(part);
+  const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
+    { method: "POST", body: JSON.stringify(sent), label: "getMyFeesEstimates" });
+  const list = r.ok ? mwFeeList(r.data) : [];
+  const pick = list.length ? mwFeePick(list[0]) : null;
+  const info = await saveRun(env, run);
+  return {
+    ok: !!(pick && pick.ok),
+    asin, price,
+    http: r.status,
+    /* 理由は全文（400字）。キーは入らない（Amazon が返す文面だけ）。 */
+    err: String(r.err || "").slice(0, 400),
+    sent: sent,
+    got_n: list.length,
+    got: list.slice(0, 1),
+    pick: pick,
+    run: info,
+    note: (pick && pick.ok)
+      ? "商品ごとの実額が取れました。次の「Amazonで調べる」で一覧にも入ります。"
+      : "取れませんでした。上の err（全文）と sent（送った中身）を見てください。",
+  };
+}
 /* ASIN をまとめて見積もる。price は売値（円）。 */
 async function mwFeeFind(env, run, items) {
   const out = {};
   let calls = 0;
   for (let i = 0; i < items.length; i += MW_FEE_BATCH) {
     const part = items.slice(i, i + MW_FEE_BATCH);
-    const body = JSON.stringify({
-      FeesEstimateByIdRequestList: part.map((x) => ({
-        FeesEstimateRequest: {
-          MarketplaceId: MP_FE,
-          IsAmazonFulfilled: true,
-          Identifier: x.asin,
-          PriceToEstimateFees: {
-            ListingPrice: { CurrencyCode: "JPY", Amount: Number(x.price) || 0 },
-          },
-        },
-        IdType: "ASIN",
-        IdValue: x.asin,
-      })),
-    });
+    /* 7.104：**本文は配列そのもの**（FeesEstimateByIdRequest の配列）。
+       `{"FeesEstimateByIdRequestList":[…]}` の形で送っていたため、
+       getMyFeesEstimates は全件 HTTP 400 InvalidInput
+       「This is an invalid request」で断っていた（1071件が仮の手数料のまま）。
+       Amazon の公開モデル（product-fees-api-model）では
+         getMyFeesEstimates(body: Array<FeesEstimateByIdRequest>)
+         → 応答も Array<FeesEstimateResult>
+       となっている（単品の …/items/{Asin}/feesEstimate だけが
+       `{"FeesEstimateRequest":{…}}` の形）。 */
+    const body = JSON.stringify(mwFeeBody(part));
     const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
                            { method: "POST", body, label: "getMyFeesEstimates" });
     calls++;
     if (!r.ok) {
       for (const x of part)
+        /* 7.104：理由は**切らずに**残す（400字）。
+           60字で切っていたので「This is an invali…」で終わっていた。 */
         out[x.asin] = { ok: false, err: ("HTTP " + r.status + " "
-          + String(r.err || "")).trim().slice(0, 200) };
+          + String(r.err || "")).trim().slice(0, 400) };
       continue;
     }
-    for (const z of ((r.data && r.data.FeesEstimateResultList) || [])) {
-      const id = String(((z.FeesEstimateIdentifier || {}).IdValue) || "");
+    for (const z of mwFeeList(r.data)) {
+      /* IdValue が無い形（SellerInputIdentifier だけ）も拾う。 */
+      const fi = z.FeesEstimateIdentifier || (z.FeesEstimateResult || {}).FeesEstimateIdentifier || {};
+      const id = String(fi.IdValue || fi.SellerInputIdentifier || "");
       if (!id) continue;
       out[id] = mwFeePick(z);
     }
@@ -5655,7 +5724,7 @@ async function mwScanFee(env, run, o, dl) {
       if (g.ok) st.ok_n++;
       else {
         st.ng++;
-        const k = String(g.err || "理由なし").slice(0, 60);
+        const k = String(g.err || "理由なし").slice(0, 200);   // 7.104：全文に近く残す
         st.whys[k] = (st.whys[k] || 0) + 1;
       }
       stmts.push(env.DB.prepare(
@@ -7288,7 +7357,9 @@ async function mwAmzList(env, url) {
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
       WHERE ${w} AND COALESCE(a.price,0)>0`).bind(...q0.bind).first();
   const feeWhy = await env.DB.prepare(
-    `SELECT substr(COALESCE(a.fee_err,''),1,60) AS why, COUNT(*) AS n
+    /* 7.104：理由は**全文**（400字）で返す。60字で切っていたため、
+       画面が「HTTP 400 InvalidInput: This is an invali…」で終わっていた。 */
+    `SELECT substr(COALESCE(a.fee_err,''),1,400) AS why, COUNT(*) AS n
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
       WHERE ${w} AND COALESCE(a.price,0)>0 AND COALESCE(a.fee_err,'')<>''
       GROUP BY why ORDER BY n DESC LIMIT 5`).bind(...q0.bind).all();
@@ -9747,6 +9818,12 @@ export default {
       /* D1 の作りを確かめる（7.103）。読み取りだけなので作業者のキーでも使える。 */
       if (request.method === "GET" && url.pathname === "/schema/check")
         return json(await schemaCheck(env), 200, origin);
+      /* 手数料を1件だけ試す（7.104）。Amazon に問い合わせるので管理者だけ。 */
+      if (request.method === "GET" && url.pathname === "/mw/fee/test") {
+        if (role !== "admin")
+          return forbidStaff("手数料の試しは管理者用のキーが必要です", [], origin);
+        return json(await mwFeeTest(env, url), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/mw/amz")
         return json(await mwAmzList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/market") {
@@ -9950,7 +10027,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,
   schemaCheck, schemaFixOf, SCHEMA_TABLES, SCHEMA_ITEM_COLS,
-  mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwScanFee,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, mwFeeBody, mwFeeList, mwFeeTest, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,

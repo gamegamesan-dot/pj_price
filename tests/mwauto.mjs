@@ -27,14 +27,19 @@ globalThis.fetch=async(u,i)=>{
   }
   if(/feesEstimate/.test(url)){
     const b=JSON.parse(i.body);
-    return new Response(JSON.stringify({FeesEstimateResultList:
-      b.FeesEstimateByIdRequestList.map((q)=>({
-        FeesEstimateIdentifier:{IdType:'ASIN',IdValue:q.IdValue},
-        FeesEstimateResult:{Status:'Success',FeesEstimate:{
-          TotalFeesEstimate:{Amount:1000},
-          FeeDetailList:[{FeeType:'ReferralFee',FinalFee:{Amount:700}},
-                         {FeeType:'FBAFees',FinalFee:{Amount:230}},
-                         {FeeType:'ReferralFeeTax',FinalFee:{Amount:70}}]}}}))}),
+    /* 7.104：本文は**配列**。オブジェクトで送ると本物は 400 を返す。 */
+    if(!Array.isArray(b))
+      return new Response(JSON.stringify({errors:[{code:'InvalidInput',
+        message:'This is an invalid request.'}]}),{status:400});
+    /* 応答も**配列**（FeesEstimateResult が平たく並ぶ）。 */
+    return new Response(JSON.stringify(b.map((q)=>({
+      FeesEstimateIdentifier:{IdType:'ASIN',IdValue:q.IdValue},
+      Status:'Success',
+      FeesEstimate:{
+        TotalFeesEstimate:{Amount:1000},
+        FeeDetailList:[{FeeType:'ReferralFee',FinalFee:{Amount:700}},
+                       {FeeType:'FBAFees',FinalFee:{Amount:230}},
+                       {FeeType:'ReferralFeeTax',FinalFee:{Amount:70}}]}}))),
       {status:200});
   }
   if(/restrictions/.test(url)){

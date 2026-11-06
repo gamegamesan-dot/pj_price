@@ -27,7 +27,7 @@ globalThis.fetch=async(u)=>{
   if(/itemOffers/.test(url))
     return new Response(JSON.stringify({responses:[]}),{status:200});
   if(/feesEstimate/.test(url))
-    return new Response(JSON.stringify({FeesEstimateResultList:[]}),{status:200});
+    return new Response(JSON.stringify([]),{status:200});   /* 7.104：応答は配列 */
   if(/discord/.test(url))return new Response(null,{status:204});
   throw new Error('外へ出てはいけない: '+url);
 };

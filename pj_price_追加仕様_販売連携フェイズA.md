@@ -6388,3 +6388,52 @@ worker.js が使う表（32）と `items` の列（100）と見比べる。
 そのため列が1つでも無いと、どの印を送っても同じ `no such column` で落ちる。
 `WHERE` は `asin=? AND cond=?` だけで、区分（`cart`／`loose`）はそのまま使う。
 `amz_drop`（7.102）は**別表**なので、`amz_drop` を送った回だけその表を触る。
+
+## 7.104 手数料（getMyFeesEstimates）の本文の形を直す（2026-11-06）
+
+### 1. 原因：本文が**配列**でなければならない
+
+「だめ 1071件：HTTP 400 InvalidInput: This is an invalid request…」で、
+**商品ごとの実額が0件**（全行が仮の手数料）だった。
+
+`getMyFeesEstimates`（POST `/products/fees/v0/feesEstimate`）の本文は
+**`FeesEstimateByIdRequest` の配列そのもの**で、応答も
+**`FeesEstimateResult` の配列**（Amazon の公開モデル
+product-fees-api-model より）。
+
+```
+getMyFeesEstimates(body: Array<FeesEstimateByIdRequest>)
+  -> Array<FeesEstimateResult>
+```
+
+pj-sync は `{"FeesEstimateByIdRequestList":[…]}` の形で送っていたため、
+**全件が 400 で断られていた**。
+（`{"FeesEstimateRequest":{…}}` の形は**単品**の
+`/products/fees/v0/items/{Asin}/feesEstimate` だけ。）
+
+応答の読み取りも二重に間違っていた。
+
+- 一覧は `r.data.FeesEstimateResultList` を見ていた → **配列そのもの**を見る
+  （`payload` 包み・古い形でも拾えるようにしてある）。
+- 1件ぶんは `d.FeesEstimateResult` を見ていた → 配列の要素は**平たい**
+  （`Status`・`FeesEstimateIdentifier`・`FeesEstimate`・`Error`）。
+
+### 2. 理由を切らない
+
+| 場所 | 前 | 後 |
+| --- | --- | --- |
+| `mwFeeFind` の理由 | 200字 | **400字** |
+| `mwScanFee` のまとめ | 60字 | **200字** |
+| `GET /mw/amz` の `fee.why` | `substr(…,1,60)` | **`substr(…,1,400)`** |
+| 1件ごとの `Error` | 出していなかった | `Type: Code: Message` を足す |
+
+### 3. `GET /mw/fee/test?asin=&price=`（管理者だけ）
+
+1件だけ Amazon に聞いて、**送った本文・HTTP・理由の全文・拾えた内訳**を返す。
+**D1 は書かない**（確かめるだけ）。デプロイ直後の確認に使う。
+
+### 4. テストの作り物も本物に合わせた
+
+`tests/mwfee.mjs` の作り物が `FeesEstimateByIdRequestList` を受け取る形だったので、
+この間違いに気づけなかった。いまは**配列でなければ本物と同じ 400 InvalidInput**
+を返すようにしてあるので、同じ間違いをすれば必ず落ちる。

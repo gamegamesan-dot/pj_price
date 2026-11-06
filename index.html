@@ -1493,6 +1493,25 @@ body.staff #syncOnHandFix{display:none !important}
           （新しい大分類が出てきたら自動で足します）。</div>
         <div id="mwRankCapBox"></div>
         <div class="note2" id="mwRankCapNote" style="margin-top:2px"></div>
+        <!-- 手数料を1件だけためす（6.142／7.104）。管理者だけ。
+             Amazon に1回だけ聞いて、送った中身と**理由の全文**を出す。
+             D1 には何も書かない。 -->
+        <div class="cfgprice" style="margin:10px 0 2px">
+          <div class="note2" style="margin:0 0 2px"><b>手数料を1件ためす</b>
+            ：ASIN と売値を入れて押すと、Amazon の
+            <b>getMyFeesEstimates</b> に1回だけ聞いて、
+            <b>送った中身・HTTP・理由の全文・拾えた内訳</b>を出します。
+            「仮の手数料」のままの行が多いときの確かめに使います
+            （何も書き替えません）。</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" id="mwFeeTestAsin" placeholder="B07MLZ2JKF"
+                   style="flex:1 1 0;min-width:0" autocapitalize="characters">
+            <input type="number" id="mwFeeTestPrice" value="1980" step="1" min="1"
+                   inputmode="numeric" style="width:88px">
+            <button class="btn" id="mwFeeTestBtn" style="flex:0 0 auto">ためす</button>
+          </div>
+          <div class="note2" id="mwFeeTestNote" style="margin-top:2px"></div>
+        </div>
         <!-- 中身は {"ホビー":900000,...} の形。pj-sync と端末の両方に控える -->
         <input type="hidden" id="mwRankCaps" value="">
         <!-- 自動で「電池なし・危険物に該当しない」にする種類（6.128）。
@@ -2499,6 +2518,18 @@ var ADV_PB=['pbMode','pbRestock','autoRkMode','autoSkMode',
    **端末ではなく pj-sync に持つ**ので、作業者用の端末でも同じ基準で絞り込まれる。
    中身は {"ホビー":900000,"ゲーム":80000} の形の文字列（隠し欄に入れてある）。 */
 var ADV_AMZRANK=['mwRankCaps','mwDgTypes'];
+/* Amazon刈取の一覧の絞り込みの**既定値**（6.142）。
+   これまで端末にも残していなかったので、管理者と作業者で見える行が
+   違っていた（候補 1237件・管理者 28件／作業者 51件）。
+   並べ替えと「利益率がこれ以上」は値の欄、残りはチェック欄。
+   作業者の端末は pj-sync の値で始まる（変えても送らない＝その場だけ）。 */
+var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM'];
+/* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
+   同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
+var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
+                 'mwShipFee','mwNetMode'];
+var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
+                'csvMwAmzDup','csvMwAmzNoRank'];
 /* ---- 値付けの式が使う設定（6.73）----
    Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
    ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
@@ -2511,6 +2542,8 @@ var ADV_AMZRANK=['mwRankCaps','mwDgTypes'];
    自動処理が使う広告料率は autoAdRate で、こちらを送る。 */
 var ADV_CALC=['fx','fxc','fee','intlFee','feeTax','fixed','pack'];
 var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero'];
+/* 真偽値で送るチェック欄の全部（6.142）。 */
+function advChecks(){ return ADV_CHECK.concat(ADV_AMZCHK); }
 var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
                'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
                'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes',
@@ -2518,7 +2551,8 @@ var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
-    .concat(ADV_PRICE).concat(ADV_AMZRANK);
+    .concat(ADV_PRICE).concat(ADV_AMZRANK).concat(ADV_AMZFILT)
+    .concat(ADV_AMZCALC);
 }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
@@ -2531,7 +2565,7 @@ function advGet(){
   ADV_FIELDS.concat(ADV_CALC).concat(advCsvCfg())
     .forEach(function(id){ o[id]=String($(id).value); });
   // チェック欄は真偽値で送る（文字の '' と 'false' を取り違えないため）
-  ADV_CHECK.forEach(function(id){ o[id]=!!$(id).checked; });
+  advChecks().forEach(function(id){ o[id]=!!$(id).checked; });
   return o;
 }
 /* 受け取った値を欄に入れる。選択肢に無い値（古い版の設定）は捨てて既定のままにする。 */
@@ -2562,7 +2596,7 @@ function advApply(o){
     if(el.value!==String(v)){ el.value=String(v); hit=true; }
   });
   /* チェック欄。真偽値で来たものだけ入れる（古い版は項目が無い）。 */
-  ADV_CHECK.forEach(function(id){
+  advChecks().forEach(function(id){
     var v=o[id];
     if(typeof v!=='boolean')return;
     var el=$(id);
@@ -2622,6 +2656,16 @@ function advPull(){
     .then(function(d){
       if(!d||d.ok!==true)return;
       var at=String(d.at||'');
+      /* 6.142：**作業者の端末は pj-sync の値を正とする**。
+         作業者は設定を送れない（Worker が 403）ので、その端末で何かを
+         変えると advAt だけが新しくなり、**以後ずっと D1 の設定を
+         採らなくなっていた**。そのため管理者と作業者で
+         ランキングの上限・手数料・為替が違い、一覧の件数が違っていた
+         （候補 1237件・管理者 28件／作業者 51件）。 */
+      if(isStaff()){
+        if(d.settings)advAdopt(d);
+        return;
+      }
       if(at&&(!advAt||at>advAt)){ advAdopt(d); return; }   // D1 のほうが新しい
       if(advAt&&(!at||advAt>at))advPush();                 // 端末のほうが新しい
     })['catch'](function(){});
@@ -4937,6 +4981,8 @@ function csvLoad(){
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){
          if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
+       ADV_AMZCHK.forEach(function(id){
+         if(typeof o[id]==='boolean')$(id).checked=o[id]; });
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
        if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
        if(typeof o.mwNewOnly==='boolean')$('mwNewOnly').checked=o.mwNewOnly;
@@ -5102,6 +5148,8 @@ function csvSaveCfg(){
       }
       o[id]=v; csvSecretKeep(id,v);
     });
+    /* Amazon刈取の絞り込み（6.142）。管理者の端末では次に開いても同じ形。 */
+    ADV_AMZCHK.forEach(function(id){ o[id]=$(id).checked; });
     o.csvAutoParse=$('csvAutoParse').checked;
     o.csvShowNew=$('csvShowNew').checked;
     o.mwNewOnly=$('mwNewOnly').checked;        // MW：新品だけ（6.85）
@@ -9788,7 +9836,14 @@ $('csvMwBuyCsv').onclick=mwBuyCsvGo;
   .forEach(function(id){
     /* 並べ替えと絞り込みは候補の一覧だけのものなので、
        仕入れる一覧を見ているときは候補の一覧に戻して並べ直す（6.126）。 */
-    $(id).addEventListener('change',function(){ mwAmzRender(); });
+    $(id).addEventListener('change',function(){
+      mwAmzRender();
+      /* 6.142：管理者が変えた形を**既定値**として pj-sync に置く
+         （作業者の端末も同じ条件で始まる）。作業者のときは端末にも残さない
+         ＝次に開くと管理者の既定値に戻る。 */
+      try{ csvSaveCfg(); }catch(e){}
+      if(!isStaff())advTouch();
+    });
   });
 /* ランキングの上限の表（6.124）。欄は出し直すたびに作るので、
    1つずつ結ばずに箱で受ける。保存先は pj-sync（端末ごとではない）。
@@ -10366,15 +10421,74 @@ function mwPicLine(r){
 function mwFeeNote(f){
   if(!f||!(+f.n>0))return '';
   var ok=+f.ok||0, ng=+f.ng||0, none=+f.none||0, n=+f.n||0;
-  var why=(f.why||[]).map(function(x){
-    return esc(String(x.why||'').slice(0,40))+' '+(+x.n||0)+'件'; }).join('／');
+  /* 6.142：理由は**切らずに**出す。以前は40字で切っていたので
+     「HTTP 400 InvalidInput: This is an invali…」で終わっていて、
+     何が不正なのか分からなかった。
+     一覧の上は短く出し、全文は折りたたみに入れる。 */
+  var ws=(f.why||[]).map(function(x){
+    return { t:String(x.why||''), n:+x.n||0 }; });
+  var why=ws.map(function(x){
+    return esc(x.t.slice(0,60))+(x.t.length>60?'…':'')+' '+x.n+'件'; }).join('／');
+  var full=ws.length
+    ? ('<details style="margin:2px 0 0"><summary class="note2" style="margin:0;'
+       +'cursor:pointer">だめだった理由（全文）</summary>'
+       +ws.map(function(x){
+           return '<div class="note2" style="margin:2px 0 0;word-break:break-all">'
+             +'<b>'+x.n+'件</b>　'+esc(x.t)+'</div>'; }).join('')
+       +'</details>')
+    : '';
   return '<br>手数料：<b>商品ごとの実額 '+ok+'件</b>'
     +'　<span'+((ng+none)?' style="color:var(--bad)"':'')+'>仮の手数料 '
     +(ng+none)+'件</span>'
     +'（値段あり '+n+'件のうち）'
     +(none?('　まだ '+none+'件（次の「Amazonで調べる」で取ります）'):'')
-    +(ng?('　だめ '+ng+'件'+(why?('：'+why):'')):'');
+    +(ng?('　だめ '+ng+'件'+(why?('：'+why):'')):'')
+    +full;
 }
+/* ---- 手数料を1件だけためす（6.142／7.104・管理者だけ）---- */
+function mwFeeTestRun(){
+  var n=$('mwFeeTestNote');
+  if(roleDenyPrice('mwFeeTestNote'))return;
+  if(!syncUrl()){ n.textContent='設定の「pj-sync のURL」を入れてください。'; return; }
+  if(!syncKeyReady('mwFeeTestNote'))return;
+  var asin=String($('mwFeeTestAsin').value||'').trim().toUpperCase();
+  var price=Math.round(+$('mwFeeTestPrice').value||0);
+  if(!/^B[0-9A-Z]{9}$/.test(asin)){
+    n.textContent='ASIN を B0XXXXXXXX の形で入れてください。'; return;
+  }
+  if(!(price>0)){ n.textContent='売値（円）を入れてください。'; return; }
+  var b=$('mwFeeTestBtn'), back=b.textContent;
+  b.disabled=true; b.textContent='聞いています…';
+  n.textContent='Amazon に1回だけ聞いています…';
+  fetch(syncUrl()+'/mw/fee/test?asin='+encodeURIComponent(asin)
+        +'&price='+price,{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(syncResJson)
+    .then(function(d){
+      b.disabled=false; b.textContent=back;
+      var p=d.pick||{};
+      n.innerHTML=(d.ok
+          ? '<b style="color:var(--good)">取れました</b>　販売手数料 '+yen(+p.ref||0)
+            +'＋手数料消費税 '+yen(+p.tax||0)+'　FBA手数料 '+yen(+p.fba||0)
+            +'　合計 '+yen(+p.total||0)
+          : '<b style="color:#b00">取れませんでした</b>'
+            +'　HTTP '+(+d.http||0)+(d.got_n?('　返り '+d.got_n+'件'):''))
+        +(d.err?('<div class="note2" style="margin:2px 0 0;word-break:break-all">'
+          +'<b>理由（全文）</b>　'+esc(String(d.err))+'</div>'):'')
+        +(p.err?('<div class="note2" style="margin:2px 0 0;word-break:break-all">'
+          +'<b>この商品の理由</b>　'+esc(String(p.err))+'</div>'):'')
+        +'<details style="margin:2px 0 0"><summary class="note2" style="margin:0;'
+        +'cursor:pointer">送った中身と返り</summary>'
+        +'<div class="note2" style="margin:2px 0 0;word-break:break-all">'
+        +esc(JSON.stringify(d.sent||null))+'</div>'
+        +'<div class="note2" style="margin:2px 0 0;word-break:break-all">'
+        +esc(JSON.stringify(d.got||null).slice(0,1200))+'</div></details>';
+    })
+    ['catch'](function(e){
+      b.disabled=false; b.textContent=back;
+      n.textContent='ためせませんでした：'+e.message;
+    });
+}
+$('mwFeeTestBtn').onclick=mwFeeTestRun;
 function mwAmzBreak(r,c){
   if(!c)return '';
   return '<div class="note2" style="margin:2px 0 0">'
@@ -11708,8 +11822,10 @@ function mwAmzRender(){
     +(mwJanDupN()?('　<b style="color:var(--bad)">JAN重複 '+mwJanDupN()
       +'件</b>（下の絞り込みで見られます）'):'')
     /* ランキングの上限（⚙設定・大分類ごと）で落ちた行（6.124）。 */
+    /* 6.142：作業者の端末でも必ず出す（⚙は開けないので言い方を変える）。 */
     +(mwRankHid?('　<b>ランキングの基準で隠した行 '+mwRankHid+'件</b>'
-      +'（⚙設定の「Amazon刈取」で分類ごとに変えられます）'):'')
+      +(isStaff()?'（管理者が⚙で決めた基準です）'
+                 :'（⚙設定の「Amazon刈取」で分類ごとに変えられます）')):'')
     +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'')
     /* 商品ごとの手数料の様子（6.133／7.97）。
        「仮の手数料」のままの行が多いときに、何件・なぜかが分かるように。 */
@@ -15112,6 +15228,9 @@ function roleCheck(){
       /* 価格の欄を出し入れしたので、いまの値の1行と一覧も作り直す。 */
       try{ cfgLineRender(); }catch(e){}
       try{ if(syncData)syncRender(); }catch(e){}
+      /* 6.142：作業者だと分かったら、設定を pj-sync のものに合わせ直す
+         （最初の突き合わせはどちらのキーか分かる前に走っている）。 */
+      if(r==='staff')try{ advPull(); }catch(e){}
     })['catch'](function(){});
 }
 /* 価格を動かすボタンの入口で使う。作業者のときは押しても何もしない
@@ -18807,7 +18926,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v228';   // sw.js の const V と必ず同じ値にする
+var APP_V='v229';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
