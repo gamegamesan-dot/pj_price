@@ -9011,6 +9011,122 @@ function numZero(x, key) {
   if (!isFinite(n) || n < 0) return null;
   return n;
 }
+/* ---- D1 の作りを確かめる（7.103）----
+   /listings が HTTP 500 になる原因のほとんどは「マイグレーションの流し漏れ」。
+   items の列が1つ足りないだけで、**行のボタン全部**（手元在庫・一点物・無在庫・
+   在庫0時・値下げしない …）が 500 になる。どれが足りないのかを、
+   押す前に一度で分かるようにする。
+   読み取りだけ（sqlite_master と pragma_table_info）。秘密は返さない。
+   この2つの一覧は schema.sql と一致していることを tests/schemachk.mjs で見張る
+   （片方だけ増えて気付かない、ということが起きないように）。 */
+const SCHEMA_TABLES = ["amz_dg", "amz_drop", "amz_ptype", "events", "items",
+  "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
+  "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
+  "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders", "pb_log",
+  "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs", "sk_log", "sk_runs",
+  "skus", "sync_runs", "sync_state"];
+const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
+  "ebay_sku", "ebay_qty", "ebay_price", "ebay_currency", "ebay_seen_at",
+  "ebay_start", "ebay_ship_profile", "ebay_bo", "ebay_bo_accept",
+  "ebay_bo_decline", "revise_err", "revise_err_at", "fba_available",
+  "fba_inbound", "fba_reserved", "fba_res_cust", "fba_res_trans",
+  "fba_res_proc", "fba_seen_at", "mode", "one_off", "one_off_known",
+  "fba_link", "on_hand", "amazon_lowest", "amazon_lowest_n", "amazon_offers",
+  "amazon_offers_json", "amazon_lowest_at", "amazon_new_low", "amazon_new_n",
+  "amazon_new_at", "restocking", "restock_at", "restock_price",
+  "restock_max_cost", "restock_skip_acc", "dropship", "hand_qty", "weight_g",
+  "cost_yen", "sold_usd", "ebay_first", "mark_at", "mark_stop", "md_step",
+  "md_start", "md_floor", "md_n", "md_done", "ebay_sale", "ebay_sale_orig",
+  "ebay_sale_end", "pics_eps", "pics_eps_at", "pics_n", "pb_act", "pb_why",
+  "pb_at", "pb_done_at", "pb_fail", "pb_skip", "pb_want", "pb_max_cost",
+  "pb_want_at", "search_kw", "rv_want", "rv_floor", "rv_kind", "rv_max_cost",
+  "rv_at", "rv_done_at", "rv_fail", "rk_want", "rk_floor", "rk_low", "rk_n",
+  "rk_max_cost", "rk_want_at", "rk_at", "rk_done_at", "rk_fail", "sold_keep",
+  "sold_price", "sold_kept_at", "sk_act", "sk_why", "sk_at", "sk_done_at",
+  "sk_fail", "mw_low", "mw_low_at", "mw_n", "mw_stock", "updated_at"];
+/* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
+   新しい順に見て、最初に当たったものを返す。 */
+const SCHEMA_FIX = [
+  ["amz_drop", "migrate-0037-amz-drop.sql"],
+  ["amz_dg", "migrate-0035-amz-dg.sql"],
+  ["amz_ptype", "migrate-0034-ptype.sql"],
+  ["mw_auto_runs", "migrate-0031-jan-dup-fees.sql"],
+  ["mw_reg_log", "migrate-0032-mw-reg-log.sql"],
+  ["mw_rst_runs", "migrate-0029-mw-restrict.sql"],
+  ["mw_restrict", "migrate-0029-mw-restrict.sql"],
+  ["mw_buy", "migrate-0028-mw-buy.sql"],
+  ["jan_map", "migrate-0027-jan-map.sql"],
+  ["mw_amz", "migrate-0026-mw-amz.sql"],
+  ["mw_market", "migrate-0025-mw-market.sql"],
+  ["mw_img", "migrate-0025-mw-market.sql"],
+  ["mw_mkt_runs", "migrate-0025-mw-market.sql"],
+  ["mw_stock", "migrate-0024-mw-stock.sql"],
+  ["mw_runs", "migrate-0024-mw-stock.sql"],
+  ["mw_low", "migrate-0023-sold-keep.sql"],
+  ["mw_n", "migrate-0023-sold-keep.sql"],
+  ["sold_keep", "migrate-0023-sold-keep.sql"],
+  ["sold_price", "migrate-0023-sold-keep.sql"],
+  ["sold_kept_at", "migrate-0023-sold-keep.sql"],
+  ["sk_", "migrate-0023-sold-keep.sql"],
+  ["rk_", "migrate-0022-restock-price.sql"],
+  ["pb_", "migrate-0021-phase-b.sql"],
+  ["pics_", "migrate-0020-pics-eps.sql"],
+  ["ebay_sale", "migrate-0019-ebay-sale.sql"],
+  ["rv_", "migrate-0018-auto-review.sql"],
+  ["search_kw", "migrate-0017-search-kw.sql"],
+  ["md_", "migrate-0016-auto-markdown.sql"],
+  ["mark_", "migrate-0016-auto-markdown.sql"],
+  ["ebay_bo", "migrate-0015-best-offer.sql"],
+  ["amazon_new", "migrate-0014-amazon-new-low.sql"],
+  ["ebay_first", "migrate-0013-ebay-first.sql"],
+  ["weight_g", "migrate-0012-price-source.sql"],
+  ["cost_yen", "migrate-0012-price-source.sql"],
+  ["sold_usd", "migrate-0012-price-source.sql"],
+  ["ebay_ship_profile", "migrate-0011-ship-profile.sql"],
+  ["hand_qty", "migrate-0010-cart-hand.sql"],
+];
+function schemaFixOf(name) {
+  const n = String(name || "");
+  for (const [k, f] of SCHEMA_FIX) if (n.indexOf(k) === 0) return f;
+  return "";
+}
+async function schemaCheck(env) {
+  const tabs = {}, cols = {};
+  const t = await env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table'`).all();
+  ((t && t.results) || []).forEach((r) => { tabs[String(r.name)] = 1; });
+  const missTab = SCHEMA_TABLES.filter((x) => !tabs[x]);
+  /* items が無いときは列を聞いても意味がない（空が返るだけ）。 */
+  let missCol = [];
+  if (tabs.items) {
+    const c = await env.DB.prepare(
+      `SELECT name FROM pragma_table_info('items')`).all();
+    ((c && c.results) || []).forEach((r) => { cols[String(r.name)] = 1; });
+    missCol = SCHEMA_ITEM_COLS.filter((x) => !cols[x]);
+  }
+  const fix = [];
+  missTab.concat(missCol).forEach((n) => {
+    const f = schemaFixOf(n);
+    if (f && fix.indexOf(f) < 0) fix.push(f);
+  });
+  const ok = !missTab.length && !missCol.length;
+  return {
+    ok: ok,
+    tables: Object.keys(tabs).length,
+    item_cols: Object.keys(cols).length,
+    missing_tables: missTab,
+    missing_item_cols: missCol,
+    /* items は D1 の上限ちょうど（100列）。これ以上は足せないので、
+       新しい項目は別表（amz_drop のような）に持つ。 */
+    item_cols_max: D1_MAX_COLS,
+    run: fix.map((f) => "cd proxy-sync && node d1-exec.mjs " + f),
+    note: ok
+      ? "D1 の作りは worker.js と合っています。"
+      : "D1 に足りない表／列があります。上の run を順に実行してから、"
+        + "npx wrangler deploy をやり直してください。"
+        + "items の列が1つ足りないだけで、行のボタン全部が HTTP 500 になります。",
+  };
+}
 async function putListings(env, body) {
   const run = newRun("listings");
   const list = Array.isArray(body && body.items) ? body.items.slice(0, 500) : [];
@@ -9185,7 +9301,11 @@ async function putListings(env, body) {
     if (ad === 1) stmts.push(amzDropSet(env, k.asin, k.cond, nowIso(), "画面で選びました"));
     else if (ad === 0) stmts.push(amzDropDel(env, k.asin, k.cond));
   }
-  await runBatch(env, run, stmts);
+  /* 7.103：落ちた場所が分かるように、短い言葉を頭に付けて投げ直す。
+     秘密は含めない（D1 が返すのは表と列の名前だけ）。 */
+  try { await runBatch(env, run, stmts); }
+  catch (e) { throw new Error("名簿の保存（items の書き替え）で失敗："
+    + String((e && e.message) || e).slice(0, 300)); }
   run.notes.push("名簿 " + (list.length - bad) + "件を登録" + (bad ? ("／" + bad + "件は解析不可") : ""));
   const info = await saveRun(env, run);
   return { accepted: list.length - bad, rejected: bad, run: info };
@@ -9624,6 +9744,9 @@ export default {
           return json(await skuFind(env, url), 200, origin);
         return json(await janFind(env, url), 200, origin);
       }
+      /* D1 の作りを確かめる（7.103）。読み取りだけなので作業者のキーでも使える。 */
+      if (request.method === "GET" && url.pathname === "/schema/check")
+        return json(await schemaCheck(env), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/amz")
         return json(await mwAmzList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/market") {
@@ -9726,7 +9849,14 @@ export default {
         return json({ error: "bad_kind" }, 400, origin);
       }
     } catch (e) {
-      return json({ error: "server_error", detail: e.message }, 500, origin);
+      /* 7.103：画面（ボタンの下）に出す短い文面。
+         表と列の名前は出すが、キーなどの秘密は入れない。 */
+      return json({ error: "server_error", where: url.pathname,
+                    detail: String((e && e.message) || e).slice(0, 300),
+                    hint: /no such (column|table)/i.test(String((e && e.message) || ""))
+                      ? "D1 に足りない表／列があります。GET /schema/check で確かめ、"
+                        + "proxy-sync の migrate-*.sql を流してください。"
+                      : "" }, 500, origin);
     }
     return json({ error: "not_found" }, 404, origin);
   },
@@ -9819,6 +9949,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,
+  schemaCheck, schemaFixOf, SCHEMA_TABLES, SCHEMA_ITEM_COLS,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,

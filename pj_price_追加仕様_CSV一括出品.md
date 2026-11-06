@@ -6775,3 +6775,60 @@ iPhone では画面の外なので、
 - 自動値下げの除外条件（`mdSkip`）も変えていない。
   `mark_stop=1`・`restocking=1`（Amazon 無在庫を含む）・無在庫・一点物・
   数量0 はこれまでどおり対象外。
+
+## 6.141 行のボタンが HTTP 500 のときに、理由と直し方を出す（2026-11-06・sw.js v228）
+
+v227 で「押しても無反応」が「**切り替えに失敗しました：HTTP 500**」に変わった。
+そこで止まっていたのは **pj-sync（D1）側**だったが、番号だけでは何が悪いか
+分からないので、本文まで読んで出すようにした。
+
+### 1. 本文まで読む（6.49 の道具を行のボタンにも使う）
+
+行のボタンは `if(!res.ok)throw new Error('HTTP '+res.status)` で
+**本文を捨てていた**。6.49 で作ってあった `syncPostWhy`／`syncMigrateHint`
+（status・error・detail から「どの migrate を流すか」まで作る）を、
+行のボタンの送信にも通す（`syncResJson`）。
+
+出る文面の例：
+
+```
+切り替えに失敗しました：HTTP 500 server_error /listings
+名簿の保存（items の書き替え）で失敗：D1_ERROR: no such column: sold_keep
+　pj-sync の D1 に「sold_keep」がありません。
+　proxy-sync の migrate-0023-sold-keep.sql を実行してから、もう一度押してください。
+```
+
+通したボタン：**値下げしない・手元在庫・一点物・無在庫・eBay優先・
+今回は動かさない・在庫0時・再調達中の解除・最安値を今すぐ取り直す・
+在庫の根拠がない出品の選択**（まとめて無在庫オン／オフも同じ）。
+`SYNC_MIGRATE` に**表**（`no such table`）と新しい列（`sold_keep`・`rk_`・
+`pb_`・`sk_`・`amz_drop` など）を足した。
+
+### 2. 「pj-sync の作りを確かめる」ボタン
+
+販売連携 →「その他（ときどき使う）」の中。`GET /schema/check`（読み取りだけ・
+7.103）に聞いて、**足りない表・列**と**流すマイグレーション**を出す。
+
+```
+D1 に足りないものがあります
+足りない表：amz_drop
+足りない列（items）：sold_keep
+この順に実行してください：
+cd proxy-sync && node d1-exec.mjs migrate-0037-amz-drop.sql
+cd proxy-sync && node d1-exec.mjs migrate-0023-sold-keep.sql
+そのあと npx wrangler deploy をやり直してください。
+```
+
+合っているときは「D1 の作りは合っています（表 32・items の列 100／上限 100）」。
+
+### 3. 分かったこと（500 の切り分け表）
+
+| D1 の状態 | 値下げしない | ほかの行ボタン | 一覧（/status） |
+| --- | --- | --- | --- |
+| 正常 | 200 | 200 | 200 |
+| **items の列が1つ足りない** | **500** | **全部 500** | 500 |
+| `amz_drop` 表が無い（0037 未実行） | 200 | 200 | **500** |
+
+`mark_stop` は **`items` の列**（別表ではない）。
+Amazon 無在庫の印だけが別表（`amz_drop`）で、`items` は**100列ちょうど**
+＝D1 の上限なので、新しい項目はこれ以上足せない。

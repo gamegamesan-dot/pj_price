@@ -1222,6 +1222,9 @@ body.staff #syncOnHandFix{display:none !important}
           <div class="note2" id="syncPushNote">アップロード結果を取り込んだときに自動で送ります。手で送り直したいときだけ押してください。</div>
           <button class="btn" id="syncOnHandFix" style="width:100%;margin-top:8px">手元在庫の印を付け直す（FBAに在庫がある行から外す）</button>
           <div class="note2" id="syncFixNote"></div>
+          <!-- 6.141：行のボタンが HTTP 500 になるときの確かめ。読み取りだけ -->
+          <button class="btn" id="syncSchemaChk" style="width:100%;margin-top:8px">pj-sync の作りを確かめる（HTTP 500 のとき）</button>
+          <div class="note2" id="syncSchemaNote">D1 に足りない表・列があると、行のボタンが <b>HTTP 500</b> になります。押すと、足りないものと流すマイグレーションを出します。</div>
           <!-- チェックを付けた行をまとめて無在庫オン／オフにする -->
           <div style="display:flex;gap:8px;margin-top:8px">
             <button class="btn" id="syncDropOn" style="flex:1 1 0;min-width:0;padding:9px 4px">無在庫オン</button>
@@ -14154,7 +14157,7 @@ function syncFlagBulk(field,want){
         o[field]=!!want;
         return o;
       })})})
-      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(syncResJson)
       .then(function(d){ sent+=(d&&d.accepted)||0; })
       ['catch'](function(e){ note.textContent='送信に失敗：'+e.message; })
       .then(function(){ step(i+200); });
@@ -15132,6 +15135,30 @@ function roleDenyPrice(noteId){
 var SYNC_POST_CHUNK=200;              // 1回に送る件数
 /* D1 に列が無いときは、どの migrate を実行すればよいかまで出す。 */
 var SYNC_MIGRATE=[
+  /* 6.141：表（no such table）もここで引く。新しいものから並べる。 */
+  ['amz_drop','migrate-0037-amz-drop.sql'],
+  ['amz_dg','migrate-0035-amz-dg.sql'],
+  ['amz_ptype','migrate-0034-ptype.sql'],
+  ['mw_reg_log','migrate-0032-mw-reg-log.sql'],
+  ['mw_auto_runs','migrate-0031-jan-dup-fees.sql'],
+  ['mw_restrict','migrate-0029-mw-restrict.sql'],
+  ['mw_rst_runs','migrate-0029-mw-restrict.sql'],
+  ['mw_buy','migrate-0028-mw-buy.sql'],
+  ['jan_map','migrate-0027-jan-map.sql'],
+  ['mw_amz','migrate-0026-mw-amz.sql'],
+  ['mw_market','migrate-0025-mw-market.sql'],
+  ['mw_img','migrate-0025-mw-market.sql'],
+  ['mw_mkt_runs','migrate-0025-mw-market.sql'],
+  ['mw_stock','migrate-0024-mw-stock.sql'],
+  ['mw_runs','migrate-0024-mw-stock.sql'],
+  ['sold_keep','migrate-0023-sold-keep.sql'],
+  ['sold_price','migrate-0023-sold-keep.sql'],
+  ['sold_kept_at','migrate-0023-sold-keep.sql'],
+  ['sk_','migrate-0023-sold-keep.sql'],
+  ['mw_low','migrate-0023-sold-keep.sql'],
+  ['mw_n','migrate-0023-sold-keep.sql'],
+  ['rk_','migrate-0022-restock-price.sql'],
+  ['pb_','migrate-0021-phase-b.sql'],
   ['rv_','migrate-0018-auto-review.sql'],
   ['md_','migrate-0016-auto-markdown.sql'],
   ['pics_eps','migrate-0020-pics-eps.sql'],
@@ -15161,9 +15188,64 @@ function syncMigrateHint(d){
 function syncPostWhy(status,body,text){
   var o=body||{};
   var d=String(o.detail||'').trim()||String(text||'').trim();
+  var h=syncMigrateHint(d);
   return 'HTTP '+(status||0)+(o.error?(' '+o.error):'')
-    +(d?(' '+d.slice(0,200)):'')+syncMigrateHint(d);
+    +(o.where?(' '+o.where):'')
+    +(d?(' '+d.slice(0,200)):'')
+    /* 足りない名前が分かれば migrate まで出す。分からなければ
+       Worker が付けた一言（hint）を出す（6.141）。 */
+    +(h||(o.hint?('　'+String(o.hint).slice(0,200)):''));
 }
+/* 応答を本文まで読む（6.141）。
+   いままで行のボタンは `if(!res.ok)throw new Error('HTTP '+res.status)` で
+   本文を捨てていたので、画面には「HTTP 500」しか出ず、
+   **D1 のどの表・列が足りないのか**が分からなかった。
+   これを通すと「HTTP 500 server_error no such column: sold_keep　pj-sync の
+   D1 に「sold_keep」がありません。proxy-sync の migrate-0023-sold-keep.sql を
+   実行してから…」まで出る。秘密は本文に入っていない（表と列の名前だけ）。 */
+function syncResJson(res){
+  return res.text().then(function(t){
+    var b=null; try{ b=JSON.parse(t); }catch(e){}
+    if(!res.ok||!b||b.error)throw new Error(syncPostWhy(res.status,b,t));
+    return b;
+  });
+}
+/* ---- pj-sync の作りを確かめる（6.141／7.103）----
+   行のボタンが HTTP 500 になる原因のほとんどは、D1 のマイグレーションの
+   流し漏れ。items の列が1つ足りないだけで、**行のボタン全部**が 500 になる。
+   読み取りだけの窓口（GET /schema/check）に聞いて、足りない表・列と、
+   流すマイグレーションの実行の仕方をそのまま出す。 */
+function syncSchemaRun(){
+  var n=$('syncSchemaNote');
+  if(!syncUrl()){ n.textContent='設定の「pj-sync のURL」を入れてください。'; return; }
+  if(!syncKeyReady('syncSchemaNote'))return;
+  var b=$('syncSchemaChk'), back=b.textContent;
+  b.disabled=true; b.textContent='確かめています…';
+  n.textContent='pj-sync に聞いています…';
+  fetch(syncUrl()+'/schema/check',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(syncResJson)
+    .then(function(d){
+      b.disabled=false; b.textContent=back;
+      var mt=(d.missing_tables||[]), mc=(d.missing_item_cols||[]);
+      if(d.ok){
+        n.innerHTML='<b>D1 の作りは合っています</b>（表 '+(+d.tables||0)+'・'
+          +'items の列 '+(+d.item_cols||0)+'／上限 '+(+d.item_cols_max||100)+'）。'
+          +'HTTP 500 が続くときは、ボタンの下に出る文面をそのまま知らせてください。';
+        return;
+      }
+      n.innerHTML='<b style="color:#b00">D1 に足りないものがあります</b>'
+        +(mt.length?('<br>足りない表：'+esc(mt.join('・'))):'')
+        +(mc.length?('<br>足りない列（items）：'+esc(mc.join('・'))):'')
+        +'<br>この順に実行してください：<br>'
+        +(d.run||[]).map(function(x){ return '<code>'+esc(x)+'</code>'; }).join('<br>')
+        +'<br>そのあと <code>npx wrangler deploy</code> をやり直してください。';
+    })
+    ['catch'](function(e){
+      b.disabled=false; b.textContent=back;
+      n.textContent='確かめられませんでした：'+e.message;
+    });
+}
+$('syncSchemaChk').onclick=syncSchemaRun;
 /* pj-sync に1回 POST する。失敗したときは理由（文字列）を onErr に渡す。 */
 function syncJsonPost(path,body,onOk,onErr){
   var st=0;
@@ -16946,7 +17028,7 @@ function syncNoBasisGo(t,r,keep){
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({ items:[{ asin:r.asin, cond:r.cond,
       title:r.title||'', on_hand:0, amz_drop:keep?1:0 }] })})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(syncResJson)
     .then(function(d){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r.on_hand=0;
@@ -16962,7 +17044,10 @@ function syncNoBasisGo(t,r,keep){
            +'　Amazon 無在庫にはしないので、<b>この行は数量0の対象</b>になります。');
       syncRender();
     })
-    ['catch'](function(e){ note.textContent='送れませんでした：'+e.message; })
+    ['catch'](function(e){
+      note.textContent='送れませんでした：'+e.message;
+      syncBtnSay(t,'送れませんでした：'+e.message,1);           // 6.141
+    })
     .then(function(){ t.disabled=false; t.textContent=back; });
 }
 function syncIsRestocking(r){
@@ -17104,13 +17189,14 @@ function syncLowNow(t,r,key){
   fetch(syncUrl()+'/lowest',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({ items:[{ asin:r.asin, cond:(r.cond==='new')?'new':'used' }] })})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(syncResJson)
     .then(function(d){
       var at=d.at||new Date().toISOString();
       var v=(d.lowest||{})[String(r.asin)+'|'+((r.cond==='new')?'new':'used')];
       if(!v||!(+v.low>0)){
         $('syncFixNote').textContent='Amazon に出品が見つかりませんでした（'
           +(r.title||r.asin)+'）';
+        syncBtnSay(t,'Amazon に出品が見つかりませんでした。',1);  // 6.141
         t.disabled=false; t.textContent=back;
         return;
       }
@@ -17133,6 +17219,7 @@ function syncLowNow(t,r,key){
     ['catch'](function(e){
       t.disabled=false; t.textContent=back;
       $('syncFixNote').textContent='取得に失敗しました：'+e.message;
+      syncBtnSay(t,'取得に失敗しました：'+e.message,1);         // 6.141
     });
 }
 function syncMarkStopBtn(r,key){
@@ -17709,7 +17796,7 @@ function syncDropBulk(on){
       body:JSON.stringify({items:part.map(function(r){
         return { asin:r.asin, cond:r.cond, title:r.title||'', dropship:!!on };
       })})})
-      .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+      .then(syncResJson)
       .then(function(d){
         sent+=(d.accepted||0); failed+=(d.rejected||0);
         // 送れた行はその場で表示も合わせる（次の取り込みを待たない）
@@ -18070,7 +18157,7 @@ function syncModeSend(t,r,want){
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:[{asin:r.asin, cond:r.cond, title:r.title||'',
                                  mode:want}]})})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(syncResJson)
     .then(function(d){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r.mode=want;
@@ -18091,6 +18178,7 @@ function syncModeSend(t,r,want){
     .catch(function(e){
       t.disabled=false; t.textContent=back;
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
+      syncBtnSay(t,'切り替えに失敗しました：'+e.message,1);     // 6.141
     });
 }
 /* ---- 行のボタンの結果を、そのボタンのすぐ下に出す（6.140）----
@@ -18140,7 +18228,7 @@ function syncFlagSend(t,r,field,want,label){
   fetch(u+'/listings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:[body]})})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(syncResJson)
     .then(function(d){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r[field]=want?1:0;
@@ -18193,7 +18281,7 @@ function syncRestockingSend(t,r,on,label){
   fetch(syncUrl()+'/listings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
     body:JSON.stringify({items:[body]})})
-    .then(function(res){ if(!res.ok)throw new Error('HTTP '+res.status); return res.json(); })
+    .then(syncResJson)
     .then(function(d){
       if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
       r.restocking=on?1:0;
@@ -18217,6 +18305,7 @@ function syncRestockingSend(t,r,on,label){
     .catch(function(e){
       t.disabled=false; t.textContent=back;
       $('syncFixNote').textContent='切り替えに失敗しました：'+e.message;
+      syncBtnSay(t,'切り替えに失敗しました：'+e.message,1);     // 6.141
     });
 }
 $('syncList').addEventListener('click',function(e){
@@ -18718,7 +18807,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v227';   // sw.js の const V と必ず同じ値にする
+var APP_V='v228';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

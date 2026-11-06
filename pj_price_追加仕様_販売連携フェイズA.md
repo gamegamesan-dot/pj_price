@@ -6346,3 +6346,45 @@ Amazon に出品が無くなったときの数量0は、どちらも今までど
 cd proxy-sync && node d1-exec.mjs migrate-0037-amz-drop.sql
 ```
 表 `amz_drop` を作るだけ（**items は触らない**）。
+
+## 7.103 D1 の作りを確かめる窓口と、500 のときの文面（2026-11-06）
+
+### 1. `GET /schema/check`（読み取りだけ・作業者のキーでも可）
+
+`sqlite_master` と `pragma_table_info('items')` を見て、
+worker.js が使う表（32）と `items` の列（100）と見比べる。
+
+```json
+{ "ok": false, "tables": 31, "item_cols": 99, "item_cols_max": 100,
+  "missing_tables": ["amz_drop"], "missing_item_cols": ["sold_keep"],
+  "run": ["cd proxy-sync && node d1-exec.mjs migrate-0037-amz-drop.sql",
+          "cd proxy-sync && node d1-exec.mjs migrate-0023-sold-keep.sql"],
+  "note": "D1 に足りない表／列があります。…" }
+```
+
+- `SCHEMA_TABLES`／`SCHEMA_ITEM_COLS` は **schema.sql と一致していることを
+  tests/schemachk.mjs で見張る**（並びまで同じ）。片方だけ増えて気付かない、
+  ということが起きない。
+- 足りない名前 → マイグレーションの対応は `SCHEMA_FIX`（前方一致・新しい順）。
+- 返すのは表と列の名前だけ。**キーや秘密は返さない**。
+
+### 2. 500 の本文
+
+```json
+{ "error": "server_error", "where": "/listings",
+  "detail": "名簿の保存（items の書き替え）で失敗：D1_ERROR: no such column: sold_keep",
+  "hint": "D1 に足りない表／列があります。GET /schema/check で確かめ、…" }
+```
+
+- `where`（どの窓口か）を足し、`detail` は **300字で切る**。
+- `no such column`／`no such table` のときだけ `hint` を付ける。
+- `putListings` の保存は `try` で囲み、「**名簿の保存（items の書き替え）で失敗**」
+  と、どこで落ちたかを頭に付けて投げ直す。
+
+### 3. なぜ列が1つ足りないと全部止まるのか
+
+`POST /listings` の `UPDATE items SET …` は、送られてこなかった項目も
+`COALESCE(?n, 列)` で**必ず列名を書く**（送られた項目だけを書き替えるため）。
+そのため列が1つでも無いと、どの印を送っても同じ `no such column` で落ちる。
+`WHERE` は `asin=? AND cond=?` だけで、区分（`cart`／`loose`）はそのまま使う。
+`amz_drop`（7.102）は**別表**なので、`amz_drop` を送った回だけその表を触る。

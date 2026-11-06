@@ -81,8 +81,15 @@ const listOf=(cols)=>{
 const itemList=listOf(W.ITEM_COLS), stList=listOf(W.STATUS_COLS);
 const pricing=readCols(readFileSync('shared/pricing.js','utf8'));
 const screen=readCols(readFileSync('index.html','utf8'));
+/* 列の一覧そのもの（SELECT の形・D1 の作りの見張り・7.103）は
+   「行から値を読んでいる場所」ではないので、走査から外す。
+   外さないと、SCHEMA_ITEM_COLS に並んだ100個の名前が
+   「Worker が読む列」と数えられてしまう。 */
 const wsrc=readFileSync('proxy-sync/worker.js','utf8')
-  .replace(/const ITEM_COLS = `[\s\S]*?`;/,'').replace(/const STATUS_COLS = `[\s\S]*?`;/,'');
+  .replace(/const ITEM_COLS = `[\s\S]*?`;/,'').replace(/const STATUS_COLS = `[\s\S]*?`;/,'')
+  .replace(/const SCHEMA_TABLES = \[[\s\S]*?\];/,'')
+  .replace(/const SCHEMA_ITEM_COLS = \[[\s\S]*?\];/,'')
+  .replace(/const SCHEMA_FIX = \[[\s\S]*?\];/,'');
 const worker=readCols(wsrc);
 console.log('   式が読む：'+pricing.length+'列／画面が読む：'+screen.length
   +'列／Worker が読む：'+worker.length+'列');
