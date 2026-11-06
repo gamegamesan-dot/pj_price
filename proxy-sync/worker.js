@@ -52,6 +52,7 @@ const SP_GAP = {
   putListingsItem: 250,              // 5回/秒（7.90）。余裕をみて4回/秒
   getDefinitionsProductType: 250,    // 5回/秒（7.92）。余裕をみて4回/秒
   searchDefinitionsProductTypes: 250,
+  searchListingsItems: 250,          // 5回/秒（7.105）。余裕をみて4回/秒
 };
 const SP_GAP_DEFAULT = 700;
 const SP_RETRY = 3;                // QuotaExceeded の再試行回数
@@ -151,6 +152,10 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/catalog\/2022-04-01\/items\?/ },
   /* 出品の可否（7.76）。読み取りだけ。Product Listing ロールで使える。 */
   { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/restrictions\?/ },
+  /* 自分の出品を ASIN で引く（searchListingsItems・7.105）。読み取りだけ。
+     「せどりすと など pj 以外で先に登録した」行を見分けて、
+     二重に登録しないようにするために使う。 */
+  { m: "GET",  re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/items\/[^/?]+\?/ },
   // 価格の照会。読み取りだがPOSTしか用意されていないAPI。
   { m: "POST", re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/batches\/products\/pricing\/v0\/itemOffers$/ },
   /* 商品ごとの手数料（7.85）。読み取りだけ（見積りを返すだけで何も変えない）。 */
@@ -6333,6 +6338,7 @@ async function mwRestrictRun(env, body, opt) {
    端末をまたいで同じ印が見えるよう D1 に置く。
    **作業者（STAFF_KEY）でも付けられる**（仕入れの候補を選ぶ仕事なので）。
    お金を動かす操作ではなく、印と数量だけ。 */
+const MW_BUY_CHK_MAX = 30;      // 1回に確かめる件数（7.105）
 const MW_BUY_MAX_QTY = 99;
 async function mwBuyPut(env, body, role) {
   const run = newRun("mw-buy");
@@ -6343,13 +6349,37 @@ async function mwBuyPut(env, body, role) {
       : [{ jan: o.jan, qty: o.qty }];
     const stmts = [];
     const at = nowIso();
+    const fills = [];
     for (const x of list.slice(0, 200)) {
       const jan = String((x && x.jan) || "").replace(/\D/g, "");
       if (!janOk(jan)) continue;
+      /* 7.105：登録の状態だけを変える呼び出し（数量は触らない）。
+         reg='pj'／'other' で「登録済みにする」、reg='' で戻す。 */
+      if (x && x.reg !== undefined && x.reg !== null) {
+        const st = String(x.reg || "");
+        const state = (st === "pj" || st === "other") ? st : "";
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_buy SET reg_state=?2,
+             reg_sku=CASE WHEN ?2='' THEN NULL ELSE COALESCE(?3, reg_sku) END,
+             reg_at=CASE WHEN ?2='' THEN NULL ELSE ?4 END WHERE jan=?1`)
+          .bind(jan, state, String((x && x.reg_sku) || "") || null, at));
+        res.n++;
+        res.rows.push({ jan, reg: state });
+        continue;
+      }
+      /* 7.105：この区分から外す（印ごと消す）。数量0と同じだが、
+         画面の言い方（「この区分から外す」）に合わせて別の名前でも受ける。 */
+      if (x && (x.off === 1 || x.off === true)) {
+        stmts.push(env.DB.prepare(`DELETE FROM mw_buy WHERE jan=?1`).bind(jan));
+        res.n++;
+        res.rows.push({ jan, qty: 0, off: 1 });
+        continue;
+      }
       const qty = Math.max(0, Math.min(MW_BUY_MAX_QTY, mwNum(x && x.qty)));
       if (qty <= 0) {
         stmts.push(env.DB.prepare(`DELETE FROM mw_buy WHERE jan=?1`).bind(jan));
       } else {
+        fills.push(jan);
         stmts.push(env.DB.prepare(
           `INSERT INTO mw_buy (jan,qty,by_role,note,at,created_at)
              VALUES (?1,?2,?3,?4,?5,?5)
@@ -6361,6 +6391,9 @@ async function mwBuyPut(env, body, role) {
       res.rows.push({ jan, qty });
     }
     await runBatch(env, run, stmts);
+    /* 7.105：印を付けた時点の中身を控える（空の列だけ入れる）。
+       CSV から消えても Amazon に登録できるようにするため。 */
+    for (const j of fills.slice(0, 50)) await mwBuyFill(env, run, j);
     res.ok = true;
     run.notes.push("MW仕入れの印：" + res.n + "件");
   } catch (e) {
@@ -6369,17 +6402,280 @@ async function mwBuyPut(env, body, role) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
-/* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。 */
+/* ---- 仕入れ済み（MW の CSV から消えても残す）7.105 ----
+   MW で売り切れた商品は stocks_3.csv から消える。消えた行は
+   mw_stock に gone_at が入るだけで残るが、**印を付けた時点の卸値**は
+   CSV が入れ替わると変わってしまう（値上げ・値下げ）。
+   仕入れたあとに Amazon に登録できるよう、印を付けた時点の中身を
+   mw_buy 側に控える。 */
+/* 控えを埋める。**空の列だけ**入れる（仕入れ時の値を後から上書きしない）。
+   jan を渡すとその行だけ、省くと控えがまだ無い行をまとめて埋める。 */
+function mwBuyFillStmt(env, jan) {
+  const where = jan ? `jan=?1` : `snap_at IS NULL`;
+  const sql =
+    `UPDATE mw_buy SET
+       asin=COALESCE(asin,
+         (SELECT a.asin FROM mw_amz a WHERE a.jan=mw_buy.jan)),
+       name=COALESCE(NULLIF(name,''),
+         (SELECT NULLIF(a.name,'') FROM mw_amz a WHERE a.jan=mw_buy.jan),
+         (SELECT s.name FROM mw_stock s WHERE s.jan=mw_buy.jan
+           ORDER BY s.pick DESC, COALESCE(s.gone_at,'') ASC LIMIT 1)),
+       sha=COALESCE(NULLIF(sha,''),
+         (SELECT s.sha FROM mw_stock s WHERE s.jan=mw_buy.jan
+           ORDER BY s.pick DESC, COALESCE(s.gone_at,'') ASC LIMIT 1)),
+       kishu=COALESCE(NULLIF(kishu,''),
+         (SELECT s.kishu FROM mw_stock s WHERE s.jan=mw_buy.jan
+           ORDER BY s.pick DESC, COALESCE(s.gone_at,'') ASC LIMIT 1)),
+       cond=COALESCE(NULLIF(cond,''),
+         (SELECT s.cond FROM mw_stock s WHERE s.jan=mw_buy.jan
+           ORDER BY s.pick DESC, COALESCE(s.gone_at,'') ASC LIMIT 1)),
+       wholesale=COALESCE(wholesale,
+         (SELECT s.wholesale FROM mw_stock s WHERE s.jan=mw_buy.jan
+           ORDER BY s.pick DESC, COALESCE(s.gone_at,'') ASC LIMIT 1)),
+       pics=COALESCE(pics,
+         (SELECT COUNT(*) FROM mw_img i WHERE i.jan=mw_buy.jan AND i.ok=1)),
+       snap_at=COALESCE(snap_at, ?${jan ? 2 : 1})
+     WHERE ${where}`;
+  return jan ? env.DB.prepare(sql).bind(String(jan), nowIso())
+             : env.DB.prepare(sql).bind(nowIso());
+}
+async function mwBuyFill(env, run, jan) {
+  try { await env.DB.batch([mwBuyFillStmt(env, jan)]); }
+  catch (e) { if (run) run.notes.push("仕入れの控え：" + String((e && e.message) || e)); }
+}
+/* 写真の枚数は増えることがあるので、控えがあっても数え直す（上書きする）。 */
+function mwBuyPicsStmt(env) {
+  return env.DB.prepare(
+    `UPDATE mw_buy SET pics=
+       (SELECT COUNT(*) FROM mw_img i WHERE i.jan=mw_buy.jan AND i.ok=1)`);
+}
+/* 自分の出品を ASIN で引く（searchListingsItems・7.105）。
+   返るのは自分の出品だけなので、mw で始まる SKU があれば
+   「もう登録してある」と分かる（pj からでも せどりすと からでも）。 */
+async function mwRegFind(env, run, asin) {
+  if (!spSellerId(env))
+    return { ok: false, err: "出品者トークン（SP_SELLER_ID）が入っていません" };
+  const q = new URLSearchParams({ marketplaceIds: MP_FE,
+    identifiers: String(asin), identifiersType: "ASIN",
+    includedData: "summaries", pageSize: "10" });
+  const path = "/listings/2021-08-01/items/" + encodeURIComponent(spSellerId(env))
+    + "?" + q.toString();
+  const r = await spCall(env, run, path, { label: "searchListingsItems" });
+  if (!r.ok)
+    return { ok: false, status: r.status,
+             err: ("HTTP " + r.status + " " + String(r.err || "")).trim().slice(0, 300) };
+  const items = ((r.data || {}).items) || [];
+  const skus = items.map((x) => String(x.sku || "")).filter(Boolean);
+  const mw = skus.filter((x) => /^mw/i.test(x));
+  return { ok: true, skus, mw_sku: mw[0] || "", n: skus.length };
+}
+/* その SKU を pj が送ったか（mw_reg_log にあるか）。 */
+async function mwRegMine(env, sku) {
+  if (!sku) return false;
+  try {
+    const r = await env.DB.prepare(
+      `SELECT 1 AS k FROM mw_reg_log WHERE sku=?1 LIMIT 1`).bind(String(sku)).first();
+    return !!(r && r.k);
+  } catch (e) { return false; }
+}
+/* ---- POST /mw/buy/check ----
+   仕入れ済みの行が、もう Amazon に登録されていないかを確かめる（管理者だけ）。
+   同じ ASIN で mw から始まる SKU があれば、その行は登録済みにする。 */
+async function mwBuyCheck(env, body) {
+  const run = newRun("mw-buy-check");
+  const res = { ok: false, n: 0, done: 0, found: 0, calls: 0, rows: [], why: "" };
+  try {
+    const o = body || {};
+    const jans = (Array.isArray(o.jans) ? o.jans : [o.jan])
+      .map((x) => String(x || "").replace(/\D/g, "")).filter(janOk);
+    const q = jans.length
+      ? await env.DB.prepare(
+          `SELECT jan, asin, reg_state FROM mw_buy
+            WHERE jan IN (${jans.map(() => "?").join(",")})`).bind(...jans).all()
+      : await env.DB.prepare(
+          `SELECT jan, asin, reg_state FROM mw_buy
+            WHERE COALESCE(asin,'')<>'' AND COALESCE(reg_state,'')=''
+            ORDER BY COALESCE(reg_chk_at,'') ASC LIMIT ${MW_BUY_CHK_MAX}`).all();
+    const rows = (q && q.results) || [];
+    res.n = rows.length;
+    if (!rows.length) { res.ok = true; res.why = "確かめる行がありません"; 
+      return Object.assign(await saveRun(env, run), res); }
+    const at = nowIso();
+    const stmts = [];
+    for (const r of rows) {
+      const asin = String(r.asin || "");
+      if (!/^B[0-9A-Z]{9}$/.test(asin)) continue;
+      const g = await mwRegFind(env, run, asin);
+      res.calls++;
+      res.done++;
+      if (!g.ok) {
+        res.rows.push({ jan: r.jan, asin, err: g.err || "" });
+        continue;
+      }
+      const sku = g.mw_sku;
+      /* pj が送った SKU なら 'pj'、それ以外（せどりすと等）は 'other'。 */
+      const state = sku ? (await mwRegMine(env, sku) ? "pj" : "other") : "";
+      if (sku) res.found++;
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_buy SET reg_state=?2, reg_sku=?3,
+           reg_at=CASE WHEN ?2='' THEN NULL ELSE COALESCE(reg_at, ?4) END,
+           reg_chk_at=?4 WHERE jan=?1`)
+        .bind(String(r.jan), state, sku || null, at));
+      res.rows.push({ jan: r.jan, asin, sku: sku || "", state, skus: g.skus });
+    }
+    await runBatch(env, run, stmts);
+    res.ok = true;
+    run.notes.push("仕入れ済みの登録確認：" + res.done + "件／見つかった "
+      + res.found + "件");
+  } catch (e) {
+    run.errors++; run.notes.push("mw-buy-check: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* ---- POST /mw/buy/refresh ----
+   仕入れ済みの1行を、その場で取り直す（管理者だけ）。
+   ASIN（無ければ引く）→ 最安値 → 出品の可否 → 手数料 → 登録済みの確認。
+   MW の CSV から消えた行も対象にする（候補の絞り込みを通さない）。 */
+async function mwBuyRefresh(env, body) {
+  const run = newRun("mw-buy-refresh");
+  const res = { ok: false, jan: "", asin: "", price: 0, basis: "", rst: "",
+                fee: null, reg_state: "", reg_sku: "", why: "" };
+  try {
+    const jan = String(((body || {}).jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) { res.why = "JAN が13桁ではありません";
+      return Object.assign(await saveRun(env, run), res); }
+    res.jan = jan;
+    const b = await env.DB.prepare(
+      `SELECT jan, asin FROM mw_buy WHERE jan=?1`).bind(jan).first();
+    if (!b) { res.why = "仕入れる印がありません";
+      return Object.assign(await saveRun(env, run), res); }
+    let asin = String(b.asin || "");
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) {
+      const a0 = await env.DB.prepare(
+        `SELECT asin FROM mw_amz WHERE jan=?1`).bind(jan).first();
+      asin = String((a0 && a0.asin) || "");
+    }
+    /* それでも無ければ JAN から引く（1件）。 */
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) {
+      const f = await mwAsinFind(env, run, [jan], Date.now() + 20000, {});
+      const hit = (f || {})[jan];
+      asin = String((hit && hit.asin) || "");
+      if (/^B[0-9A-Z]{9}$/.test(asin))
+        await env.DB.batch([env.DB.prepare(
+          `UPDATE mw_buy SET asin=?2 WHERE jan=?1`).bind(jan, asin)]);
+    }
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) {
+      res.why = "ASIN が引けませんでした";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    res.asin = asin;
+    const at = nowIso();
+    const stmts = [];
+    /* ① 最安値（カート優先）。mw_amz にも控える。 */
+    const g = await amazonLowest(env, run, [{ asin, cond: "new" }]);
+    const z = (g || {})[asin + "|new"] || null;
+    const buy = z ? Number(z.buy || 0) : 0;
+    const lw = z ? Number(z.low || 0) : 0;
+    res.price = buy > 0 ? buy : lw;
+    res.basis = buy > 0 ? "カート" : (lw > 0 ? "最安" : "");
+    if (res.price > 0)
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
+           low_n=?7, amz=?8, fba_n=?9, err='', checked_at=?10, price_at=?10
+         WHERE jan=?1`)
+        .bind(jan, res.price, res.basis, lw || null, buy || null,
+              z ? (z.newN || z.total || 0) : 0, z ? (z.lowN || 0) : 0,
+              z ? (z.amz || 0) : 0, z ? (z.fba || 0) : 0, at));
+    /* ② 出品の可否。 */
+    const rs = await mwRstOne(env, run, asin);
+    if (rs.ok) {
+      res.rst = String(rs.state || "ok");
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_restrict (asin,cond,state,reasons,link,err,checked_at,created_at)
+           VALUES (?1,?2,?3,?4,?5,'',?6,?6)
+         ON CONFLICT(asin,cond) DO UPDATE SET state=excluded.state,
+           reasons=excluded.reasons, link=excluded.link, err='',
+           checked_at=excluded.checked_at`)
+        .bind(asin, MW_RST_COND, res.rst, String(rs.reasons || ""),
+              String(rs.link || ""), at));
+    } else {
+      res.rst = "";
+      res.why = (res.why ? res.why + "／" : "") + "可否：" + String(rs.err || "");
+    }
+    /* ③ 手数料（その売値で）。 */
+    if (res.price > 0) {
+      const fr = await mwFeeFind(env, run, [{ asin, price: res.price }]);
+      const fz = (fr.map || {})[asin] || null;
+      res.fee = fz;
+      if (fz)
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
+             fee_base=?6, fee_at=?7, fee_err=?8 WHERE jan=?1`)
+          .bind(jan, fz.ok ? fz.ref : null, fz.ok ? fz.fba : null,
+                fz.ok ? fz.tax : null, fz.ok ? fz.total : null,
+                fz.ok ? res.price : null, at,
+                fz.ok ? "" : String(fz.err || "").slice(0, 400)));
+    }
+    /* ④ もう登録されていないか（pj 以外も見る）。 */
+    const rf = await mwRegFind(env, run, asin);
+    if (rf.ok) {
+      const sku = rf.mw_sku;
+      res.reg_state = sku ? (await mwRegMine(env, sku) ? "pj" : "other") : "";
+      res.reg_sku = sku || "";
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_buy SET reg_state=?2, reg_sku=?3,
+           reg_at=CASE WHEN ?2='' THEN NULL ELSE COALESCE(reg_at, ?4) END,
+           reg_chk_at=?4 WHERE jan=?1`)
+        .bind(jan, res.reg_state, sku || null, at));
+    }
+    await runBatch(env, run, stmts);
+    await mwBuyFill(env, run, jan);
+    res.ok = true;
+    run.notes.push("仕入れ済みの取り直し：" + jan + " / " + asin);
+  } catch (e) {
+    run.errors++; run.notes.push("mw-buy-refresh: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。
+   7.105：**控え（mw_buy 側）を優先**して返す。
+   ・卸値・商品名・社・機種・新中は、印を付けた時点の値（仕入れ時の値）
+   ・MW の CSV から消えた行（gone）も必ず返す。消えたことは gone で分かる
+   ・登録の状態（reg_state／reg_sku）も返す（二重登録を止めるため） */
 async function mwBuyList(env, url) {
+  const run = newRun("mw-buy-list");
+  /* 控えがまだ無い行（v229 以前に印を付けた行）を、いまの CSV・直近のデータで
+     埋める。読むたびに1回だけ走り、埋まっている行は触らない。 */
+  await mwBuyFill(env, run, "");
+  try { await env.DB.batch([mwBuyPicsStmt(env)]); } catch (e) { /* 写真は無くても出す */ }
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.qty AS qty, b.by_role AS by_role, b.at AS at,
-            s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
-            s.list_price AS list_price, s.wholesale AS wholesale,
+            COALESCE(b.sha, s.sha) AS sha,
+            COALESCE(b.kishu, s.kishu) AS kishu,
+            COALESCE(NULLIF(b.name,''), s.name) AS mw_name,
+            s.list_price AS list_price,
+            COALESCE(b.wholesale, s.wholesale) AS wholesale,
+            s.wholesale AS mw_wholesale,
             s.stock AS stock, s.note AS note, s.ship_text AS ship_text,
-            s.ship_days AS ship_days, s.cond AS cond, s.gone_at AS gone_at,
-            a.asin AS asin, a.name AS amz_name, a.price AS price,
+            s.ship_days AS ship_days,
+            COALESCE(b.cond, s.cond) AS cond, s.gone_at AS gone_at,
+            /* CSV に今あるか（pick=1 の生きている行があるか）。 */
+            (CASE WHEN s.jan IS NULL OR s.gone_at IS NOT NULL THEN 1 ELSE 0 END)
+              AS gone,
+            COALESCE(b.asin, a.asin) AS asin,
+            COALESCE(NULLIF(a.name,''), b.name) AS amz_name,
+            a.price AS price,
             a.basis AS basis, a.rank AS rank, a.rank_cat AS rank_cat,
             a.new_n AS new_n, a.amz AS amz,
+            a.fee_total AS fee_total, a.fee_ref AS fee_ref, a.fee_fba AS fee_fba,
+            a.fee_tax AS fee_tax, a.fee_base AS fee_base, a.fee_at AS fee_at,
+            a.fee_err AS fee_err, a.price_at AS price_at,
+            COALESCE(b.pics,0) AS pics,
+            b.snap_at AS snap_at,
+            COALESCE(b.reg_state,'') AS reg_state, b.reg_sku AS reg_sku,
+            b.reg_at AS reg_at, b.reg_chk_at AS reg_chk_at,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
             r.checked_at AS rst_at, r.err AS rst_err,
             COALESCE(m.cand_n,0) AS cand_n, m.picked_at AS jan_picked_at
@@ -6387,18 +6683,26 @@ async function mwBuyList(env, url) {
        LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
        LEFT JOIN mw_amz   a ON a.jan = b.jan
        LEFT JOIN jan_map  m ON m.jan = b.jan
-       LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
+       LEFT JOIN mw_restrict r ON r.asin = COALESCE(b.asin, a.asin)
+                              AND r.cond = 'new_new'
       ORDER BY b.at DESC`).all();
   const rows = (q && q.results) || [];
-  /* 卸値（税込）の合計。送料無料（5万円）までの残りは画面で出す。 */
+  /* 卸値（税込）の合計。送料無料（5万円）までの残りは画面で出す。
+     仕入れ済み（CSV から消えた行）は**まだ注文していない分には入れない**。 */
   let yen = 0, n = 0;
   for (const r of rows) {
+    if (Number(r.gone) === 1) continue;
     const w = Number(r.wholesale) || 0;
     n += Number(r.qty) || 0;
     yen += Math.round(w * 1.1) * (Number(r.qty) || 0);
   }
+  const goneRows = rows.filter((r) => Number(r.gone) === 1);
+  await saveRun(env, run);
   return { ok: true, rows, n: rows.length, qty: n, yen,
-           gone: rows.filter((r) => r.gone_at).length };
+           /* gone … CSV から消えた件数（仕入れ済みの区分に出す件数）。 */
+           gone: goneRows.length,
+           live: rows.length - goneRows.length,
+           reg: rows.filter((r) => String(r.reg_state || "")).length };
 }
 
 /* ===== 自動の取り直し（毎時 :37・7.86）=====
@@ -9809,6 +10113,20 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/buy")
         return json(await mwBuyList(env, url), 200, origin);
+      /* 仕入れ済みの1行を取り直す（7.105）。Amazon に問い合わせるので管理者だけ。 */
+      if (request.method === "POST" && url.pathname === "/mw/buy/refresh") {
+        if (role !== "admin")
+          return forbidStaff("取り直しは管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await mwBuyRefresh(env, b), 200, origin);
+      }
+      /* もう登録されていないかを確かめる（7.105）。管理者だけ。 */
+      if (request.method === "POST" && url.pathname === "/mw/buy/check") {
+        if (role !== "admin")
+          return forbidStaff("登録済みの確認は管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await mwBuyCheck(env, b), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/find") {
         /* SKU・ASIN で聞かれたときは「pj に入っているか」を返す（7.101）。 */
         if (url.searchParams.get("sku") || url.searchParams.get("asin"))
@@ -10022,7 +10340,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         jobPicsCheck, picErrClear, PIC_OK_MIN, PICS_CHECK_MAX,
                         mwStockPut, mwList, mwRow, mwHash, d1Step, D1_MAX_BINDS,
                         janFind, janMapPut, janOk, JAN_MISS_TTL_D,
-                        mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_AMZ_RETRY_MAX,
+                        mwBuyPut, mwBuyList, MW_BUY_MAX_QTY, MW_BUY_CHK_MAX,
+  mwBuyFill, mwBuyCheck, mwBuyRefresh, mwRegFind, mwRegMine, MW_AMZ_RETRY_MAX,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,

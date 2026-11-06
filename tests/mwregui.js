@@ -100,7 +100,8 @@ let pk=await p.evaluate((BUY)=>{ const z=mwRegPick(BUY);
   return { take:z.take.map((r)=>r.jan), skip:z.skip.map((x)=>[x.r.jan,x.why]) }; },BUY);
 console.log('   取る: '+JSON.stringify(pk.take));
 pk.skip.forEach((x)=>console.log('   外す: '+x[0]+' '+x[1]));
-ok(pk.take.length===2&&pk.take[0]==='4111111111111','★★★緑の2件だけ取る');
+ok(pk.take.length===3&&pk.take[0]==='4111111111111',
+   '★★★緑の行を取る（6.143 で、MW で売り切れた行も入るので3件）');
 ok(/許可/.test(pk.skip.filter((x)=>x[0]==='4333333333333')[0][1]),
    '★★★黄は外す（申請してから）');
 ok(/出品できません/.test(pk.skip.filter((x)=>x[0]==='4444444444444')[0][1]),
@@ -109,8 +110,11 @@ ok(/調べていません/.test(pk.skip.filter((x)=>x[0]==='4555555555555')[0][1
    '★★未調査は外す');
 ok(/ASIN/.test(pk.skip.filter((x)=>x[0]==='4666666666666')[0][1]),
    '★★ASIN が無い行は外す');
-ok(/欠品/.test(pk.skip.filter((x)=>x[0]==='4777777777777')[0][1]),
-   '★★★MW で欠品した行は外す');
+/* 6.143：MW で売り切れて CSV から消えた行は**仕入れ済み**なので、
+   もう手元にある＝登録できる。v229 までは「MW で欠品」で外していた。 */
+ok(pk.take.indexOf('4777777777777')>=0,
+   '★★★MW で売り切れた行も取る（仕入れ済み・6.143）');
+ok(!pk.skip.some((x)=>x[0]==='4777777777777'),'★欠品では外さない');
 
 console.log('\n=== ファイルの形（せどりすと の実物と同じ）===');
 await p.evaluate(()=>{ $('csvMwReg').click(); });
@@ -131,7 +135,7 @@ let H=L[2].split('\t');
 ok(H.length===31,'★★★3行目は機械の列名31列');
 ok(H[0]==='sku'&&H[1]==='price'&&H[3]==='quantity'
    &&H[30]==='supplier_declared_dg_hz_regulation1','★★★機械の列名');
-ok(L.length===3+2+1&&L[L.length-1]==='','★★中身は2行（最後に改行）');
+ok(L.length===3+3+1&&L[L.length-1]==='','★★中身は3行（最後に改行）');
 let c=L[3].split('\t'), at=(k)=>c[H.indexOf(k)];
 console.log('   sku='+at('sku')+' price='+at('price')+' qty='+JSON.stringify(at('quantity'))
   +' cond='+at('condition-type')+' fc='+at('fulfillment-center-id'));
@@ -158,15 +162,15 @@ console.log('\n=== 書き出したら D1 に控える ===');
 let pp=await p.evaluate(()=>window.__posts.filter((x)=>/\/mw\/reg/.test(x.url))[0]);
 console.log('   '+JSON.stringify(pp&&pp.body).slice(0,220));
 ok(!!pp,'★★★/mw/reg に送る');
-ok(pp.body.rows.length===2,'★★出した2件だけ送る');
+ok(pp.body.rows.length===3,'★★出した3件だけ送る');
 let one=pp.body.rows[0];
 ok(one.jan==='4111111111111'&&one.sha==='M200'&&one.cost_src===3476,
    '★★★JAN・社・仕入値を送る');
 ok(/^mwgame-/.test(one.sku),'★★SKU も送る');
 let n=await p.evaluate(()=>$('csvMwRegNote').textContent);
 console.log('   '+n.replace(/\s+/g,' ').slice(0,180));
-ok(/2件/.test(n)&&/amazon_offer_/.test(n),'★★件数とファイル名を出す');
-ok(/外した 5件/.test(n),'★★★外した件数と理由を出す');
+ok(/3件/.test(n)&&/amazon_offer_/.test(n),'★★件数とファイル名を出す');
+ok(/外した 4件/.test(n),'★★★外した件数と理由を出す');
 ok(/D1 に控えました/.test(n),'★控えたことも出す');
 
 console.log('\n=== タブと改行は列を崩さない ===');

@@ -665,7 +665,23 @@ CREATE TABLE IF NOT EXISTS mw_buy (
   by_role    TEXT,                         -- 'admin' / 'staff'（誰が付けたか）
   note       TEXT,
   at         TEXT,
-  created_at TEXT
+  created_at TEXT,
+  /* 印を付けた時点の控え（7.105・migrate-0038）。
+     MW の stocks_3.csv から消えた（売り切れた）商品でも
+     Amazon に登録できるようにするため、ここに残す。 */
+  asin       TEXT,
+  name       TEXT,
+  sha        TEXT,
+  kishu      TEXT,
+  cond       TEXT,
+  wholesale  INTEGER,
+  pics       INTEGER,
+  snap_at    TEXT,
+  /* 登録の状態。'' 未登録 / 'pj' pj で登録 / 'other' pj 以外（せどりすと等）。 */
+  reg_state  TEXT,
+  reg_sku    TEXT,
+  reg_at     TEXT,
+  reg_chk_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_buy_at ON mw_buy(at);
 

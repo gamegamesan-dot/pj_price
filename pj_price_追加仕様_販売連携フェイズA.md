@@ -6437,3 +6437,42 @@ pj-sync は `{"FeesEstimateByIdRequestList":[…]}` の形で送っていたた�
 `tests/mwfee.mjs` の作り物が `FeesEstimateByIdRequestList` を受け取る形だったので、
 この間違いに気づけなかった。いまは**配列でなければ本物と同じ 400 InvalidInput**
 を返すようにしてあるので、同じ間違いをすれば必ず落ちる。
+
+## 7.105 仕入れ済みの控えと、二重登録の見分け（2026-11-06）
+
+### 1. `mw_buy` に印を付けた時点の中身を控える（migrate-0038）
+
+`asin` / `name` / `sha` / `kishu` / `cond` / `wholesale` / `pics` / `snap_at` と、
+登録の状態 `reg_state`（`''`／`pj`／`other`）/ `reg_sku` / `reg_at` / `reg_chk_at`。
+
+- `mwBuyFill()` … **空の列だけ**埋める（仕入れ時の値を後から上書きしない）。
+  印を付けたときと、`GET /mw/buy` を読んだとき（控えがまだ無い行）に走る。
+- `GET /mw/buy` は控えを優先して返し、`gone`（CSV から消えた）・
+  `mw_wholesale`（いまの CSV の卸値）・`live`／`gone`／`reg` の件数も返す。
+- MW の在庫CSVから消えた行は `mw_stock.gone_at` が入るだけで残るが、
+  **卸値は CSV が入れ替わると変わる**ので、控えが必要。
+
+### 2. `POST /mw/buy/refresh { jan }`（管理者だけ）
+
+その1件だけ、①ASIN（無ければ JAN から引く）②最安値（`getItemOffersBatch`）
+③出品の可否（`getListingsRestrictions`）④手数料（`getMyFeesEstimates`）
+⑤登録済みの確認 を順に行い、D1 にも控える。
+**候補の絞り込みを通さない**ので、CSV から消えた行でも取り直せる。
+
+### 3. `POST /mw/buy/check { jans }`（管理者だけ）
+
+`searchListingsItems`（`GET /listings/2021-08-01/items/{sellerId}?identifiers=<ASIN>&identifiersType=ASIN`）
+で**自分の出品**を ASIN から引く。返った SKU に **mw で始まるもの**があれば
+その行は登録済みにする。
+
+- `mw_reg_log` にその SKU があれば `pj`（pj から登録）、無ければ `other`（pj 以外）。
+- `jans` を省くと、ASIN があってまだ登録済みでない行を古い順に 30件まで調べる。
+- ALLOWED に **GET だけ**足した（読み取り。`searchListingsItems` 5回/秒）。
+
+### 4. `POST /mw/buy` が受ける形（追加）
+
+| 送る中身 | 意味 |
+| --- | --- |
+| `{jan, qty}` | 今までどおり（0 で印を外す） |
+| `{jan, reg:'other'\|'pj'\|''}` | 登録済みにする／未登録に戻す（数量は触らない） |
+| `{jan, off:1}` | この区分から外す（印ごと消す） |
