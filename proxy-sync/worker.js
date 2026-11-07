@@ -4936,6 +4936,195 @@ function mwRow(x) {
   r.row_hash = mwHash(r);
   return r;
 }
+/* ===== 取り込みのたびの知らせ（7.110）=====
+   MW の在庫CSVを取り込んだら、**その回に動いたものだけ**を1通にまとめて送る。
+   対象は「今回**新しく**欠品になったもの」と「今回**新しく**出てきたもの」。
+   ① 在庫切れ（CSV から消えた・在庫0）のうち
+      ・eBay に無在庫で出品中（SKU が W-<JAN>）… 数量0にした
+      ・「仕入れる」の印が付いている（まだ注文していない）… 注文前に売り切れ
+   ② 新入荷（前回の CSV に無かった JAN）のうち
+      ・刈取の「見込みあり」（定価×0.85 − 卸値×1.1 > MW_HOPE_YEN）
+      ・または eBay 無在庫の候補（機種・新品・出荷・在庫・備考の条件）
+   ③ 件数と上位 n件（商品名・JAN・卸値・見込みの粗利）を出し、
+      残りは pj の該当一覧へのリンクにする
+   ④ どれを知らせるか・上位何件かは⚙で切り替える（mwNt*）
+   同じ商品を毎回知らせないよう、知らせた JAN は mw_notify に控える。 */
+const APP_URL = "https://gamegamesan-dot.github.io/pj_price/";
+const MW_NT_TOP = 10;              // 上位何件まで出すか（既定）
+const MW_NT_MAX = 50;              // ⚙で増やせる上限
+function mwNtOn(st, key, def) {
+  const v = (st || {})[key];
+  if (v === undefined || v === null || v === "") return def;
+  return !(v === false || v === 0 || v === "0" || v === "off" || v === "false");
+}
+/* 知らせた JAN を控える（同じことを毎回言わないため）。 */
+async function mwNtSeen(env, kind, jans) {
+  if (!jans.length) return {};
+  const out = {};
+  const step = d1Step(1);
+  for (let i = 0; i < jans.length; i += step) {
+    const part = jans.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT jan FROM mw_notify WHERE kind=? AND jan IN (`
+      + part.map(() => "?").join(",") + `)`).bind(kind, ...part).all();
+    for (const r of (q && q.results) || []) out[r.jan] = 1;
+  }
+  return out;
+}
+async function mwNtMark(env, kind, jans, at) {
+  const stmts = [];
+  for (const j of jans)
+    stmts.push(env.DB.prepare(
+      `INSERT INTO mw_notify (jan,kind,at,created_at) VALUES (?1,?2,?3,?3)
+       ON CONFLICT(jan,kind) DO UPDATE SET at=excluded.at`).bind(j, kind, at));
+  for (let i = 0; i < stmts.length; i += 50)
+    await env.DB.batch(stmts.slice(i, i + 50));
+}
+/* 1行ぶんの文（商品名・JAN・卸値・見込みの粗利）。 */
+function mwNtLine(x) {
+  const w = Number(x.wholesale) || 0;
+  const g = Math.round(Number(x.hope) || 0);
+  return "  " + String(x.name || "").slice(0, 36)
+    + "　JAN " + x.jan + "　卸値 ¥" + w.toLocaleString("en-US")
+    + (g ? ("　見込み粗利 ¥" + g.toLocaleString("en-US")) : "");
+}
+async function mwImportNotify(env, run, at, res) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const top = Math.max(1, Math.min(MW_NT_MAX,
+    Math.round(Number(st.mwNtTop) || MW_NT_TOP)));
+  const onDrop = mwNtOn(st, "mwNtDrop", true);   // W- の無在庫が欠品
+  const onBuy = mwNtOn(st, "mwNtBuy", true);     // 仕入れる印の商品が売り切れ
+  const onNew = mwNtOn(st, "mwNtNew", true);     // 新入荷
+  if (!onDrop && !onBuy && !onNew) return false;
+  /* 3割の歯止めが効いた回は、欠品にしていないので在庫切れは知らせない。 */
+  const gone = res.warn ? [] : await mwNtGone(env, at);
+  const zero = res.warn ? [] : await mwNtZero(env, at);
+  const fresh = onNew ? await mwNtNew(env, at, st) : [];
+  const drop = onDrop ? gone.concat(zero).filter((x) => x.ebay) : [];
+  const buy = onBuy ? gone.concat(zero).filter((x) => x.buy && !x.ebay) : [];
+  if (!drop.length && !buy.length && !fresh.length) return false;
+  /* 同じ商品を毎回言わない（在庫0のぶん。CSV から消えた分は1回だけ起きる）。 */
+  const seen = await mwNtSeen(env, "sold", drop.concat(buy).map((x) => x.jan));
+  const drop2 = drop.filter((x) => !seen[x.jan]);
+  const buy2 = buy.filter((x) => !seen[x.jan]);
+  const seenN = await mwNtSeen(env, "new", fresh.map((x) => x.jan));
+  const nw2 = fresh.filter((x) => !seenN[x.jan]);
+  if (!drop2.length && !buy2.length && !nw2.length) return false;
+  const t = ["📥 MW の在庫CSVを取り込みました"];
+  t.push("・今回 新しく欠品 " + (res.gone_jan || 0) + "件"
+    + "（欠品の合計 " + (res.gone_all_jan || 0) + "件）"
+    + "／新しく出てきた " + (res.added_jan || 0) + "件");
+  if (drop2.length) {
+    t.push("");
+    t.push("🛑 eBay に無在庫で出していた商品が売り切れました（**数量0にしました**）… "
+      + drop2.length + "件"
+      + (res.zeroed ? ("　pj が数量0にした出品 " + res.zeroed + "件") : ""));
+    for (const x of drop2.slice(0, top)) t.push(mwNtLine(x));
+    if (drop2.length > top)
+      t.push("  ほか " + (drop2.length - top) + "件 → " + APP_URL + "#tab=E");
+  }
+  if (buy2.length) {
+    t.push("");
+    t.push("🛒 **注文前に売り切れました**（「仕入れる」の印が付いています）… "
+      + buy2.length + "件");
+    for (const x of buy2.slice(0, top)) t.push(mwNtLine(x));
+    t.push("  印を外すか、別の行に替えてください → " + APP_URL + "#tab=F&view=buy");
+  }
+  if (nw2.length) {
+    t.push("");
+    t.push("🆕 新しく入荷しました（刈取の見込みあり／eBay 無在庫の候補）… "
+      + nw2.length + "件");
+    for (const x of nw2.slice(0, top)) t.push(mwNtLine(x));
+    if (nw2.length > top)
+      t.push("  ほか " + (nw2.length - top) + "件 → " + APP_URL + "#tab=F");
+  }
+  const sent = await notify(env, run, t.join("\n"));
+  await mwNtMark(env, "sold", drop2.concat(buy2).map((x) => x.jan), at);
+  await mwNtMark(env, "new", nw2.map((x) => x.jan), at);
+  res.note_drop = drop2.length;
+  res.note_buy = buy2.length;
+  res.note_new = nw2.length;
+  return sent;
+}
+/* 今回**新しく**欠品になった商品（JANごと）。eBay の無在庫・印の有無も見る。 */
+async function mwNtGone(env, at) {
+  const q = await env.DB.prepare(
+    `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
+            MAX(s.list_price) AS list_price,
+            EXISTS (SELECT 1 FROM items i
+                     WHERE i.ebay_sku = 'W-' || s.jan
+                       AND COALESCE(i.ebay_item_id,'') <> '') AS ebay,
+            EXISTS (SELECT 1 FROM mw_buy b
+                     WHERE b.jan = s.jan AND COALESCE(b.qty,0) > 0
+                       AND COALESCE(b.reg_state,'') = '') AS buy
+       FROM mw_stock s
+      WHERE s.gone_at = ?1
+      GROUP BY s.jan`).bind(at).all();
+  return mwNtRows(q);
+}
+/* 今回の取り込みで**在庫0**になった商品（CSV には残っている）。 */
+async function mwNtZero(env, at) {
+  const q = await env.DB.prepare(
+    `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
+            MAX(s.list_price) AS list_price,
+            EXISTS (SELECT 1 FROM items i
+                     WHERE i.ebay_sku = 'W-' || s.jan
+                       AND COALESCE(i.ebay_item_id,'') <> '') AS ebay,
+            EXISTS (SELECT 1 FROM mw_buy b
+                     WHERE b.jan = s.jan AND COALESCE(b.qty,0) > 0
+                       AND COALESCE(b.reg_state,'') = '') AS buy
+       FROM mw_stock s
+      WHERE s.seen_at = ?1 AND s.gone_at IS NULL
+      GROUP BY s.jan
+     HAVING MAX(COALESCE(s.stock,0)) = 0`).bind(at).all();
+  return mwNtRows(q);
+}
+function mwNtRows(q) {
+  return ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""), name: String(r.name || ""),
+    wholesale: Number(r.wholesale) || 0,
+    hope: Math.max(0, Math.round((Number(r.list_price) || 0) * 0.85
+      - (Number(r.wholesale) || 0) * 1.1)),
+    ebay: !!Number(r.ebay), buy: !!Number(r.buy) }));
+}
+/* 今回はじめて出てきた商品（JAN）のうち、見込みあり or eBay 無在庫の候補。 */
+async function mwNtNew(env, at, st) {
+  const q = await env.DB.prepare(
+    `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
+            MAX(s.list_price) AS list_price, MAX(s.kishu) AS kishu,
+            MAX(COALESCE(s.stock,0)) AS stock,
+            MIN(COALESCE(s.ship_days,99)) AS ship_days,
+            MAX(s.cond) AS cond, MAX(COALESCE(s.note,'')) AS note
+       FROM mw_stock s
+      WHERE s.created_at = ?1 AND s.gone_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM mw_stock t
+                         WHERE t.jan = s.jan AND t.created_at <> ?1)
+      GROUP BY s.jan`).bind(at).all();
+  const rows = ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""), name: String(r.name || ""),
+    wholesale: Number(r.wholesale) || 0,
+    hope: Math.round((Number(r.list_price) || 0) * 0.85
+      - (Number(r.wholesale) || 0) * 1.1),
+    kishu: String(r.kishu || ""), stock: Number(r.stock) || 0,
+    ship_days: Number(r.ship_days) || 99, cond: String(r.cond || ""),
+    note: String(r.note || "") }));
+  /* eBay 無在庫の条件（⚙ mwKishu／mwShipMax／mwStockMin／mwNoteNg）。 */
+  const kishu = String((st && st.mwKishu) || "").split(",")
+    .map((x) => x.trim()).filter(Boolean);
+  const shipMax = mwNum(st && st.mwShipMax) || MW_SHIP_OK;
+  const stockMin = Math.max(1, mwNum(st && st.mwStockMin) || MW_STOCK_MIN);
+  const ng = String((st && st.mwNoteNg) || "").split(",")
+    .map((x) => x.trim()).filter(Boolean);
+  const okEbay = (x) =>
+    (!kishu.length || kishu.indexOf(x.kishu) >= 0)
+    && x.cond === "新品" && x.ship_days <= shipMax && x.stock >= stockMin
+    && !ng.some((g) => x.note.indexOf(g) >= 0);
+  return rows.filter((x) => x.hope > MW_HOPE_YEN || okEbay(x))
+    .map((x) => Object.assign({}, x, { hope: Math.max(0, x.hope) }))
+    .sort((a, b) => b.hope - a.hope);
+}
+
 /* 取り込み。body = { at, part, parts, rows:[…], rows_in, unreadable }
    part/parts は分けて送るときの通し番号（1/31 … 31/31）。
    最後の便（part>=parts）で欠品の判定と代表選びをする。 */
@@ -5028,6 +5217,27 @@ async function mwStockPut(env, body) {
           .bind(at).run();
         res.gone = Number((g && g.meta && g.meta.changes) || 0);
       }
+      /* 7.110：「欠品」の数が分かりにくかったので内訳も返す。
+         ・gone      … **今回新しく**欠品にした**行**数（社ごとの行）
+         ・gone_jan  … 今回新しく欠品にした**商品**数（JAN）
+         ・gone_all  … 欠品の印が付いている行の**合計**
+         ・added_jan … 今回はじめて出てきた商品数（JAN） */
+      const gj = await env.DB.prepare(
+        `SELECT COUNT(DISTINCT jan) AS n FROM mw_stock WHERE gone_at=?1`)
+        .bind(at).first();
+      res.gone_jan = Number((gj && gj.n) || 0);
+      const ga = await env.DB.prepare(
+        `SELECT COUNT(*) AS n, COUNT(DISTINCT jan) AS j FROM mw_stock
+          WHERE gone_at IS NOT NULL`).first();
+      res.gone_all = Number((ga && ga.n) || 0);
+      res.gone_all_jan = Number((ga && ga.j) || 0);
+      const aj = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT jan FROM mw_stock WHERE created_at=?1 AND gone_at IS NULL
+             AND NOT EXISTS (SELECT 1 FROM mw_stock t
+                              WHERE t.jan=mw_stock.jan AND t.created_at<>?1)
+           GROUP BY jan)`).bind(at).first();
+      res.added_jan = Number((aj && aj.n) || 0);
       /* JANごとに1つ選ぶ（窓関数。行数に関係なく2文で済む）。 */
       await env.DB.prepare(`UPDATE mw_stock SET pick=0 WHERE pick=1`).run();
       const pk = await env.DB.prepare(
@@ -5049,7 +5259,9 @@ async function mwStockPut(env, body) {
         /* 何か動いたときだけ走らせる（欠品が出た・在庫数が変わった）。
            3割の歯止めが効いたときは何も消していないので走らせない。 */
         if (!res.warn && (res.gone > 0 || res.changed > 0)) {
-          const z = await jobMwDrop(env, { approve: true, only: "zero" });
+          /* 7.110：知らせは取り込みの1通にまとめるので、ここでは出さない。 */
+          const z = await jobMwDrop(env, { approve: true, only: "zero",
+                                           quiet: true });
           res.zeroed = Number((z && z.zero) || 0);
           if (res.zeroed)
             run.notes.push("欠品した出品 " + res.zeroed + "件の数量を0にしました");
@@ -5073,6 +5285,10 @@ async function mwStockPut(env, body) {
               res.warn || null,
               ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300))
         .run();
+      /* 7.110：取り込みのたびに1通だけ知らせる（在庫切れ・新入荷）。 */
+      try {
+        res.note_sent = await mwImportNotify(env, run, at, res);
+      } catch (e) { run.notes.push("mw-note: " + String((e && e.message) || e)); }
       run.notes.push("MW在庫：現れた " + seen + "行／足した " + res.added
         + "／変わった " + res.changed + "／同じ " + res.same
         + "／欠品 " + res.gone + "／戻った " + res.back
@@ -6264,7 +6480,8 @@ async function jobMwDrop(env, opt) {
     res.ok = true;
     run.notes.push("MW無在庫：数量0 " + res.zero + "／値上げ " + res.up
       + "／数量1 " + (res.relist + res.restock) + "／失敗 " + res.failed + "件");
-    await mwDropNotify(env, run, res, true);
+    /* 7.110：取り込みの中から呼ばれたときは知らせない（1通にまとめる）。 */
+    if (!o.quiet) await mwDropNotify(env, run, res, true);
   } catch (e) {
     run.errors++; run.notes.push("mw-drop: " + String((e && e.message) || e));
     res.error = String((e && e.message) || e);
@@ -7547,6 +7764,99 @@ async function mwPutOne(env, run, x, dg, def) {
            err: bad.length ? bad.map((y) => y.code + ": " + y.message).join(" | ")
                              .slice(0, 300) : "" };
 }
+/* ===== 作業者の端末からの登録（7.111）=====
+   「仕入れる」の印が付いた商品（仕入れ確定）だけを、**pj-sync 側で組み立てて**
+   登録する。作業者は売値・SKU・申告を変えられない（画面から送った値は使わない）。
+   ・仕入日   … 印を付けた日（mw_buy.at・日本時間）
+   ・仕入原価 … 印を付けた時点の卸値×1.1 ＋ 1点あたりの仕入れ送料（⚙）
+   ・売値     … いまの Amazon の実売価格（mw_amz.price）
+   ・SKU      … mwgame／mwhobby-仕入日8桁-N-ASIN-仕入原価（せどりすとと同じ形）
+   MW から届く前でも、CSV から消えた（仕入れ済みの区分）商品でも登録できる。 */
+const MW_PUT_DAY = 30;             // 1日の登録の上限（既定・⚙ mwPutDay）
+const MW_PUT_DAY_MAX = 300;
+const MW_GAME_KISHU_W = {
+  NS: 1, NS2: 1, NS2H: 1, P5: 1, P4: 1, "3DS": 1, PS5: 1, PS4: 1, SW: 1,
+  PP: 1, PV: 1, XB: 1, XBX: 1, WIN: 1, PCC: 1, "68": 1 };
+function mwPutPrefix(kishu) {
+  return MW_GAME_KISHU_W[String(kishu || "")] ? "mwgame" : "mwhobby";
+}
+/* 今日（日本時間）すでに登録した件数と、残り。 */
+async function mwPutDayLeft(env, st) {
+  const max = Math.max(0, Math.min(MW_PUT_DAY_MAX,
+    Math.round(Number((st || {}).mwPutDay) || MW_PUT_DAY)));
+  const d0 = jstText(nowIso()).slice(0, 10);          // 2026-11-07（日本時間）
+  const q = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_reg_log WHERE ok=1 AND at >= ?1`)
+    .bind(new Date(Date.parse(d0 + "T00:00:00+09:00")).toISOString()).first();
+  const used = Number((q && q.n) || 0);
+  return { max, used, left: Math.max(0, max - used), day: d0 };
+}
+/* 印の付いた商品から、送る中身を組み立てる（作業者用）。 */
+async function mwPutStaffRows(env, jans, st) {
+  const list = (Array.isArray(jans) ? jans : [])
+    .map((x) => String((x && x.jan) || x || "").trim())
+    .filter((x) => /^\d{13}$/.test(x)).slice(0, MW_PUT_MAX);
+  if (!list.length) return { rows: [], skip: [] };
+  const ship = Math.max(0, Math.round(Number((st || {}).mwShipFee) || 176));
+  const rows = [], skip = [];
+  const step = d1Step(1);
+  const got = [];
+  for (let i = 0; i < list.length; i += step) {
+    const part = list.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT b.jan AS jan, b.at AS buy_at, b.asin AS b_asin, b.name AS b_name,
+              b.sha AS sha, b.kishu AS kishu, b.wholesale AS wholesale,
+              COALESCE(b.reg_state,'') AS reg_state, b.reg_sku AS reg_sku,
+              b.qty AS qty,
+              a.asin AS a_asin, a.price AS price,
+              a.name AS a_name,
+              /* 機種は mw_stock（いまの行）から。無ければ控え（b.kishu）。 */
+              (SELECT MAX(s.kishu) FROM mw_stock s WHERE s.jan = b.jan) AS s_kishu,
+              /* 出品の可否は mw_restrict（ASIN＋状態）に入っている。 */
+              r.state AS rst
+         FROM mw_buy b
+         LEFT JOIN mw_amz a ON a.jan = b.jan
+         LEFT JOIN mw_restrict r ON r.asin = COALESCE(b.asin, a.asin)
+                               AND r.cond = '${MW_RST_COND}'
+        WHERE b.jan IN (` + part.map(() => "?").join(",") + `)`)
+      .bind(...part).all();
+    for (const r of (q && q.results) || []) got.push(r);
+  }
+  const by = {};
+  for (const r of got) by[String(r.jan)] = r;
+  for (const jan of list) {
+    const r = by[jan];
+    const push = (why) => skip.push({ jan, why });
+    if (!r) { push("「仕入れる」の印がありません"); continue; }
+    if (!(Number(r.qty) > 0)) { push("「仕入れる」の印が外れています"); continue; }
+    if (r.reg_state === "pj" || r.reg_state === "other") {
+      push("登録済み（" + (r.reg_state === "pj" ? "pj から" : "pj 以外")
+        + "・SKU " + String(r.reg_sku || "") + "）");
+      continue;
+    }
+    const asin = String(r.b_asin || r.a_asin || "");
+    if (!/^B[0-9A-Z]{9}$/.test(asin)) { push("ASIN が引けていません"); continue; }
+    const price = Math.round(Number(r.price) || 0);
+    if (!(price > 0)) { push("Amazon の販売価格が取れていません"); continue; }
+    const rst = String(r.rst || "");
+    if (rst === "blocked") { push("この ASIN では出品できません"); continue; }
+    if (rst === "approval") { push("出品の許可が必要です（申請してから）"); continue; }
+    if (rst !== "ok") { push("出品の可否をまだ調べていません"); continue; }
+    const w = Math.round(Number(r.wholesale) || 0);
+    if (!(w > 0)) { push("印を付けた時点の卸値がありません"); continue; }
+    /* 7.111：**印を付けた日**と**印を付けた時点の卸値**で固定する。 */
+    const ymd = jstText(String(r.buy_at || nowIso())).slice(0, 10)
+      .replace(/-/g, "");
+    const cost = Math.round(w * 1.1) + ship;
+    const kishu = String(r.kishu || r.s_kishu || "");
+    const sku = mwPutPrefix(kishu) + "-" + ymd + "-N-" + asin + "-" + cost;
+    rows.push({ jan, asin, sku, price, sha: String(r.sha || ""),
+                kishu, cost_src: Math.round(w * 1.1),
+                title: String(r.a_name || r.b_name || ""),
+                name: String(r.a_name || r.b_name || "") });
+  }
+  return { rows, skip };
+}
 async function mwPutRun(env, body, role) {
   const run = newRun("mw-put");
   const res = { ok: false, sent: 0, ok_n: 0, ng: 0, alt: 0, rows: [], why: "",
@@ -7560,9 +7870,41 @@ async function mwPutRun(env, body, role) {
       res.ok = true;
       return Object.assign(await saveRun(env, run), res);
     }
-    const list = (Array.isArray(o.rows) ? o.rows : []).slice(0, MW_PUT_MAX);
-    if (!list.length) { res.why = "送る行がありません"; res.ok = true;
-      return Object.assign(await saveRun(env, run), res); }
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    const staff = String(role || "admin") !== "admin";
+    let list = (Array.isArray(o.rows) ? o.rows : []).slice(0, MW_PUT_MAX);
+    /* 7.111：作業者の端末から来た中身は**使わない**。
+       印の付いた商品から pj-sync 側で組み立てる（売値・SKU・仕入原価を固定）。 */
+    if (staff) {
+      const b = await mwPutStaffRows(env, list, st);
+      list = b.rows;
+      res.skip = b.skip;
+      for (const x of b.skip) res.rows.push({ sku: "", jan: x.jan, ok: false,
+                                              err: x.why });
+      res.by_role = "staff";
+    }
+    /* 1日の登録の上限（⚙ mwPutDay・既定30件）。通った件数で数える。 */
+    const day = await mwPutDayLeft(env, st);
+    res.day = day;
+    if (!o.check && day.left <= 0) {
+      res.why = "今日の登録は上限（" + day.max + "件）に達しました。"
+        + "⚙の「1日の登録の上限」で変えられます";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!o.check && list.length > day.left) {
+      res.why = "今日の残りは " + day.left + "件なので、そこまで送ります"
+        + "（上限 " + day.max + "件）";
+      list = list.slice(0, day.left);
+    }
+    if (!list.length) {
+      res.why = res.why || (staff
+        ? "送れる行がありません（印・ASIN・売値・出品の可否を確かめてください）"
+        : "送る行がありません");
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
     const dl = Date.now() + MW_PUT_DEADLINE_MS;
     const at = nowIso();
     const stmts = [];
@@ -7577,8 +7919,9 @@ async function mwPutRun(env, body, role) {
       defs[t] = await mwPtypeDef(env, run, t);
       await sleep(SP_GAP.getDefinitionsProductType);
     }
-    /* 人が選んだ申告（確認の画面から来る）。SKU ごと。 */
-    const pick = (o.dg && typeof o.dg === "object") ? o.dg : {};
+    /* 人が選んだ申告（確認の画面から来る）。SKU ごと。
+       7.111：作業者の端末からは**受け取らない**（自動で決まる行だけ送る）。 */
+    const pick = (!staff && o.dg && typeof o.dg === "object") ? o.dg : {};
     /* ⚙の「自動でよい種類」の足し引き（6.128）と、前回の選択（7.93）。 */
     const over = await mwDgOver(env);
     const mem = await mwDgMemGet(env, list.map((x) => String(x.asin || "")));
@@ -7617,6 +7960,10 @@ async function mwPutRun(env, body, role) {
       const q0 = planOf(x);
       const d0 = defs[q0.ptype_send] || defs[q0.ptype] || null;
       return { sku: String(x.sku || ""), asin: String(x.asin || ""),
+               /* 7.111：作業者の画面に出すため、pj-sync が決めた
+                  売値・JAN・商品名も返す（画面では変えられない）。 */
+               price: Math.round(Number(x.price) || 0),
+               jan: String(x.jan || ""), name: String(x.name || x.title || ""),
                ptype: q0.ptype, ptype_send: q0.ptype_send,
                auto: !!q0.auto, hand: !!q0.hand,
                prev: !!q0.prev, batteries: q0.batteries, dg: q0.dg, why: q0.why,
@@ -7739,16 +8086,23 @@ async function mwPutRun(env, body, role) {
 async function mwPutLog(env, url) {
   const lim = Math.max(1, Math.min(200, mwNum(url.searchParams.get("limit")) || 50));
   const q = await env.DB.prepare(
-    `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err,ptype,ptype_try
+    `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err,ptype,ptype_try,
+            by_role
        FROM mw_reg_log ORDER BY id DESC LIMIT ?1`).bind(lim).all();
   const rows = ((q && q.results) || []).map((r) => {
     let is = [];
     try { is = JSON.parse(r.issues || "[]") || []; } catch (e) { is = []; }
-    return Object.assign({}, r, { issues: is, ok: Number(r.ok || 0) });
+    return Object.assign({}, r, { issues: is, ok: Number(r.ok || 0),
+      at_jst: jstText(r.at), by_role: String(r.by_role || "") });
   });
   const n = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_reg_log WHERE ok=1`).first();
-  return { ok: true, rows, sent_ok: Number((n && n.n) || 0), max: MW_PUT_MAX };
+  /* 7.111：今日の件数と上限（⚙ mwPutDay）も返す（画面に出す）。 */
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const day = await mwPutDayLeft(env, st);
+  return { ok: true, rows, sent_ok: Number((n && n.n) || 0), max: MW_PUT_MAX,
+           day };
 }
 
 /* ===== JAN重複：人が選んだ ASIN を控える（7.84）=====
@@ -9717,9 +10071,9 @@ function numZero(x, key) {
 const SCHEMA_TABLES = ["amz_dg", "amz_drop", "amz_ptype", "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
-  "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders", "pb_log",
-  "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs", "settings_log",
-  "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
+  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders",
+  "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
+  "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
 const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
   "ebay_sku", "ebay_qty", "ebay_price", "ebay_currency", "ebay_seen_at",
   "ebay_start", "ebay_ship_profile", "ebay_bo", "ebay_bo_accept",
@@ -9742,6 +10096,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["mw_notify", "migrate-0042-mw-notify.sql"],
   ["settings_log", "migrate-0041-settings-log.sql"],
   ["size_tier", "migrate-0040-size-tier.sql"],
   ["fee_fba_ship", "migrate-0039-fba-split.sql"],
@@ -10178,9 +10533,12 @@ export default {
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
             || url.pathname === "/mw/amz"
             || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
-            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
-            || url.pathname === "/mw/put"))
+            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
+    /* 7.111：**Amazon への登録は作業者の端末からもできる**。
+       ただし送る中身（売値・SKU・申告・仕入原価）は pj-sync 側で組み立て、
+       画面から来た値は使わない（mwPutRun の staff の枝）。
+       対象は「仕入れる」の印が付いた商品だけ。1日の上限は⚙で決める。 */
     if (role !== "admin" && request.method === "POST"
         && (url.pathname === "/settings" || url.pathname === "/sync"))
       return forbidStaff("価格の設定と実行は管理者用のキーが必要です"
@@ -10684,6 +11042,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, mwFeeBody, mwFeeList, mwFeeTest,
   mwSizeTier, mwDimPick, MW_FEE_TAX_PCT, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
+  /* 7.110／7.111 */
+  mwImportNotify, mwNtGone, mwNtZero, mwNtNew, mwNtLine, MW_NT_TOP,
+  mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,
   mwDgOver, mwDgMemGet, mwDgMemSet, mwPtypeAll, mwPtypeList, MW_DG_SAFE_RE,

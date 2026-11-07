@@ -1042,11 +1042,14 @@ body.staff #syncOnHandFix{display:none !important}
       </details>
       <button class="btn" id="csvMwReg" style="width:100%;margin-top:6px">Amazon登録用ファイルを作る</button>
       <div class="note2" id="csvMwRegNote" style="margin-top:2px"></div>
-      <!-- API で直に登録（6.113）。確認してから・管理者だけ -->
-      <details class="exp cfgprice" data-exp="amzPut"><summary>説明</summary>
-      <div class="note2 cfgprice" style="margin:8px 0 0">ファイルを使わず、<b>pj-sync から Amazon に直に登録</b>することもできます（相乗り出品・価格と数量だけ）。<b>送る前に必ず確認の画面</b>が出ます。最初は<b>1件だけ</b>送って、セラーセントラルで見え方を確かめてください。</div>
+      <!-- API で直に登録（6.113／6.151）。確認してから。
+           6.151：**作業者の端末からも登録できる**（cfgprice を外した）。
+           売値・SKU・仕入原価・申告は pj-sync が決めるので、
+           作業者は中身を変えられない（7.111）。 -->
+      <details class="exp" data-exp="amzPut"><summary>説明</summary>
+      <div class="note2" style="margin:8px 0 0">ファイルを使わず、<b>pj-sync から Amazon に直に登録</b>することもできます（相乗り出品・価格と数量だけ）。<b>送る前に必ず確認の画面</b>が出ます。最初は<b>1件だけ</b>送って、セラーセントラルで見え方を確かめてください。<br><b>作業者の端末でも使えます</b>：対象は「仕入れる」の印が付いた商品だけで、<b>売値・SKU（仕入日・仕入原価）・電池や危険物の申告は pj-sync が決めます</b>。MW から届く前でも、MW で売り切れて一覧から消えた商品（仕入れ済みの区分）でも登録できます。1日の件数は⚙の上限までです。</div>
       </details>
-      <button class="btn cfgprice" id="csvMwPut" style="width:100%;margin-top:6px">Amazon に登録する（確認してから）</button>
+      <button class="btn" id="csvMwPut" style="width:100%;margin-top:6px">Amazon に登録する（確認してから）</button>
       <div class="note2" id="csvMwPutNote" style="margin-top:2px"></div>
       <div id="csvMwPutBox" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
       <!-- 並べ替えと絞り込み（6.93） -->
@@ -1682,6 +1685,43 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn" id="mwCountBtn" style="flex:1">候補の件数を数える</button>
         </div>
         <div class="note2" id="mwCountOut" style="margin-top:2px"></div>
+        <!-- 6.151：取り込んだときの Discord 通知（どれを知らせるか・上位何件か）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>在庫CSVを取り込んだときの知らせ</b>
+          （Discord・1回の取り込みにつき1通）</div>
+        <details class="exp" data-exp="mwNt"><summary>知らせる中身の説明</summary>
+        <div class="note2" style="margin-top:0">その回に<b>新しく</b>欠品になったものと、
+          <b>新しく</b>出てきたものだけを知らせます（合計ではありません）。
+          <br>・<b>eBay に無在庫で出していた商品が売り切れた</b>
+          → pj が<b>数量を0に</b>しています
+          <br>・<b>「仕入れる」の印が付いた商品が売り切れた</b>
+          → 注文前なので、印を外すか別の行に替えてください
+          <br>・<b>新しく入荷した商品</b>（刈取の<b>見込みあり</b>、
+          または eBay 無在庫の候補に入るもの）
+          <br>件数と上位の商品（商品名・JAN・卸値・見込みの粗利）を出し、
+          残りは pj の一覧へのリンクにします。
+          同じ商品は<b>一度だけ</b>知らせます。</div>
+        </details>
+        <div class="chk"><input type="checkbox" id="mwNtDrop" checked><label for="mwNtDrop" style="flex:1">eBay 無在庫が売り切れたら知らせる（数量0にしました）</label></div>
+        <div class="chk"><input type="checkbox" id="mwNtBuy" checked><label for="mwNtBuy" style="flex:1">仕入れる印の商品が売り切れたら知らせる（注文前）</label></div>
+        <div class="chk"><input type="checkbox" id="mwNtNew" checked><label for="mwNtNew" style="flex:1">新入荷（見込みあり・eBay 無在庫の候補）を知らせる</label></div>
+        <div class="row"><label>知らせる上位の件数</label><input type="number" id="mwNtTop" value="10" step="1" min="1" max="50" inputmode="numeric"><span class="unit">件</span></div>
+        <!-- 6.151：Amazon 登録の上限と記録（作業者の端末からも登録できる）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>Amazon への登録</b></div>
+        <details class="exp" data-exp="mwPutDay"><summary>1日の上限と記録の説明</summary>
+        <div class="note2" style="margin-top:0"><b>作業者の端末からも登録できます</b>
+          （7.111）。対象は<b>「仕入れる」の印が付いた商品</b>だけで、
+          <b>売値・SKU・電池や危険物の申告は pj-sync が決めます</b>
+          （作業者は変えられません）。仕入日は<b>印を付けた日</b>、
+          仕入原価は<b>印を付けた時点の卸値</b>で固定します。
+          同じ ASIN で mw から始まる SKU がすでにあれば登録しません。
+          <br>1日の登録件数は下の上限までです（通った件数で数えます）。</div>
+        </details>
+        <div class="row"><label>1日の登録の上限</label><input type="number" id="mwPutDay" value="30" step="1" min="0" max="300" inputmode="numeric"><span class="unit">件</span></div>
+        <div style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwPutLogBtn" style="flex:1">登録の記録を見る（誰が・いつ・何を）</button>
+        </div>
+        <div class="note2" id="mwPutLogNote" style="margin-top:2px"></div>
+        <div id="mwPutLogBox"></div>
         <!-- 6.150：ブックマークレットは**仕入れタブの「MW の写真」**に移した
              （貼り付け欄と離れていて往復が長かった）。 -->
         <div class="note2" style="margin:10px 0 0">MW の写真の<b>ブックマークレット</b>は、
@@ -2319,7 +2359,10 @@ var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM','csvMwAmzGenre'];
    v234 まで ADV のどのまとまりにも入っておらず **D1 に送っていなかった**
    （画面で「オン」にしても Worker 側はずっとオフ・7.109）。 */
 var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
-                 'mwAutoMode'];
+                 'mwAutoMode',
+                 /* 取り込みの知らせ（6.151／7.110）と登録の上限（7.111）。
+                    **Worker が読む**設定なので必ず D1 に送る。 */
+                 'mwNtTop','mwPutDay'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
@@ -2330,7 +2373,9 @@ var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
                  'mwProfitMode'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
-                'csvMwAmzDup','csvMwAmzNoRank'];
+                'csvMwAmzDup','csvMwAmzNoRank',
+                /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
+                'mwNtDrop','mwNtBuy','mwNtNew'];
 /* ---- 値付けの式が使う設定（6.73）----
    Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
    ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
@@ -5050,6 +5095,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwProfitMode',
                  /* Amazon刈取の候補の条件と自動の件数（6.146） */
                  'amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
+                 'mwNtTop','mwPutDay','mwNtDrop','mwNtBuy','mwNtNew',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
@@ -9852,9 +9898,16 @@ function mwImportRun(text,fi){
       mwImportBusy(false);
       if(mwSend===st)
         { mwSend=null; mwSendBarShow(false); }
+      /* 6.151：「欠品」は**その回に新しく消えたぶん**。
+         合計（欠品の印が付いている行）と混ざらないように分けて書く。 */
       note.text('✓ '+d.rows.length+'行を送りました（足した '+sum.added
-        +'／変わった '+sum.changed+'／同じ '+sum.same+'／欠品 '+sum.gone
-        +'／戻った '+sum.back+'）。JANごとの代表 '+sum.picked+'件。'
+        +'／変わった '+sum.changed+'／同じ '+sum.same
+        +'／今回 新しく欠品 '+sum.gone+'行'
+        +(sum.gone_jan?('（商品 '+sum.gone_jan+'件）'):'')
+        +'／戻った '+sum.back+'）'
+        +'　欠品の合計 '+(sum.gone_all||0)+'行'
+        +(sum.gone_all_jan?('（商品 '+sum.gone_all_jan+'件）'):'')
+        +'。JANごとの代表 '+sum.picked+'件。'
         +(d.ng?('　JANが13桁でない行 '+d.ng+'件は除きました。'):'')
         +(d.few?('　列が足りない行 '+d.few+'件は飛ばしました。'):'')
         +(d.many?('　列が多い行 '+d.many+'件は先頭'+d.cols+'列を使いました。'):'')
@@ -9872,6 +9925,9 @@ function mwImportRun(text,fi){
       rows_in:d.rows.length, unreadable:d.unread },function(x){
       ['added','changed','same','skipped','gone','back','picked','seen']
         .forEach(function(k){ sum[k]=(sum[k]||0)+(+x[k]||0); });
+      /* 6.151：内訳は最後の便の値（全体を数えた結果）。 */
+      ['gone_jan','gone_all','gone_all_jan','added_jan']
+        .forEach(function(k){ if(x[k]!==undefined)sum[k]=+x[k]||0; });
       if(x.picked)sum.picked=+x.picked;      // 代表は最後の便の値
       if(x.warn)sum.warn=x.warn;
       st.pi=pi;                              // ここまでは送れた
@@ -10155,6 +10211,8 @@ $('mwMarkCopy').onclick=function(){
 /* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。
    欄は出し直すたびに作るので、1つずつ結ばずに箱で受ける（6.124と同じ）。 */
 $('mwDgTypeBtn').onclick=mwDgTypeLoad;
+/* ⚙：Amazon 登録の記録（6.151）。行は作り直すので箱で受ける。 */
+$('mwPutLogBtn').onclick=mwPutLogShow;
 /* 自動の取り直し（6.149）。選択肢が件数なので、隠し欄をそろえてから送る。 */
 $('mwAutoMode').addEventListener('change',function(){
   mwAutoSync(); csvSaveCfg(); advTouch();
@@ -12092,6 +12150,14 @@ function mwPutReady(){
 /* 登録に回せる行（登録ファイルと同じ判定）から、送る中身を作る。 */
 function mwPutRows(){
   var ymd=new Date(Date.now()+9*3600000).toISOString().slice(0,10).replace(/-/g,'');
+  /* 6.151：作業者の端末は **JAN だけ**送る（pj-sync が中身を決める）。
+     画面には pj-sync が返した下調べ（plan）の SKU・売値を出す。 */
+  if(isStaff())
+    return mwRegPick(mwBuyRows).take.map(function(r){
+      return { jan:String(r.jan||''), asin:String(r.asin||''),
+               sku:'', price:0,
+               name:String(r.amz_name||r.mw_name||'') };
+    });
   return mwRegPick(mwBuyRows).take.map(function(r){
     return { sku:mwRegSku(r,ymd), asin:String(r.asin||''), jan:String(r.jan||''),
              sha:String(r.sha||''), price:Math.round(+r.price||0),
@@ -12107,7 +12173,9 @@ function mwPutShow(){
   if(!syncUrl()||!syncApiKey()){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
-  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  /* 6.151／7.111：作業者の端末からも登録できる。
+     送る中身（売値・SKU・仕入原価・申告）は pj-sync 側で組み立てるので、
+     ここでは **JAN だけ**を送る。 */
   note.textContent='確かめています…（商品の種類と必須の項目を調べます）';
   mwBuyLoad(true).then(function(){
     var pk=mwRegPick(mwBuyRows);
@@ -12132,6 +12200,17 @@ function mwPutShow(){
       })
       .then(function(r){
         mwPutPlan={};
+        /* 6.151：作業者の端末は pj-sync が組み立てた SKU・売値を受け取る
+           （画面では変えられない）。plan は ASIN で突き合わせる。 */
+        if(isStaff()){
+          var byA={};
+          (r.plan||[]).forEach(function(x){ byA[String(x.asin)]=x; });
+          mwPutList=mwPutList.map(function(x){
+            var q=byA[String(x.asin)]||null;
+            return q?Object.assign({},x,{ sku:String(q.sku||''),
+              price:Math.round(+q.price||0) }):x;
+          }).filter(function(x){ return !!x.sku; });
+        }
         (r.plan||[]).forEach(function(x){ mwPutPlan[String(x.sku)]=x; });
         mwPutHand={};                       // 人が選んだ申告（SKUごと）
         note.textContent='';
@@ -12156,6 +12235,12 @@ function mwPutHtml(pk,log,why){
     return h;
   }
   var ready=mwPutReady().length, hand=n-ready;
+  /* 6.151：作業者の端末では、売値・SKU・申告は pj-sync が決める。 */
+  if(isStaff())
+    h+='<div class="note2" style="margin:0 0 4px">売値・SKU（仕入日と仕入原価）・'
+      +'電池や危険物の申告は<b>pj-sync が決めます</b>（この端末では変えられません）。'
+      +'仕入日は<b>「仕入れる」の印を付けた日</b>、'
+      +'仕入原価は<b>印を付けた時点の卸値</b>です。</div>';
   h+='<div class="note2" style="margin:0 0 4px">送るのは <b>'+n+'件</b>'
     +(pk.skip.length?('／外した '+pk.skip.length+'件'):'')
     +'　相乗り出品（価格と数量だけ。商品情報は作りません）'
@@ -12163,7 +12248,9 @@ function mwPutHtml(pk,log,why){
     +(why?('<div class="note2" style="margin:0 0 4px;color:var(--bad)">⚠ '
       +esc(why)+'</div>'):'')
     +(hand?('<div class="warn" style="margin:0 0 4px"><b>'+hand+'件</b>は'
-      +'<b>電池・危険物の申告</b>を選んでください（選ぶまで送りません）。'
+      +'<b>電池・危険物の申告</b>を'+(isStaff()
+        ?'自動で決められないので送れません（管理者に連絡してください）'
+        :'選んでください（選ぶまで送りません）')+'。'
       +'フィギュア・プラモデル・ゲームソフトは自動で'
       +'「電池なし・危険物に該当しない」になります。</div>'):'')
     +(mwPutList.some(function(x){
@@ -12199,8 +12286,9 @@ function mwPutHtml(pk,log,why){
         +((p&&p.def_err)
           ?('<br><span style="color:var(--bad)">必須の項目を調べられませんでした：'
             +esc(String(p.def_err).slice(0,80))+'</span>'):'')
-        /* 選んでいない行は選ぶ。前回の選択を使う行は**選び直せる**（7.93）。 */
-        +((okDg&&!(p&&p.prev&&!my))?''
+        /* 選んでいない行は選ぶ。前回の選択を使う行は**選び直せる**（7.93）。
+           6.151：作業者の端末では選べない（自動で決まる行だけ送る）。 */
+        +((isStaff()||(okDg&&!(p&&p.prev&&!my)))?''
           :('<br><select data-dgsku="'+esc(x.sku)+'" style="width:100%">'
           +'<option value="">'+((p&&p.prev&&!my)?'前回のまま（'
             +esc(mwDgText(dg))+'）':'電池の申告を選ぶ…')+'</option>'
@@ -12225,6 +12313,48 @@ function mwPutHtml(pk,log,why){
       +'1件でも通ると「残りをまとめて送る」が出ます。</div>';
   if(log.length)h+=mwPutLogHtml(log);
   return h;
+}
+/* ===== ⚙：Amazon 登録の記録（6.151／7.111）=====
+   誰が（管理者／作業者）・いつ・何を登録したかと、今日の件数・上限を出す。 */
+function mwPutLogShow(){
+  var note=$('mwPutLogNote'), box=$('mwPutLogBox');
+  if(!note||!box)return;
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var b=$('mwPutLogBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='読み込み中…'; }
+  note.textContent='pj-sync に聞いています…';
+  fetch(syncUrl()+'/mw/put?limit=50',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){ note.textContent='読めませんでした。'; return; }
+      var day=d.day||{};
+      note.innerHTML='今日の登録 <b>'+(+day.used||0)+'件</b>'
+        +'（上限 '+(+day.max||0)+'件・残り '+(+day.left||0)+'件）'
+        +'　これまでに通った '+(+d.sent_ok||0)+'件';
+      var rows=d.rows||[];
+      box.innerHTML=rows.length
+        ?rows.slice(0,listShow('mwputlog')).map(function(r){
+            return '<div class="note2" style="margin:4px 0;border-top:1px solid #ddd;'
+              +'padding-top:4px">'
+              +(+r.ok?'<b style="color:var(--good)">通った</b>'
+                     :'<b style="color:var(--bad)">だめ</b>')
+              +'　'+esc(String(r.at_jst||r.at||''))
+              +'　'+(r.by_role==='staff'?'作業者':'管理者')
+              +'<br><span style="font-family:ui-monospace,monospace">'
+              +esc(String(r.sku||''))+'</span>'
+              +'　'+yen(+r.price||0)+'　JAN '+esc(String(r.jan||'—'))
+              +(r.err?('<br>'+esc(String(r.err).slice(0,120))):'')
+              +'</div>';
+          }).join('')+listMoreBar('mwputlog',rows.length)
+        :'<div class="note2">まだ登録していません。</div>';
+      listReg('mwputlog',mwPutLogShow);
+    })['catch'](function(e){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='読めませんでした：'+((e&&e.message)||'');
+    });
 }
 /* これまでの結果（行ごと）。 */
 function mwPutLogHtml(log){
@@ -12273,8 +12403,11 @@ function mwPutGo(one){
   var b1=$('csvMwPutOne'), b2=$('csvMwPutAll');
   if(b1)b1.disabled=true; if(b2)b2.disabled=true;
   note.textContent='Amazon に送っています…（1件ずつ送るので件数ぶん待ちます）';
-  /* 人が選んだ申告も一緒に送る（SKUごと）。 */
-  mwPost('/mw/put',{ rows:rows, dg:mwPutHand })
+  /* 人が選んだ申告も一緒に送る（SKUごと）。
+     6.151：作業者の端末からは**送らない**（pj-sync が決める）。 */
+  mwPost('/mw/put',isStaff()
+    ? { rows:rows.map(function(x){ return { jan:String(x.jan||'') }; }) }
+    : { rows:rows, dg:mwPutHand })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'送れませんでした');
       if(d.why&&!d.sent){ note.innerHTML='⚠ '+esc(d.why); return; }
@@ -12820,7 +12953,7 @@ function mwListRun(){
         +'　／　MW の生きている行 '+(d.alive||0)+'　JANごとの代表 '+(d.picked||0)
         +(mwLast?('　／　前回の取り込み '+esc(mwLast.at_jst||'')
           +'（足した '+mwLast.added+'／変わった '+mwLast.changed
-          +'／欠品 '+mwLast.gone+'）'):'');
+          +'／今回 新しく欠品 '+mwLast.gone+'行）'):'');
       mwListRender();
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
@@ -19678,6 +19811,29 @@ try{ mwPicQNote(); }catch(e){}
    タブの中身の出し分けは switchTab にまとめてあるので、ここから1回呼ぶ。
    出品リストの読み込み（csvLoad）より後に呼ぶこと。 */
 switchTab(tabLoad());
+/* ---- 知らせのリンクから開く（6.151）----
+   Discord の知らせに付けるリンク（…/#tab=F&view=buy）から、
+   そのタブ・その一覧を開く。写真の #mwpic=… とは別に見る。
+   tab … D 出品CSV／E 販売連携／A・B eBay／F 刈取／M 無在庫／G ⚙
+   view … buy（仕入れる一覧） */
+function tabHash(){
+  var h=String(location.hash||'');
+  var m=/[#&]tab=([A-Z])/.exec(h);
+  if(!m)return false;
+  var t=m[1];
+  if(!TAB_OK[t]&&t!=='G')return false;
+  switchTab(t);
+  /* 仕入れる一覧（6.143）を出す指定。 */
+  if(/[#&]view=buy/.test(h)&&typeof mwBuyShow==='function'){
+    try{ mwBuyShow(); }catch(e){}
+  }
+  /* アドレスから消す（開き直しで毎回飛ばないように）。 */
+  try{ history.replaceState(null,'',location.pathname+location.search); }
+  catch(e){ location.hash=''; }
+  return true;
+}
+try{ tabHash(); }catch(e){}
+addEventListener('hashchange',function(){ try{ tabHash(); }catch(e){} });
 /* MW の写真をブックマークレットから受け取ったとき（6.129）。
    アドレスの #mwpic=… を読んで帯を出す（取り込むのは人が押してから）。
    すでに開いている pj に戻ってきたときのために hashchange も見る。 */
@@ -19698,7 +19854,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v236';   // sw.js の const V と必ず同じ値にする
+var APP_V='v237';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

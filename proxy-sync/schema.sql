@@ -789,3 +789,16 @@ CREATE TABLE IF NOT EXISTS settings_log (
   created_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_settings_log_at ON settings_log (at DESC);
+
+/* ===== 取り込みのたびの知らせ：もう知らせた商品（7.110）=====
+   在庫0の行は次の取り込みでも在庫0のままなので、同じ商品を毎回
+   知らせないよう、知らせた JAN を控える。
+   kind … 'sold'（在庫切れ）／'new'（新入荷） */
+CREATE TABLE IF NOT EXISTS mw_notify (
+  jan        TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  at         TEXT,
+  created_at TEXT,
+  PRIMARY KEY (jan, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_mw_notify_at ON mw_notify (at DESC);

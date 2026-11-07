@@ -153,7 +153,10 @@ ok(sv.list&&sv.sort&&sv.dup,'★★★一覧・並べ替え・絞り込みが見
 ok(sv.jan&&sv.orderCsv&&sv.buyShow,
    '★★★JANコピー・注文用CSV・仕入れる一覧が見える');
 ok(sv.scan===false,'★★★「Amazonで調べる」は管理者だけ');
-ok(sv.put===false,'★★★「Amazon に登録する」も管理者だけ');
+/* 6.151：**「Amazon に登録する」は作業者の端末でも使える**。
+   送る中身（売値・SKU・仕入原価・申告）は pj-sync が決めるので、
+   作業者は変えられない（7.111）。 */
+ok(sv.put===true,'★★★「Amazon に登録する」は作業者でも使える（6.151）');
 await p.evaluate(()=>{ syncRole='admin'; roleApply(); });
 
 console.log('\n=== 仕入れる印は作業者でも付けられる ===');

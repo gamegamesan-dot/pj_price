@@ -275,8 +275,12 @@ ok(z.ebay_qty===0,'★★★D1 の数量も0になる');
 let z2=await env2.DB.prepare(
   "SELECT ebay_qty FROM items WHERE asin='B00Z000001'").first();
 ok(z2.ebay_qty===1,'★★残っている行は触らない');
-ok(/欠品した出品の数量を0にしました/.test(notes.join('')),
-   '★★Discord に実行結果を出す');
+/* 7.110：取り込みの中から動かしたぶんは、取り込みの知らせ（1通）に入れる
+   （別に「🛑 MWで欠品した…」を出すのはやめた）。 */
+ok(/数量0にしました/.test(notes.join('')),
+   '★★Discord に実行結果を出す（取り込みの知らせ1通にまとめる）');
+ok(notes.filter((x)=>/MWで欠品した出品の数量を0にしました/.test(x)).length===0,
+   '★★★取り込みのときは別の知らせを出さない（1回につき1通）');
 
 console.log('\n=== 3割の歯止めが効いたときは数量0にしない ===');
 const env3=makeEnv({ EBAY_CLIENT_ID:'ci', EBAY_CLIENT_SECRET:'cs',

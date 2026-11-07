@@ -190,8 +190,70 @@ ok(d.sent_ok>=2,'★★★通った件数を返す（まとめて送るを出す
 ok(d.max===W.MW_PUT_MAX&&W.MW_PUT_MAX===30,'★1回30件まで');
 ok(Array.isArray(d.rows[0].issues),'★★指摘は配列で返す');
 
-console.log('\n=== 作業者のキー ===');
-r=await post('/mw/put',{ rows:[row()] },'staff-key-123');
-ok(r.status===403,'★★★作業者では登録できない（唯一の書き込みなので）');
+console.log('\n=== 作業者のキー（7.111：登録できる。中身は pj-sync が組み立てる）===');
+/* 7.111：作業者の端末からも登録できる。ただし送るのは
+   「仕入れる」の印が付いた商品だけで、売値・SKU・仕入原価・申告は
+   pj-sync 側で決める（画面から来た値は使わない）。 */
+const JAN_S='4902370559001';
+env.DB._db.prepare(
+  `INSERT INTO mw_buy (jan,qty,by_role,at,created_at,asin,name,sha,kishu,
+     cond,wholesale,snap_at)
+   VALUES ('`+JAN_S+`',1,'staff','2026-10-29T02:00:00Z','2026-10-29T02:00:00Z',
+     'B0STAFF777','作業者の商品','M200','NS','新品',3000,
+     '2026-10-29T02:00:00Z')`).run();
+env.DB._db.prepare(
+  `INSERT INTO mw_amz (jan,asin,name,price,checked_at,created_at)
+   VALUES ('`+JAN_S+`','B0STAFF777','作業者の商品',9980,
+     '2026-11-07T00:00:00Z','2026-11-07T00:00:00Z')`).run();
+/* 出品の可否（mw_restrict）。'ok' でなければ送らない。 */
+env.DB._db.prepare(
+  `INSERT INTO mw_restrict (asin,cond,state,checked_at,created_at)
+   VALUES ('B0STAFF777','new_new','ok','2026-11-07T00:00:00Z',
+     '2026-11-07T00:00:00Z')`).run();
+/* 下調べ（check）で、pj-sync が組み立てた中身が返る。 */
+r=await post('/mw/put',{ check:1, rows:[{ jan:JAN_S, price:1, sku:'うそのSKU' }] },
+  'staff-key-123');
+console.log('   '+r.status+' '+JSON.stringify(r.body).slice(0,400));
+ok(r.status===200&&r.body.ok===true,'★★★作業者でも 403 にならない（7.111）');
+const pl=(r.body.plan||[])[0]||{};
+/* 印を付けた日（2026-10-29 JST）と、印を付けた時点の卸値（3000×1.1＋176＝3476）。 */
+ok(pl.sku==='mwgame-20261029-N-B0STAFF777-3476',
+   '★★★SKU は pj-sync が組み立てる（仕入日＝印の日・仕入原価＝印の時点の卸値）');
+ok(pl.asin==='B0STAFF777','★ASIN も控えから入れる');
+r=await post('/mw/put',{ rows:[{ jan:JAN_S, price:1, sku:'うそのSKU' }] },
+  'staff-key-123');
+console.log('   '+JSON.stringify({sent:r.body.sent,ok_n:r.body.ok_n,
+  rows:r.body.rows}));
+ok(r.body.sent===1&&r.body.ok_n===1,'★★★作業者の端末から登録できる');
+const sent=calls[calls.length-1];
+ok(/B0STAFF777-3476/.test(sent.url),'★★送った SKU も pj-sync が決めたもの');
+ok(/9980/.test(sent.body)&&!/\"amount\":1\b/.test(sent.body),
+   '★★★売値は Amazon の実売価格（画面から来た 1円は使わない）');
+/* 記録に「誰が」が残る。 */
+let lg=(await asJson(await worker.fetch(get('/mw/put?limit=5'),env))).body;
+console.log('   記録: '+JSON.stringify(lg.rows[0]&&
+  { sku:lg.rows[0].sku, by:lg.rows[0].by_role, day:lg.day }));
+ok(lg.rows[0].by_role==='staff','★★★誰が登録したかを残す（作業者）');
+ok(!!lg.rows[0].at_jst,'★日本時間の列も返す');
+ok(lg.day&&lg.day.max===30&&lg.day.used>=1,
+   '★★1日の上限（既定30件）と今日の件数を返す');
+/* 二重登録はしない（登録済みの印が付いている行）。 */
+env.DB._db.prepare(
+  `UPDATE mw_buy SET reg_state='other', reg_sku='mwgame-x' WHERE jan='`+JAN_S+`'`).run();
+r=await post('/mw/put',{ rows:[{ jan:JAN_S }] },'staff-key-123');
+console.log('   '+JSON.stringify(r.body.rows));
+ok(r.body.sent===0&&/登録済み/.test((r.body.rows[0]||{}).err||''),
+   '★★★同じ ASIN で登録済みなら送らない（理由を返す）');
+/* 1日の上限を超えたら送らない（⚙ mwPutDay）。 */
+await asJson(await worker.fetch(new Request('https://x/settings',{method:'POST',
+  headers:{'X-PJ-Key':'k','content-type':'application/json'},
+  body:JSON.stringify({ at:new Date().toISOString(),
+    settings:{ mwPutDay:'1' } })}),env));
+env.DB._db.prepare(
+  `UPDATE mw_buy SET reg_state='' WHERE jan='`+JAN_S+`'`).run();
+r=await post('/mw/put',{ rows:[{ jan:JAN_S }] },'staff-key-123');
+console.log('   '+JSON.stringify({why:r.body.why,sent:r.body.sent}));
+ok(r.body.sent===0&&/上限/.test(r.body.why||''),
+   '★★★1日の上限に達したら送らない（⚙で変えられる）');
 
 await T.done();

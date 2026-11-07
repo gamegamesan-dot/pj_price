@@ -174,5 +174,8 @@ console.log('   知らせ: '+notes.join(' / ').slice(0,200));
 ok(/無在庫の配送ポリシーが足りません/.test(notes.join('')),
    '★★★Discord に知らせる');
 ok(/W2000-MW に切り替え/.test(notes.join('')),'★★切り替え先も書く');
-ok(!/4902370554923/.test(notes.join('')),'★★足りている行は知らせない');
+/* 7.110：取り込みの知らせ（新入荷など）も同じ Discord に出るので、
+   ここでは**配送ポリシーの知らせ**だけを見る。 */
+const shipNote=notes.filter((x)=>/配送ポリシーが足りません/.test(x)).join('');
+ok(!/4902370554923/.test(shipNote),'★★足りている行は知らせない');
 T.done();

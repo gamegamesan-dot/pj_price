@@ -52,8 +52,14 @@ const setup=async()=>await p.evaluate((META)=>{
         /* 送る前の下調べ（7.92）。送った数には数えない。 */
         if(b&&b.check){
           window.__checks=(window.__checks||0)+1;
+          /* 6.151：作業者の端末は JAN だけ送る。pj-sync が SKU と売値を
+             組み立てて plan で返す（印の日・印の時点の卸値で固定）。 */
+          window.__checkBody=b;
           return new Response(JSON.stringify({ok:true,sent:0,ok_n:0,ng:0,rows:[],
-            plan:(b.rows||[]).map((x)=>({ sku:x.sku, asin:x.asin,
+            plan:(b.rows||[]).map((x)=>({
+              sku:x.sku||('mwgame-20261029-N-'+x.asin+'-5126'),
+              price:x.price||9638, jan:x.jan||'',
+              asin:x.asin,
               ptype:'VIDEO_GAMES', auto:true, hand:false, batteries:false,
               dg:'not_applicable', why:'ゲームソフトなので「電池なし・危険物に'
                 +'該当しない」で送ります', req:['batteries_required'],
@@ -212,7 +218,7 @@ ok(box.indexOf('id="csvMwPutAll"')>=0,
    '★★★1件でも通っていれば「まとめて送る」のボタンが出る');
 ok(box.indexOf('id="csvMwPutOne"')>=0,'★「1件だけ送る」も残る');
 
-console.log('\n=== 作業者には出さない ===');
+console.log('\n=== 作業者の端末からも登録できる（6.151／7.111）===');
 /* roleApply() は引数を取らず、syncRole を見る（6.113 のテストで踏んだ）。 */
 await p.evaluate(()=>{ syncRole='staff'; roleApply(); });
 await p.waitForTimeout(150);
@@ -221,13 +227,40 @@ let st=await p.evaluate(()=>{
   return { shown:getComputedStyle(el).display!=='none' };
 });
 console.log('   '+JSON.stringify(st));
-ok(st.shown===false,'★★★作業者にはボタンを出さない（cfgprice）');
-await p.evaluate(()=>{ window.__posts=[]; mwPutShow(); });
-await p.waitForTimeout(400);
-ok((await p.evaluate(()=>window.__posts.length))===0,
-   '★★★呼んでも送らない');
-ok(/管理者用のキー/.test(await p.evaluate(()=>$('csvMwPutNote').textContent)),
-   '★★理由を出す');
+ok(st.shown===true,'★★★作業者にもボタンを出す（6.151）');
+await p.evaluate(()=>{ window.__posts=[]; window.__checkBody=null; mwPutShow(); });
+await p.waitForTimeout(600);
+const sv=await p.evaluate(()=>({
+  check:window.__checkBody,
+  box:($('csvMwPutBox').innerText||'').replace(/\s+/g,' '),
+  sel:document.querySelectorAll('#csvMwPutBox select[data-dgsku]').length,
+  one:!!$('csvMwPutOne') }));
+console.log('   送った中身: '+JSON.stringify(sv.check));
+ok(!!sv.check&&(sv.check.rows||[]).length===1,'★★下調べを送る');
+ok((sv.check.rows[0].sku||'')===''&&!(+sv.check.rows[0].price>0),
+   '★★★作業者の端末は売値・SKU を送らない（pj-sync が決める）');
+ok(!!sv.check.rows[0].jan,'★JAN だけ送る');
+console.log('   確認の画面: '+sv.box.slice(0,200));
+ok(/mwgame-20261029-N-B0SAIVA001-5126/.test(sv.box),
+   '★★★pj-sync が組み立てた SKU を画面に出す（仕入日・仕入原価つき）');
+ok(/pj-sync が決めます/.test(sv.box)&&/変えられません/.test(sv.box),
+   '★★作業者は変えられないと書く');
+ok(sv.sel===0,'★★★作業者には電池・危険物の選択を出さない（自動のぶんだけ送る）');
+ok(sv.one===true,'★「1件だけ送る」は押せる');
+/* 送ると、pj-sync へ行くのは JAN だけ（売値・SKU は入れない）。 */
+await p.evaluate(()=>{ window.__posts=[]; mwPutGo(1); });
+await p.waitForTimeout(500);
+const sp=await p.evaluate(()=>window.__posts);
+console.log('   送信: '+JSON.stringify(sp));
+ok(sp.length===1&&(sp[0].body.rows||[]).length===1,'★★★作業者の端末から送れる');
+ok(!sp[0].body.dg,'★★申告は送らない（pj-sync が決める）');
+ok((sp[0].body.rows[0].sku===undefined)&&(sp[0].body.rows[0].price===undefined),
+   '★★★送るのは JAN だけ（売値・SKU は送らない）');
+const res2=await p.evaluate(()=>($('csvMwPutBox').innerText||'')
+  .replace(/\s+/g,' '));
+console.log('   結果: '+res2.slice(0,120));
+ok(/結果/.test(res2)&&/通った/.test(res2),
+   '★★★登録の結果（成功・失敗の理由）を作業者の画面にも出す');
 
 await T.done();
 })();
