@@ -572,6 +572,10 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   size_cm3  INTEGER,       -- 体積（cm3）
   size_long REAL,          -- 長辺（cm）
   size_g    INTEGER,       -- 重さ（g）
+  /* その重さがどこから来たか（7.112・migrate-0043）。
+     'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
+     MW 無在庫（W-）の送料の計算に使うので、画面にも出す。 */
+  size_src  TEXT,
   fee_tax    INTEGER,   -- 手数料の消費税
   fee_total  INTEGER,   -- 合計（Amazon が返す総額）
   fee_base   INTEGER,   -- その手数料を出したときの売値

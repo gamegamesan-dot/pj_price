@@ -1,0 +1,11 @@
+-- Amazon の重さが「梱包重量」か「商品の重量」か（7.112）
+-- cd proxy-sync && node d1-exec.mjs migrate-0043-size-src.sql
+-- DB: pj-sync
+--
+-- MW 無在庫（W-）の送料は、MW の CSV に重量が無いので
+-- ジャンルの既定値（フィギュア400g・ゲーム150g）で計算していた。
+-- 同じ JAN の ASIN があれば Amazon のカタログの**梱包重量**を使うので、
+-- どちらから取った値かを控えて画面に出す。
+--   'pkg'  … 梱包重量（package weight）
+--   'item' … 商品の重量（梱包重量が無いとき）
+ALTER TABLE mw_amz ADD COLUMN size_src TEXT;

@@ -1761,6 +1761,10 @@ async function syncOrders(env, run, days, maxItems) {
                      qty: Number(li.qty || 0), at: o.at || "",
                      /* CustomLabel。W-<JAN> なら MW の無在庫（7.72）。 */
                      sku: li.sku || "",
+                     /* 7.112：売れた値段（1点あたり）。下限利益と比べる。 */
+                     price: (Number(li.qty || 0) > 0)
+                       ? (Number(li.amount || 0) / Number(li.qty || 1))
+                       : Number(li.amount || 0),
                      shipBy: li.shipBy || "", dropship: !!k.dropship });
       } else {
         /* SKUが無い出品（Amazonに無いセット品など）や、SKUの形が違って解析できない出品。
@@ -1927,6 +1931,8 @@ async function syncOrders(env, run, days, maxItems) {
     if (mwSold.length) {
       const n = await mwOrderNotify(env, run, mwSold.map((x) => ({
         sku: x.sku, qty: x.qty, orderedAt: x.at,
+        /* 7.112：売れた値段（下限利益を割っていないかを見る）。 */
+        price: Number(x.price || x.ebay_price || 0),
         hand: daysLeft(x.shipBy) || MW_HAND_DEFAULT })));
       if (n) run.notes.push("MWに注文が必要な行 " + n + "件を知らせました");
     }
@@ -5477,9 +5483,12 @@ function mwDimPick(it) {
     return { cm: [num(o.length), num(o.width), num(o.height)].filter((x) => x > 0),
              g: Math.round(gOf(o.weight)) };
   };
+  /* 7.112：**どちらの重さか**も返す（画面に出すため）。
+     'pkg'＝梱包重量（package）／'item'＝商品の重量。 */
   const a = pick(pk);
-  if (a.cm.length >= 3 || a.g) return a;
-  return pick(im);
+  if (a.cm.length >= 3 || a.g) return Object.assign(a, { src: a.g ? "pkg" : "" });
+  const b = pick(im);
+  return Object.assign(b, { src: b.g ? "item" : "" });
 }
 /* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。 */
 function mwFeeBody(part) {
@@ -5665,7 +5674,8 @@ async function mwAsinFind(env, run, jans, dl, keep) {
           cm3: dm.cm.length >= 3
             ? Math.round(dm.cm[0] * dm.cm[1] * dm.cm[2]) : 0,
           long_cm: dm.cm.length ? Math.round(Math.max.apply(null, dm.cm) * 10) / 10 : 0,
-          gram: dm.g || 0, size_tier: mwSizeTier(dm.cm, dm.g) }, rk);
+          gram: dm.g || 0, gram_src: dm.src || "",
+          size_tier: mwSizeTier(dm.cm, dm.g) }, rk);
       for (const j of jset) if (part.indexOf(j) >= 0) {
         addCand(j, rec);
         if (!out[j]) out[j] = rec;
@@ -5709,7 +5719,8 @@ async function mwAsinFind(env, run, jans, dl, keep) {
           ? Math.round(dm1.cm[0] * dm1.cm[1] * dm1.cm[2]) : 0,
         long_cm: dm1.cm.length
           ? Math.round(Math.max.apply(null, dm1.cm) * 10) / 10 : 0,
-        gram: dm1.g || 0, size_tier: mwSizeTier(dm1.cm, dm1.g) },
+        gram: dm1.g || 0, gram_src: dm1.src || "",
+        size_tier: mwSizeTier(dm1.cm, dm1.g) },
       rankPick(it));
     /* 1件ずつの引き直しでも候補を控える（まとめ引きで漏れた分の補い）。 */
     for (const it2 of items) {
@@ -5998,8 +6009,9 @@ async function mwScanAsin(env, run, o, dl) {
     stmts.push(env.DB.prepare(
       /* 7.108：寸法・重さ・サイズ区分も控える（在庫管理手数料の目安に使う）。 */
       `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,rank_sub,rank_sub_cat,
-         err,checked_at,asin_at,created_at,size_tier,size_cm3,size_long,size_g)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8,?9,?10,?11,?12)
+         err,checked_at,asin_at,created_at,size_tier,size_cm3,size_long,size_g,
+         size_src)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8,?9,?10,?11,?12,?13)
        ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
          name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
          rank=COALESCE(excluded.rank, mw_amz.rank),
@@ -6010,11 +6022,13 @@ async function mwScanAsin(env, run, o, dl) {
          size_cm3=COALESCE(NULLIF(excluded.size_cm3,0), mw_amz.size_cm3),
          size_long=COALESCE(NULLIF(excluded.size_long,0), mw_amz.size_long),
          size_g=COALESCE(NULLIF(excluded.size_g,0), mw_amz.size_g),
+         size_src=COALESCE(NULLIF(excluded.size_src,''), mw_amz.size_src),
          err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
       .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
             f.rank_sub || null, f.rank_sub_cat || "", at,
             String(f.size_tier || ""), Number(f.cm3 || 0),
-            Number(f.long_cm || 0), Number(f.gram || 0)));
+            Number(f.long_cm || 0), Number(f.gram || 0),
+            String(f.gram_src || "")));
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
@@ -6285,8 +6299,50 @@ function mwJanOfSku(sku) {
   const m = /^W-(\d{13})$/.exec(String(sku || "").trim());
   return m ? m[1] : "";
 }
+/* ===== MW 無在庫の仕入れ値（7.112）=====
+   W- の行は「MW から仕入れる」前提だったが、**Amazon の新品最安値のほうが
+   安いこともある**（その場合は Amazon で買って直送する）。
+   どちらで買えるかで売値が変わるので、**安いほう**を仕入れ値にする。
+   ・MW     … 卸値×1.1 ＋ 1点あたりの仕入れ送料（⚙ mwShipFee・既定¥176）
+   ・Amazon … 新品の最安値（送料込み・**ポイントは引かない**）。
+               24時間以内に取れた値だけ使う（rkTarget と同じ鮮度・RK_LOW_MS）
+   ⚙の「Amazon の値段も仕入れ値の候補にする」（mwAmzCost・既定オン）で切れる。
+   返り：{ cost, src:'mw'|'amz', mw, amz, why } */
+const MW_COST_SRC = { mw: "MW", amz: "Amazon" };
+function mwDropCost(S, mw, amz, st) {
+  const o = { cost: 0, src: "", mw: 0, amz: 0, why: "" };
+  const fee = Number((S && S.mwShipFee) || 0);
+  const w = Number((mw && mw.wholesale) || 0);
+  if (w > 0) o.mw = Math.round(w * 1.1) + fee;
+  /* ⚙でオフにしていたら MW だけで決める（既定はオン）。 */
+  const useAmz = !st || st.mwAmzCost === undefined || st.mwAmzCost === null
+    || st.mwAmzCost === "" || !(st.mwAmzCost === false || st.mwAmzCost === 0
+      || st.mwAmzCost === "0" || st.mwAmzCost === "off");
+  const lowA = Math.round(Number((amz && (amz.amz_low !== undefined
+    ? amz.amz_low : amz.low)) || 0));
+  const atA = String((amz && (amz.amz_at !== undefined ? amz.amz_at
+    : amz.price_at)) || "");
+  const t = Date.parse(atA);
+  const fresh = !!t && (Date.now() - t) <= RK_LOW_MS;
+  if (useAmz && lowA > 0 && fresh) o.amz = lowA;
+  else if (useAmz && lowA > 0 && !fresh) o.why = "Amazon の値段が古い（24時間超）";
+  if (o.mw > 0 && o.amz > 0) {
+    if (o.amz < o.mw) { o.cost = o.amz; o.src = "amz"; }
+    else { o.cost = o.mw; o.src = "mw"; }
+  } else if (o.amz > 0) { o.cost = o.amz; o.src = "amz"; }
+  else if (o.mw > 0) { o.cost = o.mw; o.src = "mw"; }
+  return o;
+}
+/* 画面と通知に出す1行（「仕入れ基準：Amazon ¥9,800」）。 */
+function mwCostText(c) {
+  if (!c || !c.cost) return "";
+  return "仕入れ基準：" + (MW_COST_SRC[c.src] || "") + " ¥"
+    + Math.round(c.cost).toLocaleString("en-US")
+    + ((c.mw && c.amz) ? ("（MW ¥" + c.mw.toLocaleString("en-US")
+        + "／Amazon ¥" + c.amz.toLocaleString("en-US") + "）") : "");
+}
 /* 1行ぶんの判定。値付けの式は shared/pricing.js のものだけを使う。 */
-function mwDropPlan(S, r, mw, mk, over) {
+function mwDropPlan(S, r, mw, mk, over, amz, st) {
   const o = { act: "", why: "", to: 0, qty: 0 };
   const qty = Number(r.ebay_qty) || 0;
   const now = Number(r.ebay_price) || 0;
@@ -6300,10 +6356,18 @@ function mwDropPlan(S, r, mw, mk, over) {
     if (qty > 0) { o.act = "zero"; o.why = "MWの在庫が0"; }
     return o;
   }
-  /* いまの卸値から、目標利益の売値と下限利益の売値を出す。 */
-  const cost = Math.round((Number(mw.wholesale) || 0) * 1.1) + (Number(S.mwShipFee) || 0);
+  /* 7.112：**MW と Amazon の安いほう**を仕入れ値にする。
+     どちらを基準にしたかは o.cost_src／o.cost_text に入れて画面と知らせに出す。 */
+  const cc = mwDropCost(S, mw, amz, st);
+  const cost = cc.cost;
+  o.cost = cost; o.cost_src = cc.src; o.cost_mw = cc.mw; o.cost_amz = cc.amz;
+  o.cost_text = mwCostText(cc);
   if (!(cost > 0)) return o;
-  const w = Number(r.weight_g) || (skuCatOf(r.prefix) === "game" ? 150 : 400);
+  /* 7.112：Amazon の重さ（梱包重量）があれば送料もそれで出す。
+     手で直した重さ（weight_g）があるときはそれを優先する。 */
+  const w = Number(r.weight_g)
+    || (Number(amz && amz.amz_g) > 0 ? Number(amz.amz_g) : 0)
+    || (skuCatOf(r.prefix) === "game" ? 150 : 400);
   const p = PRICING.priceFor(S, cost, w, 0);
   const ship = PRICING.model(S, { cost: cost, weight: w, flat: 0 });
   const g = ship.zoneShipCharge(ship.basisZone);
@@ -6332,12 +6396,15 @@ function mwDropPlan(S, r, mw, mk, over) {
   if (now > 0 && now < p.floor) {
     if (cap && p.price > cap) {
       o.act = "zero";
-      o.why = "卸値が上がり、相場の" + Math.round((over || MW_D_OVER) * 100)
-        + "%以内では利益が出ない";
+      o.why = (cc.src === "amz" ? "Amazon の最安値" : "卸値")
+        + "が上がり、相場の" + Math.round((over || MW_D_OVER) * 100)
+        + "%以内では利益が出ない（" + (o.cost_text || "") + "）";
       return o;
     }
     o.act = "up"; o.to = p.price;
-    o.why = "卸値が上がったので売値を上げる（下限 $" + p.floor.toFixed(2) + "）";
+    o.why = (cc.src === "amz" ? "Amazon の最安値" : "卸値")
+      + "が上がったので売値を上げる（下限 $" + p.floor.toFixed(2) + "・"
+      + (o.cost_text || "") + "）";
     return o;
   }
   return o;    // 卸値が下がった・問題なし → 何もしない
@@ -6387,7 +6454,7 @@ async function jobMwDrop(env, opt) {
       const j = mwJanOfSku(r.ebay_sku);
       if (j && jans.indexOf(j) < 0) jans.push(j);
     }
-    const mwBy = {}, mkBy = {};
+    const mwBy = {}, mkBy = {}, azBy = {};
     const step = d1Step(1);
     for (let i = 0; i < jans.length; i += step) {
       const part = jans.slice(i, i + step);
@@ -6400,18 +6467,30 @@ async function jobMwDrop(env, opt) {
         `SELECT jan, low, low_any, n FROM mw_market WHERE jan IN (${marks})`)
         .bind(...part).all();
       for (const x of (b && b.results) || []) mkBy[x.jan] = x;
+      /* 7.112：Amazon の新品最安値（仕入れ値の候補）と重さ（梱包重量）。 */
+      const c = await env.DB.prepare(
+        `SELECT jan, asin, low AS amz_low, price_at AS amz_at,
+                size_g AS amz_g, size_src AS amz_g_src
+           FROM mw_amz WHERE jan IN (${marks})`).bind(...part).all();
+      for (const x of (c && c.results) || []) azBy[x.jan] = x;
     }
     /* 判定。 */
     const todo = [];
     for (const r of rows) {
       const j = mwJanOfSku(r.ebay_sku);
       if (!j) { res.skipped++; continue; }
-      const pl = mwDropPlan(S, r, mwBy[j], mkBy[j], over);
-      if (!pl.act) { if (pl.why) res.plan.push({ jan: j, why: pl.why }); continue; }
+      const pl = mwDropPlan(S, r, mwBy[j], mkBy[j], over, azBy[j], ps.st);
+      if (!pl.act) {
+        if (pl.why) res.plan.push({ jan: j, why: pl.why,
+          cost_src: pl.cost_src || "", cost_text: pl.cost_text || "" });
+        continue;
+      }
       if (only === "zero" && pl.act !== "zero") continue;   // 7.73
       todo.push({ jan: j, item_id: String(r.ebay_item_id), act: pl.act,
                   kind: (pl.act === "up") ? "price" : pl.act,
                   to: pl.to, qty: pl.qty, why: pl.why,
+                  /* 7.112：どちらを仕入れ基準にしたか。 */
+                  cost_src: pl.cost_src || "", cost_text: pl.cost_text || "",
                   title: String(r.title || r.ebay_sku || ""),
                   asin: r.asin, cond: r.cond,
                   sha: (mwBy[j] && mwBy[j].sha) || "" });
@@ -6545,16 +6624,19 @@ async function mwStaleCheck(env, run) {
 /* ===== 売れたら「MW に注文してください」（7.72）=====
    W- の SKU の注文が入ったら、MW に注文する材料を Discord に出す。
    商品名・JAN・社・卸値・出荷日・注文の期限（ハンドリングから逆算）。 */
+/* 届け先の呼び名（7.112）。**住所は持たない**（呼び名だけ）。 */
+const BUY_TO = { amz: "自宅", mw: "秋葉原" };
 async function mwOrderNotify(env, run, sold) {
   const list = [];
   for (const x of (sold || [])) {
     const jan = mwJanOfSku(x.sku);
     if (jan) list.push({ jan, sku: x.sku, qty: Number(x.qty) || 1,
-                         at: x.orderedAt || "" });
+                         at: x.orderedAt || "",
+                         price: Number(x.price) || 0, hand: x.hand });
   }
   if (!list.length) return 0;
   const jans = list.map((x) => x.jan);
-  const by = {};
+  const by = {}, az = {};
   const step = d1Step(1);
   for (let i = 0; i < jans.length; i += step) {
     const part = jans.slice(i, i + step);
@@ -6563,12 +6645,78 @@ async function mwOrderNotify(env, run, sold) {
          FROM mw_stock WHERE pick=1 AND jan IN (${part.map(() => "?").join(",")})`)
       .bind(...part).all();
     for (const r of (q && q.results) || []) by[r.jan] = r;
+    /* 7.112：Amazon の値段も見る（安いほうで買う）。 */
+    const q2 = await env.DB.prepare(
+      `SELECT jan, asin, low AS amz_low, price_at AS amz_at, size_g AS amz_g
+         FROM mw_amz WHERE jan IN (${part.map(() => "?").join(",")})`)
+      .bind(...part).all();
+    for (const r of (q2 && q2.results) || []) az[r.jan] = r;
   }
-  const t = ["🛒 **MW に注文してください**"];
+  /* 7.112：売れた時点の値段で決めたいので、**Amazon の最安値を取り直す**
+     （1回の呼び出しで20件まで）。取れなければ控えの値を使う。 */
+  let ps = null;
+  try { ps = await pricingSettings(env, run); } catch (e) { ps = null; }
+  const S = (ps && ps.S) || null;
+  if (S) S.mwShipFee = Number((ps.st && ps.st.mwShipFee) || 176);
+  try {
+    const keys = jans.map((j) => (az[j] && az[j].asin)
+      ? { asin: String(az[j].asin), cond: "new", jan: j } : null).filter(Boolean);
+    if (keys.length) {
+      const g = await amazonLowest(env, run, keys);
+      const at2 = nowIso();
+      const stmts = [];
+      for (const k of keys) {
+        const z = g[k.asin + "|new"] || null;
+        if (!z) continue;
+        const lw = Math.round(Number(z.low || 0));
+        if (!(lw > 0)) continue;
+        az[k.jan].amz_low = lw;
+        az[k.jan].amz_at = at2;
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_amz SET low=?2, new_n=?3, checked_at=?4, price_at=?4
+            WHERE jan=?1`).bind(k.jan, lw, Number(z.newN || z.total || 0), at2));
+      }
+      if (stmts.length) await runBatch(env, run, stmts);
+    }
+  } catch (e) { run.notes.push("mw-order-amz: " + String((e && e.message) || e)); }
+  const t = ["🛒 **仕入れてください（MW 無在庫が売れました）**"];
   for (const x of list) {
     const m = by[x.jan];
+    const a = az[x.jan] || null;
+    /* 7.112：MW と Amazon の安いほうを出す。 */
+    const cc = S ? mwDropCost(S, m, a, (ps && ps.st) || {})
+                 : { cost: 0, src: "", mw: 0, amz: 0 };
+    const to = BUY_TO[cc.src] || "";
+    /* 下限利益を割らないか（売れた値段と比べる）。 */
+    const sold$ = Number(x.price) || 0;
+    const w = (a && Number(a.amz_g) > 0) ? Number(a.amz_g)
+      : (/^mwgame/.test(String(x.sku || "")) ? 150 : 400);
+    let fl = 0;
+    try {
+      if (S && cc.cost > 0) fl = PRICING.priceFor(S, cc.cost, w, 0).floor;
+    } catch (e) { fl = 0; }
+    const under = !!(fl > 0 && sold$ > 0 && sold$ < fl);
+    if (cc.src === "amz" && a && a.asin) {
+      t.push("・" + String((m && m.name) || (a && a.asin) || "").slice(0, 50)
+        + "\n　**Amazon で購入してください**"
+        + "　ASIN **" + String(a.asin) + "**"
+        + "　¥" + Math.round(cc.amz).toLocaleString("en-US")
+        + "　数量 " + x.qty
+        + "\n　https://www.amazon.co.jp/dp/" + String(a.asin)
+        + "\n　**届け先：" + BUY_TO.amz + "**"
+        + "\n　" + mwCostText(cc)
+        + (under ? ("\n　🔴 **この値段では下限利益を割ります**"
+            + "（売れた値段 $" + sold$.toFixed(2) + "／下限 $" + fl.toFixed(2)
+            + "）。買う前に確かめてください") : ""));
+      continue;
+    }
     if (!m) {
-      t.push("・JAN " + x.jan + "（MW の在庫に見つかりません。欠品の可能性）");
+      t.push("・JAN " + x.jan + "（MW の在庫に見つかりません。欠品の可能性）"
+        + (a && Number(a.amz_low) > 0
+          ? ("\n　Amazon なら ¥" + Math.round(a.amz_low).toLocaleString("en-US")
+             + "（ASIN " + String(a.asin || "") + "）"
+             + "\n　https://www.amazon.co.jp/dp/" + String(a.asin || "")
+             + "\n　**届け先：" + BUY_TO.amz + "**") : ""));
       continue;
     }
     /* 注文の期限：eBay のハンドリング日数から、MW の出荷日数＋配達1〜2日を引く。
@@ -6578,6 +6726,7 @@ async function mwOrderNotify(env, run, sold) {
     const base = x.at ? new Date(x.at) : new Date();
     const due = new Date(base.getTime() + days * 86400000);
     t.push("・" + String(m.name || "").slice(0, 50)
+      + "\n　**MW に注文してください**"
       + "\n　JAN " + x.jan + "　社 **" + String(m.sha || "") + "**"
       + "　卸値 ¥" + (Number(m.wholesale) || 0).toLocaleString("ja-JP") + "（税抜）"
       + "　数量 " + x.qty
@@ -6585,9 +6734,15 @@ async function mwOrderNotify(env, run, sold) {
       + (m.ship_text ? "（" + String(m.ship_text).slice(0, 24) + "）" : "")
       + "　MW在庫 " + (Number(m.stock) || 0) + "点"
       + "\n　**注文の期限 " + jstDate10(due.toISOString()) + "**"
+      + "\n　**届け先：" + BUY_TO.mw + "**"
+      + (cc.cost ? ("\n　" + mwCostText(cc)) : "")
+      + (under ? ("\n　🔴 **この値段では下限利益を割ります**"
+          + "（売れた値段 $" + sold$.toFixed(2) + "／下限 $" + fl.toFixed(2)
+          + "）。買う前に確かめてください") : "")
       + (m.gone_at ? "　⚠ MW で欠品しています" : ""));
   }
-  t.push("注文したら2週間の取り置きになります。出荷時に銀行振込で決済してください。");
+  t.push("MW に注文したら2週間の取り置きになります。"
+    + "出荷時に銀行振込で決済してください。");
   await notify(env, run, t.join("\n"));
   return list.length;
 }
@@ -8626,8 +8781,14 @@ async function mwList(env, url) {
             m.low_any AS mkt_low_any, m.low_ship AS mkt_ship, m.cur AS mkt_cur,
             m.item_url AS mkt_url, m.no_ship AS mkt_no_ship,
             m.err AS mkt_err, m.checked_at AS mkt_at,
+            /* 7.112：Amazon の新品最安値（仕入れ値の候補）と、
+               Amazon の重さ（梱包重量）。無在庫の売値と送料に使う。 */
+            a.asin AS asin, a.low AS amz_low, a.price_at AS amz_at,
+            a.new_n AS amz_new_n, a.size_g AS amz_g, a.size_src AS amz_g_src,
             (SELECT COUNT(*) FROM mw_img g WHERE g.jan=s.jan AND g.ok=1) AS pics_ok
-       FROM mw_stock s LEFT JOIN mw_market m ON m.jan = s.jan
+       FROM mw_stock s
+       LEFT JOIN mw_market m ON m.jan = s.jan
+       LEFT JOIN mw_amz a ON a.jan = s.jan
       WHERE ${w}
       ORDER BY COALESCE(s.wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
   const n = await env.DB.prepare(
@@ -10096,6 +10257,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["size_src", "migrate-0043-size-src.sql"],
   ["mw_notify", "migrate-0042-mw-notify.sql"],
   ["settings_log", "migrate-0041-settings-log.sql"],
   ["size_tier", "migrate-0040-size-tier.sql"],
@@ -11044,6 +11206,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   /* 7.110／7.111 */
   mwImportNotify, mwNtGone, mwNtZero, mwNtNew, mwNtLine, MW_NT_TOP,
+  /* 7.112 */
+  mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,

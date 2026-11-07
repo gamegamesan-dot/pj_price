@@ -189,7 +189,7 @@ ok(r.body.rows.length<=1,'★★上限で切る');
 ok(W.MW_D_MAX===60,'★上限の既定は60件');
 ok(W.MW_D_OVER===1.15,'★相場の上限は115%');
 
-console.log('\n=== 売れたら「MW に注文してください」===');
+console.log('\n=== 売れたら「仕入れてください」（MW か Amazon の安いほう・7.112）===');
 notes=[];
 const run={ kind:'t', subrequests:0, pages:0, errors:0, notes:[], rows:0 };
 let n=await W.mwOrderNotify(env,run,[
@@ -198,7 +198,12 @@ let n=await W.mwOrderNotify(env,run,[
   { sku:'W-4999999999994', qty:1, orderedAt:'2026-10-30T00:00:00Z' }]);
 console.log('   '+notes[0]);
 ok(n===2,'★★W- の行だけを対象にする');
-ok(/MW に注文してください/.test(notes[0]),'★★★見出し');
+ok(/仕入れてください/.test(notes[0]),'★★★見出し');
+ok(/MW に注文してください/.test(notes[0]),
+   '★★★MW が安いときは「MW に注文してください」');
+/* 7.112：届け先の呼び名（住所は持たない）。 */
+ok(/届け先：秋葉原/.test(notes[0]),'★★★MW に注文するときは「届け先：秋葉原」');
+ok(/仕入れ基準：MW/.test(notes[0]),'★★どちらを基準にしたかを書く');
 ok(/JAN 4902370550467/.test(notes[0]),'★★★JAN を出す');
 ok(/社 \*\*M200\*\*/.test(notes[0]),'★★★社を出す');
 ok(/卸値 ¥3,000/.test(notes[0]),'★★★卸値を出す');
