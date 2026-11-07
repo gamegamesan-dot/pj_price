@@ -5534,7 +5534,8 @@ async function mwScanAsin(env, run, o, dl) {
           /* ランキング・商品名を3日ごとに引き直す（7.91） */
           OR (COALESCE(a.asin,'') <> '' AND (a.asin_at IS NULL OR a.asin_at < ?))
         )
-      ORDER BY (CASE WHEN COALESCE(a.asin,'') = '' THEN 0 ELSE 1 END) ASC,
+      ORDER BY ${String(o.order || "") === "auto" ? MW_ORDER_HOPE1 + "," : ""}
+               (CASE WHEN COALESCE(a.asin,'') = '' THEN 0 ELSE 1 END) ASC,
                COALESCE(a.asin_at,'') ASC, s.jan ASC`)
     .bind(...q.bind, errOld, oldAt).all();
   const rows0 = (pick && pick.results) || [];
@@ -5625,8 +5626,10 @@ async function mwScanPrice(env, run, o, dl) {
      ③は手数料が取れている行は**その手数料で**、まだの行は一律の見込みで出す
      （一律は⚙設定を Worker が持たないので、ゲームの既定 15%＋530円で代用）。 */
   const auto = String(o.order || "") === "auto";
+  /* 7.107：①仕入れる印 ②見込みあり ③写真あり ④まだ値段が無い
+     ⑤粗利の大きい順 ⑥価格が古い順。 */
   const ordAuto =
-    `(CASE WHEN COALESCE(MAX(b.qty),0) > 0 THEN 0 ELSE 1 END) ASC,
+    `${MW_ORDER_HOPE},
      (CASE WHEN MAX(a.price_at) IS NULL THEN 0 ELSE 1 END) ASC,
      (COALESCE(MAX(a.price),0)
       - COALESCE(MAX(a.fee_total),
@@ -6752,22 +6755,63 @@ async function mwBuyList(env, url) {
    ・既存の日次（JST 3時台 :07）と3時間ごとの hot（:07）とは**分（:37）で分ける**。
      getItemOffersBatch は10秒に1回の間隔を KV で守るので、重なっても待つだけ。 */
 const MW_AUTO_MODES = { off: 1, on: 1 };
-const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き直す件数（7.91）
-const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数
-const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数
+const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き直す件数（既定）
+const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数（既定）
+const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数（既定）
 const MW_AUTO_BUDGET_MS = 45000;    // 1回の持ち時間（60秒の手前）
 const MW_AUTO_FEE_MS = 8000;        // そのうち手数料にあてる分（7.97）
+/* 1時間ぶんの件数（⚙設定 mwAutoPerHour・7.107）。既定100件/時。
+   SP-API の上限で**段ごとに進める上限が違う**ので、ここで押さえる。
+     ・JAN→ASIN（Catalog getItems）… 20件/回・5回/秒 → 100件でも約1秒
+     ・価格（getItemOffersBatch）  … 20件/回・**0.1回/秒＝10.5秒/回**
+       → 45秒の持ち時間では3〜4回（60〜80件）が上限
+     ・手数料（getMyFeesEstimates）… 20件/回・0.5回/秒（2.1秒/回）
+     ・可否（getListingsRestrictions）… 1件/回・4回/秒
+   そのため「設定した件数」と「実際に進める見込み」は違うことがある。
+   画面には両方出す（GET /mw/amz の auto）。 */
+const MW_AUTO_PER_HOUR = 100;       // 既定（⚙ mwAutoPerHour）
+const MW_AUTO_PER_HOUR_MAX = 400;   // これ以上は受け取らない
+const MW_AUTO_PRICE_MAX = 80;       // 価格は1回80件まで（0.1回/秒の壁）
+/* 段ごとの「1回に進める上限」を、設定の件数と持ち時間から出す。 */
+function mwAutoPlan(perHour, budgetMs) {
+  const per = Math.max(1, Math.min(MW_AUTO_PER_HOUR_MAX,
+    Math.round(Number(perHour) || MW_AUTO_PER_HOUR)));
+  const ms = Math.max(5000, Number(budgetMs) || MW_AUTO_BUDGET_MS);
+  /* 価格は 10.5秒/20件。手数料と可否の分を残してから割る。 */
+  const left = ms - MW_AUTO_FEE_MS - MW_AUTO_RST_N * SP_GAP.getListingsRestrictions;
+  const calls = Math.max(1, Math.floor(left / MW_PRICE_CALL_MS));
+  const priceCap = Math.min(MW_AUTO_PRICE_MAX, calls * PRICING_BATCH);
+  return { per: per, asin: per, price: Math.min(per, priceCap),
+           rst: Math.min(per, MW_AUTO_RST_N * 3), price_cap: priceCap };
+}
+/* Amazon刈取の候補の条件（7.107）。
+   **eBay 無在庫（mwKishu／mwShipMax／mwStockMin）とは別に持つ**。
+   刈取は「機種すべて・新品・出荷14営業日以内・MW在庫1点以上」が既定。
+   ⚙で変えられる（amzKishu／amzShipMax／amzStockMin／amzNoteNg／amzNoteAll）。 */
+const AMZ_SHIP_MAX = 14;            // 出荷（営業日）の既定
+const AMZ_STOCK_MIN = 1;            // MW 在庫の既定
+function amzPickOpt(st) {
+  const o = st || {};
+  const num = (v, d) => {
+    const n = Number(v);
+    return (isFinite(n) && n >= 0) ? n : d;
+  };
+  return { kishu: String(o.amzKishu || ""), new_only: 1,
+           ship_max: num(o.amzShipMax, AMZ_SHIP_MAX),
+           stock_min: Math.max(1, num(o.amzStockMin, AMZ_STOCK_MIN)),
+           /* 備考の NG 語は eBay 無在庫と同じものを既定にする。 */
+           note_ng: String(o.amzNoteNg || o.mwNoteNg || ""),
+           note_all: Number(o.amzNoteAll || 0) ? 1 : 0 };
+}
 async function mwAutoSettings(env) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
   const m = String(st.mwAutoMode || "off");
   return {
     mode: MW_AUTO_MODES[m] ? m : "off",
-    /* 画面の絞り込みと同じ条件を使う（⚙設定に保存されている）。 */
-    opt: { kishu: String(st.mwKishu || ""), new_only: 1,
-           ship_max: Number(st.mwShipMax) || MW_SHIP_OK,
-           stock_min: Number(st.mwStockMin) || MW_STOCK_MIN,
-           note_ng: String(st.mwNoteNg || ""), note_all: 0 },
+    /* 7.107：**Amazon刈取の条件**で回す（eBay 無在庫の条件とは別）。 */
+    opt: amzPickOpt(st),
+    plan: mwAutoPlan(st.mwAutoPerHour, MW_AUTO_BUDGET_MS),
   };
 }
 async function jobMwAuto(env, opt) {
@@ -6785,13 +6829,17 @@ async function jobMwAuto(env, opt) {
     }
     const t0 = Date.now();
     const dl = t0 + MW_AUTO_BUDGET_MS;
-    /* ① ASIN・ランキング・商品名の引き直し（7.91）。
-       Catalog は 5回/秒で軽いので、ここでも少しずつ進める。 */
+    const plan = st.plan || mwAutoPlan(MW_AUTO_PER_HOUR, MW_AUTO_BUDGET_MS);
+    res.per_hour = plan.per;
+    /* ① ASIN・ランキング・商品名の引き直し（7.91／7.107）。
+       Catalog は 20件/回・5回/秒で軽いので、**まず引き当てを進める**
+       （まだ ASIN が無い行が数千あるため。進み具合は GET /mw/amz が返す）。 */
     const sa = await mwScanAsin(env, run,
-      Object.assign({}, st.opt, { limit: MW_AUTO_ASIN_N }), dl);
+      Object.assign({}, st.opt, { limit: plan.asin, order: "auto" }), dl);
     res.asin_n = sa.done; res.calls += sa.calls || 0; res.left += sa.left || 0;
+    res.asin_left = sa.left || 0;
     /* ② 価格。優先順は上のとおり。手数料は③で別に取る（7.97）。 */
-    const o = Object.assign({}, st.opt, { limit: MW_AUTO_PRICE_N, order: "auto" });
+    const o = Object.assign({}, st.opt, { limit: plan.price, order: "auto" });
     const pr = await mwScanPrice(env, run, o, dl - MW_AUTO_FEE_MS);
     res.price_n = pr.done; res.left = pr.left;
     res.calls += (pr.calls || 0) + (pr.fee_calls || 0);
@@ -6804,11 +6852,12 @@ async function jobMwAuto(env, opt) {
     res.calls += fe.calls || 0;
     /* ③ 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
     const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
-      { limit: MW_AUTO_RST_N }), { run: run, deadline: dl });
+      { limit: plan.rst }), { run: run, deadline: dl });
     res.rst_n = rr.done || 0;
     res.calls += rr.calls || 0;
     res.left += rr.left || 0;
-    res.note = "ASIN・順位 " + res.asin_n + "件／価格 " + res.price_n
+    res.note = "1時間ぶん " + plan.per + "件（価格は1回 " + plan.price
+      + "件まで）／ASIN・順位 " + res.asin_n + "件／価格 " + res.price_n
       + "件／手数料 " + res.fee_n + "件（だめ " + (res.fee_ng || 0)
       + "・残り " + (res.fee_left || 0) + "）／可否 " + res.rst_n
       + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
@@ -7716,6 +7765,32 @@ async function mwAmzList(env, url) {
            limit };
 }
 
+/* ---- 調べる順（7.107）----
+   ①仕入れる印あり（人が決めた行） ②**見込みあり** ③**写真あり** ④その他
+   「見込みあり」＝ MW の定価×0.85 − 卸値×1.1 が MW_HOPE_YEN より大きい行
+   （Amazon を呼ばずに出せる粗い当たり。/mw/count の「見込みあり」と同じ式）。
+   写真は mw_img に使える1枚があるか。 */
+const MW_HOPE_YEN = 1000;
+const MW_ORDER_HOPE =
+  `(CASE WHEN COALESCE(MAX(b.qty),0) > 0 THEN 0 ELSE 1 END) ASC,
+   (CASE WHEN COALESCE(MAX(s.list_price),0)*0.85
+            - COALESCE(MAX(s.wholesale),0)*1.1 > ${MW_HOPE_YEN}
+         THEN 0 ELSE 1 END) ASC,
+   (CASE WHEN EXISTS (SELECT 1 FROM mw_img i
+                       WHERE i.jan = s.jan AND i.ok = 1) THEN 0 ELSE 1 END) ASC`;
+/* GROUP BY を使わない SELECT 用（MAX を外した形）。
+   mw_buy は **JOIN せず EXISTS で見る**。migrate-0038 で mw_buy にも cond 列が
+   できたため、JOIN すると mwWhere の素の `cond` と衝突して
+   「ambiguous column name: cond」で落ちる。 */
+const MW_ORDER_HOPE1 =
+  `(CASE WHEN EXISTS (SELECT 1 FROM mw_buy b2
+                       WHERE b2.jan = s.jan AND COALESCE(b2.qty,0) > 0)
+         THEN 0 ELSE 1 END) ASC,
+   (CASE WHEN COALESCE(s.list_price,0)*0.85
+            - COALESCE(s.wholesale,0)*1.1 > ${MW_HOPE_YEN}
+         THEN 0 ELSE 1 END) ASC,
+   (CASE WHEN EXISTS (SELECT 1 FROM mw_img i
+                       WHERE i.jan = s.jan AND i.ok = 1) THEN 0 ELSE 1 END) ASC`;
 /* ---- 候補の絞り込み（4章の1〜4）。一覧と相場の取得で同じ条件を使う ----
    返す w には **素の `?`** が入る（機種の IN）。番号付きの ?N と混ぜると
    SQLite の番号割り当てがずれるので、呼ぶ側は素の `?` だけで組むか、

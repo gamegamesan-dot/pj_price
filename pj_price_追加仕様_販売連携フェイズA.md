@@ -6490,3 +6490,42 @@ pj-sync は `{"FeesEstimateByIdRequestList":[…]}` の形で送っていたた�
   （合計がずれないようにする）。
 - 控え先：`mw_amz.fee_fba_ship` / `fee_fba_store`（**migrate-0039**）。
   `GET /mw/amz` と `GET /mw/buy` が返すので、画面はそのまま出せる。
+
+## 7.107 刈取の条件・自動の件数・調べる順（2026-11-07）
+
+### 1. `amzPickOpt(settings)`
+
+Amazon刈取の候補の条件を**設定から組み立てる**（eBay 無在庫とは別）。
+
+```
+amzKishu   … 機種（空＝すべて）          既定 ''（全ジャンル）
+amzShipMax … 出荷（営業日・これ以内）    既定 14
+amzStockMin… MW 在庫（これ以上）         既定 1
+amzNoteNg  … 備考の NG 語（既定は mwNoteNg と同じ）
+amzNoteAll … 状態に注意も含める          既定 0
+new_only   … 常に 1（新品だけ）
+```
+
+`jobMwAuto`（毎時37分）と `GET /mw/amz`・`GET /mw/count` がこれを使う。
+
+### 2. `mwAutoPlan(perHour, budgetMs)`
+
+⚙ `mwAutoPerHour`（既定 100・上限 400）から、段ごとの「1回に進める上限」を出す。
+
+- `asin` … 設定の件数そのまま（Catalog は 20件/回・5回/秒で軽い）
+- `price` … `min(設定, floor((持ち時間 − 手数料8秒 − 可否5秒) / 10.5秒) × 20, 80)`
+- `rst` … `min(設定, 60)`
+
+**JAN→ASIN を先に進める**（まだ ASIN が無い行が数千あるため）。
+`jobMwAuto` の記録に「1時間ぶん n件（価格は1回 m件まで）」を残す。
+
+### 3. 調べる順（`MW_ORDER_HOPE`）
+
+```
+①仕入れる印あり ②見込みあり（list_price×0.85 − wholesale×1.1 > 1,000）
+③写真あり（mw_img に ok=1 がある） ④…
+```
+
+`mw_buy` は **JOIN せず EXISTS で見る**。migrate-0038 で `mw_buy` にも `cond` 列が
+できたため、JOIN すると `mwWhere` の素の `cond` と衝突して
+「ambiguous column name: cond」で落ちる（実際に起きた）。

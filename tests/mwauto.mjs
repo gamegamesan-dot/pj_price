@@ -72,8 +72,26 @@ await setCfg({});
 let st=await W.mwAutoSettings(env);
 console.log('   '+JSON.stringify({mode:st.mode,opt:st.opt}));
 ok(st.mode==='off','★★★既定はオフ');
-ok(st.opt.kishu==='NS'&&st.opt.ship_max===4&&st.opt.stock_min===5,
-   '★★★画面の絞り込み（⚙設定）と同じ条件を使う');
+/* 7.107：自動の取り直しは **Amazon刈取の条件**で回す
+   （eBay 無在庫の mwKishu／mwShipMax／mwStockMin とは別）。
+   既定は 機種すべて・出荷14営業日・在庫1点。 */
+ok(st.opt.kishu===''&&st.opt.ship_max===14&&st.opt.stock_min===1,
+   '★★★Amazon刈取の条件（機種すべて・14営業日・在庫1点）で回す');
+ok(st.plan&&st.plan.per===100,'★★★1時間ぶんの既定は100件（⚙ mwAutoPerHour）');
+ok(st.plan.asin===100,'★★ASIN の引き当ては100件まで（Catalog は軽い）');
+ok(st.plan.price>0&&st.plan.price<=80,
+   '★★価格は持ち時間と 0.1回/秒 の壁で決まる（'+st.plan.price+'件）');
+{
+  /* ⚙で件数と条件を変えられる。 */
+  await setCfg({ mwAutoPerHour:200, amzKishu:'NS,figure', amzShipMax:7,
+                 amzStockMin:3 });
+  const st2=await W.mwAutoSettings(env);
+  ok(st2.plan.per===200&&st2.plan.asin===200,'★★★件数を⚙で変えられる');
+  ok(st2.plan.price<=80,'★★価格は80件を超えない（SP-API の上限内）');
+  ok(st2.opt.kishu==='NS,figure'&&st2.opt.ship_max===7&&st2.opt.stock_min===3,
+     '★★★刈取の条件を⚙で変えられる');
+  await setCfg({});
+}
 calls=[];
 let r=await put('/mw/auto',{});
 console.log('   '+JSON.stringify({mode:r.body.mode,price:r.body.price_n}));

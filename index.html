@@ -1050,6 +1050,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
       <!-- 順位が無い行の出し入れ（6.124）。上限は⚙設定（大分類ごと）で決める -->
       <div class="chk"><input type="checkbox" id="csvMwAmzNoRank"><label for="csvMwAmzNoRank" style="flex:1">順位が無い行も表示</label></div>
+      <!-- 6.146：全ジャンルに広げたので、ジャンルで絞れるようにする -->
+      <div class="rowv"><label>ジャンル</label><select id="csvMwAmzGenre"><option value="" selected>すべて</option></select></div>
       <details class="exp" data-exp="amzRank"><summary>説明</summary>
       <div class="note2" style="margin:0 0 4px">ランキングの上限は
         <b>⚙設定の「Amazon刈取」</b>で<b>大分類ごと</b>に決めます
@@ -1481,6 +1483,16 @@ body.staff #syncOnHandFix{display:none !important}
            国内FBAの手数料・税抜の粗利の出し方・自動の取り直しをここにまとめた。 -->
       <summary class="cfggsum">Amazon刈取（国内FBA）<span class="cfggn"></span></summary>
       <div class="body">
+        <!-- 6.146：刈取の候補の条件（eBay 無在庫とは別に持つ）。 -->
+        <div class="note2" style="margin:8px 0 2px"><b>候補の条件（Amazon刈取）</b>
+          ：eBay 無在庫の条件（上の「MW の無在庫」）とは<b>別</b>です。
+          刈取は<b>全ジャンル・新品・出荷14営業日以内・MW在庫1点以上</b>が既定。
+          変えたら⚙の「候補の件数を数える」で件数を確かめてください。</div>
+        <div class="rowv"><label>機種（空ならすべて）</label><input type="text" id="amzKishu" placeholder="空＝すべて（例 NS,NS2,figure）"><div class="note2" style="margin-top:2px">空にすると<b>全ジャンル</b>（MW のすべての機種）が候補になります。</div></div>
+        <div class="row"><label>出荷（これ以内）</label><input type="number" id="amzShipMax" value="14" step="1" min="0" inputmode="numeric"><span class="unit">営業日</span></div>
+        <div class="row"><label>MW 在庫（これ以上）</label><input type="number" id="amzStockMin" value="1" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
+        <div class="row cfgprice"><label>自動の取り直し（1時間ぶん）</label><input type="number" id="mwAutoPerHour" value="100" step="10" min="10" max="400" inputmode="numeric"><span class="unit">件</span></div>
+        <div class="note2 cfgprice" style="margin-top:2px">毎時37分の自動の取り直しで、1時間に進める件数です（<b>JAN→ASIN の引き当ても含みます</b>）。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>：ASIN の引き当ては 20件/回・5回/秒で軽いのでこの件数まで、<b>価格は 20件/回・0.1回/秒（10.5秒/回）</b>なので1回の持ち時間（45秒）では<b>60〜80件が上限</b>です。実際に進める見込みは「候補の件数を数える」の「1周（自動）」に出します。</div>
         <div class="note2" style="margin:4px 0 2px">「Amazon刈取」タブで使う設定です。
           手数料は <b>Amazon から商品ごとに取れた値</b>を優先し、取れていない行だけ
           下の一律の値で計算します（画面に「仮の手数料」と出ます・7.85）。</div>
@@ -2547,7 +2559,9 @@ var ADV_AMZRANK=['mwRankCaps','mwDgTypes'];
    違っていた（候補 1237件・管理者 28件／作業者 51件）。
    並べ替えと「利益率がこれ以上」は値の欄、残りはチェック欄。
    作業者の端末は pj-sync の値で始まる（変えても送らない＝その場だけ）。 */
-var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM'];
+var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM','csvMwAmzGenre'];
+/* Amazon刈取の候補の条件と自動の件数（6.146）。**Worker が読む**ので必ず送る。 */
+var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
@@ -2581,7 +2595,7 @@ var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
     .concat(ADV_PRICE).concat(ADV_AMZRANK).concat(ADV_AMZFILT)
-    .concat(ADV_AMZCALC);
+    .concat(ADV_AMZCALC).concat(ADV_AMZCOND);
 }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
@@ -4988,6 +5002,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwFbaShipS','mwFbaStoreS','mwFbaShipM','mwFbaStoreM',
                  'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
                  'mwProfitMode',
+                 /* Amazon刈取の候補の条件と自動の件数（6.146） */
+                 'amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
@@ -9959,7 +9975,7 @@ $('mwBuyUndoBtn').onclick=mwBuyUndoGo;
 $('mwBuyUndoClose').onclick=mwBuyUndoHide;
 $('csvMwBuyCsv').onclick=mwBuyCsvGo;
 ['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
- 'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank']
+ 'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank','csvMwAmzGenre']
   .forEach(function(id){
     /* 並べ替えと絞り込みは候補の一覧だけのものなので、
        仕入れる一覧を見ているときは候補の一覧に戻して並べ直す（6.126）。 */
@@ -10817,12 +10833,37 @@ function mwScanNote(d){
   else if(!rstDead)out.push('調べ終わりました。');
   return out.join('<br>');
 }
+/* Amazon刈取の候補の条件（6.146）。**eBay 無在庫とは別**。
+   既定は 機種すべて・新品・出荷14営業日以内・MW在庫1点以上。 */
+function amzKishuList(){
+  var v=String(($('amzKishu')||{}).value||'').trim();
+  if(!v)return [];
+  return v.split(/[,\s、]+/).map(function(x){ return x.trim(); })
+    .filter(Boolean);
+}
+function amzShipMax(){
+  var n=+(($('amzShipMax')||{}).value); return (isFinite(n)&&n>=0)?n:14;
+}
+function amzStockMin(){
+  var n=+(($('amzStockMin')||{}).value); return (isFinite(n)&&n>=1)?n:1;
+}
+function amzAutoPerHour(){
+  var n=+(($('mwAutoPerHour')||{}).value);
+  return (isFinite(n)&&n>=10)?Math.min(400,Math.round(n)):100;
+}
+/* 刈取の条件をひとまとめに（一覧・件数・見込みで同じものを使う）。 */
+function amzCondQ(){
+  return { kishu:amzKishuList().join(','), new_only:1,
+           ship_max:amzShipMax(), stock_min:amzStockMin(),
+           note_ng:mwNoteNgList().join(','), note_all:0 };
+}
 function mwAmzQuery(priced){
-  return '?kishu='+encodeURIComponent(mwKishuList().join(','))
-    +'&new_only='+(mwNewOnly()?'1':'0')
-    +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()
-    +'&note_ng='+encodeURIComponent(mwNoteNgList().join(','))
-    +'&note_all='+(mwNoteAll()?'1':'0')
+  var q=amzCondQ();
+  return '?kishu='+encodeURIComponent(q.kishu)
+    +'&new_only=1'
+    +'&ship_max='+q.ship_max+'&stock_min='+q.stock_min
+    +'&note_ng='+encodeURIComponent(q.note_ng)
+    +'&note_all=0'
     +(priced?'&priced=1':'')+'&limit=3000';
 }
 function mwAmzLoad(){
@@ -11000,7 +11041,9 @@ function mwRankCapNote(){
    条件を変えたら候補が何件になるかを、**実データで**見るためだけの口。
    候補の決め方は変えない（数えるだけ）。 */
 var MW_COUNT_SETS=[
-  { name:'いまの無在庫の条件', q:function(){
+  /* 6.146：いまの刈取の条件を先頭に出す（既定＝機種すべて・14営業日・在庫1点）。 */
+  { name:'いまの刈取の条件', q:function(){ return amzCondQ(); } },
+  { name:'いまの eBay 無在庫の条件', q:function(){
       return { kishu:mwKishuList().join(','), new_only:1,
                ship_max:mwShipMax(), stock_min:mwStockMin(),
                note_ng:mwNoteNgList().join(','), note_all:mwNoteAll()?1:0 }; } },
@@ -11024,12 +11067,18 @@ function mwCountUrl(q){
   });
   return syncUrl()+'/mw/count?'+p.join('&');
 }
-/* 1周にかかる日数の見込み。
-   ・毎時37分の自動：価格 MW_AUTO_PRICE_N 件／時（24回/日）
+/* 1周にかかる日数の見込み（6.146）。
+   ・毎時37分の自動：⚙「自動の取り直し（1時間ぶん）」の件数（24回/日）
+     ただし**価格は 0.1回/秒の壁**で1回60〜80件が上限なので、
+     そちらも別に出す（設定の件数と実際に進める見込みは違う）。
    ・「Amazonで調べる」を押したとき：1回60件 */
+var MW_PRICE_PER_RUN_MAX=80;          // 価格は1回80件まで（Worker 側と同じ）
+function mwAutoPrice(){ return Math.min(MW_PRICE_PER_RUN_MAX,amzAutoPerHour()); }
 function mwCountDays(n){
-  var perHour=20, perDay=perHour*24;        // 毎時37分の自動（価格20件）
-  return { auto:Math.ceil(n/perDay), hand:Math.ceil(n/60) };
+  var per=amzAutoPerHour(), perDay=per*24;
+  var pricePer=mwAutoPrice(), priceDay=pricePer*24;
+  return { auto:Math.ceil(n/perDay), price:Math.ceil(n/priceDay),
+           per:per, pricePer:pricePer, hand:Math.ceil(n/60) };
 }
 function mwCountRun(){
   var out=$('mwCountOut'), btn=$('mwCountBtn');
@@ -11054,7 +11103,8 @@ function mwCountRun(){
       +'<th style="text-align:right">候補</th><th style="text-align:right">ASIN済</th>'
       +'<th style="text-align:right">値段済</th>'
       +'<th style="text-align:right">見込みあり</th>'
-      +'<th style="text-align:right">1周（自動）</th></tr>'
+      +'<th style="text-align:right">1周（ASIN）</th>'
+      +'<th style="text-align:right">1周（価格）</th></tr>'
       +rows.map(function(x){
         var n=+x.d.n||0, sp=x.d.spread||{};
         var dd=mwCountDays(n);
@@ -11063,12 +11113,18 @@ function mwCountRun(){
           +'<td style="text-align:right">'+(+x.d.asin_ok||0).toLocaleString('ja-JP')+'</td>'
           +'<td style="text-align:right">'+(+x.d.priced||0).toLocaleString('ja-JP')+'</td>'
           +'<td style="text-align:right">'+(+sp.plus1k||0).toLocaleString('ja-JP')+'</td>'
-          +'<td style="text-align:right">'+dd.auto+'日</td></tr>';
+          +'<td style="text-align:right">'+dd.auto+'日</td>'
+          +'<td style="text-align:right">'+dd.price+'日</td></tr>';
       }).join('')+'</table>'
       +'<div style="margin-top:4px">「見込みあり」＝ MW の定価×0.85 − 卸値×1.1 が'
       +'<b>1,000円より大きい</b>行（Amazon を呼ばずに出せる粗い当たり）。'
-      +'<br>「1周（自動）」＝ 毎時37分の自動の取り直し（価格20件/時＝480件/日）で'
-      +'一周する日数。「Amazonで調べる」を押すと1回60件まで進みます。</div>'
+      +'<br>「1周（ASIN）」＝ 毎時37分の自動で <b>'+mwCountDays(1).per+'件/時</b>'
+      +'（⚙「自動の取り直し（1時間ぶん）」）進めたときに一周する日数。'
+      +'JAN→ASIN の引き当てはこの件数まで進みます。'
+      +'<br>「1周（価格）」＝ 価格は <b>'+mwCountDays(1).pricePer+'件/時</b> が上限'
+      +'（getItemOffersBatch は 20件/回・0.1回/秒＝10.5秒/回。'
+      +'1回の持ち時間45秒では3〜4回）。'
+      +'「Amazonで調べる」を押すと1回60件まで進みます。</div>'
       +mwCountDetail(rows);
   })['catch'](function(e){ out.textContent='数えられませんでした：'+e.message; })
   .then(function(){ btn.disabled=false; });
@@ -11278,8 +11334,28 @@ function mwJanDupLine(r){
 }
 /* ---- 並べ替えと絞り込み（6.93）---- */
 function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
+/* ジャンルの選択肢（6.146）。いまの一覧にあるジャンルを件数の多い順に並べる。 */
+function mwGenreOpts(){
+  var sel=$('csvMwAmzGenre'); if(!sel)return;
+  var by={};
+  (mwAmzRows||[]).forEach(function(r){
+    var g=mwAmzGenre(r)||'（その他）';
+    by[g]=(by[g]||0)+1;
+  });
+  var ks=Object.keys(by).sort(function(a,b){ return by[b]-by[a]; });
+  var cur=String(sel.value||'');
+  var h='<option value="">すべて（'+(mwAmzRows||[]).length+'件）</option>'
+    +ks.map(function(k){
+      return '<option value="'+esc(k)+'">'+esc(k)+' '+by[k]+'件</option>'; }).join('');
+  if(sel.innerHTML!==h){
+    sel.innerHTML=h;
+    sel.value=(cur&&by[cur])?cur:'';
+  }
+}
+function mwAmzGenreSel(){ return String(($('csvMwAmzGenre')||{}).value||''); }
 function mwAmzFilters(){
-  return { win:!!$('csvMwAmzWin').checked, multi:!!$('csvMwAmzMulti').checked,
+  return { genre:mwAmzGenreSel(),
+           win:!!$('csvMwAmzWin').checked, multi:!!$('csvMwAmzMulti').checked,
            noAmz:!!$('csvMwAmzNoAmz').checked,
            rstOk:!!$('csvMwAmzRstOk').checked,
            dup:!!$('csvMwAmzDup').checked,
@@ -11323,6 +11399,8 @@ function mwAmzKeep(x,f){
       /* JAN重複の行は ASIN が無いので値段も利益も出ない。
          それでも**一覧から落とさない**（落とすと印にも候補にも気づけない）。 */
       if(!x.c)return mwJanDup(x.r);
+      /* 6.146：ジャンルの絞り込み。 */
+      if(f.genre&&(mwAmzGenre(x.r)||'（その他）')!==f.genre)return false;
       if(f.win&&x.c.profit<=0)return false;
       if(f.multi&&(+x.r.new_n||0)<2)return false;
       if(f.noAmz&&(+x.r.amz))return false;
@@ -12222,6 +12300,7 @@ function mwAmzRender(){
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
   /* ⚙の「ランキングの上限」の表は、いまの一覧の大分類と件数で作る（6.124）。 */
   try{ mwRankCapRender(); }catch(e){}
+  try{ mwGenreOpts(); }catch(e){}        // ジャンルの選択肢（6.146）
   var d=mwAmzMeta||{};
   var all=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
     .filter(function(x){ return x.c; });
@@ -12232,9 +12311,14 @@ function mwAmzRender(){
   /* 検索の件数と「×」（6.115）。絞り込みで隠れている件数も出す（6.125）。
      検索欄は2つあるので両方に出す（6.126）。 */
   findNoteAmz(list.length,mwAmzRows.length,mwFindHid);
-  note.innerHTML='候補 '+(d.n||0)+'件　調べ終わった '+(d.seen||0)
+  /* 6.146：JAN→ASIN の引き当ての進み具合を「済／残り」で出す
+     （まだ ASIN が無い行が数千あるので、どこまで進んだかを見えるようにする）。 */
+  note.innerHTML='候補 '+(d.n||0)+'件'
+    +'　<b>ASIN 済 '+(d.seen||0)+'／残り '+(d.left||0)+'</b>'
     +'　値段あり '+(d.priced||0)
-    +(d.left?('　<b>まだ '+d.left+'件</b>'):'')
+    +((d.n&&d.left)?('<span class="note2">（自動で 1時間 '+amzAutoPerHour()
+      +'件・残り およそ '+Math.max(1,Math.ceil((d.left||0)/(amzAutoPerHour()*24)))
+      +'日）</span>'):'')
     +'　／　<b>'+list.length+'件</b>を表示'
     +'（値段あり '+all.length+'件のうち）'
     +(mwJanDupN()?('　<b style="color:var(--bad)">JAN重複 '+mwJanDupN()
@@ -12288,7 +12372,9 @@ function mwAmzRender(){
         +'　<b>MW卸値</b> '+yen(+r.wholesale||0)+'（税抜）</div>'
         +mwJanDupLine(r)
         +'</div>';
-    return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+    /* data-mwrow：行を見分ける印（6.146。ジャンルの絞り込みの確認にも使う）。 */
+    return '<div data-mwrow="'+esc(jan)+'"'
+      +' style="margin:6px 0;padding:6px;border:1px solid var(--line);'
       +'border-radius:6px'+(q?';border-color:var(--good);background:#f6fff4':'')+'">'
       +'<b>'+yen(c.net)+'</b>'
       +' <span class="note2">（税抜・'+esc(mwNetLabel())+'・税込 '+yen(c.profit)
@@ -19344,7 +19430,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v232';   // sw.js の const V と必ず同じ値にする
+var APP_V='v233';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
