@@ -5046,19 +5046,46 @@ function mwFeePick(d) {
   }
   const e = r.FeesEstimate || {};
   const total = Math.round(Number((e.TotalFeesEstimate || {}).Amount) || 0);
-  let ref = 0, fba = 0, tax = 0;
+  let ref = 0, fba = 0, tax = 0, fbaShip = 0, fbaStore = 0;
+  /* 7.106：FBA手数料を**配送代行**と**在庫管理**に分ける。
+     せどりすと の内訳（FBA 289＝配送代行288＋在庫管理1）と並べて見るため。
+     Amazon は FBAFees の中の IncludedFeeDetailList に内訳を入れてくる
+     （FBAPerUnitFulfillmentFee ＝ 配送代行／…Storage… ＝ 在庫管理）。 */
+  const amtOf = (x) => Math.round(Number((x.FinalFee || x.FeeAmount || {}).Amount) || 0);
+  const splitFba = (x) => {
+    const subs = x.IncludedFeeDetailList || [];
+    let hit = false;
+    for (const y of subs) {
+      const ty = String(y.FeeType || "");
+      const a2 = amtOf(y);
+      tax += Math.round(Number((y.TaxAmount || {}).Amount) || 0);
+      if (/Storage/i.test(ty)) { fbaStore += a2; hit = true; continue; }
+      if (/Fulfillment|Fulfilment|Pick|Pack|Weight/i.test(ty)) {
+        fbaShip += a2; hit = true; continue;
+      }
+    }
+    return hit;
+  };
   for (const x of (e.FeeDetailList || [])) {
     const t = String(x.FeeType || "");
-    const amt = Math.round(Number((x.FinalFee || x.FeeAmount || {}).Amount) || 0);
+    const amt = amtOf(x);
     /* 税が明細の中に入っている形（FeeAmount＋TaxAmount）もあるので、
        種類を見る**前に**どの明細からも拾う。 */
     tax += Math.round(Number((x.TaxAmount || {}).Amount) || 0);
     if (/Tax/i.test(t)) { tax += amt; continue; }   // 税だけの明細
     if (/Referral/i.test(t)) { ref += amt; continue; }
     fba += amt;
+    /* 内訳が無いときは、種類の名前だけで振り分ける。 */
+    if (!splitFba(x)) {
+      if (/Storage/i.test(t)) fbaStore += amt; else fbaShip += amt;
+    }
   }
   if (!total && !ref && !fba) return { ok: false, err: "手数料の明細がありません" };
-  return { ok: true, ref, fba, tax, total: total || (ref + fba + tax) };
+  /* 内訳の合計が FBA手数料に合わないときは、差を配送代行に寄せる
+     （合計がずれないようにする。画面はこの2つを足して出す）。 */
+  if (fba && fbaShip + fbaStore !== fba) fbaShip = fba - fbaStore;
+  return { ok: true, ref, fba, tax, fba_ship: fbaShip, fba_store: fbaStore,
+           total: total || (ref + fba + tax) };
 }
 /* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。 */
 function mwFeeBody(part) {
@@ -5734,10 +5761,12 @@ async function mwScanFee(env, run, o, dl) {
       }
       stmts.push(env.DB.prepare(
         `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
-           fee_base=?6, fee_at=?7, fee_err=?8 WHERE asin=?1`)
+           fee_base=?6, fee_at=?7, fee_err=?8,
+           fee_fba_ship=?9, fee_fba_store=?10 WHERE asin=?1`)
         .bind(asin, g.ok ? g.ref : null, g.ok ? g.fba : null,
               g.ok ? g.tax : null, g.ok ? g.total : null,
-              (row && row.price) || null, at, g.ok ? "" : String(g.err || "")));
+              (row && row.price) || null, at, g.ok ? "" : String(g.err || ""),
+              g.ok ? (g.fba_ship || 0) : null, g.ok ? (g.fba_store || 0) : null));
     }
   }
   await runBatch(env, run, stmts);
@@ -6611,11 +6640,14 @@ async function mwBuyRefresh(env, body) {
       if (fz)
         stmts.push(env.DB.prepare(
           `UPDATE mw_amz SET fee_ref=?2, fee_fba=?3, fee_tax=?4, fee_total=?5,
-             fee_base=?6, fee_at=?7, fee_err=?8 WHERE jan=?1`)
+             fee_base=?6, fee_at=?7, fee_err=?8,
+             fee_fba_ship=?9, fee_fba_store=?10 WHERE jan=?1`)
           .bind(jan, fz.ok ? fz.ref : null, fz.ok ? fz.fba : null,
                 fz.ok ? fz.tax : null, fz.ok ? fz.total : null,
                 fz.ok ? res.price : null, at,
-                fz.ok ? "" : String(fz.err || "").slice(0, 400)));
+                fz.ok ? "" : String(fz.err || "").slice(0, 400),
+                fz.ok ? (fz.fba_ship || 0) : null,
+                fz.ok ? (fz.fba_store || 0) : null));
     }
     /* ④ もう登録されていないか（pj 以外も見る）。 */
     const rf = await mwRegFind(env, run, asin);
@@ -6672,6 +6704,7 @@ async function mwBuyList(env, url) {
             a.fee_total AS fee_total, a.fee_ref AS fee_ref, a.fee_fba AS fee_fba,
             a.fee_tax AS fee_tax, a.fee_base AS fee_base, a.fee_at AS fee_at,
             a.fee_err AS fee_err, a.price_at AS price_at,
+            a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
             COALESCE(b.pics,0) AS pics,
             b.snap_at AS snap_at,
             COALESCE(b.reg_state,'') AS reg_state, b.reg_sku AS reg_sku,
@@ -7618,6 +7651,8 @@ async function mwAmzList(env, url) {
             a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
             a.fee_total AS fee_total, a.fee_base AS fee_base,
             a.fee_at AS fee_at, a.fee_err AS fee_err,
+            /* FBA の内訳（7.106）。配送代行と在庫管理を分けて出す。 */
+            a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
             /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
             COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
             i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,

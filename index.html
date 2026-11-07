@@ -1489,7 +1489,22 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row"><label>FBA手数料（ゲーム）</label><input type="number" id="mwAmzFbaGame" value="530" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row"><label>販売手数料（ホビー）</label><input type="number" id="mwAmzFeeHobby" value="10" step="0.5" min="0" inputmode="decimal"><span class="unit">%</span></div>
         <div class="row"><label>FBA手数料（ホビー）</label><input type="number" id="mwAmzFbaHobby" value="580" step="10" min="0" inputmode="numeric"><span class="unit">円</span></div>
-        <div class="note2" style="margin-top:2px">そのほかの機種は⚙設定の「Amazon販売手数料」「FBA配送代行手数料」を使います。FBA手数料は実際には商品の大きさで変わるので、発注前に Amazon の料金シミュレーターで確かめてください。</div>
+        <div class="note2" style="margin-top:2px">そのほかの機種は⚙設定の「Amazon販売手数料」「FBA配送代行手数料」を使います。<b>販売手数料には手数料の消費税10%を足して計算します</b>（せどりすと と同じ・6.145）。</div>
+        <!-- 仮のFBA手数料（サイズ区分ごと・6.145）。実額が取れるまでの目安。
+             既定はせどりすとの実額から：小型288+1／標準425+16／大型675+93 -->
+        <div class="note2" style="margin:8px 0 2px"><b>仮の FBA手数料（サイズ区分ごと）</b>
+          ：Amazon から実額が取れていない行で使う目安です。
+          <b>配送代行手数料</b>と<b>在庫管理手数料</b>を分けて入れます
+          （せどりすと の実額：小型 288＋1／標準 425＋16／大型 675＋93）。</div>
+        <div class="row"><label>小型：配送代行</label><input type="number" id="mwFbaShipS" value="288" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>小型：在庫管理</label><input type="number" id="mwFbaStoreS" value="1" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>標準：配送代行</label><input type="number" id="mwFbaShipM" value="425" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>標準：在庫管理</label><input type="number" id="mwFbaStoreM" value="16" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>大型：配送代行</label><input type="number" id="mwFbaShipL" value="675" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>大型：在庫管理</label><input type="number" id="mwFbaStoreL" value="93" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="rowv"><label>ゲームの既定のサイズ区分</label><select id="mwFbaSizeGame"><option value="s" selected>小型</option><option value="m">標準</option><option value="l">大型</option></select></div>
+        <div class="rowv"><label>フィギュアの既定のサイズ区分</label><select id="mwFbaSizeHobby"><option value="s">小型</option><option value="m" selected>標準</option><option value="l">大型</option></select></div>
+        <div class="rowv cfgprice"><label>粗利の基準（並べ替え・黒字のみ・利益率）</label><select id="mwProfitMode"><option value="mw" selected>MW送料込み（仕入原価＋MWの仕入れ送料）</option><option value="sedori">せどりすと方式（仕入原価＝卸値×1.1）</option></select><div class="note2" style="margin-top:2px">一覧には<b>両方</b>出します（6.145）。ここで選ぶのは<b>並べ替え・「黒字のみ」・「利益率がこれ以上」に使うほう</b>です。<b>既定は MW送料込み</b>（実際に出ていくお金に近いほう）。せどりすと の画面と数字を見比べるときは「せどりすと方式」にしてください。</div></div>
         <div class="rowv cfgprice"><label>税抜の粗利の出し方</label><select id="mwNetMode"><option value="sedori" selected>せどりすと方式（粗利×0.9）</option><option value="exact">税込から税抜へ（粗利×10/11）</option></select><div class="note2" style="margin-top:2px">国内FBAの<b>粗利（税抜）</b>の出し方です（6.111）。<b>せどりすと方式</b>は「粗利の10%を納付消費税として引く」やり方で、せどりすと の内訳（サイヴァリア3：税込粗利 2,615円 → 納付消費税 261円・粗利 <b>2,353円</b>）と合います。<b>×10/11</b> は税込→税抜の算数として正しい変換で、同じ例で <b>2,377円</b>（24円高く出ます）。<b>せどりすと と数字を合わせたいなら前者</b>、消費税の計算として正確にしたいなら後者です。赤字の行はどちらでも引きません。</div></div>
         <!-- ランキングの上限（大分類ごと・6.124）。
              pj-sync（/settings）に保存するので、作業者用の端末でも同じ基準で
@@ -2536,7 +2551,12 @@ var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
-                 'mwShipFee','mwNetMode'];
+                 'mwShipFee','mwNetMode',
+                 /* 仮のFBA手数料（サイズ区分ごと）と粗利の基準（6.145）。
+                    作業者の端末でも同じ粗利になるように送る。 */
+                 'mwFbaShipS','mwFbaStoreS','mwFbaShipM','mwFbaStoreM',
+                 'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
+                 'mwProfitMode'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank'];
 /* ---- 値付けの式が使う設定（6.73）----
@@ -4964,6 +4984,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
+                 /* 仮のFBA手数料（サイズ区分ごと）と粗利の基準（6.145） */
+                 'mwFbaShipS','mwFbaStoreS','mwFbaShipM','mwFbaStoreM',
+                 'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
+                 'mwProfitMode',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
@@ -10055,6 +10079,19 @@ function mwCost(r){
   if(!(w>0))return 0;
   return Math.round(w*1.1)+mwShipFee();
 }
+/* 仕入原価（せどりすと方式・6.145）。**卸値×1.1 だけ**（MW の仕入れ送料を足さない）。
+   せどりすと の画面と数字を見比べるために持つ。 */
+function mwCostSedo(r){
+  var w=+((r||{}).wholesale)||0;
+  if(!(w>0))return 0;
+  return Math.round(w*1.1);
+}
+/* 並べ替え・黒字のみ・利益率に使う粗利（6.145）。既定は MW送料込み。 */
+function mwProfitMode(){
+  var el=$('mwProfitMode');
+  var v=el?String(el.value||''):'';
+  return (v==='sedori')?'sedori':'mw';
+}
 /* 重量の既定値。ゲームは syncWeightGame、ホビーは syncWeight（⚙設定）。 */
 var MW_GAME_KISHU={ NS:1, NS2:1, NS2H:1, P5:1, P4:1, '3DS':1, PS5:1, PS4:1, SW:1 };
 function mwWeight(r){
@@ -10444,13 +10481,40 @@ function mwNum0(id,def){
   var n=+$(id).value;
   return (isFinite(n)&&n>=0)?n:def;
 }
+/* 手数料の消費税の率（6.145）。せどりすと は販売手数料の10%を足している。 */
+var MW_FEE_TAX_PCT=10;
+/* サイズ区分ごとの仮の FBA手数料（6.145）。配送代行と在庫管理に分ける。 */
+var MW_FBA_SIZE={ s:'小型', m:'標準', l:'大型' };
+function mwFbaSizeOf(r){
+  var g=mwAmzGenre(r);
+  var v=(g==='ゲーム')?String(($('mwFbaSizeGame')||{}).value||'s')
+       :((g==='フィギュア')?String(($('mwFbaSizeHobby')||{}).value||'m'):'m');
+  return MW_FBA_SIZE[v]?v:'m';
+}
+function mwFbaGuess(r){
+  var k=mwFbaSizeOf(r);
+  var pick={ s:['mwFbaShipS',288,'mwFbaStoreS',1],
+             m:['mwFbaShipM',425,'mwFbaStoreM',16],
+             l:['mwFbaShipL',675,'mwFbaStoreL',93] }[k];
+  var ship=mwNum0(pick[0],pick[1]), store=mwNum0(pick[2],pick[3]);
+  /* 古い設定（FBA手数料（ゲーム）／（ホビー））しか入っていない端末では、
+     そちらを配送代行として使う（いきなり数字が変わらないように）。 */
+  if(!ship&&!store){
+    var g=mwAmzGenre(r);
+    ship=(g==='ゲーム')?mwNum0('mwAmzFbaGame',530)
+        :((g==='フィギュア')?mwNum0('mwAmzFbaHobby',580):mwNum0('amzFbaFee',400));
+  }
+  return { size:k, sizeName:MW_FBA_SIZE[k], ship:ship, store:store,
+           fba:ship+store };
+}
 function mwAmzFee(r){
   var g=mwAmzGenre(r);
+  var fb=mwFbaGuess(r);
   if(g==='ゲーム')
-    return { rate:mwNum0('mwAmzFeeGame',15), fba:mwNum0('mwAmzFbaGame',530) };
+    return { rate:mwNum0('mwAmzFeeGame',15), fba:fb.fba, fb:fb };
   if(g==='フィギュア')
-    return { rate:mwNum0('mwAmzFeeHobby',10), fba:mwNum0('mwAmzFbaHobby',580) };
-  return { rate:mwNum0('amzFeeRate',15), fba:mwNum0('amzFbaFee',400) };
+    return { rate:mwNum0('mwAmzFeeHobby',10), fba:fb.fba, fb:fb };
+  return { rate:mwNum0('amzFeeRate',15), fba:fb.fba, fb:fb };
 }
 /* 1行ぶんの利益。値段が取れていない行は null。 */
 /* 商品ごとの手数料（6.108・7.85）。Amazon から取れていればそれを使う。
@@ -10464,13 +10528,23 @@ function mwFeeOf(r){
     /* 合計が明細より大きいときは、差を消費税に寄せる（明細の形が変わっても
        合計がずれないように）。 */
     if(tot>ref+fba+tax)tax=tot-ref-fba;
-    return { ref:ref, fba:fba, tax:tax, fee:ref+fba+tax, real:true,
+    /* FBA の内訳（7.106）。取れていなければ配送代行に寄せる。 */
+    var sh=+r.fee_fba_ship||0, st2=+r.fee_fba_store||0;
+    if(fba&&sh+st2!==fba){ st2=st2||0; sh=fba-st2; }
+    return { ref:ref, fba:fba, fbaShip:sh, fbaStore:st2, tax:tax,
+             fee:ref+fba+tax, real:true,
              rate:ref&&r.fee_base?Math.round(ref/(+r.fee_base||1)*1000)/10:null,
              base:+r.fee_base||0, at:r.fee_at||'' };
   }
   var f=mwAmzFee(r), price=+((r||{}).price)||0;
   var ref2=Math.round(price*f.rate/100);
-  return { ref:ref2, fba:f.fba, tax:0, fee:ref2+f.fba, real:false,
+  /* 6.145：**仮の値でも手数料の消費税10%を足す**（せどりすと と同じ）。
+     足していなかったので、せどりすと の粗利より高く出ていた
+     （Everafter Falls：pj 897 に対して せどりすと 920＋92＝1,012）。 */
+  var tax2=Math.round(ref2*MW_FEE_TAX_PCT/100);
+  return { ref:ref2, fba:f.fba, fbaShip:f.fb.ship, fbaStore:f.fb.store,
+           tax:tax2, fee:ref2+f.fba+tax2, real:false,
+           size:f.fb.size, sizeName:f.fb.sizeName,
            rate:f.rate, base:price, at:'' };
 }
 function mwAmzCalc(r){
@@ -10480,13 +10554,30 @@ function mwAmzCalc(r){
   if(!(cost>0))return null;
   var z=mwFeeOf(r);
   var fee=z.fee;
-  var profit=Math.round(price-fee-cost);
-  return { price:price, cost:cost, fee:fee, rate:z.rate, fba:z.fba,
+  /* 6.145：粗利を**2つ**出す。
+     ・せどりすと方式  … 仕入原価＝卸値×1.1（せどりすと の画面と同じ）
+     ・MW送料込み      … ＋MW の仕入れ送料（実際に出ていくお金に近い）
+     並べ替え・黒字のみ・利益率に使うほうは⚙で選ぶ（既定は MW送料込み）。 */
+  var costSedo=mwCostSedo(r);
+  var profitMw=Math.round(price-fee-cost);
+  var profitSedo=Math.round(price-fee-costSedo);
+  var mode=mwProfitMode(), useSedo=(mode==='sedori');
+  var profit=useSedo?profitSedo:profitMw;
+  return { price:price, cost:cost, costSedo:costSedo, ship:mwShipFee(),
+           fee:fee, rate:z.rate, fba:z.fba,
+           fbaShip:+z.fbaShip||0, fbaStore:+z.fbaStore||0,
            feeRef:z.ref, feeTax:z.tax, feeReal:z.real, feeAt:z.at,
-           profit:profit,
-           /* 消費税を引いた額（6.111）。式は⚙設定で選ぶ。 */
-           net:mwNet(profit), netMode:mwNetMode(),
+           feeSize:z.sizeName||'',
+           /* 使うほう（並べ替え・絞り込み） */
+           profit:profit, net:mwNet(profit),
            margin:Math.round(profit/price*1000)/10,
+           /* 両方（表示用） */
+           profitSedo:profitSedo, netSedo:mwNet(profitSedo),
+           marginSedo:Math.round(profitSedo/price*1000)/10,
+           profitMw:profitMw, netMw:mwNet(profitMw),
+           marginMw:Math.round(profitMw/price*1000)/10,
+           profitMode:mode,
+           netMode:mwNetMode(),
            genre:mwAmzGenre(r) };
 }
 /* ---- 税抜の粗利の出し方（6.111）----
@@ -10606,15 +10697,35 @@ function mwFeeTestRun(){
     });
 }
 $('mwFeeTestBtn').onclick=mwFeeTestRun;
+/* 内訳（6.145）。**せどりすと と同じ並び**で出す。
+     販売手数料（率）＋手数料の消費税 ／ FBA手数料（配送代行＋在庫管理）
+     ／ 仕入原価 ／ 納付消費税 ／ 粗利
+   粗利は せどりすと方式 と MW送料込み の**2つ**を並べ、
+   並べ替え・絞り込みに使っているほうを太字にする。 */
 function mwAmzBreak(r,c){
   if(!c)return '';
+  var useSedo=(c.profitMode==='sedori');
+  var b=function(on,t){ return on?('<b>'+t+'</b>'):t; };
   return '<div class="note2" style="margin:2px 0 0">'
     +'販売手数料 '+yen(c.feeRef)
     +(c.rate!=null?('（'+c.rate+'%）'):'')
-    +(c.feeTax?('＋手数料消費税 '+yen(c.feeTax)):'')
+    +'＋手数料消費税 '+yen(c.feeTax)
     +'　FBA手数料 '+yen(c.fba)
-    +'　仕入 '+yen(c.cost)
-    +(c.feeReal?'':' <span style="color:var(--bad)">仮の手数料</span>')
+    +((c.fbaShip||c.fbaStore)
+      ?('（配送代行 '+yen(c.fbaShip)+'＋在庫管理 '+yen(c.fbaStore)+'）'):'')
+    +(c.feeReal?'':(' <span style="color:var(--bad)">仮の手数料'
+      +(c.feeSize?('・'+esc(c.feeSize)):'')+'</span>'))
+    +'</div>'
+    +'<div class="note2" style="margin:2px 0 0">'
+    +'仕入原価 '+yen(c.costSedo)+'（卸値×1.1）'
+    +(c.ship?('＋MW送料 '+yen(c.ship)):'')
+    +'</div>'
+    +'<div class="note2" style="margin:2px 0 0">'
+    +'粗利（税抜）　'
+    +b(useSedo,'せどりすと方式 '+yen(c.netSedo))
+    +'　／　'+b(!useSedo,'MW送料込み '+yen(c.netMw))
+    +' <span style="opacity:.75">（'+esc(mwNetLabel())+'・'
+    +'税込 '+yen(c.profitSedo)+'／'+yen(c.profitMw)+'）</span>'
     +'</div>';
 }
 function mwAmzRunGo(){
@@ -19233,7 +19344,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v231';   // sw.js の const V と必ず同じ値にする
+var APP_V='v232';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

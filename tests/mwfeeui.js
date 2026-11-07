@@ -94,8 +94,14 @@ ok(c.sai.cost===5126,'★仕入は 卸値×1.1＋仕入送料（4,950＋176）')
 ok(c.sai.profit===9638-2073-5126,'★★★粗利＝売値−手数料−仕入');
 console.log('   仮の手数料: '+JSON.stringify(c.tmp));
 ok(c.tmp.real===false,'★★★取れていない行は「仮」');
-ok(c.tmp.ref===Math.round(9000*0.15)&&c.tmp.fba===530&&c.tmp.tax===0,
-   '★★取れていない行は⚙設定の一律の値');
+/* 6.145：仮の値も せどりすと に合わせる。
+   販売手数料（率）＋**手数料の消費税10%**、FBA は**サイズ区分の目安**
+   （ゲームの既定は小型 288＋1＝289）。 */
+{
+  const ref=Math.round(9000*0.15);
+  ok(c.tmp.ref===ref&&c.tmp.tax===Math.round(ref*0.1)&&c.tmp.fba===289,
+     '★★取れていない行は⚙設定の率＋消費税10%＋サイズ区分のFBA（6.145）');
+}
 
 console.log('\n=== 画面の表示 ===');
 const card=async(jan)=>await p.evaluate((jan)=>{

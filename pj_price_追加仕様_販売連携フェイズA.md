@@ -6476,3 +6476,17 @@ pj-sync は `{"FeesEstimateByIdRequestList":[…]}` の形で送っていたた�
 | `{jan, qty}` | 今までどおり（0 で印を外す） |
 | `{jan, reg:'other'\|'pj'\|''}` | 登録済みにする／未登録に戻す（数量は触らない） |
 | `{jan, off:1}` | この区分から外す（印ごと消す） |
+
+## 7.106 FBA手数料を「配送代行」と「在庫管理」に分けて控える（2026-11-07）
+
+せどりすと の内訳（FBA 289＝配送代行 288＋在庫管理 1）と並べて見るため、
+`getMyFeesEstimates` の応答から内訳を取り出して控える。
+
+- Amazon は `FBAFees` の中の **`IncludedFeeDetailList`** に内訳を入れてくる。
+  `…Fulfillment…`／`…Pick`／`…Pack`／`…Weight` は**配送代行**、
+  `…Storage…` は**在庫管理**として足す。
+- 内訳が無いときは、種類の名前だけで振り分ける。
+- 内訳の合計が FBA手数料に合わないときは、差を**配送代行**に寄せる
+  （合計がずれないようにする）。
+- 控え先：`mw_amz.fee_fba_ship` / `fee_fba_store`（**migrate-0039**）。
+  `GET /mw/amz` と `GET /mw/buy` が返すので、画面はそのまま出せる。

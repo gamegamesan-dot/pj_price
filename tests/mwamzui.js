@@ -146,20 +146,29 @@ let c=await p.evaluate((R)=>{
     const r=R.filter((x)=>x.jan===jan)[0];
     const z=mwAmzCalc(r);
     return z?{genre:z.genre,rate:z.rate,fba:z.fba,fee:z.fee,cost:z.cost,
-      profit:z.profit,net:z.net,margin:z.margin,price:z.price}:null; };
+      costSedo:z.costSedo,profit:z.profit,profitSedo:z.profitSedo,
+      net:z.net,margin:z.margin,price:z.price}:null; };
   return { game:f('4595120538169'), fig:f('4582292602828'),
            red:f('4988611224878'), none:f('4970381909444') };
 },ROWS);
 console.log('   ゲーム: '+JSON.stringify(c.game));
 console.log('   フィギュア: '+JSON.stringify(c.fig));
-ok(c.game.genre==='ゲーム'&&c.game.rate===15&&c.game.fba===530,
-   '★★ゲームは 15%＋FBA530円');
-ok(c.fig.genre==='フィギュア'&&c.fig.rate===10&&c.fig.fba===580,
-   '★★フィギュアは 10%＋FBA580円');
-/* 10/7 の利益計算ファイルの実例と合うか（仕入れ送料176円のぶんだけ differ） */
+/* 6.145：仮の手数料は **販売手数料（率）＋手数料の消費税10%＋サイズ区分の
+   FBA手数料（配送代行＋在庫管理）**になった（せどりすと に合わせたため）。
+   ゲームの既定は小型（288＋1＝289）、フィギュアは標準（425＋16＝441）。 */
+ok(c.game.genre==='ゲーム'&&c.game.rate===15&&c.game.fba===289,
+   '★★ゲームは 15%＋小型のFBA（288＋1）');
+ok(c.fig.genre==='フィギュア'&&c.fig.rate===10&&c.fig.fba===441,
+   '★★フィギュアは 10%＋標準のFBA（425＋16）');
 ok(c.game.cost===Math.round(12000*1.1)+176,
    '★★仕入値＝卸値×1.1＋仕入れ送料176円');
-ok(c.game.fee===Math.round(24829*0.15)+530,'★★手数料＝販売価格×率＋FBA');
+ok(c.game.costSedo===Math.round(12000*1.1),
+   '★★★せどりすと方式の仕入原価は 卸値×1.1 だけ（6.145）');
+{
+  const ref=Math.round(24829*0.15);
+  ok(c.game.fee===ref+Math.round(ref*0.1)+289,
+     '★★手数料＝販売価格×率＋手数料の消費税10%＋FBA（6.145）');
+}
 ok(c.game.profit===24829-c.game.fee-c.game.cost,
    '★★粗利＝販売価格−手数料−仕入値');
 /* 税抜の式は⚙設定で選ぶ（6.111）。既定は せどりすと方式（×0.9）。 */
@@ -169,14 +178,22 @@ ok(c.game.net<c.game.profit,'★税抜は税込より小さい');
 ok(c.game.margin===Math.round(c.game.profit/24829*1000)/10,'★利益率');
 ok(c.red.profit<0,'★★赤字の行は赤字と出る');
 ok(c.none===null,'★★値段が取れていない行は計算しない');
-/* 10/7 のファイルの数字との突き合わせ（粗利 7375・手数料 4254・仕入 13200）。
-   いまは仕入れ送料176円を足すので、そのぶん粗利が減るのが正しい。 */
-console.log('   10/7 のファイル: 粗利7375 手数料4254 仕入13200');
+/* 10/7 のファイルの数字（粗利 7375・手数料 4254・仕入 13200）は
+   **手数料の消費税を足す前**のもの。6.145 で せどりすと に合わせたので、
+   手数料は「消費税＋サイズ区分のFBA」のぶんだけ変わるのが正しい。
+   ここでは**その差がちょうど説明できること**を見張る。 */
+console.log('   10/7 のファイル: 粗利7375 手数料4254 仕入13200（消費税なし・FBA530）');
 console.log('   いま:            粗利'+c.game.profit+' 手数料'+c.game.fee
   +' 仕入'+c.game.cost+'（＋176円）');
-ok(c.game.fee===4254,'★★手数料が 10/7 のファイルと一致する');
-ok(c.game.profit===7375-176,
-   '★★粗利は 10/7 のファイルから仕入れ送料176円ぶん少ない（式どおり）');
+{
+  const ref=Math.round(24829*0.15);         // 3724
+  ok(c.game.fee===4254-530+289+Math.round(ref*0.1),
+     '★★手数料の差は「FBA の付け替え（530→289）＋手数料の消費税」だけ');
+  ok(c.game.profit===24829-c.game.fee-c.game.cost,
+     '★★粗利＝販売価格−手数料−仕入値（MW送料込み）');
+  ok(c.game.profitSedo===c.game.profit+176,
+     '★★★せどりすと方式の粗利は MW送料のぶん多い（6.145）');
+}
 
 console.log('\n=== 一覧 ===');
 await p.evaluate(()=>{ $('csvMwAmzLoad').click(); });
@@ -255,14 +272,22 @@ ok(red[head.indexOf('ジャンル')]==='ゲーム','★赤字の行もジャン�
 
 console.log('\n=== 手数料を変えると取り直さずに計算し直せる ===');
 let again=await p.evaluate((R)=>{
-  $('mwAmzFeeGame').value='8'; $('mwAmzFbaGame').value='0';
+  /* 6.145：仮の FBA手数料は**サイズ区分ごとの欄**になった
+     （ゲームの既定は小型）。0 を入れても既定値に戻らないこと。 */
+  $('mwAmzFeeGame').value='8';
+  $('mwFbaShipS').value='0'; $('mwFbaStoreS').value='0';
+  $('mwAmzFbaGame').value='0';
   const z=mwAmzCalc(R.filter((x)=>x.jan==='4595120538169')[0]);
   return { rate:z.rate, fba:z.fba, fee:z.fee, profit:z.profit, net:z.net };
 },ROWS);
 console.log('   '+JSON.stringify(again));
 ok(again.rate===8&&again.fba===0,
    '★★⚙設定の値がそのまま効く（**0 を入れても既定値に戻らない**）');
-ok(again.fee===Math.round(24829*0.08),'★★手数料が計算し直される');
+{
+  const ref2=Math.round(24829*0.08);
+  ok(again.fee===ref2+Math.round(ref2*0.1),
+     '★★手数料が計算し直される（販売手数料＋消費税10%・6.145）');
+}
 ok(again.profit>c.game.profit,'★★利益も計算し直される（取り直し不要）');
 ok(again.net===Math.round(again.profit*0.9),'★税抜も付いてくる');
 

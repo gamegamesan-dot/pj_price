@@ -563,6 +563,9 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   /* 商品ごとの手数料（Product Fees API・7.85）。一律の率とは別に持つ。 */
   fee_ref    INTEGER,   -- 販売手数料（税抜）
   fee_fba    INTEGER,   -- FBA手数料（配送代行＋在庫管理）
+  /* その内訳（7.106・migrate-0039）。せどりすと と並べて見るため。 */
+  fee_fba_ship  INTEGER,   -- 配送代行手数料
+  fee_fba_store INTEGER,   -- 在庫管理手数料
   fee_tax    INTEGER,   -- 手数料の消費税
   fee_total  INTEGER,   -- 合計（Amazon が返す総額）
   fee_base   INTEGER,   -- その手数料を出したときの売値
