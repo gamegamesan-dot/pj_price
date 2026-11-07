@@ -1,12 +1,14 @@
-/* ⚙設定を使う頻度で並べる（6.50）
-   ・上（よく変える）＝値付けの目標／自動値下げ／売値の自動反映／相場の扱い は初期から開く
-   ・中（ときどき）・下（ほぼ触らない）は畳む。見出しをタップで開閉し、開閉を保存する
+/* ⚙設定を中身で5つのまとまりに並べる（6.50／6.150）
+   ・1 値付け ／ 2 自動でやること ／ 3 仕入れ ／ 4 出品の既定値 ／ 5 ほぼ触らない
+   ・上に目次（#cfgToc）を出し、押すとそのまとまりへ飛ぶ
+   ・値付けの目標／自動値下げ／売値の自動反映／相場の扱い は初期から開く
+   ・ほかは畳む。見出しをタップで開閉し、開閉を保存する
    ・要対応（キーが空・設定を送っていない）のグループは自動で開いて赤く出す
      （自動で開いたぶんは覚えない＝直したら元の畳んだ状態に戻る）
    ・説明は1行だけ出し、残りは「?」で出す
    ・値・保存先・動作は変えない（並び替えと表示だけ） */
 const { harness } = require('./lib');
-const T = harness('⚙設定の並び（使う頻度で3段）');
+const T = harness('⚙設定の並び（5つのまとまり）');
 const ok = T.ok;
 (async()=>{
 const p=await T.open();
@@ -23,17 +25,31 @@ const groups=async()=>await p.evaluate(()=>{
 });
 const byKey=(g,k)=>g.filter(x=>x.k===k)[0]||{};
 
-console.log('=== 3段に並ぶ ===');
+console.log('=== 5つのまとまりに並ぶ ===');
 let g=await groups();
 g.forEach(x=>console.log('   '+(x.open?'開':'閉')+' '+x.k+' '+x.sum));
 const band=await p.evaluate(()=>Array.from(document.querySelectorAll('#tabCfg .cfgband'))
   .map(d=>d.textContent.replace(/\s+/g,' ').trim()));
 console.log('   帯: '+JSON.stringify(band));
-ok(band.length===3&&/よく変える/.test(band[0])&&/ときどき変える/.test(band[1])
-   &&/ほぼ触らない/.test(band[2]),'★「よく変える／ときどき変える／ほぼ触らない」の3段');
+ok(band.length===5&&/1\. 値付け/.test(band[0])&&/2\. 自動/.test(band[1])
+   &&/3\. 仕入れ/.test(band[2])&&/4\. 出品の既定値/.test(band[3])
+   &&/5\. ほぼ触らない/.test(band[4]),
+   '★「値付け／自動／仕入れ／出品の既定値／ほぼ触らない」の5つ（6.150）');
 ok(g.map(x=>x.k).join()
-   ==='goal,md,rv,sold,tune,list,amz,conn,fee,policy,sync,ops,man,ui',
-   '★上から 値付けの目標→自動値下げ→自動反映→相場→（中）→（下）の順');
+   ==='goal,sold,fee,md,rv,sync,amz,tune,list,policy,conn,ui,ops,man',
+   '★まとまりごとに並ぶ（値付け→自動→仕入れ→出品の既定値→ほぼ触らない）');
+/* 6.150：上の目次からそのまとまりへ飛べる。 */
+const toc=await p.evaluate(()=>Array.from(
+  document.querySelectorAll('#cfgToc button')).map(b=>b.textContent.trim()));
+console.log('   目次: '+JSON.stringify(toc));
+ok(toc.length===5&&/1\. 値付け/.test(toc[0]),'★上に目次が出る（5つ）');
+const jumped=await p.evaluate(()=>{
+  const b=Array.from(document.querySelectorAll('#cfgToc button'))
+    .filter(x=>/3\. 仕入れ/.test(x.textContent))[0];
+  b.click();
+  return !!document.querySelector('#cfgBandbuy');
+});
+ok(jumped,'★押すとそのまとまりへ飛ぶ');
 
 console.log('\n=== 上の4つは初期から開く ===');
 ok(['goal','md','rv','sold'].every(k=>byKey(g,k).open===true),

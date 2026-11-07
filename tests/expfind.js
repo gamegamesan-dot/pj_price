@@ -75,7 +75,8 @@ const exp=await p.evaluate(()=>{
 console.log('   '+exp.n+'件: '+JSON.stringify(exp.all.map((x)=>x.key)));
 ok(exp.n>=12,'★★長い説明文が畳める形になっている');
 ok(exp.all.every((x)=>x.open===false),'★★★既定は畳んだ状態');
-ok(exp.all.every((x)=>x.sum==='説明'),'★★★「説明」の1行で畳む');
+/* 6.150：⚙では何の説明か分かるように「○○の説明」と書く（1行は同じ）。 */
+ok(exp.all.every((x)=>/説明$/.test(x.sum)),'★★★「説明」の1行で畳む');
 const tabs=exp.all.map((x)=>x.tab);
 console.log('   タブ: '+JSON.stringify(Array.from(new Set(tabs))));
 ['tabAmz','tabCsv','tabSync'].forEach(function(t){

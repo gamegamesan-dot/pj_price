@@ -37,7 +37,9 @@ const view=async()=>await p.evaluate(()=>({
   list:$('syncMdList').innerText, listHtml:$('syncMdList').innerHTML,
   brk:$('syncWarnBreak').innerText,
   n:(($('syncMdList').innerText.match(/^・/gm)||[]).length),
-  saved:localStorage.getItem('pj:syncmore:v1')||'' }));
+  /* 6.150：出している件数で覚える（pj:listn:v1）。
+     v235 までは開いた／閉じたの真偽値（pj:syncmore:v1）だった。 */
+  saved:localStorage.getItem('pj:listn:v1')||'' }));
 
 console.log('=== 販売連携：まとめは先頭3件だけ出す ===');
 await seed(); await openCsvBoxes(p);
@@ -45,6 +47,7 @@ let v=await view();
 console.log('   予定の一覧: '+v.list.replace(/\n/g,' / '));
 ok(v.n===3,'★値下げの予定は先頭3件だけ出す（5件のうち）');
 ok(/すべて表示（5件）/.test(v.list),'★「すべて表示（5件）」を出す');
+ok(/さらに10件/.test(v.list),'★「さらに10件」も出す（6.150）');
 console.log('   警告の理由: '+v.brk.replace(/\n/g,' / '));
 ok(/対応が必要 5件/.test(v.brk),'★件数は全部の数で出す');
 ok((v.brk.match(/件\s*／/g)||[]).length===2&&/すべて表示（5件）/.test(v.brk),
@@ -58,7 +61,7 @@ console.log('   '+v.list.replace(/\n/g,' / '));
 ok(v.n===5,'★押すと5件ぜんぶ出る');
 ok(/折りたたむ/.test(v.list)&&!/すべて表示/.test(v.list),'★「折りたたむ」に変わる');
 console.log('   保存: '+v.saved);
-ok(/"mdplan":true/.test(v.saved),'★開いた状態をこの端末に保存する');
+ok(/"more:mdplan":\d+/.test(v.saved),'★開いた状態（出す件数）をこの端末に保存する');
 
 console.log('\n=== 開き直しても開いたまま ===');
 await p.reload(); await p.waitForTimeout(400);
@@ -68,7 +71,7 @@ console.log('   '+v.list.replace(/\n/g,' / '));
 ok(v.n===5&&/折りたたむ/.test(v.list),'★開き直しても開いたまま');
 await p.click('#syncMdList a[data-more="mdplan"]'); await p.waitForTimeout(200);
 v=await view();
-ok(v.n===3&&/"mdplan":false/.test(v.saved),'★畳んだ状態も残る');
+ok(v.n===3&&!/"more:mdplan"/.test(v.saved),'★畳んだら先頭3件に戻る（記憶も消える）');
 
 console.log('\n=== 3件以下のときはリンクを出さない ===');
 const few=await p.evaluate(()=>{
@@ -130,31 +133,21 @@ ok(one.open===false&&!/要対応/.test(one.sum),
 console.log('\n=== ⚙設定：使い方マニュアル ===');
 /* 中身（章立て・作業の流れ・管理者だけの印）は tests/manual.js で見る。
    ここでは置き場所と「畳んである」ことだけ確かめる。 */
+/* 6.150：マニュアルは manual.html に分けた（⚙にはリンクだけ）。
+   中身の確かめは tests/manual.js で行う。ここでは置き場所だけ見る。 */
 const man=await p.evaluate(()=>{
   switchTab('G'); $('cfgManBox').open=true;
   const box=$('cfgManBox');
   return { inCfg:$('tabCfg').contains(box),
     inCsv:$('tabCsv').contains(box),
-    chaps:Array.from(box.querySelectorAll('details.manc>summary'))
-      .map(x=>x.textContent.trim()),
-    shut:Array.from(box.querySelectorAll('details.manc')).every(d=>!d.open),
-    lis:box.querySelectorAll('li').length,
-    long:Array.from(box.querySelectorAll('li')).filter(x=>x.textContent.length>260).length,
-    /* 畳んだままだと innerText に出ないので、中身を読むときだけ開ける。 */
-    text:(function(){
-      box.querySelectorAll('details.manc').forEach(function(d){ d.open=true; });
-      const t=box.innerText;
-      box.querySelectorAll('details.manc').forEach(function(d){ d.open=false; });
-      return t;
-    })() };
+    link:(box.querySelector('a[href="manual.html"]')||{}).getAttribute
+      ?box.querySelector('a[href="manual.html"]').getAttribute('href'):'',
+    body:box.querySelectorAll('details.manc').length };
 });
-console.log('   章: '+JSON.stringify(man.chaps));
+console.log('   '+JSON.stringify(man));
 ok(man.inCfg&&!man.inCsv,'★⚙設定の中にある');
-ok(man.chaps.length===5,'★★章は5つ（毎日／Amazon刈取／eBay出品／販売連携／困ったとき）');
-ok(man.shut,'★★章は畳んである（スマホで長い文を一度に見せない）');
-ok(man.lis>=40&&man.long===0,'★短い箇条書きで書く（長すぎる行なし）');
-ok(/Shift_JIS/.test(man.text)&&/File Exchange/.test(man.text)&&/500px/.test(man.text),
-   '★画面から外した説明（文字コード・File Exchange・写真の大きさ）が入っている');
+ok(man.link==='manual.html','★★マニュアルは別のページ（manual.html）へのリンク');
+ok(man.body===0,'★★本文は index.html から外した（⚙が短くなる）');
 
 await T.done();
 })();

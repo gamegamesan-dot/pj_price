@@ -1,8 +1,11 @@
-/* 画面：使い方マニュアル（6.122）
-   ・⚙設定の中にあり、**章ごとに開閉**できる（スマホで一度に長い文を見せない）
+/* 画面：使い方マニュアル（6.122／6.150）
+   ・6.150 から**別のページ（manual.html）**。⚙にはリンクだけ置く
+     （index.html が長くなりすぎて、⚙のスクロールが終わらなかった）
+   ・**章ごとに開閉**できる（スマホで一度に長い文を見せない）
    ・機能の羅列ではなく「いつ・何をするか」の順。章は5つ
-   ・タブの名前と並び（出品CSV／販売連携／eBay／Amazon刈取／⚙）に合っている
+   ・タブの名前と並び（出品CSV／販売連携／eBay／仕入れ／⚙）に合っている
    ・管理者だけの操作には、作業者用の端末（STAFF_KEY）で「管理者だけ」の印が出る */
+const path=require('path');
 const { harness } = require('./lib');
 const T = harness('画面：使い方マニュアル');
 const ok = T.ok;
@@ -10,14 +13,28 @@ const ok = T.ok;
 const p=await T.open();
 p.on('dialog',async d=>{ await d.accept(); });
 
-const open=async()=>await p.evaluate(()=>{
-  switchTab('G');
-  $('cfgManBox').open=true;
-  document.querySelectorAll('#cfgManBox details.manc')
+/* 6.150：マニュアルは manual.html に移した。
+   ⚙にリンクがあることを確かめてから、そのページを開く。 */
+/* 章をぜんぶ開く（読むため）。 */
+const openChaps=async()=>await p.evaluate(()=>{
+  document.querySelectorAll('.man details.manc')
     .forEach(function(d){ d.open=true; });
 });
+const open=async()=>{
+  const link=await p.evaluate(()=>{
+    switchTab('G');
+    $('cfgManBox').open=true;
+    const a=document.querySelector('#cfgManBox a[href="manual.html"]');
+    return { href:a?a.getAttribute('href'):'', body:
+      !!document.querySelector('.man details.manc') };
+  });
+  ok(link.href==='manual.html','★★★⚙にはマニュアルへのリンクだけ置く（6.150）');
+  ok(link.body===false,'★★本文は index.html から外した');
+  await p.goto('file://'+path.join(__dirname,'..','manual.html'));
+  await openChaps();
+};
 const chap=(n)=>p.evaluate((n)=>{
-  const d=document.querySelectorAll('#cfgManBox details.manc')[n];
+  const d=document.querySelectorAll('.man details.manc')[n];
   return d?{ sum:d.querySelector('summary').textContent.trim(),
     h5:Array.prototype.map.call(d.querySelectorAll('h5'),
       (h)=>h.textContent.replace(/管理者だけ/g,'').trim()),
@@ -28,33 +45,34 @@ await open();
 
 console.log('=== 章立て ===');
 const sums=await p.evaluate(()=>Array.prototype.map.call(
-  document.querySelectorAll('#cfgManBox details.manc>summary'),
+  document.querySelectorAll('.man details.manc>summary'),
   (x)=>x.textContent.trim()));
 console.log('   '+JSON.stringify(sums));
 ok(sums.length===5,'★★★章は5つ');
 ok(/^1\. 毎日の作業/.test(sums[0]),'★★1章は「毎日の作業」（まずこれを見る）');
-ok(/Amazon刈取/.test(sums[1]),'★★2章は Amazon刈取');
+ok(/仕入れ（刈取/.test(sums[1]),'★★2章は 仕入れ（刈取）');
 ok(/eBay 出品/.test(sums[2]),'★★3章は eBay 出品');
 ok(/販売連携/.test(sums[3]),'★★4章は 販売連携（売れたとき）');
 ok(/困ったとき/.test(sums[4]),'★★5章は 困ったとき');
 /* 畳んだ状態から始める（開くのは読みたい章だけ）。 */
 const shut=await p.evaluate(()=>{
-  document.querySelectorAll('#cfgManBox details.manc')
+  document.querySelectorAll('.man details.manc')
     .forEach(function(d){ d.open=false; });
-  const d=document.querySelector('#cfgManBox details.manc');
+  const d=document.querySelector('.man details.manc');
   d.querySelector('summary').click();
   const r={ one:d.open,
     others:Array.prototype.filter.call(
-      document.querySelectorAll('#cfgManBox details.manc'),(x)=>x.open).length };
+      document.querySelectorAll('.man details.manc'),(x)=>x.open).length };
   return r;
 });
 console.log('   '+JSON.stringify(shut));
 ok(shut.one===true&&shut.others===1,'★★★章は1つずつ開ける（タップで開閉）');
-await open();
+await openChaps();
 
 console.log('\n=== タブの名前と並びに合っている ===');
-const all=await p.evaluate(()=>($('cfgManBox').innerText||'').replace(/\s+/g,' '));
-ok(/出品CSV/.test(all)&&/販売連携/.test(all)&&/Amazon刈取/.test(all),
+const all=await p.evaluate(()=>
+  ((document.querySelector('.man')||{}).innerText||'').replace(/\s+/g,' '));
+ok(/出品CSV/.test(all)&&/販売連携/.test(all)&&/仕入れ/.test(all),
    '★★いまのタブの名前で書いている');
 ok(!/Shopee/.test(all),'★★タブから外した Shopee は書かない');
 ok(!/出品文タブ/.test(all),'★無くなった「出品文」タブは書かない');
@@ -163,7 +181,7 @@ ok(/git pull/.test(c.text)&&/wrangler deploy/.test(c.text)
 
 console.log('\n=== 管理者だけの印（作業者用の端末）===');
 const adm=await p.evaluate(()=>{
-  const q=document.querySelectorAll('#cfgManBox .admonly');
+  const q=document.querySelectorAll('.man .admonly');
   return { n:q.length, shown:getComputedStyle(q[0]).display,
     near:Array.prototype.map.call(q,(x)=>
       (x.closest('li')||x.closest('h5')||x).textContent.replace(/\s+/g,' ')
@@ -172,11 +190,13 @@ const adm=await p.evaluate(()=>{
 console.log('   '+adm.n+'個 / '+adm.shown);
 ok(adm.n>=7,'★★管理者だけの操作に印が付いている');
 ok(adm.shown==='none','★★管理者の端末では印を出さない（全部押せるので）');
+/* 6.150：別ページなので、作業者用の端末の見え方は .man に staff を付けて見る
+   （index.html では body.staff から同じ class が付く）。 */
 const staff=await p.evaluate(()=>{
-  localStorage.setItem('pj:role:v1','staff');
-  syncRole='staff'; roleApply();
-  const q=document.querySelectorAll('#cfgManBox .admonly');
-  return { body:document.body.className, shown:getComputedStyle(q[0]).display,
+  const m=document.querySelector('.man');
+  m.classList.add('staff');
+  const q=document.querySelectorAll('.man .admonly');
+  return { body:m.className, shown:getComputedStyle(q[0]).display,
     text:q[0].textContent.trim() };
 });
 console.log('   '+JSON.stringify(staff));
@@ -185,7 +205,7 @@ ok(staff.shown!=='none'&&staff.text==='管理者だけ',
    '★★★作業者用の端末では「管理者だけ」と出る');
 const where=await p.evaluate(()=>{
   const t=[];
-  document.querySelectorAll('#cfgManBox .admonly').forEach(function(x){
+  document.querySelectorAll('.man .admonly').forEach(function(x){
     const h=x.closest('h5'), l=x.closest('li');
     t.push(((h||l||x).textContent||'').replace(/\s+/g,' ').slice(0,30));
   });

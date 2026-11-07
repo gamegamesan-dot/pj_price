@@ -1,5 +1,5 @@
-/* タブの並びと、eBayタブの中の「値付け｜出品文」の切り替え（6.26）
-   ・並びは 出品CSV ― 販売連携 ― eBay ― Shopee。開いたときは出品CSV
+/* タブの並びと、eBay／仕入れタブの中の切り替え（6.26／6.150）
+   ・並びは 出品CSV ― 販売連携 ― eBay ― 仕入れ。開いたときは出品CSV
    ・出品文は eBay タブの中に入れた（タブは4つ＋⚙設定）
    ・出品CSVの行の「出品文を作る」→ eBay タブの出品文側 →「書き戻す」の往復
    ・各タブの設定が混ざらないこと */
@@ -18,8 +18,29 @@ const bar=await p.$$eval('.tabbar .tabs button',bs=>bs
   .map(b=>b.id+':'+b.textContent+':'+b.getAttribute('aria-pressed')));
 console.log('   '+JSON.stringify(bar));
 ok(bar.length===5,'★タブは4つ＋⚙設定（出品文は eBay の中に入れた）');
-ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|Amazon刈取|⚙',
-   '★★★並びは 出品CSV ― 販売連携 ― eBay ― Amazon刈取 ― ⚙設定');
+ok(bar.map(x=>x.split(':')[1]).join('|')==='出品CSV|販売連携|eBay|仕入れ|⚙',
+   '★★★並びは 出品CSV ― 販売連携 ― eBay ― 仕入れ ― ⚙設定（6.150）');
+/* 6.150：仕入れタブの中は「刈取（Amazon FBA）｜無在庫（eBay）」の2つ。
+   どちらも同じ在庫CSV・同じ JAN の行から始まるので1つのタブにまとめた。 */
+const buy=await p.evaluate(()=>{
+  switchTab('F');
+  const a={ bar:getComputedStyle($('buySubBar')).display,
+    amz:getComputedStyle($('tabAmz')).display,
+    mw:getComputedStyle($('tabBuyMw')).display,
+    pressed:$('buySubAmz').getAttribute('aria-pressed') };
+  $('buySubMw').click();
+  const b={ amz:getComputedStyle($('tabAmz')).display,
+    mw:getComputedStyle($('tabBuyMw')).display,
+    pressed:$('buySubMw').getAttribute('aria-pressed'),
+    tabF:$('tabF').getAttribute('aria-pressed') };
+  switchTab('D');                 // 元（出品CSV）に戻す
+  return { a:a, b:b };
+});
+console.log('   仕入れ: '+JSON.stringify(buy));
+ok(buy.a.bar!=='none'&&buy.a.amz!=='none'&&buy.a.mw==='none'
+   &&buy.a.pressed==='true','★★仕入れタブは「刈取」から始まる');
+ok(buy.b.mw!=='none'&&buy.b.amz==='none'&&buy.b.pressed==='true'
+   &&buy.b.tabF==='true','★★「無在庫（eBay）」に切り替わる（タブの印は仕入れのまま）');
 ok((await p.evaluate(()=>getComputedStyle($('tabC')).display))==='none',
    '★★Shopee のボタンは出さない（中身は残す）');
 ok(bar[0].indexOf(':true')>0&&bar.slice(1).every(x=>x.indexOf(':false')>0),

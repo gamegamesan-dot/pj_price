@@ -1,6 +1,6 @@
 /* 画面：Amazon刈取タブ（6.116〜6.120）
    出品CSVタブの「国内 Amazon FBA で見る」を独立したタブに移した（機能は同じ）。
-   ・タブは 出品CSV／販売連携／eBay／Amazon刈取／⚙（Shopee はタブから外した）
+   ・タブは 出品CSV／販売連携／eBay／仕入れ／⚙（Shopee はタブから外した）
    ・スマホの幅（390・360・320px）で1行に収まる
    ・MW の在庫CSVの取り込みはタブの上にも置く（同じ処理）。前回の取り込みと催促も
    ・作業者でも見える（見る・印・JANコピー・注文用CSVまで）
@@ -19,8 +19,8 @@ let bar=await p.$$eval('.tabbar .tabs button',bs=>bs
   .filter(b=>getComputedStyle(b).display!=='none')
   .map(b=>b.textContent));
 console.log('   '+JSON.stringify(bar));
-ok(bar.join('|')==='出品CSV|販売連携|eBay|Amazon刈取|⚙',
-   '★★★出品CSV／販売連携／eBay／Amazon刈取／⚙');
+ok(bar.join('|')==='出品CSV|販売連携|eBay|仕入れ|⚙',
+   '★★★出品CSV／販売連携／eBay／仕入れ／⚙');
 ok(bar.length===5,'★5つ');
 
 console.log('\n=== スマホの幅で1行に収まる ===');
@@ -46,7 +46,7 @@ for(const w of [414,390,360,320]){
 }
 await p.setViewportSize({width:390,height:900});
 
-console.log('\n=== Amazon刈取タブの中身（移したもの）===');
+console.log('\n=== 仕入れタブ（刈取）の中身（移したもの）===');
 await p.evaluate(()=>{ switchTab('F'); });
 await p.waitForTimeout(200);
 let v=await p.evaluate(()=>{
@@ -60,20 +60,21 @@ let v=await p.evaluate(()=>{
     buyShow:inTab('csvMwBuyShow'), jan:inTab('csvMwJanCopy'),
     orderCsv:inTab('csvMwBuyCsv'), reg:inTab('csvMwReg'),
     put:inTab('csvMwPut'), find:inTab('mwAmzFind'), cam:inTab('mwAmzFindCam'),
-    /* 出品CSVタブに残すもの */
-    mwBox:!!$('csvMwBox'), mwImport:!!($('csvMwImport')
-      &&$('csvMwImport').closest('#tabCsv')) };
+    /* 6.150：MW の無在庫は**仕入れタブの「無在庫（eBay）」**に移した。 */
+    mwBox:!!($('csvMwBox')&&$('csvMwBox').closest('#tabBuyMw')),
+    mwImport:!!($('csvMwImport')&&$('csvMwImport').closest('#tabBuyMw')),
+    mwInCsv:!!($('csvMwBox')&&$('csvMwBox').closest('#tabCsv')) };
 });
 console.log('   '+JSON.stringify(v));
-ok(v.tab===true&&v.csv===false,'★★★Amazon刈取タブが開く');
+ok(v.tab===true&&v.csv===false,'★★★仕入れタブ（刈取）が開く');
 ok(v.scan&&v.list&&v.sort&&v.dup&&v.rstOk,
    '★★★「Amazonで調べる」・一覧・並べ替え・絞り込み（JAN重複だけを含む）が入っている');
 ok(v.buyBar&&v.buyShow&&v.jan&&v.orderCsv,
    '★★★仕入れる印の帯・仕入れる一覧・JANコピー・注文用CSVが入っている');
 ok(v.reg&&v.put,'★★★Amazon登録用ファイルと Amazon への登録が入っている');
 ok(v.find&&v.cam,'★★★検索欄と📷が入っている');
-ok(v.mwBox&&v.mwImport,
-   '★★★MW の無在庫（在庫CSVの取り込み）は出品CSVタブに残る');
+ok(v.mwBox&&v.mwImport&&!v.mwInCsv,
+   '★★★MW の無在庫（在庫CSVの取り込み）は仕入れタブの「無在庫」にある（6.150）');
 
 console.log('\n=== MW の在庫CSVの取り込みはタブの上にも ===');
 let top=await p.evaluate(()=>{

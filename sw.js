@@ -1,8 +1,11 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v235';
+const V = 'pj-pricing-v236';
 const ASSETS = [
   './',
   './index.html',
+  // 使い方マニュアル（6.150）。⚙から分けた別ページ。
+  // オフラインでも読めるよう、index.html と同じ版で束ねて入れる。
+  './manual.html',
   // 値付けの式（index.html と pj-sync が同じファイルを読む）。
   // index.html と必ずセットで更新されるよう、バージョン（V）で束ねて入れておく。
   './shared/pricing.js',

@@ -66,7 +66,8 @@ const view=async()=>await p.evaluate(()=>{
   switchTab('G');
   const g={ goal:grp('goal'), md:grp('md'), rv:grp('rv'), sold:grp('sold'),
             tune:grp('tune'), fee:grp('fee'), conn:grp('conn'), list:grp('list'),
-            policy:grp('policy'), ops:grp('ops'), man:grp('man'), ui:grp('ui') };
+            policy:grp('policy'), ops:grp('ops'), man:grp('man'), ui:grp('ui'),
+            amz:grp('amz'), sync:grp('sync') };
   const cfgNote=vis('#tabCfg .staffonly');
   const price=vis('.cfgprice');
   const revPrice=vis('#csvRevisePrice');
@@ -84,6 +85,8 @@ const view=async()=>await p.evaluate(()=>{
     onhand:vis('#syncOnHandFix'),
     barRev:vis('#syncBarRev'), barFloor:vis('#syncBarFloor'),
     load:vis('#syncLoad'), push:vis('#syncPush'),
+    /* 6.150：作業者の端末では eBay タブを既定で隠す。 */
+    ebTab:vis('#tabA'), hideEbay:!!($('uiHideEbay')||{}).checked,
     saved:localStorage.getItem('pj:role:v1')||'' };
 });
 
@@ -114,8 +117,17 @@ ok(v.saved==='staff','★どちらのキーかを端末に控える');
 ok(v.g.goal===false&&v.g.md===false&&v.g.rv===false&&v.g.sold===false
    &&v.g.tune===false&&v.g.fee===false,
    '★★⚙設定の価格の欄（目標・自動値下げ・自動反映・相場・しきい値・手数料）を出さない');
-ok(v.g.conn&&v.g.list&&v.g.policy&&v.g.ops&&v.g.man&&v.g.ui,
-   '★価格でない設定（接続・原産国・ポリシー・操作・マニュアル・画面）は出す');
+/* 6.150：⚙は**大部分を既定で隠す**。作業者が使うのは
+   「接続設定」「画面」「ときどき使う操作」とマニュアルだけ。
+   値（ランキングの上限・手数料・原産国の既定値など）は pj-sync から来るので、
+   見えなくても同じ条件で動く。 */
+ok(v.g.conn&&v.g.ops&&v.g.man&&v.g.ui,
+   '★作業者が使う設定（接続・操作・マニュアル・画面）は出す');
+ok(v.g.list===false&&v.g.policy===false&&v.g.amz===false&&v.g.sync===false,
+   '★★そのほかの設定（原産国・ポリシー・刈取・販売連携の上限）は隠す（6.150）');
+console.log('   eBay タブ: '+JSON.stringify(v.ebTab));
+ok(v.ebTab===false,'★★eBay タブは既定で隠す（⚙の「画面」で戻せる）');
+ok(v.hideEbay===true,'★「eBay タブを隠す」に印が付く（人が外せば戻る）');
 ok(v.priceBox===false&&v.restock===false&&v.revPrice===false,
    '★★価格の操作・無在庫（MW）の見直し・「売値も含める」を出さない');
 ok(v.onhand===false,'★手動実行になる操作（手元在庫の付け直し）も出さない');

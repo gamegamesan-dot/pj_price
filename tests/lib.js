@@ -80,7 +80,10 @@ async function openCsvBoxes(page){
       function(d){ d.open=true; });
     // ⚙設定のグループ（6.50）も開く
     /* 開いたことを端末に覚えさせない（data-cfgauto はアプリ側の仕組み）。 */
-    Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details'),
+    /* 6.150：⚙にも「説明 ▸」（details.exp）が入ったので、
+       グループだけを開く（説明は畳んだままが既定）。 */
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#tabCfg details:not(.exp)'),
       function(d){ if(!d.open){ d.setAttribute('data-cfgauto','1'); d.open=true; } });
   });
   await page.waitForTimeout(80);
