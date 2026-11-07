@@ -1333,6 +1333,10 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="resetAuto">初期値に戻す</button>
         <span class="note2" id="autoNote" style="margin:0 0 0 8px"></span>
         <div class="note2" id="advSyncNote" style="margin:6px 0 0"></div>
+        <!-- 7.109：設定が消えたときに追えるようにする。いつ・どの端末・どの項目。 -->
+        <button class="btn" id="advLogBtn" style="margin-top:6px">設定の書き込み履歴</button>
+        <div class="note2" id="advLogNote" style="margin:4px 0 0"></div>
+        <div id="advLogBox"></div>
       </div>
     </details>
   </section>
@@ -1493,8 +1497,10 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv"><label>機種（空ならすべて）</label><input type="text" id="amzKishu" placeholder="空＝すべて（例 NS,NS2,figure）"><div class="note2" style="margin-top:2px">空にすると<b>全ジャンル</b>（MW のすべての機種）が候補になります。</div></div>
         <div class="row"><label>出荷（これ以内）</label><input type="number" id="amzShipMax" value="14" step="1" min="0" inputmode="numeric"><span class="unit">営業日</span></div>
         <div class="row"><label>MW 在庫（これ以上）</label><input type="number" id="amzStockMin" value="1" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
-        <div class="row cfgprice"><label>自動の取り直し（1時間ぶん）</label><input type="number" id="mwAutoPerHour" value="100" step="10" min="10" max="400" inputmode="numeric"><span class="unit">件</span></div>
-        <div class="note2 cfgprice" style="margin-top:2px">毎時37分の自動の取り直しで、1時間に進める件数です（<b>JAN→ASIN の引き当ても含みます</b>）。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>：ASIN の引き当ては 20件/回・5回/秒で軽いのでこの件数まで、<b>価格は 20件/回・0.1回/秒（10.5秒/回）</b>なので1回の持ち時間（45秒）では<b>60〜80件が上限</b>です。実際に進める見込みは「候補の件数を数える」の「1周（自動）」に出します。</div>
+        <!-- 7.109：件数は下の「自動で取り直す」の選択肢で選ぶ。
+             ここは Worker に送る件数の控え（隠し欄）。 -->
+        <input type="hidden" id="mwAutoPerHour" value="100">
+        <div class="note2 cfgprice" style="margin-top:2px">毎時37分の自動の取り直しで、1時間に進める件数は、下の<b>「MW候補の Amazon 価格を自動で取り直す」</b>で選びます（<b>JAN→ASIN の引き当ても含みます</b>）。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>：ASIN の引き当ては 20件/回・5回/秒で軽いのでこの件数まで、<b>価格は 20件/回・0.1回/秒（10.5秒/回）</b>なので1回の持ち時間（45秒）では<b>60〜80件が上限</b>です。実際に進める見込みは「候補の件数を数える」の「1周（自動）」に出します。</div>
         <div class="note2" style="margin:4px 0 2px">「Amazon刈取」タブで使う設定です。
           手数料は <b>Amazon から商品ごとに取れた値</b>を優先し、取れていない行だけ
           下の一律の値で計算します（画面に「仮の手数料」と出ます・7.85）。</div>
@@ -1605,7 +1611,7 @@ body.staff #syncOnHandFix{display:none !important}
           font-family:ui-monospace,monospace;font-size:11px"></textarea>
         <div class="note2" style="margin:4px 0 0">iPhone の Safari での入れ方は、
           <b>使い方マニュアルの「2. Amazon刈取」</b>に書いてあります。</div>
-        <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off" selected>オフ（「Amazonで調べる」を押したときだけ）</option><option value="on">オン（1時間に1回・20件ずつ）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>Amazon価格と手数料を20件</b>、<b>出品の可否を20件</b>だけ取り直します（7.86）。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順</b>。価格は3日たった行から取り直すので、候補1,180件なら<b>2〜3日で一周</b>します。<b>まずオフのままで1〜2日ようすを見てから</b>オンにしてください。</div></div>
+        <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off">オフ（「Amazonで調べる」を押したときだけ）</option><option value="20">オン（1時間に20件）</option><option value="50">オン（1時間に50件）</option><option value="100" selected>オン（1時間に100件）</option><option value="200">オン（1時間に200件）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>JAN→ASIN の引き当て・Amazon価格と手数料・出品の可否</b>を、選んだ件数ぶんだけ取り直します（7.86／7.109）。<b>既定は オン・1時間に100件</b>です。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①見込みあり ②写真あり ③その他</b>。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>（価格は1回の持ち時間で60〜80件まで）。実際に進める見込みは「候補の件数を数える」の<b>「1周（自動）」</b>に出ます。</div></div>
       </div>
     </details>
   </section>
@@ -2568,7 +2574,11 @@ var ADV_AMZRANK=['mwRankCaps','mwDgTypes'];
    作業者の端末は pj-sync の値で始まる（変えても送らない＝その場だけ）。 */
 var ADV_AMZFILT=['csvMwAmzSort','csvMwAmzMinM','csvMwAmzGenre'];
 /* Amazon刈取の候補の条件と自動の件数（6.146）。**Worker が読む**ので必ず送る。 */
-var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour'];
+/* mwAutoMode は **Worker が読んで毎時37分に動く設定**なのに、
+   v234 まで ADV のどのまとまりにも入っておらず **D1 に送っていなかった**
+   （画面で「オン」にしても Worker 側はずっとオフ・7.109）。 */
+var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
+                 'mwAutoMode'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
@@ -2610,6 +2620,46 @@ function advDefaults(){
            usTaxRate:String(US_TAX_DEFAULT) };
 }
 var advAt='';          // 詳細設定を最後に変えた時刻（ISO）。D1 との突き合わせに使う
+/* ---- 変えた項目だけ送る（6.149／7.109）----
+   v234 までは **advGet() の全項目**を送り、Worker 側も
+   「送られてきた設定で丸ごと置き換え」だったので、
+   一覧をまだ読み込んでいない端末で絞り込みを触ると、その瞬間に
+   ランキングの上限（mwRankCaps）・自動申告の種類（mwDgTypes）・
+   自動の取り直しが **0／空／オフで上書きされて消えていた**。
+   advSent …「いま D1 に入っているはず」の値。ここと比べて差分だけ送る。 */
+var advSent=null;
+/* 空の値（未読み込み）は送らない。「空にした」と区別がつかないため。 */
+function advBlank(v){
+  if(v===''||v===undefined||v===null)return true;
+  if(typeof v==='string'&&/^\s*\{\s*\}\s*$/.test(v))return true;
+  return false;
+}
+/* **人がこの端末で空にした**項目（ランキングの上限・種類の表）。
+   「まだ読み込んでいないから空」と区別するための印。
+   印が付いている項目は、空でも `null`（＝消す）として送る（6.149）。 */
+var advBlankOk={};
+function advBlankMark(id){ advBlankOk[id]=1; }
+/* 送る中身（差分）。n は項目数。 */
+function advDiff(){
+  var all=advGet(), out={}, n=0, k;
+  for(k in all){
+    if(advBlank(all[k])){
+      /* 人が空にしたのなら「消す」として送る（それ以外は送らない）。 */
+      if(advBlankOk[k]&&advSent&&!advBlank(advSent[k])){ out[k]=null; n++; }
+      continue;
+    }
+    if(advSent&&JSON.stringify(advSent[k])===JSON.stringify(all[k]))continue;
+    out[k]=all[k]; n++;
+  }
+  return { settings:out, n:n, all:all };
+}
+/* D1 から読めた値を「送ったことにする」（次の差分の基準）。 */
+function advSentMark(st){
+  if(!st||typeof st!=='object')return;
+  var o=Object.assign({},advSent||{},st), k;
+  for(k in st)if(st[k]===null)delete o[k];   // 消した項目は控えからも消す
+  advSent=o;
+}
 function advGet(){
   var o={};
   ADV_FIELDS.concat(ADV_CALC).concat(advCsvCfg())
@@ -2668,6 +2718,7 @@ function advPushLater(){
 }
 /* D1 の設定に合わせる。売値の計算が変わるので、表示も一緒に引き直す。 */
 function advAdopt(d){
+  advSentMark(d&&d.settings);          // D1 の値を差分の基準にする（7.109）
   if(!advApply(d&&d.settings))return false;
   advAt=String((d&&d.at)||'');
   save(); applyTargetUnit();
@@ -2675,6 +2726,7 @@ function advAdopt(d){
   try{ if(typeof csvRender==='function'&&typeof csvList!=='undefined')csvRender(); }catch(e){}
   /* ランキングの上限（6.124）が変わっていることがあるので、
      Amazon刈取の一覧と⚙の表も作り直す。 */
+  try{ if(typeof mwAutoSync==='function')mwAutoSync(); }catch(e){}
   try{ if(typeof mwAmzRender==='function')mwAmzRender(); }catch(e){}
   try{ if(typeof mwDgTypeRender==='function')mwDgTypeRender(); }catch(e){}
   advNote('ほかの端末で変えた設定に合わせました');
@@ -2682,18 +2734,41 @@ function advAdopt(d){
 }
 function advPush(){
   if(!syncUrl()||!syncApiKey()||!advAt)return;
-  /* 作業者用のキーでは設定を送れない（Worker が 403）。送らずに端末だけに保存する。 */
+  /* 作業者用のキーでは設定を送れない（Worker が 403）。送らずに端末だけに保存する。
+     価格・ランキングの上限・自動の取り直し・種類の表も送らない（7.109）。 */
   if(isStaff()){ advNote('この端末だけに保存しました（作業者用のキーです）'); return; }
+  /* まだ D1 の中身を知らないときは、**先に読んでから**差分を送る。
+     知らないまま送ると、画面の既定値で他の項目を上書きしてしまう（7.109）。 */
+  if(advSent===null){
+    try{
+      fetch(syncUrl()+'/settings',{headers:{'X-PJ-Key':syncApiKey()}})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          advSent=(d&&d.ok===true&&d.settings)?d.settings:{};
+          advPushDiff();
+        })['catch'](function(){
+          advNote('この端末だけに保存しました（pj-sync に届きません）');
+        });
+    }catch(e){ advSent={}; advPushDiff(); }   // 読めなくても送れるようにする
+    return;
+  }
+  advPushDiff();
+}
+function advPushDiff(){
+  var df=advDiff();
+  if(!df.n){ advNote('pj-sync と同じ値です（送るものはありません）'); return; }
   fetch(syncUrl()+'/settings',{method:'POST',
     headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
-    body:JSON.stringify({ at:advAt, settings:advGet() })})
+    body:JSON.stringify({ at:advAt, settings:df.settings })})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(!d||d.ok!==true){ advNote('この端末だけに保存しました'); return; }
       /* 書き込みが退けられたのは、D1 にもっと新しい設定があるとき。
          別の端末であとから変えた値を上書きしないよう、そちらに合わせる。 */
       if(d.stored===false&&d.at&&d.at>advAt){ advAdopt(d); return; }
-      advNote('pj-sync にも保存しました（ほかの端末でも同じ値で始まります）');
+      advSentMark(d.settings||df.settings);
+      advNote('pj-sync にも保存しました（変えた '+df.n
+        +'項目だけ送りました。ほかの項目はそのままです）');
     })['catch'](function(){
       advNote('この端末だけに保存しました（pj-sync に届きません）');
     });
@@ -2705,6 +2780,7 @@ function advPull(){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(!d||d.ok!==true)return;
+      advSentMark(d.settings);         // 差分の基準（7.109）
       var at=String(d.at||'');
       /* 6.142：**作業者の端末は pj-sync の値を正とする**。
          作業者は設定を送れない（Worker が 403）ので、その端末で何かを
@@ -2719,6 +2795,84 @@ function advPull(){
       if(at&&(!advAt||at>advAt)){ advAdopt(d); return; }   // D1 のほうが新しい
       if(advAt&&(!at||advAt>at))advPush();                 // 端末のほうが新しい
     })['catch'](function(){});
+}
+/* ===== 設定の書き込み履歴（6.149／7.109）=====
+   設定が消えたときに「いつ・どの端末（管理者／作業者）・どの項目を
+   何から何に変えたか」を追えるようにする。GET /settings/log（管理者だけ）。
+   「戻す」で、その書き込みの**直前の値**に戻す（POST /settings/undo）。 */
+var advLog=[];
+function advLogNote(t,html){
+  var el=$('advLogNote'); if(!el)return;
+  if(html)el.innerHTML=t||''; else el.textContent=t||'';
+}
+function advLogLoad(){
+  if(!syncUrl()||!syncApiKey()){
+    advLogNote('pj-sync のURLとキーを入れてください。'); return;
+  }
+  if(isStaff()){
+    advLogNote('履歴は管理者用のキーで見られます。'); return;
+  }
+  var b=$('advLogBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='読み込み中…'; }
+  advLogNote('pj-sync に聞いています…');
+  fetch(syncUrl()+'/settings/log?limit=20',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){
+        advLogNote('読めませんでした（'+esc(String((d&&d.error)||''))+'）。'
+          +'<b>migrate-0041-settings-log.sql</b> を流してください。',true);
+        return;
+      }
+      advLog=d.rows||[];
+      advLogNote(advLog.length?('直近 '+advLog.length+'件です。'
+        +'「戻す」はその書き込みの<b>直前の値</b>に戻します。'):'履歴はまだありません。',true);
+      advLogRender();
+    })['catch'](function(e){
+      if(b){ b.disabled=false; b.textContent=back; }
+      advLogNote('読めませんでした：'+((e&&e.message)||''));
+    });
+}
+function advLogRender(){
+  var box=$('advLogBox'); if(!box)return;
+  box.innerHTML=advLog.map(function(r){
+    var ks=(r.keys||[]);
+    var det=ks.slice(0,8).map(function(k){
+      var b=(r.before&&r.before[k]), a=(r.after&&r.after[k]);
+      var bs=(b===null||b===undefined)?'（なし）':String(b);
+      return esc(k)+'：'+esc(bs.slice(0,24))+' → '+esc(String(a).slice(0,24));
+    }).join('<br>');
+    return '<div class="note2" style="margin:4px 0;border-top:1px solid #ddd;'
+      +'padding-top:4px"><b>'+esc(String(r.at_jst||r.at||''))+'</b>'
+      +'<span style="margin-left:6px">'
+      +(r.role==='staff'?'作業者の端末':'管理者の端末')+'</span>'
+      +'<span style="margin-left:6px">'+(+r.keys_n||0)+'項目</span>'
+      +'<button class="btn" data-advundo="'+(+r.id||0)+'"'
+      +' style="margin-left:6px;padding:2px 8px">戻す</button>'
+      +'<div style="margin-top:2px">'+det
+      +(ks.length>8?('<br>ほか '+(ks.length-8)+'項目'):'')+'</div></div>';
+  }).join('');
+}
+/* 直前の値に戻す。戻した値はそのまま画面にも入れる。 */
+function advUndo(id){
+  if(!syncUrl()||!syncApiKey()||!(+id>0))return;
+  advLogNote('戻しています…');
+  fetch(syncUrl()+'/settings/undo',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({ id:+id })})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        advLogNote('戻せませんでした（'+esc(String((d&&d.error)||''))+'）',true); return;
+      }
+      /* D1 の値に合わせる（戻した項目が「なし」だった分は画面はそのまま）。 */
+      advAdopt({ at:String(d.at||''), settings:d.settings||{} });
+      advLogNote((d.keys||[]).length+'項目を直前の値に戻しました（'
+        +esc((d.keys||[]).join('・'))+'）',true);
+      advLogLoad();
+    })['catch'](function(e){
+      advLogNote('戻せませんでした：'+((e&&e.message)||''));
+    });
 }
 /* 開いたときに D1 の設定と突き合わせ、どちらのキーかも聞く（6.52）。 */
 function advSyncInit(){
@@ -3280,6 +3434,8 @@ function save(){
     // 詳細設定（目標の決め方）は保存する。変えた時刻も一緒に持ち、D1 と突き合わせる
     ADV_FIELDS.forEach(function(id){ o[id]=$(id).value; });
     o.advAt=advAt;
+    /* 7.109：いま D1 に入っているはずの値。次に送る差分の基準。 */
+    o.advSent=advSent;
     o.fxEdited=fxEdited;   // 手入力の為替を自動取得で上書きしないため
     localStorage.setItem(KEY,JSON.stringify(o));
   }catch(e){}
@@ -3300,6 +3456,10 @@ function load(){
         el.value=o[k];});
       fxEdited=!!o.fxEdited;   // 為替を手入力していたら自動取得しない
       advAt=String(o.advAt||'');   // 詳細設定を最後に変えた時刻
+      /* 7.109：差分の基準（無ければ最初の送信前に /settings を読む）。 */
+      advSent=(o.advSent&&typeof o.advSent==='object'&&!Array.isArray(o.advSent))
+        ?o.advSent:null;
+      try{ mwAutoSync(); }catch(e){}
     }
   }catch(e){}
   // ここから下は保存データの有無に関わらず、開いたときの初期状態を作る。
@@ -10077,6 +10237,10 @@ $('mwMarkCopy').onclick=function(){
 /* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。
    欄は出し直すたびに作るので、1つずつ結ばずに箱で受ける（6.124と同じ）。 */
 $('mwDgTypeBtn').onclick=mwDgTypeLoad;
+/* 自動の取り直し（6.149）。選択肢が件数なので、隠し欄をそろえてから送る。 */
+$('mwAutoMode').addEventListener('change',function(){
+  mwAutoSync(); csvSaveCfg(); advTouch();
+});
 $('mwDgTypeBox').addEventListener('change',function(e){
   var el=e.target; if(!el||!el.getAttribute)return;
   if(isStaff())return;                   // 作業者は見るだけ（変更は管理者だけ）
@@ -10901,10 +11065,27 @@ function amzShipMax(){
 function amzStockMin(){
   var n=+(($('amzStockMin')||{}).value); return (isFinite(n)&&n>=1)?n:1;
 }
-function amzAutoPerHour(){
-  var n=+(($('mwAutoPerHour')||{}).value);
-  return (isFinite(n)&&n>=10)?Math.min(400,Math.round(n)):100;
+/* ---- 自動の取り直し（6.149／7.109）----
+   選択肢そのものが件数（off／20／50／100／200）。既定は オン・100件/時。
+   Worker に送る mwAutoPerHour（隠し欄）は、この選択からそろえる。 */
+var MW_AUTO_HOUR_DEF=100;
+function mwAutoOn(){
+  return String((($('mwAutoMode')||{}).value)||'off')!=='off';
 }
+function mwAutoHour(){
+  var v=String((($('mwAutoMode')||{}).value)||''), n=+v;
+  if(isFinite(n)&&n>=10)return Math.min(400,Math.round(n));
+  /* 古い版の 'on'／'off' のときは隠し欄の件数を使う。 */
+  var h=+(($('mwAutoPerHour')||{}).value);
+  return (isFinite(h)&&h>=10)?Math.min(400,Math.round(h)):MW_AUTO_HOUR_DEF;
+}
+/* 隠し欄をそろえる（D1 にはこの件数が行く）。 */
+function mwAutoSync(){
+  var el=$('mwAutoPerHour'); if(!el)return;
+  var v=String(mwAutoHour());
+  if(el.value!==v)el.value=v;
+}
+function amzAutoPerHour(){ return mwAutoHour(); }
 /* 刈取の条件をひとまとめに（一覧・件数・見込みで同じものを使う）。 */
 function amzCondQ(){
   return { kishu:amzKishuList().join(','), new_only:1,
@@ -11020,7 +11201,10 @@ function mwRankCaps(){
     return (o&&typeof o==='object'&&!Array.isArray(o))?o:{};
   }catch(e){ return {}; }
 }
-function mwRankCapSet(o){ $('mwRankCaps').value=JSON.stringify(o||{}); }
+function mwRankCapSet(o){
+  $('mwRankCaps').value=JSON.stringify(o||{});
+  advBlankMark('mwRankCaps');    // 人が決めた中身（空でも送る・6.149）
+}
 /* その行に当てる上限（0 なら制限なし）。 */
 function mwRankCapOf(r,caps){
   var c=caps||mwRankCaps();
@@ -11203,18 +11387,33 @@ function mwCountDetail(rows){
    中身は {"FIGURINE":1,"TOY_VEHICLE":0}（既定への足し引き）。
    保存は /settings（サーバー）なので、作業者用の端末でも同じ基準になる。 */
 var mwDgSeen=[], mwDgAll=[], mwDgAllAt='';
+/* 6.149：**表が空でも既定の2種類は必ず出す**（Worker 側は MW_DG_SAFE_PT で
+   もともと自動申告の対象だが、⚙の表が空だと「印が消えた」ように見えていた）。
+   ここに入れておけば、印（チェック）も最初から付いた状態で出る。 */
+var MW_DG_DEF=['FIGURINE','ABIS_VIDEO_GAMES'];
+function mwDgDefSeed(){
+  MW_DG_DEF.forEach(function(k){
+    if(!mwDgSeen.some(function(x){ return x.ptype===k; }))
+      mwDgSeen.push({ ptype:k, n:0, def_safe:1 });
+  });
+}
 function mwDgTypes(){
   try{
     var o=JSON.parse($('mwDgTypes').value||'{}');
     return (o&&typeof o==='object'&&!Array.isArray(o))?o:{};
   }catch(e){ return {}; }
 }
-function mwDgTypeSet(o){ $('mwDgTypes').value=JSON.stringify(o||{}); }
+function mwDgTypeSet(o){
+  $('mwDgTypes').value=JSON.stringify(o||{});
+  advBlankMark('mwDgTypes');     // 人が決めた中身（空でも送る・6.149）
+}
 /* いま自動でよい種類か。既定（def_safe・Worker と同じ判定）に足し引きを当てる。 */
 function mwDgTypeOn(x){
   var o=mwDgTypes(), k=String((x&&x.ptype)||x||'');
   if(o[k]===1)return true;
   if(o[k]===0)return false;
+  /* 既定の2種類は、表に何も無くても印を付ける（6.149）。 */
+  if(MW_DG_DEF.indexOf(k)>=0)return true;
   return !!(x&&x.def_safe);
 }
 /* 種類を読み込む（GET /mw/ptypes）。 */
@@ -11228,6 +11427,7 @@ function mwDgTypeLoad(){
     .then(function(r){ return r.json(); })
     .then(function(d){
       mwDgSeen=(d&&d.seen)||[]; mwDgAll=(d&&d.all)||[];
+      mwDgDefSeed();                   // 既定の2種類は必ず出す（6.149）
       mwDgAllAt=String((d&&d.all_at)||'');
       mwDgTypeRender();
       if(note&&d&&d.all_err)note.innerHTML='種類の一覧は読めませんでした（'
@@ -11245,16 +11445,23 @@ function mwDgTypeRender(){
   var box=$('mwDgTypeBox'); if(!box)return;
   if(mwFocusIn('mwDgTypeBox')){ mwDgTypeNote(); return; }
   var ro=isStaff(), o=mwDgTypes(), k;
+  mwDgDefSeed();                       // 既定の2種類は必ず出す（6.149）
   var seen=mwDgSeen.slice();
   /* 表に足した種類が、まだ一覧に出てきていなくても残す。 */
   for(k in o)if(!seen.some(function(x){ return x.ptype===k; }))
     seen.push({ ptype:k, n:0, def_safe:0 });
+  /* 6.149：既定の2種類だけのときも、読み込みを案内する（表は出す）。 */
+  var guide=mwDgSeen.filter(function(x){ return MW_DG_DEF.indexOf(x.ptype)<0; })
+    .length?'':'<div class="note2" style="margin:0 0 2px">'
+      +'まだ出てきた種類がありません（下の<b>既定の2種類</b>は自動で申告します）。'
+      +'ほかの種類も見るには<b>「種類を読み込む」</b>を押してください'
+      +'（Amazon に登録するときに種類を調べて控えます）。</div>';
   if(!seen.length){
     box.innerHTML='<div class="note2" style="margin:0">まだ種類が分かりません。'
       +'<b>「種類を読み込む」</b>を押してください'
       +'（Amazon に登録するときに種類を調べて控えます）。</div>';
   }else{
-    box.innerHTML=seen.map(function(x){
+    box.innerHTML=guide+seen.map(function(x){
       var on=mwDgTypeOn(x);
       return '<div class="row"><label>'
         +'<span style="font-family:ui-monospace,monospace">'+esc(x.ptype)+'</span>'
@@ -15923,6 +16130,13 @@ function syncSchemaRun(){
     });
 }
 $('syncSchemaChk').onclick=syncSchemaRun;
+/* 設定の書き込み履歴（6.149）。行は作り直すので箱で受ける。 */
+$('advLogBtn').onclick=advLogLoad;
+$('advLogBox').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var id=t.getAttribute('data-advundo'); if(!id)return;
+  advUndo(id);
+});
 /* pj-sync に1回 POST する。失敗したときは理由（文字列）を onErr に渡す。 */
 function syncJsonPost(path,body,onOk,onErr){
   var st=0;
@@ -19484,7 +19698,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v234';   // sw.js の const V と必ず同じ値にする
+var APP_V='v235';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

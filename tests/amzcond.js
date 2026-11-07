@@ -69,13 +69,15 @@ let e=await p.evaluate(()=>({ kishu:mwKishuList().join(','), ship:mwShipMax(),
 ok(e.kishu==='NS,NS2,figure'&&e.ship===4&&e.stock===5,
    '★★★eBay 無在庫の条件はそのまま（機種3つ・4営業日・5点）');
 
-/* ---- 2. 1周の見込みは⚙の件数で ---- */
+/* ---- 2. 1周の見込みは⚙の件数で ----
+   6.149：件数は「自動で取り直す」の選択肢そのもの（off／20／50／100／200）。 */
 let d=await p.evaluate(()=>{
-  $('mwAutoPerHour').value='100';
+  const pick=(v)=>{ $('mwAutoMode').value=v; mwAutoSync(); };
+  pick('100');
   const a=mwCountDays(4900);
-  $('mwAutoPerHour').value='200';
+  pick('200');
   const b=mwCountDays(4900);
-  $('mwAutoPerHour').value='100';
+  pick('100');
   return { a:a, b:b };
 });
 console.log('   '+JSON.stringify(d));

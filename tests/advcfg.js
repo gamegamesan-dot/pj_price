@@ -142,7 +142,10 @@ const sent=await p.evaluate(()=>window.__calls.filter(x=>x.m==='POST'));
 console.log('   '+JSON.stringify(sent));
 ok(sent.length===1,'★変えたら1回だけ送る（打つたびには送らない）');
 const bd=JSON.parse(sent[0].body);
-ok(bd.settings.baseProfit==='5000'&&bd.settings.linkRate==='50','★いまの値を送る');
+/* 6.149：送るのは**変えた項目だけ**（D1 と同じ値は送らない）。
+   v234 までは全項目を送っていて、空の欄で他の項目を消していた。 */
+ok(bd.settings.baseProfit==='5000','★変えた値を送る');
+ok(bd.settings.linkRate===undefined,'★D1 と同じ値（linkRate）は送らない');
 ok(bd.at>'2026-10-08T05:00:00.000Z','★送る時刻は D1 のものより新しい');
 ok(/pj-sync にも保存しました/.test(await p.textContent('#advSyncNote')),'★そう知らせる');
 

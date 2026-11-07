@@ -67,11 +67,13 @@ const setCfg=async(o)=>await asJson(await worker.fetch(post('/settings',
    settings:Object.assign({mwKishu:'NS',mwShipMax:4,mwStockMin:5,mwNoteNg:'',
      pbMode:'off',autoMdMode:'off',autoRvMode:'off'},o||{})}),env));
 
-console.log('=== 既定はオフ ===');
+/* 7.109：既定は**オン・100件/時**（v234 までは オフ）。
+   ⚙の選択肢そのものが件数（off／20／50／100／200）。 */
+console.log('=== 既定はオン・100件/時 ===');
 await setCfg({});
 let st=await W.mwAutoSettings(env);
 console.log('   '+JSON.stringify({mode:st.mode,opt:st.opt}));
-ok(st.mode==='off','★★★既定はオフ');
+ok(st.mode==='on','★★★既定はオン（7.109）');
 /* 7.107：自動の取り直しは **Amazon刈取の条件**で回す
    （eBay 無在庫の mwKishu／mwShipMax／mwStockMin とは別）。
    既定は 機種すべて・出荷14営業日・在庫1点。 */
@@ -90,9 +92,14 @@ ok(st.plan.price>0&&st.plan.price<=80,
   ok(st2.plan.price<=80,'★★価格は80件を超えない（SP-API の上限内）');
   ok(st2.opt.kishu==='NS,figure'&&st2.opt.ship_max===7&&st2.opt.stock_min===3,
      '★★★刈取の条件を⚙で変えられる');
-  await setCfg({});
+  /* 7.109：/settings は**送られてきた項目だけ**上書きするので、
+     戻したい項目は書いて送る（書かないのは「変えない」）。 */
+  await setCfg({ mwAutoPerHour:100, amzKishu:'', amzShipMax:14, amzStockMin:1 });
+  const st3=await W.mwAutoSettings(env);
+  ok(st3.plan.per===100&&st3.opt.ship_max===14,'★戻せる（変えた項目だけ送る）');
 }
 calls=[];
+await setCfg({ mwAutoMode:'off' });
 let r=await put('/mw/auto',{});
 console.log('   '+JSON.stringify({mode:r.body.mode,price:r.body.price_n}));
 ok(r.body.mode==='off'&&r.body.price_n===0,'★★オフなら何もしない');
@@ -100,7 +107,7 @@ ok(calls.filter((u)=>/itemOffers|restrictions|feesEstimate/.test(u)).length===0,
    '★★★オフなら1回も呼ばない');
 
 console.log('\n=== オンにすると価格・手数料・可否を取る ===');
-await setCfg({ mwAutoMode:'on' });
+await setCfg({ mwAutoMode:'100' });
 const J=[];
 for(let i=0;i<5;i++){
   const jan='49023705504'+String(60+i);

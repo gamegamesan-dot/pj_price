@@ -773,3 +773,19 @@ CREATE TABLE IF NOT EXISTS amz_drop (
   created_at TEXT,
   PRIMARY KEY (asin, cond)
 );
+
+/* ===== ⚙の設定を書き込んだ履歴（7.109）=====
+   /settings は「送られてきた項目だけ」を上書きする（マージ）。
+   消えたときに追えるように、いつ・どの端末（役割）・どの項目を
+   何から何に変えたかを残す。⚙から「直前の値に戻す」のに使う。 */
+CREATE TABLE IF NOT EXISTS settings_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          TEXT,
+  role        TEXT,
+  keys_n      INTEGER,
+  keys        TEXT,
+  before_json TEXT,
+  after_json  TEXT,
+  created_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_settings_log_at ON settings_log (at DESC);

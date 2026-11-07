@@ -195,8 +195,9 @@ let cfg=await p.evaluate(()=>({
   opts:Array.prototype.map.call($('mwAutoMode').options,(o)=>o.value).join(',') }));
 console.log('   '+JSON.stringify(cfg));
 ok(cfg.has===true,'★設定がある');
-ok(cfg.v==='off','★★★既定はオフ');
-ok(cfg.opts==='off,on','★オフとオンの2つ');
+/* 6.149：件数を選ぶ形になり、既定は**オン・100件/時**（v234 までは オフ）。 */
+ok(cfg.v==='100','★★★既定はオン・100件/時');
+ok(cfg.opts==='off,20,50,100,200','★オフと件数（20／50／100／200件/時）');
 /* 「MW の在庫CSVを自動で取り込む」と読み違えやすいので、名前と説明で分ける。 */
 let lab=await p.evaluate(()=>{
   const row=$('mwAutoMode').closest('.rowv');

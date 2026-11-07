@@ -27,8 +27,12 @@ globalThis.fetch=async(u)=>{
   throw new Error('想定外の通信: '+url);
 };
 let atSeq=0;
+/* 7.109：/settings は**送られてきた項目だけ**上書きする（マージ）。
+   このテストは毎回「この設定だけが入っている」状態を作りたいので、
+   丸ごと置き換える `replace:true` で送る。 */
 const put=async(o)=>await asJson(await worker.fetch(post('/settings',
-  {at:new Date(Date.now()+(++atSeq)*1000).toISOString(),settings:o}),env));
+  {at:new Date(Date.now()+(++atSeq)*1000).toISOString(),settings:o,
+   replace:true}),env));
 
 console.log('=== 基準は切り出す前の記録 ===');
 console.log('   記録した版: '+base.app);

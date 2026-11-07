@@ -86,18 +86,40 @@ ok(/ホビー/.test(g.caps)&&g.minM==='15','★管理者も D1 が新しけれ�
 
 /* ---- 3. 送る中身に絞り込みが入っている ---- */
 await setup('admin','2026-11-06T09:00:00.000Z');
+await p.evaluate(()=>advPull());                 // D1 の値を差分の基準にする
+await p.waitForTimeout(200);
 await p.evaluate(()=>{
-  $('csvMwAmzWin').checked=true; $('csvMwAmzMulti').checked=true;
+  /* 6.149：送るのは**変えた項目だけ**。
+     csvMwAmzNoAmz は D1 では false なので、オンにすれば送られる。 */
+  $('csvMwAmzNoAmz').checked=true;
   $('csvMwAmzMinM').value='12'; $('csvMwAmzSort').value='margin';
+  $('mwRankCaps').value='';                      // まだ一覧を読んでいない端末
   advPush();
 });
-await p.waitForTimeout(200);
-const body=await p.evaluate(()=>window.__posted[0]||null);
+await p.waitForTimeout(300);
+/* advPull で「端末のほうが新しい」ぶんの送信もあるので、最後のものを見る。 */
+const body=await p.evaluate(()=>{
+  const l=window.__posted.filter((x)=>x&&x.settings);
+  return l[l.length-1]||null;
+});
+console.log('   送った項目：'+JSON.stringify(Object.keys((body||{}).settings||{})));
 ok(!!body&&body.settings.csvMwAmzMinM==='12'&&body.settings.csvMwAmzSort==='margin',
    '★★並べ替えと利益率を送る');
-ok(body.settings.csvMwAmzWin===true&&body.settings.csvMwAmzMulti===true,
+ok(body.settings.csvMwAmzNoAmz===true,
    '★★★チェックの絞り込みを真偽値で送る');
-ok(body.settings.mwRankCaps!==undefined,'★ランキングの上限も一緒に送る');
+ok(body.settings.mwRankCaps===undefined,
+   '★★空のランキングの上限は送らない（D1 の値を消さない・6.149）');
+ok(body.settings.csvMwAmzWin===undefined,
+   '★D1 と同じ値（絞り込み）は送らない');
+/* 管理者が上限を変えたときは、その項目が送られる。 */
+await p.evaluate(()=>{ $('mwRankCaps').value='{"ホビー":500000}'; advPush(); });
+await p.waitForTimeout(300);
+const body2=await p.evaluate(()=>{
+  const l=window.__posted.filter((x)=>x&&x.settings);
+  return l[l.length-1]||null;
+});
+ok(!!body2&&body2.settings.mwRankCaps==='{"ホビー":500000}',
+   '★変えたランキングの上限は送る');
 
 /* ---- 4. 「ランキングの基準で隠した行」は作業者にも出る ---- */
 const rows=async(role)=>await p.evaluate(async(role)=>{

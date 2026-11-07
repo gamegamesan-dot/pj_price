@@ -36,6 +36,9 @@ const setup=async(o)=>await p.evaluate((o)=>{
       return res({accepted:body.items.length,rejected:0});
     }
     if(/\/settings/.test(url)){
+      /* 6.149：画面は送る前に GET /settings を1回読む（差分の基準）。
+         記録するのは書き込み（POST）だけ。 */
+      if(!body)return res({ok:true,at:'',settings:{}});
       window.__settings.push(body);
       return res({ok:true,stored:true,at:body.at,settings:body.settings});
     }

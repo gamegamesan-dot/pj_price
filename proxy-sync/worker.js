@@ -1240,19 +1240,122 @@ async function settingsGet(env) {
     return { ok: true, at: String(o.at || ""), settings: o.settings || {} };
   } catch (e) { return { ok: true, at: "", settings: {} }; }
 }
-async function settingsPut(env, body) {
+/* ---- 設定の書き込み（7.109）----
+   **送られてきた項目だけを上書きする（マージ）**。
+   v234 までは「送られてきた設定で丸ごと置き換え」だったので、
+   画面側が**空の欄もそのまま送る**作りと合わさって、
+   ランキングの上限（mwRankCaps）・自動申告の種類（mwDgTypes）・
+   自動の取り直し（mwAutoMode）が **0／空／オフで上書きされて消えていた**
+   （一覧をまだ読み込んでいない端末で絞り込みを触ると、その瞬間に消える）。
+
+   ・`settings` に入っている項目だけを書き替える
+   ・値が `null` の項目は**消す**（意図して消したいとき）
+   ・`SET_NO_BLANK` の項目（中身が JSON の塊）は、**空文字では上書きしない**
+     （「まだ読み込んでいない」と「空にした」の区別がつかないため）
+   ・`replace: true` を送ったときだけ、今までどおり丸ごと置き換える
+   ・書き込みは **settings_log** に残す（いつ・どのキー・前の値・誰が） */
+const SET_NO_BLANK = ["mwRankCaps", "mwDgTypes"];
+/* 価格・ランキングの上限・自動の取り直し・種類の表は**管理者だけ**（7.109）。
+   POST /settings 自体も管理者だけだが、万一の経路でも守る。 */
+const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour",
+  "autoMdMode", "autoMdMax", "autoRvMode", "autoRvMax", "autoRvPct",
+  "pbMode", "pbRestock", "autoRkMode", "autoSkMode", "amzDropMode", "amzDropPick",
+  "mwProfitMode", "mwNetMode", "amzKishu", "amzShipMax", "amzStockMin"];
+const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
+const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
+function settingsBlank(v) {
+  if (v === "" || v === undefined) return true;
+  if (v && typeof v === "object" && !Array.isArray(v)
+      && !Object.keys(v).length) return true;
+  /* "{}" のような空の塊も「まだ読み込んでいない」とみなす。 */
+  if (typeof v === "string" && /^\s*\{\s*\}\s*$/.test(v)) return true;
+  return false;
+}
+async function settingsPut(env, body, role) {
   const at = String((body && body.at) || "");
   const st = body && body.settings;
   if (!ISO_RE.test(at) || !st || typeof st !== "object" || Array.isArray(st))
     return { ok: false, error: "bad_request" };
-  const txt = JSON.stringify({ at, settings: st });
-  if (txt.length > SETTINGS_MAX) return { ok: false, error: "too_large" };
   const cur = await settingsGet(env);
   // いま入っている設定のほうが新しければ書かない（同じ時刻なら新しい書き込みを採る）
   if (cur.at && cur.at > at)
     return { ok: true, stored: false, at: cur.at, settings: cur.settings };
+  const old = (cur && cur.settings) || {};
+  const next = (body && body.replace === true) ? {} : Object.assign({}, old);
+  const before = {}, keys = [], skipped = [], denied = [];
+  for (const k of Object.keys(st)) {
+    const v = st[k];
+    if (role && role !== "admin" && SET_ADMIN_ONLY.indexOf(k) >= 0) {
+      denied.push(k); continue;
+    }
+    /* 空で上書きしない項目（7.109）。 */
+    if (SET_NO_BLANK.indexOf(k) >= 0 && settingsBlank(v)
+        && !settingsBlank(old[k])) { skipped.push(k); continue; }
+    if (v === null) {
+      if (Object.prototype.hasOwnProperty.call(next, k)) {
+        before[k] = old[k]; keys.push(k); delete next[k];
+      }
+      continue;
+    }
+    if (JSON.stringify(old[k]) === JSON.stringify(v)) continue;   // 変わっていない
+    before[k] = (old[k] === undefined) ? null : old[k];
+    keys.push(k);
+    next[k] = v;
+  }
+  const txt = JSON.stringify({ at, settings: next });
+  if (txt.length > SETTINGS_MAX) return { ok: false, error: "too_large" };
   await stateSet(env, SETTINGS_KEY, txt).run();
-  return { ok: true, stored: true, at, settings: st };
+  /* 書き込みの履歴（7.109）。消えたときに「いつ・どの端末・どの項目」が分かる。 */
+  if (keys.length) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO settings_log (at,role,keys_n,keys,before_json,after_json,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?1)`)
+        .bind(nowIso(), String(role || ""), keys.length,
+              keys.join(",").slice(0, 1000),
+              JSON.stringify(before).slice(0, 4000),
+              JSON.stringify(
+                keys.reduce((o, k) => (o[k] = next[k], o), {})).slice(0, 4000)).run();
+      /* 古い履歴は捨てる（直近 SET_LOG_KEEP 件だけ残す）。 */
+      await env.DB.prepare(
+        `DELETE FROM settings_log
+          WHERE id <= (SELECT MAX(id) - ?1 FROM settings_log)`)
+        .bind(SET_LOG_KEEP).run();
+    } catch (e) { /* 履歴が残らなくても設定は保存する */ }
+  }
+  return { ok: true, stored: true, at, settings: next,
+           changed: keys, skipped_blank: skipped, denied };
+}
+/* 書き込みの履歴（7.109）。新しい順。 */
+async function settingsLog(env, url) {
+  const n = Math.max(1, Math.min(SET_LOG_MAX,
+    Number((url && url.searchParams.get("limit")) || 20)));
+  const q = await env.DB.prepare(
+    `SELECT id,at,role,keys_n,keys,before_json,after_json FROM settings_log
+      ORDER BY id DESC LIMIT ${n}`).all();
+  return { ok: true, rows: ((q && q.results) || []).map((r) => ({
+    id: r.id, at: r.at, at_jst: jstText(r.at), role: r.role,
+    keys_n: r.keys_n, keys: String(r.keys || "").split(",").filter(Boolean),
+    before: (() => { try { return JSON.parse(r.before_json || "{}"); }
+                     catch (e) { return {}; } })(),
+    after: (() => { try { return JSON.parse(r.after_json || "{}"); }
+                    catch (e) { return {}; } })() })) };
+}
+/* 直前の値に戻す（7.109）。履歴の `before` をそのまま書き戻す。 */
+async function settingsUndo(env, body, role) {
+  const id = Math.round(Number((body && body.id) || 0));
+  if (!(id > 0)) return { ok: false, error: "bad_id" };
+  const r = await env.DB.prepare(
+    `SELECT id,before_json FROM settings_log WHERE id=?1`).bind(id).first();
+  if (!r) return { ok: false, error: "not_found" };
+  let before = {};
+  try { before = JSON.parse(r.before_json || "{}"); } catch (e) { before = {}; }
+  const keys = Object.keys(before);
+  if (!keys.length) return { ok: false, error: "nothing_to_undo" };
+  /* 無かった項目（null）は消す。あった項目はその値に戻す。 */
+  const put = await settingsPut(env,
+    { at: nowIso(), settings: before }, role || "admin");
+  return Object.assign({ ok: true, undone: id, keys }, put);
 }
 async function runBatch(env, run, stmts) {
   if (!stmts.length) return;
@@ -6850,7 +6953,9 @@ async function mwBuyList(env, url) {
      ④価格が古い順
    ・既存の日次（JST 3時台 :07）と3時間ごとの hot（:07）とは**分（:37）で分ける**。
      getItemOffersBatch は10秒に1回の間隔を KV で守るので、重なっても待つだけ。 */
-const MW_AUTO_MODES = { off: 1, on: 1 };
+/* 7.109：⚙の選択肢は**件数**（off／20／50／100／200）。
+   古い "on" も受ける（件数は mwAutoPerHour）。既定は オン・100件/時。 */
+const MW_AUTO_HOURS = [20, 50, 100, 200];
 const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き直す件数（既定）
 const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数（既定）
 const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数（既定）
@@ -6902,12 +7007,18 @@ function amzPickOpt(st) {
 async function mwAutoSettings(env) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
-  const m = String(st.mwAutoMode || "off");
+  /* 7.109：⚙の選択肢が**件数**になった（off／20／50／100／200）。
+     古い "on" も受ける。件数が入っていればそれを1時間ぶんに使う。
+     既定は**オン・100件/時**（設定が無い＝これから）。 */
+  const m = String(st.mwAutoMode === undefined ? "" : st.mwAutoMode);
+  const n = Number(m);
+  const num = isFinite(n) && n >= 10;
+  const on = m === "" ? true : (m === "on" || num);
   return {
-    mode: MW_AUTO_MODES[m] ? m : "off",
+    mode: on ? "on" : "off",
     /* 7.107：**Amazon刈取の条件**で回す（eBay 無在庫の条件とは別）。 */
     opt: amzPickOpt(st),
-    plan: mwAutoPlan(st.mwAutoPerHour, MW_AUTO_BUDGET_MS),
+    plan: mwAutoPlan(num ? n : st.mwAutoPerHour, MW_AUTO_BUDGET_MS),
   };
 }
 async function jobMwAuto(env, opt) {
@@ -9607,8 +9718,8 @@ const SCHEMA_TABLES = ["amz_dg", "amz_drop", "amz_ptype", "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders", "pb_log",
-  "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs", "sk_log", "sk_runs",
-  "skus", "sync_runs", "sync_state"];
+  "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs", "settings_log",
+  "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
 const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
   "ebay_sku", "ebay_qty", "ebay_price", "ebay_currency", "ebay_seen_at",
   "ebay_start", "ebay_ship_profile", "ebay_bo", "ebay_bo_accept",
@@ -9631,6 +9742,9 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["settings_log", "migrate-0041-settings-log.sql"],
+  ["size_tier", "migrate-0040-size-tier.sql"],
+  ["fee_fba_ship", "migrate-0039-fba-split.sql"],
   ["amz_drop", "migrate-0037-amz-drop.sql"],
   ["amz_dg", "migrate-0035-amz-dg.sql"],
   ["amz_ptype", "migrate-0034-ptype.sql"],
@@ -10232,12 +10346,24 @@ export default {
           max_cost: PRICING.maxCost(ps.S, num("price", 0), weight, flat),
           in: { cost: cost, weight: weight, flat: flat } }, 200, origin);
       }
+      /* 設定の書き込みの履歴と、直前の値に戻す（7.109）。管理者だけ。 */
+      if (request.method === "GET" && url.pathname === "/settings/log") {
+        if (role !== "admin")
+          return forbidStaff("設定の履歴は管理者用のキーが必要です", [], origin);
+        return json(await settingsLog(env, url), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/settings/undo") {
+        if (role !== "admin")
+          return forbidStaff("設定を戻すのは管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await settingsUndo(env, b, role), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/settings")
         return json(await settingsGet(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/settings") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ ok: false, error: "bad_request" }, 400, origin); }
-        const r = await settingsPut(env, body);
+        const r = await settingsPut(env, body, role);
         return json(r, r.ok ? 200 : 400, origin);
       }
 

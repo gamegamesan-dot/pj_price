@@ -118,8 +118,10 @@ ok(r.rate===152.75&&r.from==='settings','★★⚙設定の fx を使う');
 ok(r.src==='ui.settings','★どこから採ったかを返す');
 // ③ それも無ければ既定値
 await clear();
+/* 7.109：/settings は**送られてきた項目だけ**上書きするので、
+   ⚙の fx を消すときは **null** を送る（項目を書かないのは「変えない」）。 */
 await worker.fetch(post('/settings',{at:new Date(Date.now()+60000).toISOString(),
-  settings:{ targetMode:'auto', baseProfit:'1000', linkRate:'30',
+  settings:{ fx:null, targetMode:'auto', baseProfit:'1000', linkRate:'30',
              saleRate:'15', usTaxRate:'8' }}),env);
 r=await fx();
 console.log('   既定値: '+JSON.stringify(r));
