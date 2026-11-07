@@ -414,6 +414,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="cap" id="bigCap">利益</div>
       <div class="v num" id="bigVal">&mdash;</div>
       <div class="sub" id="bigTotal"></div>
+      <!-- 6.148：地域ごとの「買い手の支払い総額と利益」。基準に★を付ける -->
+      <div class="sub" id="bigZones" style="text-align:left"></div>
       <div class="sub" id="bigSub">&mdash;</div>
       <div class="sub" id="bigSold" style="display:none"></div>
     </div>
@@ -1507,11 +1509,16 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:8px 0 2px"><b>仮の FBA手数料（サイズ区分ごと）</b>
           ：Amazon から実額が取れていない行で使う目安です。
           <b>配送代行手数料</b>と<b>在庫管理手数料</b>を分けて入れます
-          （せどりすと の実額：小型 288＋1／標準 425＋16／大型 675＋93）。</div>
+          （せどりすと の実額：小型 288＋1／標準 425＋8〜16／大型 675＋93）。
+          <b>SP-API の FBA手数料には在庫管理手数料が入っていない</b>ので、
+          実額が取れた行にも<b>この在庫管理のぶんを足します</b>（6.147）。
+          サイズ区分は<b>Amazon の寸法・重さから</b>決め、取れない行だけ
+          下の既定を使います。標準は商品の大きさで <b>8〜16円</b>と幅があるので、
+          せどりすと と合わせたいときはここを直してください。</div>
         <div class="row"><label>小型：配送代行</label><input type="number" id="mwFbaShipS" value="288" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row"><label>小型：在庫管理</label><input type="number" id="mwFbaStoreS" value="1" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row"><label>標準：配送代行</label><input type="number" id="mwFbaShipM" value="425" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
-        <div class="row"><label>標準：在庫管理</label><input type="number" id="mwFbaStoreM" value="16" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row"><label>標準：在庫管理</label><input type="number" id="mwFbaStoreM" value="8" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row"><label>大型：配送代行</label><input type="number" id="mwFbaShipL" value="675" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row"><label>大型：在庫管理</label><input type="number" id="mwFbaStoreL" value="93" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="rowv"><label>ゲームの既定のサイズ区分</label><select id="mwFbaSizeGame"><option value="s" selected>小型</option><option value="m">標準</option><option value="l">大型</option></select></div>
@@ -2829,6 +2836,9 @@ const ZONES=PJC.ZONES;
 const ZONE_LABEL={1:'第1地帯（中国・韓国・台湾）',2:'第2地帯（アジア）',
                   3:'第3地帯（オセアニア・カナダ・メキシコ・中近東）',4:'第4地帯（米国）'};
 const ZONE_SHORT={1:'第1',2:'第2',3:'第3',4:'第4'};
+/* 地域ごとの一覧（6.148）に出す名前。 */
+const ZONE_NAME={1:'中国・韓国・台湾',2:'アジア',
+                 3:'オセアニア・カナダ・メキシコ・中近東',4:'米国'};
 const SHIP_ZONES=PJC.SHIP_ZONES;    // 請求送料を別建てする地帯（第1・第2は送料無料）
 // 現地税率。第3は豪州GST（2026-09-15 実売で確認）、第4は設定の想定税率を使う。
 const ZONE3_TAX=PJC.ZONE3_TAX;
@@ -2971,8 +2981,27 @@ function calc(){
 
   $('bigCap').textContent='推奨売値';
   $('bigVal').textContent=usd(recCeil);
+  /* 6.148：この行の請求送料は**基準の地帯**のもの。どの地帯かを書き添える
+     （「内訳の表示先」を米国にしていても、基準がアジアなら $0.00 と出るため、
+       送料が消えたように見えていた）。 */
   $('bigTotal').textContent='出品価格 '+usd(recCeil)+' ＋ 請求送料 '+usd(gCeil)
-    +' ＝ 総額 '+usd(recTotal);
+    +'（'+ZONE_SHORT[basisZone]+'＝基準）＝ 総額 '+usd(recTotal);
+  /* 6.148：地域ごとの「買い手の支払い総額（商品代＋請求送料）と利益」。
+     推奨売値は**どの地帯でも同じ商品代**で出すので、地帯ごとに
+     請求送料と現地の税・関税が変わり、総額と利益が変わる。
+     ★基準＝推奨売値を決めた地帯（いちばん利益が薄い地帯）。
+     （表示中）＝「内訳の表示先」で選んだ地帯。 */
+  $('bigZones').innerHTML=ZONES.map(function(z){
+    var g=ceil2(zoneShipCharge(z));
+    var tot=Math.round((recCeil+g)*100)/100;
+    var pf=recByZone[z];
+    var mark=(z===basisZone)?'<b>★基準</b> ':'　　　';
+    return mark+ZONE_SHORT[z]+' '+esc(ZONE_NAME[z])
+      +(z===zSel?'（表示中）':'')
+      +'　<b>'+usd(tot)+'</b>'
+      +(g>0?('（商品 '+usd(recCeil)+'＋送料 '+usd(g)+'）'):'（送料無料）')
+      +'　利益 '+yen(pf);
+  }).join('<br>');
   $('bigSub').textContent='推奨売値で\u3000'+ZONE_SHORT[basisZone]+' '+yen(recBasis)
     +(bestZone!==basisZone?('\u3000/\u3000'+ZONE_SHORT[bestZone]+' '+yen(recByZone[bestZone])):'')
     +'\u3000基準：'+ZONE_LABEL[basisZone];
@@ -10501,11 +10530,19 @@ function mwNum0(id,def){
 var MW_FEE_TAX_PCT=10;
 /* サイズ区分ごとの仮の FBA手数料（6.145）。配送代行と在庫管理に分ける。 */
 var MW_FBA_SIZE={ s:'小型', m:'標準', l:'大型' };
+/* サイズ区分（6.147）。**Catalog の寸法・重さから決めた区分（size_tier）を優先**し、
+   取れていない行だけ⚙の既定（ゲーム＝小型／フィギュア＝標準）を使う。 */
 function mwFbaSizeOf(r){
+  var t=String((r||{}).size_tier||'');
+  if(MW_FBA_SIZE[t])return t;
   var g=mwAmzGenre(r);
   var v=(g==='ゲーム')?String(($('mwFbaSizeGame')||{}).value||'s')
        :((g==='フィギュア')?String(($('mwFbaSizeHobby')||{}).value||'m'):'m');
   return MW_FBA_SIZE[v]?v:'m';
+}
+/* その区分がどこから来たか（画面に出す）。 */
+function mwFbaSizeFrom(r){
+  return MW_FBA_SIZE[String((r||{}).size_tier||'')]?'寸法から':'既定';
 }
 function mwFbaGuess(r){
   var k=mwFbaSizeOf(r);
@@ -10520,8 +10557,8 @@ function mwFbaGuess(r){
     ship=(g==='ゲーム')?mwNum0('mwAmzFbaGame',530)
         :((g==='フィギュア')?mwNum0('mwAmzFbaHobby',580):mwNum0('amzFbaFee',400));
   }
-  return { size:k, sizeName:MW_FBA_SIZE[k], ship:ship, store:store,
-           fba:ship+store };
+  return { size:k, sizeName:MW_FBA_SIZE[k], from:mwFbaSizeFrom(r),
+           ship:ship, store:store, fba:ship+store };
 }
 function mwAmzFee(r){
   var g=mwAmzGenre(r);
@@ -10547,8 +10584,20 @@ function mwFeeOf(r){
     /* FBA の内訳（7.106）。取れていなければ配送代行に寄せる。 */
     var sh=+r.fee_fba_ship||0, st2=+r.fee_fba_store||0;
     if(fba&&sh+st2!==fba){ st2=st2||0; sh=fba-st2; }
+    /* 6.147：**SP-API の FBA手数料には在庫管理手数料（保管料）が入っていない**。
+       0 のときは⚙のサイズ区分ごとの目安を足す（実額が返っていればそのまま）。
+       例 B0GYC8BM48：pj の FBA 420（配送代行だけ）に対して
+       せどりすと は 428（配送代行420＋在庫管理8）。 */
+    var fb0=mwFbaGuess(r), storeGuess=0;
+    if(!st2&&fb0.store>0){ st2=fb0.store; storeGuess=1; fba=sh+st2; }
+    /* 6.147：手数料の消費税が 0 のまま返ってきた行は、画面でも10%を足す
+       （Worker 側でも足すが、古い控えのまま一覧に出る行のため）。 */
+    var taxGuess=0;
+    if(!tax&&ref){ tax=Math.round(ref*MW_FEE_TAX_PCT/100); taxGuess=1; }
     return { ref:ref, fba:fba, fbaShip:sh, fbaStore:st2, tax:tax,
              fee:ref+fba+tax, real:true,
+             storeGuess:storeGuess, taxGuess:taxGuess,
+             size:fb0.size, sizeName:fb0.sizeName, sizeFrom:fb0.from,
              rate:ref&&r.fee_base?Math.round(ref/(+r.fee_base||1)*1000)/10:null,
              base:+r.fee_base||0, at:r.fee_at||'' };
   }
@@ -10560,7 +10609,7 @@ function mwFeeOf(r){
   var tax2=Math.round(ref2*MW_FEE_TAX_PCT/100);
   return { ref:ref2, fba:f.fba, fbaShip:f.fb.ship, fbaStore:f.fb.store,
            tax:tax2, fee:ref2+f.fba+tax2, real:false,
-           size:f.fb.size, sizeName:f.fb.sizeName,
+           size:f.fb.size, sizeName:f.fb.sizeName, sizeFrom:f.fb.from,
            rate:f.rate, base:price, at:'' };
 }
 function mwAmzCalc(r){
@@ -10583,7 +10632,8 @@ function mwAmzCalc(r){
            fee:fee, rate:z.rate, fba:z.fba,
            fbaShip:+z.fbaShip||0, fbaStore:+z.fbaStore||0,
            feeRef:z.ref, feeTax:z.tax, feeReal:z.real, feeAt:z.at,
-           feeSize:z.sizeName||'',
+           feeSize:z.sizeName||'', feeSizeFrom:z.sizeFrom||'',
+           feeStoreGuess:!!z.storeGuess, feeTaxGuess:!!z.taxGuess,
            /* 使うほう（並べ替え・絞り込み） */
            profit:profit, net:mwNet(profit),
            margin:Math.round(profit/price*1000)/10,
@@ -10726,11 +10776,15 @@ function mwAmzBreak(r,c){
     +'販売手数料 '+yen(c.feeRef)
     +(c.rate!=null?('（'+c.rate+'%）'):'')
     +'＋手数料消費税 '+yen(c.feeTax)
+    +(c.feeTaxGuess?'<span class="note2">（10%を足しました）</span>':'')
     +'　FBA手数料 '+yen(c.fba)
     +((c.fbaShip||c.fbaStore)
-      ?('（配送代行 '+yen(c.fbaShip)+'＋在庫管理 '+yen(c.fbaStore)+'）'):'')
+      ?('（配送代行 '+yen(c.fbaShip)+'＋在庫管理 '+yen(c.fbaStore)
+        +(c.feeStoreGuess?('・'+esc(c.feeSize||'')+'の目安'
+          +(c.feeSizeFrom?('・'+esc(c.feeSizeFrom)):'')):'')+'）'):'')
     +(c.feeReal?'':(' <span style="color:var(--bad)">仮の手数料'
-      +(c.feeSize?('・'+esc(c.feeSize)):'')+'</span>'))
+      +(c.feeSize?('・'+esc(c.feeSize)
+        +(c.feeSizeFrom?('（'+esc(c.feeSizeFrom)+'）'):'')):'')+'</span>'))
     +'</div>'
     +'<div class="note2" style="margin:2px 0 0">'
     +'仕入原価 '+yen(c.costSedo)+'（卸値×1.1）'
@@ -19430,7 +19484,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v233';   // sw.js の const V と必ず同じ値にする
+var APP_V='v234';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

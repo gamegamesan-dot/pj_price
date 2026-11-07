@@ -6529,3 +6529,29 @@ new_only   … 常に 1（新品だけ）
 `mw_buy` は **JOIN せず EXISTS で見る**。migrate-0038 で `mw_buy` にも `cond` 列が
 できたため、JOIN すると `mwWhere` の素の `cond` と衝突して
 「ambiguous column name: cond」で落ちる（実際に起きた）。
+
+## 7.108 手数料の消費税と、寸法からのサイズ区分（2026-11-07）
+
+### 1. `mwFeePick` の直し
+
+- **成約料**（`VariableClosingFee`／`FixedClosingFee`／`PerItemFee`）を
+  **販売手数料のグループ**に入れる（v232 までは FBA手数料に落ちていた）。
+- `TaxAmount` の合計が 0 のときは `ref × 10%` を足し、`tax_guess:1` を返す。
+- 合計は**足し直す**（`ref + fba + tax`）。Amazon の `TotalFeesEstimate` は
+  消費税を足す前の額なので、そのまま使うとずれる（`total_api` で別に返す）。
+
+### 2. サイズ区分（migrate-0040）
+
+`Catalog getItems` の `includedData` に **`dimensions`** を足し、
+`package`（無ければ `item`）の寸法・重さを cm と g にそろえて控える。
+
+| 区分 | 条件（国内FBA） |
+| --- | --- |
+| 小型 `s` | 25×18×2.0cm 以内 **かつ** 250g 以内 |
+| 標準 `m` | 45×35×20cm 以内 **かつ** 9kg 以内 |
+| 大型 `l` | それより大きい |
+
+控え先：`mw_amz.size_tier` / `size_cm3` / `size_long` / `size_g`。
+`GET /mw/amz`・`GET /mw/buy` が返すので、画面はこの区分で
+⚙の在庫管理手数料の目安を選ぶ（取れない行は⚙の既定）。
+インチ・オンス・ミリ・kg も cm と g に直す。

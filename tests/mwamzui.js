@@ -158,8 +158,9 @@ console.log('   フィギュア: '+JSON.stringify(c.fig));
    ゲームの既定は小型（288＋1＝289）、フィギュアは標準（425＋16＝441）。 */
 ok(c.game.genre==='ゲーム'&&c.game.rate===15&&c.game.fba===289,
    '★★ゲームは 15%＋小型のFBA（288＋1）');
-ok(c.fig.genre==='フィギュア'&&c.fig.rate===10&&c.fig.fba===441,
-   '★★フィギュアは 10%＋標準のFBA（425＋16）');
+/* 6.147：⚙の「標準：在庫管理」の既定は 8 円（実例 8〜16 円）。 */
+ok(c.fig.genre==='フィギュア'&&c.fig.rate===10&&c.fig.fba===433,
+   '★★フィギュアは 10%＋標準のFBA（425＋8）');
 ok(c.game.cost===Math.round(12000*1.1)+176,
    '★★仕入値＝卸値×1.1＋仕入れ送料176円');
 ok(c.game.costSedo===Math.round(12000*1.1),

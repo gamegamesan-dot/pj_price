@@ -5026,6 +5026,7 @@ async function spSlotKv(env, label) {
    取れない行は今までの一律の値を使い、画面に「仮の手数料」と出す。
 
    IsAmazonFulfilled: true で FBA の手数料を見積もる（出品していない ASIN でも返る）。 */
+const MW_FEE_TAX_PCT = 10;          // 手数料の消費税（7.108）
 const MW_FEE_BATCH = 20;
 const MW_FEE_CALL_MS = 2500;        // 1回ぶんの見込み（0.5回/秒＋余裕）
 /* 手数料の明細から、販売手数料・FBA手数料・消費税に振り分ける。
@@ -5073,7 +5074,13 @@ function mwFeePick(d) {
        種類を見る**前に**どの明細からも拾う。 */
     tax += Math.round(Number((x.TaxAmount || {}).Amount) || 0);
     if (/Tax/i.test(t)) { tax += amt; continue; }   // 税だけの明細
-    if (/Referral/i.test(t)) { ref += amt; continue; }
+    /* 7.108：**成約料（カテゴリ成約料・1点ごとの手数料）は販売手数料の
+       グループ**に入れる。せどりすと の「販売手数料」と同じ区切りにし、
+       手数料の消費税（10%）の土台にもする。
+       v232 までは下の else に落ちて **FBA手数料に入っていた**。 */
+    if (/Referral|VariableClosing|FixedClosing|PerItem/i.test(t)) {
+      ref += amt; continue;
+    }
     fba += amt;
     /* 内訳が無いときは、種類の名前だけで振り分ける。 */
     if (!splitFba(x)) {
@@ -5081,11 +5088,79 @@ function mwFeePick(d) {
     }
   }
   if (!total && !ref && !fba) return { ok: false, err: "手数料の明細がありません" };
+  /* 7.108：**手数料の消費税が 0 で返ってきたときは、販売手数料の10%を足す**。
+     SP-API は税を含めない形（TaxAmount 0）で返すことがあり、そのままだと
+     せどりすと より消費税のぶん安く見えていた
+     （例 B0GYC8BM48：pj 1,030＋0 に対して せどりすと 1,029＋103）。
+     返ってきた税が 0 でなければ、その値をそのまま使う。 */
+  let taxGuess = 0;
+  if (!tax && ref) {
+    tax = Math.round(ref * MW_FEE_TAX_PCT / 100);
+    taxGuess = 1;
+  }
   /* 内訳の合計が FBA手数料に合わないときは、差を配送代行に寄せる
      （合計がずれないようにする。画面はこの2つを足して出す）。 */
   if (fba && fbaShip + fbaStore !== fba) fbaShip = fba - fbaStore;
+  /* 7.108：合計は**足し直す**。Amazon の TotalFeesEstimate は
+     消費税を足す前の額なので、そのまま使うとずれる。 */
   return { ok: true, ref, fba, tax, fba_ship: fbaShip, fba_store: fbaStore,
-           total: total || (ref + fba + tax) };
+           tax_guess: taxGuess, total: ref + fba + tax,
+           total_api: total };
+}
+/* ---- サイズ区分（7.108）----
+   SP-API の手数料には**在庫管理手数料（保管料）が入っていない**ので、
+   画面で⚙の目安を足す。その目安を選ぶためにサイズ区分を決める。
+   国内FBAの区分（2026年の料金表より）：
+     小型 … 25×18×2.0cm 以内かつ 250g 以内
+     標準 … 45×35×20cm 以内かつ 9kg 以内
+     大型 … それより大きい
+   寸法が取れていない行は '' を返す（画面は⚙の既定を使う）。 */
+const MW_SIZE_S = { len: 25, wid: 18, hei: 2, g: 250 };
+const MW_SIZE_M = { len: 45, wid: 35, hei: 20, g: 9000 };
+function mwSizeTier(cm, g) {
+  const a = (cm || []).map((x) => Number(x) || 0).filter((x) => x > 0)
+    .sort((x, y) => y - x);
+  const w = Number(g) || 0;
+  if (a.length < 3 && !w) return "";
+  const fit = (lim) => a.length >= 3
+    && a[0] <= lim.len && a[1] <= lim.wid && a[2] <= lim.hei;
+  if (fit(MW_SIZE_S) && (!w || w <= MW_SIZE_S.g)) return "s";
+  if (fit(MW_SIZE_M) && (!w || w <= MW_SIZE_M.g)) return "m";
+  /* 寸法が無くて重さだけ分かるときは、重さで分ける。 */
+  if (a.length < 3 && w) return (w <= MW_SIZE_S.g) ? "s" : (w <= MW_SIZE_M.g ? "m" : "l");
+  return "l";
+}
+/* Catalog の dimensions（package を優先）から cm と g を取り出す。 */
+function mwDimPick(it) {
+  const list = (it && it.dimensions) || [];
+  const d0 = list[0] || {};
+  const pk = d0.package || {};
+  const im = d0.item || {};
+  const pick = (o) => {
+    const num = (v, unit) => {
+      const n = Number((v || {}).value) || 0;
+      if (!n) return 0;
+      const u = String((v || {}).unit || "").toLowerCase();
+      /* cm にそろえる（inches なら 2.54 倍）。 */
+      if (/inch/.test(u)) return n * 2.54;
+      if (/millimet|^mm$/.test(u)) return n / 10;
+      return n;
+    };
+    const gOf = (v) => {
+      const n = Number((v || {}).value) || 0;
+      if (!n) return 0;
+      const u = String((v || {}).unit || "").toLowerCase();
+      if (/kilogram|^kg$/.test(u)) return n * 1000;
+      if (/pound|^lb/.test(u)) return n * 453.592;
+      if (/ounce|^oz/.test(u)) return n * 28.3495;
+      return n;                                    // grams
+    };
+    return { cm: [num(o.length), num(o.width), num(o.height)].filter((x) => x > 0),
+             g: Math.round(gOf(o.weight)) };
+  };
+  const a = pick(pk);
+  if (a.cm.length >= 3 || a.g) return a;
+  return pick(im);
 }
 /* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。 */
 function mwFeeBody(part) {
@@ -5244,7 +5319,8 @@ async function mwAsinFind(env, run, jans, dl, keep) {
     const q = new URLSearchParams({
       identifiers: part.join(","), identifiersType: "EAN",
       marketplaceIds: MP_FE,
-      includedData: "summaries,salesRanks,identifiers",
+      /* 7.108：dimensions も取る（サイズ区分＝在庫管理手数料の目安に使う）。 */
+      includedData: "summaries,salesRanks,identifiers,dimensions",
     });
     const r = await spCall(env, run, "/catalog/2022-04-01/items?" + q.toString(),
                            { label: "searchCatalogItems" });
@@ -5263,8 +5339,14 @@ async function mwAsinFind(env, run, jans, dl, keep) {
       }
       const sum = (it.summaries || [])[0] || {};
       const rk = rankPick(it);
+      /* 7.108：寸法・重さとサイズ区分（在庫管理手数料の目安に使う）。 */
+      const dm = mwDimPick(it);
       const rec = Object.assign(
-        { asin, name: String(sum.itemName || "").slice(0, 300) }, rk);
+        { asin, name: String(sum.itemName || "").slice(0, 300),
+          cm3: dm.cm.length >= 3
+            ? Math.round(dm.cm[0] * dm.cm[1] * dm.cm[2]) : 0,
+          long_cm: dm.cm.length ? Math.round(Math.max.apply(null, dm.cm) * 10) / 10 : 0,
+          gram: dm.g || 0, size_tier: mwSizeTier(dm.cm, dm.g) }, rk);
       for (const j of jset) if (part.indexOf(j) >= 0) {
         addCand(j, rec);
         if (!out[j]) out[j] = rec;
@@ -5289,7 +5371,7 @@ async function mwAsinFind(env, run, jans, dl, keep) {
     if (over()) { why[j] = "時間が足りないので次回に回します"; continue; }
     const q = new URLSearchParams({
       identifiers: j, identifiersType: "EAN", marketplaceIds: MP_FE,
-      includedData: "summaries,salesRanks,identifiers",
+      includedData: "summaries,salesRanks,identifiers,dimensions",
     });
     const r = await spCall(env, run, "/catalog/2022-04-01/items?" + q.toString(),
                            { label: "searchCatalogItems" });
@@ -5301,8 +5383,14 @@ async function mwAsinFind(env, run, jans, dl, keep) {
     const asin = String(it.asin || "");
     if (!asin) { why[j] = "ASIN が返りませんでした"; continue; }
     const sum = (it.summaries || [])[0] || {};
+    const dm1 = mwDimPick(it);
     out[j] = Object.assign(
-      { asin, name: String(sum.itemName || "").slice(0, 300), retried: 1 },
+      { asin, name: String(sum.itemName || "").slice(0, 300), retried: 1,
+        cm3: dm1.cm.length >= 3
+          ? Math.round(dm1.cm[0] * dm1.cm[1] * dm1.cm[2]) : 0,
+        long_cm: dm1.cm.length
+          ? Math.round(Math.max.apply(null, dm1.cm) * 10) / 10 : 0,
+        gram: dm1.g || 0, size_tier: mwSizeTier(dm1.cm, dm1.g) },
       rankPick(it));
     /* 1件ずつの引き直しでも候補を控える（まとめ引きで漏れた分の補い）。 */
     for (const it2 of items) {
@@ -5589,18 +5677,25 @@ async function mwScanAsin(env, run, o, dl) {
     st.ok_n++;
     /* 値段の列には触らない（③が入れる）。 */
     stmts.push(env.DB.prepare(
+      /* 7.108：寸法・重さ・サイズ区分も控える（在庫管理手数料の目安に使う）。 */
       `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,rank_sub,rank_sub_cat,
-         err,checked_at,asin_at,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8)
+         err,checked_at,asin_at,created_at,size_tier,size_cm3,size_long,size_g)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8,?9,?10,?11,?12)
        ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
          name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
          rank=COALESCE(excluded.rank, mw_amz.rank),
          rank_cat=COALESCE(NULLIF(excluded.rank_cat,''), mw_amz.rank_cat),
          rank_sub=COALESCE(excluded.rank_sub, mw_amz.rank_sub),
          rank_sub_cat=COALESCE(NULLIF(excluded.rank_sub_cat,''), mw_amz.rank_sub_cat),
+         size_tier=COALESCE(NULLIF(excluded.size_tier,''), mw_amz.size_tier),
+         size_cm3=COALESCE(NULLIF(excluded.size_cm3,0), mw_amz.size_cm3),
+         size_long=COALESCE(NULLIF(excluded.size_long,0), mw_amz.size_long),
+         size_g=COALESCE(NULLIF(excluded.size_g,0), mw_amz.size_g),
          err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
       .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
-            f.rank_sub || null, f.rank_sub_cat || "", at));
+            f.rank_sub || null, f.rank_sub_cat || "", at,
+            String(f.size_tier || ""), Number(f.cm3 || 0),
+            Number(f.long_cm || 0), Number(f.gram || 0)));
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
@@ -6708,6 +6803,7 @@ async function mwBuyList(env, url) {
             a.fee_tax AS fee_tax, a.fee_base AS fee_base, a.fee_at AS fee_at,
             a.fee_err AS fee_err, a.price_at AS price_at,
             a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
+            a.size_tier AS size_tier, a.size_g AS size_g,
             COALESCE(b.pics,0) AS pics,
             b.snap_at AS snap_at,
             COALESCE(b.reg_state,'') AS reg_state, b.reg_sku AS reg_sku,
@@ -7702,6 +7798,9 @@ async function mwAmzList(env, url) {
             a.fee_at AS fee_at, a.fee_err AS fee_err,
             /* FBA の内訳（7.106）。配送代行と在庫管理を分けて出す。 */
             a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
+            /* サイズ区分（7.108）。在庫管理手数料の目安に使う。 */
+            a.size_tier AS size_tier, a.size_cm3 AS size_cm3,
+            a.size_long AS size_long, a.size_g AS size_g,
             /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
             COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
             i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,
@@ -10456,7 +10555,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,
   schemaCheck, schemaFixOf, SCHEMA_TABLES, SCHEMA_ITEM_COLS,
-  mwFeePick, mwFeeFind, MW_FEE_BATCH, mwFeeBody, mwFeeList, mwFeeTest, MW_FEE_CALL_MS, mwScanFee,
+  mwFeePick, mwFeeFind, MW_FEE_BATCH, mwFeeBody, mwFeeList, mwFeeTest,
+  mwSizeTier, mwDimPick, MW_FEE_TAX_PCT, MW_FEE_CALL_MS, mwScanFee,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,

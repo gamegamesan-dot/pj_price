@@ -22,7 +22,12 @@ const base={ sha:'M200', kishu:'NS', cond:'新品', stock:9, note:'',
 const SAI=Object.assign({},base,{ jan:'4944076005667', kishu:'PS5',
   mw_name:'サイヴァリア3 限定版', amz_name:'サイヴァリア3 限定版 PS5',
   wholesale:4500, asin:'B0SAIVA001', price:9638,
-  fee_ref:1484, fee_fba:441, fee_tax:148, fee_total:2073, fee_base:9638,
+  /* 7.108：SP-API の FBA手数料は**配送代行だけ**（在庫管理は入らない）。
+     実機（B0GYC8BM48）で API 420 に対して せどりすと 428（420＋8）だった。
+     ここは せどりすと の 441（配送代行425＋在庫管理16）に合わせるので、
+     API は 425 を返し、⚙の標準の在庫管理 16 を足して 441 にする。 */
+  fee_ref:1484, fee_fba:425, fee_fba_ship:425, fee_fba_store:0,
+  fee_tax:148, fee_total:2057, fee_base:9638, size_tier:'m',
   fee_at:'2026-10-29T01:00:00Z' });
 /* 手数料が取れていない行（仮の手数料） */
 const TMP=Object.assign({},base,{ jan:'4902370550467',
@@ -45,6 +50,9 @@ const setup=async()=>await p.evaluate((META)=>{
   $('mwKishu').value='NS,PS5,FIG'; $('mwNewOnly').checked=true;
   $('mwAmzFeeGame').value='15'; $('mwAmzFbaGame').value='530';
   $('mwAmzFeeHobby').value='10'; $('mwAmzFbaHobby').value='580';
+  /* 7.108：在庫管理手数料の目安（標準＝16。この例の せどりすと の内訳）。 */
+  $('mwFbaStoreM').value='16'; $('mwFbaShipM').value='425';
+  $('mwFbaSizeHobby').value='m';
   window.__posts=[]; window.__copied=null;
   const real=window.fetch;
   window.fetch=async(u,i)=>{

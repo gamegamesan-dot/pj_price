@@ -566,6 +566,12 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   /* その内訳（7.106・migrate-0039）。せどりすと と並べて見るため。 */
   fee_fba_ship  INTEGER,   -- 配送代行手数料
   fee_fba_store INTEGER,   -- 在庫管理手数料
+  /* サイズ区分（7.108・migrate-0040）。Catalog の dimensions から出す。
+     SP-API の手数料には在庫管理手数料が入らないので、⚙の目安を選ぶのに使う。 */
+  size_tier TEXT,          -- 's'(小型) / 'm'(標準) / 'l'(大型)
+  size_cm3  INTEGER,       -- 体積（cm3）
+  size_long REAL,          -- 長辺（cm）
+  size_g    INTEGER,       -- 重さ（g）
   fee_tax    INTEGER,   -- 手数料の消費税
   fee_total  INTEGER,   -- 合計（Amazon が返す総額）
   fee_base   INTEGER,   -- その手数料を出したときの売値
