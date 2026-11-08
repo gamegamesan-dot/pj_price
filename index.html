@@ -1214,6 +1214,39 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
       </details>
 
+      <!-- 取り込めなかった CustomLabel の内訳（6.153）。形ごとの件数と例を出す。 -->
+      <details id="syncUnpBox" data-box="1" data-toc="解析不可の出品" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer" id="syncUnpSum">解析不可の出品</summary>
+        <div style="padding:6px 0 0">
+          <details class="exp" data-exp="syncUnp"><summary>説明</summary>
+          <div class="note2" style="margin:0 0 6px">eBay の出品中リストのうち、<b>CustomLabel から pj の行を決められなかった出品</b>です。読める形は <b>E-&lt;ASIN&gt;</b>（手元在庫）／<b>-U</b>・<b>-C</b>・<b>-L</b>（中古の区分）／<b>M-&lt;ASIN&gt;</b>（Amazon 無在庫）／<b>W-&lt;JAN&gt;</b>（MW 無在庫）です。形ごとの件数と例を出します。例は取り込んだ回の先頭10件です。</div>
+          </details>
+          <div class="note2" id="syncUnpNote" style="margin:0">「状況を取り込む」を押してください。</div>
+          <div id="syncUnpList" style="margin-top:4px"></div>
+        </div>
+      </details>
+
+      <!-- 出品を1件だけ手で結び付ける（6.153）。取り込みで落ちた出品の受け皿。 -->
+      <details id="syncLinkBox" data-box="1" data-toc="手で結び付ける" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer">出品を手で結び付ける</summary>
+        <div style="padding:6px 0 0">
+          <details class="exp" data-exp="syncLink"><summary>説明</summary>
+          <div class="note2" style="margin:0 0 6px"><b>ItemID を入れるだけ</b>で、その出品を pj の行に結び付けます。eBay を1件だけ読み（<b>GetItem</b>）、CustomLabel から行を決めて、ItemID・数量・売値を入れます。<b>eBay には何も書き込みません。</b>eBay 側の CustomLabel が空の出品は、結び付ける先（<b>W-&lt;JAN&gt;</b> など）も入れてください。eBay に CustomLabel があって入れた値と違うときは、まちがいを防ぐために止めます。</div>
+          </details>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input id="syncLinkId" inputmode="numeric" placeholder="ItemID（例 960161917613）"
+                   style="flex:1 1 0;min-width:0">
+            <input id="syncLinkSku" placeholder="CustomLabel（例 W-4562475323733）"
+                   style="flex:1 1 0;min-width:0">
+          </div>
+          <label class="note2" style="display:flex;gap:6px;align-items:center;margin:4px 0 0">
+            <input type="checkbox" id="syncLinkForce"> すでに別の ItemID が入っていても上書きする
+          </label>
+          <button class="btn" id="syncLinkGo" style="width:100%;margin-top:4px">この ItemID を結び付ける</button>
+          <div class="note2" id="syncLinkRes" style="margin-top:4px"></div>
+        </div>
+      </details>
+
       <!-- 価格の操作。値下げの時期が来ていれば自動で開く。 -->
       <details id="syncPriceBox" data-box="1" data-toc="価格の操作" style="margin-top:8px">
         <summary class="note2" style="margin:0;cursor:pointer" id="syncPriceSum">価格の操作</summary>
@@ -5263,8 +5296,35 @@ function csvUndoShow(ids,label){
 }
 /* 行を消す（ゴミ箱へ移す）。消した件数を返す。
    pos は「追加順」での位置なので、並べ替えて表示していても元の位置に戻せる。 */
-function csvDeleteRows(rows,label){
+/* 消そうとした行のうち、ItemID 待ちの行を分ける（6.153）。
+   ItemID 待ち（csvWaitId）の決め方は手順⑤のところにある。 */
+function csvWaitSplit(rows){
+  var wait=[], go=[];
+  (rows||[]).forEach(function(r){ (csvWaitId(r)?wait:go).push(r); });
+  return { wait:wait, go:go };
+}
+function csvWaitMsg(wait){
+  return 'ItemID がまだ入っていない行が '+wait.length+'件あります。\n'
+    +wait.slice(0,5).map(function(r){
+        return '・'+(r.titleJa||r.titleEn||csvCustomLabel(r)||'（名前なし）'); }).join('\n')
+    +(wait.length>5?('\n…ほか'+(wait.length-5)+'件'):'')
+    +'\n\nこの行を消すと、「アップロード結果を取り込む」で ItemID を'
+    +'結び付けられません。\n'
+    +'先に結果を取り込んでから消してください。';
+}
+function csvDeleteRows(rows,label,force){
   if(!rows.length)return 0;
+  /* 6.153：ItemID 待ちの行は残す（force のときだけ消す）。 */
+  var held=0;
+  if(force!==true){
+    var sp=csvWaitSplit(rows);
+    held=sp.wait.length;
+    rows=sp.go;
+    if(!rows.length){
+      alert(csvWaitMsg(sp.wait));
+      return 0;
+    }
+  }
   var put=[], ids=[];
   rows.forEach(function(r){
     var i=csvList.indexOf(r); if(i<0)return;
@@ -5273,7 +5333,8 @@ function csvDeleteRows(rows,label){
   put.slice().reverse().forEach(function(x){ csvList.splice(csvList.indexOf(x.r),1); });
   csvTrashPut(put);
   csvSaveList();
-  csvUndoShow(ids,label||((ids.length)+'件を削除しました（ゴミ箱に入れました）'));
+  csvUndoShow(ids,(label||((ids.length)+'件を削除しました（ゴミ箱に入れました）'))
+    +(held?('　ItemID 待ちの '+held+'件は残しました'):''));
   return ids.length;
 }
 function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
@@ -6257,6 +6318,8 @@ function csvBadgeHtml(r){
   if(rest.length)badge+=b(rest.join('・'),'var(--bad)');
   if(!r.jan)badge+=b('JANなし','#8a6d00');
   if(csvLogged(r))badge+=b('出品済みの可能性','#8a6d00');
+  /* 6.153：書き出したのに ItemID が入っていない行。消すと照合できない。 */
+  if(csvWaitId(r))badge+=b('ItemID 待ち（消さないでください）','#b35c00');
   /* 写真の切り替え（6.79）。済むまでは eBayアプリで編集してはいけない。 */
   if(csvPicsGone(r))badge+=b('写真が抜けています','var(--bad)');
   else if(csvPicsWait(r)||String(r.picsErr||'').trim())
@@ -7278,11 +7341,23 @@ function csvGroupsRender(){
 }
 /* ================= 仕入れのたびの手順（①〜⑤）=================
    残りの件数を出し、押すとその場所へ移動する。数え方は一覧の絞り込みと同じ決まり。 */
-// 書き出したのに ItemID が入っていない行（結果ファイル待ち）
+/* 書き出したのに ItemID が入っていない行（結果ファイル待ち）。
+   6.153：この行を消すと、アップロードの結果を取り込んでも照合できない
+   （2026-11-08：W-4562475323733 の ItemID が入らなかった原因）ので、
+   削除の歯止めにも使う。見分け方は2つ。
+   ・priceSent … 書き出したときに付く控え（書き出しログを消しても残る）
+   ・書き出しログに同じ CustomLabel があって ItemID が空
+   アップロードが失敗した行は、直して出し直すので待ちに数えない。
+   突き合わせは csvLogHit（E-／M- の違いは見ない・W- は JAN で見る）。 */
 function csvWaitId(r){
+  if(!r)return false;
   if(String(r.itemId||'').trim())return false;
+  if(String(r.uploadErr||'').trim())return false;
+  if(+r.priceSent>0)return true;
   var lb=csvCustomLabel(r);
-  return csvLog.some(function(x){ return String(x.sku||'')===lb; });
+  if(!lb)return false;
+  return csvLog.some(function(x){
+    return csvLogHit(x,lb)&&!String(x.itemId||'').trim(); });
 }
 var CSV_STEPS=[
   { k:'①', t:'取り込み', box:'csvImportBtn',
@@ -7678,7 +7753,13 @@ $('csvList').addEventListener('click',function(e){
   /* 削除はゴミ箱へ移すだけ。押し間違えても一覧の上の「ゴミ箱」から戻せる。 */
   if(t.hasAttribute('data-del')){
     var dr=csvList[i];
-    csvDeleteRows([dr],'「'+(dr.titleJa||dr.sku||'1件')+'」を削除しました');
+    /* 6.153：ItemID 待ちの行は、理由を見せてから消す（押し間違いを防ぐ）。 */
+    var dForce=false;
+    if(csvWaitId(dr)){
+      if(!confirm(csvWaitMsg([dr])+'\n\nそれでも消しますか？'))return;
+      dForce=true;
+    }
+    csvDeleteRows([dr],'「'+(dr.titleJa||dr.sku||'1件')+'」を削除しました',dForce);
     csvRender(); return;
   }
   else if(t.hasAttribute('data-fba'))csvList[i].fba=!csvList[i].fba;
@@ -7960,15 +8041,28 @@ $('csvPerPage').addEventListener('change',function(){ csvPerApply(this.value); }
 $('csvPickEbay').onclick=function(){
   var keep=csvList.filter(csvEbayFirst);
   if(!keep.length){ alert('eBay優先と判定された行がありません。'); return; }
-  if(!confirm('eBay優先の '+keep.length+'件だけ残し、残り '+(csvList.length-keep.length)+'件を削除します。よろしいですか？'))return;
-  csvList=keep; csvSaveList(); csvRender();
+  /* 6.153：ItemID 待ちの行も残す（結果を取り込むまで消さない）。 */
+  var wait=csvList.filter(function(r){
+    return !csvEbayFirst(r)&&csvWaitId(r); });
+  if(!confirm('eBay優先の '+keep.length+'件だけ残し、残り '
+    +(csvList.length-keep.length-wait.length)+'件を削除します。'
+    +(wait.length?('\nItemID 待ちの '+wait.length+'件は残します。'):'')
+    +'\nよろしいですか？'))return;
+  var drop=csvList.filter(function(r){
+    return keep.indexOf(r)<0&&wait.indexOf(r)<0; });
+  csvDeleteRows(drop,drop.length+'件を削除しました（ゴミ箱に入れました）',true);
+  csvRender();
 };
 $('csvClear').onclick=function(){
   if(!csvList.length)return;
-  if(!confirm('出品リストの '+csvList.length+'件をすべて削除します。\n'
+  /* 6.153：ItemID 待ちの行は残す（アップロード結果の照合に要る）。 */
+  var sp=csvWaitSplit(csvList.slice());
+  if(!sp.go.length){ alert(csvWaitMsg(sp.wait)); return; }
+  if(!confirm('出品リストの '+sp.go.length+'件を削除します。\n'
+    +(sp.wait.length?('ItemID 待ちの '+sp.wait.length+'件は残します。\n'):'')
     +'ゴミ箱に入るので、あとから「すべて戻す」で戻せます。\n'
     +'よろしいですか？'))return;
-  var n=csvDeleteRows(csvList.slice(),csvList.length+'件を削除しました（ゴミ箱に入れました）');
+  var n=csvDeleteRows(sp.go,sp.go.length+'件を削除しました（ゴミ箱に入れました）',true);
   csvRender();
   if(!n)return;
 };
@@ -13747,10 +13841,13 @@ function csvResKey(h){ return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,'
    復活で M- を E- に変えて出したあとでも、同じ出品として結び付けるため
    （2026-10-06：-C の行の ItemID が記録されなかった原因）。 */
 function csvLabelKey(label){
+  /* 6.153：MW 無在庫（W-<JAN>）。ASIN が無い行もあるので JAN で照合する。 */
+  var w=/^W-(\d{13})$/.exec(String(label||'').trim());
+  if(w)return { asin:'', jan:w[1], kind:'new', mw:true };
   var m=/^([EM])-(B[0-9A-Z]{9})(-U|-C|-L)?$/i.exec(String(label||'').trim());
   if(!m)return null;
   var suf=String(m[3]||'').toUpperCase();
-  return { asin:m[2].toUpperCase(),
+  return { asin:m[2].toUpperCase(), jan:'', mw:false,
            kind:(suf==='-C')?'cart':((suf==='-L')?'loose'
                 :((suf==='-U')?'used':'new')) };
 }
@@ -13761,6 +13858,8 @@ function csvLabelHit(r,label){
   if(csvCustomLabel(r)===label)return true;        // 文字どおりの一致
   var k=csvLabelKey(label);
   if(!k)return false;
+  /* W-<JAN> は JAN だけで照合する（ASIN が無い行があるため）。 */
+  if(k.mw)return String(r.jan||'').replace(/\D/g,'')===k.jan;
   return String(r.asin||'').toUpperCase()===k.asin&&csvKindOf(r)===k.kind;
 }
 // 書き出しログの行がその CustomLabel のものか
@@ -13773,12 +13872,28 @@ function csvLogHit(L,label){
 function csvLabelWhy(label){
   var k=csvLabelKey(label);
   if(!k)return 'この CustomLabel の行が出品リストにありません';
+  if(k.mw)return 'この商品（JAN '+k.jan+'）の行が出品リストにありません'
+    +'（MW 無在庫）';
   var same=csvList.filter(function(x){
     return String(x.asin||'').toUpperCase()===k.asin; });
   if(!same.length)return 'この商品（'+k.asin+'）の行が出品リストにありません';
   return '同じASINの行はありますが区分が違います（結果は'+(CSV_KIND_NAME[k.kind]||k.kind)
     +'、出品リストの行は'+same.map(function(x){
         return CSV_KIND_NAME[csvKindOf(x)]||csvKindOf(x); }).join('・')+'）';
+}
+/* 出品リストから消えている行は、ゴミ箱から戻してから結び付ける（6.153）。
+   アップロードの結果を取り込む前に行を消してしまっても、ItemID が
+   その行に入るようにする（消した行は30日ぶんゴミ箱に残っている）。 */
+function csvResRevive(label){
+  if(!label)return null;
+  var t=null;
+  for(var i=0;i<csvTrash.length;i++){
+    var r0=csvTrash[i]&&csvTrash[i].r;
+    if(r0&&csvLabelHit(r0,label)){ t=csvTrash[i]; break; }
+  }
+  if(!t)return null;
+  if(!csvTrashRestore([t.r.id],{force:true}))return null;
+  return t.r;
 }
 function csvResImport(text){
   var rows=csvParse(text);
@@ -13796,6 +13911,7 @@ function csvResImport(text){
       iWn=col('warningmessage','warning'),
       iCd=col('errorcode','code'), iLn=col('linenumber');
   var ok=0, warnN=0, ng=0, miss=0, logged=0, notes=[], rev=0, revNg=0, post=[];
+  var back=0;   // ゴミ箱から戻した行（6.153）
   /* この取り込みで ItemID が入った行（6.79）。
      ここで写真の切り替えまで済ませてしまう（「状況を取り込む」を待たない）。 */
   var fresh=[];
@@ -13809,6 +13925,8 @@ function csvResImport(text){
     var hit=null;
     // 書き出しと同じ規則で照合する（E-/M- の違いは見ない。-U/-C は区別する）
     if(label)csvList.forEach(function(x){ if(csvLabelHit(x,label))hit=x; });
+    /* 6.153：一覧に無ければゴミ箱から戻す。戻した件数は結果に出す。 */
+    if(!hit&&label){ hit=csvResRevive(label); if(hit)back++; }
     // Warning も出品自体は通っているので成功として扱う
     if(/^(success|warning)$/i.test(st)){
       var isWarn=/^warning$/i.test(st);
@@ -13857,7 +13975,7 @@ function csvResImport(text){
   csvSaveList(); csvSaveLog();
   syncResPost(post,'csvResResult');
   return { ok:ok, warnN:warnN, ng:ng, miss:miss, logged:logged, notes:notes,
-           rev:rev, revNg:revNg, fresh:fresh };
+           rev:rev, revNg:revNg, fresh:fresh, back:back };
 }
 $('csvResFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f)return;
@@ -13878,6 +13996,7 @@ $('csvResFile').addEventListener('change',function(){
     box.textContent='✓ 成功 '+r.ok+'件'+(r.warnN?('（うち警告 '+r.warnN+'件）'):'')
       +'（ログ記録 '+r.logged+'件）／失敗 '+r.ng+'件'
       +(r.miss?('　照合できなかった行 '+r.miss+'件'):'')
+      +(r.back?('　ゴミ箱から戻した行 '+r.back+'件'):'')
       +(r.rev?('　値段の更新 '+r.rev+'件（失敗 '+r.revNg+'件は元に戻しました）'):'')
       +(r.notes.length?('\n'+r.notes.slice(0,10).join('\n')
         +(r.notes.length>10?('\nほか '+(r.notes.length-10)+'件'):'')):'');
@@ -15598,6 +15717,8 @@ function syncPicsAutoRun(done){
   }
   step();
 }
+/* 出品を手で結び付ける（6.153）。 */
+$('syncLinkGo').onclick=function(){ syncLinkGo(); };
 $('syncPicsOne').onclick=function(){
   var id=String($('syncPicsId').value||'').replace(/[^0-9]/g,'');
   if(!/^[0-9]{9,15}$/.test(id)){
@@ -18699,6 +18820,8 @@ function syncRowHtml(r,key){
       +syncMdRowHtml(r)
       /* 再調達中の行は、出し直したときの売値と、赤字にならない仕入値の上限を出す。
          いまの最安値がこの上限を超えたら「再調達で赤字」。 */
+      /* MW 無在庫（6.153）。仕入れ基準（MW／Amazon）と重量の出どころ。 */
+      +syncMwDropHtml(r)
       /* Amazon 無在庫（6.139）。再調達中の仕組みで値段が追従する。 */
       +(syncIsAmzDrop(r)
         ? ('<div class="note2" style="margin-top:2px">'
@@ -18759,6 +18882,131 @@ function syncRowHtml(r,key){
       +detHtml('sync',key,det)
       +'</div>';
 }
+/* ===== MW 無在庫（W-<JAN>）の出品（6.153）=====
+   CustomLabel が W-<JAN> の行は、items の asin が「W＋JAN」の見かけの ASIN なので
+   Amazon の最安値・重量が items には入らない。仕入れ基準と重さは pj-sync が
+   /status の mw（JAN をキー）で返すので、それを行に出す。 */
+function syncMwJanOf(r){
+  var m=/^W-(\d{13})$/.exec(String((r&&r.ebay_sku)||'').trim());
+  if(m)return m[1];
+  var a=/^W(\d{13})$/.exec(String((r&&r.asin)||'').trim());
+  return a?a[1]:'';
+}
+function syncMwInfo(r){
+  var j=syncMwJanOf(r); if(!j)return null;
+  var o=((syncData&&syncData.mw)||{})[j];
+  return o?o:{ jan:j };
+}
+/* 仕入れ基準（MW ¥○○／Amazon ¥○○）と重量（出どころ）を1つの帯で出す。 */
+function syncMwDropHtml(r){
+  var o=syncMwInfo(r); if(!o)return '';
+  var mw=Math.round(+o.cost_mw||0), az=Math.round(+o.cost_amz||0);
+  var src=String(o.cost_src||''), cost=Math.round(+o.cost||0);
+  var t='<div class="note2" style="margin-top:2px">'
+    +'<b style="color:#0b6b8a">MW 無在庫</b>　JAN '+esc(o.jan)
+    +(o.asin?('　ASIN '+esc(o.asin)):'')
+    +(o.sha?('　'+esc(o.sha)):'');
+  if(cost>0){
+    t+='<br>仕入れ基準：MW '+(mw>0?yen(mw):'—')+'／Amazon '+(az>0?yen(az):'—')
+      +'　→ <b>'+(src==='amz'?'Amazon':'MW')+' '+yen(cost)+'</b>'
+      +(o.cost_why?('　<span style="opacity:.75">'+esc(o.cost_why)+'</span>'):'');
+  }else{
+    t+='<br><span style="opacity:.75">仕入れ基準：まだ分かりません'
+      +'（仕入れタブで MW の在庫CSVを取り込んでください）</span>';
+  }
+  /* 重さは pj-sync が返した Amazon の重量に、⚙の梱包マージンを足して出す。
+     手で直した重さが items にあればそれを優先する（7.112 と同じ決め方）。 */
+  var w=mwWeightOf({ wHand:+r.weight_g||0, amz_g:+o.amz_g||0,
+                     amz_g_src:o.amz_g_src, kishu:o.kishu });
+  t+='<br>'+esc(mwWeightText(w));
+  if(o.amz_at)t+='　<span style="opacity:.7">Amazon 最安値 '+esc(jstText(o.amz_at))+'</span>';
+  if(Number(o.gone||0))
+    t+='<br><span style="color:var(--bad);font-weight:700">MW で欠品しています'
+      +'（段取り D で数量0にします）</span>';
+  return t+'</div>';
+}
+/* ===== 取り込めなかった CustomLabel の内訳（6.153）===== */
+function syncUnpRender(){
+  var note=$('syncUnpNote'), list=$('syncUnpList'), sum=$('syncUnpSum');
+  if(!note||!list)return;
+  var u=(syncData&&syncData.ebay_unparsed)||null;
+  var n=u?(+u.n||0):0;
+  if(sum)sum.textContent='解析不可の出品'+(syncData?('　'+n+'件'):'');
+  if(!syncData){ note.textContent='「状況を取り込む」を押してください。';
+                 list.innerHTML=''; return; }
+  if(!u){ note.textContent='内訳がありません（eBay の出品中リストを'
+            +'取り込み直すと出ます）。'; list.innerHTML=''; return; }
+  if(!n){ note.textContent='読めなかった出品はありません。'; list.innerHTML=''; return; }
+  note.innerHTML='読めなかった出品 <b>'+n+'件</b>'
+    +(u.at_jst?('　<span style="opacity:.7">'+esc(u.at_jst)+'</span>'):'');
+  var k=u.kinds||{}, keys=Object.keys(k).sort(function(a,b){ return k[b]-k[a]; });
+  var h='';
+  keys.forEach(function(x){
+    h+='<div class="note2" style="margin:2px 0">・'+esc(x)+'　<b>'+(+k[x]||0)+'件</b>'
+      +'</div>';
+  });
+  var sm=u.samples||[];
+  if(sm.length){
+    h+='<div class="note2" style="margin:6px 0 2px">例（先頭'+sm.length+'件）</div>';
+    sm.forEach(function(x){
+      var id=String(x.item_id||'');
+      h+='<div class="note2" style="margin:2px 0">'
+        +'CustomLabel <b>'+esc(String(x.sku||'')||'（空）')+'</b>'
+        +(id?('　ItemID '+esc(id)):'')
+        +(x.title?('　'+esc(x.title)):'')
+        +(id?('　<button class="btn" data-unplink="'+esc(id)+'"'
+              +' style="padding:2px 8px;font-size:11.5px">手で結び付ける</button>'):'')
+        +'</div>';
+    });
+  }
+  list.innerHTML=h;
+}
+/* 例の「手で結び付ける」。ItemID を欄に入れて、箱を開けて見せる。 */
+document.addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var id=t.getAttribute('data-unplink'); if(!id)return;
+  var box=$('syncLinkBox'); if(box)box.open=true;
+  var el=$('syncLinkId'); if(el){ el.value=id; }
+  var sk=$('syncLinkSku'); if(sk)sk.value='';
+  if(box&&box.scrollIntoView)box.scrollIntoView({block:'center'});
+});
+/* ===== 出品を1件だけ手で結び付ける（6.153）===== */
+function syncLinkGo(){
+  var out=$('syncLinkRes'); if(!out)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ out.textContent='⚙設定のURLとキーが要ります'; return; }
+  var id=String(($('syncLinkId')||{}).value||'').replace(/\D/g,'');
+  var sku=String(($('syncLinkSku')||{}).value||'').trim();
+  if(!/^\d{9,15}$/.test(id)){ out.textContent='ItemID を数字で入れてください'; return; }
+  out.textContent='結び付けています…';
+  var b={ item_id:id };
+  if(sku)b.label=sku;
+  if(($('syncLinkForce')||{}).checked)b.force=true;
+  fetch(syncUrl()+'/ebay/link',
+    {method:'POST',headers:{'Content-Type':'application/json','X-PJ-Key':syncApiKey()},
+     body:JSON.stringify(b)})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        out.innerHTML='<span style="color:var(--bad);font-weight:700">結び付けられません'
+          +'</span>　'+esc(String((d&&d.why)||'理由が分かりません'));
+        return;
+      }
+      out.innerHTML='<b style="color:var(--ok,#1f7a4d)">結び付けました</b>　'
+        +esc(d.sku||'')+' ⇔ ItemID '+esc(d.item_id||'')
+        +'（'+esc(d.asin||'')+'／'+(d.cond==='new'?'新品':'中古')
+        +(Number(d.dropship||0)?'・無在庫':'')+'）'
+        +'　数量 '+(+d.qty||0)+'　売値 '+(d.price?usd(+d.price):'—')
+        +(d.replaced?('<br><span style="opacity:.75">前の ItemID '+esc(d.replaced)
+          +' を入れ替えました</span>'):'')
+        +'<br><span style="opacity:.75">一覧に出すために、もう一度'
+        +'「状況を取り込む」を押してください</span>';
+    })
+    .catch(function(err){
+      out.innerHTML='<span style="color:var(--bad)">つながりません：'
+        +esc(String(err&&err.message||err))+'</span>';
+    });
+}
 /* 1行だけ作り直す。相場を入れ替えたときに使う（ほかの行の欄は触らない）。 */
 function syncRowReplace(key){
   syncMemoClear();
@@ -18795,6 +19043,7 @@ function syncRender(){
   syncMemoClear();                  // 引き当てと計算の控えを捨てる
   syncFilterOpts();                 // 絞り込みの件数を先に作り直す
   syncWarnBreakRender();            // 警告の理由ごとの件数
+  syncUnpRender();                  // 解析不可の出品の内訳（6.153）
   var c=(syncData&&syncData.counts)||{};
   $('syncCount').textContent=(c.ebay_in_stock===undefined?0:c.ebay_in_stock);
   $('syncSummary').textContent=syncData
@@ -19990,7 +20239,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v238';   // sw.js の const V と必ず同じ値にする
+var APP_V='v239';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

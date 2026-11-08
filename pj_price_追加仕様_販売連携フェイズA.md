@@ -6753,3 +6753,116 @@ v226 の Amazon 無在庫（`rkTarget`）と同じ考え方。
 `mwDimPick()` が **package か item か**も返すようにし、`mw_amz.size_src`
 （`'pkg'`／`'item'`）に控える。`GET /mw/list` は
 `asin` / `amz_low` / `amz_at` / `amz_new_n` / `amz_g` / `amz_g_src` を返す。
+
+---
+
+## 7.113 MW 無在庫（W-&lt;JAN&gt;）の出品を販売連携に取り込む（v239・【至急】）
+
+### 何が起きていたか（原因）
+
+W-4562475323733（カラ松・eBay ItemID 960161917613・$37.00）が販売連携に
+入っていなかった。原因は1つで、**`parseLabel()` に `W-` の枝が無かった**こと。
+
+`parseLabel()` が読める CustomLabel は `E-<ASIN>[-U|-C|-L]` と `M-<ASIN>` だけで、
+`W-<JAN>` は「読めない」と返っていた。そのため
+
+- eBay の出品中リストの取り込み（`syncEbayActive`）で、W- の出品が
+  **「CustomLabel解析不可」**に数えられ、`items` の行が作られなかった
+  （画面の「解析不可の出品 69件」）
+- 名簿の送信（`POST /listings`）でも W- の行が `bad` に落ちて
+  **「名簿を pj-sync に送りました：0件」**になった
+- `items` に行が無いので、販売連携で JAN を検索しても0件だった
+
+### 1. W- の行のキー（JAN から作る見かけの ASIN）
+
+`items` の主キーは **(asin, cond)** だが、W- の出品は Amazon の ASIN が
+まだ引けていないことがある（JAN→ASIN を調べていない・Amazon に無い）。
+そこで **JAN から作る見かけの ASIN**をキーにする。
+
+```
+W-4562475323733  →  asin 'W4562475323733' ／ cond 'new' ／ scope 'ebay'
+                     dropship 1（MW 無在庫）
+```
+
+| 性質 | なぜ大丈夫か |
+| --- | --- |
+| 本物の ASIN とぶつからない | 本物は `B` ＋ 9文字。こちらは `W` ＋ 13桁 |
+| FBA の行と混ざらない | 同じ商品を FBA で出していても別の行（別の出口なので分けたい） |
+| CustomLabel だけで決まる | ASIN が引けていなくても結び付く |
+
+- `mwAsinOfJan(jan)` / `mwJanOfAsin(asin)` … 行き帰りの変換
+- `isAsin(a)` … 本物の ASIN か（Amazon に問い合わせてよいか）
+
+**Amazon に問い合わせる処理からは必ず外す。**
+
+| 場所 | 外し方 |
+| --- | --- |
+| `lowestReqs()` | `if (!isAsin(k.asin)) continue;` |
+| `syncPricing()` の SELECT | `AND asin LIKE 'B%'` |
+
+### 2. 名簿（`POST /listings`）でも W- を優先する
+
+せどりすとSKU と CustomLabel の両方が送られてくるので、キーの決め方は
+`-C` / `-L` と同じように **W- のときは CustomLabel を優先**する
+（`lab.cart || lab.from === "mw"`）。同じ商品を FBA でも出していると、
+せどりすとSKU 側のキー（`E-<ASIN>`）に ItemID が付いてしまい、
+無在庫の行が結び付かない。
+
+### 3. 読めなかった CustomLabel の内訳（`GET /status` の `ebay_unparsed`）
+
+「解析不可 69件」だけでは直せないので、**形ごとに数えて例も控える**。
+
+| 形 | 見分け方 |
+| --- | --- |
+| CustomLabel が空 | 空文字 |
+| W-（MW 無在庫）だが JAN が13桁でない | `^W-` |
+| E-／M- だが ASIN の形でない | `^[EM]-` |
+| Amazon 用の SKU（mwgame／mwhobby） | `^mw(game|hobby)-` |
+| せどりすとの SKU | `^(game|hobby|toy|fig)-` |
+| JAN だけ（13桁の数字） | `^\d{13}$` |
+| その他 | 残り |
+
+- `sync_state` の `ebay.unparsed.kinds` に `{at, n, kinds, samples}`（例は先頭10件）
+- 取り込みの記録（`run.notes`）にも形ごとの件数を書く
+- `GET /status` が `ebay_unparsed: { n, kinds, samples, at, at_jst }` を返す
+
+### 4. 1件だけ手で結び付ける（`POST /ebay/link`）
+
+取り込みが追いつかないとき・解析不可で落ちたときの受け皿。
+**eBay には何も書き込まない**（GetItem を1件だけ読む）ので、作業者のキーでも使える。
+
+```
+POST /ebay/link  { item_id, label?, force? }
+→ { ok, asin, cond, item_id, sku, jan, dropship, qty, price, currency,
+    status, title, replaced }
+```
+
+| 歯止め | 動き |
+| --- | --- |
+| ItemID の形が違う | 断る |
+| eBay で見られない ItemID | GetItem の理由をそのまま返す |
+| eBay の CustomLabel と `label` が違う | **断る**（別の出品に結び付けない） |
+| eBay の CustomLabel が空 | `label` で結び付ける（`label` も無ければ断る） |
+| その行に別の ItemID が入っている | `force:true` のときだけ入れ替える（`replaced` に前の値） |
+
+### 5. 出品済みの W- の行の仕入れ基準と重さ（`GET /status` の `mw`）
+
+W- の行は `items` に Amazon の最安値・重量が入らない（見かけの ASIN なので
+Amazon に問い合わせていない）。画面が同じ計算をしなくてよいように、
+**JAN をキーに pj-sync 側で出して返す**（`mwDropInfo`）。
+
+```
+mw: { "4562475323733": {
+  jan, cost, cost_src:'mw'|'amz', cost_mw, cost_amz, cost_why, cost_text,
+  amz_g, amz_g_src:'pkg'|'item', amz_low, amz_at, asin,
+  wholesale, kishu, ship_days, sha, stock, gone, name } }
+```
+
+- 仕入れ基準は 7.112 の `mwDropCost()` / `mwCostText()` をそのまま使う
+- 仕入れ元は `mw_stock.pick=1`。印が無い JAN（欠品で落ちた・まだ選んでいない）は
+  **卸値のいちばん安い行**で代える（画面が空にならないように）
+- `kishu` も返す（画面でジャンルの既定値と梱包マージンを決めるのに使う）
+
+### D1 の作業
+
+**不要。**新しい表・列は増やしていない（`sync_state` のキーが1つ増えるだけ）。

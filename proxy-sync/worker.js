@@ -360,8 +360,33 @@ function parseSku(sku) {
    -C は「カートリッジのみ」（箱・説明書なし）、-L は「フィギュアのみ」（箱なし）。
    どちらも箱付き中古（-U）とは別物で、items の主キーは (asin, cond) なので
    cond='cart' / 'loose' として別の行になる。どちらも手元から発送する。 */
+/* ---- MW 無在庫（W-<JAN>）の行のキー（7.113）----
+   W- の出品は Amazon の ASIN が無いことがある（JAN→ASIN をまだ引いていない）。
+   items は (asin, cond) がキーなので、**JAN から作る見かけの ASIN**を使う。
+     W-4562475323733 → asin 'W4562475323733'・cond 'new'
+   ・本物の ASIN（B＋9文字）とぶつからない（長さも頭文字も違う）
+   ・同じ商品の FBA の行（E-<ASIN>）と混ざらない（別の出口なので分けたい）
+   ・CustomLabel だけで決まるので、ASIN が引けていなくても結び付く
+   Amazon に問い合わせる処理は、この見かけの ASIN を**外して**から呼ぶ
+   （isAsin／lowestReqs で弾く）。 */
+function mwAsinOfJan(jan) {
+  const j = String(jan || "").replace(/\D/g, "");
+  return /^\d{13}$/.test(j) ? ("W" + j) : "";
+}
+function mwJanOfAsin(asin) {
+  const m = /^W(\d{13})$/.exec(String(asin || "").trim());
+  return m ? m[1] : "";
+}
+/* 本物の ASIN か（Amazon に問い合わせてよいか）。 */
+function isAsin(a) { return /^B[0-9A-Z]{9}$/.test(String(a || "").trim()); }
 function parseLabel(label) {
   const s = String(label || "").trim();
+  /* 7.113：MW 無在庫（W-<JAN>）。dropship=1 として取り込む。 */
+  const w = /^W-(\d{13})$/.exec(s);
+  if (w) {
+    return { ok: true, asin: mwAsinOfJan(w[1]), cond: "new", scope: "ebay",
+             from: "mw", dropship: true, cart: false, mwJan: w[1] };
+  }
   let m = /^([EM])-(B[0-9A-Z]{9})(-U|-C|-L)?$/i.exec(s);
   if (m) {
     const drop = m[1].toUpperCase() === "M";
@@ -774,6 +799,8 @@ function condOf(v) {
 function lowestReqs(keys) {
   const out = [], seen = {};
   for (const k of keys) {
+    /* 7.113：MW 無在庫の見かけの ASIN（W＋JAN）は Amazon に無いので外す。 */
+    if (!isAsin(k.asin)) continue;
     const own = (k.cond === "new") ? "new" : "used";
     [own, (own === "used") ? "new" : null].forEach((c) => {
       if (!c) return;
@@ -2142,9 +2169,31 @@ async function syncEbayActive(env, run) {
   /* pj_price を通さず出した既存出品は CustomLabel が空か別形式で、
      ASIN＋新品/中古のキーが作れない。一覧・通知の対象にせず、件数だけ出す。 */
   let unparsed = 0;
+  /* 7.113：取り込めなかった CustomLabel を**形ごとに数える**（画面に出す）。
+     どんな形が残っているか分からないと直せないため。 */
+  const kinds = {}, samples = [];
+  const kindOf = (lab) => {
+    const s0 = String(lab || "").trim();
+    if (!s0) return "CustomLabel が空";
+    if (/^W-/.test(s0)) return "W-（MW 無在庫）だが JAN が13桁でない";
+    if (/^[EM]-/i.test(s0)) return "E-／M- だが ASIN の形でない";
+    if (/^mw(game|hobby)-/i.test(s0)) return "Amazon 用の SKU（mwgame／mwhobby）";
+    if (/^(game|hobby|toy|fig)-/i.test(s0)) return "せどりすとの SKU";
+    if (/^\d{13}$/.test(s0)) return "JAN だけ（13桁の数字）";
+    return "その他";
+  };
   for (const it of r.rows) {
     const k = parseLabel(it.sku);
-    if (!k.ok) { unparsed++; continue; }
+    if (!k.ok) {
+      unparsed++;
+      const kd = kindOf(it.sku);
+      kinds[kd] = (kinds[kd] || 0) + 1;
+      if (samples.length < 10)
+        samples.push({ sku: String(it.sku || "").slice(0, 40),
+                       item_id: String(it.itemId || ""),
+                       title: String(it.title || "").slice(0, 40) });
+      continue;
+    }
     stmts.push(itemSeed(env, k.asin, k.cond, k.scope, it.title));
     stmts.push(env.DB.prepare(
       `UPDATE items SET ebay_item_id=?3, ebay_sku=?4, ebay_qty=?5, ebay_price=?6,
@@ -2180,11 +2229,16 @@ async function syncEbayActive(env, run) {
   }
   await runBatch(env, run, stmts);
   if (unparsed) {
-    run.notes.push("CustomLabel解析不可 " + unparsed + "件（pj_priceを通さず出した出品。対象外）");
+    const kindText = Object.keys(kinds).sort((a, b) => kinds[b] - kinds[a])
+      .map((k) => k + " " + kinds[k] + "件").join("／");
+    run.notes.push("CustomLabel解析不可 " + unparsed + "件（" + kindText + "）");
     await stateSet(env, "ebay.unparsed", String(unparsed)).run();
   } else {
     await stateSet(env, "ebay.unparsed", "0").run();
   }
+  /* 7.113：中身（形ごとの件数と例）を控えて /status で返す。 */
+  await stateSet(env, "ebay.unparsed.kinds",
+    JSON.stringify({ at: runAt, n: unparsed, kinds, samples })).run();
   // 全ページ読めたときだけ、消えた出品を数量0にする（途中で切れた回では触らない）
   if (r.ok) {
     await env.DB.prepare(
@@ -2195,12 +2249,136 @@ async function syncEbayActive(env, run) {
   return keys;
 }
 
+/* ---- POST /ebay/link ----
+   出品を1件だけ手で結び付ける（7.113）。
+   出品中リストの取り込みが追いつかない・解析不可で落ちたときの受け皿。
+   ItemID を GetItem で1件だけ見て、CustomLabel（SKU）から (asin, cond) を決め、
+   items の行に ItemID・数量・売値を入れる。
+   label を渡したときは、その形で読む（eBay 側の CustomLabel が空のときの手当て）。
+   ただし eBay に CustomLabel があって渡した label と違うときは断る
+   （別の出品に結び付けてしまうと、数量0や値段の書き込みが他人の行に飛ぶ）。 */
+async function ebayLink(env, body) {
+  const run = newRun("ebay-link");
+  const itemId = String((body && body.item_id) || "").replace(/\D/g, "");
+  const want = String((body && body.label) || (body && body.sku) || "").trim();
+  if (!/^\d{9,15}$/.test(itemId)) {
+    run.notes.push("ItemID の形が違います");
+    return Object.assign({ ok: false, why: "ItemID は数字だけで入れてください" },
+      await saveRun(env, run));
+  }
+  let token = "";
+  try { token = await ebayToken(env, run); }
+  catch (e) {
+    run.notes.push("eBay のトークンが取れません：" + e.message);
+    return Object.assign({ ok: false, why: "eBay につなげません：" + e.message },
+      await saveRun(env, run));
+  }
+  const got = await ebayGetOne(env, run, token, itemId);
+  if (!got.ok) {
+    run.notes.push("GetItem 失敗：" + got.why);
+    return Object.assign({ ok: false, why: "この ItemID を eBay で見られません："
+      + got.why }, await saveRun(env, run));
+  }
+  /* CustomLabel は eBay にあるものを優先。空のときだけ手入力を使う。 */
+  const label = got.sku || want;
+  if (!label) {
+    run.notes.push("CustomLabel が分かりません");
+    return Object.assign({ ok: false, why: "この出品に CustomLabel が無いので、"
+      + "結び付ける先（W-<JAN> など）を入れてください" }, await saveRun(env, run));
+  }
+  if (got.sku && want && got.sku !== want) {
+    run.notes.push("CustomLabel が違います");
+    return Object.assign({ ok: false,
+      why: "eBay の CustomLabel は「" + got.sku + "」です（入れたのは「" + want
+        + "」）。別の出品に結び付かないよう、ここでは止めます",
+      sku: got.sku }, await saveRun(env, run));
+  }
+  const k = parseLabel(label);
+  if (!k.ok) {
+    run.notes.push("CustomLabel 解析不可：" + label);
+    return Object.assign({ ok: false, why: "CustomLabel「" + label
+      + "」は読めません（E-<ASIN>／M-<ASIN>／W-<JAN> の形）" },
+      await saveRun(env, run));
+  }
+  /* すでに別の ItemID が入っている行には、黙って上書きしない。 */
+  const cur = await env.DB.prepare(
+    `SELECT ebay_item_id FROM items WHERE asin=?1 AND cond=?2`)
+    .bind(k.asin, k.cond).first();
+  const had = String((cur && cur.ebay_item_id) || "");
+  if (had && had !== itemId && body && body.force !== true) {
+    run.notes.push("別の ItemID が入っています：" + had);
+    return Object.assign({ ok: false, asin: k.asin, cond: k.cond, had: had,
+      why: "この行にはすでに ItemID " + had + " が入っています。"
+        + "入れ替えるなら「上書きする」で実行してください" },
+      await saveRun(env, run));
+  }
+  const at = nowIso();
+  await runBatch(env, run, [
+    itemSeed(env, k.asin, k.cond, k.scope, got.title),
+    env.DB.prepare(
+      `UPDATE items SET ebay_item_id=?3, ebay_sku=?4, ebay_qty=?5, ebay_price=?6,
+         ebay_currency=?7, ebay_seen_at=?8, title=COALESCE(NULLIF(title,''),?9),
+         dropship=CASE WHEN ?10=1 THEN 1 ELSE dropship END,
+         updated_at=?8
+       WHERE asin=?1 AND cond=?2`
+    ).bind(k.asin, k.cond, itemId, label, got.qty, got.price,
+           got.currency || "USD", at, got.title, k.dropship ? 1 : 0),
+  ]);
+  run.rows = 1;
+  run.notes.push("結び付けました：" + label + " ⇔ " + itemId
+    + "（" + k.asin + "／" + k.cond + "）");
+  return Object.assign({ ok: true, asin: k.asin, cond: k.cond, item_id: itemId,
+    sku: label, jan: k.mwJan || "", dropship: k.dropship ? 1 : 0,
+    qty: got.qty, price: got.price, currency: got.currency || "USD",
+    status: got.status, title: got.title, replaced: had || "" },
+    await saveRun(env, run));
+}
+/* GetItem を1件だけ（CustomLabel・題・数量・売値・出品の状態）。 */
+async function ebayGetOne(env, run, token, itemId) {
+  const body = '<?xml version="1.0" encoding="utf-8"?>'
+    + '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+    + "<ItemID>" + esc(itemId) + "</ItemID>"
+    + "<DetailLevel>ReturnAll</DetailLevel>"
+    + "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
+    + "</GetItemRequest>";
+  const resp = await net(run, EBAY_API + "/ws/api.dll", {
+    method: "POST",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetItem",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-IAF-TOKEN": token,
+      "content-type": "text/xml",
+    },
+    body: body,
+  });
+  const xml = await resp.text();
+  const ack = xmlTag(xml, "Ack");
+  if (!resp.ok || /^Failure$/i.test(ack)) {
+    return { ok: false,
+      why: [xmlTag(xml, "ErrorCode"), xmlTag(xml, "ShortMessage")]
+             .filter(Boolean).join(" / ").slice(0, 200) || ("HTTP " + resp.status) };
+  }
+  const ss = xmlTag(xml, "SellingStatus");
+  const qty = Number(xmlTag(xml, "Quantity") || 0);
+  const sold = Number(xmlTag(ss, "QuantitySold") || 0);
+  return { ok: true,
+           sku: String(xmlTag(xml, "SKU") || "").trim(),
+           title: String(xmlTag(xml, "Title") || "").trim(),
+           status: xmlTag(ss, "ListingStatus"),
+           qty: Math.max(0, qty - sold),
+           price: Number(xmlTag(ss, "CurrentPrice") || 0),
+           currency: xmlAttr(ss, "CurrentPrice", "currencyID") || "USD" };
+}
+
 /* 日次。Amazon最安値（参考表示用）。eBayに出ている行だけ。 */
 async function syncPricing(env, run) {
   const q = await env.DB.prepare(
     /* 再調達中の行を先に見る。この行だけは最安値が上がると赤字になるので、
        古い値のまま放置しない。あとは最安値が古い順。 */
+    /* 7.113：MW 無在庫（asin が W…）は Amazon に無いので最初から外す。 */
     `SELECT asin, cond FROM items WHERE scope='ebay' AND ebay_qty>0
+        AND asin LIKE 'B%'
        ORDER BY restocking DESC, amazon_lowest_at IS NOT NULL,
        amazon_lowest_at LIMIT ?1`
     /* 1行につき最大2回（その行の状態＋新品）要求するので、行数は上限の半分にする。 */
@@ -10138,10 +10316,88 @@ async function statusBody(env, url) {
     /* Worker が使っている為替（7.50）。画面の⚙設定に出して見比べられるようにする。
        ここでは控えだけを見る（/status で外に問い合わせない）。 */
     fx: await fxCached(env),
+    /* 7.113：取り込めなかった CustomLabel の中身（形ごとの件数と例）。 */
+    ebay_unparsed: await unparsedInfo(env),
+    /* 7.113：MW 無在庫（W-）の行の仕入れ基準と重さ。JAN をキーに返す。 */
+    mw: await mwDropInfo(env, items),
     items,
     sold_recent: (sold && sold.results) || [],
     events_recent: (ev && ev.results) || [],
   };
+}
+/* 取り込めなかった CustomLabel の中身（7.113）。 */
+async function unparsedInfo(env) {
+  try {
+    const s0 = await stateGet(env, "ebay.unparsed.kinds");
+    if (!s0) return { n: 0, kinds: {}, samples: [], at: "" };
+    const o = JSON.parse(s0);
+    return { n: Number(o.n || 0), kinds: o.kinds || {},
+             samples: o.samples || [], at: String(o.at || ""),
+             at_jst: jstText(o.at || "") };
+  } catch (e) { return { n: 0, kinds: {}, samples: [], at: "" }; }
+}
+/* MW 無在庫（W-）の行の仕入れ基準と重さ（7.113）。
+   画面が同じ計算をしなくてよいように、pj-sync 側で出して JAN ごとに返す。 */
+async function mwDropInfo(env, items) {
+  const jans = [];
+  for (const r of items || []) {
+    const j = mwJanOfSku(r.ebay_sku) || mwJanOfAsin(r.asin);
+    if (j && jans.indexOf(j) < 0) jans.push(j);
+  }
+  if (!jans.length) return {};
+  let ps = null;
+  try { ps = await pricingSettings(env, newRun("mw-info")); } catch (e) { ps = null; }
+  const S = (ps && ps.S) || null;
+  if (S) S.mwShipFee = Number((ps.st && ps.st.mwShipFee) || 176);
+  const out = {};
+  const step = d1Step(1);
+  for (let i = 0; i < jans.length; i += step) {
+    const part = jans.slice(i, i + step);
+    const marks = part.map(() => "?").join(",");
+    const a = await env.DB.prepare(
+      `SELECT jan, sha, kishu, name, wholesale, stock, ship_days, gone_at, pick
+         FROM mw_stock WHERE jan IN (${marks})`).bind(...part).all();
+    /* 仕入れ元は pick=1 を使う。印が無い JAN（欠品で落ちた・まだ選んでいない）は
+       卸値のいちばん安い行で代える（画面に何も出ないのを避ける）。 */
+    const mw = {};
+    for (const x of (a && a.results) || []) {
+      const cur = mw[x.jan];
+      if (!cur) { mw[x.jan] = x; continue; }
+      if (Number(x.pick || 0) && !Number(cur.pick || 0)) { mw[x.jan] = x; continue; }
+      if (Number(x.pick || 0) === Number(cur.pick || 0)
+          && Number(x.wholesale || 0) > 0
+          && (!(Number(cur.wholesale || 0) > 0)
+              || Number(x.wholesale) < Number(cur.wholesale))) mw[x.jan] = x;
+    }
+    const b = await env.DB.prepare(
+      `SELECT jan, asin, low AS amz_low, price_at AS amz_at,
+              size_g AS amz_g, size_src AS amz_g_src
+         FROM mw_amz WHERE jan IN (${marks})`).bind(...part).all();
+    const az = {};
+    for (const x of (b && b.results) || []) az[x.jan] = x;
+    for (const j of part) {
+      const cc = S ? mwDropCost(S, mw[j], az[j], (ps && ps.st) || {})
+                   : { cost: 0, src: "", mw: 0, amz: 0, why: "" };
+      out[j] = { jan: j,
+        /* 仕入れ基準（6.152／7.112）。 */
+        cost: cc.cost, cost_src: cc.src, cost_mw: cc.mw, cost_amz: cc.amz,
+        cost_why: cc.why || "", cost_text: mwCostText(cc),
+        /* 重さ（7.112）。pkg＝梱包重量／item＝商品の重量。 */
+        amz_g: Number((az[j] && az[j].amz_g) || 0),
+        amz_g_src: String((az[j] && az[j].amz_g_src) || ""),
+        amz_low: Number((az[j] && az[j].amz_low) || 0),
+        amz_at: String((az[j] && az[j].amz_at) || ""),
+        asin: String((az[j] && az[j].asin) || ""),
+        wholesale: Number((mw[j] && mw[j].wholesale) || 0),
+        kishu: String((mw[j] && mw[j].kishu) || ""),
+        ship_days: Number((mw[j] && mw[j].ship_days) || 0),
+        sha: String((mw[j] && mw[j].sha) || ""),
+        stock: Number((mw[j] && mw[j].stock) || 0),
+        gone: (mw[j] && mw[j].gone_at) ? 1 : 0,
+        name: String((mw[j] && mw[j].name) || "") };
+    }
+  }
+  return out;
 }
 
 /* ---- GET /orders/summary ----
@@ -10362,7 +10618,10 @@ async function putListings(env, body) {
        カートリッジのみ（cart）の別物なので、SKUに合わせると箱付き中古の行に
        ItemID が付いてしまう。 */
     const kSku = (p && p.ok) ? { asin: p.asin, cond: p.cond, scope: p.scope } : null;
-    let k = (lab.ok && lab.cart) ? lab : (kSku || lab);   // lab.cart は -C と -L
+    /* 7.113：W-<JAN>（MW 無在庫）も CustomLabel を優先する。
+       同じ商品を FBA でも出していると、せどりすとSKU 側のキー（E-<ASIN>）に
+       ItemID が付いてしまい、無在庫の行が結び付かない。 */
+    let k = (lab.ok && (lab.cart || lab.from === "mw")) ? lab : (kSku || lab);
     if ((!k || !k.asin) && /^B[0-9A-Z]{9}$/.test(String(x.asin || "").trim())) {
       const c0 = String(x.cond || "");
       k = { asin: String(x.asin).trim(),
@@ -11020,6 +11279,12 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/catalog/check")
         return json(await catalogCheck(env), 200, origin);
+      /* 出品を1件だけ手で結び付ける（7.113）。
+         eBay に書き込まない読み取りだけなので、作業者のキーでも使える。 */
+      if (request.method === "POST" && url.pathname === "/ebay/link") {
+        const b = await request.json().catch(() => ({}));
+        return json(await ebayLink(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/listings") {
         let body; try { body = await request.json(); }
         catch (e) { return json({ error: "bad_request" }, 400, origin); }
@@ -11248,4 +11513,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rvSettings, rvSkip, rvAct, rvLoss, invBody, jobReview, rvLast,
                         pbSettings, pbTarget, pbRestockWhy, jobPhaseB, pbPlan, pbLast,
                         PB_ZERO_MAX, PB_RESTOCK_MAX,
-                        rvPlanGet, rvUsedToday };
+                        rvPlanGet, rvUsedToday,
+  /* 7.113 */
+  mwAsinOfJan, mwJanOfAsin, isAsin, ebayLink, ebayGetOne,
+  unparsedInfo, mwDropInfo, putListings };
