@@ -1750,11 +1750,23 @@ body.staff #syncOnHandFix{display:none !important}
           <br>1日の登録件数は下の上限までです（通った件数で数えます）。</div>
         </details>
         <div class="row"><label>1日の登録の上限</label><input type="number" id="mwPutDay" value="30" step="1" min="0" max="300" inputmode="numeric"><span class="unit">件</span></div>
+        <div class="rowv cfgprice"><label for="mwUsedPct">新品が0人のときの掛け率</label><input type="number" id="mwUsedPct" value="120" step="1" min="100" max="300" inputmode="numeric"><div class="note2" style="margin-top:2px">Amazon に登録するときは、<b>送る直前に値段を取り直します</b>。<b>新品の出品者がいればその最安値（送料込み）</b>、<b>0人なら中古の最安値（送料込み）×この率</b>を売値にします。新品も中古もいない商品は登録せず、確認の画面で売値を入れてもらいます。取り直せなかったときは登録しません。</div></div>
         <div style="display:flex;gap:6px;margin:2px 0">
           <button class="btn" id="mwPutLogBtn" style="flex:1">登録の記録を見る（誰が・いつ・何を）</button>
         </div>
         <div class="note2" id="mwPutLogNote" style="margin-top:2px"></div>
         <div id="mwPutLogBox"></div>
+        <!-- 6.155：登録済みの mw… の SKU の売値だけを直す（管理者だけ）。 -->
+        <div class="cfgprice" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5">
+          <div class="note2" style="margin:0 0 4px"><b>登録済みの売値を直す</b></div>
+          <div class="note2" style="margin:0 0 4px">pj が登録した <b>mwgame／mwhobby</b> の SKU の<b>売値だけ</b>を Amazon に送り直します（商品情報も数量も触りません）。<b>売値を空にすると、登録と同じ決め方で取り直した値段</b>（新品の最安値／新品が0人なら中古の最安値×掛け率）にします。</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input id="mwFixSku" placeholder="SKU（例 mwhobby-20261105-N-B0XXXXXXXX-3476）" style="flex:1 1 0;min-width:0">
+            <input type="number" id="mwFixPrice" step="1" min="1" inputmode="numeric" placeholder="売値（空＝取り直す）" style="flex:0 0 150px;min-width:0;text-align:right">
+          </div>
+          <button class="btn" id="mwFixGo" style="width:100%;margin-top:4px">この SKU の売値を直す</button>
+          <div class="note2" id="mwFixRes" style="margin-top:4px"></div>
+        </div>
         <!-- 6.150：ブックマークレットは**仕入れタブの「MW の写真」**に移した
              （貼り付け欄と離れていて往復が長かった）。 -->
         <div class="note2" style="margin:10px 0 0">MW の写真の<b>ブックマークレット</b>は、
@@ -2413,7 +2425,7 @@ var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  'mwAutoMode',
                  /* 取り込みの知らせ（6.151／7.110）と登録の上限（7.111）。
                     **Worker が読む**設定なので必ず D1 に送る。 */
-                 'mwNtTop','mwPutDay'];
+                 'mwNtTop','mwPutDay','mwUsedPct'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
@@ -5149,7 +5161,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwProfitMode',
                  /* Amazon刈取の候補の条件と自動の件数（6.146） */
                  'amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
-                 'mwNtTop','mwPutDay','mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost',
+                 'mwNtTop','mwPutDay','mwUsedPct',
+                 'mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
@@ -10264,6 +10277,16 @@ $('csvMwAmz').onclick=mwAmzRunGo;
 $('csvMwReg').onclick=mwRegGo;
 $('csvMwJanCopy').onclick=mwBuyJanCopy;
 $('csvMwPut').onclick=mwPutShow;
+/* 6.155：登録済みの売値を直す（管理者だけ）。 */
+$('mwFixGo').onclick=function(){
+  mwFixGo(($('mwFixSku')||{}).value,($('mwFixPrice')||{}).value); };
+document.addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var k=t.getAttribute('data-mwfix'); if(!k)return;
+  var el=$('mwFixSku'); if(el)el.value=k;
+  var pe=$('mwFixPrice'); if(pe)pe.value='';
+  mwFixGo(k,0);
+});
 $('csvMwAmzLoad').onclick=mwAmzLoad;
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
@@ -10971,6 +10994,40 @@ function mwFeeOf(r){
            tax:tax2, fee:ref2+f.fba+tax2, real:false,
            size:f.fb.size, sizeName:f.fb.sizeName, sizeFrom:f.fb.from,
            rate:f.rate, base:price, at:'' };
+}
+/* ===== 値段を取った日時（6.155・【O】）=====
+   古い控えのまま Amazon に登録してしまわないように、一覧に日時を出し、
+   24時間より古いときは目立たせる。 */
+var MW_PRICE_OLD_MS=24*60*60*1000;
+function mwPriceAt(r){
+  return String((r||{}).price_at||(r||{}).amz_at||'');
+}
+function mwPriceOld(r){
+  var t=Date.parse(mwPriceAt(r));
+  return !!t&&(Date.now()-t)>MW_PRICE_OLD_MS;
+}
+function mwPriceAgeHtml(r){
+  var at=mwPriceAt(r);
+  if(!at)return '　<b style="color:var(--bad)">値段の日時なし</b>';
+  var old=mwPriceOld(r);
+  return '　<span style="'+(old?'color:var(--bad);font-weight:700'
+    :'opacity:.75')+'">'+esc(jstText(at))+(old?'（24時間より古い）':'')+'</span>';
+}
+/* 中古の最安値（7.115）。新品が0人の行では、これ×掛け率が登録の売値になる。 */
+function mwUsedLowHtml(r){
+  var u=Math.round(+((r||{}).used_low)||0);
+  var n=+((r||{}).new_n)||0;
+  if(!(u>0))return '';
+  return '<div class="note2" style="margin:2px 0 0'+((n===0)?';color:#8a4f00':'')+'">'
+    +'中古最安 <b>'+yen(u)+'</b>（送料込み・'+(+r.used_n||0)+'人）'
+    +((n===0)?('　<b>新品0人 → 登録の売値は '+yen(Math.round(u*mwUsedPct()/100))
+      +'（×'+mwUsedPct()+'%）</b>'):'')
+    +'</div>';
+}
+/* ⚙「新品が0人のときの掛け率」（既定120%）。 */
+function mwUsedPct(){
+  var n=Math.round(+(($('mwUsedPct')||{}).value)||0);
+  return (n>=100&&n<=300)?n:120;
 }
 function mwAmzCalc(r){
   var price=+((r||{}).price)||0;
@@ -12347,6 +12404,16 @@ function mwPutBind(){
   var cl=$('csvMwPutClose'); if(cl)cl.onclick=function(){
     box.style.display='none'; box.innerHTML=''; };
   var bk=$('csvMwPutBack'); if(bk)bk.onclick=mwPutShow;
+  /* 6.155：売値を手で入れる欄（新品も中古もいない行・管理者だけ）。 */
+  Array.prototype.forEach.call(box.querySelectorAll('input[data-mwprice]'),
+    function(el){
+      el.oninput=function(){
+        var k=el.getAttribute('data-mwprice');
+        var n=Math.round(+el.value||0);
+        if(n>0)mwPutPriceHand[k]=n; else delete mwPutPriceHand[k];
+        mwPutBtnApply();
+      };
+    });
   /* 人が選ぶ行（電池の有無）。選ぶと送れるようになる。 */
   Array.prototype.forEach.call(box.querySelectorAll('select[data-dgsku]'),
     function(sel){
@@ -12364,8 +12431,27 @@ var mwPutLogLast=[], mwPutWhyLast='';
 function mwPutReady(){
   return mwPutList.filter(function(x){
     var p=mwPutPlan[String(x.sku)];
-    return !!(mwPutHand[String(x.sku)]||(p&&p.auto));
+    return !!(mwPutHand[String(x.sku)]||(p&&p.auto))&&mwPutPriceOk(x,p);
   });
+}
+/* 6.155：売値が決まっているか。
+   ・取り直せなかった行は送らない（少し待ってやり直す）
+   ・新品も中古もいない行は、管理者が売値を入れたときだけ送れる */
+function mwPutPriceOk(x,p){
+  if(!p)return false;
+  if(String(p.price_err||''))return false;
+  if(p.need_price)
+    return !isStaff()&&Math.round(+mwPutPriceHand[String(x.sku)]||0)>0;
+  return Math.round(+p.price||0)>0;
+}
+/* 売値を入れた・消したときに、送るボタンだけを出し入れする
+   （欄を作り直すと入力中の欄が消えてしまうため）。 */
+function mwPutBtnApply(){
+  var n=mwPutReady().length;
+  var b1=$('csvMwPutOne'), b2=$('csvMwPutAll');
+  if(b1)b1.disabled=!n;
+  if(b2){ b2.disabled=!n;
+    b2.textContent='残りをまとめて送る（'+n+'件）'; }
 }
 /* 登録に回せる行（登録ファイルと同じ判定）から、送る中身を作る。 */
 function mwPutRows(){
@@ -12396,7 +12482,8 @@ function mwPutShow(){
   /* 6.151／7.111：作業者の端末からも登録できる。
      送る中身（売値・SKU・仕入原価・申告）は pj-sync 側で組み立てるので、
      ここでは **JAN だけ**を送る。 */
-  note.textContent='確かめています…（商品の種類と必須の項目を調べます）';
+  note.textContent='確かめています…（値段を取り直し、商品の種類と必須の項目を'
+    +'調べます。10秒ほどかかります）';
   mwBuyLoad(true).then(function(){
     var pk=mwRegPick(mwBuyRows);
     mwPutList=mwPutRows();
@@ -12433,6 +12520,7 @@ function mwPutShow(){
         }
         (r.plan||[]).forEach(function(x){ mwPutPlan[String(x.sku)]=x; });
         mwPutHand={};                       // 人が選んだ申告（SKUごと）
+        mwPutPriceHand={};                  // 手で入れた売値（6.155）
         note.textContent='';
         box.style.display='';
         box.innerHTML=mwPutHtml(pk,r.log||[],r.why||'');
@@ -12440,6 +12528,50 @@ function mwPutShow(){
       });
   })['catch'](function(e){ note.textContent='⚠ 出せませんでした：'+e.message; });
 }
+/* ===== 売値と根拠（6.155・【O】）=====
+   pj-sync が**送る直前に取り直した**値段と、その根拠を出す。
+   ・新品の出品者がいる → 新品の最安値（送料込み）
+   ・新品が0人         → 中古の最安値（送料込み）× ⚙の掛け率（既定120%）
+   ・どちらもいない     → 売値を入れてもらう（管理者だけ）
+   「仕入原価＋手数料＋下限利益」を下回る行は赤で知らせる。 */
+var mwPutPriceHand={};            // 手で入れた売値（SKU ごと）
+function mwPutPriceHtml(x,p){
+  if(!p)return '<div style="opacity:.75">値段を調べていません</div>';
+  var t='';
+  if(String(p.price_err||''))
+    return '<div style="color:var(--bad);font-weight:700">⚠ '+esc(p.price_err)
+      +'（登録しません。少し待ってもう一度押してください）</div>';
+  if(p.need_price){
+    var my=Math.round(+mwPutPriceHand[String(x.sku)]||0);
+    t+='<div style="color:var(--bad);font-weight:700">⚠ '
+      +esc(p.price_why||'新品も中古も出品がありません')+'</div>';
+    if(isStaff())
+      t+='<div style="opacity:.75">管理者に売値を決めてもらってください。</div>';
+    else
+      t+='<div style="display:flex;gap:6px;align-items:center;margin:2px 0">'
+        +'<span style="flex:0 0 auto">売値（円）</span>'
+        +'<input type="number" step="1" min="1" data-mwprice="'+esc(x.sku)+'"'
+        +' value="'+(my>0?my:'')+'" style="flex:1 1 0;min-width:0;padding:4px 6px;'
+        +'font-size:13px;text-align:right;border:1px solid var(--line);'
+        +'border-radius:2px;background:#fcfbf8"></div>';
+    return t;
+  }
+  t+='<div>'+esc(p.price_why||'')
+    +(p.price_at_jst?('　<span style="opacity:.7">'+esc(p.price_at_jst)
+      +' に取り直し</span>'):'')+'</div>';
+  /* 「仕入原価＋手数料＋下限利益」の見張り。 */
+  if(p.floor_ng)
+    t+='<div style="color:var(--bad);font-weight:700">⚠ この売値では'
+      +'下限利益を割ります（仕入原価 '+yen(+p.cost||0)+'＋手数料 '
+      +yen(+p.fee||0)+'＋下限利益 '+yen(mwBaseProfit())+' → 必要な売値 '
+      +yen(+p.need||0)+'）。見込みの利益 '+yen(+p.profit_at||0)+'</div>';
+  else if(+p.need>0)
+    t+='<div style="opacity:.75">仕入原価 '+yen(+p.cost||0)+'＋手数料 '
+      +yen(+p.fee||0)+(p.fee_real?'':'（仮）')+'　見込みの利益 '
+      +yen(+p.profit_at||0)+'（必要な売値 '+yen(+p.need||0)+'以上）</div>';
+  return t;
+}
+function mwBaseProfit(){ return Math.round(+(($('baseProfit')||{}).value)||0); }
 function mwPutHtml(pk,log,why){
   mwPutLogLast=log||[]; mwPutWhyLast=why||'';
   var n=mwPutList.length;
@@ -12465,6 +12597,10 @@ function mwPutHtml(pk,log,why){
     +(pk.skip.length?('／外した '+pk.skip.length+'件'):'')
     +'　相乗り出品（価格と数量だけ。商品情報は作りません）'
     +'　コンディションは<b>新品</b>・FBA（AMAZON_JP）</div>'
+    /* 6.155：売値の決め方を箱の上に1行で出す。 */
+    +'<div class="note2" style="margin:0 0 4px">売値は<b>送る直前に取り直した値段</b>'
+    +'です（新品の最安値／<b>新品が0人なら中古の最安値×'+mwUsedPct()+'%</b>）。'
+    +'取り直せなかった行・新品も中古もいない行は<b>登録しません</b>。</div>'
     +(why?('<div class="note2" style="margin:0 0 4px;color:var(--bad)">⚠ '
       +esc(why)+'</div>'):'')
     +(hand?('<div class="warn" style="margin:0 0 4px"><b>'+hand+'件</b>は'
@@ -12485,14 +12621,17 @@ function mwPutHtml(pk,log,why){
       var my=mwPutHand[String(x.sku)]||null;
       var dg=my||p;
       var okDg=!!(my||(p&&p.auto));
+      var pz=p?Math.round(+p.price||0):Math.round(+x.price||0);
       return '<div class="note2" style="margin:0 0 3px;padding:3px 0;'
         +(i?'border-top:1px solid var(--line)':'')+'">'
-        +'<b>'+yen(x.price)+'</b>　'+esc(x.asin)
+        +'<b>'+(pz>0?yen(pz):'値段なし')+'</b>　'+esc(x.asin)
         +((p&&p.ptype)?('　種類 '+esc(p.ptype)):'')
         +((p&&p.ptype_send&&p.ptype_send!==p.ptype)
           ?('　<b>送る種類 '+esc(p.ptype_send)+'</b>'):'')
         +'<br><span style="font-family:ui-monospace,monospace">'+esc(x.sku)+'</span>'
         +'<br>'+esc(x.name.slice(0,44))
+        /* 6.155：売値と、その根拠（送る直前に取り直した値段）。 */
+        +mwPutPriceHtml(x,p)
         /* 付ける申告を行ごとに出す（7.92）。 */
         +'<br>申告：'+(okDg
           ?('<b>'+esc(mwDgText(dg))+'</b>'
@@ -12536,6 +12675,50 @@ function mwPutHtml(pk,log,why){
 }
 /* ===== ⚙：Amazon 登録の記録（6.151／7.111）=====
    誰が（管理者／作業者）・いつ・何を登録したかと、今日の件数・上限を出す。 */
+/* ===== 登録済みの売値を直す（6.155・【O】の5）=====
+   pj が登録した mw… の SKU の**売値だけ**を Amazon に送り直す（patchListingsItem）。
+   売値を空にすると、登録と同じ決め方で取り直した値段にする。管理者だけ。 */
+function mwFixGo(sku,price){
+  var out=$('mwFixRes'); if(!out)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ out.textContent='pj-sync のURLとキーが要ります'; return; }
+  if(isStaff()){ out.textContent='売値を直すのは管理者用のキーが必要です'; return; }
+  var k=String(sku||'').trim();
+  if(!/^mw(game|hobby)-/.test(k)){
+    out.textContent='pj が登録した SKU（mwgame／mwhobby）を入れてください'; return;
+  }
+  var n=Math.round(+price||0);
+  if(!confirm('Amazon の売値を直します。\n'+k+'\n'
+    +(n>0?('売値 '+yen(n)):'売値は取り直した値段にします')
+    +'\n（売値だけを送ります。商品情報も数量も触りません）\nよろしいですか。'))return;
+  out.textContent='送っています…（値段を取り直すので少し待ちます）';
+  var b={ rows:[ n>0?{ sku:k, price:n }:{ sku:k } ] };
+  mwPost('/mw/price',b)
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'送れませんでした');
+      if(d.why&&!d.sent){ out.innerHTML='⚠ '+esc(d.why); return; }
+      var r=(d.rows||[])[0]||{};
+      if(!r.ok){
+        out.innerHTML='<b style="color:var(--bad)">直せませんでした</b>　'
+          +esc(String(r.err||'理由が分かりません').slice(0,200))
+          +(r.hint?('<br>'+esc(String(r.hint))):'');
+        return;
+      }
+      out.innerHTML='<b style="color:var(--good)">直しました</b>　'
+        +esc(k)+' → <b>'+yen(+r.price||0)+'</b>'
+        +(r.price_why?('<br><span style="opacity:.8">'+esc(r.price_why)+'</span>'):'')
+        +(r.floor_ng
+          ?('<br><b style="color:var(--bad)">⚠ この売値では下限利益を割ります'
+            +'（必要な売値 '+yen(+r.need||0)+'以上・見込みの利益 '
+            +yen(+r.profit_at||0)+'）</b>'):'')
+        +'<br><span style="opacity:.75">Amazon の画面に出るまで数分かかります。</span>';
+      mwPutLogShow();
+    })
+    ['catch'](function(e){
+      out.innerHTML='<span style="color:var(--bad)">送れませんでした：'
+        +esc(e.message)+'</span>';
+    });
+}
 function mwPutLogShow(){
   var note=$('mwPutLogNote'), box=$('mwPutLogBox');
   if(!note||!box)return;
@@ -12566,7 +12749,16 @@ function mwPutLogShow(){
               +'<br><span style="font-family:ui-monospace,monospace">'
               +esc(String(r.sku||''))+'</span>'
               +'　'+yen(+r.price||0)+'　JAN '+esc(String(r.jan||'—'))
+              +((String(r.kind||'put')==='price')
+                ?'　<b>売値だけ直した</b>':'')
+              /* 6.155：値段の出どころと根拠（記録に残している）。 */
+              +((r.price_why)?('<br><span style="opacity:.75">'
+                +esc(String(r.price_why).slice(0,120))+'</span>'):'')
               +(r.err?('<br>'+esc(String(r.err).slice(0,120))):'')
+              /* 6.155：通った行は、売値だけを直せる（管理者だけ）。 */
+              +((+r.ok&&!isStaff()&&/^mw(game|hobby)-/.test(String(r.sku||'')))
+                ?('<br><button class="btn" data-mwfix="'+esc(String(r.sku||''))+'"'
+                  +' style="padding:2px 8px;font-size:11.5px">売値を直す</button>'):'')
               +'</div>';
           }).join('')+listMoreBar('mwputlog',rows.length)
         :'<div class="note2">まだ登録していません。</div>';
@@ -12605,6 +12797,15 @@ function mwPutLogHtml(log){
           ?('<br>　足りない項目：'+esc((r.missing||[]).join('・'))):'')
         +((!+r.ok)?('<br>　<span style="opacity:.75">直したら'
           +'<b>同じ SKU のまま</b>もう一度送れます（二重になりません）。</span>'):'')
+        /* 6.155：値段の出どころと根拠（記録に残している）。 */
+        +((r.price_why)?('<br>　<span style="opacity:.75">'
+          +esc(String(r.price_why).slice(0,120))+'</span>'):'')
+        +((String(r.kind||'put')==='price')
+          ?'<br>　<b>売値だけ直しました</b>':'')
+        /* 通った行は、売値だけを直せる（管理者だけ・6.155）。 */
+        +((+r.ok&&!isStaff()&&/^mw(game|hobby)-/.test(String(r.sku||'')))
+          ?('<br>　<button class="btn" data-mwfix="'+esc(String(r.sku||''))+'"'
+            +' style="padding:2px 8px;font-size:11.5px">売値を直す</button>'):'')
         +'</div>';
     }).join('');
 }
@@ -12615,19 +12816,22 @@ function mwPutGo(one){
   /* 電池・危険物の申告が決まっている行だけ送る（7.92）。 */
   var ok=mwPutReady();
   if(!ok.length){
-    note.textContent='電池・危険物の申告を選んでください（選ぶまで送りません）。';
+    note.textContent='送れる行がありません'
+      +'（電池・危険物の申告を選ぶ／売値を入れてください）。';
     return;
   }
   var rows=one?ok.slice(0,1):ok.slice(0);
   if(!one&&!confirm('Amazon に '+rows.length+'件を登録します。よろしいですか。'))return;
   var b1=$('csvMwPutOne'), b2=$('csvMwPutAll');
   if(b1)b1.disabled=true; if(b2)b2.disabled=true;
-  note.textContent='Amazon に送っています…（1件ずつ送るので件数ぶん待ちます）';
+  note.textContent='Amazon に送っています…（送る直前に値段を取り直すので'
+    +'10秒ほど待ちます。1件ずつ送るので件数ぶんかかります）';
   /* 人が選んだ申告も一緒に送る（SKUごと）。
      6.151：作業者の端末からは**送らない**（pj-sync が決める）。 */
   mwPost('/mw/put',isStaff()
     ? { rows:rows.map(function(x){ return { jan:String(x.jan||'') }; }) }
-    : { rows:rows, dg:mwPutHand })
+    /* 6.155：手で決めた売値も送る（新品も中古もいない行だけ使われる）。 */
+    : { rows:rows, dg:mwPutHand, price:mwPutPriceHand })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'送れませんでした');
       if(d.why&&!d.sent){ note.innerHTML='⚠ '+esc(d.why); return; }
@@ -12637,8 +12841,11 @@ function mwPutGo(one){
       /* 行ごとの結果をその場で出す。 */
       box.innerHTML='<div class="note2" style="margin:0 0 4px"><b>結果</b></div>'
         +mwPutLogHtml((d.rows||[]).map(function(x){
-          return { ok:x.ok?1:0, sku:x.sku, price:(mwPutList.filter(function(y){
-            return y.sku===x.sku; })[0]||{}).price||0,
+          /* 6.155：出す値段は pj-sync が取り直したもの（下調べの plan）。 */
+          return { ok:x.ok?1:0, sku:x.sku,
+            price:(mwPutPlan[String(x.sku)]||{}).price
+              ||(mwPutList.filter(function(y){
+                   return y.sku===x.sku; })[0]||{}).price||0,
             status:x.status, err:x.err, issues:x.issues,
             /* 何を足せばよいかの案内（7.92）。 */
             hint:x.hint, missing:x.missing, ptype:x.ptype,
@@ -12928,7 +13135,9 @@ function mwAmzRender(){
         +' style="text-decoration:underline dotted">'+esc(asin)+'</a>'):'')
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'</div>'
       +'<div class="note2" style="margin:2px 0 0">販売価格 <b>'+yen(c.price)+'</b>'
-      +'（'+esc(r.basis||'')+'）　手数料 '+yen(c.fee)+'</div>'
+      +'（'+esc(r.basis||'')+'）'+mwPriceAgeHtml(r)+'　手数料 '+yen(c.fee)+'</div>'
+      /* 6.155：新品が0人のときの中古の最安値（登録の売値の根拠になる）。 */
+      +mwUsedLowHtml(r)
       /* 手数料の内訳（6.108）。せどりすと の内訳と並べて見られる */
       +mwAmzBreak(r,c)
       +'<div class="note2" style="margin:2px 0 0">ランキング '
@@ -20302,7 +20511,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v240';   // sw.js の const V と必ず同じ値にする
+var APP_V='v241';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

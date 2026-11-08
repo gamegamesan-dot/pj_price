@@ -50,6 +50,7 @@ const SP_GAP = {
   getListingsRestrictions: 250,      // 5回/秒（7.76）。余裕をみて4回/秒
   getMyFeesEstimates: 2100,          // 0.5回/秒（7.85）。1回20件
   putListingsItem: 250,              // 5回/秒（7.90）。余裕をみて4回/秒
+  patchListingsItem: 250,            // 5回/秒（7.115）。余裕をみて4回/秒
   getDefinitionsProductType: 250,    // 5回/秒（7.92）。余裕をみて4回/秒
   searchDefinitionsProductTypes: 250,
   searchListingsItems: 250,          // 5回/秒（7.105）。余裕をみて4回/秒
@@ -177,6 +178,11 @@ const ALLOWED = [
      出品者トークンと SKU をパスに入れる。相乗り出品（価格と数量だけ）で、
      商品情報は作らない（requirements: LISTING_OFFER_ONLY）。 */
   { m: "PUT", write: true,
+    re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/items\/[A-Z0-9]+\/[^/?]+\?/ },
+  /* ★★ 登録済みの SKU の**売値だけ**を直す（patchListingsItem・7.115）。
+     書き込みはこの PATCH と上の PUT の2本だけ。**管理者だけ**が使う。
+     送るのは purchasable_offer（値段）1つで、商品情報も数量も触らない。 */
+  { m: "PATCH", write: true,
     re: /^https:\/\/sellingpartnerapi-fe\.amazon\.com\/listings\/2021-08-01\/items\/[A-Z0-9]+\/[^/?]+\?/ },
   { m: "POST", re: /^https:\/\/api\.ebay\.com\/identity\/v1\/oauth2\/token$/ },
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/sell\/fulfillment\/v1\/order\?/ },
@@ -861,8 +867,12 @@ function offerN(p, cond) {
   }
   return n;
 }
-async function amazonLowest(env, run, keys) {
+/* stat を渡すと、何回呼んで何回失敗したかを入れて返す（7.115）。
+   呼べなかった回を「出品が無い」と読み違えないために要る。 */
+async function amazonLowest(env, run, keys, stat) {
   const out = {};
+  const sv = stat || {};
+  sv.calls = 0; sv.failed = 0;
   let skipped = 0, noCond = 0;
   for (let i = 0; i < keys.length && i / PRICING_BATCH < PRICING_MAX_CALLS; i += PRICING_BATCH) {
     const part = keys.slice(i, i + PRICING_BATCH);
@@ -877,7 +887,8 @@ async function amazonLowest(env, run, keys) {
     });
     const r = await spCall(env, run, "/batches/products/pricing/v0/itemOffers",
                            { method: "POST", body, label: "getItemOffersBatch" });
-    if (!r.ok) continue;
+    sv.calls++;
+    if (!r.ok) { sv.failed++; continue; }
     for (const res of (r.data && r.data.responses) || []) {
       const req = res.request || {};
       const p = (res.body && res.body.payload) || {};
@@ -898,7 +909,10 @@ async function amazonLowest(env, run, keys) {
         const oc = condOf(sub);
         if (oc && oc !== cond) continue;
         const v = landed(o);
-        if (v > 0) offers.push({ p: Math.round(v), c: sub });
+        /* 7.115：本体と送料も残す（「¥7,168＋送料 ¥265」と根拠を出すため）。 */
+        if (v > 0) offers.push({ p: Math.round(v), c: sub,
+          b: Math.round(Number((o.ListingPrice && o.ListingPrice.Amount) || 0)),
+          s: Math.round(Number((o.Shipping && o.Shipping.Amount) || 0)) });
       }
       if (!offers.length) continue;
       if (!offers.some(function (o) { return o.c; })) noCond++;
@@ -909,6 +923,8 @@ async function amazonLowest(env, run, keys) {
       const total = Math.max(vals.length,
         Number((p.Summary && p.Summary.TotalOfferCount) || 0));
       out[asin + "|" + cond] = { low: low, lowN: lowN, total: total,
+                                 /* 7.115：最安の本体と送料（根拠の内訳）。 */
+                                 lowB: offers[0].b || 0, lowS: offers[0].s || 0,
                                  offers: offers.slice(0, 10),
                                  amz: amzSelf(p), fba: fbaN(p),
                                  buy: buyBox(p), newN: offerN(p, "New") };
@@ -1287,7 +1303,9 @@ const SET_NO_BLANK = ["mwRankCaps", "mwDgTypes"];
 const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour",
   "autoMdMode", "autoMdMax", "autoRvMode", "autoRvMax", "autoRvPct",
   "pbMode", "pbRestock", "autoRkMode", "autoSkMode", "amzDropMode", "amzDropPick",
-  "mwProfitMode", "mwNetMode", "amzKishu", "amzShipMax", "amzStockMin"];
+  "mwProfitMode", "mwNetMode", "amzKishu", "amzShipMax", "amzStockMin",
+  /* 7.115：登録の売値を決める率。作業者の端末からは書き替えられない。 */
+  "mwUsedPct"];
 const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
 const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
 function settingsBlank(v) {
@@ -8132,7 +8150,8 @@ async function mwPutOne(env, run, x, dg, def) {
    登録する。作業者は売値・SKU・申告を変えられない（画面から送った値は使わない）。
    ・仕入日   … 印を付けた日（mw_buy.at・日本時間）
    ・仕入原価 … 印を付けた時点の卸値×1.1 ＋ 1点あたりの仕入れ送料（⚙）
-   ・売値     … いまの Amazon の実売価格（mw_amz.price）
+   ・売値     … **送る直前に取り直した値段**（7.115・mwPutPrice）。
+                  新品の出品者が0人なら中古の最安値×⚙ mwUsedPct（既定120%）
    ・SKU      … mwgame／mwhobby-仕入日8桁-N-ASIN-仕入原価（せどりすとと同じ形）
    MW から届く前でも、CSV から消えた（仕入れ済みの区分）商品でも登録できる。 */
 const MW_PUT_DAY = 30;             // 1日の登録の上限（既定・⚙ mwPutDay）
@@ -8199,8 +8218,9 @@ async function mwPutStaffRows(env, jans, st) {
     }
     const asin = String(r.b_asin || r.a_asin || "");
     if (!/^B[0-9A-Z]{9}$/.test(asin)) { push("ASIN が引けていません"); continue; }
+    /* 7.115：売値は**送る直前に取り直す**（mwPutPrice）。
+       控え（mw_amz.price）が古い・空でも、ここでは落とさない。 */
     const price = Math.round(Number(r.price) || 0);
-    if (!(price > 0)) { push("Amazon の販売価格が取れていません"); continue; }
     const rst = String(r.rst || "");
     if (rst === "blocked") { push("この ASIN では出品できません"); continue; }
     if (rst === "approval") { push("出品の許可が必要です（申請してから）"); continue; }
@@ -8219,6 +8239,164 @@ async function mwPutStaffRows(env, jans, st) {
                 name: String(r.a_name || r.b_name || "") });
   }
   return { rows, skip };
+}
+/* ===== 送る直前に値段を取り直す（7.115）=====
+   【O】2026-11-08：薔薇と椿（JAN 4570101051127）を、届く前に「Amazon に登録する」で
+   登録したら売値が ¥5,800（古い控え）になった。実際は**新品の出品者0人**で、
+   中古の最安値 ¥7,168＋送料 ¥265＝¥7,433。
+   原因：売値に **mw_amz.price（取り込みのときの控え）**をそのまま使っていて、
+   送る直前に取り直していなかった。しかも控えは**新品の最安値**しか見ないので、
+   新品の出品者がいなくなった商品では古い値が残り続ける。
+
+   直し方：
+   ・送る直前に、その ASIN の出品を SP-API で**新品と中古の両方**取り直す
+   ・取り直せなかったら登録しない（理由を出す）
+   ・新品の出品者がいる   → 新品の最安値（送料込み）。今までどおり
+   ・新品の出品者が0人    → **中古の最安値（送料込み）× ⚙ mwUsedPct（既定120%）**
+   ・新品も中古もいない   → 登録せず「値段を手で決めてください」
+     （管理者は確認の画面で売値を入れて登録できる） */
+const MW_USED_PCT = 120;             // 中古から出すときの掛け率（既定・⚙ mwUsedPct）
+const MW_USED_PCT_MIN = 100;
+const MW_USED_PCT_MAX = 300;
+function mwUsedPct(st) {
+  const n = Math.round(Number((st || {}).mwUsedPct) || MW_USED_PCT);
+  return Math.max(MW_USED_PCT_MIN, Math.min(MW_USED_PCT_MAX, n));
+}
+/* 1つの ASIN の値段を決める。amazonLowest の返り（新品・中古）から作る。 */
+function mwPickPrice(asin, low, pct) {
+  const nw = low[asin + "|new"] || null;
+  const us = low[asin + "|used"] || null;
+  const o = { asin, price: 0, src: "", pct,
+              new_low: nw ? Math.round(nw.low) : 0,
+              new_n: nw ? Math.max(1, Number(nw.total || 0)) : 0,
+              used_low: us ? Math.round(us.low) : 0,
+              used_b: us ? Math.round(us.lowB || 0) : 0,
+              used_s: us ? Math.round(us.lowS || 0) : 0,
+              used_n: us ? Math.max(1, Number(us.total || 0)) : 0,
+              why: "" };
+  if (o.new_low > 0) {
+    o.price = o.new_low; o.src = "new";
+    o.why = "新品の最安値 " + yenText(o.new_low) + "（送料込み・出品者 "
+      + o.new_n + "人）";
+    return o;
+  }
+  if (o.used_low > 0) {
+    o.price = Math.round(o.used_low * pct / 100); o.src = "used";
+    const brk = (o.used_b > 0 && o.used_s > 0)
+      ? ("（" + yenText(o.used_b) + "＋送料 " + yenText(o.used_s) + "）") : " ";
+    o.why = "新品の出品者なし：中古の最安値 " + yenText(o.used_low) + brk
+      + "× " + pct + "% ＝ " + yenText(o.price);
+    return o;
+  }
+  o.why = "新品も中古も出品がありません。値段を手で決めてください";
+  return o;
+}
+function yenText(n) {
+  return "¥" + Math.round(Number(n) || 0).toLocaleString("en-US");
+}
+/* 送る行ぶんの値段を取り直す。1回の呼び出しで新品＋中古の2件を聞くので、
+   PRICING_BATCH（20件）に対して ASIN は10件ずつ。 */
+async function mwPutPrice(env, run, list, st) {
+  const pct = mwUsedPct(st);
+  const asins = [];
+  for (const x of list || []) {
+    const a = String((x && x.asin) || "").trim();
+    if (isAsin(a) && asins.indexOf(a) < 0) asins.push(a);
+  }
+  const out = {};
+  if (!asins.length) return { map: out, pct, calls: 0 };
+  let calls = 0;
+  const at = nowIso();
+  for (let i = 0; i < asins.length; i += 10) {
+    const part = asins.slice(i, i + 10);
+    const keys = [];
+    for (const a of part) {
+      keys.push({ asin: a, cond: "new" });
+      keys.push({ asin: a, cond: "used" });
+    }
+    let low = null;
+    const stat = {};
+    try { low = await amazonLowest(env, run, keys, stat); }
+    catch (e) {
+      run.notes.push("値段の取り直しに失敗：" + String((e && e.message) || e));
+      low = null;
+    }
+    /* 呼べなかった回は「出品が無い」ではない。登録しないで理由を返す。 */
+    if (low && (!stat.calls || stat.failed)) low = null;
+    calls++;
+    for (const a of part) {
+      if (!low) {
+        out[a] = { asin: a, price: 0, src: "", pct, at: "",
+                   err: "値段を取り直せませんでした（Amazon に聞けませんでした）",
+                   why: "値段を取り直せませんでした" };
+        continue;
+      }
+      out[a] = Object.assign(mwPickPrice(a, low, pct), { at, err: "" });
+    }
+    if (i + 10 < asins.length) await sleep(SP_GAP.getItemOffersBatch);
+  }
+  return { map: out, pct, calls };
+}
+/* 取り直した値段を控えに書く（一覧の「販売価格」と日時もその場で新しくなる）。 */
+function mwPriceSave(env, jan, g) {
+  if (!jan) return null;
+  return env.DB.prepare(
+    `UPDATE mw_amz SET price=?2, low=?3, new_n=?4,
+       used_low=?5, used_n=?6, used_at=?7, price_at=?7,
+       basis=?8, checked_at=?7
+     WHERE jan=?1`)
+    .bind(String(jan), Math.round(Number(g.price) || 0) || null,
+          Math.round(Number(g.new_low) || 0) || null,
+          Math.round(Number(g.new_n) || 0),
+          Math.round(Number(g.used_low) || 0) || null,
+          Math.round(Number(g.used_n) || 0),
+          String(g.at || nowIso()),
+          (g.src === "used") ? "中古から" : ((g.src === "new") ? "最安" : ""));
+}
+/* ===== 「仕入原価＋手数料＋下限利益」を下回らないか（7.115）=====
+   その売値で売ったときの手数料を引いて、下限利益が残るかを見る。
+   残らないときは確認の画面で赤く出す（登録は止めない。人が決める）。
+   手数料は mw_amz の実額（Product Fees API）を使い、無ければ⚙の率で出す。 */
+function mwFeeAt(r, st, price) {
+  const p = Math.max(0, Math.round(Number(price) || 0));
+  const base = Math.round(Number((r || {}).fee_base) || 0);
+  const ref0 = Math.round(Number((r || {}).fee_ref) || 0);
+  const fba = Math.round(Number((r || {}).fee_fba) || 0);
+  const real = base > 0 && ref0 > 0;
+  /* 販売手数料は値段に比例するので、実額が取れていても**率**に直して使う
+     （控えの値段と送る値段が違うため）。 */
+  const rate = real ? (ref0 / base)
+    : (Math.max(0, Math.min(50, Number((st || {}).amzFeeRate) || 15)) / 100);
+  const ref = Math.round(p * rate);
+  const tax = Math.round(ref * MW_FEE_TAX_PCT / 100);
+  return { rate, ref, fba, tax, fee: ref + fba + tax, real };
+}
+/* その仕入原価で下限利益が残る最低の売値。 */
+function mwNeedPrice(cost, fba, rate, profit) {
+  const k = 1 - rate * (1 + MW_FEE_TAX_PCT / 100);
+  if (!(k > 0)) return 0;
+  const v = (Math.round(Number(cost) || 0) + Math.round(Number(fba) || 0)
+             + Math.round(Number(profit) || 0)) / k;
+  return Math.max(0, Math.ceil(v));
+}
+/* 送る行ぶんの手数料の控えを引く（ASIN をキーに）。 */
+async function mwFeeRows(env, list) {
+  const asins = [];
+  for (const x of list || []) {
+    const a = String((x && x.asin) || "").trim();
+    if (a && asins.indexOf(a) < 0) asins.push(a);
+  }
+  const out = {};
+  if (!asins.length) return out;
+  const step = d1Step(1);
+  for (let i = 0; i < asins.length; i += step) {
+    const part = asins.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT asin, fee_ref, fee_fba, fee_base FROM mw_amz
+        WHERE asin IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const r of (q && q.results) || []) out[String(r.asin)] = r;
+  }
+  return out;
 }
 async function mwPutRun(env, body, role) {
   const run = newRun("mw-put");
@@ -8263,7 +8441,7 @@ async function mwPutRun(env, body, role) {
     }
     if (!list.length) {
       res.why = res.why || (staff
-        ? "送れる行がありません（印・ASIN・売値・出品の可否を確かめてください）"
+        ? "送れる行がありません（印・ASIN・出品の可否を確かめてください）"
         : "送る行がありません");
       res.ok = true;
       return Object.assign(await saveRun(env, run), res);
@@ -8271,6 +8449,53 @@ async function mwPutRun(env, body, role) {
     const dl = Date.now() + MW_PUT_DEADLINE_MS;
     const at = nowIso();
     const stmts = [];
+    /* ---- 7.115：送る直前に値段を取り直す（下調べのときも必ず取り直す）----
+       新品の出品者がいなければ中古の最安値×⚙の掛け率。
+       取り直せなかった行・どちらもいない行は**登録しない**。 */
+    const pr = await mwPutPrice(env, run, list, st);
+    res.price_pct = pr.pct;
+    res.calls_price = pr.calls;
+    const feeRows = await mwFeeRows(env, list);
+    const profit = Math.max(0, Math.round(Number(st.baseProfit) || 1000));
+    /* 管理者が確認の画面で入れた売値（新品も中古もいない行だけ使う）。 */
+    const hand = (!staff && o.price && typeof o.price === "object") ? o.price : {};
+    for (const x of list) {
+      const g = pr.map[String(x.asin || "")]
+        || { price: 0, src: "", why: "値段を取り直せませんでした",
+             err: "値段を取り直せませんでした" };
+      const my = Math.round(Number(hand[String(x.sku || "")]) || 0);
+      if (!g.price && g.src === "" && !g.err && my > 0) {
+        x.price = my; x.price_src = "hand";
+        x.price_why = "新品も中古も出品が無いので、手で決めた売値 " + yenText(my);
+      } else {
+        x.price = Math.round(Number(g.price) || 0);
+        x.price_src = String(g.src || "");
+        x.price_why = String(g.why || "");
+      }
+      x.price_at = String(g.at || "");
+      x.price_err = String(g.err || "");
+      x.new_n = Number(g.new_n || 0);
+      x.new_low = Number(g.new_low || 0);
+      x.used_low = Number(g.used_low || 0);
+      x.used_b = Number(g.used_b || 0);
+      x.used_s = Number(g.used_s || 0);
+      x.used_n = Number(g.used_n || 0);
+      /* 「仕入原価＋手数料＋下限利益」を下回らないか。 */
+      const cost = Math.round(Number(x.cost_src) || 0)
+        || Math.round(Number((parseSku(String(x.sku || "")) || {}).cost) || 0);
+      const z = mwFeeAt(feeRows[String(x.asin || "")] || null, st, x.price);
+      x.cost = cost;
+      x.fee = z.fee; x.fee_real = z.real; x.fee_rate = z.rate; x.fee_fba = z.fba;
+      x.need = cost > 0 ? mwNeedPrice(cost, z.fba, z.rate, profit) : 0;
+      x.profit_at = x.price > 0 ? (x.price - z.fee - cost) : 0;
+      x.floor_ng = !!(cost > 0 && x.price > 0 && x.need > 0 && x.price < x.need);
+      /* 取り直した値段は控えにも書く（一覧の「販売価格」と日時が新しくなる）。 */
+      if (x.price > 0 && x.jan && !g.err) {
+        const up = mwPriceSave(env, String(x.jan), Object.assign({}, g,
+          { price: x.price, at: g.at || at }));
+        if (up) stmts.push(up);
+      }
+    }
     /* ---- 送る前に、種類と必須項目を調べる（7.92）----
        check=1 のときは**ここまでで返す**（確認の画面がこれを出す）。 */
     const pt = await mwPtypeFind(env, run, list.map((x) => String(x.asin || "")));
@@ -8327,6 +8552,22 @@ async function mwPutRun(env, body, role) {
                   売値・JAN・商品名も返す（画面では変えられない）。 */
                price: Math.round(Number(x.price) || 0),
                jan: String(x.jan || ""), name: String(x.name || x.title || ""),
+               /* 7.115：取り直した値段と、その根拠（確認の画面に出す）。 */
+               price_src: String(x.price_src || ""),
+               price_why: String(x.price_why || ""),
+               price_at: String(x.price_at || ""),
+               price_at_jst: jstText(x.price_at || ""),
+               price_err: String(x.price_err || ""),
+               new_n: Number(x.new_n || 0), new_low: Number(x.new_low || 0),
+               used_low: Number(x.used_low || 0), used_n: Number(x.used_n || 0),
+               used_b: Number(x.used_b || 0), used_s: Number(x.used_s || 0),
+               used_pct: Number(pr.pct || 0),
+               /* 「仕入原価＋手数料＋下限利益」の見張り。 */
+               cost: Number(x.cost || 0), fee: Number(x.fee || 0),
+               fee_real: !!x.fee_real, need: Number(x.need || 0),
+               profit_at: Number(x.profit_at || 0), floor_ng: !!x.floor_ng,
+               /* 値段を手で決める必要がある行（管理者だけ入れられる）。 */
+               need_price: !(Number(x.price) > 0) && !String(x.price_err || ""),
                ptype: q0.ptype, ptype_send: q0.ptype_send,
                auto: !!q0.auto, hand: !!q0.hand,
                prev: !!q0.prev, batteries: q0.batteries, dg: q0.dg, why: q0.why,
@@ -8338,8 +8579,11 @@ async function mwPutRun(env, body, role) {
                  && d0.req.some((k) => /dg_hz/i.test(String(k)))) };
     });
     if (o.check) {
+      /* 7.115：取り直した値段の控えだけは、下調べでも書いておく。 */
+      if (stmts.length) await runBatch(env, run, stmts);
       res.ok = true;
-      run.notes.push("Amazon登録（下調べ）：" + list.length + "件");
+      run.notes.push("Amazon登録（下調べ）：" + list.length + "件"
+        + "／値段を取り直した " + Object.keys(pr.map).length + "件");
       return Object.assign(await saveRun(env, run), res);
     }
     for (const x of list) {
@@ -8353,8 +8597,19 @@ async function mwPutRun(env, body, role) {
           err: !p.ok ? "SKU の形が違います" : "SKU の中の ASIN と合いません" });
         continue;
       }
+      /* 7.115：取り直せなかった行・新品も中古もいない行は登録しない。 */
+      if (String(x.price_err || "")) {
+        res.ng++;
+        res.rows.push({ sku, asin: String(x.asin), ok: false,
+          err: x.price_err,
+          hint: "少し待ってから、もう一度「Amazon に登録する」を押してください" });
+        continue;
+      }
       if (!(Number(x.price) > 0)) {
-        res.ng++; res.rows.push({ sku, ok: false, err: "売値がありません" });
+        res.ng++;
+        res.rows.push({ sku, asin: String(x.asin), ok: false,
+          err: "新品も中古も出品がありません（値段を決められません）",
+          hint: "確認の画面で売値を入れてから送ってください（管理者だけ）" });
         continue;
       }
       /* 電池・危険物の申告が決まっていない行は送らない（7.92）。
@@ -8407,15 +8662,17 @@ async function mwPutRun(env, body, role) {
         stmts.push(mwDgMemSet(env, String(x.asin), plan.batteries, plan.dg, role));
       stmts.push(env.DB.prepare(
         `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
-           issues,err,by_role,ptype,ptype_try,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?1)`)
+           issues,err,by_role,ptype,ptype_try,kind,price_src,price_why,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'put',?15,?16,?1)`)
         .bind(at, sku, String(x.asin || ""), String(x.jan || ""),
               Math.round(Number(x.price) || 0), p.cond === "new" ? "new_new" : MW_RST_COND,
               g.ok ? 1 : 0, g.status || "", g.sub_id || "",
               JSON.stringify(g.issues || []).slice(0, 2000), g.err || "",
               String(role || "admin"),
               /* どの種類で送ったか・何を試したか（7.95）。 */
-              String(g.ptype_used || ""), String(g.ptype_try || "")));
+              String(g.ptype_used || ""), String(g.ptype_try || ""),
+              /* 7.115：値段の出どころと根拠も残す（あとで見直せるように）。 */
+              String(x.price_src || ""), String(x.price_why || "").slice(0, 300)));
       /* 通った行は skus にも控える（仕入れ元・社・JAN・仕入値）。 */
       if (g.ok)
         stmts.push(env.DB.prepare(
@@ -8444,13 +8701,187 @@ async function mwPutRun(env, body, role) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 登録済みの SKU の売値を直す（patchListingsItem・7.115）=====
+   【O】の5。今回の薔薇と椿のように、古い値段で登録してしまった行を pj から直す。
+   ・**管理者だけ**
+   ・直せるのは pj が登録した **mw… の SKU** だけ（mwgame／mwhobby）
+   ・送るのは **purchasable_offer（値段）1つだけ**。商品情報も数量も触らない
+   ・値段を指定しなければ、登録のときと同じ決め方で**取り直して**入れる
+     （新品の最安値／新品が0人なら中古の最安値×⚙の掛け率）
+   ・「仕入原価＋手数料＋下限利益」を下回るときは、下回ることを返す（止めない） */
+function mwPatchBody(price) {
+  return { productType: "PRODUCT", patches: [{
+    op: "replace", path: "/attributes/purchasable_offer",
+    value: [{ currency: "JPY", marketplace_id: MP_FE,
+              our_price: [{ schedule: [{ value_with_tax:
+                Math.round(Number(price) || 0) }] }] }] }] };
+}
+async function mwPatchOne(env, run, sku, price) {
+  const q = new URLSearchParams({ marketplaceIds: MP_FE, issueLocale: "ja_JP" });
+  const path = "/listings/2021-08-01/items/" + encodeURIComponent(spSellerId(env))
+    + "/" + encodeURIComponent(sku) + "?" + q.toString();
+  const r = await spCall(env, run, path, {
+    method: "PATCH", body: JSON.stringify(mwPatchBody(price)),
+    label: "patchListingsItem", write: true,
+  });
+  if (!r.ok)
+    return { ok: false, status: "", issues: [],
+             err: ("HTTP " + r.status + " " + String(r.err || "")).trim().slice(0, 300) };
+  const d = r.data || {};
+  const issues = (d.issues || []).map((y) => ({
+    code: String(y.code || ""), severity: String(y.severity || ""),
+    message: String(y.message || "").slice(0, 300),
+    attrs: (y.attributeNames || []).slice(0, 6),
+  }));
+  const bad = issues.filter((y) => /ERROR/i.test(y.severity));
+  const st = String(d.status || "");
+  return { ok: /ACCEPTED/i.test(st) && !bad.length, status: st,
+           sub_id: String(d.submissionId || ""), issues,
+           err: bad.length ? bad.map((y) => y.code + ": " + y.message).join(" | ")
+                             .slice(0, 300) : "" };
+}
+const MW_PATCH_MAX = 20;             // 1回に直せる上限
+async function mwSkuPrice(env, body, role) {
+  const run = newRun("mw-price");
+  const res = { ok: false, sent: 0, ok_n: 0, ng: 0, rows: [], why: "" };
+  try {
+    if (String(role || "admin") !== "admin") {
+      res.why = "売値を直すのは管理者用のキーが必要です";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!spSellerId(env)) {
+      res.why = "出品者トークン（SP_SELLER_ID）が入っていません";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const o = body || {};
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    const profit = Math.max(0, Math.round(Number(st.baseProfit) || 1000));
+    /* 直す行。{ sku, price? } の並び（price を入れればその値、無ければ取り直す）。 */
+    const list = [];
+    for (const x of (Array.isArray(o.rows) ? o.rows : []).slice(0, MW_PATCH_MAX)) {
+      const sku = String((x && x.sku) || "").trim();
+      const p = parseSku(sku);
+      if (!p.ok) { res.rows.push({ sku, ok: false, err: "SKU の形が違います" });
+                   res.ng++; continue; }
+      if (!/^mw(game|hobby)$/.test(String(p.prefix || ""))) {
+        res.rows.push({ sku, ok: false,
+          err: "pj が登録した SKU（mwgame／mwhobby）だけ直せます" });
+        res.ng++; continue;
+      }
+      list.push({ sku, asin: p.asin, cost_src: p.cost,
+                  price: Math.round(Number(x && x.price) || 0) });
+    }
+    if (!list.length) {
+      res.why = res.why || "直す行がありません";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 値段を入れていない行は、登録と同じ決め方で取り直す。 */
+    const need = list.filter((x) => !(x.price > 0));
+    const pr = need.length ? await mwPutPrice(env, run, need, st)
+                           : { map: {}, pct: mwUsedPct(st), calls: 0 };
+    res.price_pct = pr.pct;
+    const feeRows = await mwFeeRows(env, list);
+    const jans = await mwJanOfAsins(env, list.map((x) => x.asin));
+    const at = nowIso();
+    const stmts = [];
+    for (const x of list) {
+      if (!(x.price > 0)) {
+        const g = pr.map[x.asin] || { price: 0, src: "", why: "", err: "" };
+        if (String(g.err || "")) {
+          res.ng++;
+          res.rows.push({ sku: x.sku, asin: x.asin, ok: false, err: g.err });
+          continue;
+        }
+        if (!(Number(g.price) > 0)) {
+          res.ng++;
+          res.rows.push({ sku: x.sku, asin: x.asin, ok: false,
+            err: "新品も中古も出品がありません（値段を決められません）",
+            hint: "売値を入れて押してください" });
+          continue;
+        }
+        x.price = Math.round(Number(g.price) || 0);
+        x.price_src = String(g.src || "");
+        x.price_why = String(g.why || "");
+        x.price_at = String(g.at || at);
+        x.jan = String(jans[x.asin] || "");
+        const up = x.jan ? mwPriceSave(env, x.jan, Object.assign({}, g,
+          { price: x.price, at: g.at || at })) : null;
+        if (up) stmts.push(up);
+      } else {
+        x.price_src = "hand";
+        x.price_why = "手で入れた売値 " + yenText(x.price);
+        x.jan = String(jans[x.asin] || "");
+      }
+      const z = mwFeeAt(feeRows[x.asin] || null, st, x.price);
+      const cost = Math.round(Number(x.cost_src) || 0);
+      const needP = cost > 0 ? mwNeedPrice(cost, z.fba, z.rate, profit) : 0;
+      const floorNg = !!(cost > 0 && needP > 0 && x.price < needP);
+      if (res.sent) await sleep(SP_GAP.patchListingsItem);
+      const g2 = await mwPatchOne(env, run, x.sku, x.price);
+      res.sent++;
+      if (g2.ok) res.ok_n++; else res.ng++;
+      res.rows.push({ sku: x.sku, asin: x.asin, jan: x.jan, ok: g2.ok,
+        status: g2.status, issues: g2.issues, err: g2.err,
+        price: x.price, price_src: x.price_src, price_why: x.price_why,
+        cost, fee: z.fee, need: needP, floor_ng: floorNg,
+        profit_at: x.price - z.fee - cost });
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_reg_log (at,sku,asin,jan,price,cond,ok,status,sub_id,
+           issues,err,by_role,ptype,ptype_try,kind,price_src,price_why,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'','','price',?13,?14,?1)`)
+        .bind(at, x.sku, x.asin, x.jan || "", x.price,
+              MW_RST_COND, g2.ok ? 1 : 0, g2.status || "", g2.sub_id || "",
+              JSON.stringify(g2.issues || []).slice(0, 2000), g2.err || "",
+              String(role || "admin"),
+              String(x.price_src || ""), String(x.price_why || "").slice(0, 300)));
+      /* 通った行は skus の控えの値段も直す（画面の一覧と合わせる）。 */
+      if (g2.ok)
+        stmts.push(env.DB.prepare(
+          `UPDATE skus SET updated_at=?2 WHERE seller_sku=?1`)
+          .bind(x.sku, at));
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("売値を直した：送った " + res.sent + "件（通った " + res.ok_n
+      + "／だめ " + res.ng + "）");
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-price: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* ASIN → JAN（控えの値段を直すのに使う）。 */
+async function mwJanOfAsins(env, asins) {
+  const list = [];
+  for (const a of asins || []) {
+    const x = String(a || "").trim();
+    if (x && list.indexOf(x) < 0) list.push(x);
+  }
+  const out = {};
+  if (!list.length) return out;
+  const step = d1Step(1);
+  for (let i = 0; i < list.length; i += step) {
+    const part = list.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT asin, jan FROM mw_amz
+        WHERE asin IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const r of (q && q.results) || []) out[String(r.asin)] = String(r.jan || "");
+  }
+  return out;
+}
 /* 登録の記録（画面の「結果」）。通った件数も返す
    （1件でも通ってから「まとめて送る」を出すため）。 */
 async function mwPutLog(env, url) {
   const lim = Math.max(1, Math.min(200, mwNum(url.searchParams.get("limit")) || 50));
   const q = await env.DB.prepare(
     `SELECT at,sku,asin,jan,price,ok,status,sub_id,issues,err,ptype,ptype_try,
-            by_role
+            by_role, COALESCE(kind,'put') AS kind,
+            COALESCE(price_src,'') AS price_src,
+            COALESCE(price_why,'') AS price_why
        FROM mw_reg_log ORDER BY id DESC LIMIT ?1`).bind(lim).all();
   const rows = ((q && q.results) || []).map((r) => {
     let is = [];
@@ -8620,6 +9051,9 @@ async function mwAmzList(env, url) {
             a.low AS low, a.buybox AS buybox, a.new_n AS new_n, a.low_n AS low_n,
             a.amz AS amz, a.fba_n AS fba_n, a.err AS amz_err,
             a.checked_at AS amz_at,
+            /* 7.115：値段を取った日時と、中古の最安値（新品が0人のときに使う）。 */
+            a.price_at AS price_at, a.used_low AS used_low,
+            a.used_n AS used_n, a.used_at AS used_at,
             /* 商品ごとの手数料（7.85）。取れていない行は NULL。 */
             a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
             a.fee_total AS fee_total, a.fee_base AS fee_base,
@@ -10543,6 +10977,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["used_low", "migrate-0044-reg-price.sql"],
+  ["price_src", "migrate-0044-reg-price.sql"],
   ["size_src", "migrate-0043-size-src.sql"],
   ["mw_notify", "migrate-0042-mw-notify.sql"],
   ["settings_log", "migrate-0041-settings-log.sql"],
@@ -11214,6 +11650,14 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/put")
         return json(await mwPutLog(env, url), 200, origin);
+      /* 登録済みの SKU の売値だけを直す（7.115）。**管理者だけ**。
+         Amazon に書き込むので、作業者のキーでは断る（中で見ている）。 */
+      if (request.method === "POST" && url.pathname === "/mw/price") {
+        const b = await request.json().catch(() => ({}));
+        const pr = mwSkuPrice(env, b, role);
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
+      }
       /* 自動で申告を付けてよい種類の表（6.128／7.93）。見るのは誰でも、
          変えるのは⚙の設定（POST /settings）側で管理者だけ。 */
       /* 候補の件数を数えるだけ（7.100）。条件の見直しの見込みに使う。 */
@@ -11548,4 +11992,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwAsinOfJan, mwJanOfAsin, isAsin, ebayLink, ebayGetOne,
   /* 7.114 */
   skPlanSig, skNoteDue, SK_NOTE_MS,
+  /* 7.115 */
+  /* SP_GAP はテストで間隔を 0 にするために出す（本番では触らない）。 */
+  SP_GAP,
+  mwUsedPct, mwPickPrice, mwPutPrice, mwFeeAt, mwNeedPrice, mwFeeRows,
+  mwPriceSave, mwSkuPrice, mwPatchBody, mwJanOfAsins, yenText,
+  MW_USED_PCT, MW_PATCH_MAX,
   unparsedInfo, mwDropInfo, putListings };

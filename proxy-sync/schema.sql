@@ -549,6 +549,11 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   price      INTEGER,   -- 販売価格（円・送料込み）
   basis      TEXT,      -- 'カート' か '最安'
   low        INTEGER,   -- 新品の最安値（送料込み）
+  /* 中古の最安値（7.115）。新品の出品者が0人のときに、
+     これ×⚙の掛け率（既定120%）を売値にする。 */
+  used_low   INTEGER,   -- 中古の最安値（送料込み）
+  used_n     INTEGER,   -- 中古の出品者数
+  used_at    TEXT,      -- 中古の最安値を取った時刻
   buybox     INTEGER,   -- カート価格（取れたときだけ）
   new_n      INTEGER,   -- 新品の出品者数
   low_n      INTEGER,   -- 最安値と同じ値段の出品者数
@@ -625,6 +630,10 @@ CREATE TABLE IF NOT EXISTS mw_reg_log (
   by_role    TEXT,
   ptype      TEXT,              -- 送った productType（7.95。PRODUCT のことも）
   ptype_try  TEXT,              -- 試した順（"ABIS_VIDEO_GAMES > PRODUCT"）
+  /* 7.115：新規登録（'put'）と売値だけ直した（'price'）の見分け＋値段の根拠。 */
+  kind       TEXT,              -- 'put' / 'price'
+  price_src  TEXT,              -- 'new' / 'used' / 'hand'
+  price_why  TEXT,              -- 「新品の出品者なし：中古の最安値 … × 120% ＝ …」
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_reg_log_at  ON mw_reg_log(at);

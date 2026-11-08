@@ -14,11 +14,38 @@ const env=makeEnv({ STAFF_KEY:'staff-key-123',
   LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs', LWA_REFRESH_TOKEN:'rt',
   SP_SELLER_ID:'A1SELLER9999' });
 
+/* 本物の getItemOffersBatch は 0.1回/秒（10.5秒おき）。
+   テストでは待たせない（間隔そのものは tests/mwfee.mjs などで見張っている）。 */
+W.SP_GAP.getItemOffersBatch=0;
 let calls=[], reply={};
+/* 7.115：送る直前に値段を取り直す。ASIN ごとに新品／中古の出品を返す。
+   既定は「新品に1人・9,638円」（これまでのテストと同じ売値になる）。 */
+let offers={ '*': { New:[{ b:9638, s:0 }], Used:[] } }, offersFail=false;
+const offerOf=(asin,cond)=>{
+  const o=offers[asin]||offers['*']||{ New:[], Used:[] };
+  return (cond==='New'?(o.New||[]):(o.Used||[]));
+};
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/o2\/token/.test(url))
     return new Response(JSON.stringify({access_token:'t',expires_in:3600}),{status:200});
+  /* 値段の取り直し（getItemOffersBatch・7.115）。 */
+  if(/batches\/products\/pricing\/v0\/itemOffers/.test(url)){
+    if(offersFail)return new Response('{"errors":[{"code":"x"}]}',{status:503});
+    const reqs=(JSON.parse(String(o.body||'{}')).requests)||[];
+    return new Response(JSON.stringify({ responses:reqs.map((q)=>{
+      const asin=(/\/items\/([A-Z0-9]{10})\/offers/.exec(String(q.uri||''))||[])[1]||'';
+      const cond=String(q.ItemCondition||'New');
+      const list=offerOf(asin,cond);
+      return { request:q, status:{statusCode:200},
+        body:{ payload:{ ASIN:asin, ItemCondition:cond,
+          Summary:{ NumberOfOffers:[{ condition:cond.toLowerCase(),
+            OfferCount:list.length }], TotalOfferCount:list.length },
+          Offers:list.map((x)=>({ SubCondition:(cond==='New'?'new':'good'),
+            ListingPrice:{ Amount:x.b, CurrencyCode:'JPY' },
+            Shipping:{ Amount:x.s||0, CurrencyCode:'JPY' } })) } } };
+    }) }),{status:200});
+  }
   if(/listings\/2021-08-01\/items/.test(url)){
     calls.push({url:url,method:o.method,body:String(o.body||'')});
     const sku=decodeURIComponent((url.split('/items/')[1]||'').split('?')[0]
@@ -135,17 +162,21 @@ reply[SKU]=null;
 
 console.log('\n=== 送る前に確かめる ===');
 calls=[];
+/* 3つめは「新品も中古も出品が無い」行（7.115）。画面から来た売値は見ない。 */
+offers['B0NOOFFER1']={ New:[], Used:[] };
 r=await post('/mw/put',{ rows:[
   row({ sku:'こわれたSKU' }),
   row({ sku:'mwgame-20261029-N-B0PUT00001-3476', asin:'B0OTHER001' }),
-  row({ price:0 })] });
+  row({ sku:'mwgame-20261029-N-B0NOOFFER1-3476', asin:'B0NOOFFER1',
+        price:9999 })] });
 console.log('   '+JSON.stringify(r.body.rows.map((x)=>x.err)));
 ok(r.body.sent===0&&r.body.ng===3,'★★★形がおかしい行は送らない');
 ok(calls.length===0,'★★★1回も呼ばない');
 ok(/SKU の形/.test(r.body.rows[0].err),'★★SKU の形を見る');
 ok(/ASIN と合いません/.test(r.body.rows[1].err),
    '★★★SKU の中の ASIN と合わない行は送らない（取り違え防止）');
-ok(/売値がありません/.test(r.body.rows[2].err),'★★売値を見る');
+ok(/新品も中古も出品がありません/.test(r.body.rows[2].err),
+   '★★★新品も中古もいない行は送らない（7.115）');
 
 console.log('\n=== 出品者トークンが無いとき ===');
 const env2=makeEnv({ LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs',
@@ -210,6 +241,8 @@ env.DB._db.prepare(
   `INSERT INTO mw_restrict (asin,cond,state,checked_at,created_at)
    VALUES ('B0STAFF777','new_new','ok','2026-11-07T00:00:00Z',
      '2026-11-07T00:00:00Z')`).run();
+/* 7.115：売値は送る直前に取り直す。新品に1人・9,980円いることにする。 */
+offers['B0STAFF777']={ New:[{ b:9980, s:0 }], Used:[] };
 /* 下調べ（check）で、pj-sync が組み立てた中身が返る。 */
 r=await post('/mw/put',{ check:1, rows:[{ jan:JAN_S, price:1, sku:'うそのSKU' }] },
   'staff-key-123');
@@ -228,7 +261,7 @@ ok(r.body.sent===1&&r.body.ok_n===1,'★★★作業者の端末から登録で�
 const sent=calls[calls.length-1];
 ok(/B0STAFF777-3476/.test(sent.url),'★★送った SKU も pj-sync が決めたもの');
 ok(/9980/.test(sent.body)&&!/\"amount\":1\b/.test(sent.body),
-   '★★★売値は Amazon の実売価格（画面から来た 1円は使わない）');
+   '★★★売値は取り直した値段（画面から来た 1円は使わない）');
 /* 記録に「誰が」が残る。 */
 let lg=(await asJson(await worker.fetch(get('/mw/put?limit=5'),env))).body;
 console.log('   記録: '+JSON.stringify(lg.rows[0]&&

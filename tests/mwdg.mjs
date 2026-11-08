@@ -13,6 +13,7 @@ import { harness, loadWorker, makeEnv, asJson } from './lib.mjs';
 const T=harness('Worker：電池・危険物の申告');
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('mwdg');
+W.SP_GAP.getItemOffersBatch=0;      // 本物は 0.1回/秒。テストでは待たせない
 const env=makeEnv({ STAFF_KEY:'staff-key-123',
   LWA_CLIENT_ID:'ci', LWA_CLIENT_SECRET:'cs', LWA_REFRESH_TOKEN:'rt',
   SP_SELLER_ID:'A1SELLER9999' });
@@ -26,6 +27,20 @@ globalThis.fetch=async(u,i)=>{
   calls.push({url:url,method:o.method||'GET',body:String(o.body||'')});
   if(/o2\/token/.test(url))
     return new Response(JSON.stringify({access_token:'t',expires_in:3600}),{status:200});
+  /* 7.115：送る直前に値段を取り直す。新品に1人いることにする。 */
+  if(/batches\/products\/pricing\/v0\/itemOffers/.test(url)){
+    const reqs=(JSON.parse(String(o.body||'{}')).requests)||[];
+    return new Response(JSON.stringify({ responses:reqs.map((q)=>{
+      const a2=(/\/items\/([A-Z0-9]{10})\/offers/.exec(String(q.uri||''))||[])[1]||'';
+      const isNew=String(q.ItemCondition||'New')==='New';
+      return { request:q, status:{statusCode:200},
+        body:{ payload:{ ASIN:a2, ItemCondition:q.ItemCondition,
+          Summary:{ TotalOfferCount:isNew?1:0 },
+          Offers:isNew?[{ SubCondition:'new',
+            ListingPrice:{ Amount:9638, CurrencyCode:'JPY' },
+            Shipping:{ Amount:0, CurrencyCode:'JPY' } }]:[] } } };
+    }) }),{status:200});
+  }
   if(/catalog\/2022-04-01\/items/.test(url)){
     const ids=new URL(url).searchParams.get('identifiers').split(',');
     return new Response(JSON.stringify({ items:ids.map((a)=>({ asin:a,

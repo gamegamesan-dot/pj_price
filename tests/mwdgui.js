@@ -49,7 +49,10 @@ const setup=async()=>await p.evaluate(([META,PLAN])=>{
         if(b&&b.check){
           window.__checks++;
           return new Response(JSON.stringify({ok:true,plan:(b.rows||[]).map((x)=>
-            Object.assign({sku:x.sku,asin:x.asin},PLAN[x.asin]||{}))}),{status:200});
+            /* 6.155：pj-sync は送る直前に取り直した売値も plan に入れて返す。 */
+            Object.assign({sku:x.sku,asin:x.asin,price:x.price||9638,
+              price_src:'new',price_why:'新品の最安値 ¥9,638（送料込み）',
+              price_err:'',need_price:false},PLAN[x.asin]||{}))}),{status:200});
         }
         window.__posts.push(b);
         return new Response(JSON.stringify(window.__putReply||{ok:true,
@@ -188,11 +191,15 @@ await p.evaluate(()=>{
     if(/\/mw\/put/.test(url)&&i&&i.method==='POST'&&b&&b.check)
       return new Response(JSON.stringify({ok:true,plan:(b.rows||[]).map((x)=>
         (x.asin==='B0LED00001'
-          ?{ sku:x.sku, asin:x.asin, ptype:'FIGURINE', auto:true, hand:true,
+          ?{ sku:x.sku, asin:x.asin, price:x.price||9638, price_src:'new',
+             price_why:'新品の最安値', price_err:'', need_price:false,
+             ptype:'FIGURINE', auto:true, hand:true,
              prev:true, batteries:true, dg:'not_applicable',
              why:'前回の選択を使用（2026-11-01に選びました）',
              req:['batteries_required'], def_err:'', need_batt:true, need_dg:true }
-          :{ sku:x.sku, asin:x.asin, ptype:'FIGURINE', auto:true, hand:false,
+          :{ sku:x.sku, asin:x.asin, price:x.price||9638, price_src:'new',
+             price_why:'新品の最安値', price_err:'', need_price:false,
+             ptype:'FIGURINE', auto:true, hand:false,
              prev:false, batteries:false, dg:'not_applicable',
              why:'この種類（FIGURINE）は「電池なし・危険物に該当しない」で送ります',
              req:[], def_err:'', need_batt:false, need_dg:false }))}),{status:200});
@@ -241,7 +248,9 @@ await p.evaluate(()=>{
       ?JSON.parse(i.body):null;
     if(/\/mw\/put/.test(url)&&i&&i.method==='POST'&&b&&b.check)
       return new Response(JSON.stringify({ok:true,plan:(b.rows||[]).map((x)=>
-        ({ sku:x.sku, asin:x.asin, ptype:'ABIS_VIDEO_GAMES',
+        ({ sku:x.sku, asin:x.asin, price:x.price||9638, price_src:'new',
+           price_why:'新品の最安値', price_err:'', need_price:false,
+           ptype:'ABIS_VIDEO_GAMES',
            ptype_send:'PRODUCT', auto:true, hand:false, prev:false,
            batteries:false, dg:'not_applicable',
            why:'ゲームソフトなので「電池なし・危険物に該当しない」で送ります',
