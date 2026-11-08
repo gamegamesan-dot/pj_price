@@ -63,6 +63,8 @@ const setup=async(o)=>await p.evaluate((o)=>{
     amazon_offers_json:'[{"p":3000,"c":"good"},{"p":3050,"c":"good"}]',
     amazon_lowest_at:NOW,mw_low:null,mw_low_at:null,mw_n:null,mw_stock:null,
     sold_usd:null,warnings:[],notes:[],state:'ok'},x||{});
+  /* 6.154：行の形だけ変えて試したいときは only:[{asin,x}] を渡す。 */
+  if(o.only)o.items=o.only.map(function(e){ return it(e.asin,e.x); });
   syncData={at:NOW,counts:{},items:(o.items||[
     it('B0SKU00001'),                                   // 仕入れ直して出せる
     it('B0SKU00002',{fba_available:2,amazon_lowest:90000,
@@ -331,6 +333,82 @@ ok(!/再出品/.test(cfg.label)&&!/再出品/.test(cfg.note),'★★「再出品
 ok(/確認してから/.test(cfg.txt)&&/自動/.test(cfg.txt),'★表示も日本語');
 ok(cfg.adv,'★★⚙設定として pj-sync に送る（Worker も同じ設定で動く）');
 ok(cfg.csv,'★この端末にも保存する');
+
+console.log('=== 手元在庫の印だけでは在庫とみなさない（6.154）===');
+/* 2026-11-08：手元から売れて在庫がもう無い行（B0035WV8CY マリ 1/6・$95.70）が
+   「手持ちの在庫で補充できます」として予定に載っていた。
+   on_hand は名簿を送るたびに自動で付く**印**で、売れても下りない。 */
+const HIGH={ amazon_lowest:90000,
+  amazon_offers_json:'[{"p":90000,"c":"good"}]' };
+await setup({ only:[
+  /* 印だけの行（手元の数は未入力）。仕入れ値も高いので出せない。 */
+  { asin:'B0HAND0001', x:Object.assign({ on_hand:1, hand_qty:null },HIGH) },
+  /* 印＋手元の数が入っている行。これは出せる。 */
+  { asin:'B0HAND0002', x:Object.assign({ on_hand:1, hand_qty:2 },HIGH) },
+  /* 手元の数が0の行。出せない。 */
+  { asin:'B0HAND0003', x:Object.assign({ on_hand:1, hand_qty:0 },HIGH) },
+  /* FBA に在庫がある行。数で見る。 */
+  { asin:'B0HAND0004', x:Object.assign({ fba_available:3 },HIGH) }] });
+await openCsvBoxes(p);
+let hk=await p.evaluate(()=>({
+  a1:syncSkActOf(syncRowBy('B0HAND0001|used')),
+  a2:syncSkActOf(syncRowBy('B0HAND0002|used')),
+  a3:syncSkActOf(syncRowBy('B0HAND0003|used')),
+  a4:syncSkActOf(syncRowBy('B0HAND0004|used')) }));
+console.log('   '+JSON.stringify({a1:hk.a1.why,a2:hk.a2.why,a4:hk.a4.why}));
+ok(hk.a1.act===''&&/手元在庫の印だけ/.test(hk.a1.why||''),
+   '★★★印だけの行は補充の予定に載せない');
+ok(/手元の数/.test(hk.a1.why||''),'★★残っているときの直し方を書く');
+ok(hk.a2.act==='relist'&&hk.a2.hand===true&&/手元の在庫 2点/.test(hk.a2.why||''),
+   '★★★「手元の数」が入っていれば補充できる');
+ok(hk.a3.act===''&&/手元在庫の印だけ/.test(hk.a3.why||''),'★★0点なら載せない');
+ok(hk.a4.act==='relist'&&/FBA在庫 3点/.test(hk.a4.why||''),'★FBA在庫は数で見る');
+/* 止まった行は「対応が必要」に出て、理由が行にも出る。 */
+let hs=await p.evaluate(()=>syncSkStuck().map(function(x){ return x.asin; }));
+ok(hs.indexOf('B0HAND0001')>=0,'★★★止まった行は「対応が必要」に出る');
+let ht=await rowText('B0HAND0001|used');
+ok(/手元在庫の印だけ/.test(ht),'★★理由を行にも出す');
+
+console.log('=== 行の「手元の数」（6.154）===');
+let hb=await p.evaluate(()=>{
+  const q=function(k){
+    const el=document.querySelector('#syncList [data-srow="'+k+'"]');
+    const b=el?el.querySelector('[data-shandq]'):null;
+    return b?b.textContent:''; };
+  return { b1:q('B0HAND0001|used'), b2:q('B0HAND0002|used'),
+           b4:q('B0HAND0004|used') }; });
+console.log('   '+JSON.stringify(hb));
+ok(/手元の数/.test(hb.b1),'★★★手元在庫の印がある行にボタンを出す');
+ok(/—/.test(hb.b1),'★★数が未入力なら「—」');
+ok(/手元の数 2/.test(hb.b2),'★★入っている数を出す');
+ok(hb.b4==='','★手元在庫でない行には出さない');
+/* 押すと数を聞いて、pj-sync に hand_qty として送る。 */
+let hp=await p.evaluate(async()=>{
+  window.__posts=[];
+  window.prompt=function(){ return '3'; };
+  const el=document.querySelector('#syncList [data-srow="B0HAND0001|used"]');
+  el.querySelector('[data-shandq]').click();
+  await new Promise(function(r){ setTimeout(r,80); });
+  return { posts:JSON.parse(JSON.stringify(window.__posts)),
+           q:syncRowBy('B0HAND0001|used').hand_qty,
+           note:$('syncFixNote').textContent,
+           act:syncSkActOf(syncRowBy('B0HAND0001|used')) }; });
+console.log('   '+JSON.stringify(hp.posts)+' / '+hp.note);
+ok(hp.posts.length===1&&hp.posts[0][0].hand_qty===3,
+   '★★★入れた数を pj-sync に送る（/listings の hand_qty）');
+ok(hp.posts[0][0].asin==='B0HAND0001','★その行だけを送る');
+ok(hp.q===3&&/手元の数を 3点/.test(hp.note),'★★行と画面に反映する');
+ok(hp.act.act==='relist'&&/手元の在庫 3点/.test(hp.act.why||''),
+   '★★★入れたとたんに補充の予定に入る');
+/* キャンセルしたら送らない。 */
+let hc=await p.evaluate(async()=>{
+  window.__posts=[];
+  window.prompt=function(){ return null; };
+  const el=document.querySelector('#syncList [data-srow="B0HAND0002|used"]');
+  el.querySelector('[data-shandq]').click();
+  await new Promise(function(r){ setTimeout(r,60); });
+  return window.__posts.length; });
+ok(hc===0,'★★やめたら送らない');
 
 console.log('=== 作業者のキー ===');
 await setup({role:'staff'});

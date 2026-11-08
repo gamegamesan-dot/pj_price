@@ -1975,14 +1975,16 @@ async function syncOrders(env, run, days, maxItems) {
         amount: Number(s2.amount || 0).toFixed(2), currency: s2.currency || "USD",
         sku: s2.sku || "", order_id: s2.orderId }));
   }
-  /* カートリッジのみ（-C）は手元から発送するので、売れたら手元在庫を減らす。
+  /* 手元から発送する行は、売れたら手元在庫を減らす。
      eBayの数量もその場で同じだけ減らす（1時間ごとの出品の取り込みを待つあいだ
      「数量と手元在庫が合いません」が出続けないようにする。次の取り込みで
      eBay側の本当の数量に上書きされる）。
-     手元の数をまだ送っていない行（NULL）は触らない。 */
+     手元の数をまだ送っていない行（NULL）は触らない。
+     7.114：カートリッジのみ（-C）だけでなく、**手元の数が入っている行すべて**を
+     減らす。減らさないと在庫補充（skRelist）が「手元の在庫で補充できます」と
+     言い続けてしまう。 */
   const cartDown = [];
   for (const s2 of soldE) {
-    if (!isCart(s2)) continue;
     const n = Number(s2.qty || 0);
     if (!(n > 0) || !fresh[s2.orderId + "|" + s2.line]) continue;
     cartDown.push(env.DB.prepare(
@@ -1994,7 +1996,7 @@ async function syncOrders(env, run, days, maxItems) {
   }
   if (cartDown.length) {
     await runBatch(env, run, cartDown);
-    run.notes.push("カートリッジのみの手元在庫を減らした " + cartDown.length + "件");
+    run.notes.push("手元在庫を減らした " + cartDown.length + "件（手元の数が入っている行）");
   }
   await runBatch(env, run, ev);
 
@@ -3970,6 +3972,12 @@ const SK_PICK_LIMIT = 400;               // 判定で見る行数
 const SK_PLAN_SHOW = 20;                 // 画面・通知に出す予定の件数
 const SK_FAIL_WARN = 3;
 const SK_PLAN_KEY = "sk.plan";
+/* 予定の知らせは**同じ予定なら1日1回**（7.114）。
+   15分ごとの注文の取り込みと毎時の実行で、同じ1件の「予定」が
+   数分おきに Discord に届いていた（2026-11-08：13:01・13:08・13:16）。
+   予定の中身（どの行か）が変わったときは、その回は出す。 */
+const SK_NOTE_MS = 24 * 60 * 60 * 1000;
+const SK_NOTE_KEY = "sk.note";
 
 async function skSettings(env) {
   let st = {};
@@ -4030,6 +4038,25 @@ async function skFailN(env) {
       .bind(SK_FAIL_WARN).first();
     return Number((r && r.n) || 0);
   } catch (e) { return 0; }
+}
+/* 予定の中身の指紋（どの行が載っているか）。並び順では変わらないようにする。 */
+function skPlanSig(list) {
+  return (list || []).map((x) => String(x.asin) + "|" + String(x.cond))
+    .sort().join(",");
+}
+/* 予定の知らせを出すか（同じ予定は1日1回）。出すときは控えを書く。 */
+async function skNoteDue(env, sig) {
+  if (!sig) return false;
+  let prev = null;
+  try { const t = await stateGet(env, SK_NOTE_KEY); prev = t ? JSON.parse(t) : null; }
+  catch (e) { prev = null; }
+  if (prev && String(prev.sig || "") === sig && prev.at
+      && (Date.now() - Date.parse(prev.at) < SK_NOTE_MS)) return false;
+  try {
+    await stateSet(env, SK_NOTE_KEY,
+      JSON.stringify({ at: nowIso(), sig: sig })).run();
+  } catch (e) { /* 控えが書けなくても知らせは出す */ }
+  return true;
 }
 function skNotifyText(res) {
   const plan = (res.mode === "confirm");
@@ -4131,7 +4158,10 @@ async function jobSoldKeep(env, opt) {
       run.notes.push("確認してから：" + res.picked + "件が在庫補充の候補／とばした "
         + res.skipped + "件。eBay は変えていません");
       await skLogRun(env, run, res, "");
-      await notify(env, run, skNotifyText(res));
+      /* 7.114：同じ予定の知らせは1日1回（15分ごとの実行で鳴り続けないように）。 */
+      if (await skNoteDue(env, skPlanSig(pick.due)))
+        await notify(env, run, skNotifyText(res));
+      else run.notes.push("予定の知らせは出しません（同じ予定は1日1回）");
       return Object.assign(await saveRun(env, run), res);
     }
     if (!list.length) {
@@ -11516,4 +11546,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rvPlanGet, rvUsedToday,
   /* 7.113 */
   mwAsinOfJan, mwJanOfAsin, isAsin, ebayLink, ebayGetOne,
+  /* 7.114 */
+  skPlanSig, skNoteDue, SK_NOTE_MS,
   unparsedInfo, mwDropInfo, putListings };

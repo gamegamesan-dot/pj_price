@@ -644,12 +644,28 @@
     if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
     if (Number(r.pb_skip || 0)) return no("今回は動かさない");
     if (Number(r.sk_fail || 0) >= SK_FAIL_WARN) return no("続けて失敗（対応が必要）");
-    /* ① FBA在庫・手元在庫があれば、それで補充できる（仕入れ値は見ない）。 */
-    var hand = Number(r.fba_available || 0) > 0 || Number(r.on_hand || 0)
-      || Number(r.hand_qty || 0) > 0;
-    if (hand)
-      return { act: "relist", why: "手持ちの在庫で補充できます", price: price,
-               hand: true, buy: null, max: 0 };
+    /* ① 在庫があれば、それで補充できる（仕入れ値は見ない）。
+       **「手元在庫」は印であって数ではない。**名簿を送るたびに
+       「FBA在庫が未確認の行」へ自動で付く印で、売れても下りない。
+       これを在庫とみなしていたため、**手元から売れて在庫がもう無い行**が
+       「手持ちの在庫で補充できます」として予定に載っていた
+       （2026-11-08：B0035WV8CY マリ 1/6）。
+       数が分かるのは次の2つだけ。
+       ・fba_available … FBA の販売可能数
+       ・hand_qty      … 人が入れた手元の数（売れたら減る） */
+    var fbaN = Number(r.fba_available || 0);
+    var handN = Number(r.hand_qty || 0);
+    if (fbaN > 0)
+      return { act: "relist", why: "FBA在庫 " + fbaN + "点で補充できます",
+               price: price, hand: true, buy: null, max: 0 };
+    if (handN > 0)
+      return { act: "relist", why: "手元の在庫 " + handN + "点で補充できます",
+               price: price, hand: true, buy: null, max: 0 };
+    /* 印だけの行は「在庫がある」と決めつけない。残っているなら手元の数を入れてもらう。 */
+    if (Number(r.on_hand || 0))
+      return no("手元在庫の印だけで、手元に残っているか分かりません"
+        + "（売れた分で無くなっていないか確かめ、まだあれば行の「手元の数」を"
+        + "入れてください）");
     /* ② 無ければ仕入れ直す前提。いまの仕入れ値で、売れた値段でも下限利益が残るか。 */
     var b = buySource(S, r, now);
     /* 在庫なしを先に見る。取りに行って最安値が出なかった行（at はあるが low が0）は

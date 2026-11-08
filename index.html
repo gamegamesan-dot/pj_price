@@ -1574,7 +1574,7 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="rowv"><label>売値の自動反映（値上げ）</label><select id="autoRvMode"><option value="off">オフ（価格更新CSVを書き出して自分でアップロード）</option><option value="confirm" selected>確認モード（予定を出すだけ・まとめて実行で承認）</option><option value="auto">自動実行（pj-sync が1日1回そのまま反映）</option></select><div class="note2" style="margin-top:2px">「売値の見直し」の対象のうち<b>値上げだけ</b>を pj-sync が eBay に直接反映します（ReviseInventoryStatus）。<b>値下げは3日ごとの自動値下げに任せ</b>、最低利益ラインより下げません。相場（Sold）が入っている行は相場の判断（推奨／相場に合わせる／見送り）が優先で、<b>見送りの行は数量0</b>にします（出品は終了しません。eBayの<b>在庫切れオプション</b>をオンにしておいてください）。設定を変えたら「見直しの目標を送る」を押してください。</div></div>
       <div class="row"><label>1日に変える上限</label><input type="number" id="autoRvMax" value="50" step="10" min="1" max="2000" inputmode="numeric"><span class="unit">件</span></div>
       <div class="row"><label>1回の変更幅の上限</label><input type="number" id="autoRvPct" value="30" step="5" min="1" max="100" inputmode="numeric"><span class="unit">%</span></div>
-      <div class="rowv cfgprice"><label>売れたあとの在庫補充</label><select id="autoSkMode"><option value="confirm" selected>確認してから（予定を出すだけ）</option><option value="auto">自動で実行（承認なし）</option></select><div class="note2" style="margin-top:2px">自動値下げの途中で<b>売れた</b>行は、その値段が「売れる値段」だと分かったということなので、<b>それ以上下げず、値上げもしません</b>。売れて数量0になった行は、<b>同じ出品の数量を 0→1 に戻します</b>（在庫補充。新しく出品し直すわけではないので、ItemID も写真も説明もそのままです）（一点物でない／仕入れ値が24時間以内／その仕入れ値でも最低利益が残る／FBA在庫か手元在庫があればそれを優先、の全部を満たすときだけ）。条件を満たさない行は数量0のままで、理由を「対応が必要」に出します。1日30件まで（再調達とは別枠）。</div></div>
+      <div class="rowv cfgprice"><label>売れたあとの在庫補充</label><select id="autoSkMode"><option value="confirm" selected>確認してから（予定を出すだけ）</option><option value="auto">自動で実行（承認なし）</option></select><div class="note2" style="margin-top:2px">自動値下げの途中で<b>売れた</b>行は、その値段が「売れる値段」だと分かったということなので、<b>それ以上下げず、値上げもしません</b>。売れて数量0になった行は、<b>同じ出品の数量を 0→1 に戻します</b>（在庫補充。新しく出品し直すわけではないので、ItemID も写真も説明もそのままです）（一点物でない／仕入れ値が24時間以内／その仕入れ値でも最低利益が残る、の全部を満たすときだけ）。<b>FBA の販売可能数</b>か<b>行の「手元の数」</b>が1点以上あれば、仕入れ値を見ずにその在庫で補充します。<b>「手元在庫」の印だけでは補充しません</b>（印は名簿を送るたびに自動で付き、売れても下りないので、残っているかが分からないため）。手元にまだあるときは行の<b>「手元の数」</b>を入れてください（売れたら自動で減ります）。条件を満たさない行は数量0のままで、理由を「対応が必要」に出します。1日30件まで（再調達とは別枠）。<b>予定の知らせ（Discord）は、同じ予定なら1日1回</b>です。</div></div>
       <div class="row cfgprice"><label>自動処理の広告料率</label><input type="number" id="autoAdRate" value="6" step="0.5" min="0" max="100" inputmode="decimal"><span class="unit">%</span></div>
       <details class="exp" data-exp="cfgAutoBase"><summary>自動の処理が使う値の説明</summary>
       <div class="note2 cfgprice" style="margin:0 0 8px">自動の処理（<b>自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達</b>）と、<b>出品CSV・販売連携タブの推奨売値・最低売値・利益の表示</b>は、この料率で計算します。<b>pj-sync に送るのはこの値だけ</b>です。eBayタブの「広告料率」はその場の計算用（0%と見比べるときなどに使い、pj-sync には送りません）。</div>
@@ -18375,6 +18375,17 @@ function syncOnHandBtn(r,key){
     +(on?';background:#2f6fb0;color:#fff;border-color:#2f6fb0':'')+'">手元在庫 '
     +(on?'オン':'オフ')+'</button>';
 }
+/* 手元の数（6.154）。「手元在庫」の印だけでは在庫があるか分からないので、
+   在庫補充（数量を1に戻す）に使える**数**をここで入れる。
+   印が付いている行と、すでに数が入っている行に出す。 */
+function syncHandBtn(r,key){
+  var on=!!Number(r.on_hand||0), q=Number(r.hand_qty||0);
+  if(!on&&!(q>0)&&r.hand_qty===null)return '';
+  if(!on&&!(q>0))return '';
+  return '<button class="btn" data-shandq="'+esc(key)+'" style="padding:5px 8px;'
+    +'font-size:12px'+((q>0)?';background:#2f6fb0;color:#fff;border-color:#2f6fb0':'')
+    +'">手元の数 '+((r.hand_qty===null||r.hand_qty===undefined)?'—':q)+'</button>';
+}
 /* 再調達中の入れ/切りボタン。
    再調達中の行 … 「再調達中 解除」（mode を 'hold' に戻し、監視用の数字も消す）。
      数量を0にした・通常の出品に戻した行で押す。
@@ -18875,7 +18886,7 @@ function syncRowHtml(r,key){
       +syncSoldHtml(r,key)
       /* data-sbtns：押した結果をこの帯の中に出す（6.140）。 */
       +'<div data-sbtns="'+esc(key)+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">'
-      +syncOnHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
+      +syncOnHandBtn(r,key)+syncHandBtn(r,key)+syncOneOffBtn(r,key)+syncDropBtn(r,key)
       +syncSkResumeBtn(r,key)+syncRestockingBtn(r,key)
       +syncMarkStopBtn(r,key)+syncEbayFirstBtn(r,key)
       +syncZeroActBtn(r,key)+syncPbSkipBtn(r,key)+syncLowBtn(r,key)+'</div>'
@@ -19618,6 +19629,53 @@ function syncKeySay(key,msg,bad){
     return syncSayBox(row&&row.querySelector('[data-sbtns]'),msg,bad);
   }catch(e){ return null; }
 }
+/* 手元の数を入れる（6.154）。pj-sync の /listings に hand_qty として送る。
+   在庫補充（数量を1に戻す）は、この**数**があるときだけ「手元の在庫で補充できます」
+   と判断する（印だけでは判断しない）。売れたら pj-sync が自動で減らす。 */
+function syncHandQtyAsk(t,r){
+  var now=(r.hand_qty===null||r.hand_qty===undefined)?'':String(Number(r.hand_qty||0));
+  var v=prompt('手元にいま何点ありますか？（'+(r.title||r.asin)+'）\n'
+    +'・この数があるときだけ、売れたあとの在庫補充で「手元の在庫で補充できます」に'
+    +'なります\n'
+    +'・売れたら pj-sync が自動で減らします\n'
+    +'・0 を入れると「手元に無い」になります',now);
+  if(v===null)return;
+  var n=Math.round(Number(String(v).replace(/[^0-9]/g,'')));
+  if(!isFinite(n)||n<0){ alert('0以上の数を入れてください。'); return; }
+  syncHandQtySend(t,r,n);
+}
+function syncHandQtySend(t,r,n){
+  var u=syncUrl();
+  if(!syncKeyReady('syncFixNote')){
+    syncBtnSay(t,'設定の「pj-sync のキー」が空です。設定画面で入れ直してください。',1);
+    return;
+  }
+  var back=t.textContent, bkey=syncRowKey(r);
+  t.disabled=true; t.textContent='送信中…';
+  fetch(u+'/listings',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({items:[{asin:r.asin, cond:r.cond, title:r.title||'',
+      hand_qty:n}]})})
+    .then(syncResJson)
+    .then(function(d){
+      if(!(d&&d.accepted))throw new Error('受け付けられませんでした');
+      r.hand_qty=n;
+      syncSaveCache();
+      $('syncFixNote').textContent='手元の数を '+n+'点にしました：'
+        +(r.title||r.asin)+'　（'+r.asin+'）';
+      try{ syncRender(); }
+      catch(e2){
+        $('syncFixNote').textContent='手元の数を '+n+'点にしました（保存は済みました）。'
+          +'表示の作り直しに失敗：'+e2.message;
+      }
+      syncKeySay(bkey,'手元の数を '+n+'点にしました（保存しました）。');
+    })
+    .catch(function(e){
+      t.disabled=false; t.textContent=back;
+      $('syncFixNote').textContent='手元の数を保存できませんでした：'+e.message;
+      syncBtnSay(t,'手元の数を保存できませんでした：'+e.message,1);
+    });
+}
 function syncFlagSend(t,r,field,want,label){
   var u=syncUrl();
   if(!syncKeyReady('syncFixNote')){
@@ -19721,7 +19779,8 @@ $('syncList').addEventListener('click',function(e){
   var kz=t.getAttribute('data-szero'), kp=t.getAttribute('data-spbskip');
   var ks=t.getAttribute('data-sresume');          // 値下げを再開（6.77）
   var kl=t.getAttribute('data-slow');             // 最安値を今すぐ取り直す（6.132）
-  var key=kh||ko||kr||kd||km||kf||kz||kp||ks||kl; if(!key)return;
+  var kq=t.getAttribute('data-shandq');           // 手元の数（6.154）
+  var key=kh||ko||kr||kd||km||kf||kz||kp||ks||kl||kq; if(!key)return;
   if(!syncUrl()){ alert('設定の「pj-sync のURL」を入れてください。'); return; }
   var r=syncRowBy(key);
   if(!r){
@@ -19729,6 +19788,10 @@ $('syncList').addEventListener('click',function(e){
     syncBtnSay(t,'この行を特定できませんでした（キー '+key+'）。'
       +'「eBay・Amazonから取り込む」を押して一覧を読み込み直してください。',1);
     return;
+  }
+  if(kq){
+    /* 手元の数（6.154）。印だけでは在庫があるか分からないので、数を入れる。 */
+    syncHandQtyAsk(t,r); return;
   }
   if(kh){
     if(syncStockN(r)>0){ alert('FBAに在庫がある行は手元在庫にできません。'); return; }
@@ -20239,7 +20302,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v239';   // sw.js の const V と必ず同じ値にする
+var APP_V='v240';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

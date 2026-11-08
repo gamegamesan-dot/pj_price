@@ -187,11 +187,42 @@ await seed('B0SK000023',{amazon_lowest:90000,
   amazon_offers_json:'[{"p":90000,"c":"good"}]'});   // 手持ちなし → 止まる
 res=await sk();
 console.log('   '+JSON.stringify({relisted:res.relisted,skipped:res.skipped}));
-ok(res.relisted===3,'★★FBA在庫・手元在庫・手元の数がある行は出せる');
+ok(res.relisted===2,
+   '★★★在庫の**数**がある行だけ出せる（FBA在庫と「手元の数」。'
+   +'手元在庫の印だけの行は出さない）');
 const stk=await row('B0SK000023');
 console.log('   '+stk.sk_why);
 ok(stk.ebay_qty===0&&/下限利益を割ります/.test(stk.sk_why||''),
    '★★手持ちが無く仕入れ値が高い行は数量0のまま、理由を残す');
+ok(/FBA在庫 2点/.test((await row('B0SK000020')).sk_why||'')
+   ||(await row('B0SK000020')).ebay_qty===1,'★FBA在庫の数で補充する');
+ok((await row('B0SK000022')).ebay_qty===1,'★「手元の数」があれば補充する');
+
+console.log('\n=== 手元在庫の印だけでは在庫とみなさない（7.114）===');
+/* 2026-11-08：手元から売れて在庫がもう無い行（B0035WV8CY マリ 1/6・$95.70）が
+   「手持ちの在庫で補充できます」として予定に載っていた。
+   on_hand は**名簿を送るたびに自動で付く印**で、売れても下りないため。 */
+const hw=await row('B0SK000021');
+console.log('   '+hw.sk_why);
+ok(hw.ebay_qty===0,'★★★印だけの行は数量を戻さない');
+ok(/手元在庫の印だけ/.test(hw.sk_why||''),'★★★なぜ止めたかを行に残す');
+ok(/手元の数/.test(hw.sk_why||''),'★★残っているときの直し方も書く');
+const SK_S=PRICING.settings({adRate:6});
+let a1=PRICING.skRelist(SK_S,{ sold_keep:1, ebay_item_id:'1', ebay_qty:0,
+  sold_price:50, one_off_known:1, on_hand:1 });
+ok(a1.act===''&&/手元在庫の印だけ/.test(a1.why),
+   '★★判定は shared/pricing.js の skRelist に1か所だけ（画面も同じ）');
+a1=PRICING.skRelist(SK_S,{ sold_keep:1, ebay_item_id:'1', ebay_qty:0,
+  sold_price:50, one_off_known:1, on_hand:1, hand_qty:2 });
+ok(a1.act==='relist'&&a1.hand===true&&/手元の在庫 2点/.test(a1.why),
+   '★★★「手元の数」を入れれば補充できる');
+a1=PRICING.skRelist(SK_S,{ sold_keep:1, ebay_item_id:'1', ebay_qty:0,
+  sold_price:50, one_off_known:1, on_hand:1, hand_qty:0 });
+ok(a1.act===''&&/手元在庫の印だけ/.test(a1.why),
+   '★★手元の数が0なら補充しない');
+a1=PRICING.skRelist(SK_S,{ sold_keep:1, ebay_item_id:'1', ebay_qty:0,
+  sold_price:50, one_off_known:1, fba_available:3 });
+ok(a1.act==='relist'&&/FBA在庫 3点/.test(a1.why),'★FBA在庫は数で見る');
 
 console.log('\n=== 印を立てない行（7.54・一点物と無在庫）===');
 /* 判定は shared/pricing.js の skKeepOff に1か所だけ。
@@ -337,6 +368,59 @@ calls=[];
 res=await sk({approve:true});
 ok(res.mode==='approve'&&res.relisted===1&&calls.length>0,'★★approve で実行する');
 ok((await row('B0SK000090')).ebay_qty===1,'★数量が戻る');
+
+console.log('\n=== 同じ予定の知らせは1日1回（7.114）===');
+/* 2026-11-08：同じ1件（B0035WV8CY マリ 1/6・$95.70）の「予定」が
+   13:01・13:08・13:16 と届いていた。15分ごとの注文の取り込みと毎時の実行の
+   両方が jobSoldKeep を呼び、そのたびに Discord に出していたため。 */
+await wipe(); calls=[]; notes=[];
+await env.DB.prepare(`DELETE FROM sync_state WHERE k LIKE 'sk.%'`).bind().run();
+await seed('B0SK000110');
+res=await sk();
+ok(res.picked===1&&notes.length===1,'★1回目は知らせる');
+notes=[];
+res=await sk();
+console.log('   2回目: '+JSON.stringify({picked:res.picked,notes:notes.length}));
+ok(res.picked===1,'★★予定そのものは毎回立て直す（画面と /status は最新）');
+ok(notes.length===0,'★★★同じ予定の2回目は知らせない（鳴り続けない）');
+res=await sk();
+ok(notes.length===0,'★★★3回目も知らせない');
+/* 予定の中身が変わった回は知らせる（新しく売れた行は見落としたくない）。 */
+await seed('B0SK000111');
+notes=[];
+res=await sk();
+console.log('   行が増えた: '+JSON.stringify({picked:res.picked,
+  notes:notes.length}));
+ok(res.picked===2&&notes.length===1,
+   '★★★予定の中身が変わった回は知らせる（行が増えた）');
+notes=[];
+await sk();
+ok(notes.length===0,'★★その後また同じなら黙る');
+/* 24時間経ったら、同じ予定でももう一度知らせる。 */
+await env.DB.prepare(`UPDATE sync_state SET v=?2 WHERE k='sk.note'`)
+  .bind(null,JSON.stringify({ at:ago(25*60*60*1000),
+    sig:W.skPlanSig([{asin:'B0SK000110',cond:'used'},
+                     {asin:'B0SK000111',cond:'used'}]) })).run();
+notes=[];
+await sk();
+ok(notes.length===1,'★★★24時間を過ぎたら、同じ予定でもまた知らせる');
+/* 指紋は並び順で変わらない。 */
+ok(W.skPlanSig([{asin:'B',cond:'new'},{asin:'A',cond:'new'}])
+   ===W.skPlanSig([{asin:'A',cond:'new'},{asin:'B',cond:'new'}]),
+   '★★並び順では指紋が変わらない');
+ok(W.skPlanSig([])==='','★予定が空なら指紋も空');
+/* 実行の結果（補充しました・失敗）は毎回知らせる（予定ではないので）。 */
+await put({ autoSkMode:'auto', fx:'160', fee:'13.6', autoAdRate:'6',
+  baseProfit:'1000', linkRate:'30', saleRate:'15', targetMode:'auto',
+  syncWeightGame:'150' });
+notes=[];
+res=await sk();
+console.log('   実行: '+JSON.stringify({relisted:res.relisted,
+  notes:notes.length}));
+ok(res.relisted===2&&notes.length===1,'★★実行した結果は知らせる');
+await put({ autoSkMode:'confirm', fx:'160', fee:'13.6', autoAdRate:'6',
+  baseProfit:'1000', linkRate:'30', saleRate:'15', targetMode:'auto',
+  syncWeightGame:'150' });
 
 console.log('\n=== 値下げを再開する（POST /listings sold_keep=false）===');
 await wipe();
