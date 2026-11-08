@@ -5760,10 +5760,23 @@ async function mwFeeTest(env, url) {
     { method: "POST", body: JSON.stringify(sent), label: "getMyFeesEstimates" });
   const list = r.ok ? mwFeeList(r.data) : [];
   const pick = list.length ? mwFeePick(list[0]) : null;
+  /* 7.119：SP-API の FBA手数料には**在庫管理手数料が入っていない**（6.147）。
+     一覧と同じように目安を足せるよう、この ASIN の**サイズ区分**を控えから返す
+     （取れていなければ空。画面は⚙の既定で出す）。 */
+  let size = null;
+  try {
+    const z = await env.DB.prepare(
+      `SELECT size_tier, size_cm3, size_long, size_g FROM mw_amz
+        WHERE asin=?1 AND COALESCE(size_tier,'')<>'' LIMIT 1`).bind(asin).first();
+    if (z) size = { tier: String(z.size_tier || ""), cm3: Number(z.size_cm3 || 0),
+                    long: Number(z.size_long || 0), g: Number(z.size_g || 0) };
+  } catch (e) { size = null; }
   const info = await saveRun(env, run);
   return {
     ok: !!(pick && pick.ok),
     asin, price,
+    /* 7.119：サイズ区分（在庫管理の目安を足すのに使う）。 */
+    size: size,
     http: r.status,
     /* 理由は全文（400字）。キーは入らない（Amazon が返す文面だけ）。 */
     err: String(r.err || "").slice(0, 400),
@@ -9586,6 +9599,45 @@ async function mwImgRun(env, body) {
   return Object.assign(await saveRun(env, run), res);
 }
 /* GET /mw/img?jan=… 控えてある画像（貼り直さなくて済むように返す） */
+/* ===== 写真の控えを外す（7.119・F3）=====
+   貼った写真が別の商品のものだったとき、**その JAN の写真なしに戻す**。
+   ・消すのは `mw_img` の控えだけ。**pj-img（R2）に上げた画像は消さない**
+     （ほかの行や出品で使っている可能性がある。6.1 の決まりと同じ）
+   ・写真を貼るのと同じ仕事なので、**作業者のキーでも使える**（7.94 と同じ）
+   ・pos を渡せばその1枚だけ、渡さなければその JAN のぜんぶ */
+async function mwImgDel(env, body) {
+  const run = newRun("mw-img-del");
+  const res = { ok: false, jan: "", n: 0 };
+  try {
+    const o = body || {};
+    const jan = String(o.jan || "").replace(/\D/g, "");
+    res.jan = jan;
+    if (jan.length !== 13) {
+      res.error = "bad_jan";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const pos = (o.pos === null || o.pos === undefined || o.pos === "")
+      ? null : Math.max(0, Math.min(MW_IMG_MAX - 1, mwNum(o.pos)));
+    const q0 = await env.DB.prepare(
+      (pos === null)
+        ? `SELECT COUNT(*) AS n FROM mw_img WHERE jan=?1`
+        : `SELECT COUNT(*) AS n FROM mw_img WHERE jan=?1 AND pos=?2`)
+      .bind(...(pos === null ? [jan] : [jan, pos])).first();
+    res.n = Number((q0 && q0.n) || 0);
+    await (pos === null
+      ? env.DB.prepare(`DELETE FROM mw_img WHERE jan=?1`).bind(jan)
+      : env.DB.prepare(`DELETE FROM mw_img WHERE jan=?1 AND pos=?2`)
+          .bind(jan, pos)).run();
+    res.ok = true;
+    run.notes.push("MW画像：控えを外しました " + res.n + "枚（" + jan
+      + (pos === null ? "・ぜんぶ" : ("・" + (pos + 1) + "枚目")) + "）"
+      + "。pj-img の画像は消していません");
+  } catch (e) {
+    run.errors++; run.notes.push("mw-img-del: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
 async function mwImgGet(env, url) {
   const jan = String(url.searchParams.get("jan") || "").replace(/\D/g, "");
   if (jan.length !== 13) return { ok: false, error: "bad_jan", rows: [] };
@@ -11748,6 +11800,11 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await mwImgRun(env, b), 200, origin);
       }
+      /* 7.119：写真の控えを外す（作業者のキーでも使える）。 */
+      if (request.method === "POST" && url.pathname === "/mw/img/del") {
+        const b2 = await request.json().catch(() => ({}));
+        return json(await mwImgDel(env, b2), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/mw/img")
         return json(await mwImgGet(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/list")
@@ -11971,7 +12028,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwAmzList, mwAsinFind, amazonLowest,
                         amzSelf, fbaN, buyBox,
                         offerN, MW_AMZ_MAX, MW_AMZ_TTL_D, AMZ_SELF_ID,
-                        mwMarketRun, mwMktPick, mwImgRun, mwImgGet, mwImgUrl,
+                        mwMarketRun, mwMktPick, mwImgRun, mwImgGet, mwImgDel, mwImgUrl,
                         mwImgId, mwWhere, toB64, MW_OVER, MW_MKT_MAX,
                         MW_MKT_TTL_D, MW_IMG_MAX, MW_IMG_MIN_LONG, MW_CHUNK,
                         MW_SHIP_OK, MW_DROP_WARN,

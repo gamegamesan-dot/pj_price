@@ -303,9 +303,15 @@ await p.waitForTimeout(100);
 ok(await p.evaluate(()=>$('mwPicBar').style.display==='none'),'★帯を閉じられる');
 
 console.log('\n=== 貼り付けて取り込む（6.131）===');
-/* ブックマークレットがコピーする形を、そのまま貼る。 */
+/* ブックマークレットがコピーする形を、そのまま貼る。
+   6.156：取り込むのは候補の JAN だけなので、先に候補を読んでおく
+   （刈取の行は「仕入れる」の印が付いたものだけが対象）。 */
+await p.evaluate(()=>{ switchTab('F'); $('csvMwAmzLoad').click(); });
+await p.waitForTimeout(400);
 await p.evaluate(()=>{ switchTab('F'); $('mwPicPasteBox').open=true;
-  $('mwPicIn').value=''; window.__img=[]; window.__up=0; });
+  $('mwPicIn').value=''; window.__img=[]; window.__up=0;
+  mwBuyMap={}; (mwAmzRows||[]).forEach(function(r){ mwBuyMap[r.jan]=1;
+    r.pics_ok=0; r.pics_n=0; }); });
 got=await p.evaluate((j)=>mwPicRead(j+':10970132.10970140'),JAN);
 console.log('   '+JSON.stringify(got));
 ok(got.length===1&&got[0].ids.length===2,'★★★貼り付けた形を読める');
@@ -371,41 +377,54 @@ console.log('   '+JSON.stringify(pn));
 ok(pn.v===JAN+':10970132','★★★「クリップボードから読む」で欄に入る');
 ok(/1件/.test(pn.note),'★★読めた中身を出す');
 
-console.log('\n=== 候補にある JAN だけ取り込む（6.135）===');
+console.log('\n=== 候補の JAN だけ取り込む（6.135／6.156）===');
 /* 候補（Amazon刈取の一覧）を読み込んだ状態にする。 */
 await p.evaluate(()=>{ switchTab('F'); $('csvMwAmzLoad').click(); });
 await p.waitForTimeout(400);
 await p.evaluate(()=>{ $('mwPicPasteBox').open=true; window.__img=[]; window.__up=0; });
 let sp=await p.evaluate((j)=>{
-  /* 候補の1件目に写真あり、2件目（この JAN）は写真なし。 */
+  /* 6.156：刈取（Amazon FBA）の行は**「仕入れる」の印が付いた JAN だけ**が対象。
+     1件目と2件目に印を付け、2件目はすでに写真あり。 */
+  mwBuyMap={}; mwBuyMap[mwAmzRows[0].jan]=1; mwBuyMap[mwAmzRows[1].jan]=1;
+  mwAmzRows[0].pics_ok=0;
   mwAmzRows[1].pics_ok=2;
   $('mwPicIn').value=[ mwAmzRows[1].jan+':10900001',   // すでに写真あり
-    j+':10970132',                                     // 取り込む
-    '4900000000001:10900002' ].join('\n');            // 候補に無い
+    j+':10970132',                                     // 取り込む（印あり）
+    '4900000000001:10900002' ].join('\n');            // 候補外
   $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
   return { note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
     take:mwPicInNote().map((x)=>x.jan) };
 },JAN);
 console.log('   '+JSON.stringify(sp));
 ok(sp.take.length===1&&sp.take[0]===JAN,
-   '★★★候補にあって、まだ写真が無い JAN だけ取り込む');
+   '★★★候補で、まだ写真が無い JAN だけ取り込む');
 ok(/取り込む 1件/.test(sp.note),'★★★取り込む件数を出す');
-ok(/候補に無い 1件/.test(sp.note),'★★★候補に無い件数を出す');
+ok(/候補外 1件/.test(sp.note),'★★★候補外の件数を出す');
 ok(/すでに写真あり 1件/.test(sp.note),'★★★すでに写真がある件数を出す');
-/* 候補が読めていないときは振り分けない（止めない）。 */
+/* 6.156：候補が読めていないときは**振り分けられないので取り込まない**。
+   全部取り込むと候補外まで取ってしまう（1件2〜3秒かかる）。 */
 const noCand=await p.evaluate((j)=>{
-  const keep=mwAmzRows, keep2=mwRows;
-  mwAmzRows=[]; mwRows=[];
-  const r=mwPicSplit(mwPicRead(j+':10900003\n4900000000001:10900004'));
-  mwAmzRows=keep; mwRows=keep2;
-  return { take:r.take.length, cand:r.cand };
+  const keep=mwAmzRows, keep2=mwRows, keep3=mwBuyRows, keep4=mwBuyMap;
+  mwAmzRows=[]; mwRows=[]; mwBuyRows=[]; mwBuyMap={};
+  $('mwPicIn').value=j+':10900003\n4900000000001:10900004';
+  const take=mwPicInNote().map((x)=>x.jan);
+  const note=($('mwPicInNote').innerText||'').replace(/\s+/g,' ');
+  const r=mwPicSplit(mwPicRead($('mwPicIn').value));
+  mwAmzRows=keep; mwRows=keep2; mwBuyRows=keep3; mwBuyMap=keep4;
+  return { take:take.length, cand:r.cand, note:note };
 },JAN);
-ok(noCand.cand===0&&noCand.take===2,
-   '★★候補がまだ読めていないときは振り分けずに全部取り込む');
+console.log('   '+JSON.stringify(noCand));
+ok(noCand.cand===0&&noCand.take===0,
+   '★★★候補がまだ読めていないときは取り込まない（候補外まで取らない）');
+ok(/振り分けられません/.test(noCand.note)&&/一覧を出す/.test(noCand.note),
+   '★★★先に「一覧を出す」を押すよう知らせる');
 
 console.log('\n=== 途中で止めて、続きから ===');
 await p.evaluate((j)=>{
   window.__img=[]; window.__up=0;
+  /* 6.156：3件ぜんぶに「仕入れる」の印を付けて、対象にする。 */
+  mwBuyMap={};
+  mwAmzRows.forEach(function(r){ mwBuyMap[r.jan]=1; });
   $('mwPicIn').value=[j+':10970132', mwAmzRows[1].jan+':10970140',
     mwAmzRows[2].jan+':10970141'].join('\n');
   mwAmzRows[1].pics_ok=0; mwAmzRows[2].pics_ok=0; mwAmzRows[0].pics_ok=0;
@@ -470,8 +489,13 @@ await p.evaluate(()=>{ try{ localStorage.clear(); }catch(e){} });
 await p.reload(); await p.waitForTimeout(300);
 await setup('staff');
 await openCsvBoxes(p);
+/* 6.156：候補を先に読む（取り込むのは候補の JAN だけ）。 */
+await p.evaluate(()=>{ switchTab('F'); $('csvMwAmzLoad').click(); });
+await p.waitForTimeout(400);
 await p.evaluate((j)=>{
   switchTab('F'); $('mwPicPasteBox').open=true;
+  mwBuyMap={}; (mwAmzRows||[]).forEach(function(r){ mwBuyMap[r.jan]=1;
+    r.pics_ok=0; r.pics_n=0; });
   $('mwPicIn').value=j+':10970132';
   $('mwPicIn').dispatchEvent(new Event('input',{bubbles:true}));
 },JAN);

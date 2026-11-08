@@ -965,6 +965,8 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="mwPicInNote" style="margin-top:2px"></div>
         <div class="warn" id="mwPicQNote" style="display:none;margin-top:4px"></div>
         <div id="mwPicInOut" style="margin-top:4px"></div>
+        <!-- 6.157：取り込んだ写真のサムネイル（10件ずつ・タップで外す）。 -->
+        <div id="mwPicShots"></div>
         <!-- 6.150：ブックマークレット（6.129）は⚙から**ここ**に移した。
              貼り付け欄と同じ場所にあるほうが往復が短い。 -->
         <div style="display:flex;gap:6px;margin:8px 0 2px">
@@ -1160,6 +1162,18 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn" id="csvMwFold" style="flex:0 0 auto">MW の欄を畳む</button>
         </div>
         <div data-toc="候補一覧"></div>
+        <!-- 6.158：MW の候補一覧の検索（①〜④のどの区分にあっても見つかる）。 -->
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <input type="search" id="mwlFind" placeholder="商品名・JAN・社 で探す" style="flex:1 1 0;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search">
+          <button class="btn" id="mwlFindCam" style="flex:0 0 auto;padding:9px 10px" title="バーコードを読む">📷</button>
+          <button class="btn" id="mwlFindClear" style="flex:0 0 auto;padding:9px 10px;display:none" title="検索を消す">×</button>
+        </div>
+        <div class="note2" id="mwlFindNote" style="margin:2px 0 0;display:none"></div>
+        <div id="mwlFindCamBox" style="display:none;margin:4px 0 0">
+          <video id="mwlFindVideo" playsinline muted style="width:100%;max-height:240px;background:#000;border-radius:6px"></video>
+          <div class="note2" id="mwlFindCamNote" style="margin:2px 0 0"></div>
+          <button class="btn" id="mwlFindCamStop" style="width:100%;margin-top:4px">カメラを止める</button>
+        </div>
         <div id="csvMwList" style="margin-top:6px"></div>
       </div>
     </details>
@@ -10262,7 +10276,7 @@ expInit();
     };
     $(findPre(which)+'CamStop').onclick=findCamStop;
   };
-  on('sync'); on('csv'); on('amz'); on('amz2');
+  on('sync'); on('csv'); on('amz'); on('amz2'); on('mwl');
   /* タブを移ったらカメラを止める（撮り続けない）。 */
   document.addEventListener('visibilitychange',function(){
     if(document.hidden)findCamStop();
@@ -11157,10 +11171,26 @@ function mwFeeTestRun(){
     .then(function(d){
       b.disabled=false; b.textContent=back;
       var p=d.pick||{};
+      /* 6.159：SP-API の FBA手数料は**配送代行だけ**（在庫管理が入らない・6.147）。
+         一覧と同じように、⚙のサイズ区分ごとの在庫管理の目安を足して出す。
+         区分は pj-sync が控えから返した size_tier（無ければ⚙の既定）。 */
+      var fb=mwFbaGuess({ size_tier:String(((d.size||{}).tier)||'') });
+      var fbaApi=Math.round(+p.fba||0);
+      var fbaAll=fbaApi+(+fb.store||0);
+      var totAll=Math.round(+p.total||0)+(+fb.store||0);
       n.innerHTML=(d.ok
           ? '<b style="color:var(--good)">取れました</b>　販売手数料 '+yen(+p.ref||0)
-            +'＋手数料消費税 '+yen(+p.tax||0)+'　FBA手数料 '+yen(+p.fba||0)
-            +'　合計 '+yen(+p.total||0)
+            +'＋手数料消費税 '+yen(+p.tax||0)
+            +'　FBA手数料 <b>'+yen(fbaAll)+'</b>'
+            +'（配送代行 '+yen(fbaApi)+'＋在庫管理 '+yen(+fb.store||0)
+            +'・'+esc(fb.sizeName||'')+'の目安'
+            +(((d.size||{}).tier)?'（寸法から）':'（⚙の既定）')+'）'
+            +'　合計 <b>'+yen(totAll)+'</b>'
+            +'<div class="note2" style="margin:2px 0 0;opacity:.8">'
+            +'Amazon が返すのは<b>配送代行だけ</b>なので、一覧と同じように'
+            +'<b>在庫管理の目安</b>（⚙「FBA手数料の目安」）を足しています'
+            +'（Amazon の返り '+yen(fbaApi)+'・合計 '+yen(Math.round(+p.total||0))
+            +'）。</div>'
           : '<b style="color:#b00">取れませんでした</b>'
             +'　HTTP '+(+d.http||0)+(d.got_n?('　返り '+d.got_n+'件'):''))
         +(d.err?('<div class="note2" style="margin:2px 0 0;word-break:break-all">'
@@ -13653,27 +13683,67 @@ function mwPicParse(h){
    ・候補に無い JAN（買わない商品）は飛ばす
    ・すでに写真がある JAN も飛ばす（取り直しは1件ずつの口で）
    候補がまだ読めていないときは、振り分けずに全部取り込む（止めない）。 */
+/* ===== 取り込む相手を決める（6.156・F2）=====
+   一覧（100件）をまとめて貼るので、**取り込むのは次の JAN だけ**にする。
+   それ以外は捨てる（写真は1件ずつ MW から取るので、無駄に時間がかかる）。
+     ① 無在庫（eBay）の<b>出品候補</b>（相場の115%以内）
+     ② 無在庫（eBay）の<b>相場なし</b>（eBay に出品が無い）
+     ③ 刈取（Amazon FBA）で<b>「仕入れる」の印</b>が付いた JAN
+        （届いたあと eBay にも出せるように）
+   ③④（後回し・未調査）は捨てる。
+   すでに写真がある JAN は**上書きしない**（already）。
+   返り：{ ok, has, name, n, buy } */
 function mwPicCand(){
-  var m={}, has={};
-  var add=function(r){
-    var j=String((r||{}).jan||'').replace(/\D/g,'');
+  var ok={}, has={}, name={}, buy={}, n=0;
+  var jof=function(r){ return String((r||{}).jan||'').replace(/\D/g,''); };
+  var mark=function(r,isOk){
+    var j=jof(r);
     if(j.length!==13)return;
-    m[j]=1;
+    if(isOk){ if(!ok[j])n++; ok[j]=1; }
     if((+((r||{}).pics_ok)||0)>0)has[j]=1;
+    if(!name[j])name[j]=String((r||{}).name||(r||{}).mw_name
+      ||(r||{}).amz_name||'');
   };
-  try{ (mwAmzRows||[]).forEach(add); }catch(e){}
-  try{ (mwRows||[]).forEach(add); }catch(e){}
-  return { known:m, has:has, n:Object.keys(m).length };
+  /* 無在庫（eBay）の候補。①と②だけ入れる。 */
+  try{
+    (mwRows||[]).forEach(function(r){
+      var k='';
+      try{ k=mwMktJudge(r,mwRec(r)).k; }catch(e){ k=''; }
+      mark(r,(k==='ok'||k==='nomkt'));
+    });
+  }catch(e){}
+  /* 刈取（Amazon FBA）の「仕入れる」の印。 */
+  try{
+    (mwAmzRows||[]).forEach(function(r){
+      var j=jof(r);
+      var q=(+((mwBuyMap||{})[j])||0)>0;
+      if(q)buy[j]=1;
+      mark(r,q);
+    });
+  }catch(e){}
+  /* 印の一覧（/mw/buy）側にしか無い JAN も入れる（CSV から消えた行など）。 */
+  try{
+    (mwBuyRows||[]).forEach(function(r){
+      var j=jof(r);
+      if(!((+r.qty||0)>0))return;
+      buy[j]=1;
+      mark(r,true);
+    });
+  }catch(e){}
+  return { ok:ok, has:has, name:name, buy:buy, n:n };
 }
+/* 貼られたものを3つに分ける。
+   take=取り込む／out=候補外（捨てる）／already=すでに写真あり（触らない） */
 function mwPicSplit(got){
   var c=mwPicCand();
-  var out={ take:[], unknown:[], already:[], cand:c.n };
+  var out={ take:[], out:[], already:[], cand:c.n, name:c.name, buy:c.buy };
   (got||[]).forEach(function(x){
-    if(!c.n){ out.take.push(x); return; }   // 候補が無いときは振り分けない
-    if(!c.known[x.jan]){ out.unknown.push(x); return; }
+    if(!c.ok[x.jan]){ out.out.push(x); return; }
     if(c.has[x.jan]){ out.already.push(x); return; }
     out.take.push(x);
   });
+  /* 6.156：外に出す名前は「候補外」。昔の呼び名（unknown）も残しておく。 */
+  out.unknown=out.out;
   return out;
 }
 /* 貼り付けの欄（6.131／6.135）。読めた中身を先に見せて、押してから取り込む。 */
@@ -13688,21 +13758,37 @@ function mwPicInNote(){
     return got;
   }
   var sp=mwPicSplit(got);
+  mwPicLast=sp;
   var n=sp.take.reduce(function(a,x){ return a+x.ids.length; },0);
+  /* 6.156：候補がまだ読めていないときは**振り分けられない**。
+     全部取り込むと候補外まで取ってしまうので、先に一覧を出してもらう。 */
+  if(!sp.cand){
+    note.innerHTML='読みました：<b>'+got.length+'件</b>の JAN'
+      +'<br><span style="color:var(--bad);font-weight:700">'
+      +'候補がまだ読めていないので振り分けられません。</span>'
+      +'<br><span style="opacity:.85">「無在庫（eBay）」の<b>「一覧を出す」</b>'
+      +'（と、刈取の印を使うなら<b>「印の一覧」</b>）を押してから、'
+      +'もう一度この欄で「取り込む」を押してください。</span>';
+    return [];
+  }
   note.innerHTML='読みました：<b>'+got.length+'件</b>の JAN'
     +'　→ <b>取り込む '+sp.take.length+'件</b>（写真 '+n+'枚）'
-    +(sp.unknown.length?('　<span style="opacity:.8">候補に無い '
-      +sp.unknown.length+'件</span>'):'')
+    +(sp.out.length?('　<span style="opacity:.8">候補外 '
+      +sp.out.length+'件</span>'):'')
     +(sp.already.length?('　<span style="opacity:.8">すでに写真あり '
       +sp.already.length+'件</span>'):'')
-    +(!sp.cand?'<br><span style="opacity:.8">候補がまだ読めていないので、'
-      +'振り分けずに全部取り込みます（「一覧を出す」を押すと振り分けます）。</span>':'')
+    +'<br><span style="opacity:.75">取り込むのは'
+    +'<b>① 出品候補（相場の115%以内）・② 相場なし・「仕入れる」の印</b>の'
+    +'JAN だけです。③後回し・④未調査は捨てます。'
+    +'すでに写真がある JAN は上書きしません。</span>'
     +(sp.take.length?('<br><span style="opacity:.75">'
       +sp.take.slice(0,3).map(function(x){
         return esc(x.jan)+'（'+x.ids.length+'枚）'; }).join('　')
       +(sp.take.length>3?('　ほか '+(sp.take.length-3)+'件'):'')+'</span>'):'');
   return sp.take;
 }
+/* 直前の振り分け（結果の4つの件数に使う）。 */
+var mwPicLast=null;
 /* クリップボードから読む（iPhone では許可を聞かれる）。 */
 function mwPicClip(){
   var note=$('mwPicInNote');
@@ -13782,6 +13868,9 @@ function mwPicWork(list){
   btn.textContent='止める';
   out.innerHTML='';
   var all=q.length, done=0, ok=0, ng=0, t0=Date.now();
+  /* 6.156：この回の結果（4つの件数）と、6.157 のサムネイル用の控え。 */
+  var sp=mwPicLast||{ out:[], already:[], name:{} };
+  mwPicShots=[];
   var step=function(){
     if(mwPicStop||!q.length)return Promise.resolve();
     var x=q[0];
@@ -13798,6 +13887,11 @@ function mwPicWork(list){
     return mwImgTake(x.jan,x.ids,box).then(function(z){
       done++;
       if(z&&z.saved&&z.saved.length)ok+=z.saved.length; else ng++;
+      /* 6.157：取り込めた JAN をサムネイルに出す（商品名と JAN を添える）。 */
+      if(z&&z.saved&&z.saved.length)
+        mwPicShots.push({ jan:x.jan,
+          name:String((sp.name||{})[x.jan]||mwPicName(x.jan)||''),
+          url:String((z.saved[0]||{}).url||''), n:z.saved.length });
       var inp=mwImgIn(x.jan);
       if(inp&&!String(inp.value||'').trim())inp.value=x.ids.join('\n');
       q.shift(); mwPicQSet(q);        // 済んだ分は残りから消す（続きから再開できる）
@@ -13811,11 +13905,20 @@ function mwPicWork(list){
   };
   step().then(function(){
     mwPicRun=false;
+    /* 6.156：F2 の4つの件数。
+       取り込んだ＝写真が入った JAN／候補外＝捨てた JAN／
+       すでに写真あり＝触らなかった JAN／失敗＝写真が入らなかった JAN */
+    var tookN=done-ng;
     $('mwPicInNote').innerHTML=(mwPicStop?'<b>止めました</b>：':'<b>取り込みました</b>：')
-      +done+'/'+all+'件の JAN　控えた写真 <b>'+ok+'枚</b>'
-      +(ng?('　入らなかった '+ng+'件'):'')
-      +(q.length?('　<b>残り '+q.length+'件</b>（「続きを取り込む」で再開できます）')
-                :'　（次の商品を貼るときは、欄を空にしてから貼ってください）');
+      +'<b>取り込んだ '+tookN+'件</b>'
+      +'／候補外 '+((sp.out||[]).length)+'件'
+      +'／すでに写真あり '+((sp.already||[]).length)+'件'
+      +'／失敗 '+ng+'件'
+      +'　<span style="opacity:.8">（控えた写真 '+ok+'枚）</span>'
+      +(q.length?('<br><b>残り '+q.length+'件</b>（「続きを取り込む」で再開できます）')
+                :'<br><span style="opacity:.75">次の商品を貼るときは、'
+                 +'欄を空にしてから貼ってください</span>');
+    mwPicShotRender();
     btn.disabled=false; btn.textContent='取り込む';
     mwPicQNote();
     try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
@@ -13823,6 +13926,104 @@ function mwPicWork(list){
       mwAmzRender(); }catch(e){}
   });
 }
+/* ===== 取り込んだ写真のサムネイル（6.157・F3）=====
+   写真と商品名を見比べられるように、**商品名と JAN を添えて**並べる。
+   10件ずつ出し（「さらに10件」で広げる）、**タップで外せる**
+   （外すとその JAN は写真なしに戻る。pj-img の画像は消さない）。 */
+var mwPicShots=[];
+/* JAN から商品名を引く（候補の一覧・印の一覧から）。 */
+function mwPicName(jan){
+  var j=String(jan||'');
+  var find=function(list,keys){
+    for(var i=0;i<(list||[]).length;i++){
+      var r=list[i];
+      if(String(r.jan||'')!==j)continue;
+      for(var k=0;k<keys.length;k++)
+        if(String(r[keys[k]]||'').trim())return String(r[keys[k]]);
+    }
+    return '';
+  };
+  var n='';
+  try{ n=n||find(mwRows,['name','mw_name']); }catch(e){}
+  try{ n=n||find(mwAmzRows,['amz_name','mw_name','name']); }catch(e){}
+  try{ n=n||find(mwBuyRows,['amz_name','mw_name','name']); }catch(e){}
+  return n;
+}
+function mwPicShotRender(){
+  var el=$('mwPicShots'); if(!el)return;
+  var list=(mwPicShots||[]).filter(function(x){ return !x.gone; });
+  if(!list.length){ el.innerHTML=''; return; }
+  var n=listShow('mwpicshot');
+  var cell=function(x,i){
+    return '<div style="flex:0 0 calc(50% - 3px);border:1px solid var(--line);'
+      +'border-radius:6px;padding:4px;'+((i<n)?'':'display:none')+'">'
+      +(x.url
+        ? ('<img src="'+esc(x.url)+'" alt="" loading="lazy" '
+           +'style="width:100%;aspect-ratio:1/1;object-fit:contain;'
+           +'background:#fff;border-radius:4px">')
+        : '<div class="note2" style="margin:0">写真なし</div>')
+      +'<div class="note2" style="margin:2px 0 0;line-height:1.3">'
+      +esc(String(x.name||'（商品名なし）').slice(0,40))+'</div>'
+      +'<div class="note2" style="margin:1px 0 0;opacity:.75">JAN '+esc(x.jan)
+      +'　'+(+x.n||0)+'枚</div>'
+      +'<button class="btn" data-picdel="'+esc(x.jan)+'" style="width:100%;'
+      +'margin-top:3px;padding:3px 6px;font-size:11.5px">違う写真（外す）</button>'
+      +'</div>';
+  };
+  el.innerHTML='<div class="note2" style="margin:8px 0 2px"><b>取り込んだ写真 '
+    +list.length+'件</b>　<span style="opacity:.8">写真と商品名を見比べて、'
+    +'違うものは「違う写真（外す）」を押してください（その JAN は写真なしに戻ります）。'
+    +'</span></div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px">'
+    +list.map(cell).join('')+'</div>'
+    +listMoreBar('mwpicshot',list.length);
+  listReg('mwpicshot',mwPicShotRender);
+}
+/* 「違う写真（外す）」。その JAN の控えを消して、写真なしに戻す。 */
+function mwPicDel(jan){
+  var j=String(jan||'').replace(/\D/g,'');
+  if(j.length!==13)return;
+  var x=(mwPicShots||[]).filter(function(y){ return y.jan===j; })[0]||null;
+  if(!confirm('この写真を外します。\n'
+    +(x?((x.name||'')+'\nJAN '+j+'\n'):('JAN '+j+'\n'))
+    +'・その JAN は<写真なし>に戻ります（また貼り直せます）\n'
+    +'・上げた画像そのものは消しません\n'
+    +'よろしいですか？'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    alert('⚙設定の「pj-sync のURL」と「キー」を入れてください。'); return;
+  }
+  var note=$('mwPicInNote');
+  mwPost('/mw/img/del',{ jan:j })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'外せませんでした');
+      if(x)x.gone=true;
+      /* 一覧の「写真」の数も、取り込みを待たずにその場で 0 に戻す。 */
+      [mwRows,mwAmzRows,mwBuyRows].forEach(function(list){
+        try{
+          (list||[]).forEach(function(r){
+            if(String(r.jan||'')!==j)return;
+            r.pics_ok=0; r.pics_n=0; r.pics_long=0; r.pics_main='';
+          });
+        }catch(e){}
+      });
+      mwPicShotRender();
+      if(note)note.innerHTML='<b>外しました</b>：JAN '+esc(j)
+        +'（'+(+d.n||0)+'枚の控えを消しました。写真なしに戻りました）';
+      try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
+      try{ if(typeof mwAmzRender==='function'&&mwAmzRows.length
+        &&mwAmzView==='list')mwAmzRender(); }catch(e){}
+    })
+    ['catch'](function(e){
+      if(note)note.innerHTML='<span style="color:var(--bad)">外せませんでした：'
+        +esc(e.message)+'</span>';
+    });
+}
+document.addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var j=t.getAttribute('data-picdel'); if(!j)return;
+  mwPicDel(j);
+});
 /* 取り込み結果は10件ずつ出す（6.150）。件数は上の知らせに全部出る。 */
 function mwPicResCap(){
   var out=$('mwPicInOut'); if(!out)return;
@@ -13911,9 +14112,13 @@ function mwListRender(){
       +'在庫の下限を見直してください。</div>';
     return;
   }
-  /* 相場と見比べて4つに分ける（4章の6）。 */
+  /* 相場と見比べて4つに分ける（4章の6）。
+     6.158：検索（商品名・JAN・社）に当たった行だけを並べる。
+     ①〜④のどの区分にあっても見つかるように、**分ける前に**絞る。 */
+  var hit=mwRows.filter(findMatchMw);
+  findNoteRender('mwl',hit.length,mwRows.length);
   var g={ ok:[], nomkt:[], high:[], none:[] }, ng=[];
-  mwRows.forEach(function(r){
+  hit.forEach(function(r){
     var rec=mwRec(r);
     var o={ r:r, rec:rec, j:mwMktJudge(r,rec), ng:mwNoteHit(r) };
     if(!rec){ ng.push(o); return; }
@@ -13999,6 +14204,8 @@ function mwListRender(){
   var mk=mwMkt||{};
   var head='<div class="note2" style="margin:0 0 4px"><b>候補 '
     +mwRows.length+'件</b>'
+    +((hit.length!==mwRows.length)
+      ?('　<b>（検索に当たった '+hit.length+'件を表示）</b>'):'')
     +(ng.length?('　/　値段を出せない '+ng.length+'件'):'')
     +'（<b>目標利益</b>＝下限利益 '+yen(+$('baseProfit').value||0)+'＋仕入値×'
     +(+$('linkRate').value||0)+'%・広告料率 '+(+$('autoAdRate').value||6)+'%）</div>'
@@ -14012,6 +14219,13 @@ function mwListRender(){
       +(note?('<div class="note2" style="margin:0 0 4px;opacity:.85">'+note+'</div>'):'')
       +listMoreHtml(id,list.map(line),'',10);
   };
+  if(!hit.length){
+    el.innerHTML=head+'<div class="note2">「'
+      +esc(String(($('mwlFind')||{}).value||'').trim())
+      +'」に当たる候補がありません。言葉を減らすか、「×」で検索を消してください。'
+      +'</div>';
+    return;
+  }
   el.innerHTML=head
     +sect('mwok','① 出品候補（相場の115%以内）','var(--good)',
       '推奨売値が eBay の最安値（送料込み）の115%以内です。'
@@ -18060,6 +18274,8 @@ function findHayCsv(r){
 function findPre(which){
   if(which==='sync')return 'syncFind';
   if(which==='amz')return 'mwAmzFind';
+  /* 6.158：無在庫（eBay）の MW の候補一覧。①〜④のどこにあっても探せる。 */
+  if(which==='mwl')return 'mwlFind';
   /* Amazon刈取の検索欄は2つ（タブの上と一覧のすぐ上・6.126）。
      どちらに入れても同じ結果になるよう、値をうつし合う（findTwin）。 */
   if(which==='amz2')return 'mwAmz2Find';
@@ -18120,6 +18336,12 @@ function findHayAmz(r){
            (r||{}).sha, (r||{}).kishu ].filter(Boolean).join(' ');
 }
 function findMatchAmz(r){ return findMatchRow('amz',r,findHayAmz(r)); }
+/* 無在庫（eBay）の MW の候補（6.158）。商品名・JAN・社・機種・状態で探す。 */
+function findHayMw(r){
+  return [ (r||{}).name, (r||{}).mw_name, (r||{}).jan, (r||{}).sha,
+           (r||{}).kishu, (r||{}).cond ].filter(Boolean).join(' ');
+}
+function findMatchMw(r){ return findMatchRow('mwl',r,findHayMw(r)); }
 /* 件数と「×」の出し入れ。 */
 /* ヒットが1件なら、その行の折りたたみを開いた状態で出す。
    自動で開いた分は覚えない（boxQuietOpen と同じ考え方）。 */
@@ -18245,6 +18467,8 @@ function findRun(which){
   if(which==='csv')csvRender();
   /* 仕入れる一覧を見ていればそちら（6.125）。どちらの欄から来ても同じ。 */
   else if(which==='amz'||which==='amz2')mwViewRender();
+  /* 6.158：MW の候補一覧。取り込んでいないときは何もしない。 */
+  else if(which==='mwl'){ try{ if(mwRows.length)mwListRender(); }catch(e){} }
   else syncRender();
 }
 function findClear(which){
@@ -20511,7 +20735,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v241';   // sw.js の const V と必ず同じ値にする
+var APP_V='v242';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
