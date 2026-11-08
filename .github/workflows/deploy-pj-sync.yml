@@ -1,0 +1,181 @@
+# pj-sync の D1 の作業とデプロイを、スマホの GitHub アプリから押せるようにする（7.116・【N】）
+#
+# 出先では PowerShell が使えないので、
+#   cd proxy-sync && node d1-exec.mjs migrate-00xx-….sql
+#   npx wrangler deploy
+# が溜まってしまう。この2つをここで代わりに行う。
+#
+# ・対象は **pj-sync だけ**。pj-img・pj-title・pj-price は今回は対象外
+#   （同じ形で増やせるように、使うのは proxy-sync の中だけにしてある）
+# ・いまは**手で押したときだけ**動く（workflow_dispatch）。
+#   main への push で自動にしたくなったら、下の "on:" に次を足す：
+#     push:
+#       branches: [main]
+#       paths:
+#         - 'proxy-sync/**'
+#   （自動にすると、画面だけの変更でもデプロイが走るので paths は必ず付ける）
+# ・画面（index.html・sw.js・manual.html）は GitHub Pages なので、
+#   main に push した時点で自動で出る。このワークフローは要らない。
+name: deploy-pj-sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '確かめだけ（何も変えない）'
+        type: boolean
+        default: true
+      run_migrations:
+        description: 'D1 の未適用のマイグレーションを流す'
+        type: boolean
+        default: true
+      deploy:
+        description: 'pj-sync をデプロイする'
+        type: boolean
+        default: true
+
+# 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
+# 走っている途中のものは止めない（D1 の作業を中断させない）。
+concurrency:
+  group: deploy-pj-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # main のときだけ動く（枝では動かさない）。
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: proxy-sync
+    steps:
+      # 外部のアクションは版を固定する（勝手に中身が変わらないように）。
+      - name: ソースを取る
+        uses: actions/checkout@v4.2.2
+
+      - name: Node を用意する
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # wrangler の版はリポジトリの package.json / package-lock.json で固定している
+      # （package.json はリポジトリの**いちばん上**にある）。
+      - name: 依存を入れる
+        working-directory: .
+        run: npm ci
+
+      - name: 入力を控える
+        id: plan
+        env:
+          DRY: ${{ inputs.dry_run }}
+          MIG: ${{ inputs.run_migrations }}
+          DEP: ${{ inputs.deploy }}
+        run: |
+          echo "確かめだけ: $DRY / マイグレーション: $MIG / デプロイ: $DEP"
+          {
+            echo "dry=$DRY"
+            echo "mig=$MIG"
+            echo "dep=$DEP"
+          } >> "$GITHUB_OUTPUT"
+
+      # ---- D1：未適用のマイグレーションだけを番号順に流す ----
+      # 控え（_migrations）を見て、PC で流したぶんは飛ばす。
+      # 途中で失敗したら 0 以外で終わるので、次のデプロイは走らない。
+      - name: D1 のマイグレーション
+        id: migrate
+        if: inputs.run_migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -o pipefail
+          if [ "$DRY" = "true" ]; then
+            node d1-migrate.mjs --dry-run --src actions | tee mig.log
+          else
+            node d1-migrate.mjs --src actions | tee mig.log
+          fi
+          # 知らせに出すために、流した本数と名前を控える（秘密は入らない）。
+          {
+            echo 'summary<<PJEOF'
+            grep -E '^(  ▶|▶|  ⏭|マイグレーション|流した|確かめだけ|流すものは)' mig.log \
+              | tail -n 20 || true
+            echo 'PJEOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # ---- デプロイ ----
+      - name: pj-sync をデプロイ
+        id: deploy
+        if: inputs.deploy && !inputs.dry_run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -o pipefail
+          node ../node_modules/wrangler/bin/wrangler.js deploy | tee dep.log
+          # 版（Version ID）を控える。出なければ空のまま。
+          VER="$(grep -oE 'Version ID: *[0-9a-f-]+' dep.log | tail -n 1 \
+            | sed 's/.*: *//')" || true
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: デプロイしない理由を出す
+        if: inputs.deploy && inputs.dry_run
+        run: echo "確かめだけ（dry_run）なのでデプロイしません。"
+
+      # ---- 社内の Discord に1通だけ知らせる ----
+      # 成功でも失敗でも出す。秘密は入れない（jq で文字列として入れるので、
+      # 中身が JSON を壊すこともない）。
+      - name: Discord に知らせる
+        if: always()
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RESULT: ${{ job.status }}
+          DRY: ${{ inputs.dry_run }}
+          MIG: ${{ inputs.run_migrations }}
+          DEP: ${{ inputs.deploy }}
+          MIG_OUT: ${{ steps.migrate.outcome }}
+          DEP_OUT: ${{ steps.deploy.outcome }}
+          VER: ${{ steps.deploy.outputs.version }}
+          SUMMARY: ${{ steps.migrate.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WHO: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "DISCORD_WEBHOOK_URL が無いので知らせません。"
+            exit 0
+          fi
+          # `[ … ] && x` は set -e で落ちるので、ぜんぶ if で書く。
+          if [ "$RESULT" = "success" ]; then MARK='✅'; else MARK='🔴'; fi
+          if [ "$DRY" = "true" ]; then DRYTXT='　**確かめだけ（dry run）**'; else DRYTXT=''; fi
+          {
+            printf '%s pj-sync のデプロイ（GitHub Actions）%s\n' "$MARK" "$DRYTXT"
+            printf '結果：%s　押した人：%s　コミット：%s\n' \
+              "$RESULT" "$WHO" "$(printf '%s' "$SHA" | cut -c1-7)"
+            printf 'D1 の作業：%s（%s）　デプロイ：%s（%s）\n' \
+              "$MIG" "$MIG_OUT" "$DEP" "$DEP_OUT"
+            if [ -n "$VER" ]; then
+              printf 'デプロイした版：%s\n' "$VER"
+            fi
+            if [ -n "$SUMMARY" ]; then
+              printf -- '--- マイグレーション ---\n%s\n' "$SUMMARY"
+            fi
+            if [ "$RESULT" != "success" ]; then
+              STEP='分かりません'
+              if [ "$MIG_OUT" = "failure" ]; then STEP='D1 のマイグレーション'; fi
+              if [ "$DEP_OUT" = "failure" ]; then STEP='デプロイ'; fi
+              printf '**止まった手順：%s**\nくわしくは実行の記録を見てください。\n' "$STEP"
+            fi
+            printf '%s\n' "$RUN_URL"
+          } > body.txt
+          # 文字列として JSON に入れる（中身で JSON が壊れない）。
+          jq -Rs '{content:.}' < body.txt > payload.json
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data @payload.json "$HOOK" > /dev/null
+          echo "知らせました。"

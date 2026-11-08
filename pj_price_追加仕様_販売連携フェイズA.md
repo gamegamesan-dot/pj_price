@@ -7040,3 +7040,94 @@ POST /mw/price  { rows: [{ sku, price? }] }    ※ 1回 20件まで
 **必要。**`cd proxy-sync && node d1-exec.mjs migrate-0044-reg-price.sql`
 （`mw_amz` に `used_low` / `used_n` / `used_at`、`mw_reg_log` に
 `kind` / `price_src` / `price_why` を足す）。**`wrangler deploy` の前に流すこと。**
+
+---
+
+## 7.116 GitHub Actions で pj-sync の D1 とデプロイをスマホから押す（【N】）
+
+出先では PowerShell が使えず、`node d1-exec.mjs …` と `npx wrangler deploy` が
+溜まってしまう。GitHub の画面（スマホの GitHub アプリでも可）から押せるようにする。
+**対象は pj-sync だけ**（pj-img・pj-title・pj-price は今回は対象外。
+同じ形で増やせるように、ワークフローは `proxy-sync` の中だけで動く）。
+
+### 1. ワークフロー（`.github/workflows/deploy-pj-sync.yml`）
+
+- **手で押したときだけ**動く（`workflow_dispatch`）。
+  main への push での自動実行は付けない。あとで切り替えられるように、
+  `paths: proxy-sync/**` 付きの書き方をコメントで残してある
+- 入力（スマホの Run workflow で選べる）
+
+  | 入力 | 既定 | 意味 |
+  | --- | --- | --- |
+  | `dry_run` | **true** | 流すものの一覧を出すだけ。何も変えない・デプロイもしない |
+  | `run_migrations` | true | 未適用のマイグレーションを流す |
+  | `deploy` | true | `wrangler deploy` |
+
+- 手順：checkout → Node 22 → `npm ci`（wrangler の版は lock で固定）→
+  `node d1-migrate.mjs --src actions` → `wrangler deploy` → Discord
+- `concurrency: { group: deploy-pj-sync, cancel-in-progress: false }`
+  （同時に2本は走らない。**走っている途中のものは止めない**＝D1 の作業を中断させない）
+- `if: github.ref == 'refs/heads/main'`（main だけ）
+- `permissions: contents: read`（読み取りだけ）
+- 外部のアクションは**版で固定**（`actions/checkout@v4.2.2` /
+  `actions/setup-node@v4.1.0`）。より強く固定したいときは、
+  それぞれのコミット（40桁）に替える
+
+### 2. 「未適用のマイグレーションだけ」を確実に（`proxy-sync/d1-migrate.mjs`）
+
+D1 に **`_migrations`** 表（`migrate-0045-migrations.sql`）を作り、
+流したファイル名を D1 自身に覚えさせる。
+
+| 列 | 中身 |
+| --- | --- |
+| `file` | ファイル名（**主キー**。二重に入らない） |
+| `at` | 流した日時（UTC の ISO） |
+| `src` | `pc`（手元の PowerShell）／`actions`（GitHub Actions） |
+
+- 流す順は**ファイル名の4桁の番号**。同じ番号なら `migrate` → `backfill`
+  （列を作ってから埋める）
+- **はじめての実行**（控えが空）は、D1 の**いまの作り**（`sqlite_master` と
+  `pragma_table_info`）を読んで、そのファイルが足す表・列・索引がぜんぶ揃って
+  いれば**「適用済み」として記録だけ**する（流し直さない）。
+  `UPDATE` などが入るファイル（`backfill-…`）は作りから判定できないので、
+  勝手に「済み」にせず必ず流す
+- `node d1-exec.mjs <file.sql>` で1本だけ流したときも**同じ表に同じ書き方で記録**
+  （`markSql` と `sqlMark` は同じ文を作る。テストで一致を見張っている）。
+  `--src pc` が既定、`--no-mark` で控えない、`--local` と `--dry-run` は控えない
+- **途中で失敗したらそこで止める。**そのファイルは控えに入れないので、
+  直してからもう一度流せる（通ったぶんは飛ばす）。
+  0 以外で終わるので、**次のデプロイの手順には進まない**
+- 「duplicate column name／already exists」は**済み**として飛ばす（7.87 と同じ）
+
+### 3. 秘密の扱い
+
+- GitHub の Secrets から読む：`CLOUDFLARE_API_TOKEN`（**GitHub 専用に新しく作る**）、
+  `CLOUDFLARE_ACCOUNT_ID`、`DISCORD_WEBHOOK_URL`
+- 秘密は **`env:` に入れるだけ**。コマンドの中には書かない・`echo` しない
+- Cloudflare のトークンに必要な権限は **Account → Workers Scripts：Edit** と
+  **Account → D1：Edit** の2つだけ（期限1年・自分のアカウントだけ）。
+  KV・R2・Secrets の権限は要らない（`wrangler deploy` が更新する結び付けは
+  Workers Scripts の権限の中。**Secret の値はこのトークンでは変えられない**ので、
+  秘密は今までどおり PC から入れる）
+- 止めたいときは Cloudflare の API Tokens でそのトークンを **Delete** するだけ
+
+### 4. 知らせ（Discord・1通）
+
+成功でも失敗でも1通出す（`if: always()`）。
+
+- 成功／失敗、押した人、コミット、`dry_run` かどうか
+- D1 の作業とデプロイをしたか（`steps.*.outcome`）
+- 流したマイグレーションの一覧（ログから拾う）
+- デプロイした **Version ID**
+- 失敗したときは**どの手順で止まったか**と、エラーの短い文
+- 文は `jq -Rs` で**文字列として**JSON に入れる（中身で JSON が壊れない）
+- エラーの文は `token` / `secret` / `api key` / `authorization` / `bearer` を
+  含む行を落として300文字で切る（`shortErr`）
+
+### 5. D1 の作業
+
+**必要。**`cd proxy-sync && node d1-exec.mjs migrate-0045-migrations.sql`
+（控えの表 `_migrations` を作る）。
+1回入れれば、以降は `deploy-pj-sync` が自分で面倒を見る
+（`d1-migrate.mjs` は毎回 `CREATE TABLE IF NOT EXISTS` で作り直すので、
+入れ忘れていても自分で作る）。

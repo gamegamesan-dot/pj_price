@@ -428,6 +428,17 @@ CREATE INDEX IF NOT EXISTS idx_sk_log_key ON sk_log(asin, cond, at);
 -- （同じ商品を倉庫違い・ロット違いで2行に分けているように見える）。
 -- 差分の突き合わせには **(jan, sha, idx)** を使う。idx は同じ (jan, sha) が
 -- CSV に現れた順（0,1,2…）。これで行を取り違えずに UPSERT できる。
+/* ===== 流したマイグレーションの控え（7.116）=====
+   GitHub Actions（スマホ）と手元の PowerShell のどちらで流しても
+   二重にならないように、流したファイル名を D1 自身に覚えさせる。
+     src … 'pc'（手元）／'actions'（GitHub Actions） */
+CREATE TABLE IF NOT EXISTS _migrations (
+  file TEXT PRIMARY KEY,
+  at   TEXT NOT NULL,
+  src  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_migrations_at ON _migrations(at);
+
 CREATE TABLE IF NOT EXISTS mw_stock (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   jan        TEXT NOT NULL,

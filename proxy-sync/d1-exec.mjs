@@ -64,6 +64,20 @@ export function splitSql(src) {
 /* もう当たっている（＝済み）とみなすエラー。 */
 export const DONE_RE = /duplicate column name|already exists|already an index/i;
 
+/* ---- 流したマイグレーションの控え（7.116）----
+   `_migrations`（file／at／src）に、流したファイル名を入れる。
+   src は 'pc'（手元の PowerShell）／'actions'（GitHub Actions）。
+   d1-migrate.mjs と**同じ表・同じ書き方**にしてある
+   （どちらで流しても二重にならないため）。 */
+export const LEDGER_NEW =
+  "CREATE TABLE IF NOT EXISTS _migrations (file TEXT PRIMARY KEY, "
+  + "at TEXT NOT NULL, src TEXT NOT NULL)";
+export function markSql(file, at, src) {
+  const q = (v) => "'" + String(v).replace(/'/g, "''") + "'";
+  return "INSERT OR REPLACE INTO _migrations (file, at, src) VALUES ("
+    + q(file) + "," + q(at) + "," + q(src) + ")";
+}
+
 /* ---- wrangler の起動の仕方を決める（7.88）----
    **Windows の落とし穴**：Node は `.cmd` / `.bat` を shell なしでは起動できない
    （CVE-2024-27980 の対策。Node 18.20.2／20.12.2／21.7.3 以降）。
@@ -196,8 +210,28 @@ export function runFile(file, opt) {
       + "（済んだ文は飛ばします）。");
     return { ok: false, ran, done, at: i + 1 };
   }
-  log("できました：流した " + ran + "文／すでに済み " + done + "文");
-  return { ok: true, ran, done };
+  /* ---- 流したことを D1 の控え（_migrations）に残す（7.116）----
+     GitHub Actions（スマホ）からも流せるようにしたので、
+     **PC で流したぶんも同じ表に記録**しないと二重に流れてしまう。
+     --local と --dry-run のときは記録しない。記録に失敗しても
+     SQL は流れているので、本処理は成功のまま（注意だけ出す）。 */
+  let marked = false;
+  if (!o.local && !o.noMark) {
+    const name = path.basename(file);
+    const r0 = exec(LEDGER_NEW);
+    const ok0 = r0.status === 0
+      || DONE_RE.test((r0.stdout || "") + (r0.stderr || ""));
+    const r1 = ok0 ? exec(markSql(name, new Date().toISOString(), o.src || "pc"))
+                   : { status: 1 };
+    marked = ok0 && r1.status === 0;
+    if (!marked)
+      log("⚠ 流したことを _migrations に記録できませんでした"
+        + "（SQL は流れています）。"
+        + "proxy-sync で `node d1-migrate.mjs --dry-run` を1回見てください。");
+  }
+  log("できました：流した " + ran + "文／すでに済み " + done + "文"
+    + (marked ? "／控えに記録しました" : ""));
+  return { ok: true, ran, done, marked };
 }
 
 function main() {
@@ -207,7 +241,8 @@ function main() {
     && args[args.indexOf(a) - 1] !== "--wrangler");
   if (!file) {
     console.error("使い方: node d1-exec.mjs <file.sql> "
-      + "[--dry-run] [--local] [--debug] [--db 名前] [--wrangler パス]");
+      + "[--dry-run] [--local] [--debug] [--db 名前] [--wrangler パス]"
+      + " [--src pc|actions] [--no-mark]");
     process.exit(2);
   }
   const at = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : ""; };
@@ -216,6 +251,9 @@ function main() {
     dry: args.includes("--dry-run"), local: args.includes("--local"),
     debug: args.includes("--debug"), db: at("--db") || "pj-sync",
     from: path.dirname(path.resolve(file)),
+    /* 7.116：流したことを控える場所（既定は手元＝pc）。
+       --no-mark を付けると控えない（控えの表を触りたくないとき）。 */
+    src: at("--src") || "pc", noMark: args.includes("--no-mark"),
     how: w ? { kind: "node", path: path.resolve(w), tries: [] } : null,
   });
   if (!r.ok) process.exit(1);

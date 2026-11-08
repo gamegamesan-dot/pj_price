@@ -6,6 +6,7 @@
   "scripts": {
     "test": "sh tests/run.sh",
     "d1": "node proxy-sync/d1-exec.mjs",
+    "d1:all": "node proxy-sync/d1-migrate.mjs",
     "deploy:sync": "wrangler deploy --cwd proxy-sync",
     "deploy:price": "wrangler deploy --cwd proxy",
     "deploy:img": "wrangler deploy --cwd proxy-img",

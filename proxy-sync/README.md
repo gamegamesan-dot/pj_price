@@ -261,6 +261,38 @@ npx wrangler deploy                   # 登録したらデプロイ
 | どちらのキーか（`GET /whoami`） | ○ | ○ |
 
 
+### 方法3：未適用のぶんだけまとめて流す（`d1-migrate.mjs`・7.116）
+
+どのファイルをもう流したかを **D1 自身に覚えさせて**おき、
+**未適用のぶんだけ**を番号順に流す道具。GitHub Actions（スマホ）からも
+これを呼ぶので、**PC で流したぶんと二重にならない**。
+
+```powershell
+cd C:\dev\pj-price\proxy-sync
+node d1-migrate.mjs --dry-run      # 流すものの一覧だけ（何も変えない）
+node d1-migrate.mjs                # 未適用だけを番号順に流す
+```
+
+覚えておく場所は D1 の **`_migrations`** 表（`migrate-0045-migrations.sql`）。
+
+| 列 | 中身 |
+| --- | --- |
+| `file` | マイグレーションのファイル名（主キー。二重に入らない） |
+| `at` | 流した日時（UTC の ISO） |
+| `src` | 流した場所。`pc`（手元の PowerShell）／`actions`（GitHub Actions） |
+
+* **はじめての実行**（控えが空のとき）は、D1 の**いまの作り**（表・列・索引）を
+  読んで、そのファイルが足すものがぜんぶ揃っていれば
+  **「適用済み」として記録だけ**する（流し直さない）
+* `UPDATE` などが入っているファイル（`backfill-…`）は作りから判定できないので、
+  勝手に「済み」にはせず**必ず流す**（中身は何度流しても同じになるように書いてある）
+* **途中で失敗したらそこで止める**。そのファイルは控えに入れないので、
+  直してからもう一度流せる（通ったぶんは飛ばす）
+* `node d1-exec.mjs <file.sql>` で1本だけ流したときも**同じ控えに記録**される
+  （`--src pc` が既定。`--no-mark` で控えない）
+
+テストは `tests/ghactions.mjs`。
+
 ### 1-6. デプロイ
 
 ```powershell
@@ -270,6 +302,88 @@ npx wrangler deploy
 
 `[triggers] crons` に書いた2本（`*/15 * * * *` と `7 * * * *`）が自動で登録される。
 登録の確認は Cloudflare ダッシュボード → Workers → pj-sync → Settings → Triggers。
+
+### 1-7. スマホから D1 とデプロイを押す（GitHub Actions・7.116）
+
+出先で PowerShell が使えないときのために、
+**D1 のマイグレーション**と **pj-sync のデプロイ**を
+GitHub の画面（スマホの GitHub アプリでも可）から押せるようにしてある。
+
+ワークフロー：`.github/workflows/deploy-pj-sync.yml`（対象は **pj-sync だけ**）
+
+> 画面（`index.html` / `sw.js` / `manual.html`）は **GitHub Pages** なので、
+> main に push した時点で自動で出る。このワークフローは要らない。
+
+#### ① Cloudflare で GitHub 専用の API トークンを作る
+
+ダッシュボード → 右上のアイコン → **My Profile** → **API Tokens** →
+**Create Token** → いちばん下の **Create Custom Token**。
+
+| 欄 | 入れるもの |
+| --- | --- |
+| Token name | `github-actions-pj-sync` |
+| Permissions（1） | **Account** → **Workers Scripts** → **Edit** |
+| Permissions（2） | **Account** → **D1** → **Edit** |
+| Account Resources | **Include** → **自分のアカウントだけ** |
+| Zone Resources | 触らない（独自ドメインを使っていないので要らない） |
+| TTL（期限） | **1年**（例：今日から1年後の日付） |
+| IP Address Filtering | 空（GitHub の実行機の IP は決まっていないため） |
+
+* **この2つだけで足ります。** KV・R2・Secrets の権限は要りません。
+  `wrangler deploy` は `wrangler.toml` に書いた KV・D1・R2 の**結び付け**を
+  更新しますが、それは Workers Scripts の権限の中で行われます。
+  Secret の値（`wrangler secret put`）はこのトークンでは変えられないので、
+  **秘密は今までどおり PC から入れる**ことになります（そのほうが安全）。
+* 作ったあとに出る**トークンの文字列は一度しか見られない**ので、
+  その場で次の②に進んでください。
+* **止めたいとき**：Cloudflare のダッシュボードの同じ **API Tokens** の一覧で、
+  そのトークンの右の「…」→ **Delete**。それだけで GitHub からは何もできなくなります
+  （リポジトリ側は触らなくてよい）。
+
+**アカウント ID** は、ダッシュボードの Workers & Pages のページの右側
+（または URL の `dash.cloudflare.com/<ここ>/`）にある32桁の文字列です。
+
+#### ② GitHub の Secrets に登録する
+
+リポジトリ → **Settings** → **Secrets and variables** → **Actions** →
+**New repository secret** を3回。
+
+| Name | Secret |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | ①で作ったトークン |
+| `CLOUDFLARE_ACCOUNT_ID` | アカウント ID（32桁） |
+| `DISCORD_WEBHOOK_URL` | 社内の通知用の webhook（pj-sync に入れているものと同じで可） |
+
+登録したあとは**値を見ることはできません**（上書きだけ）。
+実行の記録（ログ）にも出ません（GitHub が自動で `***` に隠します）。
+
+#### ③ スマホの GitHub アプリから実行する
+
+1. GitHub アプリでこのリポジトリを開く
+2. 下の **Actions** タブ（または「…」→ Actions）
+3. 左の一覧から **deploy-pj-sync** を選ぶ
+4. **Run workflow** を押す（ブランチは `main`）
+5. 入力を選ぶ
+
+| 入力 | 既定 | 意味 |
+| --- | --- | --- |
+| 確かめだけ（`dry_run`） | **オン** | 流すものの一覧を出すだけ。**何も変えない・デプロイもしない** |
+| D1 の未適用のマイグレーションを流す（`run_migrations`） | オン | 未適用のぶんだけ流す |
+| pj-sync をデプロイする（`deploy`） | オン | `wrangler deploy` |
+
+6. **まず既定（確かめだけ オン）で1回押す。** Discord と実行の記録に
+   「流すもの」が出るので、それでよければ**`dry_run` を外して**もう一度押す
+7. 結果は **Discord に1通**届く（成功／失敗・流したマイグレーション・
+   デプロイした版・確かめだけかどうか・失敗したときは止まった手順）。
+   くわしくは Actions の実行の記録を開く
+
+* 同時に2本は走りません（`concurrency`）。走っている途中のものは止めません
+* `main` 以外では動きません
+* 途中で失敗したら**そこで止まり、デプロイには進みません**
+
+ログに出さないため、エラーの文は
+`token` / `secret` / `api key` / `authorization` / `bearer` を含む行を落として
+300文字で切ってから Discord に送ります。
 
 ## 2. リフレッシュトークンを取り直したときの入れ替え手順（3か所）
 

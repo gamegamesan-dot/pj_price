@@ -10949,7 +10949,8 @@ function numZero(x, key) {
    読み取りだけ（sqlite_master と pragma_table_info）。秘密は返さない。
    この2つの一覧は schema.sql と一致していることを tests/schemachk.mjs で見張る
    （片方だけ増えて気付かない、ということが起きないように）。 */
-const SCHEMA_TABLES = ["amz_dg", "amz_drop", "amz_ptype", "events", "items",
+const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
+  "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders",
@@ -10977,6 +10978,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["_migrations", "migrate-0045-migrations.sql"],
   ["used_low", "migrate-0044-reg-price.sql"],
   ["price_src", "migrate-0044-reg-price.sql"],
   ["size_src", "migrate-0043-size-src.sql"],
