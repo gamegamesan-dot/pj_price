@@ -33,6 +33,18 @@ on:
         description: 'pj-sync をデプロイする'
         type: boolean
         default: true
+      # 7.117：すでに PC から流してある番号を入れると、そこまでは
+      # 「済み」として記録だけする（D1 に当たっているかを確かめない）。
+      baseline_to:
+        description: 'この番号までは済みとして記録だけ（例 0039・空なら1本ずつ確かめる）'
+        type: string
+        default: ''
+      # 7.117：UPDATE などデータを動かす文が入っているファイルは、
+      # 既定では流さずに止める（中身を見てから、これをオンにして実行する）。
+      allow_data:
+        description: 'UPDATE が入るファイルも流す（中身を見たあとだけオン）'
+        type: boolean
+        default: false
 
 # 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
 # 走っている途中のものは止めない（D1 の作業を中断させない）。
@@ -76,8 +88,11 @@ jobs:
           DRY: ${{ inputs.dry_run }}
           MIG: ${{ inputs.run_migrations }}
           DEP: ${{ inputs.deploy }}
+          BASE: ${{ inputs.baseline_to }}
+          ALLOW: ${{ inputs.allow_data }}
         run: |
           echo "確かめだけ: $DRY / マイグレーション: $MIG / デプロイ: $DEP"
+          echo "baseline: ${BASE:-（なし）} / データを動かすファイルも流す: $ALLOW"
           {
             echo "dry=$DRY"
             echo "mig=$MIG"
@@ -94,20 +109,28 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DRY: ${{ inputs.dry_run }}
+          BASE: ${{ inputs.baseline_to }}
+          ALLOW: ${{ inputs.allow_data }}
         run: |
           set -o pipefail
-          if [ "$DRY" = "true" ]; then
-            node d1-migrate.mjs --dry-run --src actions | tee mig.log
-          else
-            node d1-migrate.mjs --src actions | tee mig.log
-          fi
-          # 知らせに出すために、流した本数と名前を控える（秘密は入らない）。
+          ARGS='--src actions --summary mig-summary.txt'
+          if [ "$DRY" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ "$ALLOW" = "true" ]; then ARGS="$ARGS --allow-data"; fi
+          if [ -n "$BASE" ]; then ARGS="$ARGS --baseline $BASE"; fi
+          echo "引数: $ARGS"
+          # 失敗しても知らせは出したいので、ここでは止めずに結果を控える。
+          set +e
+          # shellcheck disable=SC2086
+          node d1-migrate.mjs $ARGS
+          CODE=$?
+          set -e
+          # 知らせに出す短い文（d1-migrate.mjs が書く。秘密は入らない）。
           {
             echo 'summary<<PJEOF'
-            grep -E '^(  ▶|▶|  ⏭|マイグレーション|流した|確かめだけ|流すものは)' mig.log \
-              | tail -n 20 || true
+            if [ -f mig-summary.txt ]; then cat mig-summary.txt; fi
             echo 'PJEOF'
           } >> "$GITHUB_OUTPUT"
+          exit "$CODE"
 
       # ---- デプロイ ----
       - name: pj-sync をデプロイ
@@ -139,6 +162,8 @@ jobs:
           DRY: ${{ inputs.dry_run }}
           MIG: ${{ inputs.run_migrations }}
           DEP: ${{ inputs.deploy }}
+          BASE: ${{ inputs.baseline_to }}
+          ALLOW: ${{ inputs.allow_data }}
           MIG_OUT: ${{ steps.migrate.outcome }}
           DEP_OUT: ${{ steps.deploy.outcome }}
           VER: ${{ steps.deploy.outputs.version }}
@@ -160,6 +185,12 @@ jobs:
               "$RESULT" "$WHO" "$(printf '%s' "$SHA" | cut -c1-7)"
             printf 'D1 の作業：%s（%s）　デプロイ：%s（%s）\n' \
               "$MIG" "$MIG_OUT" "$DEP" "$DEP_OUT"
+            if [ -n "$BASE" ]; then
+              printf 'baseline：%s までは済みとして記録だけ\n' "$BASE"
+            fi
+            if [ "$ALLOW" = "true" ]; then
+              printf 'データを動かすファイルも流す：オン\n'
+            fi
             if [ -n "$VER" ]; then
               printf 'デプロイした版：%s\n' "$VER"
             fi

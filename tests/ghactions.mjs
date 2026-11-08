@@ -9,6 +9,7 @@ import { harness, ROOT } from './lib.mjs';
 import * as M from '../proxy-sync/d1-migrate.mjs';
 import * as X from '../proxy-sync/d1-exec.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 const T=harness('道具：GitHub Actions からの D1 とデプロイ');
 const ok=T.ok;
@@ -47,20 +48,100 @@ ok(o.tables.indexOf('_migrations')>=0&&o.indexes.length===1,
 o=M.sqlObjects("UPDATE items SET x=1 WHERE y=2");
 ok(o.other===1&&!o.tables.length,'★★作りを変えない文は other に数える');
 
-console.log('\n=== もう当たっているかの判定 ===');
-const SC={ tables:{ mw_amz:1, _migrations:1 },
-  columns:{ mw_amz:{ used_low:1, used_n:1, used_at:1 } },
-  indexes:{ idx_migrations_at:1 } };
-ok(M.appliedAlready({ tables:[], columns:[{table:'mw_amz',column:'used_low'}],
-  indexes:[], other:0 },SC)===true,'★★★列が揃っていれば「当たっている」');
-ok(M.appliedAlready({ tables:[], columns:[{table:'mw_amz',column:'nope'}],
-  indexes:[], other:0 },SC)===false,'★★★1つでも無ければ「当たっていない」');
-ok(M.appliedAlready({ tables:['_migrations'], columns:[],
-  indexes:['idx_migrations_at'], other:0 },SC)===true,'★表と索引も見る');
-ok(M.appliedAlready({ tables:[], columns:[], indexes:[], other:1 },SC)===false,
-   '★★★UPDATE などが入っているファイルは勝手に「済み」にしない');
-ok(M.appliedAlready({ tables:[], columns:[], indexes:[], other:0 },SC)===false,
-   '★★足すものが無いファイルも「済み」にしない');
+console.log('\n=== もう当たっているかの判定（空振りの SELECT・7.117）===');
+/* sqlite_master と pragma_table_info は Cloudflare の API に断られる
+   （2026-11-08 runs/42489949958：45本ぜんぶ「流す」になった原因）。
+   ふだんの SELECT で「その表・その列があるか」を確かめる。 */
+ok(M.probeTableSql('amz_drop')==='SELECT 1 FROM "amz_drop" LIMIT 0',
+   '★★★表があるかは SELECT 1 FROM … LIMIT 0 で確かめる');
+ok(M.probeColsSql('mw_amz',['used_low','used_n'])
+   ==='SELECT "used_low","used_n" FROM "mw_amz" LIMIT 0',
+   '★★★列があるかは、その列を名指しした SELECT で確かめる（表ごとに1回）');
+ok(M.probeTableSql('a"b').indexOf('"a""b"')>0
+   &&M.probeColsSql('t',['a"b']).indexOf('"a""b"')>0,
+   '★★名前の " をエスケープする');
+ok(!/sqlite_master|pragma_table_info/.test(
+     M.probeTableSql('t')+M.probeColsSql('t',['c'])),
+   '★★★sqlite_master と pragma_table_info は使わない');
+ok(M.missKind('Error: no such table: amz_drop')==='table','★「表が無い」を読む');
+ok(M.missKind('Error: no such column: used_low')==='column','★「列が無い」を読む');
+ok(M.missKind('has no column named kind')==='column','★別の言い方も読む');
+ok(M.missKind('A request to the Cloudflare API failed')==='',
+   '★★★それ以外（API の失敗など）は「無い」と決めつけない');
+
+/* judgeFile：作りものの probe で、4つの状態を確かめる。 */
+const mkProbe=(opt)=>{
+  const o=opt||{};
+  const have=Object.assign({},o.tables||{});
+  const cols=o.columns||{};
+  const seen=[];
+  return { seen, probe:async(sql)=>{
+    seen.push(sql);
+    if(o.apiNg)return { ok:false, err:'A request to the Cloudflare API failed' };
+    const m=/FROM "([^"]+)" LIMIT 0$/.exec(sql);
+    const t=m?m[1]:'';
+    if(!have[t])return { ok:false, err:'Error: no such table: '+t };
+    const want=(sql.match(/"([^"]+)"/g)||[]).map((x)=>x.slice(1,-1))
+      .filter((x)=>x!==t);
+    for(const c of want)
+      if(!(cols[t]||{})[c])
+        return { ok:false, err:'Error: no such column: '+c };
+    return { ok:true, err:'' };
+  } };
+};
+let P=mkProbe({ tables:{ mw_amz:1 },
+  columns:{ mw_amz:{ used_low:1, used_n:1, used_at:1 } } });
+let g=await M.judgeFile({ tables:[], indexes:[], other:0,
+  columns:[{table:'mw_amz',column:'used_low'},{table:'mw_amz',column:'used_n'}] },
+  P.probe);
+console.log('   '+JSON.stringify(g)+' 問い合わせ '+P.seen.length+'回');
+ok(g.state==='done','★★★列が揃っていれば「済み」');
+ok(P.seen.length===1,
+   '★★★揃っているときは表ごとに1回だけ聞く（遅くならない）');
+P=mkProbe({ tables:{ mw_amz:1 }, columns:{ mw_amz:{ used_low:1 } } });
+g=await M.judgeFile({ tables:[], indexes:[], other:0,
+  columns:[{table:'mw_amz',column:'used_low'},{table:'mw_amz',column:'used_n'},
+           {table:'mw_amz',column:'used_at'}] },P.probe);
+console.log('   '+JSON.stringify(g));
+ok(g.state==='todo','★★★1つでも無ければ「未適用」');
+ok(JSON.stringify(g.miss)==='["mw_amz.used_n","mw_amz.used_at"]',
+   '★★★足りないものを**名前で**返す（1列ずつ聞き直す）');
+ok(/足りないもの：mw_amz\.used_n・mw_amz\.used_at/.test(g.why),
+   '★★そのまま出せる文も返す');
+P=mkProbe({ tables:{} });
+g=await M.judgeFile({ tables:['amz_drop'], columns:[], indexes:[], other:0 },
+  P.probe);
+ok(g.state==='todo'&&g.miss[0]==='表 amz_drop','★★★表が無い行も分かる');
+P=mkProbe({ tables:{ amz_drop:1 } });
+g=await M.judgeFile({ tables:['amz_drop'], columns:[], indexes:['ix'], other:0 },
+  P.probe);
+ok(g.state==='done','★★索引は判定に使わない（CREATE INDEX IF NOT EXISTS なので）');
+g=await M.judgeFile({ tables:[], columns:[], indexes:[], other:1 },P.probe);
+ok(g.state==='data'&&/UPDATE/.test(g.why),
+   '★★★UPDATE などが入るファイルは「要確認」');
+g=await M.judgeFile({ tables:[], columns:[], indexes:['ix'], other:0 },P.probe);
+ok(g.state==='data','★★索引しか足さないファイルも「要確認」（確かめられない）');
+P=mkProbe({ apiNg:true });
+g=await M.judgeFile({ tables:['amz_drop'], columns:[], indexes:[], other:0 },
+  P.probe);
+console.log('   '+JSON.stringify(g));
+ok(g.state==='unknown'&&/Cloudflare/.test(g.why),
+   '★★★確かめられなかったときは「判定できない」（勝手に流さない）');
+/* 同じ問い合わせは1回だけ（memo）。 */
+P=mkProbe({ tables:{ t:1 }, columns:{ t:{ a:1 } } });
+const memo={};
+await M.judgeFile({ tables:['t'], columns:[{table:'t',column:'a'}], indexes:[],
+  other:0 },P.probe,memo);
+const n1=P.seen.length;
+await M.judgeFile({ tables:['t'], columns:[{table:'t',column:'a'}], indexes:[],
+  other:0 },P.probe,memo);
+ok(P.seen.length===n1,'★★同じ問い合わせは控えから返す（ファイル間でも）');
+
+console.log('\n=== 「この番号までは済み」（baseline）===');
+ok(M.baseNo('0039')===39&&M.baseNo('39')===39,'★★番号で指定できる');
+ok(M.baseNo('migrate-0039-fba-split.sql')===39,'★ファイル名でも指定できる');
+ok(M.baseNo('')===0&&M.baseNo(null)===0&&M.baseNo('なにか')===0,
+   '★★空や読めない値は「指定なし」');
 
 /* ---- 作りものの D1 で、流れ方を確かめる ---- */
 const mkDb=(opt)=>{
@@ -92,18 +173,28 @@ const mkDb=(opt)=>{
       if(o.noLedger)throw new Error('no such table: _migrations');
       return Object.keys(st.ledger).map((f)=>({ file:f }));
     }
-    if(sql===M.SQL_TABLES)
-      return Object.keys(st.tables).map((n)=>({ name:n }));
-    if(sql===M.SQL_INDEXES)
-      return Object.keys(st.indexes).map((n)=>({ name:n }));
-    const m=/pragma_table_info\('([^']+)'\)/.exec(sql);
-    if(m)return Object.keys(st.columns[m[1]]||{}).map((n)=>({ name:n }));
     return [];
   };
-  return { st, exec, query };
+  /* 7.117：空振りの SELECT で表・列の有無を答える。 */
+  st.probed=[];
+  const probe=async(sql)=>{
+    st.probed.push(sql);
+    if(o.apiNg)return { ok:false, err:'A request to the Cloudflare API failed' };
+    const m=/FROM "([^"]+)" LIMIT 0$/.exec(sql);
+    const t=m?m[1]:'';
+    if(!st.tables[t])return { ok:false, err:'Error: no such table: '+t };
+    const want=(sql.match(/"([^"]+)"/g)||[]).map((x)=>x.slice(1,-1))
+      .filter((x)=>x!==t);
+    for(const c of want)
+      if(!(st.columns[t]||{})[c])
+        return { ok:false, err:'Error: no such column: '+c };
+    return { ok:true, err:'' };
+  };
+  return { st, exec, query, probe };
 };
-/* 2本だけのお試しの置き場所を作る。 */
-const TMP=fs.mkdtempSync(path.join(ROOT,'.pjmig-'));
+/* お試しの置き場所。**リポジトリの外**に作る
+   （途中で落ちても .pjmig-… が散らからないように）。 */
+const TMP=fs.mkdtempSync(path.join(os.tmpdir(),'pjmig-'));
 fs.writeFileSync(path.join(TMP,'migrate-0001-a.sql'),
   'ALTER TABLE items ADD COLUMN aa TEXT;\nALTER TABLE items ADD COLUMN ab TEXT;\n');
 fs.writeFileSync(path.join(TMP,'migrate-0002-b.sql'),
@@ -114,7 +205,7 @@ const quiet=()=>{};
 
 console.log('\n=== 未適用だけを流す（控えにあるものは飛ばす）===');
 let d=mkDb({ ledger:{ 'migrate-0001-a.sql':1 } });
-let r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+let r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet, now:()=>'2026-11-08T05:00:00Z' });
 console.log('   '+JSON.stringify({ok:r.ok,pending:r.pending,ran:r.ran,
   marked:r.marked}));
@@ -130,7 +221,7 @@ ok(d.st.marked[0].src==='actions','★★★流した場所（actions）も記�
 ok(d.st.marked[0].at==='2026-11-08T05:00:00Z','★日時も記録する');
 
 console.log('\n=== 二重に流さない（もう一度押しても何もしない）===');
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 console.log('   '+JSON.stringify({ok:r.ok,pending:r.pending,note:r.note}));
 ok(r.ok===true&&!r.pending.length,'★★★2回目は未適用が0本');
@@ -144,7 +235,7 @@ ok(X.markSql('f.sql','t','pc')===M.sqlMark('f.sql','t','pc'),
    '★★★PC と Actions が**同じ表に同じ書き方**で記録する');
 ok(X.LEDGER_NEW===M.SQL_LEDGER_NEW,'★★控えの表を作る文も同じ');
 d.exec(X.markSql('migrate-0002-b.sql','2026-11-07T00:00:00Z','pc'));
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 console.log('   '+JSON.stringify({ran:r.ran,marked:r.marked}));
 ok(r.ran.indexOf('migrate-0002-b.sql')<0,
@@ -154,7 +245,7 @@ ok(r.ran.indexOf('migrate-0003-c.sql')>=0,'★残りは流す');
 console.log('\n=== はじめての実行：もう当たっているものは記録だけ ===');
 /* 控えが空で、0001 の列と 0002 の表はすでに D1 にある場面。 */
 d=mkDb({ ledger:{}, tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1 } } });
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 console.log('   '+JSON.stringify({marked:r.marked,ran:r.ran}));
 ok(JSON.stringify(r.marked)==='["migrate-0001-a.sql","migrate-0002-b.sql"]',
@@ -164,14 +255,14 @@ ok(JSON.stringify(r.ran)==='["migrate-0003-c.sql"]',
 ok(d.st.ran.length===1,'★★流した文も1つだけ');
 ok(d.st.marked.length===3,'★3本ぜんぶ控えに入る');
 /* 2回目は何もしない。 */
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 ok(!r.pending.length,'★★次からは未適用が0本');
 
 console.log('\n=== 確かめだけ（dry run）は何も変えない ===');
 d=mkDb({ ledger:{} , tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1 } } });
 r=await M.migrate({ dir:TMP, src:'actions', dry:true, exec:d.exec,
-  query:d.query, log:quiet });
+  query:d.query, probe:d.probe, log:quiet });
 console.log('   '+JSON.stringify({ok:r.ok,todo:r.todo,marked:r.marked,
   note:r.note}));
 ok(r.ok===true&&r.dry===true,'★通る');
@@ -183,12 +274,12 @@ ok(/確かめだけ/.test(r.note),'★そう書く');
 /* 控えの表がまだ無くても、確かめだけは通る。 */
 d=mkDb({ noLedger:true });
 r=await M.migrate({ dir:TMP, src:'actions', dry:true, exec:d.exec,
-  query:d.query, log:quiet });
+  query:d.query, probe:d.probe, log:quiet });
 ok(r.ok===true&&r.pending.length===3,'★★控えの表が無くても確かめられる');
 
 console.log('\n=== 途中で失敗したら止める（デプロイに進まない）===');
 d=mkDb({ ledger:{}, failAt:/ADD COLUMN cc/, failMsg:'Error: near "cc": syntax error' });
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 console.log('   '+JSON.stringify({ok:r.ok,ran:r.ran,at:r.at,failed:r.failed,
   note:r.note}));
@@ -205,14 +296,14 @@ ok(d.st.ledger['migrate-0002-b.sql']===1,
 
 console.log('\n=== すでに当たっている文は「済み」として進む ===');
 d=mkDb({ ledger:{}, doneAt:/ADD COLUMN ab/ });
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 ok(r.ok===true&&r.ran.length===3,
    '★★★「duplicate column name」は済みとして飛ばし、止まらない');
 
 console.log('\n=== 控えに記録できなかったときは止める ===');
 d=mkDb({ ledger:{}, markFail:'migrate-0002-b.sql' });
-r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet });
 console.log('   '+JSON.stringify({ok:r.ok,failed:r.failed}));
 ok(r.ok===false&&/記録できませんでした/.test(r.failed),
@@ -241,8 +332,6 @@ ok(M.parseJsonRows('{"results":[{"name":"items"}]}').rows.length===1,
    '★★配列でなくても読める');
 ok(M.parseJsonRows('こわれています').rows.length===0,
    '★読めないときは空（例外にしない）');
-ok(M.SQL_COLS("it'ems").indexOf("it''ems")>0,
-   '★★表の名前の ʼ をエスケープする');
 ok(M.sqlMark("a'b.sql",'t','pc').indexOf("a''b.sql")>0,
    '★★記録する文もエスケープする');
 
@@ -258,6 +347,17 @@ ok(/dry_run:/.test(y)&&/run_migrations:/.test(y)&&/deploy:/.test(y),
    '★★★入力は3つ');
 const defs=(y.match(/default: true/g)||[]).length;
 ok(defs===3,'★★★3つとも既定は true（'+defs+'つ）');
+/* 7.117：あとから足した2つ。 */
+ok(/baseline_to:/.test(y)&&/type: string/.test(y)&&/default: ''/.test(y),
+   '★★★「この番号までは済み」の入力があり、既定は空');
+ok(/allow_data:/.test(y)&&/default: false/.test(y),
+   '★★★「UPDATE が入るファイルも流す」の入力があり、既定はオフ');
+ok(/--baseline \$BASE/.test(y)&&/--allow-data/.test(y),
+   '★★その2つを d1-migrate.mjs に渡す');
+ok(/--summary mig-summary\.txt/.test(y)&&/cat mig-summary\.txt/.test(y),
+   '★★★知らせは d1-migrate.mjs が書いた短い文を使う');
+ok(/CODE=\$\?/.test(y)&&/exit "\$CODE"/.test(y),
+   '★★★失敗しても知らせを出してから、同じ終了コードで終わる');
 ok(/type: boolean/.test(y),'★スマホで選べるように boolean');
 ok(/concurrency:/.test(y)&&/group: deploy-pj-sync/.test(y),
    '★★★同時に2本走らせない');
@@ -311,6 +411,96 @@ ok(/dry run/.test(y),'★★確かめだけかどうかを入れる');
 ok(/止まった手順/.test(y),'★★★失敗したときはどの手順で止まったかを入れる');
 ok(/jq -Rs/.test(y),
    '★★文字列として JSON に入れる（中身で JSON が壊れない）');
+
+console.log('\n=== UPDATE が入るファイルは、初回は流さずに止める（7.117）===');
+/* 作りものの置き場所に、UPDATE が入るファイルを1本足す。 */
+fs.writeFileSync(path.join(TMP,'backfill-0002-b.sql'),
+  "UPDATE items SET aa='x' WHERE ab IS NULL;\n");
+d=mkDb({ ledger:{}, tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1, cc:1 } } });
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+  probe:d.probe, log:quiet });
+console.log('   '+JSON.stringify({ok:r.ok,failed:r.failed,data:r.data,
+  marked:r.marked.length,ran:r.ran}));
+ok(r.ok===false,'★★★0 以外で終わる（デプロイに進まない）');
+ok(JSON.stringify(r.data)==='["backfill-0002-b.sql"]',
+   '★★★UPDATE が入るファイルを「要確認」として挙げる');
+ok(/データを動かす文/.test(r.failed),'★★なぜ止めたかを返す');
+ok(/「データを動かすファイルも流す」/.test(r.note)&&/baseline/.test(r.note),
+   '★★★どうすればよいか（allow_data か baseline）も返す');
+ok(d.st.ran.length===0&&d.st.marked.length===0,
+   '★★★止めたときは SQL も記録も1つも書かない');
+/* 見たうえで allowData を付ければ流せる。 */
+d=mkDb({ ledger:{}, tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1, cc:1 } } });
+r=await M.migrate({ dir:TMP, src:'actions', allowData:true, exec:d.exec,
+  query:d.query, probe:d.probe, log:quiet });
+console.log('   '+JSON.stringify({ok:r.ok,ran:r.ran,marked:r.marked}));
+ok(r.ok===true&&JSON.stringify(r.ran)==='["backfill-0002-b.sql"]',
+   '★★★allow_data を付けると流す');
+ok(r.marked.length===3,'★ほかの3本は記録だけ');
+/* 判定できないファイルがあるときは、1本も流さない。 */
+d=mkDb({ ledger:{}, apiNg:true });
+r=await M.migrate({ dir:TMP, src:'actions', allowData:true, exec:d.exec,
+  query:d.query, probe:d.probe, log:quiet });
+console.log('   '+JSON.stringify({ok:r.ok,failed:r.failed,
+  unknown:r.unknown.length}));
+ok(r.ok===false&&r.unknown.length===3,
+   '★★★D1 の作りを確かめられないときは「判定できない」');
+ok(d.st.ran.length===0&&d.st.marked.length===0,
+   '★★★そのときも1本も流さない（勝手に流し直さない）');
+ok(/確かめられない/.test(r.failed),'★★理由を返す');
+
+console.log('\n=== 「この番号までは済み」（baseline）で記録だけにする ===');
+d=mkDb({ ledger:{}, apiNg:true });      // 作りが読めなくても baseline は効く
+r=await M.migrate({ dir:TMP, src:'actions', baselineTo:'0002', exec:d.exec,
+  query:d.query, probe:d.probe, log:quiet });
+console.log('   '+JSON.stringify({ok:r.ok,marked:r.marked,unknown:r.unknown}));
+ok(JSON.stringify(r.marked)==='["migrate-0001-a.sql","migrate-0002-b.sql",'
+  +'"backfill-0002-b.sql"]',
+   '★★★0002 以下は（UPDATE が入るものも）記録だけ');
+ok(r.unknown.length===1&&r.unknown[0]==='migrate-0003-c.sql',
+   '★★★0002 より上は今までどおり確かめる');
+ok(d.st.probed.every((q)=>/migrate-0003|items|\bcc\b/.test(q))
+   ||d.st.probed.length<=2,
+   '★★baseline のぶんは D1 に聞かない（速い）');
+/* baseline で済みになった行は src 付きで控えに入る。 */
+d=mkDb({ ledger:{}, tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1, cc:1 } } });
+r=await M.migrate({ dir:TMP, src:'actions', baselineTo:'0045', exec:d.exec,
+  query:d.query, probe:d.probe, log:quiet,
+  now:()=>'2026-11-08T06:00:00Z' });
+console.log('   '+JSON.stringify({ok:r.ok,marked:r.marked.length,ran:r.ran,
+  probed:d.st.probed.length}));
+ok(r.ok===true&&r.marked.length===4&&!r.ran.length,
+   '★★★大きい番号を入れればぜんぶ記録だけになる');
+ok(d.st.probed.length===0,'★★★そのときは D1 に1回も聞かない');
+ok(d.st.marked.length===4&&d.st.marked[0].src==='actions'
+   &&d.st.marked[0].at==='2026-11-08T06:00:00Z','★控えの中身も入る');
+ok(r.judge.every((x)=>x.state==='base'),'★★判定は「baseline」と出す');
+/* 次に押したときは、控えにあるので何もしない。 */
+r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query,
+  probe:d.probe, log:quiet });
+ok(r.ok===true&&!r.pending.length,'★★★baseline のあとは未適用が0本');
+fs.unlinkSync(path.join(TMP,'backfill-0002-b.sql'));
+
+console.log('\n=== 判定の結果をファイルごとに返す（知らせに出す）===');
+d=mkDb({ ledger:{}, tables:{ bb:1 }, columns:{ items:{ aa:1, ab:1 } } });
+r=await M.migrate({ dir:TMP, src:'actions', dry:true, exec:d.exec,
+  query:d.query, probe:d.probe, log:quiet });
+const st2={}; r.judge.forEach((x)=>{ st2[x.file]=x; });
+console.log('   '+JSON.stringify(r.judge));
+ok(st2['migrate-0001-a.sql'].state==='done'
+   &&/表・列が揃っている/.test(st2['migrate-0001-a.sql'].why),
+   '★★★済みは「表・列が揃っている」と返す');
+ok(st2['migrate-0003-c.sql'].state==='todo'
+   &&/足りないもの：items\.cc/.test(st2['migrate-0003-c.sql'].why),
+   '★★★未適用は「足りないもの：○○」と返す');
+const sum=M.summaryText(r);
+console.log('   --- 知らせ ---\n'+sum);
+ok(/済みとして記録だけ 2本/.test(sum),'★★知らせに件数を出す');
+ok(/▶ migrate-0003-c\.sql/.test(sum)&&/items\.cc/.test(sum),
+   '★★★知らせに「流す」行と足りないものを出す');
+ok(!/migrate-0001-a\.sql/.test(sum),
+   '★★済みの行は並べない（長くなるので件数だけ）');
+ok(M.SUMMARY_MAX===30,'★並べるのは30本まで');
 
 console.log('\n=== シェルの書き方（set -e で落ちない形）===');
 /* GitHub の run: は `bash -e` で動くので、`[ … ] && 代入` は

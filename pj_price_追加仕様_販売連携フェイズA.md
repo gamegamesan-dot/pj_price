@@ -7131,3 +7131,108 @@ D1 に **`_migrations`** 表（`migrate-0045-migrations.sql`）を作り、
 1回入れれば、以降は `deploy-pj-sync` が自分で面倒を見る
 （`d1-migrate.mjs` は毎回 `CREATE TABLE IF NOT EXISTS` で作り直すので、
 入れ忘れていても自分で作る）。
+
+---
+
+## 7.117 「済み」の判定を空振りの SELECT に変える（【N】の直し）
+
+### 何が起きていたか（原因）
+
+`deploy-pj-sync` を `dry_run` で実行したら「**流す 45本／記録だけ 0本**」になり、
+PC から流し済みの 0037〜0039 まで「流す」予定に入っていた
+（実行の記録：runs/42489949958）。
+
+実行の記録にこの1行が出ていた。
+
+```
+（いまの作りを読めませんでした：終了コード 1："error": {
+ / "text": "A request to the Cloudflare API (/accounts/***/d1/database/b1…
+ 。ぜんぶ流して確かめます）
+```
+
+**原因は、`sqlite_master` を読もうとして Cloudflare の API に断られたこと。**
+7.116 の `readSchema()` は
+
+```sql
+SELECT name FROM sqlite_master WHERE type='table'
+SELECT name FROM pragma_table_info('…')
+```
+
+で D1 の作りを読んでいた。これは **Worker の中（D1 のバインディング）では通るが、
+`wrangler d1 execute --remote`（query の API）では断られる**。
+断られたときは `schema = null` にして「ぜんぶ流して確かめる」に落ちる作りだったので、
+45本ぜんぶが「流す」になった。
+
+判定そのものは正しく、`schema.sql` から作った DB で試すと 42/45 を「済み」と
+判定できていた（つまり**読めなかっただけ**）。
+トークンの権限（Workers Scripts：Edit ／ D1：Edit）は足りている
+（控え `_migrations` の SELECT は通っていた。断られたのは `sqlite_master` だけ）。
+
+### 1. 空振りの SELECT で確かめる
+
+`sqlite_master` と `pragma_table_info` は使わない。
+**ふだんの SELECT**なら query の API を通るので、それで確かめる。
+
+| 確かめるもの | 文 |
+| --- | --- |
+| その表があるか | `SELECT 1 FROM "t" LIMIT 0` |
+| その列があるか | `SELECT "c1","c2" FROM "t" LIMIT 0`（**表ごとに1回**） |
+
+- 揃っているときは**表ごとに1回**で済む（ふつうはこれ。速い）
+- 通らなかったときだけ、**1列ずつ**聞き直して「足りないもの」を名前で出す
+- エラーの文で `no such table` / `no such column` を見分ける。
+  **それ以外（API の失敗など）は「無い」と決めつけない**（下の「判定できない」）
+- **索引は判定に使わない**（SELECT では確かめられない。
+  どのファイルも `CREATE INDEX IF NOT EXISTS` なので流し直しても害がない）
+- 同じ問い合わせは控える（ファイルをまたいでも1回だけ）
+
+### 2. ファイルごとに判定を出す（`judgeFile`）
+
+| 状態 | 意味 | 動き |
+| --- | --- | --- |
+| **済み** | 足す表・列がぜんぶある | 記録だけして流さない |
+| **未適用** | 足りないものがある（名前を出す） | 流す |
+| **要確認** | `UPDATE` などデータを動かす文が入っている／表も列も足さない | **流さずに止める** |
+| **判定できない** | D1 に聞けなかった | **1本も流さずに止める** |
+
+実行の記録には1本ずつ出し、Discord には
+「流す」「要確認」「判定できない」だけを並べる（済みは件数だけ・30本まで）。
+この短い文は `d1-migrate.mjs --summary <file>` が書き、ワークフローがそれを送る。
+
+### 3. `UPDATE` が入るファイルは初回は止める
+
+`backfill-0023` / `migrate-0030` / `migrate-0033` のように `UPDATE` が入る
+ファイルは、作りからは「済み」と決められない。
+**既定では流さずに止め**、どうすればよいかを出す。
+
+```
+❌ データを動かす文が入っているファイルが 3本あります
+   backfill-0023-sold-keep.sql・migrate-0030-mw-scan.sql・migrate-0033-rank-group.sql。
+   中身を見て、流してよければ「データを動かすファイルも流す」をオンにして、
+   もう一度実行してください（すでに流してあるなら baseline で済みにしてください）
+   何も流していません（記録もしていません）。
+```
+
+見たうえで入力 **`allow_data`**（`--allow-data`）をオンにすると、番号順のまま流す。
+
+### 4. 「この番号までは済み」（baseline）
+
+入力 **`baseline_to`**（`--baseline 0039`）を入れると、その番号以下のファイルは
+**D1 に聞かずに「済み」として記録だけ**する（`UPDATE` が入るものも含む）。
+`0039` / `39` / `migrate-0039-fba-split.sql` のどの形でも読む（`baseNo`）。
+
+`--baseline 0039` で試した結果（`schema.sql` から作った DB・0044 と 0045 は未適用）：
+
+```
+流す 2本／記録だけ 43本／要確認 0本　（D1 への問い合わせ 13回）
+  ⏭ migrate-0002〜0039　済み（baseline）
+  ⏭ migrate-0040-size-tier.sql　済み（表・列が揃っている）→ 記録だけ
+  ⏭ migrate-0041-settings-log.sql　済み（表・列が揃っている）→ 記録だけ
+  ⏭ migrate-0042-mw-notify.sql／0043　済み → 記録だけ
+  ▶ migrate-0044-reg-price.sql　未適用（足りないもの：mw_amz.used_low・…）
+  ▶ migrate-0045-migrations.sql　未適用（足りないもの：表 _migrations）
+```
+
+### D1 の作業
+
+**不要**（7.116 の `migrate-0045-migrations.sql` のまま。新しい表・列はない）。
