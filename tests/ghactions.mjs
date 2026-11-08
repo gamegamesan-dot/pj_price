@@ -22,8 +22,11 @@ console.log('   '+files.length+'本：'+files.slice(0,3).join(' / ')+' … '
   +files.slice(-2).join(' / '));
 ok(files.length>=44,'★リポジトリのマイグレーションをぜんぶ見つける（'+files.length+'本）');
 ok(files[0]==='migrate-0002-sales-channel.sql','★★いちばん小さい番号が先');
-ok(files.indexOf('migrate-0045-migrations.sql')===files.length-1,
-   '★★いちばん大きい番号が最後');
+/* 最後は**いちばん番号の大きいファイル**。番号を直に書くと
+   マイグレーションを足すたびにここが落ちるので、番号で見る。 */
+const noOf=(f)=>+(/^migrate-(\d+)/.exec(f)||[0,0])[1];
+ok(noOf(files[files.length-1])===Math.max(...files.map(noOf)),
+   '★★いちばん大きい番号が最後（'+files[files.length-1]+'）');
 const i23=files.indexOf('migrate-0023-sold-keep.sql');
 ok(files[i23+1]==='backfill-0023-sold-keep.sql',
    '★★★backfill は同じ番号の migrate の**すぐ後ろ**（列を作ってから埋める）');

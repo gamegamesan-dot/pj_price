@@ -1733,6 +1733,38 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
         <div class="note2" id="mwCountOut" style="margin-top:2px"></div>
         <!-- 6.151：取り込んだときの Discord 通知（どれを知らせるか・上位何件か）。 -->
+        <!-- 6.160：在庫CSVの自動取り込み（【P】）。既定オフ。 -->
+        <div class="note2 cfgprice" style="margin:10px 0 2px"><b>在庫CSVの自動取り込み</b>
+          （pj-sync が取りに行く）</div>
+        <details class="exp cfgprice" data-exp="mwCsv"><summary>どう取りに行くかの説明</summary>
+        <div class="note2" style="margin-top:0">pj-sync が<b>毎時07分</b>に、
+          下の取得先が<b>変わったかどうかだけ</b>を見ます（HEAD。本体は落としません）。
+          <br>・<b>変わっていなければ取り込みません</b>
+          <br>・<b>本体を取るのは多くても「本体を取る間隔」に1回</b>です
+          <br>・名乗って取りに行きます（<code id="mwCsvUaNote"></code>。
+          <b>メールアドレスは入れません</b>）
+          <br>・取り込む中身・差分・欠品・3割の歯止め・知らせは
+          <b>手で取り込むときとまったく同じ</b>です
+          （読み方は <code>shared/mwcsv.js</code> の1か所だけ）
+          <br>・404・ログイン画面（HTML）・大きさが前回の半分未満・行数が少なすぎる
+          ときは<b>取り込まずに Discord に知らせます</b>
+          <br>・<b>3回続けて失敗したら自動を止めて</b>知らせます
+          （下の「もう一度動かす」で戻せます）
+          <br><b>手で取り込む「MWの在庫CSVを取り込む」は残してあります</b>
+          （自動が止まったとき用）。</div>
+        </details>
+        <div class="rowv cfgprice"><label for="mwCsvAuto">自動で取り込む</label><select id="mwCsvAuto"><option value="off" selected>オフ（手で取り込む。既定）</option><option value="on">オン（pj-sync が取りに行く）</option></select></div>
+        <div class="chk cfgprice"><input type="checkbox" id="mwCsvStop"><label for="mwCsvStop" style="flex:1"><b>すぐ止める</b>（オンにすると、次の回から取りに行きません）</label></div>
+        <div class="rowv cfgprice"><label for="mwCsvUrl">取得先（在庫CSVのアドレス）</label><input id="mwCsvUrl" placeholder="https://… /stocks.csv" inputmode="url"><div class="note2" style="margin-top:2px">ここに入れたアドレスだけを見ます。<b>pj-sync 側でも「取ってよい先」を1本だけに限っている</b>ので、ほかのアドレスを入れても取りに行きません（会員サイトのページは見に行きません）。</div></div>
+        <div class="row cfgprice"><label>確かめる間隔</label><input type="number" id="mwCsvEveryH" value="1" step="1" min="1" max="24" inputmode="numeric"><span class="unit">時間に1回</span></div>
+        <div class="row cfgprice"><label>本体を取る間隔</label><input type="number" id="mwCsvBodyH" value="3" step="1" min="1" max="48" inputmode="numeric"><span class="unit">時間に1回まで</span></div>
+        <div class="cfgprice" style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwCsvNow" style="flex:1">いますぐ確かめる</button>
+          <button class="btn" id="mwCsvRunsBtn" style="flex:1">最近の取得を見る</button>
+        </div>
+        <div class="note2 cfgprice" id="mwCsvRunNote" style="margin-top:2px"></div>
+        <div class="note2 cfgprice" id="mwCsvNote" style="margin-top:2px"></div>
+        <div class="cfgprice" id="mwCsvRuns"></div>
         <div class="note2" style="margin:10px 0 2px"><b>在庫CSVを取り込んだときの知らせ</b>
           （Discord・1回の取り込みにつき1通）</div>
         <details class="exp" data-exp="mwNt"><summary>知らせる中身の説明</summary>
@@ -2090,6 +2122,8 @@ body.staff #syncOnHandFix{display:none !important}
 <!-- 値付けの式。index.html と pj-sync（Worker）が同じこのファイルを読む（C段）。
      下の <script> より**前**に読み込む（PJ_PRICING を使うため）。 -->
 <script src="./shared/pricing.js"></script>
+<!-- MW の在庫CSVの読み方（【P】）。index.html と pj-sync が同じこのファイルを読む。 -->
+<script src="./shared/mwcsv.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2097,6 +2131,12 @@ body.staff #syncOnHandFix{display:none !important}
    読み込みに失敗したら、画面が白くなる前にそれが分かるようにしておく。 */
 if(typeof PJ_PRICING==='undefined')
   throw new Error('shared/pricing.js が読み込めていません（値付けの式）');
+/* MW の在庫CSVの読み方も1か所にまとめてある（【P】）。
+   pj-sync が stocks.csv を自分で取りに行くので、**同じ読み方**でないと
+   画面と Worker で行数や出荷日数がずれる。 */
+if(typeof PJ_MWCSV==='undefined')
+  throw new Error('shared/mwcsv.js が読み込めていません（MW の在庫CSVの読み方）');
+var MWCSV=PJ_MWCSV;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -2439,7 +2479,11 @@ var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  'mwAutoMode',
                  /* 取り込みの知らせ（6.151／7.110）と登録の上限（7.111）。
                     **Worker が読む**設定なので必ず D1 に送る。 */
-                 'mwNtTop','mwPutDay','mwUsedPct'];
+                 'mwNtTop','mwPutDay','mwUsedPct',
+                 /* 在庫CSVの自動取り込み（6.160／7.120・【P】）。
+                    **Worker が毎時読んで動く設定**なので必ず D1 に送る。
+                    取得先の URL もここ（コードに直書きしない）。 */
+                 'mwCsvAuto','mwCsvUrl','mwCsvEveryH','mwCsvBodyH'];
 /* 刈取の利益の計算に入る⚙設定（6.142）。これも端末ごとだったので、
    同じ行でも黒字・利益率の判定が管理者と作業者で違っていた。 */
 var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
@@ -2455,7 +2499,9 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'mwNtDrop','mwNtBuy','mwNtNew',
                 /* 無在庫の仕入れ値に Amazon も入れるか（6.152／7.112）。
                    **Worker が段取り D と知らせで読む**ので必ず送る。 */
-                'mwAmzCost'];
+                'mwAmzCost',
+                /* 在庫CSVの自動取り込みの「すぐ止める」（6.160・【P】）。 */
+                'mwCsvStop'];
 /* ---- 値付けの式が使う設定（6.73）----
    Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
    ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
@@ -5180,7 +5226,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
-                 'amzDropMode','amzDropPick'];
+                 'amzDropMode','amzDropPick',
+                 /* 在庫CSVの自動取り込み（6.160・【P】）。取得先の URL もここ。
+                    （「すぐ止める」は真偽値なので ADV_AMZCHK 側で持つ） */
+                 'mwCsvAuto','mwCsvUrl','mwCsvEveryH','mwCsvBodyH'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -9864,124 +9913,23 @@ function mwNoteHit(r){
   return mwNoteNgList().filter(function(w){ return t.indexOf(w)>=0; });
 }
 /* ---- 出荷日の文字 → 営業日数（仕様 3章）----
-   即日=0／翌営業日=1／「1~2営業日」=2／「2.3営業日」=3／「3.4営業日」=4／
-   「5.6」=6／「7.8」=8／日付・週単位・予約・2週間などは 99（無在庫に使わない）。
-   読めなかった文字は null を返し、呼ぶ側が 99 として扱い、一覧に残す。 */
-function mwNorm(t){
-  return String(t||'').trim()
-    .replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })
-    .replace(/[．｡。]/g,'.').replace(/[～〜]/g,'~').replace(/[－ー―]/g,'-')
-    .replace(/[･・､]/g,',').replace(/　/g,' ').trim();
-}
-function mwShipDays(t){
-  var z=mwNorm(t);
-  /* 空欄は 99（無在庫に使わない）。読めない文字とは分けて数える（仕様3章）。 */
-  if(!z)return 99;
-  if(/即日|当日出荷|即出荷|12時締め/.test(z))return 0;
-  if(/翌営業日|翌日/.test(z))return 1;
-  /* 「0716 出荷」のような日付だけの書き方は無在庫に使わない。 */
-  if(/^\d{3,4}\s*出荷/.test(z))return 99;
-  /* 「2.3営業日」「3~4営業日」「2,3営業日」… 大きい方を採る。
-     「ご注文後2〜3営業」のように「日」が落ちている書き方も読む。 */
-  var m=/(\d+)\s*[.~,\-]\s*(\d+)\s*営業日?/.exec(z);
-  if(m)return Math.max(+m[1],+m[2]);
-  m=/(\d+)\s*営業日?/.exec(z);
-  if(m)return +m[1];
-  /* 日付・週単位・予約・入荷予定・再販は無在庫に使わない。
-     **数字＋日を読む前に**ここで弾く（「29日（木）」を29営業日と読まないため）。 */
-  if(/週|[月火水木金土日]曜|入荷|予約|発売|再販|中旬|上旬|下旬|月末|ヶ月|か月|箇月/.test(z)
-     ||/\d+\s*\/\s*\d+/.test(z)
-     ||/\d+\s*日\s*[（(]/.test(z)
-     ||/\d+\s*月/.test(z))
-    return 99;
-  /* 「営業日」が無い「N〜M日」「N日以内」も大きい方を採る */
-  m=/(\d+)\s*[.~,\-]\s*(\d+)\s*日/.exec(z);
-  if(m)return Math.max(+m[1],+m[2]);
-  m=/(\d+)\s*日/.exec(z);
-  if(m)return +m[1];
-  return null;                                         // 読めない
-}
+   式は shared/mwcsv.js に置いてある（【P】）。pj-sync も同じものを読む。
+   即日=0／翌営業日=1／「1~2営業日」=2／日付・週単位・予約などは 99、
+   読めなかった文字は null（呼ぶ側が 99 として扱い、一覧に残す）。 */
+function mwNorm(t){ return MWCSV.norm(t); }
+function mwShipDays(t){ return MWCSV.shipDays(t); }
 /* ---- MW の在庫CSV を読む ---- */
 var mwShipBad={};              // 読めなかった出荷日の文字 → 件数
-/* MW の在庫CSV専用の読み方（6.88）。
-   MW の書き出しは「1行＝1件・全部の欄を " で囲む」形だが、備考に**閉じていない
-   "** が入る行がある（stocks_3.csv の 3805行目。MW 側の書き出しの壊れ）。
-   欄が改行をまたげる普通の読み方（csvParse）だと、その行以降が1つの欄に
-   飲み込まれ、12,062行あるのに **3,802行で静かに終わってしまう**。
-   そこで MW のCSVだけは **改行を必ず行の区切り**として扱い、
-   引用符は1行の中だけで見る。壊れた行の被害がその行だけで止まる。 */
-function mwSplitLine(line){
-  var out=[], cur='', q=false;
-  for(var i=0;i<line.length;i++){
-    var c=line.charAt(i);
-    if(q){
-      if(c==='"'){
-        if(line.charAt(i+1)==='"'){ cur+='"'; i++; }   // "" は1つの "
-        else q=false;
-      } else cur+=c;
-    }
-    else if(c==='"')q=true;
-    else if(c===','){ out.push(cur); cur=''; }
-    else cur+=c;
-  }
-  out.push(cur);
-  return out;
-}
-function mwLines(text){
-  var a=String(text||'').replace(/^﻿/,'').split(/\r\n|\r|\n/);
-  while(a.length&&a[a.length-1]==='')a.pop();     // 末尾の空行だけ落とす
-  return a;
-}
+/* MW の在庫CSV専用の読み方（6.88）。読み方そのものは shared/mwcsv.js に
+   置いてある（【P】）。pj-sync が stocks.csv を自分で取りに行くので、
+   **同じ読み方**でないと画面と Worker で行数や出荷日数がずれる。
+   ここは画面に出すための控え（mwShipBad）を取るだけ。 */
+function mwSplitLine(line){ return MWCSV.splitLine(line); }
+function mwLines(text){ return MWCSV.lines(text); }
 function mwParse(text){
-  var raw=mwLines(text);
-  if(!raw.length)return { err:'空のファイルです' };
-  var rows=raw.map(mwSplitLine);
-  var head=(rows[0]||[]).map(function(x){
-    return String(x||'').replace(/^﻿/,'').trim(); });
-  var col=function(){
-    for(var i=0;i<arguments.length;i++){
-      var j=head.indexOf(arguments[i]); if(j>=0)return j;
-    } return -1; };
-  var iJ=col('JAN'), iS=col('社'), iK=col('機種'), iN=col('商品名'),
-      iL=col('定価'), iR=col('発売日'), iC=col('新・中','新中'),
-      iW=col('卸値'), iQ=col('掲載数'), iB=col('備考'), iD=col('出荷日');
-  if(iJ<0||iS<0||iW<0)
-    return { err:'JAN・社・卸値の列が見つかりません（MW の在庫CSVか確かめてください）' };
-  var out=[], bad={}, seen={}, ng=0, dup=0, empty=0;
-  var cols=head.length, few=0, many=0, blank=0;
-  mwShipBad={};
-  for(var n=1;n<rows.length;n++){
-    var r=rows[n];
-    if(!r||(r.length===1&&r[0]==='')){ blank++; continue; }   // 空行
-    /* 列の数が合わない行を数える。足りない行は飛ばし、
-       多い行は**先頭11列だけ**を使う（壊れた備考で列が増えた行を救う）。 */
-    if(r.length<cols){ few++; continue; }
-    if(r.length>cols){ many++; r=r.slice(0,cols); }
-    /* 利益計算CSVは ="4595..." の形で入っているので、=" と " を外す */
-    var jan=String(r[iJ]||'').replace(/^="?|"?$/g,'').replace(/\D/g,'');
-    var sha=String(r[iS]||'').trim();
-    if(jan.length!==13||!sha){ ng++; continue; }
-    var k=jan+'|'+sha;
-    var idx=seen[k]||0; seen[k]=idx+1;
-    if(idx>0)dup++;
-    var txt=String(r[iD]||'');
-    var d=mwShipDays(txt);
-    if(!mwNorm(txt))empty++;                     // 空欄（99 扱い）
-    else if(d===null){ bad[txt.trim()]=(bad[txt.trim()]||0)+1; d=99; }
-    out.push({ jan:jan, sha:sha, idx:idx,
-      kishu:String(r[iK]||'').trim(), name:String(r[iN]||'').trim(),
-      list_price:+String(r[iL]||'').replace(/[^0-9]/g,'')||0,
-      release:String(r[iR]||'').trim(), cond:String(r[iC]||'').trim(),
-      wholesale:+String(r[iW]||'').replace(/[^0-9]/g,'')||0,
-      stock:+String(r[iQ]||'').replace(/[^0-9]/g,'')||0,
-      note:String(r[iB]||'').trim(), ship_text:txt.trim(), ship_days:d });
-  }
-  mwShipBad=bad;
-  var unread=0;
-  Object.keys(bad).forEach(function(x){ unread+=bad[x]; });
-  return { rows:out, ng:ng, dup:dup, bad:bad, unread:unread, empty:empty,
-           lines:raw.length, data:raw.length-1, cols:cols,
-           few:few, many:many, blank:blank };
+  var d=MWCSV.parse(text);
+  mwShipBad=d.bad||{};
+  return d;
 }
 /* 読めなかった出荷日の文字を画面に残す（多い順）。 */
 function mwShipBadRender(){
@@ -10379,11 +10327,171 @@ $('mwMarkCopy').onclick=function(){
     note.textContent='下の欄から手でコピーしてください。';
   }
 };
+/* ===== 在庫CSVの自動取り込み（6.160・【P】）=====
+   pj-sync が毎時07分に「変わったか」だけを見て、変わったときだけ取り込む。
+   ここは⚙の画面（オンオフ・間隔・取得先・最近の取得の記録）だけを持ち、
+   取りに行くのも読むのも pj-sync の役目（読み方は shared/mwcsv.js で共通）。 */
+var mwCsvLast=null;             // 最後に読んだ /mw/csv の中身
+function mwCsvOn(){ return String(($('mwCsvAuto')||{}).value||'off')==='on'; }
+/* 記録の1行。「変わったか」だけを見た回も残っている。 */
+function mwCsvRunLine(r){
+  var ok=+r.ok?'<b style="color:var(--good)">取り込んだ</b>'
+    :(+r.changed?'<b style="color:var(--bad)">だめ</b>':'変わっていない');
+  var sec=Math.round((+r.elapsed_ms||0)/100)/10;
+  return '<div class="note2" style="margin:4px 0;border-top:1px solid #ddd;'
+    +'padding-top:4px">'
+    +ok+'　'+esc(String(r.at_jst||r.at||''))
+    +'　'+(String(r.src||'auto')==='auto'?'自動':'手で押した')
+    +(+r.http?('　HTTP '+(+r.http)):'')
+    +'<br>'+(+r.changed?'変わっていた':'変わっていない')
+    +(+r.took?('・本体を取った '+num(Math.round((+r.bytes||0)/1024))+'KB'):'・本体は取らなかった')
+    +(+r.rows_in?('<br>'+num(+r.rows_in)+'行　足した '+num(+r.added||0)
+      +'／変わった '+num(+r.changed_rows||0)
+      +'／今回 新しく欠品 '+num(+r.gone||0)+'行'):'')
+    +'<br>かかった時間 '+sec+'秒'
+    +(r.why?('<br><span style="opacity:.75">'+esc(String(r.why).slice(0,160))
+      +'</span>'):'')
+    +'</div>';
+}
+function mwCsvRunsRender(){
+  var note=$('mwCsvNote'), box=$('mwCsvRuns'), d=mwCsvLast;
+  if(!note||!box)return;
+  if(!d){ box.innerHTML=''; return; }
+  var rows=d.rows||[];
+  box.innerHTML=rows.length
+    ?rows.slice(0,listShow('mwcsvruns')).map(mwCsvRunLine).join('')
+      +listMoreBar('mwcsvruns',rows.length)
+    :'<div class="note2">まだ取りに行っていません。</div>';
+}
+listReg('mwcsvruns',mwCsvRunsRender);
+/* いまの様子（オンオフ・次の予定・続けて失敗して止まっていないか）。 */
+function mwCsvStateHtml(d){
+  if(!d)return '';
+  var t=[];
+  t.push(d.on?(d.stop?'<b style="color:var(--bad)">「すぐ止める」が入っています</b>'
+                     :'<b style="color:var(--good)">自動で取り込みます</b>')
+             :'自動取り込みは<b>オフ</b>です（手で取り込んでください）');
+  if(d.on&&!d.url_set)
+    t.push('<b style="color:var(--bad)">取得先の URL が入っていません</b>');
+  if(d.checked_jst)t.push('最後に確かめたのは '+esc(d.checked_jst));
+  if(d.next_jst)t.push('次に確かめるのは '+esc(d.next_jst)+'ごろ');
+  t.push('確かめる間隔 '+(+d.every_h||1)+'時間に1回'
+    +'／本体を取るのは '+(+d.body_h||3)+'時間に1回まで');
+  if(+d.fail)t.push('<b style="color:var(--bad)">続けて失敗 '+(+d.fail)+'回</b>'
+    +'（'+(+d.fail_stop||3)+'回で止まります）');
+  if(d.auto_off)
+    t.push('<b style="color:var(--bad)">続けて失敗したので止まっています</b>'
+      +'　<button class="btn" id="mwCsvResume" style="padding:2px 8px;'
+      +'font-size:11.5px">もう一度動かす</button>');
+  return t.join('<br>');
+}
+/* ⚙の「最近の取得を見る」。 */
+function mwCsvRunsShow(){
+  var note=$('mwCsvNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var b=$('mwCsvRunsBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='読み込み中…'; }
+  note.textContent='pj-sync に聞いています…';
+  fetch(syncUrl()+'/mw/csv?limit=50',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){
+        note.textContent=(d&&d.error==='no_table')
+          ?'pj-sync 側の D1 に記録の表がありません（migrate-0046 を流してください）。'
+          :'読めませんでした。';
+        return;
+      }
+      mwCsvLast=d;
+      note.innerHTML=mwCsvStateHtml(d);
+      var ua=$('mwCsvUaNote'); if(ua&&d.ua)ua.textContent=d.ua;
+      mwCsvRunsRender();
+    })
+    ['catch'](function(){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='pj-sync に届きませんでした。';
+    });
+}
+/* ⚙の「いますぐ確かめる」。変わっていれば本体まで取る（間隔を待たない）。 */
+function mwCsvRunNow(){
+  /* 結果は**別の欄**に出す（このあと「いまの様子」を出し直すので、
+     同じ欄に書くと結果が上書きされて消えてしまう）。 */
+  var note=$('mwCsvRunNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  if(!String(($('mwCsvUrl')||{}).value||'').trim()){
+    note.textContent='取得先（在庫CSVのアドレス）を入れてください。'; return;
+  }
+  if(!confirm('MW に在庫CSVを取りに行きます。'
+    +'\n変わっていれば本体を取って取り込みます（間隔は待ちません）。'
+    +'\nよろしいですか？'))return;
+  var b=$('mwCsvNow'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='取りに行っています…'; }
+  note.textContent='MW に取りに行っています…（12,000行あると少しかかります）';
+  mwPost('/mw/csv/run',{ force:true })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){
+        note.innerHTML='⚠ 取り込めませんでした：'
+          +esc(String((d&&(d.why||d.error))||'理由が分かりません'));
+      }else if(!d.took){
+        note.innerHTML='✓ '+esc(String(d.why||'変わっていませんでした'))
+          +'（本体は取っていません）';
+      }else{
+        note.innerHTML='✓ '+num(+d.rows_in||0)+'行を取り込みました'
+          +'（足した '+num(+d.added||0)+'／変わった '+num(+d.changed_rows||0)
+          +'／同じ '+num(+d.same||0)
+          +'／今回 新しく欠品 '+num(+d.gone||0)+'行'
+          +'／JANごとの代表 '+num(+d.picked||0)+'件）'
+          +'　'+Math.round((+d.elapsed_ms||0)/100)/10+'秒'
+          +(d.warn?('<br>⚠ '+esc(String(d.warn))):'');
+        /* 取り込めたら一覧と「前回の取り込み」も新しくする。 */
+        try{ mwStaleLoad(); }catch(e){}
+      }
+      mwCsvRunsShow();
+    })
+    ['catch'](function(e){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='取りに行けませんでした：'+String((e&&e.message)||e);
+    });
+}
+/* 続けて失敗して止まったのを戻す。 */
+function mwCsvResumeGo(){
+  if(isStaff())return;
+  if(!confirm('在庫CSVの自動取り込みをもう一度動かします。'
+    +'\n（取れない原因が直っているか確かめてから押してください）'))return;
+  mwPost('/mw/csv/on',{})
+    .then(function(){ mwCsvRunsShow(); })
+    ['catch'](function(e){
+      var n=$('mwCsvNote');
+      if(n)n.textContent='戻せませんでした：'+String((e&&e.message)||e);
+    });
+}
 /* 自動で申告を付ける種類の表（6.128）。読み込みは押したときだけ。
    欄は出し直すたびに作るので、1つずつ結ばずに箱で受ける（6.124と同じ）。 */
 $('mwDgTypeBtn').onclick=mwDgTypeLoad;
 /* ⚙：Amazon 登録の記録（6.151）。行は作り直すので箱で受ける。 */
 $('mwPutLogBtn').onclick=mwPutLogShow;
+/* ⚙：在庫CSVの自動取り込み（6.160・【P】）。 */
+$('mwCsvNow').onclick=mwCsvRunNow;
+$('mwCsvRunsBtn').onclick=mwCsvRunsShow;
+$('mwCsvNote').addEventListener('click',function(e){
+  var t=e.target;
+  if(t&&t.id==='mwCsvResume')mwCsvResumeGo();
+});
+['mwCsvAuto','mwCsvUrl','mwCsvEveryH','mwCsvBodyH'].forEach(function(id){
+  var el=$(id); if(!el)return;
+  el.addEventListener('change',function(){ csvSaveCfg(); advTouch(); });
+});
+$('mwCsvStop').addEventListener('change',function(){ csvSaveCfg(); advTouch(); });
 /* 自動の取り直し（6.149）。選択肢が件数なので、隠し欄をそろえてから送る。 */
 $('mwAutoMode').addEventListener('change',function(){
   mwAutoSync(); csvSaveCfg(); advTouch();
@@ -10633,6 +10741,8 @@ function mwStaleLoad(){
       /* 行数も出すので、前回の取り込みの中身ごと控える（6.117）。
          **無いときは消す**（一度も取り込んでいない状態に戻せるように）。 */
       if(d)mwStaleLast=d.last||null;
+      /* 【P】自動取り込みの様子（オンオフ・次の予定）。帯に出す。 */
+      if(d)mwCsvState=d.csv||null;
       if(d&&d.stale_h)MW_STALE_H=+d.stale_h||24;
       mwStaleRender();
     })
@@ -10656,19 +10766,35 @@ function mwStaleRender(){
     if(!msg){ el.style.display='none'; el.innerHTML=''; return; }
     el.innerHTML=msg; el.style.display='';
   });
-  /* 前回の取り込み（日時・行数）はいつでも出す（6.117）。 */
+  /* 前回の取り込み（日時・行数）はいつでも出す（6.117）。
+     【P】自動（pj-sync）か手動（画面）か、次に取りに行く予定も添える。 */
   var n=$('mwTopNote');
   if(n){
+    var src=String((lastRun&&lastRun.src)||'');
+    var how=src?(src==='auto'?'・<b>自動</b>':'・手で取り込み'):'';
+    var c=mwCsvState||null;
+    var nx='';
+    if(c){
+      if(c.auto_off)nx='　<b style="color:var(--bad)">自動取り込みは止まっています</b>';
+      else if(c.stop)nx='　<b style="color:var(--bad)">「すぐ止める」が入っています</b>';
+      else if(!c.on)nx='　自動取り込みはオフ';
+      else if(!c.url_set)nx='　<b style="color:var(--bad)">取得先の URL が未設定</b>';
+      else nx='　次に取りに行くのは '+esc(String(c.next_jst||'—'))+'ごろ';
+    }
     n.innerHTML=at
       ?('前回の取り込み '+esc(jstShort(at))
         +((lastRun&&+lastRun.rows_in)
           ?('・'+Number(lastRun.rows_in).toLocaleString('ja-JP')+'行'):'')
-        +(old?'　<b style="color:var(--bad)">'+h+'時間前</b>':''))
-      :'まだ取り込んでいません';
+        +how
+        +(old?'　<b style="color:var(--bad)">'+h+'時間前</b>':'')
+        +nx)
+      :('まだ取り込んでいません'+nx);
   }
 }
 /* 取り込みの時刻は候補一覧からも販売連携からも拾えるようにする。 */
 var mwStaleAt='', mwStaleLast=null;
+/* 【P】自動取り込みの様子（/mw/list の csv）。「前回の取り込み」に出す。 */
+var mwCsvState=null;
 /* ===== MW の候補を出品リストに入れる（6.96）=====
    写真が付いた「① 出品候補」の行を、既存の出品リスト（csvList）に足す。
    こうすると英題生成・Item Specifics・原産国・書き出し（File Exchange）は
@@ -20735,7 +20861,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v242';   // sw.js の const V と必ず同じ値にする
+var APP_V='v243';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

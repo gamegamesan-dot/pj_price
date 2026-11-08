@@ -33,6 +33,9 @@
    式はあちらだけにあり、ここでは PRICING 越しに呼ぶ。
    wrangler（esbuild）が module.exports を取り込むので、import でそのまま使える。 */
 import PRICING from "../shared/pricing.js";
+/* MW の在庫CSVの読み方（【P】）。画面（index.html）と**同じファイル**を読む。
+   同じ読み方でないと、画面と Worker で行数・出荷日数・代表の行がずれる。 */
+import MWCSV from "../shared/mwcsv.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -219,6 +222,14 @@ const ALLOWED = [
      画像URLはログインなしで見られる。会員サイト（/buy/?q=）は見に行かない。
      MW が利用を許諾した画像だけを使い、Amazon の画像は使わない。 */
   { m: "GET",  re: /^https:\/\/matchingworld\.asia\/products\/\d+\/\d+\/\d+\.jpg$/ },
+  /* MW の在庫CSV（【P】）。**読み取りの1本だけ**。
+     ログインなしで取れる決まったアドレスで、会員サイト（/buy/?q=）は見に行かない。
+     ・HEAD … 変わったか（ETag／Last-Modified／大きさ）だけを見る。本体は取らない
+     ・GET  … 変わっていたときだけ本体を取る（多くても3時間に1回）
+     取得先の URL は⚙に置いてコードに直書きしないが、**取ってよい先の形**は
+     ここに1本だけ書いてある。⚙に別の URL を入れても assertReadOnly が止める。 */
+  { m: "HEAD", re: /^https:\/\/matchingworld\.asia\/stocks\.csv$/ },
+  { m: "GET",  re: /^https:\/\/matchingworld\.asia\/stocks\.csv$/ },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1305,7 +1316,9 @@ const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour"
   "pbMode", "pbRestock", "autoRkMode", "autoSkMode", "amzDropMode", "amzDropPick",
   "mwProfitMode", "mwNetMode", "amzKishu", "amzShipMax", "amzStockMin",
   /* 7.115：登録の売値を決める率。作業者の端末からは書き替えられない。 */
-  "mwUsedPct"];
+  "mwUsedPct",
+  /* 7.120：在庫CSVの自動取り込み（取りに行く先・間隔・オンオフ）。【P】 */
+  "mwCsvAuto", "mwCsvStop", "mwCsvUrl", "mwCsvEveryH", "mwCsvBodyH"];
 const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
 const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
 function settingsBlank(v) {
@@ -5384,19 +5397,26 @@ async function mwStockPut(env, body) {
       if (r) rows.push(r); else res.skipped++;
     }
     res.taken = rows.length;
-    /* いまの row_hash を引いて、変わった行だけ書く。 */
-    const have = {};
-    const step = d1Step(3);                 // (jan,sha,idx) で1件3個 → 32件ずつ
-    for (let i = 0; i < rows.length; i += step) {
-      const part = rows.slice(i, i + step);
-      const where = part.map(() => "(jan=? AND sha=? AND idx=?)").join(" OR ");
-      const bind = [];
-      for (const r of part) bind.push(r.jan, r.sha, r.idx);
-      const got = await env.DB.prepare(
-        `SELECT jan, sha, idx, row_hash, gone_at FROM mw_stock WHERE ${where}`)
-        .bind(...bind).all();
-      for (const y of (got && got.results) || [])
-        have[y.jan + "|" + y.sha + "|" + y.idx] = y;
+    /* いまの row_hash を引いて、変わった行だけ書く。
+       【P】自動取り込み（jobMwCsv）は**31便ぶんを先に1回で**引いて
+       body.have として渡してくるので、便ごとに引き直さない。
+       便ごとに引くと 12,062行で SELECT が 403回になり、
+       D1 の「1回の実行で 1,000問い合わせまで」に近づいてしまう。 */
+    const have = (body && body.have && typeof body.have === "object")
+      ? body.have : {};
+    if (!(body && body.have)) {
+      const step = d1Step(3);               // (jan,sha,idx) で1件3個 → 32件ずつ
+      for (let i = 0; i < rows.length; i += step) {
+        const part = rows.slice(i, i + step);
+        const where = part.map(() => "(jan=? AND sha=? AND idx=?)").join(" OR ");
+        const bind = [];
+        for (const r of part) bind.push(r.jan, r.sha, r.idx);
+        const got = await env.DB.prepare(
+          `SELECT jan, sha, idx, row_hash, gone_at FROM mw_stock WHERE ${where}`)
+          .bind(...bind).all();
+        for (const y of (got && got.results) || [])
+          have[y.jan + "|" + y.sha + "|" + y.idx] = y;
+      }
     }
     const stmts = [];
     for (const r of rows) {
@@ -5508,15 +5528,31 @@ async function mwStockPut(env, body) {
         res.ship_seen = sc.seen;
         res.ship_rows = sc.rows.slice(0, 20);
       } catch (e) { run.notes.push("mw-ship: " + String((e && e.message) || e)); }
-      await env.DB.prepare(
-        `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
-           unreadable,warn,note,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?1)`)
-        .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
-              res.gone, res.back, res.picked, mwNum(body && body.unreadable),
-              res.warn || null,
-              ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300))
-        .run();
+      /* 【P】src は自動（Cron）か手動（画面）か。画面の「前回の取り込み」に出す。
+         migrate-0046 を流す前のデータベースでも落ちないよう、
+         列が無ければ src 抜きで入れ直す。 */
+      const runNote = ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300);
+      const runSrc = String((body && body.src) === "auto" ? "auto" : "hand");
+      try {
+        await env.DB.prepare(
+          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
+             unreadable,warn,note,src,created_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
+          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
+                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
+                res.warn || null, runNote, runSrc)
+          .run();
+      } catch (e) {
+        run.notes.push("mw_runs の src 列がありません（migrate-0046）");
+        await env.DB.prepare(
+          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
+             unreadable,warn,note,created_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?1)`)
+          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
+                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
+                res.warn || null, runNote)
+          .run();
+      }
       /* 7.110：取り込みのたびに1通だけ知らせる（在庫切れ・新入荷）。 */
       try {
         res.note_sent = await mwImportNotify(env, run, at, res);
@@ -5534,6 +5570,424 @@ async function mwStockPut(env, body) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 【P】MW の在庫CSVを pj-sync が自分で取り込む =====
+
+   いままで在庫CSVは**人が MW から落として画面に読ませる**しかなかった。
+   取り込まないと欠品が分からず売り越しになるので、pj-sync が定期的に
+   取りに行くようにする。
+
+   読み方は共通（shared/mwcsv.js）
+     画面と同じ式を読むので、行数・出荷日数・JANごとの代表が1行もずれない。
+   差分・欠品・3割の歯止め・段取りD の数量0・【H】の知らせ
+     どれも今までの mwStockPut（手動と同じ口）をそのまま呼ぶので、
+     自動でも手動でも**まったく同じ処理**が走る。
+
+   MW への当たりを「人と同じくらい」に抑える（利用規約 第11条1項(2)(3)）
+     ・既定は1時間に1回、**HEAD**で ETag／Last-Modified／大きさだけを見る
+       （本体は落とさない）。HEAD が使えないサイトなら条件付き GET に落ちる
+     ・変わっていなければ**本体を取らない**
+     ・本体を取るのは多くても3時間に1回（⚙で変更可）
+     ・名乗る（User-Agent）。**メールアドレスは入れない**
+     ・既定はオフ。カジが⚙でオンにしてから動く
+
+   取得先の URL は⚙に置き、コードに直書きしない。
+   ただし**取ってよい先の形**は ALLOWED に1本だけ書いてあり（読み取りのみ）、
+   ⚙に別の URL を入れても assertReadOnly が止める。 */
+const MW_CSV_UA = "pj-sync（有限会社オーシャン貿易・在庫確認）";
+const MW_CSV_EVERY_H = 1;              // 「変わったか」を確かめる間隔（既定・時間）
+const MW_CSV_BODY_H = 3;               // 本体を取る最短の間隔（既定・時間）
+const MW_CSV_MIN_BYTES = 200 * 1024;   // これ未満は取り込まない（絶対の下限）
+const MW_CSV_MIN_RATIO = 0.5;          // 前回の半分未満は取り込まない
+const MW_CSV_MIN_ROWS = 1000;          // 読めた行がこれ未満は取り込まない
+const MW_CSV_FAIL_STOP = 3;            // 続けて失敗したら自動を止める
+const MW_CSV_BUDGET_MS = 9 * 60000;    // 1回の取り込みに使う時間の上限
+const MW_CSV_SUB_MAX = 900;            // 1回の実行で使う外向きの回数の上限
+/* D1 は「1回の実行で 1,000問い合わせまで」。実測（12,062行・2.1MB）では
+   先読み7回＋書き込みの batch 248回＋仕上げ30回＝**約285回**で収まる。
+   行がこれより増えると上限に近づくので、ここで止めて知らせる
+   （40,000行なら batch 800回＋α＝約850回）。 */
+const MW_CSV_ROWS_MAX = 40000;
+const MW_CSV_KEEP = 200;               // D1 に残す記録の件数
+const MW_CSV_LOG_MAX = 50;             // 1回に返す記録の件数の上限
+/* sync_state のキー。 */
+const MW_CSV_ETAG = "mwcsv.etag";
+const MW_CSV_MOD = "mwcsv.modified";
+const MW_CSV_HASH = "mwcsv.hash";
+const MW_CSV_BYTES = "mwcsv.bytes";
+const MW_CSV_CHECK = "mwcsv.checked_at";
+const MW_CSV_BODYAT = "mwcsv.body_at";
+const MW_CSV_FAIL = "mwcsv.fail";
+const MW_CSV_OFF = "mwcsv.auto_off";    // 3回続けて失敗して自動を止めた理由
+
+function mwCsvNumH(v, def, max) {
+  const n = Math.round(Number(v));
+  if (!isFinite(n) || n < 1) return def;
+  return Math.min(max, n);
+}
+/* ⚙の設定を1つにまとめる。URL は⚙にしかない（コードに既定を置かない）。 */
+function mwCsvCfg(st) {
+  st = st || {};
+  return {
+    on: mwNtOn(st, "mwCsvAuto", false),       // 既定オフ
+    stop: mwNtOn(st, "mwCsvStop", false),     // 「すぐ止める」
+    url: String(st.mwCsvUrl || "").trim(),
+    everyH: mwCsvNumH(st.mwCsvEveryH, MW_CSV_EVERY_H, 24),
+    bodyH: mwCsvNumH(st.mwCsvBodyH, MW_CSV_BODY_H, 48),
+  };
+}
+/* 次に取りに行く予定の時刻（画面に出す）。 */
+function mwCsvNextAt(checkedAt, everyH) {
+  if (!checkedAt) return "";
+  const t = new Date(checkedAt).getTime();
+  if (!isFinite(t)) return "";
+  return new Date(t + everyH * 3600000).toISOString();
+}
+/* 中身のハッシュ（ETag が無いサイト用）。mwHash と同じ FNV-1a。 */
+function mwCsvHash(buf) {
+  const b = new Uint8Array(buf);
+  let h = 2166136261;
+  for (let i = 0; i < b.length; i++) {
+    h ^= b[i];
+    h = (h * 16777619) >>> 0;
+  }
+  return h.toString(36) + "." + b.length.toString(36);
+}
+/* いまの mw_stock の row_hash を**まとめて1回で**引く（【P】）。
+   便ごとに引くと 12,062行で SELECT が 403回になり、D1 の
+   「1回の実行で 1,000問い合わせまで」に近づく。2,000行ずつ読めば7回で済む。 */
+async function mwStockHave(env) {
+  const have = {};
+  const page = 2000;
+  for (let off = 0; ; off += page) {
+    const q = await env.DB.prepare(
+      `SELECT jan,sha,idx,row_hash,gone_at FROM mw_stock
+        ORDER BY id LIMIT ?1 OFFSET ?2`).bind(page, off).all();
+    const rows = (q && q.results) || [];
+    for (const y of rows) have[y.jan + "|" + y.sha + "|" + y.idx] = y;
+    if (rows.length < page) break;
+  }
+  return have;
+}
+/* 記録を1行残す（⚙の「最近の取得」に出す）。 */
+async function mwCsvLog(env, o) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO mw_csv_runs (at,src,http,changed,took,bytes,rows_in,added,
+         changed_rows,gone,elapsed_ms,ok,why,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?1)`)
+      .bind(o.at || nowIso(), String(o.src || "auto"), Math.round(o.http || 0),
+            o.changed ? 1 : 0, o.took ? 1 : 0, Math.round(o.bytes || 0),
+            Math.round(o.rows_in || 0), Math.round(o.added || 0),
+            Math.round(o.changed_rows || 0), Math.round(o.gone || 0),
+            Math.round(o.elapsed_ms || 0), o.ok ? 1 : 0,
+            String(o.why || "").slice(0, 500) || null).run();
+    /* 古い記録は捨てる（D1 をためない）。 */
+    await env.DB.prepare(
+      `DELETE FROM mw_csv_runs WHERE id NOT IN (
+         SELECT id FROM mw_csv_runs ORDER BY id DESC LIMIT ?1)`)
+      .bind(MW_CSV_KEEP).run();
+  } catch (e) { /* 記録の失敗で本処理を落とさない */ }
+}
+/* ⚙に返す記録（10件ずつ画面が出す）。 */
+async function mwCsvRuns(env, url) {
+  const limit = Math.max(1, Math.min(MW_CSV_LOG_MAX,
+    Math.round(Number((url && url.searchParams.get("limit")) || 20) || 20)));
+  let rows = [];
+  try {
+    const q = await env.DB.prepare(
+      `SELECT at,src,http,changed,took,bytes,rows_in,added,changed_rows,gone,
+              elapsed_ms,ok,why FROM mw_csv_runs ORDER BY id DESC LIMIT ?1`)
+      .bind(limit).all();
+    rows = ((q && q.results) || []).map((r) => Object.assign({}, r,
+      { at_jst: jstText(r.at) }));
+  } catch (e) { return { ok: false, error: "no_table", rows: [] }; }
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const cfg = mwCsvCfg(st);
+  const checked = await stateGet(env, MW_CSV_CHECK);
+  const off = await stateGet(env, MW_CSV_OFF);
+  const fail = Math.round(Number(await stateGet(env, MW_CSV_FAIL)) || 0);
+  const next = (cfg.on && !cfg.stop && !off)
+    ? mwCsvNextAt(checked || nowIso(), cfg.everyH) : "";
+  return { ok: true, rows: rows, n: rows.length, limit: limit,
+           on: cfg.on, stop: cfg.stop, url_set: !!cfg.url,
+           every_h: cfg.everyH, body_h: cfg.bodyH,
+           checked_at: checked || "", checked_jst: checked ? jstText(checked) : "",
+           body_at: (await stateGet(env, MW_CSV_BODYAT)) || "",
+           next_at: next, next_jst: next ? jstText(next) : "",
+           fail: fail, fail_stop: MW_CSV_FAIL_STOP,
+           auto_off: off || "", ua: MW_CSV_UA };
+}
+/* 自動を止めた印を消す（⚙の「もう一度動かす」）。 */
+async function mwCsvResume(env) {
+  await stateSet(env, MW_CSV_OFF, "").run();
+  await stateSet(env, MW_CSV_FAIL, "0").run();
+  return { ok: true };
+}
+/* 失敗を数える。3回続いたら自動を止めて知らせる。 */
+async function mwCsvFailed(env, run, why, res) {
+  const n = Math.round(Number(await stateGet(env, MW_CSV_FAIL)) || 0) + 1;
+  await stateSet(env, MW_CSV_FAIL, String(n)).run();
+  res.fail = n;
+  res.why = why;
+  if (n >= MW_CSV_FAIL_STOP) {
+    await stateSet(env, MW_CSV_OFF, nowIso() + " " + why).run();
+    res.auto_off = true;
+    await notify(env, run,
+      "🛑 **MW の在庫CSVの自動取り込みを止めました**\n"
+      + "・" + MW_CSV_FAIL_STOP + "回続けて取れませんでした\n"
+      + "・最後の理由：" + why + "\n"
+      + "そのままだと**欠品が分からず売り越し**になります。"
+      + "画面の「MWの在庫CSVを取り込む」で手で入れてください。\n"
+      + "直ったら⚙の「自動取り込み」で「もう一度動かす」を押してください。\n"
+      + APP_URL + "#tab=F");
+  } else {
+    await notify(env, run,
+      "⚠ **MW の在庫CSVを取り込めませんでした**（" + n + "回目）\n"
+      + "・理由：" + why + "\n"
+      + "あと " + (MW_CSV_FAIL_STOP - n) + "回続くと自動取り込みを止めます。");
+  }
+  return res;
+}
+/* 取ってきた中身が在庫CSVとして使えるか見る。使えなければ理由を返す。 */
+function mwCsvBad(buf, text, lastBytes) {
+  const bytes = buf ? new Uint8Array(buf).length : 0;
+  if (!bytes) return "中身が空でした";
+  /* ログイン画面やお知らせの HTML が返ってきたとき。
+     **大きさより先に見る**（HTML は小さいので、先に大きさで弾くと
+     「ログイン画面だった」ことが分からなくなる）。 */
+  const head = String(text || "").slice(0, 500).replace(/^\s+/, "");
+  if (/^</.test(head) || /<!doctype|<html|<head|<body|<form/i.test(head))
+    return "CSV ではなく HTML が返ってきました（ログイン画面かもしれません）";
+  if (bytes < MW_CSV_MIN_BYTES)
+    return "大きさが " + bytes + "バイトしかありません（在庫CSVなら"
+      + Math.round(MW_CSV_MIN_BYTES / 1024) + "KB以上あるはずです）";
+  if (lastBytes > 0 && bytes < lastBytes * MW_CSV_MIN_RATIO)
+    return "大きさが " + bytes + "バイトで、前回（" + lastBytes
+      + "バイト）の半分未満です";
+  return "";
+}
+/* ===== 取りに行く本体 =====
+   opt.src  … "auto"（Cron）／"hand"（⚙の「いますぐ確かめる」）
+   opt.force… 間隔を無視して本体まで取る（⚙のボタン） */
+async function jobMwCsv(env, opt) {
+  const o = opt || {};
+  const src = o.src === "hand" ? "hand" : "auto";
+  const run = newRun("mw-csv");
+  const res = { ok: false, src: src, ran: false, checked: false, changed: false,
+                took: false, http: 0, bytes: 0, rows_in: 0, added: 0,
+                changed_rows: 0, same: 0, gone: 0, picked: 0, parts: 0,
+                warn: "", why: "", fail: 0, auto_off: false, enc: "" };
+  const t0 = Date.now();
+  try {
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    const cfg = mwCsvCfg(st);
+    res.every_h = cfg.everyH; res.body_h = cfg.bodyH;
+    /* ---- 動かしてよいか ---- */
+    if (cfg.stop) { res.why = "⚙の「すぐ止める」が入っています"; return fin(); }
+    if (src === "auto") {
+      if (!cfg.on) { res.why = "自動取り込みはオフです"; return fin(); }
+      const off = await stateGet(env, MW_CSV_OFF);
+      if (off) {
+        res.why = "続けて失敗したので止めています（⚙の「もう一度動かす」で戻せます）";
+        res.auto_off = true; return fin();
+      }
+    }
+    if (!cfg.url) {
+      res.why = "取得先の URL を⚙に入れてください";
+      if (src === "auto") await mwCsvFailed(env, run, res.why, res);
+      return fin();
+    }
+    /* 間隔（既定1時間）。手で押したときと force は待たない。 */
+    const checkedAt = await stateGet(env, MW_CSV_CHECK);
+    if (src === "auto" && checkedAt && !o.force) {
+      const ms = Date.now() - new Date(checkedAt).getTime();
+      if (isFinite(ms) && ms < cfg.everyH * 3600000 - 60000) {
+        res.why = "まだ " + cfg.everyH + "時間たっていません";
+        return fin();
+      }
+    }
+    res.ran = true;
+    const etag = await stateGet(env, MW_CSV_ETAG);
+    const mod = await stateGet(env, MW_CSV_MOD);
+    const lastHash = await stateGet(env, MW_CSV_HASH);
+    const lastBytes = Math.round(Number(await stateGet(env, MW_CSV_BYTES)) || 0);
+    /* ---- ① 変わったかだけを見る（HEAD。本体は落とさない）---- */
+    let changed = true, head = null;
+    try {
+      head = await net(run, cfg.url, { method: "HEAD",
+        headers: { "User-Agent": MW_CSV_UA } });
+      res.http = head.status;
+      res.checked = true;
+      if (head.status === 200) {
+        const e2 = head.headers.get("etag") || "";
+        const m2 = head.headers.get("last-modified") || "";
+        const l2 = Math.round(Number(head.headers.get("content-length")) || 0);
+        res.bytes = l2;
+        if (etag && e2 && e2 === etag) changed = false;
+        else if (!e2 && mod && m2 && m2 === mod) changed = false;
+        else if (!e2 && !m2 && lastBytes > 0 && l2 > 0 && l2 === lastBytes
+                 && lastHash) changed = false;    // 見分ける手がかりが無いとき
+      }
+    } catch (e) {
+      /* HEAD を受け付けないサイトもある。そのときは条件付き GET に落ちる。 */
+      run.notes.push("HEAD 不可：" + String((e && e.message) || e));
+      head = null;
+    }
+    await stateSet(env, MW_CSV_CHECK, nowIso()).run();
+    if (head && head.status !== 200 && head.status !== 304
+        && head.status !== 405 && head.status !== 501) {
+      const why = "HEAD が HTTP " + head.status + " を返しました";
+      await mwCsvFailed(env, run, why, res);
+      return fin();
+    }
+    res.changed = changed;
+    if (!changed && !o.force) { res.ok = true; res.why = "変わっていません"; return fin(); }
+    /* ---- ② 本体を取るのは多くても bodyH 時間に1回 ---- */
+    const bodyAt = await stateGet(env, MW_CSV_BODYAT);
+    if (src === "auto" && bodyAt && !o.force) {
+      const ms = Date.now() - new Date(bodyAt).getTime();
+      if (isFinite(ms) && ms < cfg.bodyH * 3600000 - 60000) {
+        res.ok = true;
+        res.why = "変わっていますが、本体を取るのは " + cfg.bodyH
+          + "時間に1回までなので次の回にします";
+        return fin();
+      }
+    }
+    /* ---- ③ 本体を取る（条件付き GET）---- */
+    const h = { "User-Agent": MW_CSV_UA };
+    if (etag) h["If-None-Match"] = etag;
+    else if (mod) h["If-Modified-Since"] = mod;
+    const resp = await net(run, cfg.url, { method: "GET", headers: h });
+    res.http = resp.status;
+    if (resp.status === 304) {
+      res.changed = false; res.ok = true; res.why = "変わっていません（304）";
+      await stateSet(env, MW_CSV_FAIL, "0").run();
+      return fin();
+    }
+    if (!resp.ok) {
+      await mwCsvFailed(env, run, "HTTP " + resp.status + " が返りました", res);
+      return fin();
+    }
+    const buf = await resp.arrayBuffer();
+    res.bytes = new Uint8Array(buf).length;
+    res.took = true;
+    await stateSet(env, MW_CSV_BODYAT, nowIso()).run();
+    /* ---- ④ Shift_JIS を文字にする ---- */
+    const dec = MWCSV.decode(buf);
+    res.enc = dec.enc;
+    if (dec.no_sjis) {
+      await mwCsvFailed(env, run,
+        "この Worker では Shift_JIS を読めません（TextDecoder が "
+        + MWCSV.SJIS_LABELS.join("／") + " を受け付けません）", res);
+      return fin();
+    }
+    /* ---- ⑤ 使える中身か ---- */
+    const bad = mwCsvBad(buf, dec.text, lastBytes);
+    if (bad) { await mwCsvFailed(env, run, bad, res); return fin(); }
+    if (dec.garbled) {
+      await mwCsvFailed(env, run, "文字が化けています（Shift_JIS ではなさそうです）", res);
+      return fin();
+    }
+    /* 同じ中身なら取り込まない（ETag が無いサイト用の歯止め）。 */
+    const hash = mwCsvHash(buf);
+    if (lastHash && hash === lastHash && !o.force) {
+      res.changed = false; res.ok = true; res.why = "中身が前回と同じでした";
+      await stateSet(env, MW_CSV_FAIL, "0").run();
+      await stateSet(env, MW_CSV_BYTES, String(res.bytes)).run();
+      return fin();
+    }
+    /* ---- ⑥ 読む（画面と同じ shared/mwcsv.js）---- */
+    const d = MWCSV.parse(dec.text);
+    if (d.err) { await mwCsvFailed(env, run, d.err, res); return fin(); }
+    res.rows_in = d.rows.length;
+    res.unreadable = d.unread;
+    if (d.rows.length < MW_CSV_MIN_ROWS) {
+      await mwCsvFailed(env, run,
+        "読めた行が " + d.rows.length + "行しかありません（在庫CSVなら "
+        + MW_CSV_MIN_ROWS + "行以上あるはずです）", res);
+      return fin();
+    }
+    if (d.rows.length > MW_CSV_ROWS_MAX) {
+      await mwCsvFailed(env, run,
+        "読めた行が " + d.rows.length + "行あり、1回で書ける上限（"
+        + MW_CSV_ROWS_MAX + "行）を超えています", res);
+      return fin();
+    }
+    /* ---- ⑦ 手動とまったく同じ口（mwStockPut）に分けて渡す ----
+       差分の書き込み・欠品・3割の歯止め・段取りD の数量0・【H】の知らせは
+       すべてあちらが持っている。ここでは分けて渡すだけ。 */
+    const parts = [];
+    for (let i = 0; i < d.rows.length; i += MW_CHUNK)
+      parts.push(d.rows.slice(i, i + MW_CHUNK));
+    res.parts = parts.length;
+    const at = nowIso();
+    /* いまの row_hash を先に1回で引いておく（D1 の問い合わせを減らす）。 */
+    const have = await mwStockHave(env);
+    for (let i = 0; i < parts.length; i++) {
+      /* 時間と外向きの回数の見張り。足りなくなったら finalize せずに止める
+         （seen_at を新しくしただけなので、次の回にやり直せば直る）。 */
+      if (Date.now() - t0 > MW_CSV_BUDGET_MS
+          || run.subrequests > MW_CSV_SUB_MAX) {
+        await mwCsvFailed(env, run,
+          "時間（または外向きの回数）の上限に届いたので " + (i + 1) + "／"
+          + parts.length + "便で止めました。次の回にやり直します", res);
+        return fin();
+      }
+      const r = await mwStockPut(env, { at: at, part: i + 1, parts: parts.length,
+        rows: parts[i], rows_in: d.rows.length, unreadable: d.unread, src: src,
+        have: have });
+      run.subrequests += Math.round(Number(r.subrequests) || 0);
+      if (r.error) {
+        await mwCsvFailed(env, run,
+          (i + 1) + "／" + parts.length + "便で失敗しました：" + r.error, res);
+        return fin();
+      }
+      res.added += Math.round(Number(r.added) || 0);
+      res.changed_rows += Math.round(Number(r.changed) || 0);
+      res.same += Math.round(Number(r.same) || 0);
+      if (r.part >= r.parts) {
+        res.gone = Math.round(Number(r.gone) || 0);
+        res.gone_jan = Math.round(Number(r.gone_jan) || 0);
+        res.picked = Math.round(Number(r.picked) || 0);
+        res.zeroed = Math.round(Number(r.zeroed) || 0);
+        res.warn = String(r.warn || "");
+      }
+    }
+    /* 取り込めたので、次の回の判定のために控える。 */
+    const e3 = resp.headers.get("etag") || "";
+    const m3 = resp.headers.get("last-modified") || "";
+    await stateSet(env, MW_CSV_ETAG, e3).run();
+    await stateSet(env, MW_CSV_MOD, m3).run();
+    await stateSet(env, MW_CSV_HASH, hash).run();
+    await stateSet(env, MW_CSV_BYTES, String(res.bytes)).run();
+    await stateSet(env, MW_CSV_FAIL, "0").run();
+    res.ok = true;
+    run.notes.push("MW在庫CSV（" + src + "）：" + res.rows_in + "行／足した "
+      + res.added + "／変わった " + res.changed_rows + "／欠品 " + res.gone);
+  } catch (e) {
+    run.errors++;
+    run.notes.push("例外 " + e.message);
+    res.error = e.message;
+    try { await mwCsvFailed(env, run, String(e.message || e), res); } catch (e2) {}
+  }
+  return fin();
+
+  function fin() {
+    res.elapsed_ms = Date.now() - t0;
+    /* 「動かさなかった」だけの回は記録を増やさない（記録が流れてしまう）。 */
+    const keep = res.ran || res.took || res.why && res.auto_off;
+    const p = keep ? mwCsvLog(env, {
+      at: nowIso(), src: src, http: res.http, changed: res.changed,
+      took: res.took, bytes: res.bytes, rows_in: res.rows_in, added: res.added,
+      changed_rows: res.changed_rows, gone: res.gone,
+      elapsed_ms: res.elapsed_ms, ok: res.ok, why: res.why || res.warn || "",
+    }) : Promise.resolve();
+    return p.then(() => saveRun(env, run)).then((x) => Object.assign(x, res));
+  }
+}
+
 /* 候補一覧（段取りA）。4章の1〜4で絞った**代表の行**だけ返す。
    5章の利益計算（卸値×1.1＋送料）は画面が shared/pricing.js で行う。 */
 /* ===== MW の候補を Amazon（国内FBA）で見る（7.66）=====
@@ -9459,9 +9913,34 @@ async function mwList(env, url) {
     `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL`).first();
   const pick = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_stock WHERE gone_at IS NULL AND pick=1`).first();
-  const last = await env.DB.prepare(
-    `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn
-       FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+  /* 【P】src（自動か手動か）も返す。migrate-0046 を流す前でも落ちないよう、
+     列が無ければ src 抜きで引き直す。 */
+  let last = null;
+  try {
+    last = await env.DB.prepare(
+      `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn,src
+         FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+  } catch (e) {
+    last = await env.DB.prepare(
+      `SELECT at,rows_in,added,changed,same,gone,back,picked,unreadable,warn
+         FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+  }
+  /* 【P】自動取り込みの様子（オンオフ・次に取りに行く予定）。
+     画面の「前回の取り込み」に出す。 */
+  let csv = null;
+  try {
+    let cst = {};
+    try { cst = (await settingsGet(env)).settings || {}; } catch (e) { cst = {}; }
+    const ccfg = mwCsvCfg(cst);
+    const cchk = await stateGet(env, MW_CSV_CHECK);
+    const coff = await stateGet(env, MW_CSV_OFF);
+    const cnext = (ccfg.on && !ccfg.stop && !coff)
+      ? mwCsvNextAt(cchk || nowIso(), ccfg.everyH) : "";
+    csv = { on: ccfg.on, stop: ccfg.stop, url_set: !!ccfg.url,
+            every_h: ccfg.everyH, body_h: ccfg.bodyH,
+            checked_at: cchk || "", next_at: cnext,
+            next_jst: cnext ? jstText(cnext) : "", auto_off: coff || "" };
+  } catch (e) { csv = null; }
   return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
            stale_h: MW_STALE_H,
            mkt: { seen: Number((mk && mk.seen) || 0), hit: Number((mk && mk.hit) || 0),
@@ -9471,6 +9950,7 @@ async function mwList(env, url) {
            alive: Number((all && all.n) || 0),
            picked: Number((pick && pick.n) || 0),
            last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
+           csv: csv,
            limit: limit };
 }
 /* ===== MW の商品画像（6.1 の①・7.63）=====
@@ -11005,6 +11485,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
+  "mw_csv_runs",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
   "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
@@ -11030,6 +11511,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["mw_csv_runs", "migrate-0046-mw-csv.sql"],
   ["_migrations", "migrate-0045-migrations.sql"],
   ["used_low", "migrate-0044-reg-price.sql"],
   ["price_src", "migrate-0044-reg-price.sql"],
@@ -11478,7 +11960,9 @@ export default {
         && (url.pathname === "/mw/stock" || url.pathname === "/mw/market"
             || url.pathname === "/mw/amz"
             || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
-            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"))
+            || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
+            /* 【P】在庫CSVの自動取り込みを動かす・止めるのも管理者だけ。 */
+            || url.pathname === "/mw/csv/run" || url.pathname === "/mw/csv/on"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 7.111：**Amazon への登録は作業者の端末からもできる**。
        ただし送る中身（売値・SKU・申告・仕入原価）は pj-sync 側で組み立て、
@@ -11721,6 +12205,21 @@ export default {
       /* 候補の件数を数えるだけ（7.100）。条件の見直しの見込みに使う。 */
       if (request.method === "GET" && url.pathname === "/mw/count")
         return json(await mwCountRun(env, url), 200, origin);
+      /* ===== 【P】MW の在庫CSVの自動取り込み =====
+         ・GET  /mw/csv      … 最近の取得の記録と、いまの設定・次の予定
+         ・POST /mw/csv/run  … いますぐ確かめる（force で本体まで取る）
+         ・POST /mw/csv/on   … 続けて失敗して止まったのを戻す
+         記録を見るのは誰でも、動かすのは**管理者だけ**（上の枝で弾いている）。 */
+      if (request.method === "GET" && url.pathname === "/mw/csv")
+        return json(await mwCsvRuns(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/mw/csv/run") {
+        const b = await request.json().catch(() => ({}));
+        const pr = jobMwCsv(env, { src: "hand", force: !!(b && b.force) });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
+        return json(await pr, 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mw/csv/on")
+        return json(await mwCsvResume(env), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/ptypes")
         return json(await mwPtypeList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/auto") {
@@ -11956,6 +12455,11 @@ export default {
          知らせは1日1回にしてある。 */
       try { await jobAmzDrop(env, {}); }
       catch (e) { /* ここで落ちても本体は止めない */ }
+      /* 【P】MW の在庫CSVを自分で取りに行く（既定オフ）。
+         ここは「変わったか」を見るだけで、変わっていなければ本体を取らない。
+         催促（mwStaleCheck）より**先に**走らせる（取り込めたら催促は出ない）。 */
+      try { await jobMwCsv(env, { src: "auto" }); }
+      catch (e) { /* 取り込みが失敗しても本体は止めない */ }
       /* 取り込みが24時間止まっていたら催促する（7.75）。 */
       try { await mwStaleCheck(env, newRun("mw-stale")); }
       catch (e) { /* 催促が失敗しても本体は止めない */ }
@@ -12023,6 +12527,11 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         MW_RST_BAD_TTL_D, MW_RST_COND,
                         jobMwDrop, mwDropPlan, mwJanOfSku, mwOrderNotify,
                         mwStaleCheck, MW_STALE_H, MW_STOCK_MIN,
+  /* 【P】在庫CSVの自動取り込み */
+  jobMwCsv, mwCsvCfg, mwCsvRuns, mwCsvResume, mwCsvBad, mwCsvHash, mwCsvNextAt,
+  mwStockHave, MW_CSV_ROWS_MAX,
+  MWCSV, MW_CSV_UA, MW_CSV_EVERY_H, MW_CSV_BODY_H, MW_CSV_MIN_BYTES,
+  MW_CSV_MIN_ROWS, MW_CSV_FAIL_STOP, MW_CSV_MIN_RATIO,
                         MW_D_MAX, MW_D_OVER,
                         spSlotKv, SP_KV_LANES,
                         mwAmzList, mwAsinFind, amazonLowest,

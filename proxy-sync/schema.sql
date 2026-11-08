@@ -480,9 +480,31 @@ CREATE TABLE IF NOT EXISTS mw_runs (
   unreadable INTEGER NOT NULL DEFAULT 0,       -- 出荷日が読めなかった行
   warn       TEXT,                             -- 行数が減りすぎたときの警告
   note       TEXT,
+  src        TEXT NOT NULL DEFAULT 'hand',    -- 'auto'（pj-sync）／'hand'（画面）
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_runs_at ON mw_runs(at);
+
+-- 在庫CSVを取りに行った1回ぶんの記録（7.120・【P】）
+-- 「変わったか」だけを見た回も残すので、mw_runs とは別に持つ。
+CREATE TABLE IF NOT EXISTS mw_csv_runs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  src          TEXT NOT NULL DEFAULT 'auto',  -- 'auto'（Cron）／'hand'（⚙のボタン）
+  http         INTEGER NOT NULL DEFAULT 0,    -- HEAD/GET の応答
+  changed      INTEGER NOT NULL DEFAULT 0,    -- 前回と変わっていたか
+  took         INTEGER NOT NULL DEFAULT 0,    -- 本体を取ったか
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  rows_in      INTEGER NOT NULL DEFAULT 0,
+  added        INTEGER NOT NULL DEFAULT 0,
+  changed_rows INTEGER NOT NULL DEFAULT 0,
+  gone         INTEGER NOT NULL DEFAULT 0,
+  elapsed_ms   INTEGER NOT NULL DEFAULT 0,
+  ok           INTEGER NOT NULL DEFAULT 0,
+  why          TEXT,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mw_csv_runs_at ON mw_csv_runs(at);
 
 /* ===== MW 無在庫：eBay の相場と MW の画像（7.62・7.63）===== */
 -- eBay の相場。JAN（GTIN）で Browse API を引いた結果を控える。
