@@ -11201,8 +11201,12 @@ async function putListings(env, body) {
          /* 再調達中の印と、その監視用の数字。印を下ろしたらまとめて消す。
             送られてこなければ（?13 IS NULL）いまの値をそのまま残す。 */
          /* Amazon 無在庫の印（7.102）は別表（amz_drop）に持つ。
-            立てたら値段の追従も始める（restocking の仕組みをそのまま使う）。 */
-         restocking=CASE WHEN ?45=1 THEN 1 ELSE COALESCE(?13, restocking) END,
+            立てたら値段の追従も始める（restocking の仕組みをそのまま使う）。
+            7.118：ここは bind の **42番目**。v226 では 45番と書いてしまい、
+            D1 が「45個よこせ」と数えるのに 42個しか渡していなかったため、
+            行ボタンぜんぶが「Wrong number of parameter bindings」で 500 に
+            なっていた。**番号は 1 から詰めて使う**（抜けを作ると D1 が落ちる）。 */
+         restocking=CASE WHEN ?42=1 THEN 1 ELSE COALESCE(?13, restocking) END,
          restock_at=CASE WHEN ?13=1 THEN ?8 WHEN ?13=0 THEN NULL ELSE restock_at END,
          -- 印を下ろすときだけ消す。それ以外は送られてきた項目だけを書き替える。
          restock_price=CASE WHEN ?13=0 THEN NULL ELSE COALESCE(?10, restock_price) END,
@@ -11236,7 +11240,7 @@ async function putListings(env, body) {
            (x.rk_n === null || x.rk_n === undefined) ? null
              : Math.max(0, Math.round(Number(x.rk_n) || 0)),
            numOf(x, "rk_max_cost"), flagOf(x, "sold_keep"),
-           /* ?45：Amazon 無在庫の印（7.102）。 */
+           /* ?42：Amazon 無在庫の印（7.102）。 */
            flagOf(x, "amz_drop")));
     /* 印そのものは別表に入れる（items は100列ちょうどで足せない）。 */
     const ad = flagOf(x, "amz_drop");
