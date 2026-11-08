@@ -98,9 +98,12 @@ const bad=await j(await worker.fetch(post('/settings/undo',{}),env));
 ok(bad.body.ok===false&&bad.body.error==='bad_id','id が無ければ断る');
 
 console.log('\n=== 古い履歴は捨てる（直近200件だけ残す）===');
+/* 「戻す」は at に**いまの時刻**を入れるので、ここも**いまより後**の時刻で送る
+   （固定の日付にすると、その日を過ぎた日に走らせたとき古い書き込みとして
+     退けられ、履歴が増えない）。 */
 for(let i=0;i<30;i++)
   await j(await worker.fetch(post('/settings',
-    {at:new Date(Date.parse('2026-11-08T00:00:00.000Z')+i*60000).toISOString(),
+    {at:new Date(Date.now()+(i+1)*60000).toISOString(),
      settings:{baseProfit:String(3000+i)}}),env));
 const cnt=env.DB._db.prepare('SELECT COUNT(*) n FROM settings_log').get();
 const mx=env.DB._db.prepare('SELECT MAX(id) m FROM settings_log').get();
