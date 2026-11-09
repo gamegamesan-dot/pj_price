@@ -54,11 +54,38 @@ export function wantBinds(sql){
    node:sqlite は `?N` に抜けがあっても渡した順に当てはめてしまうので、
    このテストだけ通って本番で 500 になっていた
    （v226 の `?45`：D1 は45個、コードは42個）。 */
+/* ---- D1 の「二重引用符の落とし穴」（DQS・7.123）----
+   SQLite には「二重引用符の中が列として見つからなければ**文字列**として扱う」
+   という古い仕様（double-quoted string literal）がある。
+   **D1 ではこれが有効**なので
+     SELECT "asin_n" FROM "mw_auto_runs" LIMIT 0
+   は、asin_n という列が無くても**文字列 'asin_n' を返して成功する**。
+   いっぽう **node:sqlite はこれを切ってある**ので、同じ文がエラーになる。
+
+   そのため「素の "列" で列の有無を確かめる」コードは、
+   **テストだけ正しく動いて本番ではいつも「ある」**になっていた
+   （2026-11-09：migrate-0047／0048 がぜんぶ「済み」と誤判定され、
+     流れていなかった。worker.js の colOk も同じ）。
+   同じ間違いを二度としないため、**作り物も D1 と同じふるまい**にする。
+   列を確かめるときは必ず「表.列」と書く（そちらは DQS が効かない）。 */
+export function dqsProbe(sql){
+  return /^\s*SELECT\s+"[A-Za-z0-9_]+"(\s*,\s*"[A-Za-z0-9_]+")*\s+FROM\s+"[A-Za-z0-9_]+"\s+LIMIT\s+0\s*$/i
+    .test(String(sql||''));
+}
 export function makeDB(){
   const db=new DatabaseSync(':memory:');
   db.exec(fs.readFileSync(SCHEMA,'utf8'));
   const norm=(a)=>a.map((v)=>v===undefined?null:(typeof v==='boolean'?(v?1:0):v));
   const mk=(sql)=>{
+    /* 7.123：D1 と同じく、素の "列" だけの空振りの SELECT は
+       **列が無くても通る**（文字列として読まれる）。
+       この1行があるおかげで、素の "列" で列の有無を確かめるコードは
+       テストでも本番と同じに「いつも ある」と答える＝間違いが見つかる。 */
+    if(dqsProbe(sql)){
+      const o0={ bind(){ return o0; }, async run(){ return { meta:{} }; },
+        async first(){ return null; }, async all(){ return { results:[] }; } };
+      return o0;
+    }
     let args=[];
     const o={
       bind(...a){ args=norm(a);

@@ -57,9 +57,15 @@ console.log('\n=== もう当たっているかの判定（空振りの SELECT・
    ふだんの SELECT で「その表・その列があるか」を確かめる。 */
 ok(M.probeTableSql('amz_drop')==='SELECT 1 FROM "amz_drop" LIMIT 0',
    '★★★表があるかは SELECT 1 FROM … LIMIT 0 で確かめる');
+/* 7.123：列は**必ず「表.列」**で名指しする。
+   素の `SELECT "列"` だと、SQLite の古い仕様（DQS）で**無い列が文字列になり、
+   エラーにならない**（D1 では DQS が有効）。そのため列だけを足すファイルが
+   ぜんぶ「済み」と誤判定され、記録だけされて流れていなかった。 */
 ok(M.probeColsSql('mw_amz',['used_low','used_n'])
-   ==='SELECT "used_low","used_n" FROM "mw_amz" LIMIT 0',
-   '★★★列があるかは、その列を名指しした SELECT で確かめる（表ごとに1回）');
+   ==='SELECT "mw_amz"."used_low","mw_amz"."used_n" FROM "mw_amz" LIMIT 0',
+   '★★★列は「表.列」で名指しする（DQS で文字列にならないように）');
+ok(!/SELECT "used_low"/.test(M.probeColsSql('mw_amz',['used_low'])),
+   '★★★素の "列" では確かめない（無い列でも通ってしまう）');
 ok(M.probeTableSql('a"b').indexOf('"a""b"')>0
    &&M.probeColsSql('t',['a"b']).indexOf('"a""b"')>0,
    '★★名前の " をエスケープする');
@@ -169,6 +175,17 @@ const mkDb=(opt)=>{
       return { status:1, stdout:'', stderr:o.failMsg||'Error: だめ' };
     if(o.doneAt&&o.doneAt.test&&o.doneAt.test(s))
       return { status:1, stdout:'', stderr:'duplicate column name: x' };
+    /* 7.123：流したら**本物と同じように作りが増える**（表・列）。
+       ここを増やさないと、流した直後の確かめ（verify）で
+       「まだ足りない」と出てしまい、作り物だけが現実と食い違う。 */
+    let a=/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z0-9_]+)/i.exec(s);
+    if(a)st.tables[a[1]]=1;
+    a=/^ALTER\s+TABLE\s+["'`]?([A-Za-z0-9_]+)["'`]?\s+ADD\s+(?:COLUMN\s+)?["'`]?([A-Za-z0-9_]+)/i
+      .exec(s);
+    if(a){ st.columns[a[1]]=st.columns[a[1]]||{}; st.columns[a[1]][a[2]]=1; }
+    a=/^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z0-9_]+)/i
+      .exec(s);
+    if(a)st.indexes[a[1]]=1;
     return { status:0, stdout:'', stderr:'' };
   };
   const query=async(sql)=>{
@@ -207,7 +224,10 @@ fs.writeFileSync(path.join(TMP,'migrate-0003-c.sql'),
 const quiet=()=>{};
 
 console.log('\n=== 未適用だけを流す（控えにあるものは飛ばす）===');
-let d=mkDb({ ledger:{ 'migrate-0001-a.sql':1 } });
+/* 7.123：控えで「済み」のファイルは**作りも揃っている**ことにする
+   （揃っていなければ未適用に戻るのが新しいふるまい。下の塊で確かめる）。 */
+let d=mkDb({ ledger:{ 'migrate-0001-a.sql':1 },
+  columns:{ items:{ aa:1, ab:1 } } });
 let r=await M.migrate({ dir:TMP, src:'actions', exec:d.exec, query:d.query, probe:d.probe,
   log:quiet, now:()=>'2026-11-08T05:00:00Z' });
 console.log('   '+JSON.stringify({ok:r.ok,pending:r.pending,ran:r.ran,
@@ -232,7 +252,9 @@ ok(d.st.ran.length===2,'★★★SQL を1文も流さない');
 ok(/流すものはありません/.test(r.note),'★そう書く');
 
 console.log('\n=== PC で流したぶんも飛ばす（同じ控えを見る）===');
-d=mkDb({ ledger:{} });
+/* 7.123：PC がほんとうに流してあるので、0002 の表 bb はもうある
+   （無ければ「控えでは済みだが作りが足りない」として流し直すのが正しい）。 */
+d=mkDb({ ledger:{}, tables:{ items:1, bb:1 } });
 /* 手元の d1-exec.mjs が書く文と、d1-migrate.mjs が書く文が同じであること。 */
 ok(X.markSql('f.sql','t','pc')===M.sqlMark('f.sql','t','pc'),
    '★★★PC と Actions が**同じ表に同じ書き方**で記録する');
@@ -347,9 +369,21 @@ ok(!/^\s*push:/m.test(y),
 ok(/#\s*push:/.test(y)&&/branches: \[main\]/.test(y),
    '★★あとで自動にする書き方をコメントで残してある');
 ok(/dry_run:/.test(y)&&/run_migrations:/.test(y)&&/deploy:/.test(y),
-   '★★★入力は3つ');
+   '★★★基本の入力は3つ（確かめだけ・D1・デプロイ）');
+/* 7.123：控えを信じずに作りを確かめる（verify）と、名指しの流し直し（rerun）。 */
+ok(/\n      verify:/.test(y)&&/\n      rerun:/.test(y),
+   '★★★控えの確かめ（verify）と流し直し（rerun）の入力がある');
+/* 既定が true なのは「確かめだけ」「D1」「デプロイ」「控えの確かめ」の4つ。
+   いちばん安全な側（何も壊さない側）が既定であること。 */
 const defs=(y.match(/default: true/g)||[]).length;
-ok(defs===3,'★★★3つとも既定は true（'+defs+'つ）');
+ok(defs===4,'★★★既定が true なのは4つ（'+defs+'つ）');
+ok(/verify:[\s\S]{0,200}?default: true/.test(y),
+   '★★★控えの確かめは既定オン（控えは「流したつもり」の記録にすぎない）');
+ok(/allow_data:[\s\S]{0,200}?default: false/.test(y),
+   '★★UPDATE を流すのは既定オフ');
+ok(/VERIFY: \$\{\{ inputs\.verify \}\}/.test(y)
+   &&/--no-verify/.test(y)&&/--rerun/.test(y),
+   '★★★入力を d1-migrate.mjs に渡している');
 /* 7.117：あとから足した2つ。 */
 ok(/baseline_to:/.test(y)&&/type: string/.test(y)&&/default: ''/.test(y),
    '★★★「この番号までは済み」の入力があり、既定は空');

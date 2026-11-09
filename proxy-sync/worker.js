@@ -1183,7 +1183,13 @@ async function colOk(env, table, col) {
   const k = table + "." + col;
   if (COL_OK[k]) return true;
   try {
-    await env.DB.prepare(`SELECT "${col}" FROM "${table}" LIMIT 0`).all();
+    /* 7.123：**必ず「表.列」で書く**。素の `SELECT "列"` だと、
+       SQLite の古い仕様（DQS）で**無い列が文字列になり、落ちない**。
+       D1 ではこれが有効なので、v244 の書き方は列が無くても
+       いつも「ある」と答えていた（そのせいで /mw/auto が 500 相当になり、
+       画面に「記録の表がありません」と出た）。 */
+    await env.DB.prepare(
+      `SELECT "${table}"."${col}" FROM "${table}" LIMIT 0`).all();
     COL_OK[k] = true;
     return true;
   } catch (e) { return false; }

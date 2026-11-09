@@ -45,6 +45,18 @@ on:
         description: 'UPDATE が入るファイルも流す（中身を見たあとだけオン）'
         type: boolean
         default: false
+      # 7.123：控え（_migrations）で「済み」と書いてあるファイルも、
+      # いまの D1 に作りが揃っているかを確かめ、足りなければ未適用に戻す。
+      # 既定オン（控えは「流したつもり」の記録にすぎないので、作りを正とする）。
+      verify:
+        description: '控えで「済み」のファイルも作りを確かめる（足りなければ流し直す）'
+        type: boolean
+        default: true
+      # 7.123：1本だけ名指しで流し直す（名前／番号／名前の一部）。
+      rerun:
+        description: 'このファイルを流し直す（例 0048・mw-auto・空なら指定なし）'
+        type: string
+        default: ''
 
 # 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
 # 走っている途中のものは止めない（D1 の作業を中断させない）。
@@ -111,12 +123,17 @@ jobs:
           DRY: ${{ inputs.dry_run }}
           BASE: ${{ inputs.baseline_to }}
           ALLOW: ${{ inputs.allow_data }}
+          VERIFY: ${{ inputs.verify }}
+          RERUN: ${{ inputs.rerun }}
         run: |
           set -o pipefail
           ARGS='--src actions --summary mig-summary.txt'
           if [ "$DRY" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           if [ "$ALLOW" = "true" ]; then ARGS="$ARGS --allow-data"; fi
           if [ -n "$BASE" ]; then ARGS="$ARGS --baseline $BASE"; fi
+          # 7.123：控えを信じずに、いまの作りを確かめる（既定オン）。
+          if [ "$VERIFY" = "false" ]; then ARGS="$ARGS --no-verify"; fi
+          if [ -n "$RERUN" ]; then ARGS="$ARGS --rerun $RERUN"; fi
           echo "引数: $ARGS"
           # 失敗しても知らせは出したいので、ここでは止めずに結果を控える。
           set +e

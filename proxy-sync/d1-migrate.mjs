@@ -84,7 +84,22 @@ export function sqlObjects(sql) {
    「その表・その列があるか」を**空振りの SELECT**で確かめる。
 
      表があるか   … SELECT 1 FROM "t" LIMIT 0
-     列があるか   … SELECT "c1","c2" FROM "t" LIMIT 0
+     列があるか   … SELECT "t"."c1","t"."c2" FROM "t" LIMIT 0
+
+   ★★★ 列は**必ず「表.列」で書く**（7.123）★★★
+   `SELECT "c1" FROM "t" LIMIT 0` だと **列が無くてもエラーにならない**。
+   SQLite には「二重引用符の中が列として見つからなければ**文字列**として扱う」
+   という古い仕様（DQS）があり、D1 ではこれが**有効**なので
+   `SELECT "asin_n" FROM "mw_auto_runs"` は文字列 'asin_n' を返して成功する。
+   そのため **列だけを足すファイル（ALTER ADD COLUMN だけのファイル）は
+   ぜんぶ「済み」と誤判定**され、記録だけされて**流れていなかった**
+   （2026-11-09・migrate-0047／0048）。
+   「表.列」と書けば DQS は効かず、無い列は "no such column: t.c1" で落ちる。
+   実機で確かめた（wrangler d1 execute --json）：
+     SELECT "nope" FROM "t" LIMIT 0        → 終了コード0・success（通ってしまう）
+     SELECT "t"."nope" FROM "t" LIMIT 0    → 終了コード1・no such column: t.nope
+   なお **node:sqlite は DQS が切ってある**ので、テストだけ正しく落ちていた
+   （tests/lib.mjs で本物と同じにした）。
 
    ぜんぶ揃っていれば1回で通る（ふつうはこれ）。通らなかったときだけ、
    どれが無いのかを1列ずつ確かめる（足りないものを名前で出すため）。
@@ -95,7 +110,9 @@ export function probeTableSql(t) {
 }
 export function probeColsSql(t, cols) {
   const q = (v) => '"' + String(v).replace(/"/g, '""') + '"';
-  return "SELECT " + cols.map(q).join(",") + " FROM " + q(t) + " LIMIT 0";
+  /* 7.123：**必ず「表.列」**。素の "列" だと DQS で文字列になり落ちない。 */
+  return "SELECT " + cols.map((c) => q(t) + "." + q(c)).join(",")
+    + " FROM " + q(t) + " LIMIT 0";
 }
 /* エラーの文から「何が無いのか」を読む。 */
 export function missKind(err) {
@@ -182,7 +199,9 @@ export async function migrate(opt) {
   const res = { ok: false, pending: [], ran: [], marked: [], failed: "",
                 at: "", note: "", src, dry: !!o.dry,
                 /* 7.117：ファイルごとの判定（済み／未適用＋足りないもの／要確認）。 */
-                judge: [], todo: [], data: [], unknown: [] };
+                judge: [], todo: [], data: [], unknown: [],
+                /* 7.123：控えでは「済み」なのに作りが足りず、未適用に戻した分。 */
+                relist: [], rerun: [] };
   const files = fileList(dir);
   if (!files.length) {
     res.ok = true; res.note = "マイグレーションのファイルがありません";
@@ -237,9 +256,61 @@ export async function migrate(opt) {
     }
     done = {};
   }
-  res.pending = files.filter((f) => !done[f]);
+  const memo = {};
+  const objsOf = (f) => {
+    try { return sqlObjects(readFileSync(path.join(dir, f), "utf8")); }
+    catch (e) { return null; }
+  };
+  /* ★ 7.123：控え（_migrations）に「済み」と書いてあっても、**いまの D1 に
+       作りが足りないファイル**を見つけて「未適用」に戻す（verify。既定オン）。
+     二重引用符の落とし穴（probeColsSql のコメント）で、**列だけを足す
+     ファイルがぜんぶ「済み」と誤判定**され、記録だけされて流れていなかった。
+     控えは「流したつもり」の記録にすぎないので、**本当の作りを正とする**。
+     ・データを動かすファイル（UPDATE 入り）は触らない（二重に流さない）
+     ・判定できなかったファイルも触らない（控えのままにする）
+     --no-verify で止められる（急ぎのときだけ）。 */
+  const relist = {};
+  if (o.verify !== false) {
+    for (const f of files) {
+      if (!done[f]) continue;
+      const objs = objsOf(f);
+      if (!objs || objs.other > 0) continue;
+      if (!objs.tables.length && !objs.columns.length) continue;
+      const g = await judgeFile(objs, probe, memo);
+      if (g.state !== "todo") continue;
+      relist[f] = g.why;
+      res.relist.push(f);
+    }
+    if (res.relist.length) {
+      log("⚠ 控えでは「済み」なのに、D1 に作りが足りないファイルが "
+        + res.relist.length + "本あります（未適用に戻します）");
+      for (const f of res.relist) log("  ↩ " + f + "　" + relist[f]);
+    }
+  }
+  /* 7.123：入力「このファイルを流し直す」（名前でも番号でも受ける）。 */
+  const again = {};
+  for (const x of String(o.rerun || "").split(/[,\s]+/).filter(Boolean)) {
+    /* 名前そのまま（migrate-0048-mw-auto.sql）／番号（0048 でも 48 でも）／
+       名前の一部（mw-auto）のどれでも指せる。 */
+    const no = baseNo(x);
+    const hit = files.filter((f) => f === x
+      || (no > 0 && ((fileNo(f) || {}).no === no))
+      || (no === 0 && f.indexOf(x) >= 0));
+    if (!hit.length) {
+      res.failed = "流し直すファイルが見つかりません：" + x;
+      log("❌ " + res.failed);
+      return res;
+    }
+    for (const f of hit) { again[f] = 1; res.rerun.push(f); }
+  }
+  if (res.rerun.length)
+    log("↻ 流し直す指定：" + res.rerun.join("・"));
+  res.pending = files.filter((f) => !done[f] || relist[f] || again[f]);
   log("マイグレーション " + files.length + "本／控えにあるもの "
-    + Object.keys(done).length + "本／未適用 " + res.pending.length + "本");
+    + Object.keys(done).length + "本／未適用 " + res.pending.length + "本"
+    + (res.relist.length ? ("（うち 作りが足りないので戻した " + res.relist.length
+        + "本）") : "")
+    + (res.rerun.length ? ("（うち 流し直す指定 " + res.rerun.length + "本）") : ""));
   if (!res.pending.length) {
     res.ok = true; res.note = "流すものはありません";
     log("流すものはありません。");
@@ -252,12 +323,17 @@ export async function migrate(opt) {
   if (base) log("「" + String(base).padStart(4, "0")
     + " までは済み」として記録だけします（baseline）。");
   const todo = [], data = [], unknown = [];
-  const memo = {};
   for (const f of res.pending) {
     const no = (fileNo(f) || {}).no || 0;
-    let objs = null;
-    try { objs = sqlObjects(readFileSync(path.join(dir, f), "utf8")); }
-    catch (e) { objs = null; }
+    const objs = objsOf(f);
+    /* 7.123：流し直す指定のファイルは、判定を飛ばして必ず流す
+       （すでに当たっている文は「済み」として読み飛ばされる）。 */
+    if (again[f]) {
+      todo.push(f);
+      res.judge.push({ file: f, state: "rerun", why: "流し直す指定" });
+      log("  ↻ " + f + "　流し直す指定 → 流す");
+      continue;
+    }
     if (base && no <= base) {
       res.marked.push(f);
       res.judge.push({ file: f, state: "base", why: "番号 "
@@ -392,6 +468,18 @@ export function summaryText(res) {
     if (list.length > SUMMARY_MAX)
       t.push("　ほか " + (list.length - SUMMARY_MAX) + "本");
   };
+  /* 7.123：控えでは「済み」なのに作りが足りず、未適用に戻した分。
+     「流したつもりで流れていなかった」ことが Discord だけで分かるように、
+     件数とファイル名を**いちばん目につくところ**に出す。 */
+  if ((r.relist || []).length) {
+    t.push("↩ 控えでは済みだが作りが足りない " + r.relist.length
+      + "本（未適用に戻した）");
+    for (const f of r.relist.slice(0, SUMMARY_MAX)) t.push("　" + f);
+    if (r.relist.length > SUMMARY_MAX)
+      t.push("　ほか " + (r.relist.length - SUMMARY_MAX) + "本");
+  }
+  if ((r.rerun || []).length)
+    t.push("↻ 流し直す指定 " + r.rerun.length + "本：" + r.rerun.join("・"));
   show("流す", r.dry ? (r.todo || []) : (r.ran || []), "▶");
   show("要確認（データを動かす文が入っている）", r.data || [], "❔");
   show("判定できない", r.unknown || [], "⚠");
@@ -472,6 +560,11 @@ function main() {
     baselineTo: at("--baseline"),
     /* 7.117：UPDATE などデータを動かすファイルも流す（既定は止める）。 */
     allowData: args.includes("--allow-data"),
+    /* 7.123：控えで「済み」のファイルも作りを確かめ、足りなければ
+       未適用に戻す（既定オン。--no-verify で止める）。 */
+    verify: !args.includes("--no-verify"),
+    /* 7.123：このファイルを流し直す（名前／番号／名前の一部）。 */
+    rerun: at("--rerun"),
   }).then((r) => {
     /* --summary <file> で、知らせに出す短い文を書き出す（GitHub Actions 用）。 */
     if (sumTo) {
