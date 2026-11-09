@@ -36,6 +36,8 @@ import PRICING from "../shared/pricing.js";
 /* MW の在庫CSVの読み方（【P】）。画面（index.html）と**同じファイル**を読む。
    同じ読み方でないと、画面と Worker で行数・出荷日数・代表の行がずれる。 */
 import MWCSV from "../shared/mwcsv.js";
+/* 7.126（【T】）在庫の動きから出す目安。式は shared/mwstat.js の1か所だけ。 */
+import MWSTAT from "../shared/mwstat.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -1161,7 +1163,7 @@ async function ebayActive(env, run) {
 /* ---- Discord 通知 ----
    7.125：**埋め込み（embeds）も送れる**ようにした。
    文だけの知らせは今までどおり notify(env, run, text)。 */
-async function notifyRaw(env, run, text, embeds) {
+async function notifyRaw(env, run, text, embeds, opt) {
   if (!env.DISCORD_WEBHOOK_URL) return false;
   const list = (embeds || []).filter(Boolean);
   if (!String(text || "") && !list.length) return false;
@@ -1169,17 +1171,38 @@ async function notifyRaw(env, run, text, embeds) {
   const body = { content: (String(text || "")
     + "\n（" + jstText(nowIso()) + " 日本時間）").slice(0, NOTIFY_MAX) };
   if (list.length) body.embeds = list;
-  const resp = await net(run, env.DISCORD_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) { run.errors++; run.notes.push("discord -> " + resp.status); return false; }
-  return true;
+  /* 7.126（【T】）詳しい一覧は**スレッドに流せる**ようにする。
+     ⚙「知らせのスレッド」に Discord のスレッドID を入れると、
+     そのスレッドへ送る（#一般 は1通目の要約だけになる）。
+     ※ ふつうの Webhook は**スレッドを自分で作れない**ので、
+       スレッドは人が1回だけ作って ID を入れる（8.9 に手順）。 */
+  let url = env.DISCORD_WEBHOOK_URL;
+  const th = String((opt && opt.thread) || "").replace(/\D/g, "");
+  if (th) url += (url.indexOf("?") >= 0 ? "&" : "?") + "thread_id=" + th;
+  /* 7.126（【T】）通数が増えたので、混み合ったとき（429）は
+     言われた秒数だけ待ってやり直す（3回まで）。 */
+  for (let i = 0; i < 4; i++) {
+    const resp = await net(run, url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) return true;
+    if (resp.status === 429 && i < 3) {
+      let wait = 1;
+      try { wait = Number((await resp.json()).retry_after) || 1; }
+      catch (e) { wait = 1; }
+      await sleep(Math.min(5, Math.max(0.2, wait)) * 1000);
+      continue;
+    }
+    run.errors++; run.notes.push("discord -> " + resp.status);
+    return false;
+  }
+  return false;
 }
-async function notify(env, run, text) {
+async function notify(env, run, text, opt) {
   if (!text) return false;
-  return notifyRaw(env, run, text, null);
+  return notifyRaw(env, run, text, null, opt);
 }
 
 /* ---- その列がもうあるか（7.121）----
@@ -1215,7 +1238,7 @@ async function colOk(env, table, col) {
      blocks … [[見出し, 行, 行, …], …]
    返りは送れた通数（0 なら1通も送れていない）。 */
 const NOTIFY_ROOM = 120;           // 時刻の行と「（n/m）」のぶんの余裕
-async function notifyBlocks(env, run, head, blocks) {
+async function notifyBlocks(env, run, head, blocks, opt) {
   const room = NOTIFY_MAX - NOTIFY_ROOM;
   const msgs = [];
   let cur = (head || []).slice();
@@ -1249,7 +1272,7 @@ async function notifyBlocks(env, run, head, blocks) {
   for (let i = 0; i < msgs.length; i++) {
     const tail = (msgs.length > 1)
       ? ("\n（" + (i + 1) + "/" + msgs.length + "通）") : "";
-    if (await notify(env, run, msgs[i].join("\n") + tail)) sent++;
+    if (await notify(env, run, msgs[i].join("\n") + tail, opt)) sent++;
   }
   return sent;
 }
@@ -1401,7 +1424,9 @@ const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour"
   /* 7.120：在庫CSVの自動取り込み（取りに行く先・間隔・オンオフ）。【P】 */
   "mwCsvAuto", "mwCsvStop", "mwCsvUrl", "mwCsvEveryH", "mwCsvBodyH",
   /* 7.125：知らせに出す項目の出し分け（社内用／会員用）。【S】 */
-  "mwNtAudience"];
+  "mwNtAudience",
+  /* 7.126：在庫の動きの目安と知らせの形（スレッド・全件出し）。【T】 */
+  "mwNtThread", "mwNtRest", "mwSaleNote", "mwWeek"];
 const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
 const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
 function settingsBlank(v) {
@@ -2694,6 +2719,8 @@ async function jobHourly(env) {
 async function jobDaily(env) {
   const run = newRun("rollcall");
   try {
+    /* 7.126（【T】）古い在庫の動きを捨てる（合計は mw_stat に残る）。 */
+    await mwMoveSweep(env, run);
     const keys = await syncRollcall(env, run);
     const items = await itemsByKeys(env, keys);
     await runBatch(env, run, stateEvents(env, items, await pbSettings(env)));
@@ -5278,8 +5305,15 @@ function mwRow(x) {
    ④ どれを知らせるか・上位何件かは⚙で切り替える（mwNt*）
    同じ商品を毎回知らせないよう、知らせた JAN は mw_notify に控える。 */
 const APP_URL = "https://gamegamesan-dot.github.io/pj_price/";
-const MW_NT_TOP = 10;              // 上位何件まで出すか（既定）
-const MW_NT_MAX = 50;              // ⚙で増やせる上限
+/* 7.126（【T】）「全部を商品ごとに出す」ので、既定を 10 → 100 に上げた。
+   1通に10件なので 100件なら10通。通数の歯止めは MW_NT_MSG_MAX。 */
+const MW_NT_TOP = 100;             // 1つの区分に出す件数（既定）
+const MW_NT_MAX = 200;             // ⚙で増やせる上限
+const MW_NT_MSG_MAX = 24;          // 1回の取り込みで送る通数の上限
+/* 7.126（【T】）1通目の要約に出す「注目の商品」の数と、
+   「再入荷が多い」と見なす回数。 */
+const MW_NT_MARK = 5;
+const MW_NT_BACK_MANY = 2;
 function mwNtOn(st, key, def) {
   const v = (st || {})[key];
   if (v === undefined || v === null || v === "") return def;
@@ -5419,6 +5453,38 @@ function mwNtEmbed(x, kind, aud) {
     f.push({ name: "MW在庫",
              value: (Number(x.stock) > 0 ? (Number(x.stock) + "点") : "—"),
              inline: true });
+    /* 7.126（【T】）在庫の動きの目安（社内用だけ。会員用には出さない）。 */
+    const c = x.stat;
+    if (c && !c.none) {
+      if (x.mv_prev !== null && x.mv_prev !== undefined)
+        f.push({ name: "在庫の変化",
+                 value: Math.max(0, Number(x.mv_prev)) + " → "
+                   + Math.max(0, Number(x.mv_cur) || 0) + " 点", inline: true });
+      f.push({ name: "売れる速さ",
+               value: (c.speed !== null && c.speed > 0)
+                 ? (c.speed + " 点/日"
+                    + (c.speedSrc === "week" ? "（直近7日）" : "（全期間）"))
+                 : "減っていません", inline: true });
+      if (c.outDays !== null)
+        f.push({ name: "欠品までの見込み", value: c.outDays + " 日",
+                 inline: true });
+      f.push({ name: "再入荷",
+               value: c.backN > 0
+                 ? (c.backN + " 回"
+                    + (c.backAvg !== null ? ("・平均 " + c.backAvg + "点") : "")
+                    + (c.goneAvg !== null ? ("・欠品 " + c.goneAvg + "日") : ""))
+                 : (c.goneN > 0 ? "**なし**（欠品 " + c.goneN + "回）" : "—"),
+               inline: true });
+      if (c.sale)
+        f.push({ name: "在庫処分",
+                 value: c.noBack ? "**あり・再入荷なし**（刈り切る候補）" : "あり",
+                 inline: true });
+      f.push({ name: "記録",
+               value: c.days + " 日分" + (c.thin ? "（目安は参考程度）" : ""),
+               inline: true });
+    } else if (c && c.none) {
+      f.push({ name: "記録", value: "まだありません", inline: true });
+    }
   }
   /* いちばん下にリンク（Amazon・Keepa）。 */
   f.push({ name: "リンク",
@@ -5446,7 +5512,7 @@ function mwNtEmbedLen(e) {
    title… 区分の見出し（毎通の先頭に出す）
    list … embed の配列（10個ずつ・6,000字ずつに分けて送る）
    返りは送れた通数。 */
-async function notifyEmbeds(env, run, head, title, list) {
+async function notifyEmbeds(env, run, head, title, list, opt) {
   const all = (list || []).filter(Boolean);
   if (!all.length) return 0;
   const packs = [];
@@ -5465,7 +5531,7 @@ async function notifyEmbeds(env, run, head, title, list) {
     if (i === 0 && head) t.push(head);
     if (title) t.push(title + (packs.length > 1
       ? ("（" + (i + 1) + "/" + packs.length + "通）") : ""));
-    if (await notifyRaw(env, run, t.join("\n"), packs[i])) sent++;
+    if (await notifyRaw(env, run, t.join("\n"), packs[i], opt)) sent++;
   }
   return sent;
 }
@@ -5480,8 +5546,8 @@ async function mwImportNotify(env, run, at, res) {
   const onNew = mwNtOn(st, "mwNtNew", true);     // 新入荷
   if (!onDrop && !onBuy && !onNew) return false;
   /* 3割の歯止めが効いた回は、欠品にしていないので在庫切れは知らせない。 */
-  const gone = res.warn ? [] : await mwNtGone(env, at);
-  const zero = res.warn ? [] : await mwNtZero(env, at);
+  const gone = res.warn ? [] : await mwNtGone(env, at, st);
+  const zero = res.warn ? [] : await mwNtZero(env, at, st);
   const fresh = onNew ? await mwNtNew(env, at, st) : [];
   /* 7.121（【Q】の1）：**欠品は「関わりのあるもの」だけ並べる**。
      ① eBay に無在庫で出品中（数量0にした）
@@ -5493,13 +5559,16 @@ async function mwImportNotify(env, run, at, res) {
   const drop = onDrop ? all.filter((x) => x.ebay) : [];
   const buy = onBuy ? all.filter((x) => x.buy && !x.ebay) : [];
   const hope = all.filter((x) => x.amz_hope && !x.ebay && !x.buy);
-  /* 関係のない欠品（件数だけ出す）。 */
-  const rest = all.filter((x) => !x.ebay && !x.buy && !x.amz_hope).length;
+  /* 関係のない欠品。7.126（【T】）からは**商品ごとにも出せる**（mwNtRest）。 */
+  const restRows = all.filter((x) => !x.ebay && !x.buy && !x.amz_hope);
+  const rest = restRows.length;
   if (!drop.length && !buy.length && !hope.length && !fresh.length && !rest)
     return false;
-  /* 同じ商品を毎回言わない（在庫0のぶん。CSV から消えた分は1回だけ起きる）。 */
+  /* 同じ商品を毎回言わない（在庫0のぶん。CSV から消えた分は1回だけ起きる）。
+     7.126：そのほかの欠品も商品ごとに出すので、**それも**見る
+     （在庫0のままの行が毎回並ばないように）。 */
   const seen = await mwNtSeen(env, "sold",
-    drop.concat(buy).concat(hope).map((x) => x.jan));
+    drop.concat(buy).concat(hope).concat(restRows).map((x) => x.jan));
   const drop2 = drop.filter((x) => !seen[x.jan]);
   const buy2 = buy.filter((x) => !seen[x.jan]);
   const hope2 = hope.filter((x) => !seen[x.jan]);
@@ -5507,6 +5576,9 @@ async function mwImportNotify(env, run, at, res) {
   const nw2 = fresh.filter((x) => !seenN[x.jan]);
   if (!drop2.length && !buy2.length && !hope2.length && !nw2.length && !rest)
     return false;
+  /* 7.126（【T】）詳しい一覧の送り先（スレッドID が入っていればそこへ）。 */
+  const thread = String(st.mwNtThread || "").replace(/\D/g, "");
+  const toTh = thread ? { thread: thread } : undefined;
   /* 7.125（【S】）：**1商品＝1つの埋め込み**で送る。
      pj へのリンク（#tab=…）と「長押し →Safari で開く」は**出さない**
      （Discord の中のブラウザはキーを持っていないので役に立たない）。 */
@@ -5516,19 +5588,54 @@ async function mwImportNotify(env, run, at, res) {
     + "（欠品の合計 " + (res.gone_all_jan || 0) + "件）"
     + "／新しく出てきた " + (res.added_jan || 0) + "件"
     + "／欠品から戻った " + (res.back_jan || 0) + "件"];
-  if (rest)
+  /* 7.126（【T】）「そのほかの欠品」も**商品ごとに**出す（既定オン）。
+     ⚙ mwNtRest をオフにすると、今までどおり件数だけになる。 */
+  const onRest = mwNtOn(st, "mwNtRest", true);
+  const rest2 = onRest ? restRows.filter((x) => !seen[x.jan]) : [];
+  if (rest && !onRest)
     head.push("・そのほかの欠品 " + rest + "件（eBay の出品・仕入れる印・"
       + "刈取の見込みのどれにも当たらないので件数だけ）");
+  /* 7.126：注目の商品（在庫処分で再入荷なし／刈取の見込みあり／再入荷が多い）。
+     1通目の要約だけ読めば「刈り切るか・少しずつか」が分かるように。 */
+  const marks = [];
+  const mark = (x, why) => {
+    if (marks.length >= MW_NT_MARK) return;
+    if (marks.some((m) => m.jan === x.jan)) return;
+    marks.push({ jan: x.jan, name: String(x.name || x.jan).slice(0, 40),
+                 why: why });
+  };
+  const pool = drop.concat(buy).concat(hope).concat(rest2).concat(fresh);
+  for (const x of pool)
+    if (x.stat && x.stat.noBack) mark(x, "在庫処分・再入荷なし");
+  for (const x of pool)
+    if (x.stat && x.stat.backN >= MW_NT_BACK_MANY)
+      mark(x, "再入荷 " + x.stat.backN + "回");
+  for (const x of pool)
+    if (x.amz_hope) mark(x, "刈取の見込みあり");
+  if (marks.length)
+    head.push("・注目：" + marks.map((m) => m.name + "（" + m.why + "）")
+      .join("／"));
+  if (thread) head.push("・くわしくはスレッドに10件ずつ出します。");
   let sent = 0;
+  let headSent = false;
+  /* 1通目は**要約だけ**（スレッドを使うときは #一般 に残るのはこれだけ）。 */
+  const sendHead = async () => {
+    if (headSent) return;
+    headSent = true;
+    if (await notify(env, run, head.join("\n"))) sent++;
+  };
+  const over = [];                 // 通数の上限で出せなかった区分
   const group = async (title, rows, kind, tailLine) => {
     if (!rows.length) return;
+    await sendHead();
+    if (sent >= MW_NT_MSG_MAX) { over.push(title.slice(0, 24)); return; }
     const show = rows.slice(0, top);
     const t = [title];
     if (rows.length > top) t.push("（多いので上位 " + top + "件を出します。"
       + "ほか " + (rows.length - top) + "件）");
     if (tailLine) t.push(tailLine);
-    const n = await notifyEmbeds(env, run, sent ? "" : head.join("\n"),
-      t.join("\n"), show.map((x) => mwNtEmbed(x, kind, aud)));
+    const n = await notifyEmbeds(env, run, "", t.join("\n"),
+      show.map((x) => mwNtEmbed(x, kind, aud)), toTh);
     sent += n;
   };
   await group("🛑 eBay に無在庫で出していた商品が売り切れました（**数量0にしました**）… "
@@ -5542,15 +5649,25 @@ async function mwImportNotify(env, run, at, res) {
     + hope2.length + "件", hope2, "gone");
   await group("🆕 新しく入荷しました（刈取の見込みあり／eBay 無在庫の候補）… "
     + nw2.length + "件", nw2, "new");
+  /* 7.126（【T】）そのほかの欠品も商品ごとに（いちばん下に置く）。 */
+  await group("📦 そのほかの欠品（eBay の出品・仕入れる印・刈取の見込みの"
+    + "どれにも当たらないもの）… " + rest2.length + "件", rest2, "gone");
+  /* 通数の上限に当たった区分があれば、そのことだけ知らせる。 */
+  if (over.length)
+    await notify(env, run, "※ 1回に送れる通数（" + MW_NT_MSG_MAX
+      + "通）に達したので、次の区分は出していません："
+      + over.join("／") + "（⚙「知らせに出す件数」で減らせます）", toTh);
   /* 1つも埋め込みを送らなかった（件数だけの回）ときは、文だけ送る。 */
-  if (!sent && rest) sent = (await notify(env, run, head.join("\n"))) ? 1 : 0;
+  if (!sent && rest) await sendHead();
   await mwNtMark(env, "sold",
-    drop2.concat(buy2).concat(hope2).map((x) => x.jan), at);
+    drop2.concat(buy2).concat(hope2).concat(rest2).map((x) => x.jan), at);
   await mwNtMark(env, "new", nw2.map((x) => x.jan), at);
   res.note_drop = drop2.length;
   res.note_buy = buy2.length;
   res.note_hope = hope2.length;
   res.note_rest = rest;
+  res.note_rest_shown = rest2.length;
+  res.note_marks = marks.length;
   res.note_new = nw2.length;
   return sent;
 }
@@ -5561,8 +5678,9 @@ async function mwNtOrdWhere(env) {
   return (await colOk(env, "mw_buy", "ordered_at"))
     ? `AND COALESCE(b.ordered_at,'') = ''` : "";
 }
-async function mwNtGone(env, at) {
+async function mwNtGone(env, at, st) {
   const ordWhere = await mwNtOrdWhere(env);
+  const mvq = await mwStatSql(env, "s", true);
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
             MAX(s.list_price) AS list_price,
@@ -5570,6 +5688,8 @@ async function mwNtGone(env, at) {
                7.125：MW在庫（会員用では「購入できる数」）も出すので引く。 */
             MAX(s.sha) AS sha, MAX(s.kishu) AS kishu,
             MAX(COALESCE(s.stock,0)) AS stock,
+            /* 7.126：「在庫処分」の印に使う。 */
+            MAX(COALESCE(s.note,'')) AS note,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
@@ -5591,14 +5711,17 @@ async function mwNtGone(env, at) {
                                         WHERE k.jan = b.jan
                                           AND COALESCE(k.buy_src,'') = 'mw'
                                           AND COALESCE(k.active,0) = 1)) AS buy
-       FROM mw_stock s
+            /* 7.126（【T】）この回の在庫数の変化（12→0 と出すため）。
+               mw_move が無いデータベースでは mvq.chg が空になる。 */${mvq.chg}${mvq.cols}
+       FROM mw_stock s${mvq.join}
       WHERE s.gone_at = ?1
       GROUP BY s.jan`).bind(at).all();
-  return mwNtRows(q);
+  return mwNtRows(q, st);
 }
 /* 今回の取り込みで**在庫0**になった商品（CSV には残っている）。 */
-async function mwNtZero(env, at) {
+async function mwNtZero(env, at, st) {
   const ordWhere = await mwNtOrdWhere(env);
+  const mvq = await mwStatSql(env, "s", true);
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
             MAX(s.list_price) AS list_price,
@@ -5606,6 +5729,8 @@ async function mwNtZero(env, at) {
                7.125：MW在庫（会員用では「購入できる数」）も出すので引く。 */
             MAX(s.sha) AS sha, MAX(s.kishu) AS kishu,
             MAX(COALESCE(s.stock,0)) AS stock,
+            /* 7.126：「在庫処分」の印に使う。 */
+            MAX(COALESCE(s.note,'')) AS note,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
@@ -5627,13 +5752,25 @@ async function mwNtZero(env, at) {
                                         WHERE k.jan = b.jan
                                           AND COALESCE(k.buy_src,'') = 'mw'
                                           AND COALESCE(k.active,0) = 1)) AS buy
-       FROM mw_stock s
+            /* 7.126（【T】）この回の在庫数の変化（12→0 と出すため）。
+               mw_move が無いデータベースでは mvq.chg が空になる。 */${mvq.chg}${mvq.cols}
+       FROM mw_stock s${mvq.join}
       WHERE s.seen_at = ?1 AND s.gone_at IS NULL
       GROUP BY s.jan
      HAVING MAX(COALESCE(s.stock,0)) = 0`).bind(at).all();
-  return mwNtRows(q);
+  return mwNtRows(q, st);
 }
-function mwNtRows(q) {
+/* 7.126（【T】）目安（売れる速さ・欠品までの見込み・再入荷）を足す。
+   式は shared/mwstat.js の1か所だけ（画面と同じものを使う）。 */
+function mwNtStat(r, st) {
+  const c = MWSTAT.calc(r, { saleWords: mwSaleWords(st) });
+  const prev = Number(r.mv_prev);
+  const cur = Number(r.mv_cur);
+  return Object.assign({}, c, {
+    chg: (isFinite(prev) && r.mv_prev !== null && r.mv_prev !== undefined)
+      ? { prev: prev, cur: (isFinite(cur) ? cur : 0) } : null });
+}
+function mwNtRows(q, st) {
   return ((q && q.results) || []).map((r) => {
     const w = Number(r.wholesale) || 0;
     /* 定価からの見込み（今までの目安）。 */
@@ -5654,30 +5791,62 @@ function mwNtRows(q) {
       /* 「Amazon 刈取の見込みあり」。実測の粗利があればそれで、
          無ければ定価からの目安で見る。 */
       amz_hope: (gross !== null) ? (gross > MW_HOPE_YEN) : (hope > MW_HOPE_YEN),
+      note: String(r.note || ""),
+      /* 7.126（【T】）在庫の動きの目安（生の列も残す）。 */
+      mv_first: r.mv_first || null, mv_last: r.mv_last || null,
+      mv_down: Number(r.mv_down) || 0, mv_down_n: Number(r.mv_down_n) || 0,
+      mv_up: Number(r.mv_up) || 0, mv_up_n: Number(r.mv_up_n) || 0,
+      mv_gone_n: Number(r.mv_gone_n) || 0,
+      mv_back_n: Number(r.mv_back_n) || 0,
+      mv_back_qty: Number(r.mv_back_qty) || 0,
+      mv_gone_days: Number(r.mv_gone_days) || 0,
+      mv7_down: Number(r.mv7_down) || 0, mv7_n: Number(r.mv7_n) || 0,
+      mv_prev: (r.mv_prev === null || r.mv_prev === undefined)
+        ? null : Number(r.mv_prev),
+      mv_cur: (r.mv_cur === null || r.mv_cur === undefined)
+        ? null : Number(r.mv_cur),
+      stat: mwNtStat(r, st),
       ebay: !!Number(r.ebay), buy: !!Number(r.buy) };
   });
 }
 /* 今回はじめて出てきた商品（JAN）のうち、見込みあり or eBay 無在庫の候補。 */
 async function mwNtNew(env, at, st) {
+  const mvq = await mwStatSql(env, "s", true);
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
             MAX(s.list_price) AS list_price, MAX(s.kishu) AS kishu,
             MAX(COALESCE(s.stock,0)) AS stock,
             MIN(COALESCE(s.ship_days,99)) AS ship_days,
-            MAX(s.cond) AS cond, MAX(COALESCE(s.note,'')) AS note
-       FROM mw_stock s
+            MAX(s.cond) AS cond, MAX(COALESCE(s.note,'')) AS note,
+            MAX(s.sha) AS sha,
+            (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
+            (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
+            (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total${mvq.chg}${mvq.cols}
+       FROM mw_stock s${mvq.join}
       WHERE s.created_at = ?1 AND s.gone_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM mw_stock t
                          WHERE t.jan = s.jan AND t.created_at <> ?1)
       GROUP BY s.jan`).bind(at).all();
-  const rows = ((q && q.results) || []).map((r) => ({
-    jan: String(r.jan || ""), name: String(r.name || ""),
-    wholesale: Number(r.wholesale) || 0,
-    hope: Math.round((Number(r.list_price) || 0) * 0.85
-      - (Number(r.wholesale) || 0) * 1.1),
-    kishu: String(r.kishu || ""), stock: Number(r.stock) || 0,
-    ship_days: Number(r.ship_days) || 99, cond: String(r.cond || ""),
-    note: String(r.note || "") }));
+  const rows = ((q && q.results) || []).map((r) => {
+    const price = Number(r.amz_price) || 0;
+    const fee = Number(r.fee_total) || 0;
+    const w = Number(r.wholesale) || 0;
+    return {
+      jan: String(r.jan || ""), name: String(r.name || ""),
+      wholesale: w,
+      hope: Math.round((Number(r.list_price) || 0) * 0.85 - w * 1.1),
+      kishu: String(r.kishu || ""), stock: Number(r.stock) || 0,
+      ship_days: Number(r.ship_days) || 99, cond: String(r.cond || ""),
+      note: String(r.note || ""), sha: String(r.sha || ""),
+      asin: String(r.asin || ""), amz_price: price, fee_total: fee,
+      gross: (price > 0 && fee > 0) ? Math.round(price - fee - w * 1.1) : null,
+      /* 7.126（【T】）目安（新しく出てきた商品でも、以前の記録があれば出る）。 */
+      mv_prev: (r.mv_prev === null || r.mv_prev === undefined)
+        ? null : Number(r.mv_prev),
+      mv_cur: (r.mv_cur === null || r.mv_cur === undefined)
+        ? null : Number(r.mv_cur),
+      stat: mwNtStat(r, st) };
+  });
   /* eBay 無在庫の条件（⚙ mwKishu／mwShipMax／mwStockMin／mwNoteNg）。 */
   const kishu = String((st && st.mwKishu) || "").split(",")
     .map((x) => x.trim()).filter(Boolean);
@@ -5692,6 +5861,192 @@ async function mwNtNew(env, at, st) {
   return rows.filter((x) => x.hope > MW_HOPE_YEN || okEbay(x))
     .map((x) => Object.assign({}, x, { hope: Math.max(0, x.hope) }))
     .sort((a, b) => b.hope - a.hope);
+}
+
+
+/* ===== 7.126（【T】）在庫の動きの一覧とまとめ =====
+   GET  /mw/move?jan=…&limit=   … 1商品の動きの記録と目安
+   GET  /mw/week?top=           … 目安のまとめ（週に1回の知らせの中身）
+   POST /mw/week/run            … いますぐまとめを Discord に送る */
+const MW_MOVE_ROWS = 200;          // 1商品ぶんに返す記録の上限
+const MW_WEEK_TOP = 10;            // まとめに出す上位の件数
+const MW_WEEK_MAX = 30;
+const MW_WEEK_KEY = "mw.week_at";  // 最後にまとめを送った週（YYYY-Www）
+const MW_WEEK_DAY = 1;             // 月曜（UTC）
+const MW_WEEK_HOUR = 0;            // UTC 0時台 ＝ 日本時間の月曜 9時台
+
+/* 「在庫処分」の備考を SQL で見る条件。言葉は ⚙ mwSaleNote（既定は7語）。
+   7.118：素の `?` と ?N を混ぜないため、**言葉は文字で埋め込む**
+   （'' を二重にして閉じ、記号は落とす）。 */
+function mwSaleLike(st, col) {
+  const w = mwSaleWords(st).slice(0, 8)
+    .map((x) => String(x).replace(/['"%_\\\\]/g, "")).filter(Boolean);
+  if (!w.length) return "0";
+  return "(" + w.map((x) => `COALESCE(${col},'') LIKE '%${x}%'`).join(" OR ") + ")";
+}
+async function mwMoveList(env, url) {
+  const p = url.searchParams;
+  const jan = String(p.get("jan") || "").replace(/\D/g, "");
+  const limit = Math.max(1, Math.min(MW_MOVE_ROWS,
+    Math.round(Number(p.get("limit")) || 60)));
+  if (jan.length !== 13) return { ok: false, error: "bad_jan", rows: [] };
+  if (!(await mwMoveOk(env)))
+    return { ok: false, error: "no_table", rows: [],
+             detail: "mw_move がありません（migrate-0049）" };
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const mvq = await mwStatSql(env, "s", true);
+  const g = await env.DB.prepare(
+    `SELECT s.jan AS jan, MAX(s.name) AS name, MAX(s.sha) AS sha,
+            MAX(COALESCE(s.note,'')) AS note,
+            SUM(CASE WHEN s.gone_at IS NULL THEN COALESCE(s.stock,0) ELSE 0 END)
+              AS stock${mvq.cols}
+       FROM mw_stock s${mvq.join}
+      WHERE s.jan = ?1
+      GROUP BY s.jan`).bind(jan).first();
+  const q = await env.DB.prepare(
+    `SELECT at, sha, idx, prev, cur, d, kind FROM mw_move
+      WHERE jan = ?1 ORDER BY at DESC, id DESC LIMIT ?2`)
+    .bind(jan, limit).all();
+  const rows = ((q && q.results) || []).map((r) => ({
+    at: String(r.at || ""), at_jst: jstText(r.at), sha: String(r.sha || ""),
+    idx: Number(r.idx) || 0,
+    prev: (r.prev === null || r.prev === undefined) ? null : Number(r.prev),
+    cur: (r.cur === null || r.cur === undefined) ? null : Number(r.cur),
+    d: Number(r.d) || 0, kind: String(r.kind || "") }));
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_move WHERE jan = ?1`).bind(jan).first();
+  return { ok: true, jan: jan, name: String((g && g.name) || ""),
+           sha: String((g && g.sha) || ""), note: String((g && g.note) || ""),
+           stock: Number((g && g.stock) || 0),
+           stat: g ? MWSTAT.calc(Object.assign({}, g,
+             { stock: Number((g && g.stock) || 0) }),
+             { saleWords: mwSaleWords(st) }) : null,
+           raw: g || null, rows: rows, all: Number((n && n.n) || 0),
+           limit: limit, keep_days: MW_MOVE_KEEP_DAYS };
+}
+/* 古い記録を捨てる（日次）。合計は mw_stat に残るので
+   「売れる速さ（全期間）」は消えない。落ちても日次処理は止めない。 */
+async function mwMoveSweep(env, run) {
+  let n = 0;
+  try {
+    if (!(await mwMoveOk(env))) return 0;
+    const cut = new Date(Date.now() - MW_MOVE_KEEP_DAYS * 86400000)
+      .toISOString().replace(/\.\d+Z$/, "Z");
+    const d = await env.DB.prepare(
+      `DELETE FROM mw_move WHERE at < ?1`).bind(cut).run();
+    n = Number((d && d.meta && d.meta.changes) || 0);
+    if (n && run) run.notes.push("古い在庫の動き " + n + "行を捨てました（"
+      + MW_MOVE_KEEP_DAYS + "日より前）");
+  } catch (e) {
+    if (run) run.notes.push("mw-move-sweep: " + String((e && e.message) || e));
+  }
+  return n;
+}
+/* まとめの中身（週に1回の知らせと、⚙の表示に使う）。 */
+async function mwWeekData(env, opt) {
+  const o = opt || {};
+  const top = Math.max(1, Math.min(MW_WEEK_MAX,
+    Math.round(Number(o.top) || MW_WEEK_TOP)));
+  if (!(await mwMoveOk(env)))
+    return { ok: false, error: "no_table",
+             detail: "mw_move がありません（migrate-0049）" };
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const mvq = await mwStatSql(env, "s", true);
+  const sale = mwSaleLike(st, "MAX(COALESCE(s.note,''))");
+  const base = `SELECT s.jan AS jan, MAX(s.name) AS name, MAX(s.sha) AS sha,
+            MAX(COALESCE(s.note,'')) AS note,
+            SUM(CASE WHEN s.gone_at IS NULL THEN COALESCE(s.stock,0) ELSE 0 END)
+              AS stock,
+            MIN(COALESCE(s.wholesale,0)) AS wholesale${mvq.cols}
+       FROM mw_stock s${mvq.join}
+      GROUP BY s.jan`;
+  const pick = async (having, order) => {
+    const q = await env.DB.prepare(
+      `${base} HAVING ${having} ORDER BY ${order} LIMIT ${top}`).all();
+    return ((q && q.results) || []).map((r) => Object.assign({}, r, {
+      stat: MWSTAT.calc(r, { saleWords: mwSaleWords(st) }) }));
+  };
+  /* ① よく売れる商品（直近7日に減った数が多い） */
+  const hot = await pick(`COALESCE(MAX(w.mv7_down),0) > 0`,
+    `COALESCE(MAX(w.mv7_down),0) DESC`);
+  /* ② 再入荷しない在庫処分（備考に在庫処分・欠品したのに戻ったことがない） */
+  const none = await pick(
+    `${sale} AND COALESCE(MAX(v.mv_gone_n),0) > 0
+       AND COALESCE(MAX(v.mv_back_n),0) = 0`,
+    `COALESCE(MAX(v.mv_down),0) DESC`);
+  /* ③ 再入荷が多い商品（戻った回数が多い） */
+  const many = await pick(`COALESCE(MAX(v.mv_back_n),0) > 0`,
+    `COALESCE(MAX(v.mv_back_n),0) DESC, COALESCE(MAX(v.mv_back_qty),0) DESC`);
+  const kept = await env.DB.prepare(
+    `SELECT COUNT(*) AS n, MIN(at) AS a1, MAX(at) AS a2 FROM mw_move`).first();
+  return { ok: true, top: top, hot: hot, none: none, many: many,
+           rows: Number((kept && kept.n) || 0),
+           from: String((kept && kept.a1) || ""),
+           to: String((kept && kept.a2) || ""),
+           keep_days: MW_MOVE_KEEP_DAYS };
+}
+/* 週に1回、まとめを Discord に送る。
+   src:'auto' は**日本時間の月曜9時台に1回だけ**（同じ週は送らない）。 */
+async function jobMwWeek(env, opt) {
+  const o = opt || {};
+  const run = newRun("mw-week");
+  const res = { ok: false, sent: 0, why: "" };
+  try {
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    const on = mwNtOn(st, "mwWeek", true);
+    const d = new Date();
+    const week = d.getUTCFullYear() + "-W"
+      + String(Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
+        d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 1))
+        / 604800000) + 1).padStart(2, "0");
+    if (o.src === "auto") {
+      if (!on) { res.why = "off"; res.ok = true; return res; }
+      if (d.getUTCDay() !== MW_WEEK_DAY || d.getUTCHours() !== MW_WEEK_HOUR) {
+        res.why = "not_time"; res.ok = true; return res;
+      }
+      if (String(await stateGet(env, MW_WEEK_KEY)) === week) {
+        res.why = "done"; res.ok = true; return res;
+      }
+    }
+    const w = await mwWeekData(env, { top: o.top });
+    if (!w.ok) { res.why = w.error || "no_data"; return res; }
+    const line = (x) => {
+      const c = x.stat || {};
+      return "・" + String(x.name || x.jan).slice(0, 34)
+        + "（" + String(x.jan) + "）"
+        + " 在庫 " + Math.max(0, Number(x.stock) || 0) + "点"
+        + "　" + MWSTAT.text(c);
+    };
+    const blocks = [];
+    const put = (title, list, none) => {
+      blocks.push([""].concat([title],
+        list.length ? list.map(line) : ["・" + none]));
+    };
+    put("🔥 よく売れている商品（直近7日に減った数の多い順）",
+      w.hot, "記録のある動きがまだありません");
+    put("🧹 在庫処分で**再入荷がない**商品（刈り切る候補）",
+      w.none, "まだ見つかっていません");
+    put("🔁 再入荷が多い商品（少しずつ仕入れてよい候補）",
+      w.many, "まだ見つかっていません");
+    const head = ["📊 MW 在庫の目安まとめ（週に1回）",
+      "・記録 " + w.rows + "行"
+      + (w.from ? ("／" + jstText(w.from) + " 〜 " + jstText(w.to)) : "")
+      + "（詳しい記録は " + w.keep_days + "日ぶん。合計はずっと残します）"];
+    const thread = String(st.mwNtThread || "").replace(/\D/g, "");
+    res.sent = await notifyBlocks(env, run, head, blocks,
+      thread ? { thread: thread } : undefined);
+    if (o.src === "auto" && res.sent)
+      await stateSet(env, MW_WEEK_KEY, week).run();
+    res.week = week;
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-week: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 
 /* ===== 7.121（【Q】の1）取り込みの各回の中身を一覧で返す =====
@@ -5720,6 +6075,8 @@ async function mwNtList(env, url) {
     Math.round(Number(p.get("limit")) || 200)));
   if (!ISO_RE.test(at)) return { ok: false, error: "bad_at", rows: [] };
   const w = mwNtWhere(kind);
+  /* 7.126（【T】）在庫の動きの目安も返す。 */
+  const mvq = await mwStatSql(env, "s");
   let q;
   try {
     q = await env.DB.prepare(
@@ -5758,14 +6115,14 @@ async function mwNtList(env, url) {
                        WHERE it.ebay_sku = 'W-' || s.jan
                          AND COALESCE(it.ebay_item_id,'') <> '') AS ebay,
               EXISTS (SELECT 1 FROM mw_reg_log g
-                       WHERE g.jan = s.jan AND g.ok = 1) AS reg_ok
+                       WHERE g.jan = s.jan AND g.ok = 1) AS reg_ok${mvq.chg}${mvq.cols}
          FROM mw_stock s
          LEFT JOIN mw_market m ON m.jan = s.jan
          LEFT JOIN mw_amz a ON a.jan = s.jan
          LEFT JOIN mw_buy b ON b.jan = s.jan
          LEFT JOIN (SELECT jan, COUNT(*) AS n,
                            SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) AS ok_n
-                      FROM mw_img GROUP BY jan) i ON i.jan = s.jan
+                      FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}
         WHERE ${w}
         ORDER BY COALESCE(s.wholesale,0) ASC LIMIT ${limit}`).bind(at).all();
   } catch (e) {
@@ -5782,6 +6139,124 @@ async function mwNtList(env, url) {
            limit: limit, over: MW_OVER };
 }
 
+/* ===== 7.126（【T】）在庫の動きの記録 =====
+   取り込みのたびに、**掲載数が変わった行だけ** mw_move に1行残し、
+   (JAN,社) ごとの合計を mw_stat に足す（mw_move を90日で捨てても
+   「売れる速さ（全期間）」が出せるように）。
+   表が無い（migrate-0049 を流す前）ときは黙って飛ばす
+   ── 取り込みは命綱なので、記録のために止めない。 */
+const MOVE_MAX = 4000;             // 1回に残す動きの上限（D1 の問い合わせ数の歯止め）
+const MW_MV_DAYS = 7;              // 「直近」の窓（日）
+const MW_MOVE_KEEP_DAYS = 90;      // 詳しい記録を残す日数（合計は mw_stat に残る）
+async function mwMoveOk(env) {
+  return (await colOk(env, "mw_move", "jan"))
+    && (await colOk(env, "mw_stat", "down_qty"));
+}
+/* 1行ぶんの動き。記録するものが無ければ null。 */
+function mwMvOf(r, old, at) {
+  const cur = Math.max(0, mwNum(r.stock));
+  if (!old) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
+                     prev: null, cur: cur, d: cur, kind: "new" };
+  if (old.gone_at) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
+                            prev: null, cur: cur, d: cur, kind: "back",
+                            gone_at: String(old.gone_at || "") };
+  const prev = Math.max(0, mwNum(old.stock));
+  if (prev === cur) return null;        // **数が変わらない回は書かない**
+  return { at: at, jan: r.jan, sha: r.sha, idx: r.idx, prev: prev, cur: cur,
+           d: cur - prev, kind: (cur < prev) ? "down" : "up" };
+}
+/* 動きを D1 に書く文（1つの動きにつき2文）。 */
+function mwMvStmts(env, list) {
+  const out = [];
+  for (const m of (list || []).slice(0, MOVE_MAX)) {
+    out.push(env.DB.prepare(
+      `INSERT INTO mw_move (at,jan,sha,idx,prev,cur,d,kind,created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
+      .bind(m.at, m.jan, m.sha, m.idx,
+            (m.prev === null || m.prev === undefined) ? null : m.prev,
+            (m.cur === null || m.cur === undefined) ? null : m.cur,
+            Math.round(m.d || 0), String(m.kind || "")));
+    /* 減った数（補充は入れない）＝売れた数の目安。 */
+    const dn = (m.d < 0) ? -m.d : 0;
+    const upq = (m.kind === "up") ? Math.max(0, m.d) : 0;
+    const gn = (m.kind === "gone") ? 1 : 0;
+    const bn = (m.kind === "back") ? 1 : 0;
+    const bq = (m.kind === "back") ? Math.max(0, mwNum(m.cur)) : 0;
+    /* 欠品していた日数（戻ったときに足す）。 */
+    let gd = 0;
+    if (m.kind === "back" && m.gone_at) {
+      const a = Date.parse(m.at), b = Date.parse(m.gone_at);
+      if (isFinite(a) && isFinite(b) && a > b)
+        gd = Math.round((a - b) / 86400000 * 100) / 100;
+    }
+    out.push(env.DB.prepare(
+      `INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,
+         up_qty,gone_n,back_n,back_qty,gone_days,created_at)
+       VALUES (?1,?2,?3,?3,?4,?5,?6,?7,?8,?9,?10,?11,?3)
+       ON CONFLICT(jan,sha) DO UPDATE SET
+         last_at=excluded.last_at,
+         first_at=COALESCE(mw_stat.first_at, excluded.first_at),
+         down_n=mw_stat.down_n+excluded.down_n,
+         down_qty=mw_stat.down_qty+excluded.down_qty,
+         up_n=mw_stat.up_n+excluded.up_n,
+         up_qty=mw_stat.up_qty+excluded.up_qty,
+         gone_n=mw_stat.gone_n+excluded.gone_n,
+         back_n=mw_stat.back_n+excluded.back_n,
+         back_qty=mw_stat.back_qty+excluded.back_qty,
+         gone_days=mw_stat.gone_days+excluded.gone_days`)
+      .bind(m.jan, m.sha, m.at, dn ? 1 : 0, dn, upq ? 1 : 0, upq,
+            gn, bn, bq, gd));
+  }
+  return out;
+}
+/* ---- 目安の列（JANごと）----
+   SQL に足す列と JOIN を返す。表が無ければ空（口は落とさない）。
+   agg=true は GROUP BY のある SELECT 用（MAX で包む）。
+   ※ 7.118：素の `?` と ?N を混ぜないため、**日時は文字で埋め込む**
+     （nowIso から作るので外から混ぜられる余地はない）。 */
+async function mwStatSql(env, alias, agg) {
+  if (!(await mwMoveOk(env))) return { cols: "", join: "", chg: "" };
+  const a = alias || "s";
+  const since = new Date(Date.now() - MW_MV_DAYS * 86400000)
+    .toISOString().replace(/\.\d+Z$/, "Z");
+  const f = (x) => agg ? ("MAX(" + x + ")") : x;
+  const cols = `,
+            ${f("v.mv_first")} AS mv_first, ${f("v.mv_last")} AS mv_last,
+            ${f("COALESCE(v.mv_down,0)")} AS mv_down,
+            ${f("COALESCE(v.mv_down_n,0)")} AS mv_down_n,
+            ${f("COALESCE(v.mv_up,0)")} AS mv_up,
+            ${f("COALESCE(v.mv_up_n,0)")} AS mv_up_n,
+            ${f("COALESCE(v.mv_gone_n,0)")} AS mv_gone_n,
+            ${f("COALESCE(v.mv_back_n,0)")} AS mv_back_n,
+            ${f("COALESCE(v.mv_back_qty,0)")} AS mv_back_qty,
+            ${f("COALESCE(v.mv_gone_days,0)")} AS mv_gone_days,
+            ${f("COALESCE(w.mv7_down,0)")} AS mv7_down,
+            ${f("COALESCE(w.mv7_n,0)")} AS mv7_n`;
+  const join = `
+         LEFT JOIN (SELECT jan, MIN(first_at) AS mv_first,
+                           MAX(last_at) AS mv_last,
+                           SUM(down_qty) AS mv_down, SUM(down_n) AS mv_down_n,
+                           SUM(up_qty) AS mv_up, SUM(up_n) AS mv_up_n,
+                           SUM(gone_n) AS mv_gone_n, SUM(back_n) AS mv_back_n,
+                           SUM(back_qty) AS mv_back_qty,
+                           SUM(gone_days) AS mv_gone_days
+                      FROM mw_stat GROUP BY jan) v ON v.jan = ${a}.jan
+         LEFT JOIN (SELECT jan, SUM(-d) AS mv7_down, COUNT(*) AS mv7_n
+                      FROM mw_move WHERE d < 0 AND at >= '${since}'
+                      GROUP BY jan) w ON w.jan = ${a}.jan`;
+  /* その回の在庫数の変化（?1 が取り込みの日時であるときだけ使う）。 */
+  const chg = `,
+            (SELECT SUM(COALESCE(mm.prev,0)) FROM mw_move mm
+              WHERE mm.jan = ${a}.jan AND mm.at = ?1) AS mv_prev,
+            (SELECT SUM(COALESCE(mm.cur,0)) FROM mw_move mm
+              WHERE mm.jan = ${a}.jan AND mm.at = ?1) AS mv_cur`;
+  return { cols: cols, join: join, chg: chg };
+}
+/* 「在庫処分」と見なす言葉（⚙ mwSaleNote）。 */
+function mwSaleWords(st) {
+  return MWSTAT.words((st || {}).mwSaleNote);
+}
+
 /* 取り込み。body = { at, part, parts, rows:[…], rows_in, unreadable }
    part/parts は分けて送るときの通し番号（1/31 … 31/31）。
    最後の便（part>=parts）で欠品の判定と代表選びをする。 */
@@ -5789,7 +6264,7 @@ async function mwStockPut(env, body) {
   const run = newRun("mw-stock");
   const res = { ok: false, part: 1, parts: 1, taken: 0, added: 0, changed: 0,
                 same: 0, skipped: 0, gone: 0, back: 0, picked: 0, seen: 0,
-                zeroed: 0, warn: "", at: "",
+                zeroed: 0, warn: "", at: "", moved: 0,
                 /* 配送ポリシーが足りない無在庫（7.98） */
                 ship_over: 0, ship_seen: 0, ship_rows: [] };
   try {
@@ -5824,7 +6299,9 @@ async function mwStockPut(env, body) {
         const bind = [];
         for (const r of part) bind.push(r.jan, r.sha, r.idx);
         const got = await env.DB.prepare(
-          `SELECT jan, sha, idx, row_hash, gone_at FROM mw_stock WHERE ${where}`)
+          /* 7.126：**前の掲載数**も引く（動きの記録に使う）。 */
+          `SELECT jan, sha, idx, row_hash, gone_at, stock
+             FROM mw_stock WHERE ${where}`)
           .bind(...bind).all();
         for (const y of (got && got.results) || [])
           have[y.jan + "|" + y.sha + "|" + y.idx] = y;
@@ -5837,9 +6314,16 @@ async function mwStockPut(env, body) {
            back_at=CASE WHEN mw_stock.gone_at IS NOT NULL THEN excluded.seen_at
                         ELSE mw_stock.back_at END`
       : "";
+    /* 7.126（【T】）在庫の動きを記録する（表があるときだけ）。 */
+    const moveOk = await mwMoveOk(env);
+    const mv = [];
     const stmts = [];
     for (const r of rows) {
       const old = have[r.jan + "|" + r.sha + "|" + r.idx];
+      if (moveOk) {
+        const m = mwMvOf(r, old, at);
+        if (m && mv.length < MOVE_MAX) mv.push(m);
+      }
       if (old && old.row_hash === r.row_hash && !old.gone_at) {
         /* 中身が同じなら seen_at だけ新しくする（差分書き込み）。 */
         res.same++;
@@ -5870,6 +6354,13 @@ async function mwStockPut(env, body) {
               r.row_hash, at));
     }
     await runBatch(env, run, stmts);
+    /* 7.126：動きの記録（mw_move＋mw_stat）。落ちても取り込みは止めない。 */
+    if (mv.length) {
+      try {
+        await runBatch(env, run, mwMvStmts(env, mv));
+        res.moved += mv.length;
+      } catch (e) { run.notes.push("mw-move: " + String((e && e.message) || e)); }
+    }
     /* 最後の便。欠品の判定と、JANごとの代表選び。 */
     if (res.part >= res.parts) {
       const a = await env.DB.prepare(
@@ -5887,6 +6378,28 @@ async function mwStockPut(env, body) {
           + "もう一度取り込んでください";
         run.notes.push(res.warn);
       } else if (missing > 0) {
+        /* 7.126：**欠品にする前に**、その行の掲載数を記録に残す
+           （あとから「12→0 で欠品」と出せるように）。 */
+        if (moveOk) {
+          try {
+            const g0 = await env.DB.prepare(
+              `SELECT jan,sha,idx,stock FROM mw_stock
+                WHERE gone_at IS NULL AND seen_at<>?1 LIMIT ${MOVE_MAX}`)
+              .bind(at).all();
+            const mv2 = ((g0 && g0.results) || []).map((y) => {
+              const prev = Math.max(0, Number(y.stock) || 0);
+              return { at: at, jan: String(y.jan || ""), sha: String(y.sha || ""),
+                       idx: Number(y.idx) || 0, prev: prev, cur: null,
+                       d: -prev, kind: "gone" };
+            });
+            if (mv2.length) {
+              await runBatch(env, run, mwMvStmts(env, mv2));
+              res.moved += mv2.length;
+            }
+          } catch (e) {
+            run.notes.push("mw-move(gone): " + String((e && e.message) || e));
+          }
+        }
         const g = await env.DB.prepare(
           `UPDATE mw_stock SET gone_at=?1 WHERE gone_at IS NULL AND seen_at<>?1`)
           .bind(at).run();
@@ -5994,7 +6507,7 @@ async function mwStockPut(env, body) {
       run.notes.push("MW在庫：現れた " + seen + "行／足した " + res.added
         + "／変わった " + res.changed + "／同じ " + res.same
         + "／欠品 " + res.gone + "／戻った " + res.back
-        + "／代表 " + res.picked);
+        + "／代表 " + res.picked + "／動きの記録 " + res.moved);
     }
     res.ok = true;
   } catch (e) {
@@ -6094,7 +6607,8 @@ async function mwStockHave(env) {
   const page = 2000;
   for (let off = 0; ; off += page) {
     const q = await env.DB.prepare(
-      `SELECT jan,sha,idx,row_hash,gone_at FROM mw_stock
+      /* 7.126：**前の掲載数**も引く（動きの記録に使う）。 */
+      `SELECT jan,sha,idx,row_hash,gone_at,stock FROM mw_stock
         ORDER BY id LIMIT ?1 OFFSET ?2`).bind(page, off).all();
     const rows = (q && q.results) || [];
     for (const y of rows) have[y.jan + "|" + y.sha + "|" + y.idx] = y;
@@ -8442,6 +8956,8 @@ async function mwBuyList(env, url) {
     ? `COALESCE(b.ordered_at,'') AS ordered_at,
             COALESCE(b.ordered_by,'') AS ordered_by,`
     : `'' AS ordered_at, '' AS ordered_by,`;
+  /* 7.126（【T】）在庫の動きの目安も返す（b.jan でつなぐ）。 */
+  const mvq = await mwStatSql(env, "b");
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.qty AS qty, b.by_role AS by_role, b.at AS at,
             COALESCE(b.sha, s.sha) AS sha,
@@ -8479,13 +8995,13 @@ async function mwBuyList(env, url) {
                      WHERE g.jan = b.jan AND g.ok = 1) AS reg_ok,
             r.state AS rst, r.reasons AS rst_why, r.link AS rst_link,
             r.checked_at AS rst_at, r.err AS rst_err,
-            COALESCE(m.cand_n,0) AS cand_n, m.picked_at AS jan_picked_at
+            COALESCE(m.cand_n,0) AS cand_n, m.picked_at AS jan_picked_at${mvq.cols}
        FROM mw_buy b
        LEFT JOIN mw_stock s ON s.jan = b.jan AND s.pick = 1
        LEFT JOIN mw_amz   a ON a.jan = b.jan
        LEFT JOIN jan_map  m ON m.jan = b.jan
        LEFT JOIN mw_restrict r ON r.asin = COALESCE(b.asin, a.asin)
-                              AND r.cond = 'new_new'
+                              AND r.cond = 'new_new'${mvq.join}
       ORDER BY b.at DESC`).all();
   const rows = (q && q.results) || [];
   /* 卸値（税込）の合計。送料無料（5万円）までの残りは画面で出す。
@@ -10248,6 +10764,8 @@ async function mwAmzList(env, url) {
   const limit = Math.max(1, Math.min(3000, mwNum(p.get("limit")) || 2000));
   const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const only = p.get("priced") === "1" ? " AND COALESCE(a.price,0)>0" : "";
+  /* 7.126（【T】）在庫の動きの目安も返す。 */
+  const mvq = await mwStatSql(env, "s");
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
             s.list_price AS list_price, s.cond AS cond, s.wholesale AS wholesale,
@@ -10279,7 +10797,7 @@ async function mwAmzList(env, url) {
             r.checked_at AS rst_at, r.err AS rst_err,
             /* JAN重複（7.84）。候補が2件以上で、まだ選んでいない行に印を付ける。 */
             COALESCE(m.cand_n,0) AS cand_n, m.cands AS cands,
-            m.picked_at AS jan_picked_at
+            m.picked_at AS jan_picked_at${mvq.cols}
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
             LEFT JOIN mw_buy b ON b.jan = s.jan
             LEFT JOIN jan_map m ON m.jan = s.jan
@@ -10290,7 +10808,7 @@ async function mwAmzList(env, url) {
                          MAX(CASE WHEN pos=0 THEN long_px END) AS long_px,
                          MAX(CASE WHEN pos=0 THEN COALESCE(url,src) END) AS main,
                          MAX(at) AS at
-                         FROM mw_img GROUP BY jan) i ON i.jan = s.jan
+                         FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}
       WHERE ${w}${only}
       ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
   const n = await env.DB.prepare(
@@ -10637,6 +11155,8 @@ async function mwList(env, url) {
   const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
   const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const bind = q0.bind;
+  /* 7.126（【T】）在庫の動きの目安も返す（表が無ければ空）。 */
+  const mvq = await mwStatSql(env, "s");
   /* 相場（7.62）を一緒に返す。まだ調べていない JAN は null で返る。 */
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.idx AS idx, s.kishu AS kishu,
@@ -10652,10 +11172,10 @@ async function mwList(env, url) {
                Amazon の重さ（梱包重量）。無在庫の売値と送料に使う。 */
             a.asin AS asin, a.low AS amz_low, a.price_at AS amz_at,
             a.new_n AS amz_new_n, a.size_g AS amz_g, a.size_src AS amz_g_src,
-            (SELECT COUNT(*) FROM mw_img g WHERE g.jan=s.jan AND g.ok=1) AS pics_ok
+            (SELECT COUNT(*) FROM mw_img g WHERE g.jan=s.jan AND g.ok=1) AS pics_ok${mvq.cols}
        FROM mw_stock s
        LEFT JOIN mw_market m ON m.jan = s.jan
-       LEFT JOIN mw_amz a ON a.jan = s.jan
+       LEFT JOIN mw_amz a ON a.jan = s.jan${mvq.join}
       WHERE ${w}
       ORDER BY COALESCE(s.wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
   const n = await env.DB.prepare(
@@ -12248,7 +12768,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
-  "mw_csv_runs",
+  "mw_csv_runs", "mw_move", "mw_stat",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
   "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
@@ -12274,6 +12794,9 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["mw_move", "migrate-0049-mw-move.sql"],
+  ["mw_stat", "migrate-0049-mw-move.sql"],
+  ["gone_days", "migrate-0049-mw-move.sql"],
   ["asin_left", "migrate-0048-mw-auto.sql"],
   ["per_hour", "migrate-0048-mw-auto.sql"],
   ["back_at", "migrate-0047-mw-nt.sql"],
@@ -12984,6 +13507,17 @@ export default {
          見るだけなので作業者でもよい。 */
       if (request.method === "GET" && url.pathname === "/mw/nt")
         return json(await mwNtList(env, url), 200, origin);
+      /* 7.126（【T】）1商品の在庫の動きと、目安のまとめ（見るだけ）。 */
+      if (request.method === "GET" && url.pathname === "/mw/move")
+        return json(await mwMoveList(env, url), 200, origin);
+      if (request.method === "GET" && url.pathname === "/mw/week")
+        return json(await mwWeekData(env,
+          { top: url.searchParams.get("top") }), 200, origin);
+      if (request.method === "POST" && url.pathname === "/mw/week/run") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobMwWeek(env, { src: "hand", top: b && b.top }),
+          200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mw/csv/run") {
         const b = await request.json().catch(() => ({}));
         const pr = jobMwCsv(env, { src: "hand", force: !!(b && b.force) });
@@ -13243,6 +13777,10 @@ export default {
          別の回（:07）から見張る。 */
       try { await mwAutoMiss(env, newRun("mw-auto-miss")); }
       catch (e) { /* 見張りが失敗しても本体は止めない */ }
+      /* 7.126（【T】）週に1回、在庫の目安のまとめを知らせる
+         （日本時間の月曜9時台に1回だけ。jobMwWeek が自分で見張る）。 */
+      try { await jobMwWeek(env, { src: "auto" }); }
+      catch (e) { /* まとめが失敗しても本体は止めない */ }
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -13297,6 +13835,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_FEE_TTL_D, MW_FEE_DIFF, rankPick, mwRegSave, MW_REG_MAX, mwJanPick, mwJanDups, mwPutRun, mwPutLog, mwPutOne, mwPutBody,
   /* 7.110／7.111 */
   mwImportNotify, mwNtGone, mwNtZero, mwNtNew, mwNtLine, MW_NT_TOP,
+  MW_NT_MAX, MW_NT_MSG_MAX, MW_NT_MARK, MW_NT_BACK_MANY,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
@@ -13315,6 +13854,11 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 【P】在庫CSVの自動取り込み */
   /* 7.121（【Q】） */
   mwNtList, mwNtWhere, notifyBlocks, NOTIFY_MAX, NOTIFY_ROOM,
+  /* 7.126（【T】）在庫の動きの記録と目安。 */
+  mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
+  mwMoveSweep,
+  mwSaleWords, mwSaleLike, mwNtStat, MOVE_MAX, MW_MV_DAYS,
+  MW_MOVE_KEEP_DAYS, MW_WEEK_TOP, MW_WEEK_KEY, MWSTAT,
   colOk,
   /* 7.125（【S】） */
   notifyRaw, notifyEmbeds, mwNtEmbed, mwNtEmbedLen, mwNtAud, mwNtGross,

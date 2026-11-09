@@ -231,10 +231,13 @@ console.log('\n=== ③ 欠品は関わりのあるものだけ並べる ===');
   ok(/刈取の見込みがあった商品が売り切れました/.test(txt)
      &&emb.some((e)=>e.title==='刈取の見込みあり'),
      '★★★刈取の見込みがあった商品も並べる');
-  ok(!emb.some((e)=>/関係ない/.test(String(e.title||''))),
-     '★★★関係のない欠品は並べない');
-  ok(/そのほかの欠品 2件/.test(txt),
-     '★★★関係のない欠品は件数だけ出す');
+  /* 7.126（【T】）：関係のない欠品も**商品ごとに**出す（いちばん下の区分）。
+     件数だけに戻したいときは ⚙ mwNtRest をオフにする。 */
+  ok(/そのほかの欠品/.test(txt)
+     &&emb.some((e)=>/関係ない/.test(String(e.title||''))),
+     '★★★関係のない欠品も商品ごとに出す（7.126）');
+  ok(emb.filter((e)=>/関係ない/.test(String(e.title||''))).length===2,
+     '★★★2件ぜんぶ出す');
   ok(res.note_hope===1&&res.note_rest===2,'★★内訳を返す');
   ok(/新しく欠品 5件/.test(txt)&&/欠品から戻った 0件/.test(txt),
      '★★先頭に件数を出す（戻ったも）');
@@ -252,12 +255,14 @@ console.log('\n=== ③ 欠品は関わりのあるものだけ並べる ===');
   await W.mwImportNotify(env,W.newRun('t'),AT,res);
   const txt=sent.join('\n');
   const n2=emb.filter((e)=>/^新入荷\d+$/.test(String(e.title||''))).length;
-  console.log('   埋め込み '+n2+'個　'+(/ほか 4件/.test(txt)?'＋ほか4件':'')
-    +'　通数 '+msgs.length);
-  ok(n2===10,'★★★10件を超えたら上位10件（埋め込み10個）');
+  console.log('   埋め込み '+n2+'個　通数 '+msgs.length);
+  /* 7.126（【T】）：既定を 100件に上げたので 14件は**ぜんぶ**出る。 */
+  ok(n2===14,'★★★14件ぜんぶ出す（既定 100件・7.126）');
   ok(msgs.every((m)=>((m.embeds||[]).length<=W.EMB_MAX)),
      '★★★1通に入れる埋め込みは10個まで（Discord の決まり）');
-  ok(/ほか 4件/.test(txt),'★★★残りは件数で出す');
+  ok(!/ほか \d+件/.test(txt),'★★★既定の件数に収まれば「ほか n件」は出ない');
+  ok(W.MW_NT_TOP===100&&W.MW_NT_MAX===200,
+     '★★既定は100件・上限は200件（⚙で変えられる）');
   ok(/新しく出てきた 14件/.test(txt),'★★先頭に全件数を出す');
   ok(emb.every((e)=>e.color===W.EMB_COLOR['new']),
      '★★★新入荷は緑');

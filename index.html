@@ -1037,6 +1037,9 @@ body.staff #syncOnHandFix{display:none !important}
           <option value="margin">利益率順</option>
           <option value="rank">ランキング順（大分類・売れている順）</option>
           <option value="genre">ジャンルごと</option>
+          <!-- 6.166（【T】）在庫の動きで並べ替える -->
+          <option value="speed">売れる速さ順（よく売れている順）</option>
+          <option value="nostock">再入荷なし（在庫処分）を先に</option>
         </select>
       </div>
       <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
@@ -1775,9 +1778,40 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="chk"><input type="checkbox" id="mwNtDrop" checked><label for="mwNtDrop" style="flex:1">eBay 無在庫が売り切れたら知らせる（数量0にしました）</label></div>
         <div class="chk"><input type="checkbox" id="mwNtBuy" checked><label for="mwNtBuy" style="flex:1">仕入れる印の商品が売り切れたら知らせる（注文前）</label></div>
         <div class="chk"><input type="checkbox" id="mwNtNew" checked><label for="mwNtNew" style="flex:1">新入荷（見込みあり・eBay 無在庫の候補）を知らせる</label></div>
-        <div class="row"><label>知らせる上位の件数</label><input type="number" id="mwNtTop" value="10" step="1" min="1" max="50" inputmode="numeric"><span class="unit">件</span></div>
+        <div class="row"><label>知らせる上位の件数</label><input type="number" id="mwNtTop" value="100" step="1" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
         <!-- 6.164：知らせに出す項目の出し分け（【S】の4）。 -->
         <div class="rowv cfgprice"><label for="mwNtAudience">知らせに出す項目</label><select id="mwNtAudience"><option value="staff" selected>社内用（卸値・社・MW在庫を出す）</option><option value="member">会員用（卸値・社・MW在庫は出さない）</option></select><div class="note2" style="margin-top:2px"><b>社内用</b>は今までどおり <b>卸値・社・MW在庫</b>を出します。<b>会員用</b>は<b>卸値・社・MW在庫・MW の画像・備考を出さず</b>、代わりに<b>販売価格・見込みの Amazon 粗利・購入できる数</b>を出します（会員向けのリストに流すときに使います）。<b>いまは社内用のままにしてください。</b></div></div>
+        <!-- 6.166（【T】）在庫の動きの記録と目安 -->
+        <div class="note2" style="margin:10px 0 2px"><b>在庫の動きと目安（売れる速さ・再入荷）</b></div>
+        <details class="exp" data-exp="mwMove"><summary>何を記録して何が分かるかの説明</summary>
+        <div class="note2" style="margin-top:0">取り込みのたびに、<b>掲載数が変わった行だけ</b>を記録します
+          （変わらない回は書きません）。記録するのは<b>日時・前の数・今の数・出来事</b>
+          （新しく出た／減った／増えた（補充）／欠品／戻った）です。
+          くわしい記録は<b>90日ぶん</b>残し、それより古いものは捨てます。
+          <b>合計（売れた数・再入荷の回数など）はずっと残る</b>ので、
+          「売れる速さ（全期間）」は消えません。<br>
+          ここから出す目安：<b>売れる速さ</b>（1日あたりに減った数。補充は除く。直近7日と全期間）／
+          <b>欠品までの見込み</b>（いまの数 ÷ 売れる速さ）／
+          <b>再入荷</b>（戻った回数・戻ったときの数・欠品していた日数）／
+          <b>在庫処分の印</b>（備考に下の言葉があるもの。再入荷したことがあるかも出します）。
+          記録が14日に届かないうちは「<b>目安は参考程度</b>」と添えます。</div>
+        </details>
+        <div class="rowv cfgprice"><label for="mwSaleNote">「在庫処分」と見なす備考の言葉</label><input type="text" id="mwSaleNote" value="" placeholder="在庫処分,在庫限り,終売,生産終了,完売,廃盤,最終" inputmode="text"><div class="note2" style="margin-top:2px">カンマ区切り。空のままなら<b>在庫処分・在庫限り・終売・生産終了・完売・廃盤・最終</b>を見ます。この言葉が備考にある商品は、<b>再入荷したことがあるか</b>を一覧と知らせに出します（<b>再入荷なし</b>＝全部刈り取る候補）。</div></div>
+        <div class="chk"><input type="checkbox" id="mwNtRest" checked><label for="mwNtRest" style="flex:1">そのほかの欠品も<b>商品ごとに</b>知らせる（オフで件数だけ）</label></div>
+        <div class="chk"><input type="checkbox" id="mwWeek" checked><label for="mwWeek" style="flex:1">週に1回、目安のまとめを知らせる（日本時間の月曜9時台）</label></div>
+        <div class="rowv cfgprice"><label for="mwNtThread">知らせのスレッドID（任意）</label><input type="text" id="mwNtThread" value="" placeholder="（空のままで #一般 に出します）" inputmode="numeric"><div class="note2" style="margin-top:2px"><b>空のままで構いません。</b>入れると、<b>1通目の要約だけ #一般 に出し、商品ごとの詳しい一覧はそのスレッドに流します</b>（#一般 が流れなくなります）。ふつうの Webhook は<b>スレッドを自分で作れない</b>ので、Discord で #一般 の1通に「スレッドを作成」→ そのスレッドを右クリック →「IDをコピー」で入れてください。</div></div>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button class="btn" onclick="mwWeekShow()" style="flex:1">目安のまとめを見る</button>
+          <button class="btn cfgprice" onclick="mwWeekSend()" style="flex:1">いますぐ知らせる</button>
+        </div>
+        <div class="note2" id="mwWeekNote" style="margin:4px 0 0"></div>
+        <div id="mwWeekBox"></div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <input type="text" id="mwMoveJan" value="" placeholder="JAN（13桁）" inputmode="numeric" style="flex:1 1 0;min-width:0">
+          <button class="btn" onclick="mwMoveGo()" style="flex:0 0 auto">記録を見る</button>
+        </div>
+        <div class="note2" id="mwMoveNote" style="margin:4px 0 0"></div>
+        <div id="mwMoveBox"></div>
         <!-- 6.151：Amazon 登録の上限と記録（作業者の端末からも登録できる）。 -->
         <div class="note2" style="margin:10px 0 2px"><b>Amazon への登録</b></div>
         <details class="exp" data-exp="mwPutDay"><summary>1日の上限と記録の説明</summary>
@@ -2161,6 +2195,8 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/pricing.js"></script>
 <!-- MW の在庫CSVの読み方（【P】）。index.html と pj-sync が同じこのファイルを読む。 -->
 <script src="./shared/mwcsv.js"></script>
+<!-- MW 在庫の動きから出す目安（【T】）。index.html と pj-sync が同じものを読む。 -->
+<script src="./shared/mwstat.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2174,6 +2210,11 @@ if(typeof PJ_PRICING==='undefined')
 if(typeof PJ_MWCSV==='undefined')
   throw new Error('shared/mwcsv.js が読み込めていません（MW の在庫CSVの読み方）');
 var MWCSV=PJ_MWCSV;
+/* 在庫の動きの目安（売れる速さ・欠品までの見込み・再入荷）も1か所にまとめてある
+   （【T】）。pj-sync（Discord の知らせ・週のまとめ）と同じ式を使う。 */
+if(typeof PJ_MWSTAT==='undefined')
+  throw new Error('shared/mwstat.js が読み込めていません（在庫の動きの目安）');
+var MWSTAT=PJ_MWSTAT;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -2517,6 +2558,8 @@ var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  /* 取り込みの知らせ（6.151／7.110）と登録の上限（7.111）。
                     **Worker が読む**設定なので必ず D1 に送る。 */
                  'mwNtTop','mwPutDay','mwUsedPct','mwNtAudience',
+                 /* 6.166（【T】）在庫の動きの目安と知らせの形。 */
+                 'mwSaleNote','mwNtThread',
                  /* 在庫CSVの自動取り込み（6.160／7.120・【P】）。
                     **Worker が毎時読んで動く設定**なので必ず D1 に送る。
                     取得先の URL もここ（コードに直書きしない）。 */
@@ -2538,7 +2581,9 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                    **Worker が段取り D と知らせで読む**ので必ず送る。 */
                 'mwAmzCost',
                 /* 在庫CSVの自動取り込みの「すぐ止める」（6.160・【P】）。 */
-                'mwCsvStop'];
+                'mwCsvStop',
+                /* 6.166（【T】）そのほかの欠品も商品ごとに／週のまとめ。 */
+                'mwNtRest','mwWeek'];
 /* ---- 値付けの式が使う設定（6.73）----
    Worker が自分で目標を計算できるようにするため、**売値の計算に入る設定を
    ぜんぶ pj-sync に送る**。これまでは目標の決め方（ADV_FIELDS）だけを送っていて、
@@ -5259,6 +5304,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* Amazon刈取の候補の条件と自動の件数（6.146） */
                  'amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  'mwNtTop','mwPutDay','mwUsedPct','mwNtAudience',
+                 /* 6.166（【T】）在庫の動きの目安と知らせの形。 */
+                 'mwSaleNote','mwNtThread',
                  'mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
@@ -10506,6 +10553,53 @@ var MW_NT_KIND={ gone:'新しく欠品', 'new':'新しく出てきた', back:'�
 function mwNtPicked(){
   return mwNtRows2.filter(function(r){ return findMatchNt(r); });
 }
+/* ---- 在庫の動きの目安（6.166・【T】）----
+   式は shared/mwstat.js の1か所だけ。画面は**出し方**だけを持つ。
+   どの一覧（刈取・候補・仕入れる・取り込みの回）でも同じ1行を出す。 */
+function mwSaleWordsUi(){
+  var el=$('mwSaleNote');
+  return el?String(el.value||''):'';
+}
+function mwStat(r){
+  try{ return MWSTAT.calc(r,{ saleWords:mwSaleWordsUi() }); }catch(e){ return null; }
+}
+function mwStatHtml(r){
+  var c=mwStat(r); if(!c)return '';
+  var jan=String((r||{}).jan||'');
+  var more=' <a href="#" onclick="mwMoveShow(\''+esc(jan)+'\');return false">'
+    +'記録を見る</a>';
+  if(c.none)return '<div class="note2" style="margin:2px 0 0;opacity:.75">'
+    +'<b>動き</b> 記録がまだありません'+more+'</div>';
+  var t=[];
+  if(r.mv_prev!==null&&r.mv_prev!==undefined)
+    t.push('在庫 <b>'+(+r.mv_prev||0)+'→'+(+r.mv_cur||0)+'</b>');
+  t.push((c.speed!==null&&c.speed>0)
+    ?('<b>1日 '+c.speed+'点</b>'
+      +(c.speedSrc==='week'?'（直近7日）':'（全期間）'))
+    :'減っていません');
+  if(c.outDays!==null)t.push('<b>欠品まで '+c.outDays+'日</b>');
+  t.push(c.backN>0
+    ?('再入荷 '+c.backN+'回'
+      +(c.backAvg!==null?('・平均 '+c.backAvg+'点'):'')
+      +(c.goneAvg!==null?('・欠品 '+c.goneAvg+'日'):''))
+    :(c.goneN>0?'<b style="color:var(--bad)">再入荷なし</b>':'再入荷の記録なし'));
+  if(c.sale)t.push('<span class="badge" style="background:'
+    +(c.noBack?'var(--bad)':'#b07000')+'">在庫処分'
+    +(c.noBack?'・再入荷なし':'')+'</span>');
+  t.push('記録 '+c.days+'日'+(c.thin?'<b>・目安は参考程度</b>':''));
+  return '<div class="note2" style="margin:2px 0 0"><b>動き</b> '+t.join('　')
+    +more+'</div>';
+}
+/* 並べ替えに使う数（大きいほど先）。 */
+function mwStatSpeed(r){
+  var c=mwStat(r); return (c&&c.speed)?c.speed:0;
+}
+function mwStatNoBack(r){
+  var c=mwStat(r);
+  if(!c)return 0;
+  /* 在庫処分で再入荷なし＝2、在庫処分＝1、それ以外＝0。 */
+  return c.noBack?2:(c.sale?1:0);
+}
 /* なぜ知らせに出たのか（出なかったのか）を1行で出す。 */
 function mwNtWhyHtml(r){
   var t=[];
@@ -10539,6 +10633,7 @@ function mwNtRowHtml(r){
         +'（税抜 '+yen(a.net)+'・利益率 '+a.margin+'%）')
        :(r.asin?'Amazon の販売価格が取れていません':'ASIN が引けていません'))
     +'</div>'
+    +mwStatHtml(r)
     +mwNtWhyHtml(r)
     +'</div>';
 }
@@ -10562,6 +10657,117 @@ function mwNtRender(){
     :'<div class="note2">この回は該当する商品がありませんでした。</div>';
 }
 listReg('mwnt',mwNtRender);
+
+/* ===== 6.166（【T】）在庫の動きの記録と、目安のまとめ ===== */
+/* 1商品の記録を出す（一覧の「記録を見る」からも呼ぶ）。 */
+function mwMoveShow(jan){
+  var note=$('mwMoveNote'), box=$('mwMoveBox');
+  if(!note||!box)return;
+  var j=String(jan||'').replace(/\D/g,'');
+  if($('mwMoveJan'))$('mwMoveJan').value=j;
+  if(j.length!==13){ note.textContent='JAN は13桁で入れてください。'; return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  note.textContent='pj-sync に聞いています…';
+  box.innerHTML='';
+  fetch(syncUrl()+'/mw/move?jan='+encodeURIComponent(j)+'&limit=60',
+        {headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        note.textContent=(d&&d.error==='no_table')
+          ?'pj-sync 側の D1 に記録の表がありません（migrate-0049）。'
+          :((d&&d.error==='bad_jan')?'JAN の形が違います。':'読めませんでした。');
+        return;
+      }
+      note.innerHTML='<b>'+esc(String(d.name||d.jan))+'</b>'
+        +'（JAN '+esc(String(d.jan))+'）いまの在庫 '+(+d.stock||0)+'点'
+        +'　記録 '+(+d.all||0)+'行（'+(+d.keep_days||90)+'日ぶん）';
+      box.innerHTML='<div class="note2" style="margin:4px 0 0">'
+        +esc(MWSTAT.text(d.stat||{}))+'</div>'
+        +((d.rows||[]).length
+          ?('<div style="margin:4px 0 0">'
+            +(d.rows||[]).map(mwMoveLine).join('')+'</div>')
+          :'<div class="note2">動きの記録はまだありません。</div>');
+    })
+    ['catch'](function(){ note.textContent='pj-sync に届きませんでした。'; });
+}
+var MW_MOVE_KIND={ 'new':'新しく出た', down:'減った', up:'増えた（補充）',
+                   gone:'欠品', back:'欠品から戻った' };
+function mwMoveLine(x){
+  var k=String(x.kind||'');
+  var col=(k==='gone')?'var(--bad)':((k==='back'||k==='up')?'var(--good)':'');
+  var a=(x.prev===null||x.prev===undefined)?'—':(+x.prev);
+  var b=(x.cur===null||x.cur===undefined)?'—':(+x.cur);
+  return '<div class="note2" style="margin:1px 0 0">'
+    +esc(String(x.at_jst||''))+'　<b'+(col?(' style="color:'+col+'"'):'')+'>'
+    +esc(MW_MOVE_KIND[k]||k)+'</b>　'+a+' → '+b
+    +'　<span style="opacity:.7">'+esc(String(x.sha||''))+'</span></div>';
+}
+function mwMoveGo(){ mwMoveShow(($('mwMoveJan')||{}).value||''); }
+/* 目安のまとめ（よく売れる／在庫処分で再入荷なし／再入荷が多い）。 */
+function mwWeekShow(){
+  var note=$('mwWeekNote'), box=$('mwWeekBox');
+  if(!note||!box)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  note.textContent='pj-sync に聞いています…';
+  box.innerHTML='';
+  fetch(syncUrl()+'/mw/week?top=10',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        note.textContent=(d&&d.error==='no_table')
+          ?'pj-sync 側の D1 に記録の表がありません（migrate-0049）。'
+          :'読めませんでした。';
+        return;
+      }
+      note.innerHTML='記録 '+(+d.rows||0)+'行'
+        +(d.from?('（'+esc(String(d.from).slice(0,10))+' 〜 '
+          +esc(String(d.to).slice(0,10))+'）'):'');
+      box.innerHTML=mwWeekGroup('🔥 よく売れている商品',d.hot)
+        +mwWeekGroup('🧹 在庫処分で再入荷がない商品（刈り切る候補）',d.none)
+        +mwWeekGroup('🔁 再入荷が多い商品（少しずつでよい候補）',d.many);
+    })
+    ['catch'](function(){ note.textContent='pj-sync に届きませんでした。'; });
+}
+function mwWeekGroup(title,list){
+  var l=list||[];
+  return '<div class="note2" style="margin:8px 0 2px"><b>'+esc(title)+'</b></div>'
+    +(l.length?l.map(function(x){
+      return '<div class="note2" style="margin:1px 0 0">・'
+        +'<a href="#" onclick="mwMoveShow(\''+esc(String(x.jan||''))
+        +'\');return false">'+esc(String(x.name||x.jan).slice(0,40))+'</a>'
+        +'　在庫 '+(+x.stock||0)+'点　'+esc(MWSTAT.text(x.stat||{}))+'</div>';
+    }).join(''):'<div class="note2">まだ見つかっていません。</div>');
+}
+/* いますぐ Discord に送る（管理者だけ）。 */
+function mwWeekSend(){
+  var note=$('mwWeekNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  note.textContent='送っています…';
+  fetch(syncUrl()+'/mw/week/run',{ method:'POST',
+    headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
+    body:JSON.stringify({ top:10 }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      note.textContent=(d&&d.ok===true&&+d.sent>0)
+        ?('✓ Discord に '+(+d.sent)+'通 送りました。')
+        :((d&&d.why==='no_table')
+          ?'pj-sync 側の D1 に記録の表がありません（migrate-0049）。'
+          :'送れませんでした。');
+    })
+    ['catch'](function(){ note.textContent='pj-sync に届きませんでした。'; });
+}
+
 /* その回の一覧を引く。 */
 function mwNtLoad(at,kind){
   var note=$('mwNtNote');
@@ -12348,6 +12554,8 @@ function mwAmzFilters(){
 }
 /* 並べ替えの名前（一覧の見出しと同じ言い方にする・6.126）。 */
 function mwAmzSortName(sort){
+  if(sort==='speed')return '売れる速さの速い順（直近7日・なければ全期間）';
+  if(sort==='nostock')return '再入荷なし（在庫処分）を先に';
   if(sort==='margin')return '利益率の高い順';
   if(sort==='rank')return 'ランキング順（大分類・売れている順）';
   if(sort==='genre')return 'ジャンルごと';
@@ -12603,6 +12811,9 @@ function mwBuyRowHtml(r){
       +'</div>'):'')
     +(done?('<div class="note2" style="margin:2px 0 0">SKU '+esc(r.reg_sku||'')
       +'　'+esc(jstDay(r.reg_at||'')||'')+'</div>'):'')
+    /* 6.166（【T】）在庫の動きの目安（売れる速さ・欠品までの見込み・再入荷）。
+       「全部刈り取るか・少しずつでよいか」をこの行で決められるように。 */
+    +mwStatHtml(r)
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'
     +mwFindBtn(jan)
     /* 6.161：MW に注文したら押す。押すと「仕入れ済み」の区分に移り、
@@ -13632,6 +13843,16 @@ function mwAmzRender(){
     var ra=mwRankOf(a.r)||Infinity, rb=mwRankOf(b.r)||Infinity;
     return ra-rb;
   });
+  /* 6.166（【T】）売れる速さ順。記録が無い行（0）は後ろへ。 */
+  else if(sort==='speed')list.sort(function(a,b){
+    var d=mwStatSpeed(b.r)-mwStatSpeed(a.r);
+    return d||(k(b,'net')-k(a,'net'));
+  });
+  /* 6.166（【T】）在庫処分で再入荷なしの行を先に（刈り切る候補）。 */
+  else if(sort==='nostock')list.sort(function(a,b){
+    var d=mwStatNoBack(b.r)-mwStatNoBack(a.r);
+    return d||(k(b,'net')-k(a,'net'));
+  });
   else list.sort(function(a,b){ return k(b,'net')-k(a,'net'); });  // 既定：粗利（税抜）順
   var line=function(x){
     var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
@@ -13689,6 +13910,8 @@ function mwAmzRender(){
       +yen(+r.wholesale||0)+'（税抜）　<b>MW定価</b> '+yen(+r.list_price||0)+'</div>'
       +(r.note?('<div class="note2" style="margin:2px 0 0;opacity:.8"><b>MW備考</b> '
         +esc(String(r.note).slice(0,50))+'</div>'):'')
+      /* 6.166（【T】）在庫の動きの目安（売れる速さ・欠品までの見込み・再入荷）。 */
+      +mwStatHtml(r)
       +mwRstLine(r)
       +mwJanDupLine(r)
       +mwPicLine(r)
@@ -17328,6 +17551,10 @@ var SYNC_POST_CHUNK=200;              // 1回に送る件数
 /* D1 に列が無いときは、どの migrate を実行すればよいかまで出す。 */
 var SYNC_MIGRATE=[
   /* 6.141：表（no such table）もここで引く。新しいものから並べる。 */
+  /* 6.166（【T】）在庫の動きの記録。 */
+  ['mw_move','migrate-0049-mw-move.sql'],
+  ['mw_stat','migrate-0049-mw-move.sql'],
+  ['gone_days','migrate-0049-mw-move.sql'],
   ['amz_drop','migrate-0037-amz-drop.sql'],
   ['amz_dg','migrate-0035-amz-dg.sql'],
   ['amz_ptype','migrate-0034-ptype.sql'],
@@ -21255,7 +21482,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v247';   // sw.js の const V と必ず同じ値にする
+var APP_V='v248';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

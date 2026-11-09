@@ -89,11 +89,14 @@ env.DB._db.prepare(
 reset();
 r=await put(env,'2026-11-07T02:00:00.000Z',base.filter((x)=>x.jan!==JAN_W));
 console.log('   通知: '+(posts[0]||'（なし）').slice(0,420));
-ok(posts.length===1,'★★★1回の取り込みにつき1通だけ');
+/* 7.126（【T】）：1通目は**要約だけ**。見出しと商品は次の通に出る。 */
+ok(posts.length>=2&&!/数量0にしました/.test(posts[0])
+   &&/MW の在庫CSVを取り込みました/.test(posts[0]),
+   '★★★1通目は要約だけ（7.126）');
 ok(/新しく欠品 1件（欠品の合計 1件）/.test(posts[0]),
    '★★「今回 新しく欠品 n件（欠品の合計 n件）」と書く');
 /* 7.125：見出しは文、商品は埋め込みに出る。 */
-ok(/数量0にしました/.test(posts[0])
+ok(/数量0にしました/.test(posts.join('\n'))
    &&embs.some((e)=>e.title==='ヨッシークラフトワールド'),
    '★★★eBay に無在庫で出していた商品は「数量0にしました」');
 ok(new RegExp(JAN_W).test(embText())&&/¥4,000/.test(embText()),
@@ -113,13 +116,13 @@ env.DB._db.prepare(
 reset();
 r=await put(env,'2026-11-07T02:00:00.000Z',b2.filter((x)=>x.jan!==JAN_B));
 console.log('   通知: '+(posts[0]||'（なし）').slice(0,400));
-ok(/注文前に売り切れました/.test(posts[0]),
+ok(/注文前に売り切れました/.test(posts.join('\n')),
    '★★★印が付いている商品は「注文前に売り切れました」');
 ok(embs.some((e)=>e.title==='ねんどろいど八奈見'),
    '★その商品を埋め込みで出す（7.125）');
 /* 7.125：pj へのリンクは出さない（Discord の中のブラウザはキーを持たない）。
    代わりに埋め込みの中に Amazon と Keepa のリンクを出す。 */
-ok(!/#tab=/.test(posts[0])&&!/#tab=/.test(embText()),
+ok(!/#tab=/.test(posts.join('\n'))&&!/#tab=/.test(embText()),
    '★★pj へのリンクは出さない');
 ok(/amazon\.co\.jp/.test(embText()),'★★Amazon のリンクを出す');
 /* 同じ商品を2回は知らせない。 */
@@ -144,7 +147,7 @@ r=await put(env,'2026-11-07T02:00:00.000Z',add);
 console.log('   '+JSON.stringify({added_jan:r.body.added_jan})+' 通知: '
   +(posts[0]||'（なし）').slice(0,420));
 ok(r.body.added_jan===2,'★新しく出てきた商品は2件');
-ok(/新しく入荷しました/.test(posts[0])
+ok(/新しく入荷しました/.test(posts.join('\n'))
    &&embs.some((e)=>e.title==='見込みのある新商品'),
    '★★★見込みのある新入荷を知らせる');
 ok(!embs.some((e)=>e.title==='見込みのない新商品'),
