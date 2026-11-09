@@ -281,13 +281,17 @@ let t1=await topNote({ ok:true, n:0, rows:[], alive:3, picked:0, stale_h:24,
   last:{ at:new Date(Date.now()-3600000).toISOString(), at_jst:'2026-11-09 01:07',
     rows_in:12062, added:3, changed:12, gone:5, src:'auto' },
   csv:{ on:true, stop:false, url_set:true, every_h:1, body_h:3,
-    checked_at:'2026-11-08T16:07:00Z', next_at:'2026-11-08T17:07:00Z',
+    checked_at:'2026-11-08T16:07:00Z', checked_jst:'2026-11-09 01:07',
+    next_at:'2026-11-08T17:07:00Z',
     next_jst:'2026-11-09 02:07', auto_off:'' } });
 console.log('   '+t1);
 ok(/12,062行/.test(t1),'★行数を出す');
 ok(/自動/.test(t1),'★★★自動で取り込んだと出す');
-ok(/次に取りに行くのは 2026-11-09 02:07ごろ/.test(t1),
-   '★★★次に取りに行く予定を出す');
+ok(/最後に確かめたのは 2026-11-09 01:07/.test(t1),
+   '★★★最後に確かめた時刻（変わっていなかった回も）を出す');
+/* 6.163：⚙と**同じ文**にした（最後に確かめた＋次に確かめる）。 */
+ok(/次に確かめるのは 2026-11-09 02:07ごろ/.test(t1),
+   '★★★次に確かめる時刻を出す（⚙と同じ文）');
 let t2=await topNote({ ok:true, n:0, rows:[], alive:3, picked:0, stale_h:24,
   mkt:{}, limit:1,
   last:{ at:new Date(Date.now()-3600000).toISOString(), at_jst:'x',

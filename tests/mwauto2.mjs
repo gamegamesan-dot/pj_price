@@ -191,6 +191,61 @@ console.log('\n=== ② どんな終わり方でも記録を1行残す ===');
   ok(d.rows[0].stopped==='例外','★★「止まった理由」も入る');
 }
 
+console.log('\n=== 7.124：記録は絶対に落とさない ===');
+{
+  /* 走り始めに1行残し、終わったらその行を書き替える（増やさない）。 */
+  const env=env0();
+  await cfg(env,{ mwAutoMode:'100' });
+  await stock(env,0);
+  const id=await W.mwAutoStart(env,'cron');
+  ok(id>0,'★★★走り始めに1行残す（id が返る）');
+  let d=(await asJson(await worker.fetch(get('/mw/auto?limit=5'),env,{}))).body;
+  ok(d.rows.length===1&&/走っています/.test(String(d.rows[0].note||'')),
+     '★★★打ち切られても「走った」ことが記録に残る');
+  await W.mwAutoLog(env,{ price_n:5, fee_n:6, rst_n:7, calls:8, left:9,
+    note:'おわり', asin_n:10, ms:1234, stopped:'', error:'', mode:'on',
+    per_hour:100, fee_ng:0, fee_left:0, asin_left:0 },'cron',id);
+  d=(await asJson(await worker.fetch(get('/mw/auto?limit=5'),env,{}))).body;
+  console.log('   '+JSON.stringify(d.rows).slice(0,200));
+  ok(d.rows.length===1,'★★★終わったら同じ行を書き替える（2行にしない）');
+  ok(+d.rows[0].price_n===5&&+d.rows[0].asin_n===10&&+d.rows[0].ms===1234,
+     '★★★中身が入れ替わる');
+  ok(!/走っています/.test(String(d.rows[0].note||'')),'★★「走っています」は消える');
+}
+{
+  /* jobMwAuto も、走り始めの行を使い回す（記録は1本の回で1行）。 */
+  const env=env0();
+  await cfg(env,{ mwAutoMode:'100' });
+  await stock(env,0);
+  const r=await W.jobMwAuto(env,{ kind:'cron' });
+  ok(r.log_id>0,'★★走り始めの行を使う');
+  const d=(await asJson(await worker.fetch(get('/mw/auto?limit=9'),env,{}))).body;
+  ok(d.rows.length===1,'★★★1回につき記録は1行');
+  ok(+d.rows[0].asin_n===1&&+d.rows[0].ms>=0,'★中身が入る');
+}
+{
+  /* 新しい列が無いデータベースでも、短い形で入れ直して必ず残す。
+     （v245 は colOk がいつも「ある」と答えたせいで、長い形で落ちて
+       1行も残らなかった。13:37 の記録が無かったのはこれ） */
+  const env=env0();
+  await cfg(env,{ mwAutoMode:'100' });
+  await env.DB._db.exec('DROP TABLE mw_auto_runs');
+  await env.DB._db.exec(`CREATE TABLE mw_auto_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, kind TEXT, price_n INTEGER,
+    fee_n INTEGER, rst_n INTEGER, calls INTEGER, left_n INTEGER, note TEXT,
+    created_at TEXT)`);
+  await W.mwAutoLog(env,{ price_n:3, fee_n:0, rst_n:0, calls:1, left:0,
+    note:'短い形', asin_n:9, ms:50, stopped:'', error:'', mode:'on',
+    per_hour:100, fee_ng:0, fee_left:0, asin_left:0 },'cron',0);
+  const d=(await asJson(await worker.fetch(get('/mw/auto?limit=5'),env,{}))).body;
+  console.log('   '+JSON.stringify(d).slice(0,220));
+  ok(d.ok===true&&d.rows.length===1&&+d.rows[0].price_n===3,
+     '★★★新しい列が無くても記録が残る（短い形で入れ直す）');
+  ok(d.full===false,'★★★列が足りないことを画面に伝える');
+  ok(d.rows[0].asin_n===undefined||d.rows[0].asin_n===null,
+     '★古い形なので段ごとの件数は入らない');
+}
+
 console.log('\n=== ① 「前回の取得」が自動の回も数える ===');
 {
   const env=env0();

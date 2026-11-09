@@ -314,31 +314,6 @@ body.staff #syncOnHandFix{display:none !important}
   </div>
 </div>
 
-<!-- ===== 仕入れ先の在庫CSV（6.117／6.150）=====
-     どのタブからでも取り込めるように、タブの上に置く。
-     ボタンは仕入れタブの中のものと**同じ処理**（同じファイル選択を開く）。
-     前回の取り込みと、24時間を過ぎたときの催促もここに出す。
-     6.150：**仕入れ先を選べる形**にしてある（いまは MW だけなので選択欄は
-     出さない）。ほかの問屋を足すときは BUY_SRC に1行足す。 -->
-<div class="wrap" id="mwTopWrap">
-  <div id="mwTopStale" class="warn" style="display:none;margin-top:8px"></div>
-  <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
-    <!-- ファイル選択はここに置く（6.123）。隠れたタブの中（display:none の親）に
-         あると、iPhone ではファイルを選べず「押しても何も起きない」になる。
-         ボタンは2つ（ここと出品CSVタブの中）だが、選ぶ口と処理は1つだけ。 -->
-    <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
-    <select id="buySrcSel" style="flex:0 0 auto;display:none"></select>
-    <button class="btn primary" id="mwTopImport" style="flex:1 1 0;min-width:0;padding:9px 4px">MWの在庫CSVを取り込む</button>
-    <span class="note2" id="mwTopNote" style="flex:1 1 0;min-width:0;margin:0"></span>
-  </div>
-  <!-- 取り込みの知らせ（6.123）。出品CSVタブの中と**同じ中身**を、
-       どのタブからでも見えるこちらにも出す。 -->
-  <div class="warn" id="mwTopSendBar" style="display:none;margin-top:6px"></div>
-  <div class="note2" id="mwTopRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
-  <div class="note2" id="mwTopMsg" style="display:none;margin-top:2px"></div>
-  <div class="warn" id="mwTopWarn" style="display:none;margin-top:8px"></div>
-</div>
-
 <div class="wrap">
   <div id="tip"></div>
 
@@ -1128,8 +1103,9 @@ body.staff #syncOnHandFix{display:none !important}
           仕入値は<b>卸値×1.1＋1点あたりの仕入れ送料</b>で計算します（⚙設定）。
           <b>この段では出品しません</b>（写真はまだ付きません）。</div>
         </details>
-        <!-- ファイル選択（csvMwFile）はタブの上（#mwTopWrap）に置いてある。
-             隠れたタブの中にあると、iPhone ではファイルを選べない（6.123）。 -->
+        <!-- ファイル選択（csvMwFile）は **タブの外**（#mwTopWrap・画面のいちばん下）
+             に置いてある。隠れたタブの中（display:none の親）にあると、
+             iPhone ではファイルを選べない（6.123／v210）。 -->
         <div data-toc="在庫CSVの取り込み"></div>
         <button class="btn primary" id="csvMwImport" style="width:100%;margin-top:8px">MWの在庫CSVを取り込む</button>
         <div class="warn" id="csvMwSendBar" style="display:none;margin-top:6px"></div>
@@ -2135,6 +2111,41 @@ body.staff #syncOnHandFix{display:none !important}
   <button class="btn" id="csvUndoBtn" style="flex:0 0 auto;padding:6px 10px;font-size:13px">元に戻す</button>
   <button class="btn" id="csvUndoClose" style="flex:0 0 auto;padding:6px 10px;font-size:13px">閉じる</button>
 </div>
+
+<!-- ===== 仕入れ先の在庫CSV（6.117／6.150／6.163）=====
+     6.163：**自動の取り込み（【P】）になってほぼ押さないので、
+     タブの上から「そのタブのいちばん下」に移した**。
+     置き場所はここ1か所（主な中身のいちばん下・footer の直前）で、
+     どのタブを見ていてもそのタブの下に出る。
+     ★ここを**畳まれるタブの中に入れてはいけない**（v210）。
+       display:none の親の中にあると、iPhone ではファイル選択が開かず
+       「押しても何も起きない」になる。だから**タブの外**に置いてある。
+     ボタンは仕入れタブの中のものと**同じ処理**（同じファイル選択を開く）。
+     前回の取り込みと、24時間を過ぎたときの催促もここに出す。
+     6.150：**仕入れ先を選べる形**にしてある（いまは MW だけなので選択欄は
+     出さない）。ほかの問屋を足すときは BUY_SRC に1行足す。 -->
+<div class="wrap" id="mwTopWrap" style="margin-top:14px;padding-top:8px;
+     border-top:1px solid var(--line)">
+  <div id="mwTopStale" class="warn" style="display:none;margin-top:8px"></div>
+  <div class="note2" style="margin:0">在庫CSVは <b>pj-sync が自動で取り込みます</b>
+    （⚙「在庫CSVの自動取り込み」）。下のボタンは<b>自動が止まったとき用</b>です。</div>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+    <!-- ファイル選択はここに置く（6.123）。隠れたタブの中（display:none の親）に
+         あると、iPhone ではファイルを選べず「押しても何も起きない」になる。
+         ボタンは2つ（ここと出品CSVタブの中）だが、選ぶ口と処理は1つだけ。 -->
+    <input type="file" id="csvMwFile" accept=".csv,text/csv" style="display:none">
+    <select id="buySrcSel" style="flex:0 0 auto;display:none"></select>
+    <button class="btn primary" id="mwTopImport" style="flex:1 1 0;min-width:0;padding:9px 4px">MWの在庫CSVを取り込む</button>
+    <span class="note2" id="mwTopNote" style="flex:1 1 0;min-width:0;margin:0"></span>
+  </div>
+  <!-- 取り込みの知らせ（6.123）。出品CSVタブの中と**同じ中身**を、
+       どのタブからでも見えるこちらにも出す。 -->
+  <div class="warn" id="mwTopSendBar" style="display:none;margin-top:6px"></div>
+  <div class="note2" id="mwTopRead" style="display:none;margin-top:6px;padding:6px;border:1px solid var(--line);border-radius:6px"></div>
+  <div class="note2" id="mwTopMsg" style="display:none;margin-top:2px"></div>
+  <div class="warn" id="mwTopWarn" style="display:none;margin-top:8px"></div>
+</div>
+
 
 <footer>
     日本郵便 2026-08-07 時点の料金表を内蔵<br>
@@ -10639,12 +10650,14 @@ function mwCsvStateHtml(d){
              :'自動取り込みは<b>オフ</b>です（手で取り込んでください）');
   if(d.on&&!d.url_set)
     t.push('<b style="color:var(--bad)">取得先の URL が入っていません</b>');
+  /* 6.163：画面のいちばん下の帯と**同じ文**を使う（食い違わないように）。 */
   if(d.checked_jst)t.push('最後に確かめたのは '+esc(d.checked_jst));
   if(d.next_jst)t.push('次に確かめるのは '+esc(d.next_jst)+'ごろ');
   t.push('確かめる間隔 '+(+d.every_h||1)+'時間に1回'
     +'／本体を取るのは '+(+d.body_h||3)+'時間に1回まで');
   if(+d.fail)t.push('<b style="color:var(--bad)">続けて失敗 '+(+d.fail)+'回</b>'
     +'（'+(+d.fail_stop||3)+'回で止まります）');
+  if(d.__note)t.push('<b style="color:var(--bad)">'+esc(String(d.__note))+'</b>');
   if(d.auto_off)
     t.push('<b style="color:var(--bad)">続けて失敗したので止まっています</b>'
       +'　<button class="btn" id="mwCsvResume" style="padding:2px 8px;'
@@ -10672,9 +10685,16 @@ function mwCsvRunsShow(){
           :'読めませんでした。';
         return;
       }
+      /* 6.163：列が足りないときは、読めてはいるがその旨を出す。 */
+      if(d.full===false)
+        d.__note='（migrate-0047 を流すと、その回の中身も開けます）';
       mwCsvLast=d;
       note.innerHTML=mwCsvStateHtml(d);
       var ua=$('mwCsvUaNote'); if(ua&&d.ua)ua.textContent=d.ua;
+      /* 6.163：**画面のいちばん下の帯も同じ値で出し直す**。
+         v245 までは帯が画面を開いたときの値のままで、⚙と食い違って見えた。 */
+      mwCsvState=d;
+      try{ mwStaleRender(); }catch(e){}
       mwCsvRunsRender();
     })
     ['catch'](function(){
@@ -11045,34 +11065,45 @@ function mwStaleRender(){
     el.innerHTML=msg; el.style.display='';
   });
   /* 前回の取り込み（日時・行数）はいつでも出す（6.117）。
-     【P】自動（pj-sync）か手動（画面）か、次に取りに行く予定も添える。 */
+     【P】自動（pj-sync）か手動（画面）か。
+     6.163：⚙「在庫CSVの自動取り込み」と**同じ中身**を出す
+       ・最後に確かめた時刻（**変わっていなかった回も**）
+       ・次に確かめる時刻
+     v245 までは「次に取りに行くのは…」だけで、しかも画面を開いたときの値の
+     ままだったので、⚙と食い違って見えた。 */
   var n=$('mwTopNote');
   if(n){
     var src=String((lastRun&&lastRun.src)||'');
     var how=src?(src==='auto'?'・<b>自動</b>':'・手で取り込み'):'';
-    var c=mwCsvState||null;
-    var nx='';
-    if(c){
-      if(c.auto_off)nx='　<b style="color:var(--bad)">自動取り込みは止まっています</b>';
-      else if(c.stop)nx='　<b style="color:var(--bad)">「すぐ止める」が入っています</b>';
-      else if(!c.on)nx='　自動取り込みはオフ';
-      else if(!c.url_set)nx='　<b style="color:var(--bad)">取得先の URL が未設定</b>';
-      else nx='　次に取りに行くのは '+esc(String(c.next_jst||'—'))+'ごろ';
-    }
-    n.innerHTML=at
+    n.innerHTML=(at
       ?('前回の取り込み '+esc(jstShort(at))
         +((lastRun&&+lastRun.rows_in)
           ?('・'+Number(lastRun.rows_in).toLocaleString('ja-JP')+'行'):'')
         +how
-        +(old?'　<b style="color:var(--bad)">'+h+'時間前</b>':'')
-        +nx)
-      :('まだ取り込んでいません'+nx);
+        +(old?'　<b style="color:var(--bad)">'+h+'時間前</b>':''))
+      :'まだ取り込んでいません')
+      +mwCsvWhenHtml(mwCsvState);
   }
 }
 /* 取り込みの時刻は候補一覧からも販売連携からも拾えるようにする。 */
 var mwStaleAt='', mwStaleLast=null;
-/* 【P】自動取り込みの様子（/mw/list の csv）。「前回の取り込み」に出す。 */
+/* 【P】自動取り込みの様子（/mw/list・/mw/csv の csv）。
+   「前回の取り込み」と⚙の両方に、**同じ文**で出す（6.163）。 */
 var mwCsvState=null;
+function mwCsvWhenHtml(c){
+  if(!c)return '';
+  if(c.auto_off)
+    return '<br><b style="color:var(--bad)">自動取り込みは止まっています</b>'
+      +'（⚙の「もう一度動かす」で戻せます）';
+  if(c.stop)
+    return '<br><b style="color:var(--bad)">「すぐ止める」が入っています</b>';
+  if(!c.on)return '<br>自動取り込みは<b>オフ</b>です（⚙で変えられます）';
+  if(!c.url_set)
+    return '<br><b style="color:var(--bad)">取得先の URL が未設定です</b>（⚙）';
+  /* 変わっていなかった回も「確かめた」に数える（⚙と同じ）。 */
+  return '<br>最後に確かめたのは '+esc(String(c.checked_jst||'—'))
+    +'　次に確かめるのは '+esc(String(c.next_jst||'—'))+'ごろ';
+}
 /* ===== MW の候補を出品リストに入れる（6.96）=====
    写真が付いた「① 出品候補」の行を、既存の出品リスト（csvList）に足す。
    こうすると英題生成・Item Specifics・原産国・書き出し（File Exchange）は
@@ -21222,7 +21253,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v245';   // sw.js の const V と必ず同じ値にする
+var APP_V='v246';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

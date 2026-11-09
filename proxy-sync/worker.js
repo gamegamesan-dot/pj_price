@@ -5942,40 +5942,70 @@ async function mwStockHave(env) {
 }
 /* 記録を1行残す（⚙の「最近の取得」に出す）。 */
 async function mwCsvLog(env, o) {
+  /* 7.124：**記録は絶対に落とさない**。
+     v244 は `stock_at`（migrate-0047 で足した列）を必ず入れていたので、
+     その列が無いデータベースでは INSERT が落ち、
+     **取りに行った回が1行も残らなかった**（「変わっていなかった回」も含めて）。
+     列があるかを colOk で見たうえで、それでも落ちたら**短い形で入れ直す**。 */
+  const at = o.at || nowIso();
+  const v = [at, String(o.src || "auto"), Math.round(o.http || 0),
+             o.changed ? 1 : 0, o.took ? 1 : 0, Math.round(o.bytes || 0),
+             Math.round(o.rows_in || 0), Math.round(o.added || 0),
+             Math.round(o.changed_rows || 0), Math.round(o.gone || 0),
+             Math.round(o.elapsed_ms || 0), o.ok ? 1 : 0,
+             String(o.why || "").slice(0, 500) || null];
+  const SHORT =
+    `INSERT INTO mw_csv_runs (at,src,http,changed,took,bytes,rows_in,added,
+       changed_rows,gone,elapsed_ms,ok,why,created_at)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?1)`;
+  const FULL =
+    `INSERT INTO mw_csv_runs (at,src,http,changed,took,bytes,rows_in,added,
+       changed_rows,gone,elapsed_ms,ok,why,stock_at,created_at)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?1)`;
+  let done = false;
+  if (await colOk(env, "mw_csv_runs", "stock_at")) {
+    try {
+      /* 7.121：この回の一覧（/mw/nt）を開くための日時。 */
+      await env.DB.prepare(FULL)
+        .bind(...v, String(o.stock_at || "") || null).run();
+      done = true;
+    } catch (e) { done = false; }
+  }
+  if (!done) {
+    try { await env.DB.prepare(SHORT).bind(...v).run(); }
+    catch (e) { /* 記録の失敗で本処理を落とさない */ }
+  }
+  /* 古い記録は捨てる（D1 をためない）。 */
   try {
-    await env.DB.prepare(
-      `INSERT INTO mw_csv_runs (at,src,http,changed,took,bytes,rows_in,added,
-         changed_rows,gone,elapsed_ms,ok,why,stock_at,created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?1)`)
-      .bind(o.at || nowIso(), String(o.src || "auto"), Math.round(o.http || 0),
-            o.changed ? 1 : 0, o.took ? 1 : 0, Math.round(o.bytes || 0),
-            Math.round(o.rows_in || 0), Math.round(o.added || 0),
-            Math.round(o.changed_rows || 0), Math.round(o.gone || 0),
-            Math.round(o.elapsed_ms || 0), o.ok ? 1 : 0,
-            String(o.why || "").slice(0, 500) || null,
-            /* 7.121：この回の一覧（/mw/nt）を開くための日時。 */
-            String(o.stock_at || "") || null).run();
-    /* 古い記録は捨てる（D1 をためない）。 */
     await env.DB.prepare(
       `DELETE FROM mw_csv_runs WHERE id NOT IN (
          SELECT id FROM mw_csv_runs ORDER BY id DESC LIMIT ?1)`)
       .bind(MW_CSV_KEEP).run();
-  } catch (e) { /* 記録の失敗で本処理を落とさない */ }
+  } catch (e) { /* 掃除の失敗も黙って流す */ }
 }
 /* ⚙に返す記録（10件ずつ画面が出す）。 */
 async function mwCsvRuns(env, url) {
   const limit = Math.max(1, Math.min(MW_CSV_LOG_MAX,
     Math.round(Number((url && url.searchParams.get("limit")) || 20) || 20)));
-  let rows = [];
-  try {
+  /* 7.124：`stock_at` が無いデータベースでも読めるようにする
+     （列が無いだけで「記録の表がありません」と出ていた）。 */
+  let rows = [], full = true;
+  const COLS = `at,src,http,changed,took,bytes,rows_in,added,changed_rows,gone,
+              elapsed_ms,ok,why`;
+  const read = async (cols) => {
     const q = await env.DB.prepare(
-      `SELECT at,src,http,changed,took,bytes,rows_in,added,changed_rows,gone,
-              elapsed_ms,ok,why,stock_at
-         FROM mw_csv_runs ORDER BY id DESC LIMIT ?1`)
+      `SELECT ${cols} FROM mw_csv_runs ORDER BY id DESC LIMIT ?1`)
       .bind(limit).all();
-    rows = ((q && q.results) || []).map((r) => Object.assign({}, r,
+    return ((q && q.results) || []).map((r) => Object.assign({}, r,
       { at_jst: jstText(r.at) }));
-  } catch (e) { return { ok: false, error: "no_table", rows: [] }; }
+  };
+  try {
+    rows = await read(COLS + ",stock_at");
+  } catch (e) {
+    full = false;
+    try { rows = await read(COLS); }
+    catch (e2) { return { ok: false, error: "no_table", rows: [] }; }
+  }
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
   const cfg = mwCsvCfg(st);
@@ -5984,7 +6014,7 @@ async function mwCsvRuns(env, url) {
   const fail = Math.round(Number(await stateGet(env, MW_CSV_FAIL)) || 0);
   const next = (cfg.on && !cfg.stop && !off)
     ? mwCsvNextAt(checked || nowIso(), cfg.everyH) : "";
-  return { ok: true, rows: rows, n: rows.length, limit: limit,
+  return { ok: true, rows: rows, n: rows.length, limit: limit, full: full,
            on: cfg.on, stop: cfg.stop, url_set: !!cfg.url,
            every_h: cfg.everyH, body_h: cfg.bodyH,
            checked_at: checked || "", checked_jst: checked ? jstText(checked) : "",
@@ -8422,48 +8452,92 @@ async function mwAutoSettings(env) {
    途中で例外が出た回・オフだった回は **1行も残らなかった**。
    そのため「毎時37分の回が動いているのか」が外から分からなかった。
    いまは**どんな終わり方でも1行残す**（列が無い古い DB でも落ちない）。 */
-async function mwAutoLog(env, res, kind) {
-  const full = await colOk(env, "mw_auto_runs", "per_hour");
+/* 7.124：**走り始めにも1行残す**。
+   こうしておけば、途中で実行が打ち切られても
+   「その時刻に走り始めたが終わらなかった」ことが記録に残る
+   （13:37 の自動の回の記録がまったく無く、動いたのかどうかも
+     分からなかったのを、二度と起こさないため）。
+   返りは残した行の id（0 なら残せなかった）。終わったらその行を書き替える。 */
+async function mwAutoStart(env, kind) {
   try {
-    if (full)
-      await env.DB.prepare(
-        `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
-           asin_n,ms,stopped,err,mode,per_hour,fee_ng,fee_left,asin_left,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?1)`)
-        .bind(nowIso(), kind, res.price_n, res.fee_n, res.rst_n, res.calls,
-              res.left, String(res.note || "").slice(0, 300),
-              res.asin_n, Math.round(res.ms || 0),
-              String(res.stopped || "").slice(0, 200) || null,
-              String(res.error || "").slice(0, 300) || null,
-              String(res.mode || ""), Math.round(res.per_hour || 0),
-              res.fee_ng, res.fee_left, res.asin_left).run();
-    else
-      await env.DB.prepare(
-        `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
-           created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
-        .bind(nowIso(), kind, res.price_n, res.fee_n, res.rst_n, res.calls,
-              res.left, String(res.note || "").slice(0, 300)).run();
-  } catch (e) { /* 記録の失敗で本処理を落とさない */ }
+    const r = await env.DB.prepare(
+      `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
+         created_at)
+       VALUES (?1,?2,0,0,0,0,0,?3,?1)`)
+      .bind(nowIso(), kind, "走っています…").run();
+    const m = (r && r.meta) || {};
+    return Math.round(Number(m.last_row_id || m.lastInsertRowid || 0)) || 0;
+  } catch (e) { return 0; }
+}
+async function mwAutoLog(env, res, kind, id) {
+  /* 7.124：**記録は絶対に落とさない**。列があるかを見たうえで、
+     それでも落ちたら**短い形で入れ直す**（v245 は colOk が
+     いつも「ある」と答えていたため、長い形で落ちて1行も残らなかった。
+     13:37 の自動の回の記録が無かったのはこれ）。 */
+  const at = nowIso();
+  const v8 = [at, kind, res.price_n, res.fee_n, res.rst_n, res.calls,
+              res.left, String(res.note || "").slice(0, 300)];
+  const SHORT =
+    `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
+       created_at)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`;
+  const FULL =
+    `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
+       asin_n,ms,stopped,err,mode,per_hour,fee_ng,fee_left,asin_left,created_at)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?1)`;
+  /* 走り始めの行があるなら、それを書き替える（増やさない）。 */
+  const rid = Math.round(Number(id || 0)) || 0;
+  const UP_SHORT =
+    `UPDATE mw_auto_runs SET at=?1, kind=?2, price_n=?3, fee_n=?4, rst_n=?5,
+       calls=?6, left_n=?7, note=?8 WHERE id=?9`;
+  const UP_FULL = UP_SHORT.replace(" WHERE id=?9",
+    `, asin_n=?10, ms=?11, stopped=?12, err=?13, mode=?14, per_hour=?15,
+       fee_ng=?16, fee_left=?17, asin_left=?18 WHERE id=?9`);
+  const more = [res.asin_n, Math.round(res.ms || 0),
+                String(res.stopped || "").slice(0, 200) || null,
+                String(res.error || "").slice(0, 300) || null,
+                String(res.mode || ""), Math.round(res.per_hour || 0),
+                res.fee_ng, res.fee_left, res.asin_left];
+  let done = false;
+  if (await colOk(env, "mw_auto_runs", "per_hour")) {
+    try {
+      if (rid) await env.DB.prepare(UP_FULL).bind(...v8, rid, ...more).run();
+      else await env.DB.prepare(FULL).bind(...v8, ...more).run();
+      done = true;
+    } catch (e) { done = false; }
+  }
+  if (!done) {
+    try {
+      if (rid) await env.DB.prepare(UP_SHORT).bind(...v8, rid).run();
+      else await env.DB.prepare(SHORT).bind(...v8).run();
+    } catch (e) { /* 記録の失敗で本処理を落とさない */ }
+  }
 }
 /* ⚙に返す記録（10件ずつ画面が出す）と、いまの様子。 */
 const MW_AUTO_LOG_MAX = 50;
 async function mwAutoRuns(env, url) {
   const limit = Math.max(1, Math.min(MW_AUTO_LOG_MAX,
     Math.round(Number((url && url.searchParams.get("limit")) || 20) || 20)));
-  const full = await colOk(env, "mw_auto_runs", "per_hour");
-  const cols = full
-    ? `at,kind,price_n,fee_n,rst_n,calls,left_n,note,asin_n,ms,stopped,err,
-       mode,per_hour,fee_ng,fee_left,asin_left`
-    : `at,kind,price_n,fee_n,rst_n,calls,left_n,note`;
-  let rows = [];
-  try {
+  /* 7.124：列が無いだけで「記録の表がありません」と出ないように、
+     長い形で読めなければ短い形で読み直す。 */
+  const SHORT_COLS = `at,kind,price_n,fee_n,rst_n,calls,left_n,note`;
+  const LONG_COLS = SHORT_COLS + `,asin_n,ms,stopped,err,
+       mode,per_hour,fee_ng,fee_left,asin_left`;
+  const read = async (cols) => {
     const q = await env.DB.prepare(
       `SELECT ${cols} FROM mw_auto_runs ORDER BY id DESC LIMIT ?1`)
       .bind(limit).all();
-    rows = ((q && q.results) || []).map((r) => Object.assign({}, r,
+    return ((q && q.results) || []).map((r) => Object.assign({}, r,
       { at_jst: jstText(r.at) }));
-  } catch (e) { return { ok: false, error: "no_table", rows: [] }; }
+  };
+  let rows = [], full = true;
+  try {
+    rows = await read(LONG_COLS);
+  } catch (e) {
+    full = false;
+    try { rows = await read(SHORT_COLS); }
+    catch (e2) { return { ok: false, error: "no_table", rows: [] }; }
+  }
   const st = await mwAutoSettings(env);
   /* いちばん新しい「自動（cron）の回」。動いているかの目安。 */
   let lastCron = null;
@@ -8552,6 +8626,9 @@ async function jobMwAuto(env, opt) {
                 calls: 0, left: 0, ms: 0, stopped: "", note: "",
                 per_hour: 0, kind: kind };
   const t0 = Date.now();
+  /* 7.124：走り始めに1行残す（途中で打ち切られても「走った」ことが残る）。 */
+  const logId = await mwAutoStart(env, kind);
+  res.log_id = logId;
   try {
     const st = await mwAutoSettings(env);
     res.mode = st.mode;
@@ -8568,7 +8645,7 @@ async function jobMwAuto(env, opt) {
       run.notes.push("MWの自動の取り直しはオフ（⚙設定）");
       res.ok = true;
       res.ms = Date.now() - t0;
-      await mwAutoLog(env, res, kind);
+      await mwAutoLog(env, res, kind, logId);
       return Object.assign(await saveRun(env, run), res);
     }
     /* 段ごとの締め切り（積み上げ。余った分は次の段に繰り越す）。 */
@@ -8630,7 +8707,7 @@ async function jobMwAuto(env, opt) {
   }
   /* 7.122：**どんな終わり方でも1行残す**（落ちた回が見えるように）。 */
   res.ms = Date.now() - t0;
-  await mwAutoLog(env, res, kind);
+  await mwAutoLog(env, res, kind, logId);
   return Object.assign(await saveRun(env, run), res);
 }
 
@@ -10454,9 +10531,14 @@ async function mwList(env, url) {
     const coff = await stateGet(env, MW_CSV_OFF);
     const cnext = (ccfg.on && !ccfg.stop && !coff)
       ? mwCsvNextAt(cchk || nowIso(), ccfg.everyH) : "";
+    /* 7.124：画面の「前回の取り込み」を⚙と同じ中身にするため、
+       **最後に確かめた時刻（変わっていなかった回も）**も日本時間で返す。 */
     csv = { on: ccfg.on, stop: ccfg.stop, url_set: !!ccfg.url,
             every_h: ccfg.everyH, body_h: ccfg.bodyH,
-            checked_at: cchk || "", next_at: cnext,
+            checked_at: cchk || "",
+            checked_jst: cchk ? jstText(cchk) : "",
+            body_at: (await stateGet(env, MW_CSV_BODYAT)) || "",
+            next_at: cnext,
             next_jst: cnext ? jstText(cnext) : "", auto_off: coff || "" };
   } catch (e) { csv = null; }
   return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
@@ -13042,7 +13124,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,
   /* 7.122（【R】） */
-  mwAutoRuns, mwAutoLog, mwAutoMiss, mwAutoMissN, mwAutoNextAt, mwAutoShare,
+  mwAutoRuns, mwAutoLog, mwAutoStart, mwAutoMiss, mwAutoMissN, mwAutoNextAt,
+  mwAutoShare,
   MW_AUTO_CRON_MS, MW_AUTO_CRON_MIN, MW_AUTO_MISS_WARN, MW_AUTO_SHARE,
   MW_AUTO_PER_HOUR, mwAutoPlan,
   schemaCheck, schemaFixOf, SCHEMA_TABLES, SCHEMA_ITEM_COLS,

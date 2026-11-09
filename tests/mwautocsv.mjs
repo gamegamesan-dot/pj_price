@@ -446,6 +446,45 @@ console.log('\n=== 記録（⚙の「最近の取得」）===');
      '★★★/mw/list が次に取りに行く予定を返す');
 }
 
+console.log('\n=== 7.124：記録は絶対に落とさない ===');
+{
+  /* stock_at（migrate-0047 で足した列）が無いデータベース。
+     v244 はこの列を必ず入れていたので INSERT が落ち、
+     **取りに行った回が1行も残らなかった**（変わっていなかった回も）。 */
+  reset(); const env=makeEnv();
+  await cfg(env);
+  await env.DB._db.exec('DROP TABLE mw_csv_runs');
+  await env.DB._db.exec(`CREATE TABLE mw_csv_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, src TEXT,
+    http INTEGER, changed INTEGER, took INTEGER, bytes INTEGER,
+    rows_in INTEGER, added INTEGER, changed_rows INTEGER, gone INTEGER,
+    elapsed_ms INTEGER, ok INTEGER, why TEXT, created_at TEXT NOT NULL)`);
+  const d=await W.jobMwCsv(env,{ src:'auto' });
+  ok(d.ok===true&&d.took===true,'★取り込めた');
+  const g=(await asJson(await worker.fetch(get('/mw/csv?limit=10'),env,{}))).body;
+  console.log('   '+JSON.stringify(g).slice(0,260));
+  ok(g.ok===true&&g.rows.length===1,
+     '★★★stock_at の列が無くても、記録が1行残る（短い形で入れ直す）');
+  ok(+g.rows[0].rows_in===2000,'★★中身も入る');
+  ok(g.full===false,'★★★列が足りないことを画面に伝える');
+  /* 「変わっていなかった回」も残る。 */
+  await setState(env,'mwcsv.checked_at','2000-01-01T00:00:00Z');
+  await setState(env,'mwcsv.body_at','2000-01-01T00:00:00Z');
+  await W.jobMwCsv(env,{ src:'auto' });
+  const g2=(await asJson(await worker.fetch(get('/mw/csv?limit=10'),env,{}))).body;
+  ok(g2.rows.length===2&&+g2.rows[0].changed===0&&+g2.rows[0].took===0,
+     '★★★「変わっていなかった回」も記録に残る（列が無くても）');
+}
+{
+  /* 列があるときは、その回の一覧を開くための日時も残る。 */
+  reset(); const env=makeEnv();
+  await cfg(env);
+  await W.jobMwCsv(env,{ src:'auto' });
+  const g=(await asJson(await worker.fetch(get('/mw/csv?limit=10'),env,{}))).body;
+  ok(g.full===true&&!!g.rows[0].stock_at,
+     '★★列があれば stock_at も残る（その回の中身を開ける）');
+}
+
 console.log('\n=== 作業者の鍵では動かせない ===');
 {
   reset(); const env=makeEnv({ STAFF_KEY:'staff-9' });
