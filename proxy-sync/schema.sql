@@ -687,6 +687,16 @@ CREATE TABLE IF NOT EXISTS mw_auto_runs (
   calls      INTEGER,
   left_n     INTEGER,
   note       TEXT,
+  /* 7.122（【R】）。動いたか・どこで止まったかが分かるように残す。 */
+  asin_n     INTEGER,     -- ASIN・順位を引いた件数
+  ms         INTEGER,     -- かかった時間（ミリ秒）
+  stopped    TEXT,        -- 止まった理由（段ごと）
+  err        TEXT,        -- 例外のときの文
+  mode       TEXT,        -- そのときの⚙の設定（on / off）
+  per_hour   INTEGER,     -- そのときの「1時間ぶんの件数」
+  fee_ng     INTEGER,     -- 手数料が取れなかった件数
+  fee_left   INTEGER,     -- 手数料の残り（次回に回した分）
+  asin_left  INTEGER,     -- ASIN の残り
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_auto_at ON mw_auto_runs(at);

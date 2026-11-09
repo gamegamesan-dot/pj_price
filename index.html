@@ -1835,6 +1835,14 @@ body.staff #syncOnHandFix{display:none !important}
           <b>仕入れタブ →「MW の写真を貼り付けて取り込む」</b>に移しました
           （貼り付け欄と同じ場所になります）。</div>
         <div class="rowv cfgprice"><label>MW候補の Amazon 価格（手数料・可否）を自動で取り直す</label><select id="mwAutoMode"><option value="off">オフ（「Amazonで調べる」を押したときだけ）</option><option value="20">オン（1時間に20件）</option><option value="50">オン（1時間に50件）</option><option value="100" selected>オン（1時間に100件）</option><option value="200">オン（1時間に200件）</option></select><div class="note2" style="margin-top:2px">pj-sync が<b>毎時37分</b>に、MW の候補の<b>JAN→ASIN の引き当て・Amazon価格と手数料・出品の可否</b>を、選んだ件数ぶんだけ取り直します（7.86／7.109）。<b>既定は オン・1時間に100件</b>です。<b>MW の在庫CSVの取り込みは手動のままです</b>（この設定では取り込みません）。優先順は <b>①見込みあり ②写真あり ③その他</b>。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>（価格は1回の持ち時間で60〜80件まで）。実際に進める見込みは「候補の件数を数える」の<b>「1周（自動）」</b>に出ます。</div></div>
+        <!-- 6.162：自動の回の記録（【R】）。動いているかを見られるように。 -->
+        <div class="cfgprice" style="display:flex;gap:6px;margin:2px 0">
+          <button class="btn" id="mwAutoRunsBtn" style="flex:1">自動の回の記録を見る</button>
+          <button class="btn" id="mwAutoNow" style="flex:1">いま1回動かす</button>
+        </div>
+        <div class="note2 cfgprice" id="mwAutoRunNote" style="margin-top:2px"></div>
+        <div class="note2 cfgprice" id="mwAutoNote" style="margin-top:2px"></div>
+        <div class="cfgprice" id="mwAutoRuns"></div>
       </div>
     </details>
   </section>
@@ -10343,6 +10351,137 @@ $('mwMarkCopy').onclick=function(){
     note.textContent='下の欄から手でコピーしてください。';
   }
 };
+/* ===== 自動の取り直しの記録（6.162・【R】）=====
+   毎時37分の回が動いているかが分からなかった（記録が「ぜんぶ通ったとき」しか
+   残らず、「前回の取得」も手で押した回しか見ていなかった）。
+   ⚙で「日時・段ごとの件数・かかった時間・止まった理由」を見られるようにする。 */
+var mwAutoLast=null;
+function mwAutoRunLine(r){
+  var sec=Math.round((+r.ms||0)/100)/10;
+  var ng=!!String(r.err||'');
+  return '<div class="note2" style="margin:4px 0;border-top:1px solid #ddd;'
+    +'padding-top:4px">'
+    +(ng?'<b style="color:var(--bad)">落ちた</b>'
+        :(String(r.stopped||'')==='off'?'オフ（動かさなかった）'
+          :'<b style="color:var(--good)">動いた</b>'))
+    +'　'+esc(String(r.at_jst||r.at||''))
+    +'　'+(String(r.kind||'cron')==='cron'?'<b>自動（毎時37分）</b>':'手で押した')
+    +(r.mode?('　⚙ '+esc(String(r.mode))
+      +(+r.per_hour?('・1時間に'+(+r.per_hour)+'件'):'')):'')
+    +'<br>ASIN引き '+num(+r.asin_n||0)+'件'
+    +'／可否 '+num(+r.rst_n||0)+'件'
+    +'／価格 '+num(+r.price_n||0)+'件'
+    +'／手数料 '+num(+r.fee_n||0)+'件'
+    +((+r.fee_ng)?('（だめ '+num(+r.fee_ng)+'）'):'')
+    +'<br>呼び出し '+num(+r.calls||0)+'回'
+    +'　かかった時間 '+sec+'秒'
+    +'　残り '+num(+r.left_n||0)+'件'
+    +((+r.fee_left)?('（手数料 '+num(+r.fee_left)+'件は次回）'):'')
+    +(r.stopped&&String(r.stopped)!=='off'
+      ?('<br>止まった理由 '+esc(String(r.stopped))):'')
+    +(ng?('<br><span style="color:var(--bad)">'
+      +esc(String(r.err).slice(0,200))+'</span>'):'')
+    +'</div>';
+}
+function mwAutoRunsRender(){
+  var box=$('mwAutoRuns'), d=mwAutoLast;
+  if(!box)return;
+  if(!d){ box.innerHTML=''; return; }
+  var rows=d.rows||[];
+  box.innerHTML=rows.length
+    ?rows.slice(0,listShow('mwautoruns')).map(mwAutoRunLine).join('')
+      +listMoreBar('mwautoruns',rows.length)
+    :'<div class="note2">まだ記録がありません。</div>';
+}
+listReg('mwautoruns',mwAutoRunsRender);
+function mwAutoStateHtml(d){
+  if(!d)return '';
+  var t=[];
+  t.push(d.mode==='on'
+    ?('<b style="color:var(--good)">自動で取り直します</b>（1時間に '
+      +(+d.per_hour||0)+'件）')
+    :'自動の取り直しは<b>オフ</b>です');
+  if(d.last_cron_jst)t.push('最後に自動で動いたのは '+esc(d.last_cron_jst));
+  else t.push('<b style="color:var(--bad)">まだ一度も自動で動いていません</b>');
+  if(d.next_jst)t.push('次の自動の回は '+esc(d.next_jst)+'ごろ（毎時'
+    +(+d.cron_min||37)+'分）');
+  if(+d.miss>=(+d.miss_warn||2))
+    t.push('<b style="color:var(--bad)">自動の回が '+(+d.miss)
+      +'回ぶん飛んでいます</b>（'+(+d.miss_warn||2)+'回で Discord に知らせます）');
+  else if(+d.miss)t.push('自動の回が '+(+d.miss)+'回ぶん飛んでいます');
+  if(d.plan)t.push('1回の見込み：ASIN '+(+d.plan.asin||0)+'件／可否 '
+    +(+d.plan.rst||0)+'件／価格 '+(+d.plan.price||0)+'件'
+    +'（持ち時間 '+Math.round((+d.budget_ms||0)/1000)+'秒）');
+  if(d.full===false)
+    t.push('<b style="color:var(--bad)">pj-sync 側の D1 に列がありません</b>'
+      +'（migrate-0048 を流すと、段ごとの件数と止まった理由も残ります）');
+  return t.join('<br>');
+}
+function mwAutoRunsShow(){
+  var note=$('mwAutoNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var b=$('mwAutoRunsBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='読み込み中…'; }
+  note.textContent='pj-sync に聞いています…';
+  fetch(syncUrl()+'/mw/auto?limit=50',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){
+        note.textContent=(d&&d.error==='no_table')
+          ?'pj-sync 側の D1 に記録の表がありません。'
+          :'読めませんでした。';
+        return;
+      }
+      mwAutoLast=d;
+      note.innerHTML=mwAutoStateHtml(d);
+      mwAutoRunsRender();
+    })
+    ['catch'](function(){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='pj-sync に届きませんでした。';
+    });
+}
+/* ⚙の「いま1回動かす」。毎時37分を待たずに、自動の回とまったく同じ中身を回す。 */
+function mwAutoRunNow(){
+  var note=$('mwAutoRunNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  if(isStaff()){ note.textContent='この操作は管理者用のキーが必要です。'; return; }
+  if(!confirm('自動の回とまったく同じ中身を、いま1回動かします。'
+    +'\n（ASIN引き → 出品の可否 → 実売価格 → 手数料。1分ほどかかります）'
+    +'\nよろしいですか？'))return;
+  var b=$('mwAutoNow'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='動かしています…'; }
+  note.textContent='動かしています…（1分ほどかかります）';
+  mwPost('/mw/auto',{ force:true })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){
+        note.innerHTML='⚠ 動かせませんでした：'
+          +esc(String((d&&(d.error||d.note))||'理由が分かりません'));
+      }else{
+        note.innerHTML='✓ ASIN引き '+num(+d.asin_n||0)+'件'
+          +'／可否 '+num(+d.rst_n||0)+'件'
+          +'／価格 '+num(+d.price_n||0)+'件'
+          +'／手数料 '+num(+d.fee_n||0)+'件'
+          +'　'+Math.round((+d.ms||0)/100)/10+'秒'
+          +(d.stopped?('<br>止まった理由 '+esc(String(d.stopped))):'');
+      }
+      mwAutoRunsShow();
+    })
+    ['catch'](function(e){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='動かせませんでした：'+String((e&&e.message)||e);
+    });
+}
 /* ===== 取り込みの各回の中身を一覧で見る（6.161・【Q】の1）=====
    ⚙「最近の取得を見る」の各回から、その回の
    「新しく欠品」「新しく出てきた」「欠品から戻った」を開く。
@@ -10607,6 +10746,9 @@ function mwCsvResumeGo(){
 $('mwDgTypeBtn').onclick=mwDgTypeLoad;
 /* ⚙：Amazon 登録の記録（6.151）。行は作り直すので箱で受ける。 */
 $('mwPutLogBtn').onclick=mwPutLogShow;
+/* ⚙：自動の取り直しの記録（6.162・【R】）。 */
+$('mwAutoRunsBtn').onclick=mwAutoRunsShow;
+$('mwAutoNow').onclick=mwAutoRunNow;
 /* ⚙：在庫CSVの自動取り込み（6.160・【P】）。 */
 $('mwCsvNow').onclick=mwCsvRunNow;
 $('mwCsvRunsBtn').onclick=mwCsvRunsShow;
@@ -13428,7 +13570,12 @@ function mwAmzRender(){
     +(mwRankHid?('　<b>ランキングの基準で隠した行 '+mwRankHid+'件</b>'
       +(isStaff()?'（管理者が⚙で決めた基準です）'
                  :'（⚙設定の「Amazon刈取」で分類ごとに変えられます）')):'')
-    +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')):'')
+    /* 6.162（【R】）：**自動の回も数える**。
+       v244 までは手で押した回（mw_amz_runs）しか見ていなかったので、
+       毎時37分の回がどれだけ動いてもこの時刻が動かなかった。 */
+    +(d.last?('<br>前回の取得 '+esc(d.last.at_jst||'')
+      +(String(d.last.src||'')==='auto'?'（<b>自動</b>）'
+        :(String(d.last.src||'')==='hand'?'（手で押した）':''))):'')
     /* 商品ごとの手数料の様子（6.133／7.97）。
        「仮の手数料」のままの行が多いときに、何件・なぜかが分かるように。 */
     +mwFeeNote(d.fee)
@@ -21075,7 +21222,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v244';   // sw.js の const V と必ず同じ値にする
+var APP_V='v245';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

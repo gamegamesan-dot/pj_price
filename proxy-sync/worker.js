@@ -8326,8 +8326,28 @@ const MW_AUTO_HOURS = [20, 50, 100, 200];
 const MW_AUTO_ASIN_N = 20;          // 1回に ASIN・ランキングを引き直す件数（既定）
 const MW_AUTO_PRICE_N = 20;         // 1回に価格を取る件数（既定）
 const MW_AUTO_RST_N = 20;           // 1回に可否を調べる件数（既定）
-const MW_AUTO_BUDGET_MS = 45000;    // 1回の持ち時間（60秒の手前）
-const MW_AUTO_FEE_MS = 8000;        // そのうち手数料にあてる分（7.97）
+const MW_AUTO_BUDGET_MS = 45000;    // 画面から押したときの持ち時間
+/* 7.122（【R】）：**Cron の回はもっと長く使える**。
+   Worker の上限は「CPU時間」で、SP-API の間隔待ち（10.5秒など）は
+   CPU を使わない。Cron の実行そのものは分の単位で動ける。
+   45秒だと価格が1回40〜60件しか進まず、⚙で100件/時にしても届かなかった。 */
+const MW_AUTO_CRON_MS = 90000;      // 毎時37分の回の持ち時間
+/* 7.122（【R】）：**段ごとの持ち時間の割り当て**（手で押す回と同じ考え方）。
+   v244 までは自動の回だけ割り当てが無く、
+     ・①ASIN に 45秒**ぜんぶ**を渡していた
+     ・④可否は「時間を使い切ったあと」に呼ばれるので**実質0秒**だった
+       （mwAutoPlan は可否の分を*件数*の計算では引いていたのに、
+         締め切りからは引いていなかった）
+   そのため可否がいつまでも進まず、緑になった行の値段も取れなかった。
+   余った分は次の段に繰り越す（手で押す回と同じ・7.82）。 */
+const MW_AUTO_SHARE = { asin: 0.10, rst: 0.10, price: 0.62, fee: 0.18 };
+function mwAutoShare(budgetMs) {
+  const ms = Math.max(5000, Number(budgetMs) || MW_AUTO_BUDGET_MS);
+  return { asin: Math.round(ms * MW_AUTO_SHARE.asin),
+           rst: Math.round(ms * MW_AUTO_SHARE.rst),
+           price: Math.round(ms * MW_AUTO_SHARE.price),
+           fee: Math.round(ms * MW_AUTO_SHARE.fee) };
+}
 /* 1時間ぶんの件数（⚙設定 mwAutoPerHour・7.107）。既定100件/時。
    SP-API の上限で**段ごとに進める上限が違う**ので、ここで押さえる。
      ・JAN→ASIN（Catalog getItems）… 20件/回・5回/秒 → 100件でも約1秒
@@ -8345,12 +8365,15 @@ function mwAutoPlan(perHour, budgetMs) {
   const per = Math.max(1, Math.min(MW_AUTO_PER_HOUR_MAX,
     Math.round(Number(perHour) || MW_AUTO_PER_HOUR)));
   const ms = Math.max(5000, Number(budgetMs) || MW_AUTO_BUDGET_MS);
-  /* 価格は 10.5秒/20件。手数料と可否の分を残してから割る。 */
-  const left = ms - MW_AUTO_FEE_MS - MW_AUTO_RST_N * SP_GAP.getListingsRestrictions;
-  const calls = Math.max(1, Math.floor(left / MW_PRICE_CALL_MS));
+  /* 7.122：価格は 10.5秒/20件。**価格の段に割り当てた分**で何回呼べるかを出す
+     （v244 までは「全体 − 手数料 − 可否」で割っていたので、
+       締め切りの割り当てと件数の計算が食い違っていた）。 */
+  const sh = mwAutoShare(ms);
+  const calls = Math.max(1, Math.floor(sh.price / MW_PRICE_CALL_MS));
   const priceCap = Math.min(MW_AUTO_PRICE_MAX, calls * PRICING_BATCH);
   return { per: per, asin: per, price: Math.min(per, priceCap),
-           rst: Math.min(per, MW_AUTO_RST_N * 3), price_cap: priceCap };
+           rst: Math.min(per, MW_AUTO_RST_N * 3), price_cap: priceCap,
+           budget_ms: ms, share_ms: sh };
 }
 /* Amazon刈取の候補の条件（7.107）。
    **eBay 無在庫（mwKishu／mwShipMax／mwStockMin）とは別に持つ**。
@@ -8388,64 +8411,220 @@ async function mwAutoSettings(env) {
     plan: mwAutoPlan(num ? n : st.mwAutoPerHour, MW_AUTO_BUDGET_MS),
   };
 }
+/* ===== 自動の回の記録（7.122・【R】）=====
+   v244 までは `mw_auto_runs` への INSERT が**ぜんぶ通ったあと**にあったので、
+   途中で例外が出た回・オフだった回は **1行も残らなかった**。
+   そのため「毎時37分の回が動いているのか」が外から分からなかった。
+   いまは**どんな終わり方でも1行残す**（列が無い古い DB でも落ちない）。 */
+async function mwAutoLog(env, res, kind) {
+  const full = await colOk(env, "mw_auto_runs", "per_hour");
+  try {
+    if (full)
+      await env.DB.prepare(
+        `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
+           asin_n,ms,stopped,err,mode,per_hour,fee_ng,fee_left,asin_left,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?1)`)
+        .bind(nowIso(), kind, res.price_n, res.fee_n, res.rst_n, res.calls,
+              res.left, String(res.note || "").slice(0, 300),
+              res.asin_n, Math.round(res.ms || 0),
+              String(res.stopped || "").slice(0, 200) || null,
+              String(res.error || "").slice(0, 300) || null,
+              String(res.mode || ""), Math.round(res.per_hour || 0),
+              res.fee_ng, res.fee_left, res.asin_left).run();
+    else
+      await env.DB.prepare(
+        `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,
+           created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
+        .bind(nowIso(), kind, res.price_n, res.fee_n, res.rst_n, res.calls,
+              res.left, String(res.note || "").slice(0, 300)).run();
+  } catch (e) { /* 記録の失敗で本処理を落とさない */ }
+}
+/* ⚙に返す記録（10件ずつ画面が出す）と、いまの様子。 */
+const MW_AUTO_LOG_MAX = 50;
+async function mwAutoRuns(env, url) {
+  const limit = Math.max(1, Math.min(MW_AUTO_LOG_MAX,
+    Math.round(Number((url && url.searchParams.get("limit")) || 20) || 20)));
+  const full = await colOk(env, "mw_auto_runs", "per_hour");
+  const cols = full
+    ? `at,kind,price_n,fee_n,rst_n,calls,left_n,note,asin_n,ms,stopped,err,
+       mode,per_hour,fee_ng,fee_left,asin_left`
+    : `at,kind,price_n,fee_n,rst_n,calls,left_n,note`;
+  let rows = [];
+  try {
+    const q = await env.DB.prepare(
+      `SELECT ${cols} FROM mw_auto_runs ORDER BY id DESC LIMIT ?1`)
+      .bind(limit).all();
+    rows = ((q && q.results) || []).map((r) => Object.assign({}, r,
+      { at_jst: jstText(r.at) }));
+  } catch (e) { return { ok: false, error: "no_table", rows: [] }; }
+  const st = await mwAutoSettings(env);
+  /* いちばん新しい「自動（cron）の回」。動いているかの目安。 */
+  let lastCron = null;
+  try {
+    lastCron = await env.DB.prepare(
+      `SELECT at FROM mw_auto_runs WHERE kind='cron' ORDER BY id DESC LIMIT 1`)
+      .first();
+  } catch (e) { lastCron = null; }
+  const cronAt = (lastCron && lastCron.at) || "";
+  const miss = cronAt ? mwAutoMissN(cronAt) : 0;
+  return { ok: true, rows: rows, n: rows.length, limit: limit, full: full,
+           mode: st.mode, per_hour: st.plan.per, plan: st.plan,
+           cron_min: MW_AUTO_CRON_MIN, budget_ms: MW_AUTO_CRON_MS,
+           last_cron_at: cronAt, last_cron_jst: cronAt ? jstText(cronAt) : "",
+           miss: miss, miss_warn: MW_AUTO_MISS_WARN,
+           next_at: mwAutoNextAt(), next_jst: jstText(mwAutoNextAt()) };
+}
+/* 次の自動の回（毎時37分・UTC）。画面に出す。 */
+const MW_AUTO_CRON_MIN = 37;
+function mwAutoNextAt(now) {
+  const d = new Date(now === undefined ? Date.now() : now);
+  const t = new Date(d);
+  t.setUTCSeconds(0, 0);
+  t.setUTCMinutes(MW_AUTO_CRON_MIN);
+  if (t.getTime() <= d.getTime()) t.setUTCHours(t.getUTCHours() + 1);
+  return t.toISOString();
+}
+/* 最後の自動の回から、何回ぶん飛んでいるか（1時間に1回なので時間で数える）。 */
+function mwAutoMissN(lastAt, now) {
+  const t = new Date(lastAt).getTime();
+  if (!isFinite(t)) return 0;
+  const ms = (now === undefined ? Date.now() : now) - t;
+  /* 10分の余裕を見る（:37 の回が少し遅れることがある）。 */
+  return Math.max(0, Math.floor((ms - 600000) / 3600000));
+}
+/* ===== 自動の回が動かなかったら知らせる（7.122・【R】）=====
+   毎時（:07）の回から呼ぶ。**2回続けて飛んだら**1日1回だけ知らせる。
+   飛んだかどうかは `mw_auto_runs` の kind='cron' の最後の時刻で見る。 */
+const MW_AUTO_MISS_WARN = 2;        // これ以上飛んだら知らせる
+const MW_AUTO_MISS_KEY = "mw.auto.miss.notified";
+async function mwAutoMiss(env, run) {
+  const st = await mwAutoSettings(env);
+  /* オフのときは知らせない（止めてあるのだから当たり前）。 */
+  if (st.mode !== "on") return { miss: 0, mode: st.mode };
+  let r = null;
+  try {
+    r = await env.DB.prepare(
+      `SELECT at FROM mw_auto_runs WHERE kind='cron' ORDER BY id DESC LIMIT 1`)
+      .first();
+  } catch (e) { return { miss: 0, error: "no_table" }; }
+  const at = (r && r.at) || "";
+  /* まだ一度も動いていないときは、記録を足した直後なので何も言わない。 */
+  if (!at) return { miss: 0, none: true };
+  const miss = mwAutoMissN(at);
+  if (miss < MW_AUTO_MISS_WARN) {
+    if (await stateGet(env, MW_AUTO_MISS_KEY))
+      await stateSet(env, MW_AUTO_MISS_KEY, "").run();
+    return { miss: miss, at: at };
+  }
+  const last = await stateGet(env, MW_AUTO_MISS_KEY);
+  const lastMs = last ? (Date.now() - new Date(last).getTime()) : Infinity;
+  if (lastMs >= 24 * 3600000) {
+    await notify(env, run,
+      "⏰ **MW の自動の取り直しが動いていません**\n"
+      + "・最後に動いたのは " + jstText(at) + "（" + miss + "回ぶん飛んでいます）\n"
+      + "・⚙の設定は **オン（1時間に " + st.plan.per + "件）** です\n"
+      + "そのままだと Amazon の値段・手数料・出品の可否が古いままになります。\n"
+      + "⚙の「自動の回の記録を見る」で、止まった理由を確かめてください。\n"
+      + "  → " + APP_URL + "#tab=G\n  " + APP_OPEN_HINT);
+    await stateSet(env, MW_AUTO_MISS_KEY, nowIso()).run();
+  }
+  return { miss: miss, at: at, warned: true };
+}
+/* ===== 毎時37分の回（7.86／7.107／7.122）=====
+   段の順も持ち時間の割り当ても、**手で押したとき（mwScanRun）と同じ**にする。
+     ① JAN→ASIN・順位　② 出品の可否　③ 実売価格　④ 商品ごとの手数料
+   v244 までは ①→③→④→② の順で、②（可否）が最後だったため
+   「緑になった行の値段を同じ回で取る」ことができず、
+   しかも②には時間が残っていなかった。 */
 async function jobMwAuto(env, opt) {
   const run = newRun("mw-auto");
-  const res = { ok: false, mode: "off", asin_n: 0, price_n: 0, fee_n: 0,
-                fee_ng: 0, fee_left: 0, rst_n: 0,
-                calls: 0, left: 0, note: "" };
+  const o0 = opt || {};
+  const kind = o0.kind === "hand" ? "hand" : "cron";
+  const res = { ok: false, mode: "off", asin_n: 0, asin_left: 0, price_n: 0,
+                fee_n: 0, fee_ng: 0, fee_left: 0, rst_n: 0, rst_left: 0,
+                calls: 0, left: 0, ms: 0, stopped: "", note: "",
+                per_hour: 0, kind: kind };
+  const t0 = Date.now();
   try {
     const st = await mwAutoSettings(env);
     res.mode = st.mode;
-    if (st.mode !== "on" && !(opt && opt.force)) {
+    /* 持ち時間。Cron の回は長く使える（CPU ではなく待ち時間なので）。 */
+    const budget = Math.max(5000, Number(o0.budget_ms)
+      || (kind === "cron" ? MW_AUTO_CRON_MS : MW_AUTO_BUDGET_MS));
+    const plan = mwAutoPlan(st.plan ? st.plan.per : MW_AUTO_PER_HOUR, budget);
+    res.per_hour = plan.per;
+    res.budget_ms = budget;
+    res.share_ms = plan.share_ms;
+    if (st.mode !== "on" && !o0.force) {
+      res.note = "⚙の設定がオフなので動かしません";
+      res.stopped = "off";
       run.notes.push("MWの自動の取り直しはオフ（⚙設定）");
       res.ok = true;
+      res.ms = Date.now() - t0;
+      await mwAutoLog(env, res, kind);
       return Object.assign(await saveRun(env, run), res);
     }
-    const t0 = Date.now();
-    const dl = t0 + MW_AUTO_BUDGET_MS;
-    const plan = st.plan || mwAutoPlan(MW_AUTO_PER_HOUR, MW_AUTO_BUDGET_MS);
-    res.per_hour = plan.per;
-    /* ① ASIN・ランキング・商品名の引き直し（7.91／7.107）。
-       Catalog は 20件/回・5回/秒で軽いので、**まず引き当てを進める**
-       （まだ ASIN が無い行が数千あるため。進み具合は GET /mw/amz が返す）。 */
+    /* 段ごとの締め切り（積み上げ。余った分は次の段に繰り越す）。 */
+    const sh = plan.share_ms;
+    const dlAsin = t0 + sh.asin;
+    const dlRst = dlAsin + sh.rst;
+    const dlPrice = dlRst + sh.price;
+    const dlFee = dlPrice + sh.fee;
+    /* ① ASIN・ランキング・商品名の引き直し（7.91／7.107）。 */
+    const m1 = Date.now();
     const sa = await mwScanAsin(env, run,
-      Object.assign({}, st.opt, { limit: plan.asin, order: "auto" }), dl);
-    res.asin_n = sa.done; res.calls += sa.calls || 0; res.left += sa.left || 0;
+      Object.assign({}, st.opt, { limit: plan.asin, order: "auto" }), dlAsin);
+    res.asin_n = sa.done; res.calls += sa.calls || 0;
     res.asin_left = sa.left || 0;
-    /* ② 価格。優先順は上のとおり。手数料は③で別に取る（7.97）。 */
-    const o = Object.assign({}, st.opt, { limit: plan.price, order: "auto" });
-    const pr = await mwScanPrice(env, run, o, dl - MW_AUTO_FEE_MS);
+    res.asin_ms = Date.now() - m1;
+    /* ② 出品の可否（7.76）。**価格より先に**調べる（手で押す回と同じ）。
+       ここで緑になった行は、すぐ下の③で値段を取れる。 */
+    const m2 = Date.now();
+    const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
+      { limit: plan.rst }), { run: run, deadline: dlRst });
+    res.rst_n = rr.done || 0;
+    res.rst_left = rr.left || 0;
+    res.calls += rr.calls || 0;
+    res.rst_ms = Date.now() - m2;
+    /* ③ 実売価格（赤は飛ばす）。 */
+    const m3 = Date.now();
+    const pr = await mwScanPrice(env, run,
+      Object.assign({}, st.opt, { limit: plan.price, order: "auto" }), dlPrice);
     res.price_n = pr.done; res.left = pr.left;
     res.calls += (pr.calls || 0) + (pr.fee_calls || 0);
-    /* ③ 商品ごとの手数料（7.97）。価格の段とは別の持ち時間で取る。
-       v220 までは価格の段の余り時間で取っていたので、
-       時間を使い切った回は手数料を**取らずに捨てていた**（「仮の手数料」のまま）。 */
+    res.price_ms = Date.now() - m3;
+    /* ④ 商品ごとの手数料（7.97）。③とは別の持ち時間で取る。
+       **前の回で「次回」に回した分**（fee_at が空・失敗・古い行）から順に取る
+       ので、自動の回でも手で押した回でも同じように消化される。 */
+    const m4 = Date.now();
     const fe = await mwScanFee(env, run,
-      Object.assign({}, st.opt, { order: "auto" }), dl);
+      Object.assign({}, st.opt, { order: "auto" }), dlFee);
     res.fee_n = fe.ok_n; res.fee_ng = fe.ng; res.fee_left = fe.left;
     res.calls += fe.calls || 0;
-    /* ③ 出品の可否も同じ回で20件（250ms×20＝5秒）。 */
-    const rr = await mwRestrictRun(env, Object.assign({}, st.opt,
-      { limit: plan.rst }), { run: run, deadline: dl });
-    res.rst_n = rr.done || 0;
-    res.calls += rr.calls || 0;
-    res.left += rr.left || 0;
+    res.fee_ms = Date.now() - m4;
+    res.left += res.asin_left + res.rst_left;
+    res.stopped = [sa.stopped && ("ASIN:" + sa.stopped),
+                   rr.stopped && ("可否:" + rr.stopped),
+                   pr.stopped && ("価格:" + pr.stopped),
+                   fe.stopped && ("手数料:" + fe.stopped)]
+      .filter(Boolean).join("／");
     res.note = "1時間ぶん " + plan.per + "件（価格は1回 " + plan.price
-      + "件まで）／ASIN・順位 " + res.asin_n + "件／価格 " + res.price_n
-      + "件／手数料 " + res.fee_n + "件（だめ " + (res.fee_ng || 0)
-      + "・残り " + (res.fee_left || 0) + "）／可否 " + res.rst_n
-      + "件／呼び出し " + res.calls + "回／残り " + res.left + "件";
-    await env.DB.prepare(
-      `INSERT INTO mw_auto_runs (at,kind,price_n,fee_n,rst_n,calls,left_n,note,created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?1)`)
-      .bind(nowIso(), (opt && opt.kind) || "cron", res.price_n, res.fee_n,
-            res.rst_n, res.calls, res.left, res.note.slice(0, 300)).run();
+      + "件まで）／ASIN・順位 " + res.asin_n + "件／可否 " + res.rst_n
+      + "件／価格 " + res.price_n + "件／手数料 " + res.fee_n
+      + "件（だめ " + (res.fee_ng || 0) + "・残り " + (res.fee_left || 0)
+      + "）／呼び出し " + res.calls + "回／残り " + res.left + "件"
+      + (res.stopped ? ("／止まった理由 " + res.stopped) : "");
     run.notes.push("MWの自動の取り直し：" + res.note);
     res.ok = true;
   } catch (e) {
     run.errors++; run.notes.push("mw-auto: " + String((e && e.message) || e));
     res.error = String((e && e.message) || e);
+    res.stopped = res.stopped || "例外";
   }
+  /* 7.122：**どんな終わり方でも1行残す**（落ちた回が見えるように）。 */
+  res.ms = Date.now() - t0;
+  await mwAutoLog(env, res, kind);
   return Object.assign(await saveRun(env, run), res);
 }
 
@@ -9875,9 +10054,26 @@ async function mwAmzList(env, url) {
             SUM(CASE WHEN COALESCE(a.price,0)>0 THEN 1 ELSE 0 END) AS priced
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan WHERE ${w}`)
     .bind(...q0.bind).first();
-  const last = await env.DB.prepare(
+  /* 7.122（【R】）：「前回の取得」は **mw_amz_runs（手で押した回）しか
+     見ていなかった**ので、毎時37分の自動の回がどれだけ動いても
+     この時刻は動かなかった（カジが「11/08 20:03 のまま」と気づいた原因）。
+     自動の回（mw_auto_runs）も見て、**新しいほう**を返す。
+     どちらだったかは src（hand / auto）で分かる。 */
+  const lastHand = await env.DB.prepare(
     `SELECT at,asked,done,asin_ok,asin_ng,priced,none,left_n,calls_cat,calls_prc
        FROM mw_amz_runs ORDER BY id DESC LIMIT 1`).first();
+  let lastAuto = null;
+  try {
+    lastAuto = await env.DB.prepare(
+      `SELECT at,price_n,fee_n,rst_n,calls,left_n,note
+         FROM mw_auto_runs WHERE kind='cron' ORDER BY id DESC LIMIT 1`).first();
+  } catch (e) { lastAuto = null; }
+  const pick = (!lastAuto || (lastHand && String(lastHand.at || "")
+    >= String(lastAuto.at || ""))) ? lastHand : lastAuto;
+  const last = pick
+    ? Object.assign({}, pick,
+        { src: (pick === lastAuto) ? "auto" : "hand" })
+    : null;
   /* 手数料の様子（7.97）。「仮の手数料」のままの行が多い理由を画面に出す。 */
   const fee = await env.DB.prepare(
     `SELECT COUNT(*) AS n,
@@ -11827,6 +12023,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["asin_left", "migrate-0048-mw-auto.sql"],
+  ["per_hour", "migrate-0048-mw-auto.sql"],
   ["back_at", "migrate-0047-mw-nt.sql"],
   ["ordered_at", "migrate-0047-mw-nt.sql"],
   ["stock_at", "migrate-0047-mw-nt.sql"],
@@ -12545,6 +12743,9 @@ export default {
         return json(await mwCsvResume(env), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/ptypes")
         return json(await mwPtypeList(env, url), 200, origin);
+      /* 7.122（【R】）：自動の回の記録と、いまの様子（見るだけ）。 */
+      if (request.method === "GET" && url.pathname === "/mw/auto")
+        return json(await mwAutoRuns(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/mw/auto") {
         const b = await request.json().catch(() => ({}));
         const pr = jobMwAuto(env, { kind: "hand", force: !!(b && b.force) });
@@ -12786,6 +12987,11 @@ export default {
       /* 取り込みが24時間止まっていたら催促する（7.75）。 */
       try { await mwStaleCheck(env, newRun("mw-stale")); }
       catch (e) { /* 催促が失敗しても本体は止めない */ }
+      /* 7.122（【R】）：**毎時37分の自動の回**が2回続けて飛んでいたら知らせる。
+         :37 の回そのものが動いていないときに気づけるよう、
+         別の回（:07）から見張る。 */
+      try { await mwAutoMiss(env, newRun("mw-auto-miss")); }
+      catch (e) { /* 見張りが失敗しても本体は止めない */ }
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -12829,6 +13035,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         mwRestrictRun, mwScanRun, mwScanAsin, mwScanPrice,
   MW_SCAN_BUDGET_MS, MW_SCAN_SHARE, MW_PRICE_CALL_MS, mwRstPick,
   mwCountRun, skuFind,
+  /* 7.122（【R】） */
+  mwAutoRuns, mwAutoLog, mwAutoMiss, mwAutoMissN, mwAutoNextAt, mwAutoShare,
+  MW_AUTO_CRON_MS, MW_AUTO_CRON_MIN, MW_AUTO_MISS_WARN, MW_AUTO_SHARE,
+  MW_AUTO_PER_HOUR, mwAutoPlan,
   schemaCheck, schemaFixOf, SCHEMA_TABLES, SCHEMA_ITEM_COLS,
   mwFeePick, mwFeeFind, MW_FEE_BATCH, mwFeeBody, mwFeeList, mwFeeTest,
   mwSizeTier, mwDimPick, MW_FEE_TAX_PCT, MW_FEE_CALL_MS, mwScanFee,
