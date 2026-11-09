@@ -1158,19 +1158,28 @@ async function ebayActive(env, run) {
   return { rows, ok: true };
 }
 
-/* ---- Discord 通知 ---- */
-async function notify(env, run, text) {
-  if (!env.DISCORD_WEBHOOK_URL || !text) return false;
+/* ---- Discord 通知 ----
+   7.125：**埋め込み（embeds）も送れる**ようにした。
+   文だけの知らせは今までどおり notify(env, run, text)。 */
+async function notifyRaw(env, run, text, embeds) {
+  if (!env.DISCORD_WEBHOOK_URL) return false;
+  const list = (embeds || []).filter(Boolean);
+  if (!String(text || "") && !list.length) return false;
   /* 時刻は日本時間で出す（7.58）。D1 に入れるのは今までどおり UTC。 */
-  const body = (String(text) + "\n（" + jstText(nowIso()) + " 日本時間）")
-    .slice(0, NOTIFY_MAX);
+  const body = { content: (String(text || "")
+    + "\n（" + jstText(nowIso()) + " 日本時間）").slice(0, NOTIFY_MAX) };
+  if (list.length) body.embeds = list;
   const resp = await net(run, env.DISCORD_WEBHOOK_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: body }),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) { run.errors++; run.notes.push("discord -> " + resp.status); return false; }
   return true;
+}
+async function notify(env, run, text) {
+  if (!text) return false;
+  return notifyRaw(env, run, text, null);
 }
 
 /* ---- その列がもうあるか（7.121）----
@@ -1195,7 +1204,9 @@ async function colOk(env, table, col) {
   } catch (e) { return false; }
 }
 
-/* ---- 長い知らせを分けて送る（7.121・【Q】）----
+/* ---- 長い**文**の知らせを分けて送る（7.121・【Q】）----
+   7.125 で商品の知らせは埋め込み（notifyEmbeds）に変えたので、
+   こちらは「文だけの長い知らせ」用に残してある。
    Discord の1通は 2000字まで（NOTIFY_MAX で余裕を見ている）。
    【Q】で「本文だけで判断できるように」したぶん1通に収まらなくなったので、
    **塊（見出し＋その行）ごと**に詰めて、あふれたら次の1通に送る。
@@ -1388,7 +1399,9 @@ const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour"
   /* 7.115：登録の売値を決める率。作業者の端末からは書き替えられない。 */
   "mwUsedPct",
   /* 7.120：在庫CSVの自動取り込み（取りに行く先・間隔・オンオフ）。【P】 */
-  "mwCsvAuto", "mwCsvStop", "mwCsvUrl", "mwCsvEveryH", "mwCsvBodyH"];
+  "mwCsvAuto", "mwCsvStop", "mwCsvUrl", "mwCsvEveryH", "mwCsvBodyH",
+  /* 7.125：知らせに出す項目の出し分け（社内用／会員用）。【S】 */
+  "mwNtAudience"];
 const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
 const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
 function settingsBlank(v) {
@@ -5311,14 +5324,152 @@ function mwNtLine(x) {
        ? ("　Amazon " + yen(x.amz_price) + "　粗利 " + yen(x.gross))
        : (g ? ("　見込み粗利 " + yen(g) + "（定価からの目安）") : ""));
 }
-/* Discord の中のブラウザはキーを持っていないので、リンクを押すと
-   pj のキーの入れ直しになる（7.121・【Q】の3）。
-   **キーは URL に入れない**（入れたら Discord の履歴に鍵が残る）。
-   代わりに、ふだんの Safari で開けることを1行だけ添える。 */
-const APP_OPEN_HINT = "（長押し →Safari で開く）";
-function mwNtLink(hash) {
-  return "  → " + APP_URL + hash + "\n  " + APP_OPEN_HINT;
+/* 7.125（【S】の2）：**Discord の知らせに pj へのリンクは出さない**。
+   Discord の中のブラウザは pj のキーを持っていないので、押しても
+   キーの入れ直しになるだけで役に立たなかった
+   （7.121 で付けた「長押し →Safari で開く」ごとやめる）。
+   キーを URL に入れる案は採らない（Discord の履歴に鍵が残る）。
+   そのぶん**本文だけで判断できる**ようにした（1商品＝1つの埋め込み）。 */
+/* ===== 1商品＝1つの埋め込み（embed）で知らせる（7.125・【S】）=====
+   1通の文章に商品が詰まっていて見づらかったので、商品ごとに箱を分ける。
+
+   Discord の決まり（2026-11 時点・公式の資料で確かめた）
+   ・1通に embed は **10個まで**
+   ・1通の embed ぜんぶ合わせて **6,000字まで**
+   ・**ふつうの Webhook では「押せるボタン」は出せない**。
+     `with_components` を付けても出せるのは「押せない」リンクボタンだけで、
+     押したことはそのメッセージを持つアプリに届くので Webhook では受けられない。
+     → **JAN のコピーはボタンではなく「コードの書式」で出す**（下の mwNtEmbed）。
+       スマホは長押しで「コピー」、PC はコードの枠の右のコピーで取れる。
+       本当のボタンが要るなら、アプリ所有の Webhook かボットと
+       interactions の口（署名の確認つき）が必要。いまは作らない。
+
+   色（区分で変える）
+     新入荷＝緑 ／ 欠品＝赤 ／「仕入れる」の印の売り切れ＝黄 */
+const EMB_MAX = 10;                 // 1通に入れられる embed の数
+const EMB_CHARS = 5600;             // 1通の embed 合計の字数（6,000 の手前）
+const EMB_COLOR = { new: 0x2ecc71, gone: 0xe74c3c, buy: 0xf1c40f,
+                    info: 0x95a5a6 };
+/* 商品のリンク。Amazon は JAN の検索（ASIN が分かっていれば商品のページ）。
+   Keepa は amazon.co.jp の区分が 5。 */
+function mwNtAmzUrl(jan, asin) {
+  return /^B[0-9A-Z]{9}$/.test(String(asin || ""))
+    ? ("https://www.amazon.co.jp/dp/" + asin)
+    : ("https://www.amazon.co.jp/s?k=" + encodeURIComponent(String(jan || "")));
 }
+function mwNtJanUrl(jan) {
+  return "https://www.amazon.co.jp/s?k=" + encodeURIComponent(String(jan || ""));
+}
+function mwNtKeepaUrl(jan, asin) {
+  return /^B[0-9A-Z]{9}$/.test(String(asin || ""))
+    ? ("https://keepa.com/#!product/5-" + asin)
+    : ("https://keepa.com/#!search/5-" + encodeURIComponent(String(jan || "")));
+}
+/* ---- 出し分け（7.125 の4）----
+   社内用（いまの #一般）… 卸値・社・MW在庫を出す
+   会員用（あとで使う）  … 卸値・社・MW在庫・MW の画像・備考は**出さない**。
+                           代わりに 販売価格・見込みの Amazon 粗利・購入できる数
+   ⚙ `mwNtAudience`（'staff' / 'member'・既定 'staff'）で切り替える。 */
+const NT_AUD = { staff: 1, member: 1 };
+function mwNtAud(st) {
+  const v = String((st || {}).mwNtAudience || "").trim();
+  return NT_AUD[v] ? v : "staff";
+}
+/* 会員用では出してはいけない項目（うっかり足さないように名前で持つ）。 */
+const NT_MEMBER_NG = ["卸値", "社", "MW在庫", "備考", "画像"];
+function mwNtYen(n) {
+  return "¥" + Math.round(Number(n) || 0).toLocaleString("en-US");
+}
+/* 見込み粗利と、その出どころ。 */
+function mwNtGross(x) {
+  if (x && x.gross !== null && x.gross !== undefined)
+    return { yen: Number(x.gross) || 0,
+             src: "Amazon の実売 " + mwNtYen(x.amz_price) + " − 手数料" };
+  const g = Math.round(Number((x || {}).hope) || 0);
+  return g ? { yen: g, src: "定価からの目安" } : null;
+}
+/* 1商品ぶんの埋め込み。kind は 'new' / 'gone' / 'buy'。 */
+function mwNtEmbed(x, kind, aud) {
+  const jan = String((x || {}).jan || "");
+  const member = aud === "member";
+  const f = [];
+  /* JAN は**コードの書式で1行に単独**（長押しでコピーできる形）。 */
+  f.push({ name: "JAN", value: "```\n" + jan + "\n```", inline: false });
+  if (x.kishu) f.push({ name: "機種", value: String(x.kishu).slice(0, 60),
+                        inline: true });
+  const gr = mwNtGross(x);
+  if (member) {
+    /* 会員用：販売価格・見込みの Amazon 粗利・購入できる数。 */
+    if (Number(x.amz_price) > 0)
+      f.push({ name: "販売価格", value: mwNtYen(x.amz_price), inline: true });
+    if (gr) f.push({ name: "見込みの Amazon 粗利",
+                     value: mwNtYen(gr.yen), inline: true });
+    f.push({ name: "購入できる数",
+             value: (Number(x.stock) > 0 ? (Number(x.stock) + "点") : "—"),
+             inline: true });
+  } else {
+    /* 社内用：卸値・社・MW在庫。 */
+    f.push({ name: "卸値", value: mwNtYen(x.wholesale) + "（税抜）",
+             inline: true });
+    if (x.sha) f.push({ name: "社", value: String(x.sha).slice(0, 60),
+                        inline: true });
+    if (gr) f.push({ name: "見込み粗利",
+                     value: mwNtYen(gr.yen) + "\n（" + gr.src + "）",
+                     inline: true });
+    f.push({ name: "MW在庫",
+             value: (Number(x.stock) > 0 ? (Number(x.stock) + "点") : "—"),
+             inline: true });
+  }
+  /* いちばん下にリンク（Amazon・Keepa）。 */
+  f.push({ name: "リンク",
+           value: "[Amazon](" + mwNtAmzUrl(jan, x.asin) + ")　"
+             + "[Keepa](" + mwNtKeepaUrl(jan, x.asin) + ")",
+           inline: false });
+  return {
+    /* 見出しをタップすると Amazon の JAN 検索が開く。 */
+    title: String(x.name || jan).slice(0, 200),
+    url: mwNtJanUrl(jan),
+    color: EMB_COLOR[kind] || EMB_COLOR.info,
+    fields: f.slice(0, 25),
+  };
+}
+/* embed の字数（6,000字の見張り用）。 */
+function mwNtEmbedLen(e) {
+  const o = e || {};
+  let n = String(o.title || "").length + String(o.description || "").length;
+  for (const x of (o.fields || []))
+    n += String(x.name || "").length + String(x.value || "").length;
+  return n;
+}
+/* ---- 埋め込みを分けて送る（7.125）----
+   head … 1通目の先頭に出す文（件数など。無くてもよい）
+   title… 区分の見出し（毎通の先頭に出す）
+   list … embed の配列（10個ずつ・6,000字ずつに分けて送る）
+   返りは送れた通数。 */
+async function notifyEmbeds(env, run, head, title, list) {
+  const all = (list || []).filter(Boolean);
+  if (!all.length) return 0;
+  const packs = [];
+  let cur = [], len = 0;
+  for (const e of all) {
+    const n = mwNtEmbedLen(e);
+    if (cur.length >= EMB_MAX || (cur.length && len + n > EMB_CHARS)) {
+      packs.push(cur); cur = []; len = 0;
+    }
+    cur.push(e); len += n;
+  }
+  if (cur.length) packs.push(cur);
+  let sent = 0;
+  for (let i = 0; i < packs.length; i++) {
+    const t = [];
+    if (i === 0 && head) t.push(head);
+    if (title) t.push(title + (packs.length > 1
+      ? ("（" + (i + 1) + "/" + packs.length + "通）") : ""));
+    if (await notifyRaw(env, run, t.join("\n"), packs[i])) sent++;
+  }
+  return sent;
+}
+
 async function mwImportNotify(env, run, at, res) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
@@ -5356,6 +5507,10 @@ async function mwImportNotify(env, run, at, res) {
   const nw2 = fresh.filter((x) => !seenN[x.jan]);
   if (!drop2.length && !buy2.length && !hope2.length && !nw2.length && !rest)
     return false;
+  /* 7.125（【S】）：**1商品＝1つの埋め込み**で送る。
+     pj へのリンク（#tab=…）と「長押し →Safari で開く」は**出さない**
+     （Discord の中のブラウザはキーを持っていないので役に立たない）。 */
+  const aud = mwNtAud(st);
   const head = ["📥 MW の在庫CSVを取り込みました",
     "・今回 新しく欠品 " + (res.gone_jan || 0) + "件"
     + "（欠品の合計 " + (res.gone_all_jan || 0) + "件）"
@@ -5364,29 +5519,31 @@ async function mwImportNotify(env, run, at, res) {
   if (rest)
     head.push("・そのほかの欠品 " + rest + "件（eBay の出品・仕入れる印・"
       + "刈取の見込みのどれにも当たらないので件数だけ）");
-  /* 塊ごとに詰めて送る（1通 2000字に収まらないので・notifyBlocks）。 */
-  const blocks = [];
-  const group = (title, rows, hash, tailLine) => {
+  let sent = 0;
+  const group = async (title, rows, kind, tailLine) => {
     if (!rows.length) return;
-    const b = ["", title];
-    for (const x of rows.slice(0, top)) b.push(mwNtLine(x));
-    if (rows.length > top) b.push("  ほか " + (rows.length - top) + "件");
-    if (tailLine) b.push(tailLine);
-    b.push(mwNtLink(hash));
-    blocks.push(b);
+    const show = rows.slice(0, top);
+    const t = [title];
+    if (rows.length > top) t.push("（多いので上位 " + top + "件を出します。"
+      + "ほか " + (rows.length - top) + "件）");
+    if (tailLine) t.push(tailLine);
+    const n = await notifyEmbeds(env, run, sent ? "" : head.join("\n"),
+      t.join("\n"), show.map((x) => mwNtEmbed(x, kind, aud)));
+    sent += n;
   };
-  group("🛑 eBay に無在庫で出していた商品が売り切れました（**数量0にしました**）… "
+  await group("🛑 eBay に無在庫で出していた商品が売り切れました（**数量0にしました**）… "
     + drop2.length + "件"
     + (res.zeroed ? ("　pj が数量0にした出品 " + res.zeroed + "件") : ""),
-    drop2, "#tab=E");
-  group("🛒 **注文前に売り切れました**（「仕入れる」の印が付いていて、"
+    drop2, "gone");
+  await group("🛒 **注文前に売り切れました**（「仕入れる」の印が付いていて、"
     + "注文も Amazon の登録もまだです）… " + buy2.length + "件",
-    buy2, "#tab=F&view=buy", "  印を外すか、別の行に替えてください");
-  group("📉 **刈取の見込みがあった商品が売り切れました**（印はまだ付けていません）… "
-    + hope2.length + "件", hope2, "#tab=F");
-  group("🆕 新しく入荷しました（刈取の見込みあり／eBay 無在庫の候補）… "
-    + nw2.length + "件", nw2, "#tab=F");
-  const sent = await notifyBlocks(env, run, head, blocks);
+    buy2, "buy", "印を外すか、別の行に替えてください。");
+  await group("📉 **刈取の見込みがあった商品が売り切れました**（印はまだ付けていません）… "
+    + hope2.length + "件", hope2, "gone");
+  await group("🆕 新しく入荷しました（刈取の見込みあり／eBay 無在庫の候補）… "
+    + nw2.length + "件", nw2, "new");
+  /* 1つも埋め込みを送らなかった（件数だけの回）ときは、文だけ送る。 */
+  if (!sent && rest) sent = (await notify(env, run, head.join("\n"))) ? 1 : 0;
   await mwNtMark(env, "sold",
     drop2.concat(buy2).concat(hope2).map((x) => x.jan), at);
   await mwNtMark(env, "new", nw2.map((x) => x.jan), at);
@@ -5409,8 +5566,10 @@ async function mwNtGone(env, at) {
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
             MAX(s.list_price) AS list_price,
-            /* 7.121：知らせと一覧に出すために社・機種と Amazon の事実も引く。 */
+            /* 7.121：知らせと一覧に出すために社・機種と Amazon の事実も引く。
+               7.125：MW在庫（会員用では「購入できる数」）も出すので引く。 */
             MAX(s.sha) AS sha, MAX(s.kishu) AS kishu,
+            MAX(COALESCE(s.stock,0)) AS stock,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
@@ -5443,8 +5602,10 @@ async function mwNtZero(env, at) {
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, MAX(s.name) AS name, MIN(s.wholesale) AS wholesale,
             MAX(s.list_price) AS list_price,
-            /* 7.121：知らせと一覧に出すために社・機種と Amazon の事実も引く。 */
+            /* 7.121：知らせと一覧に出すために社・機種と Amazon の事実も引く。
+               7.125：MW在庫（会員用では「購入できる数」）も出すので引く。 */
             MAX(s.sha) AS sha, MAX(s.kishu) AS kishu,
+            MAX(COALESCE(s.stock,0)) AS stock,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
@@ -5486,6 +5647,7 @@ function mwNtRows(q) {
     return {
       jan: String(r.jan || ""), name: String(r.name || ""),
       sha: String(r.sha || ""), kishu: String(r.kishu || ""),
+      stock: Number(r.stock) || 0,
       wholesale: w, hope: hope,
       asin: String(r.asin || ""), amz_price: price, fee_total: fee,
       gross: gross,
@@ -6044,8 +6206,9 @@ async function mwCsvFailed(env, run, why, res) {
       + "・最後の理由：" + why + "\n"
       + "そのままだと**欠品が分からず売り越し**になります。"
       + "画面の「MWの在庫CSVを取り込む」で手で入れてください。\n"
-      + "直ったら⚙の「自動取り込み」で「もう一度動かす」を押してください。\n"
-      + APP_URL + "#tab=F");
+      /* 7.125：pj へのリンクは出さない（Discord の中のブラウザは
+         キーを持っていないので、押してもキーの入れ直しになるだけ）。 */
+      + "直ったら⚙の「自動取り込み」で「もう一度動かす」を押してください。");
   } else {
     await notify(env, run,
       "⚠ **MW の在庫CSVを取り込めませんでした**（" + n + "回目）\n"
@@ -8605,8 +8768,8 @@ async function mwAutoMiss(env, run) {
       + "・最後に動いたのは " + jstText(at) + "（" + miss + "回ぶん飛んでいます）\n"
       + "・⚙の設定は **オン（1時間に " + st.plan.per + "件）** です\n"
       + "そのままだと Amazon の値段・手数料・出品の可否が古いままになります。\n"
-      + "⚙の「自動の回の記録を見る」で、止まった理由を確かめてください。\n"
-      + "  → " + APP_URL + "#tab=G\n  " + APP_OPEN_HINT);
+      /* 7.125：pj へのリンクは出さない（キーが無いので役に立たない）。 */
+      + "⚙の「自動の回の記録を見る」で、止まった理由を確かめてください。");
     await stateSet(env, MW_AUTO_MISS_KEY, nowIso()).run();
   }
   return { miss: miss, at: at, warned: true };
@@ -13152,7 +13315,11 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 【P】在庫CSVの自動取り込み */
   /* 7.121（【Q】） */
   mwNtList, mwNtWhere, notifyBlocks, NOTIFY_MAX, NOTIFY_ROOM,
-  APP_OPEN_HINT, mwNtLink, colOk,
+  colOk,
+  /* 7.125（【S】） */
+  notifyRaw, notifyEmbeds, mwNtEmbed, mwNtEmbedLen, mwNtAud, mwNtGross,
+  mwNtAmzUrl, mwNtJanUrl, mwNtKeepaUrl, EMB_MAX, EMB_CHARS, EMB_COLOR,
+  NT_MEMBER_NG,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,
   jobMwCsv, mwCsvCfg, mwCsvRuns, mwCsvResume, mwCsvBad, mwCsvHash, mwCsvNextAt,
   mwStockHave, MW_CSV_ROWS_MAX,

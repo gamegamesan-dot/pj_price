@@ -17,11 +17,18 @@ const T=harness('Worker：取り込みの知らせと売り切れの誤報（7.1
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('mwnt');
 
-let sent=[];
+let sent=[], emb=[], msgs=[];
+/* 埋め込みの中の文をぜんぶつないだもの（探しやすくするため）。 */
+const embText=()=>emb.map((e)=>[e.title,e.url,e.description||'']
+  .concat((e.fields||[]).map((f)=>f.name+' '+f.value)).join(' ')).join('\n');
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/discord/.test(url)){
-    sent.push(JSON.parse(String(o.body||'{}')).content||'');
+    /* 7.125：埋め込み（embeds）も見る。 */
+    const b=JSON.parse(String(o.body||'{}'));
+    sent.push(b.content||'');
+    emb.push(...((b.embeds)||[]));
+    msgs.push(b);
     return new Response(null,{status:204});
   }
   if(/o2\/token/.test(url))
@@ -211,23 +218,27 @@ console.log('\n=== ③ 欠品は関わりのあるものだけ並べる ===');
   await put(env,{ jan:'4902370550105', name:'関係ない2', gone_at:AT,
     list_price:3000, wholesale:2900 });
   const res={ gone_jan:5, gone_all_jan:5, added_jan:0, back_jan:0, zeroed:1 };
+  emb=[]; msgs=[];
   const n=await W.mwImportNotify(env,W.newRun('t'),AT,res);
-  const txt=sent.join('\n');
-  console.log('   '+txt.replace(/\n/g,' ⏎ ').slice(0,460));
+  const txt=sent.join('\n'), et=embText();
+  console.log('   '+txt.replace(/\n/g,' ⏎ ').slice(0,300));
+  console.log('   埋め込み '+emb.length+'個：'+emb.map((e)=>e.title).join('／'));
   ok(n>=1,'★知らせを送った');
-  ok(/eBayに出していた/.test(txt),'★★★eBay に出していた商品は並べる');
-  ok(/仕入れる印あり/.test(txt),'★★★仕入れる印の商品は並べる');
+  ok(emb.some((e)=>e.title==='eBayに出していた'),
+     '★★★eBay に出していた商品は並べる');
+  ok(emb.some((e)=>e.title==='仕入れる印あり'),
+     '★★★仕入れる印の商品は並べる');
   ok(/刈取の見込みがあった商品が売り切れました/.test(txt)
-     &&/刈取の見込みあり/.test(txt),
+     &&emb.some((e)=>e.title==='刈取の見込みあり'),
      '★★★刈取の見込みがあった商品も並べる');
-  ok(!/関係ない1/.test(txt)&&!/関係ない2/.test(txt),
+  ok(!emb.some((e)=>/関係ない/.test(String(e.title||''))),
      '★★★関係のない欠品は並べない');
   ok(/そのほかの欠品 2件/.test(txt),
      '★★★関係のない欠品は件数だけ出す');
   ok(res.note_hope===1&&res.note_rest===2,'★★内訳を返す');
   ok(/新しく欠品 5件/.test(txt)&&/欠品から戻った 0件/.test(txt),
      '★★先頭に件数を出す（戻ったも）');
-  ok(/社 いろは商会/.test(txt),'★★★行に社も出す');
+  ok(/社 いろは商会/.test(et),'★★★埋め込みに社も出す');
 }
 {
   /* 新しく出てきた商品は全件（10件を超えたら上位10件と件数）。 */
@@ -237,13 +248,19 @@ console.log('\n=== ③ 欠品は関わりのあるものだけ並べる ===');
     await put(env,{ jan:'490237055'+String(1000+i), name:'新入荷'+i,
       created_at:AT, seen_at:AT, list_price:20000, wholesale:3000 });
   const res={ gone_jan:0, gone_all_jan:0, added_jan:14, back_jan:0 };
+  emb=[]; msgs=[];
   await W.mwImportNotify(env,W.newRun('t'),AT,res);
   const txt=sent.join('\n');
-  const lines=(txt.match(/新入荷\d+/g)||[]).length;
-  console.log('   並べた '+lines+'件　'+(/ほか 4件/.test(txt)?'＋ほか4件':''));
-  ok(lines===10,'★★★10件を超えたら上位10件');
+  const n2=emb.filter((e)=>/^新入荷\d+$/.test(String(e.title||''))).length;
+  console.log('   埋め込み '+n2+'個　'+(/ほか 4件/.test(txt)?'＋ほか4件':'')
+    +'　通数 '+msgs.length);
+  ok(n2===10,'★★★10件を超えたら上位10件（埋め込み10個）');
+  ok(msgs.every((m)=>((m.embeds||[]).length<=W.EMB_MAX)),
+     '★★★1通に入れる埋め込みは10個まで（Discord の決まり）');
   ok(/ほか 4件/.test(txt),'★★★残りは件数で出す');
   ok(/新しく出てきた 14件/.test(txt),'★★先頭に全件数を出す');
+  ok(emb.every((e)=>e.color===W.EMB_COLOR['new']),
+     '★★★新入荷は緑');
 }
 
 console.log('\n=== ④ Discord のリンク ===');
@@ -254,16 +271,20 @@ console.log('\n=== ④ Discord のリンク ===');
   await item(env,'4902370550201');
   await W.mwImportNotify(env,W.newRun('t'),AT,
     { gone_jan:1, gone_all_jan:1, added_jan:0, back_jan:0 });
-  const txt=sent.join('\n');
-  ok(/gamegamesan-dot\.github\.io\/pj_price\/#tab=E/.test(txt),
-     '★一覧へのリンクを出す');
-  ok(!/x-pj-key|X-PJ-Key|[?&]key=|[?&]k=/.test(txt),
-     '★★★リンクにキーを入れない（Discord の履歴に鍵を残さない）');
-  ok(/長押し →Safari で開く/.test(txt),
-     '★★★「長押し →Safari で開く」を添える');
-  ok(W.APP_OPEN_HINT.indexOf('Safari')>=0,'★その文は1か所に置いてある');
-  /* ほかの知らせのリンクにも鍵は入っていない。 */
-  ok(!/key=/.test(W.APP_URL),'★★アプリの住所そのものに鍵は入っていない');
+  const txt=sent.join('\n'), et=embText();
+  /* 7.125（【S】の2）：pj へのリンクと「長押し →Safari で開く」は**出さない**。
+     Discord の中のブラウザはキーを持っていないので役に立たない。 */
+  ok(!/github\.io\/pj_price/.test(txt)&&!/github\.io\/pj_price/.test(et),
+     '★★★pj へのリンクは出さない（キーが無くて役に立たない）');
+  ok(!/#tab=/.test(txt)&&!/#tab=/.test(et),'★★★#tab=… も出さない');
+  ok(!/長押し/.test(txt)&&!/Safari/.test(txt),
+     '★★★「長押し →Safari で開く」も出さない');
+  /* `?k=` は Amazon の検索の綴りなので除く（pj のキーは key= / x-pj-key）。 */
+  ok(!/x-pj-key|X-PJ-Key|[?&]key=|pj_key/i.test(txt+et),
+     '★★★キーはどこにも入れない（Discord の履歴に鍵を残さない）');
+  /* そのぶん、埋め込みの中に商品のリンク（Amazon・Keepa）を出す。 */
+  ok(/amazon\.co\.jp/.test(et)&&/keepa\.com/.test(et),
+     '★★★代わりに Amazon と Keepa のリンクを出す');
 }
 
 console.log('\n=== ⑤ 長い知らせは分けて送る ===');

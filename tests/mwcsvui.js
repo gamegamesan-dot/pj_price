@@ -96,6 +96,30 @@ ok(/ログイン画面（HTML）/.test(f.txt),'★★止める条件も書いて
 ok(/shared\/mwcsv\.js/.test(f.txt),
    '★★★読み方は手で取り込むときと同じ1か所だと書いてある');
 
+console.log('\n=== 知らせに出す項目の出し分け（6.164・【S】）===');
+let aud=await p.evaluate(()=>{
+  const el=$('mwNtAudience');
+  const row=el?el.closest('.rowv'):null;
+  return { has:!!el, v:String((el||{}).value||''),
+    opts:el?Array.prototype.map.call(el.options,function(o){ return o.value; }):[],
+    price:!!(row&&row.classList.contains('cfgprice')),
+    txt:row?(row.textContent||'').replace(/\s+/g,' '):'' };
+});
+console.log('   '+JSON.stringify(aud).slice(0,300));
+ok(aud.has===true,'★★★⚙に「知らせに出す項目」の欄がある');
+ok(aud.v==='staff','★★★既定は社内用');
+ok(aud.opts.join(',')==='staff,member','★★社内用と会員用の2つ');
+ok(aud.price===true,'★★値段に関わる設定なので作業者には見せない');
+ok(/卸値・社・MW在庫/.test(aud.txt),'★★社内用に何が出るか書いてある');
+ok(/販売価格・見込みの Amazon 粗利・購入できる数/.test(aud.txt),
+   '★★★会員用に何が出るか書いてある');
+ok(/いまは社内用のままにしてください/.test(aud.txt),
+   '★★いまは社内用だけ使うと書いてある');
+ok(await p.evaluate(()=>ADV_AMZCOND.indexOf('mwNtAudience')>=0),
+   '★★★pj-sync にも送る（Worker が読む設定）');
+ok(await p.evaluate(()=>CSV_CFG_IDS.indexOf('mwNtAudience')>=0),
+   '★★端末にも残す');
+
 console.log('\n=== 取得先は⚙に置く（コードに直書きしない）===');
 let src=await p.evaluate(()=>{
   const s=document.documentElement.outerHTML;

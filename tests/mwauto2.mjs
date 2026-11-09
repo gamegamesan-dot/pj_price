@@ -303,8 +303,11 @@ console.log('\n=== 2回続けて飛んだら Discord ===');
   ok(/最後に動いたのは/.test(sent.join('')),'★★最後に動いた時刻を書く');
   ok(/オン（1時間に 100件）/.test(sent.join('')),'★★⚙の設定も書く');
   ok(/自動の回の記録を見る/.test(sent.join('')),'★★どこを見ればよいか書く');
-  ok(/長押し →Safari で開く/.test(sent.join('')),
-     '★リンクの開き方も添える（7.121 と同じ）');
+  /* 7.125：pj へのリンクと「長押し →Safari で開く」は**出さない**
+     （Discord の中のブラウザはキーを持っていないので役に立たない）。 */
+  ok(!/github\.io\/pj_price/.test(sent.join(''))
+     &&!/長押し/.test(sent.join('')),
+     '★★★pj へのリンクと「長押し →Safari で開く」は出さない（7.125）');
   /* 1日1回まで。 */
   sent=[];
   const m2=await W.mwAutoMiss(env,W.newRun('t'));

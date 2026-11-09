@@ -22,18 +22,25 @@ const mkEnv=()=>{
   e.__posts=[];
   return e;
 };
-let posts=[];
+let posts=[], embs=[];
+/* 7.125：商品は**埋め込み（embeds）**で出るので、そちらも拾う。
+   embText() は埋め込みの中の文をぜんぶつないだもの（探しやすくするため）。 */
+const embText=()=>embs.map((e)=>[e.title,e.url,e.description||'']
+  .concat((e.fields||[]).map((f)=>f.name+' '+f.value)).join(' ')).join('\n');
 const hook=(e)=>{
   globalThis.fetch=async(u,i)=>{
     const url=String(u&&u.url?u.url:u);
     if(/discord/.test(url)){
-      posts.push(JSON.parse((i&&i.body)||((u&&u.body)?await u.text():'{}')).content||'');
+      const b=JSON.parse((i&&i.body)||((u&&u.body)?await u.text():'{}'));
+      posts.push(b.content||'');
+      embs.push(...((b.embeds)||[]));
       return new Response('{}',{status:200});
     }
     return new Response('{}',{status:200});
   };
   return e;
 };
+const reset=()=>{ posts=[]; embs=[]; };
 const row=(jan,o)=>Object.assign({ jan:jan, sha:'M200', idx:0, kishu:'NS',
   name:jan+'の商品', list_price:9800, release:'2025/01/01', cond:'新品',
   wholesale:3000, stock:9, note:'', ship_text:'即日出荷', ship_days:0 },o||{});
@@ -44,7 +51,7 @@ const cfg=async(env,o)=>await j(await worker.fetch(post('/settings',
 
 console.log('=== ①「欠品」は今回新しく消えたぶん（合計は別）===');
 let env=hook(mkEnv());
-posts=[];
+reset();
 /* 1回目：12行。2回目：そのうち3行が消える。 */
 const first=[];
 for(let i=0;i<12;i++)first.push(row('49023705500'+String(10+i).slice(-2)));
@@ -67,7 +74,7 @@ ok(r.body.gone===1&&r.body.gone_all===4,
 
 console.log('\n=== ② eBay 無在庫（W-）が欠品 → 数量0にした ===');
 env=hook(mkEnv());
-posts=[];
+reset();
 const JAN_W='4902370551001';
 const base=[];
 for(let i=0;i<12;i++)base.push(row('49023705520'+String(10+i).slice(-2)));
@@ -79,16 +86,18 @@ env.DB._db.prepare(
      updated_at)
    VALUES ('B0YOSHI0001','new','ebay','Yoshi','1234567','W-`+JAN_W+`',1,
      '2026-11-01T00:00:00Z')`).run();
-posts=[];
+reset();
 r=await put(env,'2026-11-07T02:00:00.000Z',base.filter((x)=>x.jan!==JAN_W));
 console.log('   通知: '+(posts[0]||'（なし）').slice(0,420));
 ok(posts.length===1,'★★★1回の取り込みにつき1通だけ');
 ok(/新しく欠品 1件（欠品の合計 1件）/.test(posts[0]),
    '★★「今回 新しく欠品 n件（欠品の合計 n件）」と書く');
-ok(/数量0にしました/.test(posts[0])&&/ヨッシークラフトワールド/.test(posts[0]),
+/* 7.125：見出しは文、商品は埋め込みに出る。 */
+ok(/数量0にしました/.test(posts[0])
+   &&embs.some((e)=>e.title==='ヨッシークラフトワールド'),
    '★★★eBay に無在庫で出していた商品は「数量0にしました」');
-ok(new RegExp('JAN '+JAN_W).test(posts[0])&&/卸値 ¥4,000/.test(posts[0]),
-   '★★商品名・JAN・卸値を出す');
+ok(new RegExp(JAN_W).test(embText())&&/¥4,000/.test(embText()),
+   '★★商品名・JAN・卸値を出す（埋め込みの中）');
 
 console.log('\n=== ③ 仕入れる印の商品が売り切れ → 注文前に売り切れ ===');
 env=hook(mkEnv());
@@ -101,15 +110,20 @@ env.DB._db.prepare(
   `INSERT INTO mw_buy (jan,qty,by_role,at,created_at,asin,name,wholesale)
    VALUES ('`+JAN_B+`',1,'staff','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z',
      'B0NENDO0001','ねんどろいど八奈見',2500)`).run();
-posts=[];
+reset();
 r=await put(env,'2026-11-07T02:00:00.000Z',b2.filter((x)=>x.jan!==JAN_B));
 console.log('   通知: '+(posts[0]||'（なし）').slice(0,400));
 ok(/注文前に売り切れました/.test(posts[0]),
    '★★★印が付いている商品は「注文前に売り切れました」');
-ok(/ねんどろいど八奈見/.test(posts[0]),'★その商品を出す');
-ok(/#tab=F&view=buy/.test(posts[0]),'★★仕入れる一覧へのリンクを出す');
+ok(embs.some((e)=>e.title==='ねんどろいど八奈見'),
+   '★その商品を埋め込みで出す（7.125）');
+/* 7.125：pj へのリンクは出さない（Discord の中のブラウザはキーを持たない）。
+   代わりに埋め込みの中に Amazon と Keepa のリンクを出す。 */
+ok(!/#tab=/.test(posts[0])&&!/#tab=/.test(embText()),
+   '★★pj へのリンクは出さない');
+ok(/amazon\.co\.jp/.test(embText()),'★★Amazon のリンクを出す');
 /* 同じ商品を2回は知らせない。 */
-posts=[];
+reset();
 r=await put(env,'2026-11-07T03:00:00.000Z',b2.filter((x)=>x.jan!==JAN_B));
 ok(posts.length===0,'★★同じ商品は2回知らせない（mw_notify に控える）');
 
@@ -119,7 +133,7 @@ const old=[];
 for(let i=0;i<12;i++)old.push(row('49023705540'+String(10+i).slice(-2),
   { list_price:3000, wholesale:2800 }));
 await put(env,'2026-11-07T01:00:00.000Z',old);
-posts=[];
+reset();
 const add=old.concat([
   /* 見込みあり：9800×0.85 − 3000×1.1 = 5030 > 1000 */
   row('4902370554001',{ name:'見込みのある新商品', list_price:9800, wholesale:3000 }),
@@ -130,11 +144,13 @@ r=await put(env,'2026-11-07T02:00:00.000Z',add);
 console.log('   '+JSON.stringify({added_jan:r.body.added_jan})+' 通知: '
   +(posts[0]||'（なし）').slice(0,420));
 ok(r.body.added_jan===2,'★新しく出てきた商品は2件');
-ok(/新しく入荷しました/.test(posts[0])&&/見込みのある新商品/.test(posts[0]),
+ok(/新しく入荷しました/.test(posts[0])
+   &&embs.some((e)=>e.title==='見込みのある新商品'),
    '★★★見込みのある新入荷を知らせる');
-ok(!/見込みのない新商品/.test(posts[0]),
+ok(!embs.some((e)=>e.title==='見込みのない新商品'),
    '★★★見込みもなく候補にも入らない行は知らせない');
-ok(/見込み粗利 ¥5,030/.test(posts[0]),'★★見込みの粗利を出す');
+ok(/¥5,030/.test(embText()),'★★見込みの粗利を出す');
+ok(/定価からの目安/.test(embText()),'★★★出どころも出す（7.125）');
 
 console.log('\n=== ⑤ ⚙で切り替えられる（どれを知らせるか・上位何件）===');
 env=hook(mkEnv());
@@ -142,28 +158,31 @@ await cfg(env,{ mwNtNew:false, mwNtDrop:false, mwNtBuy:false });
 const o5=[];
 for(let i=0;i<12;i++)o5.push(row('49023705550'+String(10+i).slice(-2)));
 await put(env,'2026-11-07T01:00:00.000Z',o5);
-posts=[];
+reset();
 await put(env,'2026-11-07T02:00:00.000Z',o5.concat(
   [row('4902370555901',{ name:'新商品', list_price:9800, wholesale:3000 })]));
 ok(posts.length===0,'★★★ぜんぶオフなら知らせない');
 await cfg(env,{ mwNtNew:true, mwNtTop:'2' });
-posts=[];
+reset();
 await put(env,'2026-11-07T03:00:00.000Z',o5.concat([
   row('4902370555902',{ name:'新A', list_price:9800, wholesale:3000 }),
   row('4902370555903',{ name:'新B', list_price:9700, wholesale:3000 }),
   row('4902370555904',{ name:'新C', list_price:9600, wholesale:3000 })]));
-console.log('   '+(posts[0]||'').slice(0,300));
-ok(/新A/.test(posts[0])&&/新B/.test(posts[0])&&!/新C/.test(posts[0]),
+console.log('   '+(posts[0]||'').slice(0,300)+' / 埋め込み '
+  +embs.map((e)=>e.title).join('・'));
+const t5=embs.map((e)=>e.title);
+ok(t5.indexOf('新A')>=0&&t5.indexOf('新B')>=0&&t5.indexOf('新C')<0,
    '★★★上位2件だけ出す（⚙ mwNtTop）');
-ok(/ほか 1件/.test(posts[0])&&/#tab=F/.test(posts[0]),
-   '★★残りは件数と一覧へのリンクにする');
+/* 知らせは区分ごとに別の通になるので、ぜんぶつないで見る。 */
+ok(/ほか 1件/.test(posts.join('\n')),'★★残りは件数で出す');
+ok(!/#tab=/.test(posts.join('\n')),'★★★一覧へのリンクは出さない（7.125）');
 
 console.log('\n=== ⑥ 3割の歯止めが効いた回は在庫切れを知らせない ===');
 env=hook(mkEnv());
 const o6=[];
 for(let i=0;i<20;i++)o6.push(row('49023705560'+String(10+i).slice(-2)));
 await put(env,'2026-11-07T01:00:00.000Z',o6);
-posts=[];
+reset();
 r=await put(env,'2026-11-07T02:00:00.000Z',o6.slice(0,10));
 console.log('   warn: '+String(r.body.warn||'').slice(0,60));
 ok(!!r.body.warn&&r.body.gone===0,'★半分に減ったら欠品にしない（今までどおり）');
