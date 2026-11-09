@@ -458,6 +458,7 @@ CREATE TABLE IF NOT EXISTS mw_stock (
   pick       INTEGER NOT NULL DEFAULT 0,       -- JANごとに選んだ仕入れ元か
   seen_at    TEXT NOT NULL,                    -- 最後に CSV にあった時刻
   gone_at    TEXT,                             -- 欠品（CSV から消えた）時刻
+  back_at    TEXT,                             -- 欠品から戻った時刻（7.121）
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mw_key  ON mw_stock(jan, sha, idx);
@@ -465,6 +466,7 @@ CREATE INDEX IF NOT EXISTS idx_mw_jan        ON mw_stock(jan);
 CREATE INDEX IF NOT EXISTS idx_mw_seen       ON mw_stock(seen_at);
 CREATE INDEX IF NOT EXISTS idx_mw_pick       ON mw_stock(pick, gone_at);
 CREATE INDEX IF NOT EXISTS idx_mw_kishu      ON mw_stock(kishu, cond, ship_days, stock);
+CREATE INDEX IF NOT EXISTS idx_mw_back       ON mw_stock(back_at);
 
 -- 取り込み1回ぶんの記録（画面の「前回の取り込み」に出す）
 CREATE TABLE IF NOT EXISTS mw_runs (
@@ -502,6 +504,7 @@ CREATE TABLE IF NOT EXISTS mw_csv_runs (
   elapsed_ms   INTEGER NOT NULL DEFAULT 0,
   ok           INTEGER NOT NULL DEFAULT 0,
   why          TEXT,
+  stock_at     TEXT,                           -- 取り込みに使った日時（7.121）
   created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_csv_runs_at ON mw_csv_runs(at);
@@ -736,7 +739,11 @@ CREATE TABLE IF NOT EXISTS mw_buy (
   reg_state  TEXT,
   reg_sku    TEXT,
   reg_at     TEXT,
-  reg_chk_at TEXT
+  reg_chk_at TEXT,
+  /* 「注文した」の印（7.121・【Q】）。MW に注文したあとは、CSV から消えても
+     「注文前に売り切れました」ではないので、知らせの対象から外す。 */
+  ordered_at TEXT,
+  ordered_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_buy_at ON mw_buy(at);
 

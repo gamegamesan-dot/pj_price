@@ -107,9 +107,27 @@ ok(!b.attributes.quantity,'★★★数量は送らない（FBA なので在庫�
 
 console.log('\n=== 1件送る ===');
 calls=[];
+/* 7.121（【Q】の2）：この JAN に「仕入れる」の印を付けておく。
+   登録が通ったら、その場で mw_buy も「登録済み（pj）」になること。
+   v243 まではならず、MW から消えたときに取り込みの知らせが
+   「注文前に売り切れました」と**誤って**言っていた（薔薇と椿）。 */
+await env.DB.prepare(
+  `INSERT INTO mw_buy (jan,qty,by_role,at,created_at,asin)
+   VALUES (?1,1,'admin',?2,?2,?3)`)
+  .bind('4902370550467','2026-11-01T00:00:00Z','B0PUT00001').run();
 let r=await post('/mw/put',{ rows:[row()] });
 console.log('   '+JSON.stringify({sent:r.body.sent,ok_n:r.body.ok_n,ng:r.body.ng}));
 ok(r.body.ok===true&&r.body.sent===1&&r.body.ok_n===1,'★★★通る');
+{
+  const b2=await env.DB.prepare(
+    `SELECT reg_state, reg_sku, reg_at FROM mw_buy WHERE jan=?1`)
+    .bind('4902370550467').first();
+  console.log('   mw_buy '+JSON.stringify(b2));
+  ok(b2&&b2.reg_state==='pj',
+     '★★★通ったら mw_buy も「登録済み（pj）」にする（7.121・誤報の元を断つ）');
+  ok(b2&&String(b2.reg_sku||'')===SKU,'★★その SKU を控える');
+  ok(b2&&!!b2.reg_at,'★いつ登録したかも控える');
+}
 const c0=calls[0];
 console.log('   '+c0.method+' '+c0.url.replace(/^https:\/\/[^/]+/,''));
 ok(c0.method==='PUT','★★★PUT で送る');

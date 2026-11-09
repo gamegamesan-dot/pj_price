@@ -7518,3 +7518,145 @@ UTF-8 として読んで `U+FFFD` が1%を超えたら「化けている」と�
 3. うまくいったら「自動で取り込む」を**オン**にする
 
 既定はオフなので、1〜3 をするまで pj-sync は MW に当たらない。
+
+## 7.121 取り込みの知らせの中身と、売り切れの誤報（v244・【Q】）
+
+画面側は §6.161。
+
+### 1. 「注文前に売り切れました」の誤報（原因）
+
+薔薇と椿（JAN 4570101051127）は、カジが MW の在庫を**全部注文した**ので
+CSV から消えた。**Amazon にも登録済み**（`mw_reg_log` に通った記録あり）。
+それなのに取り込みの知らせが「🛒 注文前に売り切れました」と出した。
+
+**原因は `mwPutOne`（Amazon への登録）が `mw_buy.reg_state` を立てていなかったこと。**
+
+- 登録が通ったとき書いていたのは `mw_reg_log` と `skus` だけ
+- 知らせの「仕入れる印」の判定は
+  `mw_buy.qty>0 AND COALESCE(reg_state,'')=''` で、
+  **pj 自身が登録した商品でも `reg_state` は '' のまま**だった
+- ⚙の「登録済みをまとめて確かめる」を押すまで直らない作りだった
+
+直したこと（3段がまえ）
+
+1. **根っこ**：`mwPutOne` が通ったら、その場で
+   `UPDATE mw_buy SET reg_state='pj', reg_sku=…, reg_at=…` も流す
+   （`COALESCE(reg_state,'')=''` の行だけ。人が付けた 'other' は壊さない）
+2. **立て忘れていた行も拾う**：知らせの判定に
+   「`mw_reg_log` に `ok=1` の記録がある」と
+   「`skus` に `buy_src='mw'` の生きた SKU がある」を足した
+3. **注文した印**：`mw_buy.ordered_at` が入っている行も外す
+
+```sql
+EXISTS (SELECT 1 FROM mw_buy b
+         WHERE b.jan = s.jan AND COALESCE(b.qty,0) > 0
+           AND COALESCE(b.reg_state,'') = ''
+           AND COALESCE(b.ordered_at,'') = ''        -- 注文した
+           AND NOT EXISTS (SELECT 1 FROM mw_reg_log g
+                            WHERE g.jan = b.jan AND g.ok = 1)
+           AND NOT EXISTS (SELECT 1 FROM skus k
+                            WHERE k.jan = b.jan
+                              AND COALESCE(k.buy_src,'') = 'mw'
+                              AND COALESCE(k.active,0) = 1)) AS buy
+```
+
+`mwNtGone`（CSV から消えた）と `mwNtZero`（在庫0になった）の両方に入れた。
+
+### 2. 「注文した」の印（`POST /mw/buy`）
+
+```
+{ "items": [ { "jan": "4570101051127", "ordered": 1 } ] }   … 付ける
+{ "items": [ { "jan": "…",             "ordered": 0 } ] }   … 外す
+```
+
+`mw_buy.ordered_at`（日時）と `ordered_by`（admin / staff）に入れる。
+**数量（qty）は触らない**。`GET /mw/buy` は `ordered_at` / `ordered_by` と、
+`mw_reg_log` を見た `reg_ok` を返す。
+
+### 3. 欠品は「関わりのあるもの」だけ並べる
+
+これまでは eBay 出品中と仕入れる印の2つだけを並べ、
+それ以外の欠品は**どこにも出ていなかった**（件数も分からなかった）。
+いっぽうで何十件も並ぶと肝心の行が埋もれる。そこで
+
+| 区分 | 知らせ |
+| --- | --- |
+| ① eBay に無在庫で出品中 | 並べる（数量0にしたことも書く） |
+| ② 「仕入れる」の印（注文も登録もまだ） | 並べる |
+| ③ **Amazon 刈取の見込みあり** | 並べる（新しい区分） |
+| ④ ①〜③に当たらない | **件数だけ**（「そのほかの欠品 n件」） |
+
+③の「見込みあり」は、`mw_amz` の**実売価格と手数料が取れている行は実測の粗利**
+（`price − fee_total − 卸値×1.1`）、取れていない行は今までどおり
+**定価×0.85 − 卸値×1.1** で見る（どちらも `MW_HOPE_YEN` より大きいか）。
+
+行の1文には**商品名・JAN・社・機種・卸値**と、
+**Amazon の値段と実測の粗利**（無ければ「見込み粗利（定価からの目安）」）を出す。
+
+新しく出てきた商品は今までどおり**全件**（`top` を超えたら上位 `top` 件と
+「ほか n件」。`top` の既定は10・⚙ `mwNtTop`）。
+先頭の行に「欠品から戻った n件」も足した。
+
+### 4. Discord のリンク
+
+- **リンクにキーは入れない。** Discord の中のブラウザで開くとキーの入れ直しに
+  なるが、URL に鍵を入れると**Discord の履歴に鍵が残る**（消せない）。
+  本文だけで判断できるように上の3をしたので、入れない
+- リンクの下に **「（長押し →Safari で開く）」** を1行だけ添える
+  （`APP_OPEN_HINT`・`mwNtLink`）
+
+### 5. 長い知らせは分けて送る（`notifyBlocks`）
+
+本文を厚くしたぶん、1通（`NOTIFY_MAX` 1,800字）に収まらなくなった。
+
+- **塊（見出し＋その行）ごと**に詰めて、あふれたら次の1通へ
+- 塊そのものが1通に入らないときは行で割り、見出しに**「（つづき）」**を付ける
+- 2通以上になったときだけ末尾に**「（n/m通）」**を出す
+- 1通目には必ず先頭の行（件数）を出す
+
+### 6. 取り込みの各回の中身（`GET /mw/nt`）
+
+```
+GET /mw/nt?at=<取り込みの日時>&kind=gone|new|back&limit=
+```
+
+| kind | どう引くか |
+| --- | --- |
+| `gone` | `mw_stock.gone_at = at` |
+| `new` | `created_at = at` かつ、ほかの `created_at` の行が無い |
+| `back` | `mw_stock.back_at = at` |
+
+`back_at` は**この版で足した列**。これまで「欠品から戻った」は数
+（`mw_runs.back`）しか残らず、あとから「どれが戻ったのか」を引けなかった。
+`mwStockPut` が、欠品の行を書き戻すときに入れる。
+
+返す列は、画面が**式を書き写さずに**相場の区分と見込み粗利を出せるよう、
+**候補一覧（`/mw/list`）と刈取（`/mw/amz`）と同じ名前**にそろえてある
+（`mkt_*` / `price` / `fee_*` / `size_tier` / `amz_low` …）。
+いまの状態（`ebay` / `buy_qty` / `ordered_at` / `reg_state` / `reg_ok`）も返すので、
+「なぜ知らせに出たのか」が画面で分かる。
+見るだけなので**作業者の鍵でも引ける**。
+
+### 7. マイグレーションを流す前でも落ちない
+
+足した列を読む口が、流す前のデータベースで 500 にならないようにした。
+**空振りの SELECT**（`SELECT "列" FROM "表" LIMIT 0`）で確かめる
+`colOk()` を置き、列があるときだけ読み書きする
+（7.117：D1 の query API は `sqlite_master`・`pragma_table_info` を断る）。
+
+- `mwStockPut` の `back_at`（**取り込みは命綱**なので特に）
+- `mwBuyList` の `ordered_at` / `ordered_by`
+- `mwNtGone` / `mwNtZero` の `ordered_at` の条件
+- `/mw/nt` は列が無ければ `no_column` を返す（画面が案内を出す）
+
+### 8. D1（`migrate-0047-mw-nt.sql`）
+
+- `mw_stock.back_at`（＋索引）… 欠品から戻った時刻
+- `mw_buy.ordered_at` / `ordered_by` … 「注文した」の印
+- `mw_csv_runs.stock_at` … その回の一覧を開くための日時
+
+### デプロイと D1
+
+**pj-sync のデプロイと D1 の作業が必要。**
+`migrate-0047-mw-nt.sql` を**先に**流す（deploy-pj-sync が先に流してくれる）。
+画面は v244。

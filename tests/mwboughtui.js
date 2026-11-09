@@ -87,9 +87,11 @@ ok(/仕入れ済み 2件/.test(note),'★★★仕入れ済みの件数を出す
 ok(/これから仕入れる 1件/.test(note),'★★これから仕入れる件数も出す');
 ok(/登録済み 1件/.test(note),'★登録済みの件数も出す');
 let list=await txt('#csvMwAmzList');
-ok(/仕入れ済み（MW で売り切れ・CSV から消えた商品） 2件/.test(list),
+/* 6.161：見出しを「注文した・登録済み・MW で売り切れ」に変えた。 */
+ok(/仕入れ済み（注文した・登録済み・MW で売り切れ） 2件/.test(list),
    '★★★仕入れ済みの見出しを出す');
-ok(/これから仕入れる（MW にあります） 1件/.test(list),'★★もう一方の見出しも出す');
+ok(/これから仕入れる（MW にあります・まだ注文していません） 1件/.test(list),
+   '★★もう一方の見出しも出す');
 ok(/MWで売り切れ/.test(list),'★行に「MWで売り切れ」を出す');
 ok(/登録済み（pj 以外）/.test(list),'★★★登録済み（pj 以外）を出す');
 ok(/卸値 ¥4,000（税抜・仕入れ時）/.test(list),'★★★卸値は仕入れ時の値と分かる');
@@ -180,7 +182,7 @@ let hid=await p.evaluate(()=>{
   return !!b&&getComputedStyle(b).display==='none'; });
 ok(hid,'★★作業者には「最新を取り直す」を出さない（Amazon に問い合わせるため）');
 list=await txt('#csvMwAmzList');
-ok(/仕入れ済み（MW で売り切れ・CSV から消えた商品） 2件/.test(list),
+ok(/仕入れ済み（注文した・登録済み・MW で売り切れ） 2件/.test(list),
    '★★作業者にも区分と件数は出す');
 
 await T.done();

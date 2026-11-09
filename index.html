@@ -1765,6 +1765,22 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2 cfgprice" id="mwCsvRunNote" style="margin-top:2px"></div>
         <div class="note2 cfgprice" id="mwCsvNote" style="margin-top:2px"></div>
         <div class="cfgprice" id="mwCsvRuns"></div>
+        <!-- 6.161：その回の中身（新しく欠品／新しく出てきた／戻った）。 -->
+        <div class="cfgprice" id="mwNtWrap" style="margin-top:6px">
+          <div style="display:flex;gap:6px;align-items:center">
+            <input id="mwNtFind" placeholder="商品名・JAN・社でさがす" style="flex:1 1 0;min-width:0">
+            <button class="btn" id="mwNtFindCam" style="flex:0 0 auto;padding:6px 10px">📷</button>
+            <button class="btn" id="mwNtFindClear" style="flex:0 0 auto;padding:6px 10px;display:none">×</button>
+          </div>
+          <div id="mwNtFindCamBox" style="display:none;margin-top:4px">
+            <video id="mwNtFindVideo" playsinline muted style="width:100%;max-height:230px;background:#000;border-radius:6px"></video>
+            <div class="note2" id="mwNtFindCamNote" style="margin-top:2px"></div>
+            <button class="btn" id="mwNtFindCamStop" style="width:100%;margin-top:4px">やめる</button>
+          </div>
+          <div class="note2" id="mwNtFindNote" style="margin-top:2px"></div>
+          <div class="note2" id="mwNtNote" style="margin-top:2px"></div>
+          <div id="mwNtBox"></div>
+        </div>
         <div class="note2" style="margin:10px 0 2px"><b>在庫CSVを取り込んだときの知らせ</b>
           （Discord・1回の取り込みにつき1通）</div>
         <details class="exp" data-exp="mwNt"><summary>知らせる中身の説明</summary>
@@ -10224,7 +10240,7 @@ expInit();
     };
     $(findPre(which)+'CamStop').onclick=findCamStop;
   };
-  on('sync'); on('csv'); on('amz'); on('amz2'); on('mwl');
+  on('sync'); on('csv'); on('amz'); on('amz2'); on('mwl'); on('nt');
   /* タブを移ったらカメラを止める（撮り続けない）。 */
   document.addEventListener('visibilitychange',function(){
     if(document.hidden)findCamStop();
@@ -10327,6 +10343,115 @@ $('mwMarkCopy').onclick=function(){
     note.textContent='下の欄から手でコピーしてください。';
   }
 };
+/* ===== 取り込みの各回の中身を一覧で見る（6.161・【Q】の1）=====
+   ⚙「最近の取得を見る」の各回から、その回の
+   「新しく欠品」「新しく出てきた」「欠品から戻った」を開く。
+   相場の区分は mwMktJudge、Amazon の見込み粗利は mwAmzCalc を**そのまま**使う
+   （式は1か所の決まり）。10件ずつ・検索つき。 */
+var mwNtRows2=[], mwNtAt='', mwNtKind='', mwNtJans=0;
+var MW_NT_KIND={ gone:'新しく欠品', 'new':'新しく出てきた', back:'欠品から戻った' };
+/* 検索に当たった行だけ（検索が空なら全部）。 */
+function mwNtPicked(){
+  return mwNtRows2.filter(function(r){ return findMatchNt(r); });
+}
+/* なぜ知らせに出たのか（出なかったのか）を1行で出す。 */
+function mwNtWhyHtml(r){
+  var t=[];
+  if(+r.ebay)t.push('<b>eBay に無在庫で出品中</b>');
+  if(+r.buy_qty>0)t.push('仕入れる印 '+(+r.buy_qty)+'点');
+  if(r.ordered_at)t.push('<b style="color:var(--good)">注文した '
+    +esc(jstDay(r.ordered_at)||'')+'</b>');
+  if(r.reg_state||+r.reg_ok)t.push('<b style="color:var(--good)">Amazon 登録済み</b>'
+    +(r.reg_sku?('（'+esc(String(r.reg_sku))+'）'):''));
+  if(!t.length)return '';
+  return '<div class="note2" style="margin:2px 0 0">'+t.join('　')+'</div>';
+}
+function mwNtRowHtml(r){
+  var rec=null, j=null, a=null;
+  try{ rec=mwRec(r); }catch(e){ rec=null; }
+  try{ j=mwMktJudge(r,rec); }catch(e){ j=null; }
+  try{ a=mwAmzCalc(r); }catch(e){ a=null; }
+  var cost=mwCost(r);
+  return '<div style="margin:6px 0;padding:6px;border:1px solid var(--line);'
+    +'border-radius:6px">'
+    +'<div><b>'+esc(String(r.name||r.mw_name||r.jan).slice(0,50))+'</b></div>'
+    +'<div class="note2" style="margin:2px 0 0">JAN '+esc(String(r.jan||''))
+    +'　社 '+esc(String(r.sha||''))+'　機種 '+esc(String(r.kishu||''))
+    +'　'+esc(String(r.cond||''))+'</div>'
+    +'<div class="note2" style="margin:2px 0 0">卸値 '+yen(+r.wholesale||0)
+    +'（税抜）'+(cost>0?('　仕入原価 '+yen(cost)):'')
+    +'　相場 '+(j?esc(j.label):'—')
+    +(j&&j.low?('（最安 '+esc(String(j.low))+'ドル）'):'')+'</div>'
+    +'<div class="note2" style="margin:2px 0 0">'
+    +(a?('Amazon '+yen(a.price)+'　<b>見込み粗利 '+yen(a.profit)+'</b>'
+        +'（税抜 '+yen(a.net)+'・利益率 '+a.margin+'%）')
+       :(r.asin?'Amazon の販売価格が取れていません':'ASIN が引けていません'))
+    +'</div>'
+    +mwNtWhyHtml(r)
+    +'</div>';
+}
+function mwNtRender(){
+  var box=$('mwNtBox'), note=$('mwNtNote');
+  if(!box)return;
+  if(!mwNtAt){ box.innerHTML=''; return; }
+  var list=mwNtPicked();
+  findNoteRender('nt',list.length,mwNtRows2.length);
+  if(note)note.innerHTML='<b>'+esc(MW_NT_KIND[mwNtKind]||mwNtKind)+' '
+    +mwNtJans+'件</b>（'+esc(jstShort(mwNtAt))+' の取り込み）'
+    +(mwNtRows2.length<mwNtJans
+      ?('　※ 多いので '+mwNtRows2.length+'件まで出しています'):'')
+    +(list.length!==mwNtRows2.length
+      ?('　検索に当たった '+list.length+'件を表示'):'');
+  box.innerHTML=mwNtRows2.length
+    ?(list.length
+      ?(list.slice(0,listShow('mwnt')).map(mwNtRowHtml).join('')
+        +listMoreBar('mwnt',list.length))
+      :'<div class="note2">検索に当たった商品がありません。</div>')
+    :'<div class="note2">この回は該当する商品がありませんでした。</div>';
+}
+listReg('mwnt',mwNtRender);
+/* その回の一覧を引く。 */
+function mwNtLoad(at,kind){
+  var note=$('mwNtNote');
+  if(!note)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  mwNtAt=String(at||''); mwNtKind=String(kind||'gone');
+  note.textContent='pj-sync に聞いています…';
+  $('mwNtBox').innerHTML='';
+  listSet('mwnt',LIST_STEP);
+  fetch(syncUrl()+'/mw/nt?at='+encodeURIComponent(mwNtAt)
+      +'&kind='+encodeURIComponent(mwNtKind)+'&limit=500',
+    { headers:{'X-PJ-Key':syncApiKey()} })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        mwNtAt='';
+        note.textContent=(d&&d.error==='no_column')
+          ?'pj-sync 側の D1 に列がありません（migrate-0047 を流してください）。'
+          :((d&&d.error==='bad_at')?'取り込みの日時が分かりません。'
+                                   :'読めませんでした。');
+        return;
+      }
+      mwNtRows2=d.rows||[]; mwNtJans=+d.jans||0;
+      mwNtRender();
+    })
+    ['catch'](function(){
+      mwNtAt='';
+      note.textContent='pj-sync に届きませんでした。';
+    });
+}
+/* 「新しく欠品」「新しく出てきた」「戻った」のボタン（記録の各回に出す）。 */
+function mwNtBtns(at){
+  if(!at)return '';
+  return '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:3px 0 0">'
+    +['gone','new','back'].map(function(k){
+      return '<button class="btn" data-nt="'+esc(k)+'" data-ntat="'+esc(at)+'"'
+        +' style="padding:2px 8px;font-size:11.5px">'+MW_NT_KIND[k]+'</button>';
+    }).join('')+'</div>';
+}
 /* ===== 在庫CSVの自動取り込み（6.160・【P】）=====
    pj-sync が毎時07分に「変わったか」だけを見て、変わったときだけ取り込む。
    ここは⚙の画面（オンオフ・間隔・取得先・最近の取得の記録）だけを持ち、
@@ -10351,6 +10476,8 @@ function mwCsvRunLine(r){
     +'<br>かかった時間 '+sec+'秒'
     +(r.why?('<br><span style="opacity:.75">'+esc(String(r.why).slice(0,160))
       +'</span>'):'')
+    /* 6.161：取り込めた回は、その中身を開ける。 */
+    +(+r.ok&&r.stock_at?mwNtBtns(String(r.stock_at)):'')
     +'</div>';
 }
 function mwCsvRunsRender(){
@@ -10492,6 +10619,15 @@ $('mwCsvNote').addEventListener('click',function(e){
   el.addEventListener('change',function(){ csvSaveCfg(); advTouch(); });
 });
 $('mwCsvStop').addEventListener('change',function(){ csvSaveCfg(); advTouch(); });
+/* 6.161：記録の各回の「新しく欠品／新しく出てきた／戻った」。
+   行は作り直すので箱で受ける。 */
+$('mwCsvRuns').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.getAttribute)return;
+  var k=t.getAttribute('data-nt');
+  if(!k)return;
+  if(e.preventDefault)e.preventDefault();
+  mwNtLoad(t.getAttribute('data-ntat')||'',k);
+});
 /* 自動の取り直し（6.149）。選択肢が件数なので、隠し欄をそろえてから送る。 */
 $('mwAutoMode').addEventListener('change',function(){
   mwAutoSync(); csvSaveCfg(); advTouch();
@@ -12249,17 +12385,23 @@ function mwBuyPicked(){
 function mwBuyRowHtml(r){
   var cost=Math.round((+r.wholesale||0)*1.1);
   var jan=String(r.jan||'');
-  var gone=mwBuyGone(r), done=mwRegDone(r);
+  var gone=mwBuyGone(r), done=mwRegDone(r), ord=mwBuyOrdered(r);
   var pics=+r.pics||0;
   return '<div data-buyrow="'+esc(jan)+'" style="margin:6px 0;padding:6px;'
     +'border:1px solid var(--line);border-radius:6px'
-    +(done?';border-color:var(--good)':(gone?';border-color:#a86b00':''))+'">'
+    +((done||ord||+r.reg_ok)?';border-color:var(--good)'
+      :(gone?';border-color:#a86b00':''))+'">'
     +'<div style="display:flex;gap:6px;align-items:flex-start">'
     +'<div style="flex:1 1 0;min-width:0">'
     +'<b>'+(+r.qty||0)+'点</b>　'+esc(String(r.mw_name||r.amz_name||r.jan).slice(0,50))
     +(gone?' <span class="badge" style="background:#a86b00">MWで売り切れ</span>':'')
+    /* 6.161：「注文した」の印（日付つき）。 */
+    +(ord?(' <span class="badge" style="background:var(--good)">注文した '
+      +esc(jstDay(r.ordered_at)||'')+'</span>'):'')
     +(done?(' <span class="badge" style="background:var(--good)">'
       +esc(mwRegDoneText(r))+'</span>'):'')
+    +((!done&&+r.reg_ok)?(' <span class="badge" style="background:var(--good)">'
+      +'Amazon 登録済み</span>'):'')
     +mwRstBadge(r)
     +'</div>'
     /* 外す（6.125）。確認は出さず、数秒だけ「元に戻す」を出す。 */
@@ -12288,6 +12430,11 @@ function mwBuyRowHtml(r){
       +'　'+esc(jstDay(r.reg_at||'')||'')+'</div>'):'')
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'
     +mwFindBtn(jan)
+    /* 6.161：MW に注文したら押す。押すと「仕入れ済み」の区分に移り、
+       取り込みの知らせの「注文前に売り切れました」からも外れる。 */
+    +'<button class="btn" data-buyord="'+esc(jan)+'" data-ord="'+(ord?'0':'1')+'"'
+    +' style="flex:0 0 auto;padding:4px 10px;font-size:12px">'
+    +(ord?'注文を取り消す':'注文した')+'</button>'
     +(gone?('<button class="btn cfgprice" data-buyref="'+esc(jan)+'"'
       +' style="flex:0 0 auto;padding:4px 10px;font-size:12px">最新を取り直す</button>'
       +'<button class="btn cfgprice" data-buydone="'+esc(jan)+'"'
@@ -12303,15 +12450,19 @@ function mwBuyRender(){
   var list=mwBuyPicked();
   /* 6.143：**仕入れ済み（MW で売り切れ・CSV から消えた）**と
      **これから仕入れる（MW にある）**を分けて出す。 */
-  var goneList=list.filter(mwBuyGone), liveList=list.filter(function(r){
-    return !mwBuyGone(r); });
-  var goneAll=mwBuyRows.filter(mwBuyGone).length;
-  var regAll=mwBuyRows.filter(mwRegDone).length;
+  /* 6.161：**注文した・Amazon に登録済み**の行も「仕入れ済み」に入れる
+     （CSV にまだ在庫が残っていても、もう「これから仕入れる」ではない）。 */
+  var goneList=list.filter(mwBuyBought), liveList=list.filter(function(r){
+    return !mwBuyBought(r); });
+  var goneAll=mwBuyRows.filter(mwBuyBought).length;
+  var regAll=mwBuyRows.filter(mwBuyRegOk).length;
+  var ordAll=mwBuyRows.filter(mwBuyOrdered).length;
   /* 検索の件数と「×」は一覧と同じ出し方（6.115）。2つの欄に出す（6.126）。 */
   findNoteAmz(list.length,mwBuyRows.length);
   note.innerHTML='<b>印を付けた '+mwBuyRows.length+'件</b>'
     +'（これから仕入れる '+(mwBuyRows.length-goneAll)+'件'
     +'／<b>仕入れ済み '+goneAll+'件</b>）'
+    +(ordAll?('　注文した '+ordAll+'件'):'')
     +(regAll?('　登録済み '+regAll+'件'):'')
     +'　<a href="#" onclick="mwAmzRender();return false"'
     +' style="text-decoration:underline">候補の一覧に戻る</a>';
@@ -12327,8 +12478,11 @@ function mwBuyRender(){
   };
   el.innerHTML=''
     /* ---- 仕入れ済み（CSV から消えた）---- */
-    +(goneAll?(head('仕入れ済み（MW で売り切れ・CSV から消えた商品）',goneAll,
-        'MW の在庫CSVから消えても残します。'
+    +(goneAll?(head('仕入れ済み（注文した・登録済み・MW で売り切れ）',goneAll,
+        '<b>「注文した」を押した行・Amazon に登録済みの行</b>と、'
+        +'MW の在庫CSVから消えた行です。'
+        +'この区分の行は、取り込みの知らせの'
+        +'<b>「注文前に売り切れました」からも外れます</b>。'
         +'<b>卸値は仕入れた時点の値</b>で計算します。'
         +'<span class="cfgprice">「最新を取り直す」で最安値・手数料・出品の可否を'
         +'その場で取り直せます。</span>')
@@ -12340,8 +12494,10 @@ function mwBuyRender(){
         :'<div class="note2">検索に当たった行がありません。</div>')):'')
     /* ---- これから仕入れる（MW にある）---- */
     +(mwBuyRows.length-goneAll
-      ?(head('これから仕入れる（MW にあります）',mwBuyRows.length-goneAll,
-          '発注が終わったら、まとめて外せます（確認します）。')
+      ?(head('これから仕入れる（MW にあります・まだ注文していません）',
+          mwBuyRows.length-goneAll,
+          'MW に注文したら行の<b>「注文した」</b>を押してください。'
+          +'発注が終わったら、まとめて外せます（確認します）。')
         +'<div style="display:flex;gap:6px;align-items:center;margin:0 0 4px">'
         +'<button class="btn" onclick="mwBuyOffAll();return false"'
         +' style="flex:1 1 0;min-width:0;padding:5px 8px;font-size:12px">'
@@ -12363,6 +12519,14 @@ function mwBuyBind(){
   });
   Array.prototype.forEach.call(el.querySelectorAll('[data-buydone]'),function(b){
     b.onclick=function(){ mwBuyDone(b,b.getAttribute('data-buydone')); return false; };
+  });
+  /* 6.161：「注文した」／「注文を取り消す」。 */
+  Array.prototype.forEach.call(el.querySelectorAll('[data-buyord]'),function(b){
+    b.onclick=function(){
+      mwBuyOrder(b,b.getAttribute('data-buyord'),
+        b.getAttribute('data-ord')==='1');
+      return false;
+    };
   });
   var all=$('mwBuyChkAll');
   if(all)all.onclick=function(){ mwBuyCheckAll(all); return false; };
@@ -12428,12 +12592,38 @@ function mwBuyDone(btn,jan){
       mwBuySay(jan,'保存できませんでした：'+e.message,1);
     });
 }
+/* 6.161（【Q】の2）：MW に注文したら押す。
+   押すと「仕入れ済み」の区分に移り、取り込みの知らせの
+   「注文前に売り切れました」からも外れる（まだ CSV に在庫が残っていても）。 */
+function mwBuyOrder(btn,jan,on){
+  if(roleDenyPrice('csvMwAmzListNote'))return;
+  if(!on&&!confirm('「注文した」の印を外します。\n'
+    +'外すと、MW から消えたときに「注文前に売り切れました」と知らせます。'
+    +'よろしいですか。'))return;
+  var back=btn.textContent;
+  btn.disabled=true; btn.textContent='…';
+  mwPost('/mw/buy',{ items:[{ jan:String(jan), ordered:on?1:0 }] })
+    .then(function(d){
+      btn.disabled=false; btn.textContent=back;
+      if(!d||d.ok!==true)throw new Error((d&&d.error)||'保存できませんでした');
+      var m2=on?'「注文した」の印を付けました（仕入れ済みに移します）。'
+              :'「注文した」の印を外しました。';
+      mwBuySay(jan,m2);
+      return mwBuyLoad(true).then(function(){ mwBuyRender(); mwBuySay(jan,m2); });
+    })
+    ['catch'](function(e){
+      btn.disabled=false; btn.textContent=back;
+      mwBuySay(jan,'保存できませんでした：'+e.message,1);
+    });
+}
 /* まとめて「もう登録されていないか」を Amazon に確かめる（6.143）。 */
 function mwBuyCheckAll(btn){
   if(roleDenyPrice('csvMwAmzListNote'))return;
   var note=$('csvMwAmzListNote');
   var jans=mwBuyRows.filter(function(r){
-    return mwBuyGone(r)&&!mwRegDone(r)&&/^B[0-9A-Z]{9}$/.test(String(r.asin||''));
+    /* 6.161：注文した行も対象にする（届く前に登録することがある）。 */
+    return mwBuyBought(r)&&!mwRegDone(r)
+      &&/^B[0-9A-Z]{9}$/.test(String(r.asin||''));
   }).map(function(r){ return String(r.jan); });
   if(!jans.length){ note.innerHTML+='<br>確かめる行がありません'
     +'（ASIN が引けていて、まだ登録済みでない行だけ調べます）。'; return; }
@@ -12495,7 +12685,8 @@ function mwBuyOffAll(){
   /* 6.143：**仕入れ済み（MW で売り切れ・CSV から消えた）行は外さない**。
      発注のあとに押すボタンなので、まだ MW にある行だけが対象。 */
   var gone={};
-  mwBuyRows.forEach(function(r){ if(mwBuyGone(r))gone[String(r.jan)]=1; });
+  /* 6.161：注文した・登録済みの行も残す（仕入れ済みの区分にある行）。 */
+  mwBuyRows.forEach(function(r){ if(mwBuyBought(r))gone[String(r.jan)]=1; });
   var list=Object.keys(mwBuyMap).filter(function(j){ return !gone[j]; })
     .map(function(j){ return { jan:j, qty:+mwBuyMap[j]||0 }; });
   if(!list.length){
@@ -13097,6 +13288,18 @@ function mwRegSku(r,ymd){
 /* 仕入れ済み（MW の CSV から消えた）行かどうか（6.143）。
    mw_buy の控えがあるので、CSV から消えても登録できる。 */
 function mwBuyGone(r){ return Number((r||{}).gone||0)===1||!!(r||{}).gone_at; }
+/* 6.161（【Q】の2）：「注文した」の印（日付つき）。 */
+function mwBuyOrdered(r){ return !!String(((r||{}).ordered_at)||''); }
+/* pj が通した記録（mw_reg_log）か、mw… の SKU が在庫にあるか。
+   mw_buy.reg_state を立て忘れていた行も「登録済み」と分かる。 */
+function mwBuyRegOk(r){ return mwRegDone(r)||!!Number((r||{}).reg_ok||0); }
+/* 「仕入れ済み」の区分に入れるか（6.161）。
+   v243 までは「MW の CSV から消えた」だけが仕入れ済みだったので、
+   注文したのに CSV にまだ在庫が残っている行が「これから仕入れる」に居座り、
+   取り込みの知らせでも「注文前に売り切れました」と誤って出ていた。 */
+function mwBuyBought(r){
+  return mwBuyGone(r)||mwBuyOrdered(r)||mwBuyRegOk(r);
+}
 /* 登録の状態（6.143）。'' 未登録／'pj' pj で登録／'other' pj 以外。 */
 function mwRegState(r){ return String((r||{}).reg_state||''); }
 function mwRegDone(r){ return !!mwRegState(r); }
@@ -18402,6 +18605,8 @@ function findPre(which){
   if(which==='amz')return 'mwAmzFind';
   /* 6.158：無在庫（eBay）の MW の候補一覧。①〜④のどこにあっても探せる。 */
   if(which==='mwl')return 'mwlFind';
+  /* 6.161：取り込みの各回の中身（新しく欠品／新しく出てきた／戻った）。 */
+  if(which==='nt')return 'mwNtFind';
   /* Amazon刈取の検索欄は2つ（タブの上と一覧のすぐ上・6.126）。
      どちらに入れても同じ結果になるよう、値をうつし合う（findTwin）。 */
   if(which==='amz2')return 'mwAmz2Find';
@@ -18468,6 +18673,13 @@ function findHayMw(r){
            (r||{}).kishu, (r||{}).cond ].filter(Boolean).join(' ');
 }
 function findMatchMw(r){ return findMatchRow('mwl',r,findHayMw(r)); }
+/* 6.161：取り込みの各回の一覧。商品名・JAN・社・機種・状態でさがす。 */
+function findHayNt(r){
+  return [ (r||{}).name, (r||{}).mw_name, (r||{}).amz_name, (r||{}).jan,
+           (r||{}).sha, (r||{}).kishu, (r||{}).cond,
+           (r||{}).asin ].filter(Boolean).join(' ');
+}
+function findMatchNt(r){ return findMatchRow('nt',r,findHayNt(r)); }
 /* 件数と「×」の出し入れ。 */
 /* ヒットが1件なら、その行の折りたたみを開いた状態で出す。
    自動で開いた分は覚えない（boxQuietOpen と同じ考え方）。 */
@@ -18595,6 +18807,8 @@ function findRun(which){
   else if(which==='amz'||which==='amz2')mwViewRender();
   /* 6.158：MW の候補一覧。取り込んでいないときは何もしない。 */
   else if(which==='mwl'){ try{ if(mwRows.length)mwListRender(); }catch(e){} }
+  /* 6.161：取り込みの各回の一覧。開いていないときは何もしない。 */
+  else if(which==='nt'){ try{ if(mwNtAt)mwNtRender(); }catch(e){} }
   else syncRender();
 }
 function findClear(which){
@@ -20861,7 +21075,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v243';   // sw.js の const V と必ず同じ値にする
+var APP_V='v244';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
