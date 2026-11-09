@@ -31,11 +31,12 @@ function fake(opt){
   const botPerms=o.botPerms===undefined?EIGHT:o.botPerms;
   const g={ roles:[{ id:GUILD, name:'@everyone', permissions:'0', position:0 }],
             channels:[], msgs:{}, pins:{}, calls:[], next:1000,
-            botRole:'' , orderFail:!!o.orderFail, chFail:o.chFail||'' };
+            botRole:'' , botRoles:[], orderFail:!!o.orderFail,
+            chFail:o.chFail||'', postFail:o.postFail||'' };
   /* ボットの連携ロール（いちばん上） */
   const br={ id:String(g.next++), name:'刈り取り配信', managed:true,
              permissions:String(botPerms), position:1 };
-  g.roles.push(br); g.botRole=br.id;
+  g.roles.push(br); g.botRole=br.id; g.botRoles=[br.id];
   (o.roles||[]).forEach((r)=>{
     g.roles.forEach((x)=>{ if(x.id!==GUILD) x.position=Number(x.position||0)+1; });
     g.roles.push(Object.assign({ id:String(g.next++), permissions:'0', color:0,
@@ -96,12 +97,18 @@ function fake(opt){
     pins:async(id)=>{ g.calls.push('GET pins'); return (g.pins[id]||[]).slice(); },
     pinAdd:async(ch,id)=>{ g.calls.push('PUT pin '+ch);
       (g.pins[ch]=g.pins[ch]||[]).push({ id:String(id) }); return null; },
+    memberRoleAdd:async(_g,uid,rid)=>{ g.calls.push('PUT member role '+rid);
+      const r=g.roles.filter((x)=>x.id===String(rid))[0];
+      if(!r) throw new Error('no role');
+      if(Number(r.position||0)>=botTop())
+        deny('PUT','/guilds/'+GUILD+'/members/'+uid+'/roles/'+rid);
+      g.botRoles.push(String(rid)); return null; },
     me:async()=>{ g.calls.push('GET me'); return { id:BOT }; },
     member:async(_g,uid)=>{ g.calls.push('GET member');
       if(String(uid)!==BOT) throw new Error('no member');
       if(o.noMember) throw new Error(errJa('GET','/guilds/x/members/y',403,
         '{"message":"Missing Access","code":50001}'));
-      return { user:{ id:BOT }, roles:[g.botRole] }; },
+      return { user:{ id:BOT }, roles:g.botRoles.slice() }; },
   };
   return { g, api };
 }

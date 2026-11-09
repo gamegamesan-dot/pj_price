@@ -7,7 +7,9 @@
     "・send … 書き込めるロール。view に入っていて send に入っていないロールは",
     "　　　　　書き込みとリアクションを止める（読むだけ）",
     "・管理者（admin）とスタッフ（staff）は、どのチャンネルも必ず見られる",
-    "・post … 最初に投稿する案内文（pin:true ならピン留めする）"
+    "・post … 最初に投稿する案内文（pin:true ならピン留めする）",
+    "・配信ボット（bot）は、ボット自身にも自動で付ける（8.8）。",
+    "　案内のチャンネルも bot が書ける（案内文の投稿とピン留めのため）"
   ],
   "server": {
     "name": "pj 会員向け（商品リスト配信）",
@@ -35,11 +37,12 @@
                       "MANAGE_MESSAGES", "EMBED_LINKS", "ATTACH_FILES"] }
   ],
   "memberRoles": ["light", "standard", "premium", "monitor"],
+  "selfRole": "bot",
   "categories": [
     {
       "key": "info", "name": "案内",
       "channels": [
-        { "key": "start", "name": "はじめに", "view": ["@everyone"], "send": ["admin"],
+        { "key": "start", "name": "はじめに", "view": ["@everyone"], "send": ["admin", "bot"],
           "topic": "まずここを読んでください。",
           "pin": true,
           "post": [
@@ -56,19 +59,19 @@
             "・仕入れ先で品切れになった商品は、お支払いいただいた分を返金します。",
             "・分からないことは #質問 に書いてください。"
           ] },
-        { "key": "rules", "name": "ルール・規約", "view": ["@everyone"], "send": ["admin"],
+        { "key": "rules", "name": "ルール・規約", "view": ["@everyone"], "send": ["admin", "bot"],
           "topic": "利用規約・特定商取引法に基づく表記・返金と欠品の扱い・発送の締め日。",
           "pin": true,
           "post": [
             "（ここに利用規約・特定商取引法に基づく表記・返金と欠品の扱い・発送の締め日を載せます。準備中）"
           ] },
-        { "key": "news", "name": "お知らせ", "view": ["@everyone"], "send": ["admin"],
+        { "key": "news", "name": "お知らせ", "view": ["@everyone"], "send": ["admin", "bot"],
           "topic": "運営からのお知らせ。",
           "pin": true,
           "post": [
             "サーバーを開設しました。モニター期間中は、使いにくい点を #質問 で教えていただけると助かります。"
           ] },
-        { "key": "faq", "name": "よくある質問", "view": ["@everyone"], "send": ["admin"],
+        { "key": "faq", "name": "よくある質問", "view": ["@everyone"], "send": ["admin", "bot"],
           "topic": "よくある質問と答え。" }
       ]
     },

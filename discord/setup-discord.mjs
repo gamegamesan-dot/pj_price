@@ -159,6 +159,8 @@ export function colorNum(s) {
 const READ = ["VIEW_CHANNEL", "READ_MESSAGE_HISTORY"];
 const WRITE = ["SEND_MESSAGES", "ADD_REACTIONS"];
 const THREAD = ["CREATE_PUBLIC_THREADS", "SEND_MESSAGES_IN_THREADS"];
+/* 配信ボットが書けるチャンネルでは、ピン留めと貼り直しもできるように（8.8）。 */
+const BOTX = ["MANAGE_MESSAGES"];
 export function expandKeys(keys, cfg) {
   const out = [];
   for (const k of keys || []) {
@@ -204,12 +206,43 @@ export function overwritesFor(ch, cfg, ids, botBits, drop) {
     const canWrite = send.indexOf(key) >= 0 || key === "admin"
       || (key === "staff" && send.indexOf("staff") >= 0);
     const allow = READ.concat(canWrite ? WRITE : []);
+    if (canWrite && key === (cfg.selfRole || "bot"))
+      allow.push.apply(allow, BOTX);
     if (canWrite && ch.threads) allow.push.apply(allow, THREAD);
     const deny = canWrite ? [] : WRITE.concat(THREAD);
     put(id, allow, deny);
   }
   return rows;
 }
+/* ---- そのチャンネルでボットに何ができるか（8.8）----
+   Discord の計算と同じ順で出す：
+     サーバー全体の権限 → @everyone の overwrite → 自分のロールの overwrite
+   rows … permission_overwrites、roleIds … ボットのロール（これから付けるぶんも）
+   base … ボットのサーバー全体の権限、guild … @everyone の id（サーバーID） */
+export function chanPerms(rows, roleIds, base, guild) {
+  let v = BigInt(base || 0);
+  if ((v & PERM.ADMINISTRATOR) === PERM.ADMINISTRATOR) return v;
+  const mine = (roleIds || []).map(String);
+  const ev = (rows || []).filter((x) => String(x.id) === String(guild))[0];
+  if (ev) { v &= ~BigInt(ev.deny || "0"); v |= BigInt(ev.allow || "0"); }
+  let allow = 0n, deny = 0n;
+  for (const x of rows || []) {
+    if (String(x.id) === String(guild)) continue;
+    if (mine.indexOf(String(x.id)) < 0) continue;
+    allow |= BigInt(x.allow || "0"); deny |= BigInt(x.deny || "0");
+  }
+  v &= ~deny; v |= allow;
+  return v;
+}
+/* 書けるか（見られて・送れる）。need に権限名を足すと、それも要る。 */
+export function canWriteCh(rows, roleIds, base, guild, need) {
+  const v = chanPerms(rows, roleIds, base, guild);
+  if ((v & PERM.ADMINISTRATOR) === PERM.ADMINISTRATOR) return true;
+  const want = ["VIEW_CHANNEL", "SEND_MESSAGES"].concat(need || []);
+  for (const n of want) if ((v & PERM[n]) !== PERM[n]) return false;
+  return true;
+}
+
 /* 2つの overwrites が同じか（並び順は見ない）。 */
 export function sameOverwrites(a, b) {
   const key = (l) => (l || []).map((x) => [String(x.id), String(x.allow || "0"),
@@ -268,6 +301,9 @@ export function makeApi(token, opt) {
     me: () => call("GET", "/users/@me"),
     /* ボット自身のロール（特権インテントは要らない）。 */
     member: (g, uid) => call("GET", "/guilds/" + g + "/members/" + uid),
+    /* ボット自身（や人）にロールを付ける（8.8）。 */
+    memberRoleAdd: (g, uid, rid) =>
+      call("PUT", "/guilds/" + g + "/members/" + uid + "/roles/" + rid),
   };
 }
 
@@ -401,7 +437,7 @@ export async function setup(opt) {
           plan.manual.push({ kind: "作る", name: w.name,
             how: "サーバー設定→ロールで「" + w.name + "」を手で作ってください。" });
         }
-      } else ids[w.key] = "(新)";
+      } else ids[w.key] = "(新:" + w.key + ")";
       continue;
     }
     ids[w.key] = String(old.id);
@@ -541,6 +577,41 @@ export async function setup(opt) {
     }
   }
 
+  /* ---- ボット自身に「配信ボット」のロールを付ける（8.8）----
+     案内やリストのチャンネルは「配信ボット」が書ける設定なので、
+     ボット自身にこのロールが付いていないと投稿できない。
+     連携のロール（刈り取り配信）より下なので、ボットから付けられる。 */
+  const botRoles = (bot.roleIds || []).map(String);
+  const selfKey = cfg.selfRole || "bot";
+  const selfId = String(ids[selfKey] || "");
+  const selfName = ((cfg.roles || []).filter((x) => x.key === selfKey)[0]
+    || {}).name || selfKey;
+  if (selfId && botRoles.indexOf(selfId) < 0) {
+    if (bot.unknown || !bot.id) {
+      plan.manual.push({ kind: "ロール付け", name: selfName,
+        how: "ボット自身に「" + selfName + "」のロールを手で付けてください"
+          + "（サーバー設定→メンバー、またはメンバー一覧で右クリック→ロール）。"
+          + "これが無いと案内やリストのチャンネルに投稿できません。" });
+    } else {
+      plan.roles.push({ act: "grant", name: selfName,
+                        why: "ボット自身に付ける" });
+      if (!dry) {
+        try {
+          await api.memberRoleAdd(guild, bot.id, selfId);
+          botRoles.push(selfId);
+        } catch (e) {
+          const msg = String((e && e.message) || e);
+          plan.fails.push({ what: "ボットに「" + selfName + "」を付ける", msg });
+          log("ボットにロールを付けられませんでした：" + msg);
+          plan.manual.push({ kind: "ロール付け", name: selfName,
+            how: "ボット自身に「" + selfName + "」のロールを手で付けてください"
+              + "（メンバー一覧でボットを選び、ロールを足す）。"
+              + "これが無いと案内やリストのチャンネルに投稿できません。" });
+        }
+      } else botRoles.push(selfId);
+    }
+  }
+
   /* ---- カテゴリとチャンネル ---- */
   const chs = (await api.channels(guild)) || [];
   const catByName = {}, chByName = {};
@@ -550,6 +621,7 @@ export async function setup(opt) {
   }
   const used = {};
   const ovDrop = [];   /* チャンネルの権限に書けなかった権限（8.7） */
+  const noWrite = [], noPin = [];   /* ボットが書けない・ピン留めできない（8.8） */
   let pos = 0;
   for (const cat of cfg.categories || []) {
     used[cat.name] = 1;
@@ -582,6 +654,16 @@ export async function setup(opt) {
                      topic: ch.topic || "",
                      permission_overwrites:
                        overwritesFor(ch, cfg, ids, botBits, ovDrop) };
+      /* ボットが書くはずのチャンネルで、本当に書けるか先に確かめる（8.8）。
+         --dry-run でも同じように調べるので、実行する前に分かる。 */
+      const wantsBot = expandKeys(ch.send, cfg).indexOf(selfKey) >= 0
+        || !!ch.post;
+      if (wantsBot && !bot.unknown) {
+        const rows = want.permission_overwrites;
+        if (!canWriteCh(rows, botRoles, bot.perms, guild)) noWrite.push(ch.name);
+        else if (ch.pin && !canWriteCh(rows, botRoles, bot.perms, guild,
+                                       ["MANAGE_MESSAGES"])) noPin.push(ch.name);
+      }
       const cur = chByName[ch.name];
       if (!cur) {
         plan.channels.push({ act: "add", name: ch.name, kind: "チャンネル",
@@ -639,6 +721,25 @@ export async function setup(opt) {
       }
     }
   }
+  /* ボットが書けないチャンネル（8.8）。 */
+  if (noWrite.length)
+    plan.manual.push({ kind: "書けない", name: noWrite.join("・"),
+      items: noWrite.slice(),
+      how: "このチャンネルはボット（" + (bot.topName || "ボットのロール")
+        + "・" + selfName + "）が書き込めません。"
+        + "原因：チャンネルの権限で @everyone の「メッセージを送信」が止められ、"
+        + "ボットのロールに許可が無いためです（投稿すると 403 / 50013）。"
+        + "直し方：チャンネルの権限で「" + selfName
+        + "」に「チャンネルを見る」「メッセージを送信」を許可してください"
+        + "（discord/server.config.json の send に \"bot\" を足して"
+        + "もう一度実行すると自動で直ります）。" });
+  if (noPin.length)
+    plan.manual.push({ kind: "ピン留め", name: noPin.join("・"),
+      items: noPin.slice(),
+      how: "このチャンネルはボットがピン留めできません"
+        + "（「メッセージの管理」が要ります）。チャンネルの権限で「"
+        + selfName + "」に「メッセージの管理」を許可してください。" });
+
   /* チャンネルの権限に書けなかった権限（ボットが持っていないもの）。 */
   if (ovDrop.length)
     plan.manual.push({ kind: "権限", name: "ボット自身", items: ovDrop.slice(),
@@ -660,6 +761,14 @@ export async function setup(opt) {
       const msg = String((e && e.message) || e);
       plan.fails.push({ what: "案内文を投稿（" + p.name + "）", msg });
       log("案内文を投稿できませんでした（" + p.name + "）：" + msg);
+      /* 「手でやってほしいこと」にも必ず出す（8.8）。 */
+      plan.manual.push({ kind: "投稿", name: p.name,
+        how: "#" + p.name + " に案内文を投稿できませんでした"
+          + "（ボットが書けない設定です）。チャンネルの権限で「" + selfName
+          + "」に「チャンネルを見る」「メッセージを送信」"
+          + (p.pin ? "「メッセージの管理」" : "")
+          + "を許可して、もう一度実行してください。"
+          + "急ぐときは server.config.json の post の文を手で貼っても構いません。" });
       continue;
     }
     if (p.pin && made && made.id) {
@@ -698,7 +807,8 @@ export function planText(plan, dry) {
     t.push(title + "：" + (list.length ? list.length + "件" : "なし"));
     for (const x of list) t.push("  " + f(x));
   };
-  show("ロール", plan.roles, (x) => ({ add: "作る", fix: "直す", order: "並べる" })[x.act]
+  show("ロール", plan.roles, (x) => ({ add: "作る", fix: "直す",
+    order: "並べる", grant: "付ける" })[x.act]
     + " " + x.name + (x.why ? "（" + x.why + "）" : ""));
   show("チャンネル", plan.channels, (x) => (x.act === "add" ? "作る" : "直す")
     + " " + x.kind + " " + x.name + (x.cat ? "（" + x.cat + "）" : "")
