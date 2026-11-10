@@ -816,6 +816,21 @@ CREATE TABLE IF NOT EXISTS mw_buy (
 );
 CREATE INDEX IF NOT EXISTS idx_mw_buy_at ON mw_buy(at);
 
+/* 7.130（【U の改】の1）会員に出す商品（Shopify の商品CSVの元）。
+   on_sale＝1 の行だけを CSV に出す。grades が空なら全プランに見せる。 */
+CREATE TABLE IF NOT EXISTS mw_sub (
+  jan        TEXT PRIMARY KEY,
+  on_sale    INTEGER NOT NULL DEFAULT 0,
+  max_qty    INTEGER,                      -- 販売数の上限
+  price      INTEGER,                      -- 販売価格（税込・円）
+  grades     TEXT,                         -- 見せるプラン（空＝ぜんぶ）
+  by_role    TEXT,
+  put_at     TEXT,                         -- 最後に CSV に出した日時
+  at         TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mw_sub_on_sale ON mw_sub(on_sale, at);
+
 /* ===== 国内FBA：出品の可否（7.76）===== */
 CREATE TABLE IF NOT EXISTS mw_restrict (
   asin       TEXT NOT NULL,

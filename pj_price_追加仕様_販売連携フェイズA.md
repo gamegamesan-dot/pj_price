@@ -8534,3 +8534,62 @@ migrate-0050 を流す前のデータベースでは `kind_ok:false` で内訳�
 取れる ASIN」「どれでもだめな ASIN」を用意し、2回の呼び出しで3つに分かれること・
 実額を控えること・取り直しの対象から外れること・30日で戻ること・
 内訳を返すこと・列が無くても落ちないことを確かめる。
+
+---
+
+## 7.130 会員に出す商品の印・販売数の上限・販売価格（v252・【U の改】の1）
+
+### なぜ
+
+会員向けの販売は **Shopify の商品CSV をカジが読み込む形**で始める
+（API での自動化は【U】であとから）。その元になる「どれをいくらで何点まで
+出すか」を pj で決められるようにする。
+
+### 控えるもの（migrate-0051）
+
+```sql
+CREATE TABLE IF NOT EXISTS mw_sub (
+  jan        TEXT PRIMARY KEY,
+  on_sale    INTEGER NOT NULL DEFAULT 0,  -- 1＝会員に出す
+  max_qty    INTEGER,                     -- 販売数の上限
+  price      INTEGER,                     -- 販売価格（税込・円）
+  grades     TEXT,                         -- 見せるプラン（空＝ぜんぶ）
+  by_role    TEXT,
+  put_at     TEXT,                         -- 最後に CSV に出した日時
+  at         TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mw_sub_on_sale ON mw_sub(on_sale, at);
+```
+
+### 口
+
+| 口 | 誰が | 何を |
+|---|---|---|
+| `POST /mw/sub` | **管理者だけ**（売値が入る） | 印・上限・価格・見せるプランを控える。`{jan,on,max_qty,price,grades}` か `{items:[…]}`（200件まで） |
+| `GET /mw/sub` | 作業者でもよい | 印の付いた行を CSV に要る中身つきで返す。`?all=1` で印の無い行も |
+| `POST /mw/sub/put` | 管理者だけ | 「Shopify 用 CSV に出した」印（SKU の日付に使う） |
+
+決まり
+
+- **印を付けるには上限と価格が要る**（どちらかが 0 のままなら付けない。
+  `error:"need_qty_price"` を返す）。CSV に出せない行を作らないため
+- 印を**外しても上限と価格は残す**（次に出すときそのまま使える）
+- 上限は 99点まで、価格は 999,999円まで（打ち間違いの歯止め）
+- `grades` は `light,standard,premium,monitor` のうち選んだもの。
+  **ぜんぶ選んだら空にそろえる**（＝全プランに見せる）
+- `GET /mw/sub` は**会員に見せない項目を返さない**
+  （卸値・社・MW在庫そのもの・備考・MW の商品番号）。
+  名前は **Amazon の名前**を優先（MW の名前の癖を避ける）
+- `/mw/amz` の行に `sub_on` / `sub_max` / `sub_price` / `sub_grades` /
+  `sub_put_at` が相乗りする（`mw_sub` が無い D1 では付かないだけ）
+
+### 作らなかったもの（次の回）
+
+- 売れたあとの取り込み（Shopify の注文CSV → 残り数・完売の更新・Discord への
+  知らせ）。カジの「確認」の最初の区切り（1件を読み込んで、会員タグで見え方を
+  確かめ、1点買って在庫が減るところまで）には要らないので、そこが通ってから
+
+### テスト
+
+`tests/mwsub.mjs`（39本）。

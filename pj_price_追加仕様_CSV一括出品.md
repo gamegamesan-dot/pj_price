@@ -8162,3 +8162,113 @@ FBA 不可 … 販売 ¥264 ＋ 税 ¥26 ＋ 発送 ¥441（425＋16）＝ ¥731
 - **「だめだった行を自動で切り分ける」**（既定オン）… 毎時の回のついでに40件ずつ
 - **「いますぐ切り分ける」**（管理者だけ）… 件数を決めてその場で回す。
   結果は「40件を切り分けました（FBA 不可 38件／値段 1件／その他 1件）　残り 733件」
+
+## 6.170 会員に出す印と Shopify 用 CSV（v252・【U の改】の1〜3）
+
+### 1. 刈取の行の欄
+
+「仕入れる」の下に **「会員に出す」のチェック・販売数の上限・販売価格（税込）**
+を足した。pj のおすすめ値が先に入っていて、直したいところだけ直せる。
+
+| | おすすめ値 |
+|---|---|
+| 販売価格（税込） | 卸値（税抜）×1.1×**掛け率**（⚙ `mwSubMarkup`・既定 1.3）を100円単位に切り上げ |
+| 販売数の上限 | MW の在庫数と 10点（プランの上限）の**小さいほう** |
+
+横に **「会員の粗利の目安」**（Amazon の実売 − 手数料 − 販売価格）を出す。
+**手数料が Amazon から取れている行だけ**出す（仮の手数料では出さない。
+会員に見せる数字の元になるので当てずっぽうの額は出さない）。
+
+上のまとめに「会員に出す n件（のべ n点・販売価格の合計 ¥…）」を出す。
+`mw_sub` が無い（migrate-0051 の前）ときは**欄を出さない**（押しても
+保存できないので）。
+
+### 2. Shopify 用 CSV
+
+**「Shopify 用 CSV を書き出す」**で `shopify-products-YYYYMMDD.csv` を作る。
+列の名前と作り方は **`shared/shopcsv.js` の1か所だけ**に置いた
+（Shopify 公式の 2026-11-10 時点の**今の名前**）。
+
+| ご指定（旧名） | 今の列名 |
+|---|---|
+| Handle | **URL handle** |
+| Body (HTML) | **Description** |
+| Variant SKU | **SKU** |
+| Variant Price | **Price** |
+| Variant Taxable | **Charge tax** |
+| Variant Requires Shipping | **Requires shipping** |
+| Variant Grams | **Weight value (grams)**（＋ `Weight unit for display`＝g） |
+| Published / Status | **Published on online store**（true）と **Status**（active） |
+| 在庫 policy deny | **Continue selling when out of stock**＝deny |
+| 在庫数 | **Inventory quantity**（＋ `Inventory tracker`＝shopify） |
+
+中身
+
+- `URL handle` … **`sub-<JAN>`**（同じ商品を出し直すときは同じ行を上書き）
+- `SKU` … **`SUB-<JAN>-<YYYYMMDD>`**（MW の商品番号は使わない）
+- `Title` … MW の名前の癖（`【新品】`・`★`・末尾の `※…`・`（新品）`）を外す
+- `Description` … JAN・機種・**Amazon の商品ページへのリンク**・
+  「販売数に上限があります。仕入れ先の都合で用意できない場合は、全額返金します。」
+- `Barcodes` … JAN（旧 `Barcode` 単数列とは**併用できない**ので出さない）
+- `Tags` … `member-list` ＋ `grade-*`（選んだプランだけ。無指定なら全プラン）
+  ＋ **`ship-small` / `ship-box`**
+- `Option1 name`＝`Title` / `Option1 value`＝`Default Title`
+  （**入れないと既存のバリアントが消える**ので必ず出す。⚙で変えられる）
+- `Collection` … ⚙が空なら**列ごと出さない**（空で上書きしないため）
+- **画像の列は出さない**（MW・Amazon の画像は使わない）。
+  卸値・社・MW在庫・備考・MW の商品番号も出さない
+
+> 読み込みのときは **「Overwrite products with matching handles」にチェック**。
+> CSV に入れた列が空欄だと**空で上書きされる**ので、触りたくない項目は
+> 列ごと出さない作りにしてある。
+
+**在庫CSV**（ロケーションが2つ以上の店）は別のボタン。
+`Handle` / `Location` / `Option1 Value` が必須。
+⚙「初めて置く」を入れると `On hand (current)` に `Not stocked` を入れる
+（2回目は空にして、Shopify のうっかり上書き防止の検査を効かせる）。
+
+### 3. 送料の区分（ship-small / ship-box）
+
+1点で送ったときにどの送り方になるかをタグで表す。
+**何本まとめるかで変わるぶんは Shopify 側の「重さの段」で決める**（ここでは決めない）。
+
+| | 条件 |
+|---|---|
+| `ship-small` | クリックポストに入る（34×25×**厚さ3cm**以内・1kg以内） |
+| `ship-box` | 入らない（レターパックプラス・宅配便） |
+
+採寸（`size_long`・`size_wid`・`size_hei`・`size_g`）があればそれで見る。
+無ければ Amazon のサイズ区分（`size_tier`）、それも無ければ重さで見る。
+
+> ゲームソフト通常版は 1本 約1.5cm・約110g なので `ship-small`。
+> **1〜2本はクリックポスト、3〜6本はレターパックプラス**（カジの設計メモ）は、
+> Shopify の重さの段（0〜250g／251〜700g）で出す。README に手順を書いた。
+
+### 4. 英語版（【U の改】の3）
+
+**順番が逆になる。** Translate & Adapt アプリに CSV の出し入れは無く、
+翻訳CSVは Shopify の **設定→言語** の Export / Import。しかも行を特定する
+`Identification` 列は **Shopify の内部ID**で、JAN も Handle も入っていない。
+→ **pj が先に英語CSVを作ることはできない。**
+
+そこでこうした。
+
+1. 日本語の商品CSVを読み込む
+2. Shopify で英語を足して**翻訳CSVをエクスポート**
+3. そのファイルを画面で選び、**「英題を入れる」**を押す
+   - 印の付いた行の英題を既存の **`/titles`**（英語タイトル生成）で作る
+   - 翻訳CSVの **`Default content`（日本語の商品名）で突き合わせて**
+     `Translated content` に入れる（`title` の行だけ。`body_html` は触らない）
+   - MW の癖を外した名前でも突き合わせる
+   - 入れられなかった名前は画面に出す
+4. `shopify-translations-filled.csv` を Shopify の **設定→言語 → インポート**
+
+### 5. ⚙
+
+`mwSubType`（Type・既定「ゲームソフト」）／`mwSubVendor`（空）／
+`mwSubCollection`（空）／`mwSubMarkup`（1.3）／`mwSubLoc`（ロケーション名）／
+`mwSubInvFirst`（在庫CSV：初めて置く）。
+
+### 6. テスト
+
+`tests/shopcsv.mjs`（82本・CSV の作り方）と `tests/shopui.js`（55本・画面）。

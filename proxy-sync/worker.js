@@ -9310,6 +9310,143 @@ async function mwBuyRefresh(env, body) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 7.130（【U の改】の1）会員に出す商品 =====
+   仕入れタブ（刈取）の行に「会員に出す」の印・販売数の上限・販売価格を控え、
+   そこから Shopify の商品CSV を作る（CSV の組み立ては画面側の
+   shared/shopcsv.js が1か所で持つ。ここは控えるだけ）。
+
+   grades（見せるプラン）は 'light,standard,premium,monitor' の並び。
+   空＝全プランに見せる（Shopify の grade-* タグは画面側で作る）。 */
+const SUB_GRADES = { light: 1, standard: 1, premium: 1, monitor: 1 };
+const SUB_MAX_QTY = 99;          // 1商品の販売数の上限の上限
+const SUB_PRICE_MAX = 999999;    // 販売価格の上限（打ち間違いの歯止め）
+/* mw_sub の表があるか（migrate-0051 を流す前でも落とさない）。 */
+async function mwSubOk(env) {
+  return await colOk(env, "mw_sub", "on_sale");
+}
+function mwSubGrades(v) {
+  const out = [];
+  for (const x of String(v || "").split(/[,\s]+/)) {
+    const k = x.trim().toLowerCase();
+    if (SUB_GRADES[k] && out.indexOf(k) < 0) out.push(k);
+  }
+  /* ぜんぶ選ばれているときは空（＝全プラン）にそろえる。 */
+  return out.length === Object.keys(SUB_GRADES).length ? "" : out.join(",");
+}
+/* POST /mw/sub … 印・上限・価格を控える（管理者だけ。売値が入るため）。
+   { jan, on, max_qty, price, grades } か { items:[…] }。
+   on=0 で印を外す（行は残し、上限と価格は控えたまま）。 */
+async function mwSubPut(env, body, role) {
+  const run = newRun("mw-sub");
+  const res = { ok: false, n: 0, rows: [], table_ok: true };
+  try {
+    if (!(await mwSubOk(env))) {
+      res.table_ok = false;
+      res.error = "no_table";
+      run.notes.push("会員に出す印：mw_sub がありません（migrate-0051）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const o = body || {};
+    const list = Array.isArray(o.items) ? o.items : [o];
+    const at = nowIso();
+    const stmts = [];
+    for (const x of list.slice(0, 200)) {
+      const jan = String((x && x.jan) || "").replace(/\D/g, "");
+      if (!janOk(jan)) continue;
+      const on = (x.on === 1 || x.on === true || x.on === "1") ? 1 : 0;
+      const qty = Math.max(0, Math.min(SUB_MAX_QTY,
+        Math.round(Number(x.max_qty) || 0)));
+      const px = Math.max(0, Math.min(SUB_PRICE_MAX,
+        Math.round(Number(x.price) || 0)));
+      const gr = mwSubGrades(x.grades);
+      /* 印を付けるときは上限と価格が要る（0 のままでは CSV に出せない）。 */
+      if (on && (!qty || !px)) {
+        res.rows.push({ jan: jan, error: "need_qty_price" });
+        continue;
+      }
+      stmts.push(env.DB.prepare(
+        `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?7)
+         ON CONFLICT(jan) DO UPDATE SET
+           on_sale=excluded.on_sale,
+           max_qty=COALESCE(NULLIF(excluded.max_qty,0), mw_sub.max_qty),
+           price=COALESCE(NULLIF(excluded.price,0), mw_sub.price),
+           grades=excluded.grades,
+           by_role=excluded.by_role, at=excluded.at`)
+        .bind(jan, on, qty, px, gr, String(role || "admin"), at));
+      res.n++;
+      res.rows.push({ jan: jan, on: on, max_qty: qty, price: px, grades: gr });
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("会員に出す印：" + res.n + "件");
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-sub: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /mw/sub … 印が付いている行を、CSV に要る中身つきで返す。
+   会員に見せない項目（卸値・社・MW在庫・備考・MW の商品番号）は**返さない**。
+   ?all=1 で印の無い行（上限と価格だけ控えた行）も返す。 */
+async function mwSubList(env, url) {
+  if (!(await mwSubOk(env)))
+    return { ok: true, table_ok: false, n: 0, rows: [],
+             fix: "migrate-0051-mw-sub.sql" };
+  const p = url.searchParams;
+  const all = p.get("all") === "1";
+  const limit = Math.max(1, Math.min(2000, mwNum(p.get("limit")) || 1000));
+  const q = await env.DB.prepare(
+    `SELECT b.jan AS jan, b.on_sale AS on_sale, b.max_qty AS max_qty,
+            b.price AS price, COALESCE(b.grades,'') AS grades,
+            b.at AS at, b.put_at AS put_at,
+            s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+            a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
+            a.fee_total AS fee_total, a.size_tier AS size_tier,
+            a.size_g AS size_g, a.size_long AS size_long
+       FROM mw_sub b
+            LEFT JOIN mw_stock s ON s.jan = b.jan
+            LEFT JOIN mw_amz a ON a.jan = b.jan
+      WHERE ${all ? "1=1" : "COALESCE(b.on_sale,0)=1"}
+      ORDER BY b.at DESC, b.jan ASC LIMIT ${limit}`).all();
+  const rows = ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""),
+    on: Number(r.on_sale) || 0,
+    max_qty: Number(r.max_qty) || 0,
+    price: Number(r.price) || 0,
+    grades: String(r.grades || ""),
+    at: String(r.at || ""), at_jst: jstText(r.at),
+    put_at: String(r.put_at || ""), put_at_jst: jstText(r.put_at),
+    /* 会員に見せる名前は Amazon の名前を優先（MW の名前の癖を避ける）。 */
+    name: String(r.amz_name || r.mw_name || ""),
+    kishu: String(r.kishu || ""),
+    asin: String(r.asin || ""),
+    amz_price: Number(r.amz_price) || 0,
+    fee_total: Number(r.fee_total) || 0,
+    /* 在庫は「いま何点まで出せるか」の目安として返す（MW在庫そのもの）。
+       会員に見せるのは max_qty のほうで、これは画面の注意書き用。 */
+    stock: Number(r.stock) || 0,
+    size_tier: String(r.size_tier || ""),
+    size_g: Number(r.size_g) || 0,
+    size_long: Number(r.size_long) || 0,
+  }));
+  return { ok: true, table_ok: true, n: rows.length, rows: rows, limit: limit };
+}
+/* POST /mw/sub/put … 「Shopify 用 CSV に出した」印（SKU の日付に使う）。 */
+async function mwSubPutAt(env, body) {
+  if (!(await mwSubOk(env))) return { ok: false, table_ok: false, n: 0 };
+  const o = body || {};
+  const jans = (Array.isArray(o.jans) ? o.jans : [])
+    .map((x) => String(x || "").replace(/\D/g, "")).filter(janOk).slice(0, 2000);
+  if (!jans.length) return { ok: true, n: 0 };
+  const run = newRun("mw-sub-put");
+  const at = nowIso();
+  const stmts = jans.map((j) => env.DB.prepare(
+    `UPDATE mw_sub SET put_at=?2 WHERE jan=?1`).bind(j, at));
+  await runBatch(env, run, stmts);
+  run.notes.push("Shopify に出した印：" + jans.length + "件");
+  return Object.assign(await saveRun(env, run), { ok: true, n: jans.length, at: at });
+}
 /* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。
    7.105：**控え（mw_buy 側）を優先**して返す。
    ・卸値・商品名・社・機種・新中は、印を付けた時点の値（仕入れ時の値）
@@ -11177,6 +11314,16 @@ async function mwAmzList(env, url) {
   const kindCols = kindOk
     ? `\n            a.fee_kind AS fee_kind, a.fee_kind_at AS fee_kind_at,
             COALESCE(a.fee_mfn,0) AS fee_mfn,` : "";
+  /* 7.130（【U の改】の1）会員に出す印・上限・販売価格（migrate-0051）。
+     表が無い D1 でも落とさないよう、あるときだけ足す。 */
+  const subOk = await mwSubOk(env);
+  /* mvq.cols と同じ決まり：**先頭にカンマ**を付け、末尾には付けない
+     （前の列に続けて差し込むので、両方に付けると near "," になる）。 */
+  const subCols = subOk
+    ? `,\n            COALESCE(u.on_sale,0) AS sub_on, u.max_qty AS sub_max,
+            u.price AS sub_price, COALESCE(u.grades,'') AS sub_grades,
+            u.put_at AS sub_put_at` : "";
+  const subJoin = subOk ? "\n            LEFT JOIN mw_sub u ON u.jan = s.jan" : "";
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
             s.list_price AS list_price, s.cond AS cond, s.wholesale AS wholesale,
@@ -11208,9 +11355,9 @@ async function mwAmzList(env, url) {
             r.checked_at AS rst_at, r.err AS rst_err,
             /* JAN重複（7.84）。候補が2件以上で、まだ選んでいない行に印を付ける。 */
             COALESCE(m.cand_n,0) AS cand_n, m.cands AS cands,
-            m.picked_at AS jan_picked_at${mvq.cols}
+            m.picked_at AS jan_picked_at${subCols}${mvq.cols}
        FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
-            LEFT JOIN mw_buy b ON b.jan = s.jan
+            LEFT JOIN mw_buy b ON b.jan = s.jan${subJoin}
             LEFT JOIN jan_map m ON m.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
             /* 写真（6.133）。使える枚数・メインの長辺・見本のURL。 */
@@ -13213,7 +13360,8 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "order_queue", "orders",
+  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub",
+  "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
   "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
 const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
@@ -13238,6 +13386,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["mw_sub", "migrate-0051-mw-sub.sql"],
+  ["on_sale", "migrate-0051-mw-sub.sql"],
   ["fee_kind", "migrate-0050-fee-kind.sql"],
   ["fee_mfn", "migrate-0050-fee-kind.sql"],
   ["mw_move", "migrate-0049-mw-move.sql"],
@@ -14013,6 +14163,22 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/buy")
         return json(await mwBuyList(env, url), 200, origin);
+      /* 7.130（【U の改】の1）会員に出す印・販売数の上限・販売価格。
+         売値が入るので保存は管理者だけ（読むのは作業者でもよい）。 */
+      if (request.method === "POST" && url.pathname === "/mw/sub") {
+        if (role !== "admin")
+          return forbidStaff("会員に出す印は管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await mwSubPut(env, b, role), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/mw/sub")
+        return json(await mwSubList(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/mw/sub/put") {
+        if (role !== "admin")
+          return forbidStaff("会員に出す印は管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await mwSubPutAt(env, b), 200, origin);
+      }
       /* 仕入れ済みの1行を取り直す（7.105）。Amazon に問い合わせるので管理者だけ。 */
       if (request.method === "POST" && url.pathname === "/mw/buy/refresh") {
         if (role !== "admin")
@@ -14332,6 +14498,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.129（【V の続き】の4）だめの切り分けを自動で。 */
   mwScanFeeWhy, mwFeeAsk, mwFeeKindOk, MW_WHY_MAX, MW_WHY_TTL_D,
   MW_WHY_PRICE,
+  /* 7.130（【U の改】の1）会員に出す商品。 */
+  mwSubPut, mwSubList, mwSubPutAt, mwSubOk, mwSubGrades,
+  SUB_MAX_QTY, SUB_PRICE_MAX, SUB_GRADES,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
   mwMoveSweep,
