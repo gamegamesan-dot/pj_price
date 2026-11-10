@@ -226,6 +226,11 @@ let a2=await env.DB.prepare(
 ok(a2.fee_total===2073&&a2.fee_base===9638,'★★控えが入る');
 
 console.log('\n=== 取れている行は何度も聞かない ===');
+/* 7.129：⑤の切り分けが済んだ行も④の対象から外れるので、
+   ここでは「まだ切り分けていない」状態に戻してから数える。 */
+await env.DB.prepare(
+  `UPDATE mw_amz SET fee_kind=NULL, fee_kind_at=NULL WHERE jan=?1`)
+  .bind(JAN2).run();
 calls=[];
 r=await post('/mw/amz',{ kishu:'PS5', stock_min:5 });
 console.log('   ④'+JSON.stringify(r.body.fee)

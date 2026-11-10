@@ -1426,7 +1426,9 @@ const SET_ADMIN_ONLY = ["mwRankCaps", "mwDgTypes", "mwAutoMode", "mwAutoPerHour"
   /* 7.125：知らせに出す項目の出し分け（社内用／会員用）。【S】 */
   "mwNtAudience",
   /* 7.126：在庫の動きの目安と知らせの形（スレッド・全件出し）。【T】 */
-  "mwNtThread", "mwNtRest", "mwSaleNote", "mwWeek"];
+  "mwNtThread", "mwNtRest", "mwSaleNote", "mwWeek",
+  /* 7.129：手数料の「だめ」の自動の切り分け。【V の続き】 */
+  "mwFeeWhyAuto"];
 const SET_LOG_MAX = 50;              // ⚙に出す履歴の件数
 const SET_LOG_KEEP = 200;            // D1 に残す履歴の件数（古いものは捨てる）
 function settingsBlank(v) {
@@ -7048,7 +7050,8 @@ function mwFeePick(d) {
        読めないことがあった。 */
     const why = [e0.Type, e0.Code, e0.Message].filter(Boolean).join(": ")
       .slice(0, 400);
-    return { ok: false, err: "手数料が返りませんでした（" + st + "）"
+    return { ok: false, client: (st === "ClientError"),
+             err: "手数料が返りませんでした（" + st + "）"
       + (why ? ("：" + why) : "") };
   }
   const e = r.FeesEstimate || {};
@@ -7746,7 +7749,12 @@ const MW_SCAN_BUDGET_MS = 55000;   // Worker の60秒の手前で切る
    3回入るまま。手数料は1回2.5秒なので5秒で2回＝40件取れる）。
    **締め切りは「開始からの積み上げ」**にする。①が早く終われば、
    その余りはそのまま②③の締め切りに残る（次の段へ繰り越される）。 */
-const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 35000, fee: 5000 };
+/* 7.129：⑤「だめの切り分け」のぶんも持ち時間を分ける。価格の3回ぶん
+   （33秒）は削らないので、⑤には 2秒＋**前の段の余り**しか渡らない。
+   手で押した回では余りがあるときだけ進む。切り分けの本番は
+   毎時の自動の回（MW_AUTO_SHARE.why）。 */
+const MW_SCAN_SHARE = { asin: 10000, rst: 5000, price: 33000, fee: 5000,
+                        why: 2000 };
 /* getItemOffersBatch 1回ぶんの見込み（0.1回/秒＋余裕）。
    これだけ残っていないと③を始めない。 */
 const MW_PRICE_CALL_MS = 11000;
@@ -7994,7 +8002,20 @@ async function mwScanFee(env, run, o, dl) {
   const q0 = mwWhere(o);
   const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const old = new Date(Date.now() - MW_FEE_TTL_D * 86400000).toISOString();
-  const cond = `COALESCE(a.price,0)>0 AND COALESCE(a.asin,'')<>''
+  /* 7.129（【V の続き】の4）**切り分けが済んだ行は毎回取り直さない**。
+     FBA の見積もりが出せない行（fba_ng）を毎回聞きに行くと、
+     1回20件の枠を 773件ぶん食いつぶして、ふつうの行が進まない。
+     確かめ直しは mwScanFeeWhy が30日に1回やる。
+     ただし「値段が原因」の行は、値段が1割以上変わったら聞き直す。
+     migrate-0050 を流す前のデータベースでは列が無いので、その条件を外す。 */
+  const kindOk = await mwFeeKindOk(env);
+  const skip = kindOk
+    ? ` AND (COALESCE(a.fee_kind,'')=''
+             OR (a.fee_kind='price'
+                 AND abs(COALESCE(a.fee_base,0) - a.price)
+                     > a.price * ${MW_FEE_DIFF}))`
+    : "";
+  const cond = `COALESCE(a.price,0)>0 AND COALESCE(a.asin,'')<>''${skip}
       AND (a.fee_at IS NULL OR COALESCE(a.fee_err,'')<>''
            OR a.fee_at < ?${q0.bind.length + 1}
            OR COALESCE(a.fee_total,0)=0
@@ -8084,6 +8105,159 @@ async function mwScanFee(env, run, o, dl) {
   return st;
 }
 
+
+/* ===== 7.129（【V の続き】の4）手数料の「だめ」を切り分ける =====
+   カジの切り分け（B00C1W039S・3Dマウスパッド『春』・¥3,137）
+     ① いまと同じ（FBA で出す）        … だめ
+     ② 自分で発送（FBA にしない）      … 取れた ¥290
+     ③ FBA の指定を付けない            … 取れた ¥290
+     ④ 値段だけ変える（FBA・1,000円）  … だめ
+   → **値段でも市場でも ASIN の形でもなく、その ASIN で
+     「FBA（Amazon から出す）の見積もりが出せない」**のが原因だった。
+
+   773件を同じやり方で自動で分類する。1件ずつ4回聞くと遅いので、
+   **20件まとめて**聞く（getMyFeesEstimates は1回20件）。
+     ・まず「自分で発送」で20件 → 取れた行は **fba_ng**（FBA だけ出せない）
+       このとき販売手数料と消費税は**実額**なので控える（fee_mfn=1）
+     ・取れなかった行だけ「FBA・1,000円」で聞き直す
+       → 取れたら **price**（送っている値段が原因）
+       → だめなら **other**（ASIN か市場が原因）
+   分かった行は手数料の取り直しの対象から外し、**30日に1回**だけ確かめ直す。 */
+const MW_WHY_MAX = 40;             // 1回に分類する件数（20件×2回）
+const MW_WHY_TTL_D = 30;           // 分かった行を確かめ直す日数
+const MW_WHY_PRICE = 1000;         // 「値段だけ変える」ときの値段（円）
+/* 結果の日本語の文言は**画面**（index.html の MW_FEE_KIND_JA）で出す。
+   D1 の fee_err は SP-API が返した原文のまま残す（原因を追えるように）。 */
+async function mwFeeKindOk(env) {
+  return (await colOk(env, "mw_amz", "fee_kind"))
+    && (await colOk(env, "mw_amz", "fee_mfn"));
+}
+/* 送り方を変えて20件まとめて聞く。mode は 'mfn'（自分で発送）／
+   'fba1000'（FBA・1,000円）。返りは { asin: pick }。 */
+async function mwFeeAsk(env, run, part, mode) {
+  const body = part.map((x, i) => {
+    const req = { MarketplaceId: MP_FE,
+                  Identifier: String(x.asin) + "#" + (i + 1),
+                  PriceToEstimateFees: { ListingPrice: { CurrencyCode: "JPY",
+                    Amount: (mode === "fba1000") ? MW_WHY_PRICE
+                                                 : Math.round(x.price || 0) } } };
+    if (mode === "fba1000") req.IsAmazonFulfilled = true;
+    else req.IsAmazonFulfilled = false;
+    return { FeesEstimateRequest: req, IdType: "ASIN", IdValue: String(x.asin) };
+  });
+  const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
+    { method: "POST", body: JSON.stringify(body),
+      label: "getMyFeesEstimates" });
+  const out = {};
+  if (!r.ok) return { map: out, ok: false,
+                      err: ("HTTP " + r.status + " " + String(r.err || ""))
+                        .trim().slice(0, 400) };
+  for (const z of mwFeeList(r.data)) {
+    const fi = z.FeesEstimateIdentifier
+      || (z.FeesEstimateResult || {}).FeesEstimateIdentifier || {};
+    const id = String(fi.IdValue || "");
+    if (id) out[id] = mwFeePick(z);
+  }
+  return { map: out, ok: true, err: "" };
+}
+/* ---- ⑤ だめだった行の切り分け（自動の回のついでに少しずつ）---- */
+async function mwScanFeeWhy(env, run, o, dl) {
+  const st = { need: 0, done: 0, calls: 0, left: 0, stopped: "",
+               fba_ng: 0, price: 0, other: 0 };
+  if (!(await mwFeeKindOk(env))) {
+    st.stopped = "no_column";
+    run.notes.push("手数料の切り分け：mw_amz に fee_kind がありません"
+      + "（migrate-0050）");
+    return st;
+  }
+  const q0 = mwWhere(o);
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g,
+                         "s.$1");
+  const old = new Date(Date.now() - MW_WHY_TTL_D * 86400000).toISOString();
+  /* 対象：手数料がだめだった行のうち、まだ分類していない／30日たった行。 */
+  const cond = `COALESCE(a.price,0)>0 AND COALESCE(a.asin,'')<>''
+      AND COALESCE(a.fee_total,0)=0 AND COALESCE(a.fee_err,'')<>''
+      AND (COALESCE(a.fee_kind,'')='' OR COALESCE(a.fee_kind_at,'') < '${old}')`;
+  try {
+    const c = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+        WHERE ${w} AND ${cond}`).bind(...q0.bind).first();
+    st.need = Number((c && c.n) || 0);
+  } catch (e) {
+    run.notes.push("手数料の切り分け：件数が数えられません " + e.message);
+    return st;
+  }
+  if (!st.need) return st;
+  const take = Math.max(1, Math.min(MW_WHY_MAX, mwNum(o.why_max) || MW_WHY_MAX));
+  const q = await env.DB.prepare(
+    `SELECT a.asin AS asin, a.price AS price FROM mw_stock s
+       JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND ${cond}
+      GROUP BY a.asin
+      ORDER BY COALESCE(a.fee_kind_at,''), a.asin LIMIT ${take}`)
+    .bind(...q0.bind).all();
+  const rows = ((q && q.results) || []).map((r) => ({
+    asin: String(r.asin || "").trim().toUpperCase(),
+    price: Math.round(Number(r.price) || 0) }));
+  const at = nowIso();
+  const stmts = [];
+  const put = (asin, kind, g) => {
+    st.done++;
+    st[kind] = (st[kind] || 0) + 1;
+    const mfn = (kind === "fba_ng" && g && g.ok) ? 1 : 0;
+    /* fee_base には**聞いたときの値段**を必ず入れる。
+       これが空だと「値段が1割以上変わった」の判定がいつも真になり、
+       切り分けが済んだ行をまた取りに行ってしまう。 */
+    const px = Math.round((rows.filter((x) => x.asin === asin)[0] || {})
+      .price || 0);
+    /* fee_err（SP-API が返した生の文言）はそのまま残す。
+       ⚙「だめだった行を見る」で原文を確かめられるようにするため。
+       分類は fee_kind で持ち、画面の文言は fee_kind から出す。 */
+    stmts.push(env.DB.prepare(
+      `UPDATE mw_amz SET fee_kind=?2, fee_kind_at=?3, fee_mfn=?4,
+         fee_ref=?5, fee_tax=?6, fee_base=?7, fee_at=?3,
+         fee_fba=NULL, fee_fba_ship=NULL, fee_fba_store=NULL, fee_total=NULL
+        WHERE asin=?1`)
+      .bind(asin, kind, at, mfn,
+            mfn ? Math.round(g.ref || 0) : null,
+            mfn ? Math.round(g.tax || 0) : null,
+            px || null));
+  };
+  for (let i = 0; i < rows.length; i += MW_FEE_BATCH) {
+    if (Date.now() + MW_FEE_CALL_MS > dl) { st.stopped = "time"; break; }
+    const part = rows.slice(i, i + MW_FEE_BATCH);
+    /* ① 自分で発送（FBA にしない）で聞く。 */
+    const a1 = await mwFeeAsk(env, run, part, "mfn");
+    st.calls++;
+    if (!a1.ok) { st.stopped = "api"; break; }
+    const rest = [];
+    for (const x of part) {
+      const g = a1.map[x.asin];
+      if (g && g.ok) put(x.asin, "fba_ng", g);
+      else rest.push(x);
+    }
+    if (!rest.length) continue;
+    /* ② それでもだめな行だけ「FBA・1,000円」で聞き直す。 */
+    if (Date.now() + MW_FEE_CALL_MS > dl) { st.stopped = "time"; break; }
+    const a2 = await mwFeeAsk(env, run, rest, "fba1000");
+    st.calls++;
+    if (!a2.ok) { st.stopped = "api"; break; }
+    for (const x of rest) {
+      const g = a2.map[x.asin];
+      put(x.asin, (g && g.ok) ? "price" : "other", null);
+    }
+  }
+  await runBatch(env, run, stmts);
+  st.left = Math.max(0, st.need - st.done);
+  if (st.left && !st.stopped) st.stopped = "limit";
+  run.notes.push("手数料の切り分け：だめ " + st.need + "件のうち " + st.done
+    + "件（FBA不可 " + st.fba_ng + "・値段 " + st.price + "・その他 "
+    + st.other + "）"
+    + (st.left ? ("／残り " + st.left + "件は次回") : "")
+    + "／呼び出し " + st.calls + "回");
+  return st;
+}
+
 /* ---- POST /mw/amz ----「Amazonで調べる」。①②③を順に進める。 */
 async function mwScanRun(env, body) {
   const run = newRun("mw-amz");
@@ -8099,6 +8273,7 @@ async function mwScanRun(env, body) {
     const dlRst = dlAsin + MW_SCAN_SHARE.rst;
     const dlPrice = dlRst + MW_SCAN_SHARE.price;
     const dlFee = dlPrice + MW_SCAN_SHARE.fee;
+    const dlWhy = dlFee + MW_SCAN_SHARE.why;
     res.share_ms = Object.assign({}, MW_SCAN_SHARE);
     /* ① JAN → ASIN */
     const m1 = Date.now();
@@ -8115,6 +8290,9 @@ async function mwScanRun(env, body) {
     /* ④ 商品ごとの手数料（7.97）。③とは別の持ち時間で取る。 */
     const m4 = Date.now();
     res.fee = await mwScanFee(env, run, o, dlFee);
+    /* ⑤ だめだった行の切り分け（7.129）。落ちても本体は止めない。 */
+    try { res.why = await mwScanFeeWhy(env, run, o, dlWhy); }
+    catch (e) { run.notes.push("fee-why: " + String((e && e.message) || e)); }
     res.fee.ms = Date.now() - m4;
     res.ms = Date.now() - t0;
     res.left = (res.asin.left || 0) + (res.rst.left || 0) + (res.price.left || 0);
@@ -9248,13 +9426,16 @@ const MW_AUTO_CRON_MS = 90000;      // 毎時37分の回の持ち時間
          締め切りからは引いていなかった）
    そのため可否がいつまでも進まず、緑になった行の値段も取れなかった。
    余った分は次の段に繰り越す（手で押す回と同じ・7.82）。 */
-const MW_AUTO_SHARE = { asin: 0.10, rst: 0.10, price: 0.62, fee: 0.18 };
+/* 7.129：⑤「だめの切り分け」を足した（価格のぶんを少し分けた）。 */
+const MW_AUTO_SHARE = { asin: 0.10, rst: 0.10, price: 0.56, fee: 0.18,
+                        why: 0.06 };
 function mwAutoShare(budgetMs) {
   const ms = Math.max(5000, Number(budgetMs) || MW_AUTO_BUDGET_MS);
   return { asin: Math.round(ms * MW_AUTO_SHARE.asin),
            rst: Math.round(ms * MW_AUTO_SHARE.rst),
            price: Math.round(ms * MW_AUTO_SHARE.price),
-           fee: Math.round(ms * MW_AUTO_SHARE.fee) };
+           fee: Math.round(ms * MW_AUTO_SHARE.fee),
+           why: Math.round(ms * MW_AUTO_SHARE.why) };
 }
 /* 1時間ぶんの件数（⚙設定 mwAutoPerHour・7.107）。既定100件/時。
    SP-API の上限で**段ごとに進める上限が違う**ので、ここで押さえる。
@@ -9317,6 +9498,8 @@ async function mwAutoSettings(env) {
     /* 7.107：**Amazon刈取の条件**で回す（eBay 無在庫の条件とは別）。 */
     opt: amzPickOpt(st),
     plan: mwAutoPlan(num ? n : st.mwAutoPerHour, MW_AUTO_BUDGET_MS),
+    /* 7.129：⑤「だめの切り分け」のオンオフ（⚙ mwFeeWhyAuto・既定オン）。 */
+    set: st,
   };
 }
 /* ===== 自動の回の記録（7.122・【R】）=====
@@ -9526,6 +9709,7 @@ async function jobMwAuto(env, opt) {
     const dlRst = dlAsin + sh.rst;
     const dlPrice = dlRst + sh.price;
     const dlFee = dlPrice + sh.fee;
+    const dlWhy = dlFee + (sh.why || 0);
     /* ① ASIN・ランキング・商品名の引き直し（7.91／7.107）。 */
     const m1 = Date.now();
     const sa = await mwScanAsin(env, run,
@@ -9558,17 +9742,39 @@ async function jobMwAuto(env, opt) {
     res.fee_n = fe.ok_n; res.fee_ng = fe.ng; res.fee_left = fe.left;
     res.calls += fe.calls || 0;
     res.fee_ms = Date.now() - m4;
+    /* ⑤ だめだった行の切り分け（7.129）。⚙ mwFeeWhyAuto（既定オン）。
+       落ちても自動の回は止めない。 */
+    const m5 = Date.now();
+    let wh = { done: 0, left: 0, calls: 0, stopped: "", fba_ng: 0, price: 0,
+               other: 0 };
+    try {
+      if (mwNtOn(st.set || {}, "mwFeeWhyAuto", true))
+        wh = await mwScanFeeWhy(env, run,
+          Object.assign({}, st.opt, { order: "auto" }), dlWhy);
+      else wh.stopped = "off";
+    } catch (e) {
+      run.notes.push("fee-why: " + String((e && e.message) || e));
+      wh.stopped = "例外";
+    }
+    res.why_n = wh.done; res.why_left = wh.left;
+    res.why_ng = wh.fba_ng; res.why_price = wh.price; res.why_other = wh.other;
+    res.calls += wh.calls || 0;
+    res.why_ms = Date.now() - m5;
     res.left += res.asin_left + res.rst_left;
     res.stopped = [sa.stopped && ("ASIN:" + sa.stopped),
                    rr.stopped && ("可否:" + rr.stopped),
                    pr.stopped && ("価格:" + pr.stopped),
-                   fe.stopped && ("手数料:" + fe.stopped)]
+                   fe.stopped && ("手数料:" + fe.stopped),
+                   wh.stopped && ("切り分け:" + wh.stopped)]
       .filter(Boolean).join("／");
     res.note = "1時間ぶん " + plan.per + "件（価格は1回 " + plan.price
       + "件まで）／ASIN・順位 " + res.asin_n + "件／可否 " + res.rst_n
       + "件／価格 " + res.price_n + "件／手数料 " + res.fee_n
       + "件（だめ " + (res.fee_ng || 0) + "・残り " + (res.fee_left || 0)
-      + "）／呼び出し " + res.calls + "回／残り " + res.left + "件"
+      + "）／切り分け " + (res.why_n || 0) + "件（FBA不可 "
+      + (res.why_ng || 0) + "・値段 " + (res.why_price || 0) + "・その他 "
+      + (res.why_other || 0) + "・残り " + (res.why_left || 0) + "）"
+      + "／呼び出し " + res.calls + "回／残り " + res.left + "件"
       + (res.stopped ? ("／止まった理由 " + res.stopped) : "");
     run.notes.push("MWの自動の取り直し：" + res.note);
     res.ok = true;
@@ -10965,6 +11171,12 @@ async function mwAmzList(env, url) {
   const only = p.get("priced") === "1" ? " AND COALESCE(a.price,0)>0" : "";
   /* 7.126（【T】）在庫の動きの目安も返す。 */
   const mvq = await mwStatSql(env, "s");
+  /* 7.129（【V の続き】の4）手数料の「だめ」の切り分け（migrate-0050）。
+     列が無いデータベースでも落とさないよう、あるときだけ足す。 */
+  const kindOk = await mwFeeKindOk(env);
+  const kindCols = kindOk
+    ? `\n            a.fee_kind AS fee_kind, a.fee_kind_at AS fee_kind_at,
+            COALESCE(a.fee_mfn,0) AS fee_mfn,` : "";
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
             s.list_price AS list_price, s.cond AS cond, s.wholesale AS wholesale,
@@ -10982,7 +11194,7 @@ async function mwAmzList(env, url) {
             /* 商品ごとの手数料（7.85）。取れていない行は NULL。 */
             a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
             a.fee_total AS fee_total, a.fee_base AS fee_base,
-            a.fee_at AS fee_at, a.fee_err AS fee_err,
+            a.fee_at AS fee_at, a.fee_err AS fee_err,${kindCols}
             /* FBA の内訳（7.106）。配送代行と在庫管理を分けて出す。 */
             a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
             /* サイズ区分（7.108）。在庫管理手数料の目安に使う。 */
@@ -11042,13 +11254,32 @@ async function mwAmzList(env, url) {
         { src: (pick === lastAuto) ? "auto" : "hand" })
     : null;
   /* 手数料の様子（7.97）。「仮の手数料」のままの行が多い理由を画面に出す。 */
+  /* 7.129：「だめ」の内訳（FBA不可／値段／その他／まだ切り分けていない）。
+     列が無いデータベースでは 0 のままにする。 */
+  const kindSum = kindOk
+    ? `,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_kind,'')='fba_ng'
+                     THEN 1 ELSE 0 END) AS fba_ng_n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_kind,'')='price'
+                     THEN 1 ELSE 0 END) AS price_n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_kind,'')='other'
+                     THEN 1 ELSE 0 END) AS other_n,
+            SUM(CASE WHEN COALESCE(a.fee_total,0)=0
+                      AND COALESCE(a.fee_err,'')<>''
+                      AND COALESCE(a.fee_kind,'')=''
+                     THEN 1 ELSE 0 END) AS yet_n,
+            SUM(CASE WHEN COALESCE(a.fee_mfn,0)=1 THEN 1 ELSE 0 END) AS mfn_n`
+    : "";
   const fee = await env.DB.prepare(
     `SELECT COUNT(*) AS n,
             SUM(CASE WHEN COALESCE(a.fee_total,0)>0 THEN 1 ELSE 0 END) AS ok_n,
             SUM(CASE WHEN COALESCE(a.fee_total,0)=0
                       AND COALESCE(a.fee_err,'')<>'' THEN 1 ELSE 0 END) AS ng_n,
             SUM(CASE WHEN COALESCE(a.fee_total,0)=0
-                      AND COALESCE(a.fee_err,'')='' THEN 1 ELSE 0 END) AS none_n
+                      AND COALESCE(a.fee_err,'')='' THEN 1 ELSE 0 END) AS none_n${kindSum}
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
       WHERE ${w} AND COALESCE(a.price,0)>0`).bind(...q0.bind).first();
   const feeWhy = await env.DB.prepare(
@@ -11071,6 +11302,13 @@ async function mwAmzList(env, url) {
            fee: { n: Number((fee && fee.n) || 0), ok: Number((fee && fee.ok_n) || 0),
                   ng: Number((fee && fee.ng_n) || 0),
                   none: Number((fee && fee.none_n) || 0),
+                  /* 7.129：だめの内訳。 */
+                  kind_ok: kindOk,
+                  fba_ng: Number((fee && fee.fba_ng_n) || 0),
+                  price_ng: Number((fee && fee.price_n) || 0),
+                  other_ng: Number((fee && fee.other_n) || 0),
+                  yet: Number((fee && fee.yet_n) || 0),
+                  mfn: Number((fee && fee.mfn_n) || 0),
                   why: (feeWhy && feeWhy.results) || [] },
            limit };
 }
@@ -13000,6 +13238,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["fee_kind", "migrate-0050-fee-kind.sql"],
+  ["fee_mfn", "migrate-0050-fee-kind.sql"],
   ["mw_move", "migrate-0049-mw-move.sql"],
   ["mw_stat", "migrate-0049-mw-move.sql"],
   ["gone_days", "migrate-0049-mw-move.sql"],
@@ -13797,6 +14037,21 @@ export default {
       if (request.method === "GET" && url.pathname === "/schema/check")
         return json(await schemaCheck(env), 200, origin);
       /* 手数料を1件だけ試す（7.104）。Amazon に問い合わせるので管理者だけ。 */
+      /* 7.129（【V の続き】の4）だめだった行を**まとめて**切り分ける
+         （管理者だけ。自動の回のついでにも少しずつ走る）。 */
+      if (request.method === "POST" && url.pathname === "/mw/fee/why/run") {
+        if (role !== "admin")
+          return forbidStaff("切り分けは管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        const run = newRun("fee-why-run");
+        let set = {};
+        try { set = (await settingsGet(env)).settings || {}; } catch (e) {}
+        const r = await mwScanFeeWhy(env, run,
+          Object.assign({}, amzPickOpt(set), { why_max: b && b.max }),
+          Date.now() + MW_SCAN_SHARE.why * 4);
+        return json(Object.assign({ ok: true }, r,
+          await saveRun(env, run)), 200, origin);
+      }
       /* 7.128（【V の続き】の4）だめの原因を切り分ける（管理者だけ）。 */
       if (request.method === "GET" && url.pathname === "/mw/fee/why") {
         if (role !== "admin")
@@ -14074,6 +14329,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwFeeNg, MW_FEE_NG_MAX, MW_AMZ_PAGE,
   /* 7.128（【V の続き】）大事な行は24時間で取り直す／だめの切り分け。 */
   MW_AMZ_TTL_HOT_H, MW_HOT_YEN, mwFeeWhy, mwFeeBody1, FEE_WHY_WAIT,
+  /* 7.129（【V の続き】の4）だめの切り分けを自動で。 */
+  mwScanFeeWhy, mwFeeAsk, mwFeeKindOk, MW_WHY_MAX, MW_WHY_TTL_D,
+  MW_WHY_PRICE,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
   mwMoveSweep,

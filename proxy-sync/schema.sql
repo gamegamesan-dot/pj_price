@@ -667,6 +667,13 @@ CREATE TABLE IF NOT EXISTS mw_amz (
      'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
      MW 無在庫（W-）の送料の計算に使うので、画面にも出す。 */
   size_src  TEXT,
+  /* 7.129（【V の続き】の4）手数料の「だめ」の切り分け。
+     fee_kind … ''／NULL 未分類／'fba_ng' FBA の見積もりが出せない／
+                'price' 送っている値段が原因／'other' ASIN か市場が原因
+     fee_mfn  … 1＝販売手数料と消費税は「自分で発送」の実額（FBA だけ目安） */
+  fee_kind    TEXT,
+  fee_kind_at TEXT,
+  fee_mfn     INTEGER,
   fee_tax    INTEGER,   -- 手数料の消費税
   fee_total  INTEGER,   -- 合計（Amazon が返す総額）
   fee_base   INTEGER,   -- その手数料を出したときの売値
@@ -681,6 +688,8 @@ CREATE INDEX IF NOT EXISTS idx_mw_amz_price ON mw_amz(price);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_asin  ON mw_amz(asin);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_asin_at  ON mw_amz(asin_at);
 CREATE INDEX IF NOT EXISTS idx_mw_amz_price_at ON mw_amz(price_at);
+
+CREATE INDEX IF NOT EXISTS idx_mw_amz_fee_kind ON mw_amz(fee_kind, fee_kind_at);
 
 CREATE TABLE IF NOT EXISTS mw_amz_runs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1047,6 +1047,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上<span id="csvMwAmzMultiN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし<span id="csvMwAmzNoAmzN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）<span id="csvMwAmzRstOkN" class="note2" style="margin:0 0 0 4px"></span></label></div>
+      <!-- 6.169（【V の続き】の4）FBA の見積もりが出せない行。既定で隠す -->
+      <div class="chk"><input type="checkbox" id="csvMwAmzFbaNg"><label for="csvMwAmzFbaNg" style="flex:1"><b>FBA 不可</b>も表示（Amazon が FBA の手数料を出せない商品）<span id="csvMwAmzFbaNgN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
       <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span><span id="csvMwAmzMinMN" class="note2" style="margin:0 0 0 4px"></span></div>
@@ -1690,6 +1692,16 @@ body.staff #syncOnHandFix{display:none !important}
           </div>
           <div class="note2" id="mwFeeNgNote" style="margin-top:2px"></div>
           <div id="mwFeeNgBox"></div>
+          <!-- 6.169（【V の続き】の4）だめだった行をまとめて切り分ける -->
+          <div class="chk" style="margin-top:6px"><input type="checkbox" id="mwFeeWhyAuto" checked><label for="mwFeeWhyAuto" style="flex:1">だめだった行を<b>自動で切り分ける</b>（毎時の回のついでに40件ずつ）</label></div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+            <button class="btn cfgprice" id="mwFeeWhyRunBtn" style="flex:1"
+                    onclick="mwFeeWhyRun()">いますぐ切り分ける</button>
+            <input type="number" id="mwFeeWhyN" value="40" step="20" min="20"
+                   max="200" inputmode="numeric" style="width:76px">
+            <span class="unit">件</span>
+          </div>
+          <div class="note2" id="mwFeeWhyNote" style="margin-top:2px"></div>
         </div>
         <!-- 中身は {"ホビー":900000,...} の形。pj-sync と端末の両方に控える -->
         <input type="hidden" id="mwRankCaps" value="">
@@ -2595,6 +2607,8 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'mwAmzCost',
                 /* 在庫CSVの自動取り込みの「すぐ止める」（6.160・【P】）。 */
                 'mwCsvStop',
+                /* 6.169（【V の続き】の4）FBA 不可も表示／切り分けの自動。 */
+                'csvMwAmzFbaNg','mwFeeWhyAuto',
                 /* 6.166（【T】）そのほかの欠品も商品ごとに／週のまとめ。 */
                 'mwNtRest','mwWeek'];
 /* ---- 値付けの式が使う設定（6.73）----
@@ -10354,7 +10368,7 @@ $('mwBuyUndoBtn').onclick=mwBuyUndoGo;
 $('mwBuyUndoClose').onclick=mwBuyUndoHide;
 $('csvMwBuyCsv').onclick=mwBuyCsvGo;
 ['csvMwAmzSort','csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
- 'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank','csvMwAmzGenre']
+ 'csvMwAmzDup','csvMwAmzMinM','csvMwAmzNoRank','csvMwAmzGenre','csvMwAmzFbaNg']
   .forEach(function(id){
     /* 並べ替えと絞り込みは候補の一覧だけのものなので、
        仕入れる一覧を見ているときは候補の一覧に戻して並べ直す（6.126）。 */
@@ -11626,8 +11640,32 @@ function mwAmzFee(r){
 /* 商品ごとの手数料（6.108・7.85）。Amazon から取れていればそれを使う。
    取れていない行は⚙設定の一律の率で出し、画面に「仮の手数料」と出す。
    せどりすと の内訳と合わせるため、**手数料の消費税も足す**。 */
+/* 6.169（【V の続き】の4）FBA の見積もりが出せない行（fee_kind='fba_ng'）。
+   既定では刈取の一覧から外し、「FBA 不可も表示」で出せる。 */
+function mwFbaNg(r){ return String((r||{}).fee_kind||'')==='fba_ng'; }
+function mwFeeKind(r){ return String((r||{}).fee_kind||''); }
+var MW_FEE_KIND_JA={ fba_ng:'FBA 不可', price:'値段が原因',
+                     other:'ASIN・市場が原因' };
 function mwFeeOf(r){
-  var real=(+((r||{}).fee_total)||0)>0;
+  var row=r||{};
+  /* 6.169：**販売手数料だけ実額**の行（fee_mfn=1）。
+     FBA の見積もりが出せない ASIN なので、Amazon から取れるのは
+     「自分で発送」の販売手数料と消費税だけ。
+     発送のぶん（配送代行＋在庫管理）は⚙の目安を足して出す
+     ＝ 仮の値（販売手数料も率で見積もる）より近い。 */
+  if((+row.fee_mfn||0)===1&&(+row.fee_ref||0)>0){
+    var ref0=+row.fee_ref||0;
+    var tax0=+row.fee_tax||0;
+    if(!tax0)tax0=Math.round(ref0*MW_FEE_TAX_PCT/100);
+    var g0=mwFbaGuess(row);
+    return { ref:ref0, fba:g0.fba, fbaShip:g0.ship, fbaStore:g0.store,
+             tax:tax0, fee:ref0+g0.fba+tax0, real:false, mfn:true,
+             storeGuess:1, taxGuess:(+row.fee_tax||0)?0:1,
+             size:g0.size, sizeName:g0.sizeName, sizeFrom:g0.from,
+             rate:(+row.fee_base>0)?Math.round(ref0/(+row.fee_base)*1000)/10:null,
+             base:+row.fee_base||0, at:row.fee_at||'' };
+  }
+  var real=(+row.fee_total||0)>0;
   if(real){
     var ref=+r.fee_ref||0, fba=+r.fee_fba||0, tax=+r.fee_tax||0;
     var tot=+r.fee_total||0;
@@ -11798,6 +11836,18 @@ function mwPicLine(r){
     +'</span></div>';
 }
 /* 手数料の様子（6.133）。pj-sync が返す fee の数字をそのまま出す。 */
+/* 6.169（【V の続き】の4）「だめ」の内訳（FBA不可／値段／その他／まだ）。 */
+function mwFeeKindN(f){
+  if(!f||!f.kind_ok)return '';
+  var a=+f.fba_ng||0, b=+f.price_ng||0, c=+f.other_ng||0, y=+f.yet||0;
+  if(!(a+b+c+y))return '';
+  var t=[];
+  if(a)t.push('<b>FBA 不可 '+a+'件</b>');
+  if(b)t.push('値段 '+b+'件');
+  if(c)t.push('その他 '+c+'件');
+  if(y)t.push('まだ切り分けていない '+y+'件');
+  return '（'+t.join('／')+'）';
+}
 function mwFeeNote(f){
   if(!f||!(+f.n>0))return '';
   var ok=+f.ok||0, ng=+f.ng||0, none=+f.none||0, n=+f.n||0;
@@ -11827,7 +11877,7 @@ function mwFeeNote(f){
     +(ng+none)+'件</span>'
     +'（値段あり '+n+'件のうち）'
     +(none?('　まだ '+none+'件（次の「Amazonで調べる」で取ります）'):'')
-    +(ng?('　だめ '+ng+'件'+(why?('：'+why):'')):'')
+    +(ng?('　だめ '+ng+'件'+mwFeeKindN(f)+(why?('：'+why):'')):'')
     +full;
 }
 
@@ -11893,6 +11943,43 @@ function mwFeeNgLine(x){
     +' onclick="mwFeeWhyGo(\''+esc(asin)+'\','+sent+')">原因を切り分ける</button>'
     +'</div>'
     +'</div>';
+}
+/* ---- 6.169（【V の続き】の4）だめだった行をまとめて切り分ける ----
+   20件ずつ「自分で発送」で聞き、取れた行は **FBA 不可**（販売手数料は実額）。
+   取れなかった行だけ「FBA・1,000円」で聞き直し、取れたら **値段**、
+   だめなら **ASIN・市場**。分かった行は30日に1回だけ確かめ直す。 */
+function mwFeeWhyRun(){
+  var n=$('mwFeeWhyNote');
+  if(roleDenyPrice('mwFeeWhyNote'))return;
+  if(!syncUrl()||!syncApiKey()){
+    if(n)n.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var max=Math.max(20,Math.min(200,+($('mwFeeWhyN')||{}).value||40));
+  var b=$('mwFeeWhyRunBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='切り分けています…'; }
+  if(n)n.textContent='Amazon に聞いています（1分ほどかかります）…';
+  fetch(syncUrl()+'/mw/fee/why/run',{ method:'POST',
+    headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
+    body:JSON.stringify({ max:max }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!n)return;
+      if(!d||d.ok!==true){ n.textContent='切り分けられませんでした。'; return; }
+      if(d.stopped==='no_column'){
+        n.textContent='pj-sync 側の D1 に列がありません（migrate-0050 を'
+          +'流してください）。';
+        return;
+      }
+      n.innerHTML='✓ '+(+d.done||0)+'件を切り分けました'
+        +'（<b>FBA 不可 '+(+d.fba_ng||0)+'件</b>／値段 '+(+d.price||0)
+        +'件／その他 '+(+d.other||0)+'件）'
+        +'　残り '+(+d.left||0)+'件'
+        +(d.stopped?('　止まった理由 '+esc(String(d.stopped))):'');
+    })
+    ['catch'](function(){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(n)n.textContent='pj-sync に届きませんでした。'; });
 }
 /* ---- 6.168（【V の続き】の4）原因の切り分け ----
    同じ ASIN を**送り方だけ変えて**4回聞き、どれなら通るかを出す。
@@ -12245,6 +12332,21 @@ function mwAmzLoad(){
    ''=まだ調べていない。**赤（blocked）には「仕入れる」を付けられない**。 */
 function mwRstOf(r){ return String((r||{}).rst||''); }
 function mwRstNg(r){ return mwRstOf(r)==='blocked'; }
+/* 6.169（【V の続き】の4）FBA の見積もりが出せない行の印。
+   手数料は「自分で発送」の実額＋⚙の発送の目安で出している、と添える。 */
+function mwFbaNgBadge(r){
+  if(!mwFbaNg(r))return '';
+  return ' <span class="badge" style="background:#8a1f1f">FBA 不可</span>';
+}
+function mwFbaNgLine(r){
+  if(!mwFbaNg(r))return '';
+  return '<div class="note2" style="margin:2px 0 0;color:#8a1f1f">'
+    +'<b>FBA 不可</b>：Amazon がこの商品の <b>FBA の手数料を出せません</b>'
+    +'（自分で発送なら出ます）。販売手数料と消費税は<b>実額</b>、'
+    +'発送のぶんは⚙「FBA手数料の目安」を足しています。'
+    +(r.fee_kind_at?('　切り分け '+esc(jstDay(r.fee_kind_at)||'')):'')
+    +'</div>';
+}
 function mwRstBadge(r){
   var st=mwRstOf(r);
   if(st==='ok')
@@ -12767,6 +12869,7 @@ function mwGenreOpts(){
    どの条件で減っているのかが分かるように、チェックの横に出す。 */
 var MW_FILT=[
   { id:'csvMwAmzWin', over:{ win:false } },
+  { id:'csvMwAmzFbaNg', over:{ fbaNg:false } },
   { id:'csvMwAmzMulti', over:{ multi:false } },
   { id:'csvMwAmzNoAmz', over:{ noAmz:false } },
   { id:'csvMwAmzRstOk', over:{ rstOk:false } }
@@ -12783,6 +12886,18 @@ function mwAmzPlusRender(){
   };
   MW_FILT.forEach(function(x){
     var chk=$(x.id);
+    /* 「FBA 不可も表示」は**入れると増える**ので、外したときに出す。 */
+    if(x.id==='csvMwAmzFbaNg'){
+      var el=$(x.id+'N');
+      if(el){
+        if(chk&&chk.checked){ el.textContent=''; return; }
+        var g={}; for(var k in f)g[k]=f[k];
+        g.fbaNg=true;
+        var d=mwAmzCountWith(g)-base;
+        el.textContent=d>0?('（入れると +'+mwN(d)+'件）'):'';
+      }
+      return;
+    }
     put(x.id+'N',!!(chk&&chk.checked),x.over);
   });
   /* 利益率の下限（数の欄）。 */
@@ -12802,6 +12917,8 @@ function mwAmzPlusRender(){
 function mwAmzGenreSel(){ return String(($('csvMwAmzGenre')||{}).value||''); }
 function mwAmzFilters(){
   return { genre:mwAmzGenreSel(),
+           /* 6.169：FBA の見積もりが出せない行は既定で隠す。 */
+           fbaNg:!!$('csvMwAmzFbaNg').checked,
            win:!!$('csvMwAmzWin').checked, multi:!!$('csvMwAmzMulti').checked,
            noAmz:!!$('csvMwAmzNoAmz').checked,
            rstOk:!!$('csvMwAmzRstOk').checked,
@@ -12853,6 +12970,8 @@ function mwAmzKeep(x,f,quiet){
       if(f.multi&&(+x.r.new_n||0)<2)return false;
       if(f.noAmz&&(+x.r.amz))return false;
       if(f.rstOk&&mwRstOf(x.r)!=='ok')return false;
+      /* 6.169（【V の続き】の4）FBA 不可は既定で外す（刈取は FBA のため）。 */
+      if(!f.fbaNg&&mwFbaNg(x.r))return false;
       /* ランキングの基準（6.124）。行の大分類に入れた上限で見る
          （順位が小さいほど売れている）。 */
       var rk=mwRankOf(x.r), cap=mwRankCapOf(x.r,f.caps);
@@ -14157,6 +14276,7 @@ function mwAmzRender(){
       +'・利益率 '+c.margin+'%）</span>'
       +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
       +mwRstBadge(r)
+      +mwFbaNgBadge(r)
       +(mwJanDup(r)
         ?' <span class="badge" style="background:var(--bad)">JAN重複（要確認）</span>':'')
       +(q?' <span class="badge" style="background:var(--good)">仕入れる '+q+'点</span>':'')
@@ -14187,6 +14307,7 @@ function mwAmzRender(){
         +esc(String(r.note).slice(0,50))+'</div>'):'')
       /* 6.166（【T】）在庫の動きの目安（売れる速さ・欠品までの見込み・再入荷）。 */
       +mwStatHtml(r)
+      +mwFbaNgLine(r)
       +mwRstLine(r)
       +mwJanDupLine(r)
       +mwPicLine(r)
@@ -17826,6 +17947,9 @@ var SYNC_POST_CHUNK=200;              // 1回に送る件数
 /* D1 に列が無いときは、どの migrate を実行すればよいかまで出す。 */
 var SYNC_MIGRATE=[
   /* 6.141：表（no such table）もここで引く。新しいものから並べる。 */
+  /* 6.169（【V の続き】の4）手数料の「だめ」の切り分け。 */
+  ['fee_kind','migrate-0050-fee-kind.sql'],
+  ['fee_mfn','migrate-0050-fee-kind.sql'],
   /* 6.166（【T】）在庫の動きの記録。 */
   ['mw_move','migrate-0049-mw-move.sql'],
   ['mw_stat','migrate-0049-mw-move.sql'],
@@ -21757,7 +21881,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v250';   // sw.js の const V と必ず同じ値にする
+var APP_V='v251';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
