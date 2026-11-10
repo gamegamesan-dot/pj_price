@@ -296,6 +296,8 @@ export function makeApi(token, opt) {
     chEdit: (id, b) => call("PATCH", "/channels/" + id, b),
     msgs: (id, n) => call("GET", "/channels/" + id + "/messages?limit=" + (n || 20)),
     msgAdd: (id, b) => call("POST", "/channels/" + id + "/messages", b),
+    /* 8.9：テスト配信の投稿を消す（--delete）。 */
+    msgDel: (ch, id) => call("DELETE", "/channels/" + ch + "/messages/" + id),
     pins: (id) => call("GET", "/channels/" + id + "/pins"),
     pinAdd: (ch, id) => call("PUT", "/channels/" + ch + "/pins/" + id),
     me: () => call("GET", "/users/@me"),

@@ -117,6 +117,33 @@
       ]
     }
   ],
+  "test": {
+    "note": [
+      "ロールごとのテスト配信（8.9・test-post.mjs がこれを読む）。",
+      "・posts … 送り先（ch は channels の key）と件数。形の確認なので少しでよい",
+      "・markup … 仮の販売価格の掛け率（卸値×1.1×markup・100円単位に切り上げ）",
+      "　　本番の販売価格は仕入れタブで人が決める（【U の改】の1）",
+      "・ship … 送料の区分の言い方（Amazon のサイズ区分 s/m/l から出す）",
+      "・buyUrl … 購入リンク。空だと「準備中」と出る。{jan} を JAN に置き換える",
+      "・head … 1通目の先頭に出す文（空だと「🧪 テスト配信…」）"
+    ],
+    "posts": [
+      { "ch": "list-light", "n": 3 },
+      { "ch": "list-standard", "n": 5 },
+      { "ch": "list-premium", "n": 8 },
+      { "ch": "deal-early", "n": 1 },
+      { "ch": "deal", "n": 1 }
+    ],
+    "markup": 1.3,
+    "ship": {
+      "s": "小型（クリックポスト相当）",
+      "m": "レターパックプラス相当",
+      "l": "宅配便（箱）",
+      "unknown": "—（まだ採寸していません）"
+    },
+    "buyUrl": "",
+    "head": ""
+  },
   "plans": [
     { "name": "ライト", "role": "light", "price": "未定", "per_post": 20, "max_qty": 2,
       "deal": "通常公開" },
