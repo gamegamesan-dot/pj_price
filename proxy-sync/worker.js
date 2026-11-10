@@ -38,6 +38,9 @@ import PRICING from "../shared/pricing.js";
 import MWCSV from "../shared/mwcsv.js";
 /* 7.126（【T】）在庫の動きから出す目安。式は shared/mwstat.js の1か所だけ。 */
 import MWSTAT from "../shared/mwstat.js";
+/* 7.128（【V の続き】）刈取の利益の式と、一覧の絞り込みの見分け。
+   画面（index.html）と**同じファイル**を読む（数字が食い違わないように）。 */
+import MWAMZ from "../shared/mwamz.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -6989,6 +6992,16 @@ async function jobMwCsv(env, opt) {
    控えるのは「取ってきた事実」だけ。 */
 const MW_AMZ_MAX = PRICING_BATCH * PRICING_MAX_CALLS;   // 1回に調べる件数（120）
 const MW_AMZ_TTL_D = 3;                 // 取れた値段を取り直さない日数
+/* ---- 7.128（【V の続き】の5）大事な行は**24時間**で取り直す ----
+   画面は 24時間を超えた値段を「24時間より古い」と赤で出すのに、
+   取り直しの対象は **3日**たった行だけだった。そのため
+   「毎時37分の自動は動いているのに、24時間より古い行がいつまでも直らない」
+   （カジが見た B0DV5D74ZQ の 11-09 18:37）。順番の問題ではなく、
+   **そもそも対象に入っていなかった**。
+   大事な行（仕入れるの印・eBay に無在庫で出品中・粗利の見込みが大きい）は
+   24時間で対象に入れる。それ以外は今までどおり3日。 */
+const MW_AMZ_TTL_HOT_H = 24;            // 大事な行を取り直す時間（時）
+const MW_HOT_YEN = 1000;                // 「粗利の見込みが大きい」の目安（円）
 const MW_AMZ_ERR_TTL_H = 24;            // 取れなかったものを取り直すまでの時間
 const MW_AMZ_CAT_BATCH = 20;            // Catalog Items の1回の件数
 const MW_AMZ_RETRY_MAX = 120;           // 引けなかった JAN を1件ずつ引き直す上限
@@ -7160,6 +7173,85 @@ function mwDimPick(it) {
   if (a.cm.length >= 3 || a.g) return Object.assign(a, { src: a.g ? "pkg" : "" });
   const b = pick(im);
   return Object.assign(b, { src: b.g ? "item" : "" });
+}
+/* ---- 7.128（【V の続き】の4）だめの原因を**自動で切り分ける** ----
+   GET /mw/fee/why?asin=&price=
+   同じ ASIN を**送り方だけ変えて**何度か聞き、どれなら通るかを見る。
+   これで「送っている値段・ASIN・市場のどれが不正か」が分かる。
+     ① いまと同じ（FBA で出す・IsAmazonFulfilled: true）
+     ② 自分で発送（IsAmazonFulfilled: false）
+     ③ IsAmazonFulfilled を**付けない**
+     ④ 値段だけ変える（1,000円）
+   ②③が通って①がだめなら「この ASIN は FBA の見積もりが出せない」、
+   ④だけ通るなら「送っている値段」、ぜんぶだめなら「ASIN か市場」。
+   D1 は書かない（確かめるだけ）。管理者だけ。 */
+const FEE_WHY_WAIT = 2200;         // 0.5回/秒の上限に余裕をみる
+function mwFeeBody1(asin, price, mode) {
+  const req = { MarketplaceId: MP_FE,
+                Identifier: String(asin) + "#1",
+                PriceToEstimateFees: {
+                  ListingPrice: { CurrencyCode: "JPY",
+                                  Amount: Math.round(Number(price) || 0) } } };
+  if (mode !== "omit") req.IsAmazonFulfilled = (mode === "fba");
+  return [{ FeesEstimateRequest: req, IdType: "ASIN", IdValue: String(asin) }];
+}
+async function mwFeeWhy(env, url) {
+  const run = newRun("fee-why");
+  const asin = String(url.searchParams.get("asin") || "").trim().toUpperCase();
+  const price = Math.round(Number(url.searchParams.get("price") || 0));
+  if (!/^[0-9A-Z]{10}$/.test(asin))
+    return { ok: false, error: "bad_asin",
+             note: "asin は英数字10桁で指定してください" };
+  if (!(price > 0))
+    return { ok: false, error: "bad_price",
+             note: "price=1980 のように売値（円）を指定してください" };
+  const plan = [
+    { key: "fba", label: "いまと同じ（FBA で出す）", mode: "fba", price: price },
+    { key: "mfn", label: "自分で発送（FBA にしない）", mode: "mfn", price: price },
+    { key: "omit", label: "FBA の指定を付けない", mode: "omit", price: price },
+    { key: "price", label: "値段だけ変える（1,000円）", mode: "fba",
+      price: 1000 },
+  ];
+  const tried = [];
+  for (let i = 0; i < plan.length; i++) {
+    const v = plan[i];
+    if (i) await sleep(FEE_WHY_WAIT);
+    const body = mwFeeBody1(asin, v.price, v.mode);
+    const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
+      { method: "POST", body: JSON.stringify(body),
+        label: "getMyFeesEstimates" });
+    const list = r.ok ? mwFeeList(r.data) : [];
+    const pick = list.length ? mwFeePick(list[0]) : null;
+    tried.push({ key: v.key, label: v.label, mode: v.mode, price: v.price,
+                 http: r.status, ok: !!(pick && pick.ok),
+                 total: (pick && pick.ok) ? pick.total : null,
+                 err: String((pick && pick.err) || r.err || "").slice(0, 400),
+                 sent: body });
+  }
+  const got = (k) => (tried.filter((x) => x.key === k)[0] || {}).ok;
+  let why = "", fix = "";
+  if (got("fba")) {
+    why = "いまの送り方でも取れました（そのときだけの失敗かもしれません）。";
+    fix = "もう一度「Amazonで調べる」を押してください。";
+  } else if (got("mfn") || got("omit")) {
+    why = "**この ASIN は FBA（Amazon から出す）の見積もりが出せません**"
+      + "（値段・市場・送り方は正しい）。出品者の権限か、"
+      + "その商品が FBA に向かない区分（危険物・大型・制限つきなど）です。";
+    fix = "pj からは直せません。この行は「仮の手数料」のまま使うか、"
+      + "刈取の対象から外してください（Seller Central で"
+      + "「FBA 在庫として出品できるか」を確かめると確実です）。";
+  } else if (got("price")) {
+    why = "**送っている値段**が受け付けられません（1,000円なら通りました）。";
+    fix = "Amazon の販売価格を取り直してください"
+      + "（⚙「Amazonで調べる」→ 値段を取り直す）。";
+  } else {
+    why = "どの送り方でもだめでした。**ASIN か市場**を疑ってください。";
+    fix = "ASIN が amazon.co.jp にある商品か確かめてください"
+      + "（検索して開けるか）。開けるなら Amazon 側の一時的な不具合です。";
+  }
+  const info = await saveRun(env, run);
+  return { ok: true, asin: asin, price: price, mp: MP_FE,
+           tried: tried, why: why, fix: fix, run: info };
 }
 /* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。
    7.127（【V】）Identifier は Amazon の仕様で「この1件を見分ける**一意の値**」。
@@ -7786,8 +7878,23 @@ async function mwScanPrice(env, run, o, dl) {
   const q = mwWhere(o);
   /* cond は mw_stock にも mw_restrict にもあるので、修飾しないと落ちる。 */
   const w = q.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+  /* ⚠ 番号付きの ?N は使わない（7.76 の穴）。素の `?` だけ、文に出てくる順。
+     7.128：時刻は**文字で埋め込む**（素の `?` を増やさないため。
+     値は nowIso から作るので外から混ぜられる余地はない）。 */
   const okOld = new Date(Date.now() - MW_AMZ_TTL_D * 86400000).toISOString();
-  /* ⚠ 番号付きの ?N は使わない（7.76 の穴）。素の `?` だけ、文に出てくる順。 */
+  const hotOld = new Date(Date.now() - MW_AMZ_TTL_HOT_H * 3600000).toISOString();
+  /* 大事な行（仕入れるの印・eBay 無在庫で出品中・粗利の見込みが大きい）。 */
+  const HOT = `(COALESCE(b.qty,0) > 0
+       OR EXISTS (SELECT 1 FROM items i
+                   WHERE i.ebay_sku = 'W-' || s.jan
+                     AND COALESCE(i.ebay_item_id,'') <> '')
+       OR (COALESCE(a.price,0)
+           - COALESCE(a.fee_total, ROUND(COALESCE(a.price,0) * 0.15) + 530)
+           - ROUND(COALESCE(s.wholesale,0) * 1.1)) > ${MW_HOT_YEN})`;
+  /* 取り直しの対象：3日たった行、または**24時間**たった大事な行。 */
+  const DUE = `(a.price_at IS NULL
+       OR a.price_at < '${okOld}'
+       OR (a.price_at < '${hotOld}' AND ${HOT}))`;
   /* 自動の取り直し（7.86）は優先順を変える。
        ①仕入れる印あり ②まだ値段が無い ③粗利の大きい順 ④価格が古い順
      ③は手数料が取れている行は**その手数料で**、まだの行は一律の見込みで出す
@@ -7796,7 +7903,8 @@ async function mwScanPrice(env, run, o, dl) {
   /* 7.107：①仕入れる印 ②見込みあり ③写真あり ④まだ値段が無い
      ⑤粗利の大きい順 ⑥価格が古い順。 */
   const ordAuto =
-    `${MW_ORDER_HOPE},
+    `(CASE WHEN MAX(a.price_at) < '${hotOld}' THEN 0 ELSE 1 END) ASC,
+     ${MW_ORDER_HOPE},
      (CASE WHEN MAX(a.price_at) IS NULL THEN 0 ELSE 1 END) ASC,
      (COALESCE(MAX(a.price),0)
       - COALESCE(MAX(a.fee_total),
@@ -7811,15 +7919,15 @@ async function mwScanPrice(env, run, o, dl) {
        LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = '${MW_RST_COND}'
       WHERE ${w}
         AND COALESCE(r.state,'') ${redOnly ? "=" : "<>"} 'blocked'
-        AND (a.price_at IS NULL OR a.price_at < ?)
+        AND ${DUE}
       GROUP BY a.jan
       ORDER BY ${auto ? ordAuto : "COALESCE(MAX(a.price_at),'') ASC, a.jan ASC"}`;
-  const pick = await env.DB.prepare(sql(false)).bind(...q.bind, okOld).all();
+  const pick = await env.DB.prepare(sql(false)).bind(...q.bind).all();
   const all = ((pick && pick.results) || []).map(
     (x) => ({ jan: String(x.jan), asin: String(x.asin) }));
   st.asked = all.length;
   /* 飛ばした赤の件数（画面に出す）。 */
-  const red = await env.DB.prepare(sql(true)).bind(...q.bind, okOld).all();
+  const red = await env.DB.prepare(sql(true)).bind(...q.bind).all();
   st.skipped_red = ((red && red.results) || []).length;
   if (!all.length) return st;
   const todo = all.slice(0, limit);
@@ -10841,24 +10949,210 @@ async function mwRegSave(env, body) {
 
 /* ---- GET /mw/amz ----
    候補＋MW の中身＋Amazon の事実をまとめて返す。利益は画面で計算する。 */
-async function mwAmzList(env, url) {
+
+/* ===== 7.128（【V の続き】）一覧の絞り込みと並べ替えを pj-sync でやる =====
+   GET /mw/amz/find
+     候補の条件（既存）… kishu / new_only / ship_max / stock_min / note_ng
+     絞り込み … win=1（黒字のみ）／multi=1（新品出品者2人以上）／
+                noAmz=1（Amazon本体なし）／rstOk=1（出品できる行だけ）／
+                minM=5（利益率）／genre=ゲーム／dup=1（JAN重複だけ）／
+                norank=1（順位が無い行も出す）／caps={"ゲーム":100}／q=検索語
+     並べ替え … sort=net|margin|rank|genre|speed|nostock
+     頁      … offset / limit（既定10）
+     counts=1 で ジャンルの件数・「外すと +n件」・JAN の一覧も返す
+
+   なぜ pj-sync でやるか（【V の続き】）
+     画面に 1,500件ずつ送ると、残りが絞り込み・並べ替え・CSV・ジャンルの
+     件数のどれにも入らなかった。**全件を pj-sync で見て、条件に合った行だけ**
+     を送る形にする。利益の式は shared/mwamz.js（画面と同じ）を使う。 */
+const MW_FIND_SCAN = 20000;        // 計算の対象にする行の上限
+const MW_FIND_PAGE = 1500;         // 1回に返す行の上限
+const MW_FIND_JANS = 5000;         // 返す JAN の一覧の上限
+const MW_FIND_SORTS = ["net", "margin", "rank", "genre", "speed", "nostock"];
+const MW_GENRE_ORDER = ["ゲーム", "フィギュア", "その他"];
+function mwFindJson(v) {
+  try {
+    const o = JSON.parse(String(v || "{}"));
+    return (o && typeof o === "object" && !Array.isArray(o)) ? o : {};
+  } catch (e) { return {}; }
+}
+/* 画面の並べ替えと**同じ順**にする。
+   ★ 最後に必ず JAN で決める（offset で頁を取るので、同じ値の行が多いと
+     並びが毎回変わって**同じ行が2回出たり落ちたり**する）。 */
+function mwFindSortFn(sort, S) {
+  const net = (x) => (x.c ? Number(x.c.net) || 0 : -Infinity);
+  const jan = (a, b) => (String(a.r.jan) < String(b.r.jan) ? -1 : 1);
+  const tail = (a, b) => (net(b) - net(a)) || jan(a, b);
+  if (sort === "margin")
+    return (a, b) => ((b.c ? b.c.margin : -Infinity)
+      - (a.c ? a.c.margin : -Infinity)) || tail(a, b);
+  if (sort === "rank")
+    return (a, b) => ((MWAMZ.rankOf(a.r) || Infinity)
+      - (MWAMZ.rankOf(b.r) || Infinity)) || tail(a, b);
+  if (sort === "genre")
+    return (a, b) => (MW_GENRE_ORDER.indexOf(MWAMZ.genre(a.r))
+      - MW_GENRE_ORDER.indexOf(MWAMZ.genre(b.r))) || tail(a, b);
+  if (sort === "speed")
+    return (a, b) => ((b.t && b.t.speed ? b.t.speed : 0)
+      - (a.t && a.t.speed ? a.t.speed : 0)) || tail(a, b);
+  if (sort === "nostock") {
+    const rk = (x) => (x.t ? (x.t.noBack ? 2 : (x.t.sale ? 1 : 0)) : 0);
+    return (a, b) => (rk(b) - rk(a)) || tail(a, b);
+  }
+  return (a, b) => tail(a, b);
+}
+async function mwAmzFind(env, url) {
   const p = url.searchParams;
   const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
                        ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
                        note_ng: p.get("note_ng"), note_all: p.get("note_all") });
-  /* 7.127（【V】）**打ち切らずに全件返せるようにする**。
-     v248 までは limit の上限が 3000 で、画面も limit=3000 で1回だけ聞いて
-     いたので、値段ありが 3,411件あると **411件が画面に来ていなかった**
-     （絞り込み・並べ替え・ジャンルの件数・CSV から丸ごと漏れていた）。
-     1回で返す数は抑えたまま、offset で**続きから**取れるようにする。 */
-  const limit = Math.max(1, Math.min(MW_AMZ_PAGE, mwNum(p.get("limit")) || 1500));
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g,
+                         "s.$1");
+  const limit = Math.max(1, Math.min(MW_FIND_PAGE, mwNum(p.get("limit")) || 10));
   const offset = Math.max(0, mwNum(p.get("offset")) || 0);
-  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
-  const only = p.get("priced") === "1" ? " AND COALESCE(a.price,0)>0" : "";
-  /* 7.126（【T】）在庫の動きの目安も返す。 */
-  const mvq = await mwStatSql(env, "s");
-  const q = await env.DB.prepare(
-    `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
+  const sort = MW_FIND_SORTS.indexOf(String(p.get("sort") || "")) >= 0
+    ? String(p.get("sort")) : "net";
+  const wantCounts = p.get("counts") === "1";
+  const f = {
+    genre: String(p.get("genre") || ""),
+    win: p.get("win") === "1", multi: p.get("multi") === "1",
+    noAmz: p.get("noAmz") === "1", rstOk: p.get("rstOk") === "1",
+    dup: p.get("dup") === "1", noRank: p.get("norank") === "1",
+    minM: Math.max(0, Number(p.get("minM")) || 0),
+    caps: mwFindJson(p.get("caps")),
+  };
+  f.capAny = MWAMZ.rankCapAny(f.caps);
+  const ts = MWAMZ.terms(p.get("q") || "");
+  /* 利益の式に使う⚙の設定（画面と同じものを D1 の控えから読む）。 */
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const S = MWAMZ.fromSettings(st);
+  /* 売れる速さ・在庫処分で並べるときだけ、目安の列も引く（重いので）。 */
+  const needMv = (sort === "speed" || sort === "nostock");
+  const mvq = needMv ? await mwStatSql(env, "s") : { cols: "", join: "" };
+  /* 検索の有無で、長い文（商品名・備考）を引くかを決める。 */
+  const nameCols = ts.length
+    ? `, s.name AS mw_name, a.name AS amz_name` : "";
+  const noteCols = needMv ? `, s.note AS note, s.stock AS stock` : "";
+  const lean = await env.DB.prepare(
+    `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu,
+            s.wholesale AS wholesale,
+            a.asin AS asin, a.price AS price, a.rank AS rank,
+            a.rank_cat AS rank_cat, a.new_n AS new_n, a.amz AS amz,
+            a.fee_total AS fee_total, a.fee_ref AS fee_ref,
+            a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
+            a.fee_base AS fee_base, a.fee_fba_ship AS fee_fba_ship,
+            a.fee_fba_store AS fee_fba_store, a.size_tier AS size_tier,
+            r.state AS rst,
+            COALESCE(m.cand_n,0) AS cand_n,
+            m.picked_at AS jan_picked_at${nameCols}${noteCols}${mvq.cols}
+       FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+            LEFT JOIN jan_map m ON m.jan = s.jan
+            LEFT JOIN mw_restrict r ON r.asin = a.asin
+                                   AND r.cond = 'new_new'${mvq.join}
+      WHERE ${w} AND COALESCE(a.price,0)>0
+      LIMIT ${MW_FIND_SCAN}`).bind(...q0.bind).all();
+  const scan = (lean && lean.results) || [];
+  /* 1行ずつ、画面と同じ式で利益を出し、検索に当てる。 */
+  const pre = [];
+  let calcN = 0, findHit = 0;
+  for (const r of scan) {
+    const ok = ts.length ? MWAMZ.matchAmz(r, ts) : true;
+    if (ok) findHit++;
+    const c = MWAMZ.calc(r, S);
+    if (c) calcN++;
+    const t = needMv
+      ? MWSTAT.calc(r, { saleWords: mwSaleWords(st) }) : null;
+    pre.push({ r: r, c: c, t: t, ok: ok });
+  }
+  /* 絞り込みをかける（f を少しずつ変えて数え直すのにも使う）。 */
+  const count = (ff) => {
+    let n = 0;
+    for (const x of pre) {
+      if (!x.ok) continue;
+      if (MWAMZ.keep(x.r, x.c, ff).keep) n++;
+    }
+    return n;
+  };
+  const kept = [];
+  let rankHid = 0;
+  for (const x of pre) {
+    if (!x.ok) continue;
+    const g = MWAMZ.keep(x.r, x.c, f);
+    if (g.rankHid) rankHid++;
+    if (g.keep) kept.push(x);
+  }
+  kept.sort(mwFindSortFn(sort, S));
+  const n = kept.length;
+  /* 頁ぶんの JAN（この順で画面に出す）。 */
+  const page = kept.slice(offset, offset + limit).map((x) => String(x.r.jan));
+  /* 頁の行だけ、一覧と同じ全部の列で引き直す（D1 は1文に100個まで）。 */
+  const rows = [];
+  if (page.length) {
+    const mvq2 = await mwStatSql(env, "s");
+    const step = Math.max(1, d1Step(1) - q0.bind.length);
+    const byJan = {};
+    for (let i = 0; i < page.length; i += step) {
+      const part = page.slice(i, i + step);
+      const q = await env.DB.prepare(
+        `SELECT ${mwAmzRowCols(mvq2)}
+${mwAmzRowFrom(mvq2)}
+          WHERE ${w} AND s.jan IN (${part.map(() => "?").join(",")})`)
+        .bind(...q0.bind, ...part).all();
+      for (const y of (q && q.results) || []) byJan[String(y.jan)] = y;
+    }
+    for (const j of page) if (byJan[j]) rows.push(byJan[j]);
+  }
+  /* 件数・手数料の様子・前回の取得は /mw/amz と**同じもの**を返す
+     （画面の上の行がそのまま出せるように）。n だけは
+     「条件に合った件数」で上書きする。 */
+  const meta = await mwAmzMeta(env, w, q0.bind);
+  const out = Object.assign({ ok: true }, meta,
+    { rows: rows, n: n, cand_n: meta.n,
+      offset: offset, limit: limit,
+      more: offset + rows.length < n,
+      scan: scan.length, scan_max: MW_FIND_SCAN,
+      cut: scan.length >= MW_FIND_SCAN,
+      calc_n: calcN, find_n: findHit, hid: { rank: rankHid },
+      sort: sort, q: ts.join(" ") });
+  if (wantCounts) {
+    /* ジャンルの件数（**ジャンル以外の絞り込みをかけたあと**）と全件数。 */
+    const g0 = Object.assign({}, f, { genre: "" });
+    const now = {}, all = {};
+    for (const x of pre) {
+      const g = MWAMZ.genre(x.r);
+      all[g] = (all[g] || 0) + 1;
+      if (!x.ok) continue;
+      if (MWAMZ.keep(x.r, x.c, g0).keep) now[g] = (now[g] || 0) + 1;
+    }
+    out.genres = Object.keys(all).map((g) => ({
+      g: g, n: now[g] || 0, all: all[g] }))
+      .sort((a, b) => (b.n - a.n) || (b.all - a.all));
+    out.genre_total = Object.keys(now).reduce((a, k) => a + now[k], 0);
+    /* 「これを外すと何件増えるか」。 */
+    const off = (over) => Math.max(0, count(Object.assign({}, f, over)) - n);
+    out.plus = {
+      win: f.win ? off({ win: false }) : null,
+      multi: f.multi ? off({ multi: false }) : null,
+      noAmz: f.noAmz ? off({ noAmz: false }) : null,
+      rstOk: f.rstOk ? off({ rstOk: false }) : null,
+      minM: f.minM > 0 ? off({ minM: 0 }) : null,
+      rank: (f.capAny || Object.keys(f.caps).length)
+        ? off({ caps: {}, capAny: false }) : null,
+      dup: f.dup ? off({ dup: false }) : null,
+    };
+    /* JAN の一覧（コピーと CSV の件数に使う）。 */
+    out.jans = kept.slice(0, MW_FIND_JANS).map((x) => String(x.r.jan));
+    out.jans_cut = Math.max(0, n - out.jans.length);
+  }
+  return out;
+}
+
+/* ---- 7.128（【V の続き】）一覧の行の SELECT を1か所に ----
+   /mw/amz と /mw/amz/find が**同じ列**を返すように、文を分けて持つ。
+   mvq … mwStatSql の返り（在庫の動きの目安の列と JOIN）。 */
+function mwAmzRowCols(mvq) {
+  return `s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
             s.list_price AS list_price, s.cond AS cond, s.wholesale AS wholesale,
             s.stock AS stock, s.note AS note, s.ship_text AS ship_text,
             s.ship_days AS ship_days,
@@ -10888,8 +11182,10 @@ async function mwAmzList(env, url) {
             r.checked_at AS rst_at, r.err AS rst_err,
             /* JAN重複（7.84）。候補が2件以上で、まだ選んでいない行に印を付ける。 */
             COALESCE(m.cand_n,0) AS cand_n, m.cands AS cands,
-            m.picked_at AS jan_picked_at${mvq.cols}
-       FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+            m.picked_at AS jan_picked_at${mvq.cols}`;
+}
+function mwAmzRowFrom(mvq) {
+  return `       FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
             LEFT JOIN mw_buy b ON b.jan = s.jan
             LEFT JOIN jan_map m ON m.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
@@ -10899,20 +11195,19 @@ async function mwAmzList(env, url) {
                          MAX(CASE WHEN pos=0 THEN long_px END) AS long_px,
                          MAX(CASE WHEN pos=0 THEN COALESCE(url,src) END) AS main,
                          MAX(at) AS at
-                         FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}
-      WHERE ${w}${only}
-      /* 7.127：offset で続きを取るので、**並びを一意にする**
-         （同じ値段の行が多いので、JAN を添えないとページの境目で
-         同じ行が2回出たり、落ちたりする）。 */
-      ORDER BY COALESCE(a.price,0) DESC, s.jan ASC
-      LIMIT ${limit} OFFSET ${offset}`).bind(...q0.bind).all();
+                         FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}`;
+}
+/* ---- 7.128（【V の続き】）一覧の「件数・手数料・前回の取得」----
+   /mw/amz と /mw/amz/find が**同じものを返す**ように切り出した
+   （find だけ手数料の様子が出ないと「だめ 749件」が画面から消える）。 */
+async function mwAmzMeta(env, w, bind) {
   const n = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM mw_stock s WHERE ${w}`).bind(...q0.bind).first();
+    `SELECT COUNT(*) AS n FROM mw_stock s WHERE ${w}`).bind(...bind).first();
   const seen = await env.DB.prepare(
     `SELECT COUNT(a.jan) AS n,
             SUM(CASE WHEN COALESCE(a.price,0)>0 THEN 1 ELSE 0 END) AS priced
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan WHERE ${w}`)
-    .bind(...q0.bind).first();
+    .bind(...bind).first();
   /* 7.122（【R】）：「前回の取得」は **mw_amz_runs（手で押した回）しか
      見ていなかった**ので、毎時37分の自動の回がどれだけ動いても
      この時刻は動かなかった（カジが「11/08 20:03 のまま」と気づいた原因）。
@@ -10942,29 +11237,58 @@ async function mwAmzList(env, url) {
             SUM(CASE WHEN COALESCE(a.fee_total,0)=0
                       AND COALESCE(a.fee_err,'')='' THEN 1 ELSE 0 END) AS none_n
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
-      WHERE ${w} AND COALESCE(a.price,0)>0`).bind(...q0.bind).first();
+      WHERE ${w} AND COALESCE(a.price,0)>0`).bind(...bind).first();
   const feeWhy = await env.DB.prepare(
     /* 7.104：理由は**全文**（400字）で返す。60字で切っていたため、
        画面が「HTTP 400 InvalidInput: This is an invali…」で終わっていた。 */
     `SELECT substr(COALESCE(a.fee_err,''),1,400) AS why, COUNT(*) AS n
        FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
       WHERE ${w} AND COALESCE(a.price,0)>0 AND COALESCE(a.fee_err,'')<>''
-      GROUP BY why ORDER BY n DESC LIMIT 5`).bind(...q0.bind).all();
-  return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
-           seen: Number((seen && seen.n) || 0),
-           priced: Number((seen && seen.priced) || 0),
-           left: Math.max(0, Number((n && n.n) || 0) - Number((seen && seen.n) || 0)),
-           per_run: MW_AMZ_MAX, ttl_days: MW_AMZ_TTL_D,
+      GROUP BY why ORDER BY n DESC LIMIT 5`).bind(...bind).all();
+  return {
+    n: Number((n && n.n) || 0),
+    seen: Number((seen && seen.n) || 0),
+    priced: Number((seen && seen.priced) || 0),
+    left: Math.max(0, Number((n && n.n) || 0) - Number((seen && seen.n) || 0)),
+    per_run: MW_AMZ_MAX, ttl_days: MW_AMZ_TTL_D,
+    last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
+    fee: { n: Number((fee && fee.n) || 0), ok: Number((fee && fee.ok_n) || 0),
+           ng: Number((fee && fee.ng_n) || 0),
+           none: Number((fee && fee.none_n) || 0),
+           why: (feeWhy && feeWhy.results) || [] },
+  };
+}
+async function mwAmzList(env, url) {
+  const p = url.searchParams;
+  const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
+                       ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
+                       note_ng: p.get("note_ng"), note_all: p.get("note_all") });
+  /* 7.127（【V】）**打ち切らずに全件返せるようにする**。
+     v248 までは limit の上限が 3000 で、画面も limit=3000 で1回だけ聞いて
+     いたので、値段ありが 3,411件あると **411件が画面に来ていなかった**
+     （絞り込み・並べ替え・ジャンルの件数・CSV から丸ごと漏れていた）。
+     1回で返す数は抑えたまま、offset で**続きから**取れるようにする。 */
+  const limit = Math.max(1, Math.min(MW_AMZ_PAGE, mwNum(p.get("limit")) || 1500));
+  const offset = Math.max(0, mwNum(p.get("offset")) || 0);
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+  const only = p.get("priced") === "1" ? " AND COALESCE(a.price,0)>0" : "";
+  /* 7.126（【T】）在庫の動きの目安も返す。 */
+  const mvq = await mwStatSql(env, "s");
+  const q = await env.DB.prepare(
+    `SELECT ${mwAmzRowCols(mvq)}
+${mwAmzRowFrom(mvq)}
+      WHERE ${w}${only}
+      /* 7.127：offset で続きを取るので、**並びを一意にする**
+         （同じ値段の行が多いので、JAN を添えないとページの境目で
+         同じ行が2回出たり、落ちたりする）。 */
+      ORDER BY COALESCE(a.price,0) DESC, s.jan ASC
+      LIMIT ${limit} OFFSET ${offset}`).bind(...q0.bind).all();
+  const meta = await mwAmzMeta(env, w, q0.bind);
+  return Object.assign({ ok: true, rows: (q && q.results) || [],
            /* 7.127（【V】）続きがあるか（画面はこれを見て次の頁を取る）。 */
            offset: offset, page_max: MW_AMZ_PAGE,
            more: ((q && q.results) || []).length >= limit,
-           last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
-           /* 手数料（7.97）。値段が取れている行のうち、手数料が取れた／だめ／まだ。 */
-           fee: { n: Number((fee && fee.n) || 0), ok: Number((fee && fee.ok_n) || 0),
-                  ng: Number((fee && fee.ng_n) || 0),
-                  none: Number((fee && fee.none_n) || 0),
-                  why: (feeWhy && feeWhy.results) || [] },
-           limit };
+           limit }, meta);
 }
 
 /* ---- 調べる順（7.107）----
@@ -13689,6 +14013,16 @@ export default {
       if (request.method === "GET" && url.pathname === "/schema/check")
         return json(await schemaCheck(env), 200, origin);
       /* 手数料を1件だけ試す（7.104）。Amazon に問い合わせるので管理者だけ。 */
+      /* 7.128（【V の続き】の4）だめの原因を自動で切り分ける（管理者だけ）。 */
+      if (request.method === "GET" && url.pathname === "/mw/fee/why") {
+        if (role !== "admin")
+          return forbidStaff("手数料の切り分けは管理者用のキーが必要です", [],
+                             origin);
+        return json(await mwFeeWhy(env, url), 200, origin);
+      }
+      /* 7.128（【V の続き】）絞り込みと並べ替えを pj-sync でやる一覧。 */
+      if (request.method === "GET" && url.pathname === "/mw/amz/find")
+        return json(await mwAmzFind(env, url), 200, origin);
       /* 7.127（【V】）だめだった行の一覧（見るだけなので作業者でもよい）。 */
       if (request.method === "GET" && url.pathname === "/mw/fee/ng")
         return json(await mwFeeNg(env, url), 200, origin);
@@ -13957,6 +14291,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwNtList, mwNtWhere, notifyBlocks, NOTIFY_MAX, NOTIFY_ROOM,
   /* 7.127（【V】）件数の打ち切りと、手数料のだめだった行。 */
   mwFeeNg, MW_FEE_NG_MAX, MW_AMZ_PAGE,
+  /* 7.128（【V の続き】）一覧の絞り込みと並べ替え。 */
+  mwAmzFind, mwFindSortFn, MW_FIND_SCAN, MW_FIND_PAGE, MW_FIND_JANS,
+  MW_FIND_SORTS, MWAMZ, MW_AMZ_TTL_HOT_H, MW_HOT_YEN,
+  mwAmzRowCols, mwAmzRowFrom, mwFeeWhy, mwFeeBody1, FEE_WHY_WAIT,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
   mwMoveSweep,

@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v249';
+const V = 'pj-pricing-v250';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   // MW の在庫CSVの読み方（【P】）。pj-sync も同じこのファイルを読む。
   './shared/mwcsv.js',
   './shared/mwstat.js',
+  './shared/mwamz.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

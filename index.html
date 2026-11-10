@@ -2210,6 +2210,9 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwcsv.js"></script>
 <!-- MW 在庫の動きから出す目安（【T】）。index.html と pj-sync が同じものを読む。 -->
 <script src="./shared/mwstat.js"></script>
+<!-- Amazon刈取の利益の式（【V の続き】）。絞り込みと並べ替えを pj-sync の側で
+     やるので、画面と同じ式でないと数字が食い違う。 -->
+<script src="./shared/mwamz.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2228,6 +2231,12 @@ var MWCSV=PJ_MWCSV;
 if(typeof PJ_MWSTAT==='undefined')
   throw new Error('shared/mwstat.js が読み込めていません（在庫の動きの目安）');
 var MWSTAT=PJ_MWSTAT;
+/* Amazon刈取の利益の式も1か所にまとめてある（【V の続き】）。
+   pj-sync が一覧の絞り込みと並べ替えをするので、**同じ式**でないと
+   「画面では黒字なのにサーバーが外す」という食い違いが起きる。 */
+if(typeof PJ_MWAMZ==='undefined')
+  throw new Error('shared/mwamz.js が読み込めていません（刈取の利益の式）');
+var MWAMZ=PJ_MWAMZ;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -10359,7 +10368,8 @@ $('csvMwBuyCsv').onclick=mwBuyCsvGo;
     /* 並べ替えと絞り込みは候補の一覧だけのものなので、
        仕入れる一覧を見ているときは候補の一覧に戻して並べ直す（6.126）。 */
     $(id).addEventListener('change',function(){
-      mwAmzRender();
+      /* 6.168：pj-sync 側で絞るときは取り直す（全件から選ぶため）。 */
+      mwAmzRefilter();
       /* 6.142：管理者が変えた形を**既定値**として pj-sync に置く
          （作業者の端末も同じ条件で始まる）。作業者のときは端末にも残さない
          ＝次に開くと管理者の既定値に戻る。 */
@@ -11057,24 +11067,12 @@ function mwReadNote(d,fi){
 /* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
 var mwRows=[], mwLast=null, mwMkt=null;
 /* MW の仕入値（円・税込＋1点あたりの送料）。 */
-function mwCost(r){
-  var w=+((r||{}).wholesale)||0;
-  if(!(w>0))return 0;
-  return Math.round(w*1.1)+mwShipFee();
-}
+function mwCost(r){ return MWAMZ.cost(r,mwAmzS()); }
 /* 仕入原価（せどりすと方式・6.145）。**卸値×1.1 だけ**（MW の仕入れ送料を足さない）。
    せどりすと の画面と数字を見比べるために持つ。 */
-function mwCostSedo(r){
-  var w=+((r||{}).wholesale)||0;
-  if(!(w>0))return 0;
-  return Math.round(w*1.1);
-}
+function mwCostSedo(r){ return MWAMZ.costSedo(r); }
 /* 並べ替え・黒字のみ・利益率に使う粗利（6.145）。既定は MW送料込み。 */
-function mwProfitMode(){
-  var el=$('mwProfitMode');
-  var v=el?String(el.value||''):'';
-  return (v==='sedori')?'sedori':'mw';
-}
+function mwProfitMode(){ return mwAmzS().profitMode; }
 /* ===== MW 無在庫の仕入れ値（6.152）=====
    W- の行は「MW から仕入れる」前提だったが、**Amazon の新品最安値のほうが
    安いこともある**（その場合は Amazon で買って直送する）。安いほうを使う。
@@ -11563,15 +11561,17 @@ function mwPushSkipHtml(skip){
    仕入値 ＝ 卸値 × 1.1（税込）＋ 1点あたりの仕入れ送料
    粗利（税抜）＝ 粗利 × 10 / 11（消費税を引いた額） */
 var mwAmzRows=[], mwAmzMeta=null;
-var MW_AMZ_GAME={ NS:1, NS2:1, NS2H:1, P5:1, P4:1, '3DS':1, PS5:1, PS4:1, SW:1,
-  PP:1, PV:1, XB:1, XBX:1, WIN:1, PCC:1, '68':1 };
-var MW_AMZ_HOBBY={ b2cchara_figure:1, figure:1, FIG:1, GF:1, plasticmodel:1 };
+/* 6.168（【V の続き】）機種→ジャンルの表と判定は shared/mwamz.js の1か所だけ。 */
+var MW_AMZ_GAME=MWAMZ.GAME, MW_AMZ_HOBBY=MWAMZ.HOBBY;
 /* その行のジャンル（手数料の区分）。10/7 のファイルの「ジャンル」に相当。 */
-function mwAmzGenre(r){
-  var k=String((r||{}).kishu||'');
-  if(MW_AMZ_GAME[k])return 'ゲーム';
-  if(MW_AMZ_HOBBY[k])return 'フィギュア';
-  return 'その他';
+function mwAmzGenre(r){ return MWAMZ.genre(r); }
+/* ---- ⚙の設定を1つの object にまとめる（6.168）----
+   shared/mwamz.js は**設定を受け取って**計算する形なので、ここで作る。
+   **控えない**（⚙を書き替えた直後でも必ずいまの値で計算するため。
+   入力は18個しか読まないので、3千件でも数十ミリ秒で済む）。 */
+function mwAmzS(){
+  return MWAMZ.fromUi(function(id){
+    var el=$(id); return el?el.value:undefined; });
 }
 /* 0 を入れたときに既定値へ戻ってしまわないよう、数かどうかで見る
    （`+v||既定` だと 0 が falsy なので既定に戻る）。 */
@@ -11580,91 +11580,21 @@ function mwNum0(id,def){
   return (isFinite(n)&&n>=0)?n:def;
 }
 /* 手数料の消費税の率（6.145）。せどりすと は販売手数料の10%を足している。 */
-var MW_FEE_TAX_PCT=10;
+var MW_FEE_TAX_PCT=MWAMZ.FEE_TAX_PCT;
 /* サイズ区分ごとの仮の FBA手数料（6.145）。配送代行と在庫管理に分ける。 */
-var MW_FBA_SIZE={ s:'小型', m:'標準', l:'大型' };
+var MW_FBA_SIZE=MWAMZ.FBA_SIZE;
 /* サイズ区分（6.147）。**Catalog の寸法・重さから決めた区分（size_tier）を優先**し、
    取れていない行だけ⚙の既定（ゲーム＝小型／フィギュア＝標準）を使う。 */
-function mwFbaSizeOf(r){
-  var t=String((r||{}).size_tier||'');
-  if(MW_FBA_SIZE[t])return t;
-  var g=mwAmzGenre(r);
-  var v=(g==='ゲーム')?String(($('mwFbaSizeGame')||{}).value||'s')
-       :((g==='フィギュア')?String(($('mwFbaSizeHobby')||{}).value||'m'):'m');
-  return MW_FBA_SIZE[v]?v:'m';
-}
+function mwFbaSizeOf(r){ return MWAMZ.sizeOf(r,mwAmzS()); }
 /* その区分がどこから来たか（画面に出す）。 */
-function mwFbaSizeFrom(r){
-  return MW_FBA_SIZE[String((r||{}).size_tier||'')]?'寸法から':'既定';
-}
-function mwFbaGuess(r){
-  var k=mwFbaSizeOf(r);
-  var pick={ s:['mwFbaShipS',288,'mwFbaStoreS',1],
-             m:['mwFbaShipM',425,'mwFbaStoreM',16],
-             l:['mwFbaShipL',675,'mwFbaStoreL',93] }[k];
-  var ship=mwNum0(pick[0],pick[1]), store=mwNum0(pick[2],pick[3]);
-  /* 古い設定（FBA手数料（ゲーム）／（ホビー））しか入っていない端末では、
-     そちらを配送代行として使う（いきなり数字が変わらないように）。 */
-  if(!ship&&!store){
-    var g=mwAmzGenre(r);
-    ship=(g==='ゲーム')?mwNum0('mwAmzFbaGame',530)
-        :((g==='フィギュア')?mwNum0('mwAmzFbaHobby',580):mwNum0('amzFbaFee',400));
-  }
-  return { size:k, sizeName:MW_FBA_SIZE[k], from:mwFbaSizeFrom(r),
-           ship:ship, store:store, fba:ship+store };
-}
-function mwAmzFee(r){
-  var g=mwAmzGenre(r);
-  var fb=mwFbaGuess(r);
-  if(g==='ゲーム')
-    return { rate:mwNum0('mwAmzFeeGame',15), fba:fb.fba, fb:fb };
-  if(g==='フィギュア')
-    return { rate:mwNum0('mwAmzFeeHobby',10), fba:fb.fba, fb:fb };
-  return { rate:mwNum0('amzFeeRate',15), fba:fb.fba, fb:fb };
-}
+function mwFbaSizeFrom(r){ return MWAMZ.sizeFrom(r); }
+function mwFbaGuess(r){ return MWAMZ.fbaGuess(r,mwAmzS()); }
+function mwAmzFee(r){ return MWAMZ.feeGuess(r,mwAmzS()); }
 /* 1行ぶんの利益。値段が取れていない行は null。 */
 /* 商品ごとの手数料（6.108・7.85）。Amazon から取れていればそれを使う。
    取れていない行は⚙設定の一律の率で出し、画面に「仮の手数料」と出す。
    せどりすと の内訳と合わせるため、**手数料の消費税も足す**。 */
-function mwFeeOf(r){
-  var real=(+((r||{}).fee_total)||0)>0;
-  if(real){
-    var ref=+r.fee_ref||0, fba=+r.fee_fba||0, tax=+r.fee_tax||0;
-    var tot=+r.fee_total||0;
-    /* 合計が明細より大きいときは、差を消費税に寄せる（明細の形が変わっても
-       合計がずれないように）。 */
-    if(tot>ref+fba+tax)tax=tot-ref-fba;
-    /* FBA の内訳（7.106）。取れていなければ配送代行に寄せる。 */
-    var sh=+r.fee_fba_ship||0, st2=+r.fee_fba_store||0;
-    if(fba&&sh+st2!==fba){ st2=st2||0; sh=fba-st2; }
-    /* 6.147：**SP-API の FBA手数料には在庫管理手数料（保管料）が入っていない**。
-       0 のときは⚙のサイズ区分ごとの目安を足す（実額が返っていればそのまま）。
-       例 B0GYC8BM48：pj の FBA 420（配送代行だけ）に対して
-       せどりすと は 428（配送代行420＋在庫管理8）。 */
-    var fb0=mwFbaGuess(r), storeGuess=0;
-    if(!st2&&fb0.store>0){ st2=fb0.store; storeGuess=1; fba=sh+st2; }
-    /* 6.147：手数料の消費税が 0 のまま返ってきた行は、画面でも10%を足す
-       （Worker 側でも足すが、古い控えのまま一覧に出る行のため）。 */
-    var taxGuess=0;
-    if(!tax&&ref){ tax=Math.round(ref*MW_FEE_TAX_PCT/100); taxGuess=1; }
-    return { ref:ref, fba:fba, fbaShip:sh, fbaStore:st2, tax:tax,
-             fee:ref+fba+tax, real:true,
-             storeGuess:storeGuess, taxGuess:taxGuess,
-             size:fb0.size, sizeName:fb0.sizeName, sizeFrom:fb0.from,
-             rate:ref&&r.fee_base?Math.round(ref/(+r.fee_base||1)*1000)/10:null,
-             base:+r.fee_base||0, at:r.fee_at||'' };
-  }
-  var f=mwAmzFee(r), price=+((r||{}).price)||0;
-  var ref2=Math.round(price*f.rate/100);
-  /* 6.145：**仮の値でも手数料の消費税10%を足す**（せどりすと と同じ）。
-     足していなかったので、せどりすと の粗利より高く出ていた
-     （Everafter Falls：pj 897 に対して せどりすと 920＋92＝1,012）。 */
-  var tax2=Math.round(ref2*MW_FEE_TAX_PCT/100);
-  return { ref:ref2, fba:f.fba, fbaShip:f.fb.ship, fbaStore:f.fb.store,
-           tax:tax2, fee:ref2+f.fba+tax2, real:false,
-           size:f.fb.size, sizeName:f.fb.sizeName, sizeFrom:f.fb.from,
-           rate:f.rate, base:price, at:'' };
-}
+function mwFeeOf(r){ return MWAMZ.feeOf(r,mwAmzS()); }
 /* ===== 値段を取った日時（6.155・【O】）=====
    古い控えのまま Amazon に登録してしまわないように、一覧に日時を出し、
    24時間より古いときは目立たせる。 */
@@ -11676,12 +11606,29 @@ function mwPriceOld(r){
   var t=Date.parse(mwPriceAt(r));
   return !!t&&(Date.now()-t)>MW_PRICE_OLD_MS;
 }
+/* 6.168（【V の続き】の5）いつ取り直すかも書く。
+   pj-sync は**大事な行（仕入れるの印・eBay 無在庫で出品中・粗利の見込みが
+   大きい）を24時間**で取り直し、それ以外は3日で取り直す。
+   画面は24時間で「古い」と赤にしていたので、**3日たっていない行が
+   いつまでも赤いまま**に見えていた（カジが見た 11-09 18:37 の行）。 */
+function mwPriceHot(r){
+  var row=r||{};
+  if((+row.buy_qty||0)>0)return true;
+  if(+row.ebay)return true;
+  var c=null;
+  try{ c=mwAmzCalc(row); }catch(e){ c=null; }
+  return !!(c&&c.profit>1000);
+}
 function mwPriceAgeHtml(r){
   var at=mwPriceAt(r);
   if(!at)return '　<b style="color:var(--bad)">値段の日時なし</b>';
   var old=mwPriceOld(r);
-  return '　<span style="'+(old?'color:var(--bad);font-weight:700'
-    :'opacity:.75')+'">'+esc(jstText(at))+(old?'（24時間より古い）':'')+'</span>';
+  if(!old)return '　<span style="opacity:.75">'+esc(jstText(at))+'</span>';
+  var hot=mwPriceHot(r);
+  return '　<span style="'+(hot?'color:var(--bad);font-weight:700'
+    :'opacity:.75')+'">'+esc(jstText(at))
+    +(hot?'（24時間より古い・次の自動で取り直します）'
+         :'（24時間より古い・3日で取り直します）')+'</span>';
 }
 /* 中古の最安値（7.115）。新品が0人の行では、これ×掛け率が登録の売値になる。 */
 function mwUsedLowHtml(r){
@@ -11699,40 +11646,7 @@ function mwUsedPct(){
   var n=Math.round(+(($('mwUsedPct')||{}).value)||0);
   return (n>=100&&n<=300)?n:120;
 }
-function mwAmzCalc(r){
-  var price=+((r||{}).price)||0;
-  if(!(price>0))return null;
-  var cost=mwCost(r);                      // 卸値×1.1＋仕入れ送料（MW と同じ式）
-  if(!(cost>0))return null;
-  var z=mwFeeOf(r);
-  var fee=z.fee;
-  /* 6.145：粗利を**2つ**出す。
-     ・せどりすと方式  … 仕入原価＝卸値×1.1（せどりすと の画面と同じ）
-     ・MW送料込み      … ＋MW の仕入れ送料（実際に出ていくお金に近い）
-     並べ替え・黒字のみ・利益率に使うほうは⚙で選ぶ（既定は MW送料込み）。 */
-  var costSedo=mwCostSedo(r);
-  var profitMw=Math.round(price-fee-cost);
-  var profitSedo=Math.round(price-fee-costSedo);
-  var mode=mwProfitMode(), useSedo=(mode==='sedori');
-  var profit=useSedo?profitSedo:profitMw;
-  return { price:price, cost:cost, costSedo:costSedo, ship:mwShipFee(),
-           fee:fee, rate:z.rate, fba:z.fba,
-           fbaShip:+z.fbaShip||0, fbaStore:+z.fbaStore||0,
-           feeRef:z.ref, feeTax:z.tax, feeReal:z.real, feeAt:z.at,
-           feeSize:z.sizeName||'', feeSizeFrom:z.sizeFrom||'',
-           feeStoreGuess:!!z.storeGuess, feeTaxGuess:!!z.taxGuess,
-           /* 使うほう（並べ替え・絞り込み） */
-           profit:profit, net:mwNet(profit),
-           margin:Math.round(profit/price*1000)/10,
-           /* 両方（表示用） */
-           profitSedo:profitSedo, netSedo:mwNet(profitSedo),
-           marginSedo:Math.round(profitSedo/price*1000)/10,
-           profitMw:profitMw, netMw:mwNet(profitMw),
-           marginMw:Math.round(profitMw/price*1000)/10,
-           profitMode:mode,
-           netMode:mwNetMode(),
-           genre:mwAmzGenre(r) };
-}
+function mwAmzCalc(r){ return MWAMZ.calc(r,mwAmzS()); }
 /* ---- 税抜の粗利の出し方（6.111）----
    せどりすと は「粗利の10%」を納付消費税として引く（税込粗利 × 0.9）。
    実物の内訳（サイヴァリア3：税込粗利 2,615円 → 納付消費税 261円・粗利 2,353円）は
@@ -11740,17 +11654,8 @@ function mwAmzCalc(r){
    いっぽう 税込→税抜 の算数としては × 10/11（＝1/11 を引く）が正しく、
    同じ例で 2,377円になる（24円の差）。
    どちらを使うかは⚙設定で選ぶ。**既定は せどりすと方式**（低め＝安全側）。 */
-function mwNetMode(){
-  var el=$('mwNetMode');
-  var v=el?String(el.value||''):'';
-  return (v==='exact')?'exact':'sedori';
-}
-function mwNet(profit){
-  var p=Math.round(+profit||0);
-  /* 赤字（マイナス）のときは引かない。消費税は納めないので。 */
-  if(p<=0)return p;
-  return (mwNetMode()==='exact')?Math.round(p*10/11):Math.round(p*0.9);
-}
+function mwNetMode(){ return mwAmzS().netMode; }
+function mwNet(profit){ return MWAMZ.net(profit,mwAmzS()); }
 function mwNetLabel(){
   return (mwNetMode()==='exact')?'×10/11':'せどりすと方式（×0.9）';
 }
@@ -11865,9 +11770,57 @@ function mwFeeNgLine(x){
       +(x.size_tier?('　サイズ区分 '+esc(String(x.size_tier))):'')+'</div>'):'')
     +'<div style="margin:1px 0 0">'+esc(String(x.at_jst||''))+'　'
     +esc(String(x.why||''))+'</div>'
-    +'<button class="btn" style="margin-top:3px;padding:3px 8px;font-size:12px"'
+    +'<div style="display:flex;gap:6px;margin-top:3px">'
+    +'<button class="btn" style="padding:3px 8px;font-size:12px"'
     +' onclick="mwFeeNgTry(\''+esc(asin)+'\','+sent+')">この1件で試す</button>'
+    /* 6.168（【V の続き】の4）送り方を変えて聞き、原因を切り分ける。 */
+    +'<button class="btn cfgprice" style="padding:3px 8px;font-size:12px"'
+    +' onclick="mwFeeWhyGo(\''+esc(asin)+'\','+sent+')">原因を切り分ける</button>'
+    +'</div>'
     +'</div>';
+}
+/* ---- 6.168（【V の続き】の4）原因の切り分け ----
+   同じ ASIN を**送り方だけ変えて**何度か聞き、どれなら通るかを出す。
+   「送っている値段・ASIN・市場のどれが不正か」がこれで分かる。 */
+function mwFeeWhyGo(asin,price){
+  var n=$('mwFeeTestNote');
+  if(roleDenyPrice('mwFeeTestNote'))return;
+  if(!syncUrl()||!syncApiKey()){
+    if(n)n.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var a=String(asin||'').trim().toUpperCase();
+  var pr=Math.round(+price||0);
+  if($('mwFeeTestAsin'))$('mwFeeTestAsin').value=a;
+  if($('mwFeeTestPrice'))$('mwFeeTestPrice').value=String(pr);
+  if(n)n.innerHTML='送り方を変えて4回聞いています（10秒ほどかかります）…';
+  if(n&&n.scrollIntoView)n.scrollIntoView({ block:'center' });
+  fetch(syncUrl()+'/mw/fee/why?asin='+encodeURIComponent(a)+'&price='+pr,
+        {headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!n)return;
+      if(!d||d.ok!==true){
+        n.textContent=(d&&d.note)?String(d.note):'切り分けられませんでした。';
+        return;
+      }
+      n.innerHTML='<b>切り分けの結果</b>（ASIN '+esc(String(d.asin))
+        +'・値段 '+yen(+d.price||0)+'・市場 '+esc(String(d.mp||''))+'）'
+        +(d.tried||[]).map(function(x){
+          return '<div class="note2" style="margin:2px 0 0;'
+            +'word-break:break-all">'
+            +(x.ok?'<b style="color:var(--good)">取れた</b>'
+                  :'<b style="color:var(--bad)">だめ</b>')
+            +'　'+esc(String(x.label))
+            +(x.ok?('　合計 '+yen(+x.total||0)):'')
+            +(x.err?('<br><span style="opacity:.8">'+esc(String(x.err))
+              +'</span>'):'')+'</div>'; }).join('')
+        +'<div class="note2" style="margin:4px 0 0"><b>原因</b>　'
+        +esc(String(d.why||'')).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')+'</div>'
+        +'<div class="note2" style="margin:2px 0 0"><b>直し方</b>　'
+        +esc(String(d.fix||''))+'</div>';
+    })
+    ['catch'](function(){
+      if(n)n.textContent='pj-sync に届きませんでした。'; });
 }
 /* だめだった行を、そのまま1件だけ試す（送った値段そのままで）。 */
 function mwFeeNgTry(asin,price){
@@ -12123,6 +12076,58 @@ function mwAmzQuery(priced,offset,limit){
     +(priced?'&priced=1':'')
     +'&limit='+(limit||MW_AMZ_PAGE)+'&offset='+(offset||0);
 }
+/* 6.168（【V の続き】）絞り込みと並べ替えを pj-sync でやるときの URL。
+   画面の絞り込みをそのまま渡し、**条件に合った行だけ**を受け取る。 */
+function mwAmzFindQuery(offset,limit,counts){
+  var q=amzCondQ(), f=mwAmzFilters();
+  var on=function(v){ return v?'1':'0'; };
+  return '?kishu='+encodeURIComponent(q.kishu)+'&new_only=1'
+    +'&ship_max='+q.ship_max+'&stock_min='+q.stock_min
+    +'&note_ng='+encodeURIComponent(q.note_ng)+'&note_all=0'
+    +'&win='+on(f.win)+'&multi='+on(f.multi)+'&noAmz='+on(f.noAmz)
+    +'&rstOk='+on(f.rstOk)+'&dup='+on(f.dup)
+    +'&norank='+on(!!$('csvMwAmzNoRank').checked)
+    +'&minM='+(+f.minM||0)
+    +'&genre='+encodeURIComponent(f.genre||'')
+    +'&caps='+encodeURIComponent(JSON.stringify(f.caps||{}))
+    +'&sort='+encodeURIComponent(mwAmzSort())
+    +'&counts='+(counts?'1':'0')
+    +'&limit='+(limit||MW_AMZ_PAGE)+'&offset='+(offset||0);
+}
+/* pj-sync が絞り込みをやってくれるか（null=まだ分からない）。
+   古い pj-sync（デプロイ前）では口が無いので、画面側で絞り込む形に戻す。 */
+var mwAmzSrv=null;
+/* 絞り込みを変えたとき。pj-sync 側で絞るときは**取り直す**。 */
+function mwAmzRefilter(){
+  if(mwAmzSrv===false){ mwAmzRender(); return; }
+  mwAmzLoad();
+}
+/* 6.168（【V の続き】）打ち切ったときの「続きを読み込む」。
+   いま読み込んだぶんの**続き**を1頁だけ足す（並びはそのまま）。 */
+function mwAmzMore(){
+  var note=$('csvMwAmzListNote');
+  if(!syncUrl()||!syncApiKey())return;
+  var off=(mwAmzRows||[]).length;
+  var url=(mwAmzSrv===false)
+    ? (syncUrl()+'/mw/amz'+mwAmzQuery(1,off))
+    : (syncUrl()+'/mw/amz/find'+mwAmzFindQuery(off,MW_AMZ_PAGE,0));
+  if(note)note.textContent='続きを取り込んでいます…';
+  fetch(url,{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ if(note)note.textContent='続きを読めませんでした。';
+        return; }
+      mwAmzRows=(mwAmzRows||[]).concat(d.rows||[]);
+      mwAmzGot=mwAmzRows.length;
+      var tot=(mwAmzSrv===false)?(+((mwAmzMeta||{}).priced)||0)
+                                :(+((mwAmzMeta||{}).n)||0);
+      mwAmzCut=Math.max(0,tot-mwAmzRows.length);
+      mwAmzRows.forEach(function(r){
+        if(+r.buy_qty>0)mwBuyMap[String(r.jan)]=+r.buy_qty; });
+      mwAmzRender();
+    })
+    ['catch'](function(){ if(note)note.textContent='続きを読めませんでした。'; });
+}
 function mwAmzLoad(){
   var note=$('csvMwAmzListNote');
   csvSecretFill();
@@ -12130,12 +12135,16 @@ function mwAmzLoad(){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
   note.textContent='一覧を取り込んでいます…';
-  var rows=[], first=null, page=0;
+  var rows=[], first=null, page=0, srv=(mwAmzSrv!==false);
   var get1=function(off){
-    return fetch(syncUrl()+'/mw/amz'+mwAmzQuery(1,off),
-                 {headers:{'X-PJ-Key':syncKeyReady()}})
+    var url=srv
+      ? (syncUrl()+'/mw/amz/find'+mwAmzFindQuery(off,MW_AMZ_PAGE,off===0))
+      : (syncUrl()+'/mw/amz'+mwAmzQuery(1,off));
+    return fetch(url,{headers:{'X-PJ-Key':syncKeyReady()}})
       .then(function(res){
         if(res.ok)return res.json();
+        /* 古い pj-sync は /mw/amz/find を知らない（404）。画面側に戻す。 */
+        if(srv){ srv=false; mwAmzSrv=false; return get1(0); }
         return res.text().then(function(t){
           var b=null; try{ b=JSON.parse(t); }catch(e){}
           throw new Error(syncPostWhy(res.status,b,t)); });
@@ -12143,14 +12152,25 @@ function mwAmzLoad(){
   };
   /* 続きがあるあいだ取り続ける（最大 MW_AMZ_PAGES 回）。 */
   var step=function(d){
+    if(!d||d.ok!==true){
+      if(srv){ srv=false; mwAmzSrv=false; return get1(0).then(step); }
+      return d;
+    }
+    if(srv)mwAmzSrv=true;
     if(!first)first=d;
     rows=rows.concat(d.rows||[]);
     page++;
     if(note)note.textContent='一覧を取り込んでいます… '+rows.length+'件';
-    if(d.more&&page<MW_AMZ_PAGES)return get1(rows.length).then(step);
+    /* 古い pj-sync は more を返さない。頁ぶん丸ごと来たら続きがあると見る。 */
+    var more=(d.more!==undefined)?!!d.more
+            :((d.rows||[]).length>=MW_AMZ_PAGE);
+    if(more&&page<MW_AMZ_PAGES)return get1(rows.length).then(step);
     mwAmzGot=rows.length;
-    /* 値段ありの全件（SQL で数えた数）に届かなければ、そのぶんが残り。 */
-    mwAmzCut=Math.max(0,(+first.priced||0)-rows.length);
+    /* まだ残っているか。
+       ・pj-sync 側で絞るとき … 条件に合った n件に届かないぶん
+       ・画面側で絞るとき     … 値段あり priced 件に届かないぶん */
+    mwAmzCut=srv?Math.max(0,(+first.n||0)-rows.length)
+                :Math.max(0,(+first.priced||0)-rows.length);
     return Object.assign({},first,{ rows:rows });
   };
   return get1(0).then(step)
@@ -12667,25 +12687,34 @@ function mwN(n){ return (+n||0).toLocaleString('en-US'); }
    そろえる。絞り込み前の数も「（全 1,444件）」で添える。 */
 function mwGenreOpts(){
   var sel=$('csvMwAmzGenre'); if(!sel)return;
-  var all={}, now={};
-  (mwAmzRows||[]).forEach(function(r){
-    var g=mwAmzGenre(r)||'（その他）';
-    all[g]=(all[g]||0)+1;
-  });
-  /* ジャンル以外の絞り込みだけをかけて数える。 */
-  var g0=mwAmzFiltOff(mwAmzFilters(),{ genre:'' });
-  for(var i=0;i<mwAmzPairs.length;i++){
-    if(!mwAmzKeep(mwAmzPairs[i],g0,true))continue;
-    var k=mwAmzGenre(mwAmzPairs[i].r)||'（その他）';
-    now[k]=(now[k]||0)+1;
+  var all={}, now={}, total=0, nAll=0;
+  /* 6.168（【V の続き】）pj-sync が**全件**で数えたものがあればそれを使う。
+     画面に来ているのは条件に合った行だけなので、画面で数えると足りない。 */
+  var srv=(mwAmzMeta&&mwAmzMeta.genres)?mwAmzMeta.genres:null;
+  if(srv){
+    srv.forEach(function(x){ all[x.g]=+x.all||0; now[x.g]=+x.n||0; });
+    total=+mwAmzMeta.genre_total||0;
+    nAll=+mwAmzMeta.scan||0;
+  }else{
+    (mwAmzRows||[]).forEach(function(r){
+      var g=mwAmzGenre(r)||'（その他）';
+      all[g]=(all[g]||0)+1;
+    });
+    /* ジャンル以外の絞り込みだけをかけて数える。 */
+    var g0=mwAmzFiltOff(mwAmzFilters(),{ genre:'' });
+    for(var i=0;i<mwAmzPairs.length;i++){
+      if(!mwAmzKeep(mwAmzPairs[i],g0,true))continue;
+      var k=mwAmzGenre(mwAmzPairs[i].r)||'（その他）';
+      now[k]=(now[k]||0)+1;
+    }
+    Object.keys(now).forEach(function(k){ total+=now[k]; });
+    nAll=(mwAmzRows||[]).length;
   }
-  var total=0;
-  Object.keys(now).forEach(function(k){ total+=now[k]; });
   var ks=Object.keys(all).sort(function(a,b){
     return ((now[b]||0)-(now[a]||0))||((all[b]||0)-(all[a]||0)); });
   var cur=String(sel.value||'');
   var h='<option value="">すべて（'+mwN(total)+'件／全 '
-    +mwN((mwAmzRows||[]).length)+'件）</option>'
+    +mwN(nAll)+'件）</option>'
     +ks.map(function(k){
       return '<option value="'+esc(k)+'">'+esc(k)+' '+mwN(now[k]||0)+'件'
         +'（全 '+mwN(all[k])+'件）</option>'; }).join('');
@@ -12697,35 +12726,40 @@ function mwGenreOpts(){
 /* ---- 6.167（【V】）「これを外すと何件増えるか」----
    どの条件で減っているのかが分かるように、チェックの横に出す。 */
 var MW_FILT=[
-  { id:'csvMwAmzWin', over:{ win:false } },
-  { id:'csvMwAmzMulti', over:{ multi:false } },
-  { id:'csvMwAmzNoAmz', over:{ noAmz:false } },
-  { id:'csvMwAmzRstOk', over:{ rstOk:false } }
+  { id:'csvMwAmzWin', over:{ win:false }, key:'win' },
+  { id:'csvMwAmzMulti', over:{ multi:false }, key:'multi' },
+  { id:'csvMwAmzNoAmz', over:{ noAmz:false }, key:'noAmz' },
+  { id:'csvMwAmzRstOk', over:{ rstOk:false }, key:'rstOk' }
 ];
 function mwAmzPlusRender(){
   var f=mwAmzFilters();
   var base=mwAmzCountWith(f);
-  var put=function(id,on,over,word,none){
+  /* 6.168（【V の続き】）pj-sync が**全件**で数えたものがあればそれを使う。 */
+  var sp=(mwAmzMeta&&mwAmzMeta.plus)?mwAmzMeta.plus:null;
+  var put=function(id,on,over,word,none,key){
     var el=$(id); if(!el)return;
     if(!on){ el.textContent=''; return; }
-    var d=mwAmzCountWith(mwAmzFiltOff(f,over))-base;
+    var d=(sp&&key&&sp[key]!==null&&sp[key]!==undefined)
+      ? (+sp[key]||0)
+      : (mwAmzCountWith(mwAmzFiltOff(f,over))-base);
     el.textContent=d>0?('（'+(word||'外すと')+' +'+mwN(d)+'件）')
                        :('（'+(none||'外しても増えません')+'）');
   };
   MW_FILT.forEach(function(x){
     var chk=$(x.id);
-    put(x.id+'N',!!(chk&&chk.checked),x.over);
+    put(x.id+'N',!!(chk&&chk.checked),x.over,null,null,x.key);
   });
   /* 利益率の下限（数の欄）。 */
   put('csvMwAmzMinMN',f.minM>0,{ minM:0 },'0%にすると',
-      '0%にしても増えません');
+      '0%にしても増えません','minM');
   /* ランキングの基準（⚙で決めた上限・順位が無い行を隠す）。 */
   var rk=$('csvMwAmzRankN');
   if(rk){
     var on=!!(f.capAny||Object.keys(f.caps||{}).length);
     if(!on)rk.textContent='';
     else{
-      var d=mwAmzCountWith(mwAmzFiltOff(f,{ caps:{}, capAny:false }))-base;
+      var d=(sp&&sp.rank!==null&&sp.rank!==undefined)?(+sp.rank||0)
+        :(mwAmzCountWith(mwAmzFiltOff(f,{ caps:{}, capAny:false }))-base);
       rk.textContent=d>0?('ランキングの基準を外すと +'+mwN(d)+'件'):'';
     }
   }
@@ -12771,31 +12805,13 @@ function mwAmzPicked(){
   });
 }
 /* 検索以外の絞り込み。残すなら true。
-   quiet=true のときは隠した数（mwRankHid）を足さない（数え直し用・6.167）。 */
+   quiet=true のときは隠した数（mwRankHid）を足さない（数え直し用・6.167）。
+   6.168（【V の続き】）判定そのものは shared/mwamz.js の1か所だけ
+   （pj-sync の側で絞り込むので、**同じ判定**でないと食い違う）。 */
 function mwAmzKeep(x,f,quiet){
-      /* 「JAN重複だけ」のときは重複の行だけ（値段が無くても出す・6.112）。 */
-      if(f.dup)return mwJanDup(x.r);
-      /* JAN重複の行は ASIN が無いので値段も利益も出ない。
-         それでも**一覧から落とさない**（落とすと印にも候補にも気づけない）。 */
-      if(!x.c)return mwJanDup(x.r);
-      /* 6.146：ジャンルの絞り込み。 */
-      if(f.genre&&(mwAmzGenre(x.r)||'（その他）')!==f.genre)return false;
-      if(f.win&&x.c.profit<=0)return false;
-      if(f.multi&&(+x.r.new_n||0)<2)return false;
-      if(f.noAmz&&(+x.r.amz))return false;
-      if(f.rstOk&&mwRstOf(x.r)!=='ok')return false;
-      /* ランキングの基準（6.124）。行の大分類に入れた上限で見る
-         （順位が小さいほど売れている）。 */
-      var rk=mwRankOf(x.r), cap=mwRankCapOf(x.r,f.caps);
-      if(rk>0){
-        if(cap&&rk>cap){ if(!quiet)mwRankHid++; return false; }
-      }else if(f.capAny&&!f.noRank){
-        /* 順位がまだ取れていない行は、上限を入れているあいだは隠す
-           （判断できないので）。「順位が無い行も表示」で出せる。 */
-        if(!quiet)mwRankHid++; return false;
-      }
-      if(f.minM&&x.c.margin<f.minM)return false;
-      return true;
+  var g=MWAMZ.keep(x.r,x.c,f);
+  if(g.rankHid&&!quiet)mwRankHid++;
+  return g.keep;
 }
 /* いま持っている行のうち JAN重複の件数（絞り込みの案内に出す）。 */
 function mwJanDupN(){
@@ -13993,26 +14009,45 @@ function mwAmzRender(){
   findNoteAmz(list.length,mwAmzRows.length,mwFindHid);
   /* 6.146：JAN→ASIN の引き当ての進み具合を「済／残り」で出す
      （まだ ASIN が無い行が数千あるので、どこまで進んだかを見えるようにする）。 */
-  note.innerHTML='候補 '+(d.n||0)+'件'
+  /* 6.168：pj-sync 側で絞るときは n が「条件に合った件数」になるので、
+     候補の件数は cand_n（絞り込み前）を使う。 */
+  note.innerHTML='候補 '+mwN((d.cand_n!==undefined)?d.cand_n:(d.n||0))+'件'
     +'　<b>ASIN 済 '+(d.seen||0)+'／残り '+(d.left||0)+'</b>'
     +'　値段あり '+(d.priced||0)
     +((d.n&&d.left)?('<span class="note2">（自動で 1時間 '+amzAutoPerHour()
       +'件・残り およそ '+Math.max(1,Math.ceil((d.left||0)/(amzAutoPerHour()*24)))
       +'日）</span>'):'')
-    /* 6.167（【V】）「3,000件のうち」をやめる。
-       ・読み込んだ … pj-sync から画面に来た行数（打ち切りがあればそう書く）
-       ・計算できた … そのうち利益を出せた行（JAN重複は出せない）
-       ・表示 … いまの絞り込みと検索に当たった行 */
+    /* 6.167／6.168：件数の言い方。
+       ・条件に合った … pj-sync が**全件**を見て数えた件数（6.168）
+       ・読み込んだ … 画面に来た行数
+       ・表示 … 検索にも当たった行 */
     +'　／　<b>'+mwN(list.length)+'件</b>を表示'
-    +'（読み込んだ '+mwN(mwAmzRows.length)+'件・計算できた '
-    +mwN(all.length)+'件）'
+    +(mwAmzSrv
+      ?('（条件に合った '+mwN(+d.n||0)+'件／pj-sync が全 '+mwN(+d.scan||0)
+        +'件を見ました）')
+      :('（読み込んだ '+mwN(mwAmzRows.length)+'件・計算できた '
+        +mwN(all.length)+'件）'))
     +(mwAmzCut>0
       ?('<br><b style="color:var(--bad)">※ 多いので '+mwN(mwAmzGot)
-        +'件で打ち切りました（値段あり '+mwN(+d.priced||0)+'件のうち・残り '
-        +mwN(mwAmzCut)+'件は出ていません）</b>'
-        +'<span class="note2">　絞り込み・並べ替え・CSV・ジャンルの件数は'
-        +'読み込んだぶんだけで出しています。</span>')
+        +'件で打ち切りました（'
+        +(mwAmzSrv?('条件に合った '+mwN(+d.n||0)+'件'):('値段あり '
+          +mwN(+d.priced||0)+'件'))
+        +'のうち・残り '+mwN(mwAmzCut)+'件は出ていません）</b>'
+        +'<button class="btn" style="margin:2px 0 0;padding:3px 8px;'
+        +'font-size:12px" onclick="mwAmzMore()">続きの '
+        +mwN(Math.min(MW_AMZ_PAGE,mwAmzCut))+'件を読み込む</button>'
+        +'<span class="note2">　'
+        +(mwAmzSrv
+          ?'検索と CSV は読み込んだぶんだけで出しています。'
+          :'絞り込み・並べ替え・CSV・ジャンルの件数は読み込んだぶんだけで'
+            +'出しています。<b>pj-sync をデプロイすると、絞り込みと'
+            +'並べ替えを pj-sync 側でやるので全件から選べます。</b>')
+        +'</span>')
       :'')
+    +((mwAmzSrv===false)
+      ?('<br><span class="note2">※ pj-sync が古いので、絞り込みと並べ替えを'
+        +'<b>画面側</b>で行っています（deploy-pj-sync でデプロイしてください）。'
+        +'</span>'):'')
     +(mwJanDupN()?('　<b style="color:var(--bad)">JAN重複 '+mwJanDupN()
       +'件</b>（下の絞り込みで見られます）'):'')
     /* ランキングの上限（⚙設定・大分類ごと）で落ちた行（6.124）。 */
@@ -21688,7 +21723,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v249';   // sw.js の const V と必ず同じ値にする
+var APP_V='v250';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

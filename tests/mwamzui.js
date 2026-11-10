@@ -199,8 +199,12 @@ console.log('   いま:            粗利'+c.game.profit+' 手数料'+c.game.fee
 console.log('\n=== 一覧 ===');
 await p.evaluate(()=>{ $('csvMwAmzLoad').click(); });
 await p.waitForTimeout(500);
-let q=await p.evaluate(()=>window.__posts.filter((x)=>/priced=1/.test(x.url))[0]);
-ok(!!q,'★★一覧は値段が取れた行だけを求める（priced=1）');
+/* 6.168（【V の続き】）pj-sync 側で絞るときは /mw/amz/find に聞く
+   （値段が取れた行だけは pj-sync 側の条件に入っている）。
+   古い pj-sync のときは今までどおり priced=1 を付けて /mw/amz に聞く。 */
+let q=await p.evaluate(()=>window.__posts.filter(
+  (x)=>/priced=1/.test(x.url)||/\/mw\/amz\/find/.test(x.url))[0]);
+ok(!!q,'★★一覧は値段が取れた行だけを求める（find か priced=1）');
 let t=await p.evaluate(()=>$('csvMwAmzList').textContent);
 let note2=await p.evaluate(()=>$('csvMwAmzListNote').textContent);
 console.log('   '+note2.replace(/\s+/g,' '));
