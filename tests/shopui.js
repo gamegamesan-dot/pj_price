@@ -123,7 +123,45 @@ await load();
      '★卸値が無ければ0');
 }
 
+console.log('\n=== ①の2 重さが取れていない行は注意を出す（6.171）===');
+{
+  await setup({ rows:[row(0),row(1,{ size_g:0, size_tier:'' })] });
+  await load();
+  const t=await p.evaluate(()=>({
+    txt:($('csvMwAmzList').textContent||'').replace(/\s+/g,' '),
+    noG:mwSubNoG({ size_g:0 }), g:mwSubNoG({ size_g:110 }) }));
+  ok(t.noG===true&&t.g===false,'★★重さが無い行だけ見分ける');
+  ok(/重さ未取得（送料の段がずれます）/.test(t.txt),
+     '★★★重さの無い行に注意を出す');
+  ok((t.txt.match(/重さ未取得/g)||[]).length===1,
+     '★★重さのある行には出さない');
+}
+{
+  /* 書き出したあとにも件数で知らせる。 */
+  const SUBG={ ok:true, table_ok:true, n:2, rows:[
+    { jan:'4902370550467', name:'重さあり', asin:'B0D1GSZJ8T', kishu:'Switch',
+      price:5300, max_qty:3, grades:'', size_tier:'s', size_g:110 },
+    { jan:'4948872415019', name:'重さなし', asin:'B0CW1GB9VN', kishu:'Switch',
+      price:3800, max_qty:5, grades:'', size_tier:'', size_g:0 }] };
+  await setup({ rows:[row(0)], sub:SUBG });
+  await load();
+  const d=await p.evaluate(async()=>{
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    return { note:($('mwSubNote').textContent||'').replace(/\s+/g,' '),
+             text:(window.__dl[0]||{}).text };
+  });
+  console.log('   '+d.note);
+  ok(/重さが取れていない行が 1件/.test(d.note),
+     '★★★書き出したあとに件数で知らせる');
+  ok(/Amazonで調べる/.test(d.note),'★★★どうすれば直るか書く');
+  ok(cellOf(d.text,2,'Weight value (grams)')==='0',
+     '★重さが無い行は 0 で出る（だから注意が要る）');
+}
+
 console.log('\n=== ② 印を付けると pj-sync に控える ===');
+await setup({ rows:[row(0),row(1)] });
+await load();
 {
   const q=await p.evaluate(async()=>{
     window.__q=[];

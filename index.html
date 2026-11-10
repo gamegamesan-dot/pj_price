@@ -14547,8 +14547,16 @@ function mwSubLine(r){
     +' onchange="mwSubChange(\''+esc(jan)+'\')"><span class="unit">円（税込）</span>'
     +(g===null?'':('<span class="note2" style="margin:0">会員の粗利の目安 '
       +yen(g)+'</span>'))
+    /* 6.171：重さが無いと Shopify の「重さの段」の送料がずれる
+       （ぜんぶ 0g 扱いでいちばん安い段に入ってしまう）。 */
+    +(mwSubNoG(r)?('<span class="note2" style="margin:0;color:var(--bad)">'
+      +'⚠ 重さ未取得（送料の段がずれます）</span>'):'')
     +'</div>';
 }
+/* 6.171：重さが取れていない行。Shopify の送料は「重さの段」で出すので、
+   0g のままだと何本買っても いちばん安い段（1〜2本ぶん）になってしまう。
+   採寸は Amazon（SP-API）から取るので、「Amazonで調べる」で埋まる。 */
+function mwSubNoG(r){ return (+((r||{}).size_g)||0)<=0; }
 /* 会員から見た粗利の目安＝Amazon の実売 − 手数料 − 販売価格。
    **手数料が Amazon から取れている行だけ**出す（仮の手数料では出さない）。
    会員に見せる数字の元になるので、当てずっぽうの額は出さない。
@@ -14619,10 +14627,15 @@ function mwSubCsvGo(){
     }
     var text=PJ_SHOPCSV.build(d.rows,o);
     dl('shopify-products-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
+    /* 6.171：重さの無い行は送料の段がずれるので、件数を出して知らせる。 */
+    var noG=d.rows.filter(mwSubNoG).length;
     n.innerHTML='✓ '+mwN(rows.length)+'件を書き出しました。'
       +'Shopify の <b>商品 → インポート</b>で読み込み、'
       +'<b>「Overwrite products with matching handles」にチェック</b>'
-      +'してください。';
+      +'してください。'
+      +(noG?('<br><span style="color:var(--bad)">⚠ 重さが取れていない行が '
+        +mwN(noG)+'件あります</span>（0g で出るので<b>送料の段がずれます</b>。'
+        +'「Amazonで調べる」で採寸を取ってから出し直してください）。'):'');
     /* 出した印（SKU の日付に使う）。失敗しても CSV は出せている。 */
     mwPost('/mw/sub/put',{ jans:d.rows.map(function(x){ return x.jan; }) })
       ['catch'](function(){});
@@ -22250,7 +22263,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v252';   // sw.js の const V と必ず同じ値にする
+var APP_V='v253';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
