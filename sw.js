@@ -12,7 +12,6 @@ const ASSETS = [
   // MW の在庫CSVの読み方（【P】）。pj-sync も同じこのファイルを読む。
   './shared/mwcsv.js',
   './shared/mwstat.js',
-  './shared/mwamz.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

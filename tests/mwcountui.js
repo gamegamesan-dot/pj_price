@@ -45,14 +45,6 @@ const setup=async(o)=>await p.evaluate((o)=>{
       return res(window.__ng); }
     if(/\/mw\/fee\/test/.test(url)){ window.__pages.push({u:'test',url:url});
       return res(window.__test); }
-    /* 6.168：pj-sync 側の絞り込み（/mw/amz/find）。
-       o.find を渡さないときは 404（古い pj-sync）にして、
-       画面側で絞る形（6.167）をそのまま確かめる。 */
-    if(/\/mw\/amz\/find/.test(url)){
-      window.__pages.push({u:'find',url:url});
-      if(!o.find)return new Response('{}',{status:404});
-      return res(o.find(url));
-    }
     if(/\/mw\/amz/.test(url)){
       const off=+((url.match(/[?&]offset=(\d+)/)||[])[1]||0);
       const lim=+((url.match(/[?&]limit=(\d+)/)||[])[1]||page);
@@ -101,8 +93,6 @@ console.log('=== ④ 続きを取り切る（打ち切りが起きない）===')
   const t=await note();
   console.log('   '+t.slice(0,200));
   ok(/読み込んだ 3,411件/.test(t),'★★★「読み込んだ 3,411件」と出す');
-  ok(/pj-sync が古いので/.test(t),
-     '★★★pj-sync が古いときは画面側で絞っていると書く（6.168）');
   ok(!/3,000件のうち/.test(t)&&!/打ち切り/.test(t),
      '★★★「3,000件のうち」と出さない（打ち切っていない）');
 }
