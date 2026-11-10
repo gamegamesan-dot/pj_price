@@ -123,7 +123,9 @@ let g=await p.evaluate(()=>{
 });
 console.log('   '+JSON.stringify(g));
 ok(g.opts.length>=2,'★★ジャンルの選択肢をいまの一覧から作る');
-ok(/すべて（3件）/.test(g.opts[0]),'★「すべて」に件数を出す');
+/* 6.167（【V】）件数は「絞り込みのあと／全件」の2つを出す。 */
+ok(/すべて（3件／全 3件）/.test(g.opts[0]),
+   '★「すべて」に件数を出す（絞り込みのあと／全件・6.167）');
 ok(g.rows>0&&g.rows<3,'★★★ジャンルで絞れる');
 
 await T.done();

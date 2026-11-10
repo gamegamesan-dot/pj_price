@@ -108,7 +108,10 @@ console.log('\n=== 送る本文・受ける応答の形（7.104）===');
 const fbody=W.mwFeeBody([{asin:'B0SAIVA001',price:9638.4}]);
 ok(Array.isArray(fbody),'★★★本文は**配列そのもの**（これを間違えて全件 400 だった）');
 ok(fbody[0].IdType==='ASIN'&&fbody[0].IdValue==='B0SAIVA001','★IdType と IdValue');
-ok(fbody[0].FeesEstimateRequest.Identifier==='B0SAIVA001','★Identifier も入れる');
+/* 7.127（【V】）Identifier は「1回のなかで重ならない値」。
+   同じ ASIN が2つ入っても重ならないよう、並び順を足した形にした。 */
+ok(fbody[0].FeesEstimateRequest.Identifier==='B0SAIVA001#1',
+   '★Identifier も入れる（重ならない形・7.127）');
 ok(fbody[0].FeesEstimateRequest.PriceToEstimateFees.ListingPrice.Amount===9638,
    '★★売値は整数（円）にして送る');
 ok(W.mwFeeList([{Status:'Success'}]).length===1,'★★応答が配列でも読める');

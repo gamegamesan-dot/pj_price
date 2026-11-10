@@ -107,8 +107,10 @@ await p.waitForTimeout(120);
 await p.click('#mwFeeTestBtn');
 await p.waitForTimeout(200);
 n=await note();
-ok(/B0XXXXXXXX/.test(n)&&!(await p.evaluate(()=>window.__url)),
-   '★ASIN の形が違えば送らない');
+/* 6.167（【V】）本・雑誌の ASIN は B で始まらない10桁なので、
+   断る条件は「英数字10桁かどうか」にした。 */
+ok(/英数字10桁/.test(n)&&!(await p.evaluate(()=>window.__url)),
+   '★ASIN の形が違えば送らない（英数字10桁・6.167）');
 
 /* 作業者では使えない（Amazon に問い合わせるため） */
 await setup({ role:'staff', body:{ ok:true } });

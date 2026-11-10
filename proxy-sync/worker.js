@@ -7033,7 +7033,11 @@ function mwFeePick(d) {
   if (st && st !== "Success") {
     /* 1件ごとの理由（Error）も出す。これが分からないと直せない。 */
     const e0 = r.Error || {};
-    const why = [e0.Type, e0.Code, e0.Message].filter(Boolean).join(": ").slice(0, 300);
+    /* 7.127（【V】）**切らずに残す**。300字で切っていたので、
+       Amazon の「InvalidParameterValue: The …」の肝心なところが
+       読めないことがあった。 */
+    const why = [e0.Type, e0.Code, e0.Message].filter(Boolean).join(": ")
+      .slice(0, 400);
     return { ok: false, err: "手数料が返りませんでした（" + st + "）"
       + (why ? ("：" + why) : "") };
   }
@@ -7157,13 +7161,16 @@ function mwDimPick(it) {
   const b = pick(im);
   return Object.assign(b, { src: b.g ? "item" : "" });
 }
-/* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。 */
+/* 送る本文（7.104）。配列そのもの。テストの窓口からも使う。
+   7.127（【V】）Identifier は Amazon の仕様で「この1件を見分ける**一意の値**」。
+   ASIN そのままだと、同じ ASIN が1回の中に2つ入ったときに重なるので、
+   **並び順を足して重なりようのない形**にする（応答は IdValue＝ASIN で引く）。 */
 function mwFeeBody(part) {
-  return part.map((x) => ({
+  return part.map((x, i) => ({
     FeesEstimateRequest: {
       MarketplaceId: MP_FE,
       IsAmazonFulfilled: true,
-      Identifier: String(x.asin),
+      Identifier: String(x.asin) + "#" + (i + 1),
       PriceToEstimateFees: {
         ListingPrice: { CurrencyCode: "JPY", Amount: Math.round(Number(x.price) || 0) },
       },
@@ -7191,8 +7198,12 @@ async function mwFeeTest(env, url) {
   const run = newRun("fee-test");
   const asin = String(url.searchParams.get("asin") || "").trim().toUpperCase();
   const price = Math.round(Number(url.searchParams.get("price") || 0));
-  if (!/^B[0-9A-Z]{9}$/.test(asin))
-    return { ok: false, error: "bad_asin", note: "asin=B0XXXXXXXX の形で指定してください" };
+  /* 7.127（【V】）本・雑誌の ASIN は `B` で始まらない10桁（ISBN）なので、
+     `B…` だけに限ると**だめだった行をそのまま試せなかった**。
+     Amazon が受ける形（英数字10桁）なら試せるようにする。 */
+  if (!/^[0-9A-Z]{10}$/.test(asin))
+    return { ok: false, error: "bad_asin",
+             note: "asin は英数字10桁で指定してください（例 B0XXXXXXXX・4047356123）" };
   if (!(price > 0))
     return { ok: false, error: "bad_price", note: "price=1980 のように売値（円）を指定してください" };
   const part = [{ asin, price }];
@@ -7230,6 +7241,54 @@ async function mwFeeTest(env, url) {
       ? "商品ごとの実額が取れました。次の「Amazonで調べる」で一覧にも入ります。"
       : "取れませんでした。上の err（全文）と sent（送った中身）を見てください。",
   };
+}
+/* ---- だめだった行の一覧（7.127・【V】）----
+   GET /mw/fee/ng?limit=
+   「だめ 718件」の**中身**を出す。グループの文（fee_err）だけでは
+   どの ASIN・どの値段でだめなのかが分からなかった。
+   その行の ASIN と**送った値段**（fee_base。無ければいまの値段）を返すので、
+   そのまま /mw/fee/test?asin=&price= で1件だけ試せる。 */
+const MW_FEE_NG_MAX = 200;
+async function mwFeeNg(env, url) {
+  const p = url.searchParams;
+  const limit = Math.max(1, Math.min(MW_FEE_NG_MAX,
+    Math.round(Number(p.get("limit")) || 50)));
+  const like = String(p.get("why") || "").trim();
+  const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
+                       ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
+                       note_ng: p.get("note_ng"), note_all: p.get("note_all") });
+  const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g,
+                        "s.$1");
+  /* 理由で絞る（画面の「この理由だけ見る」）。
+     7.118：素の `?` と ?N を混ぜないので、記号を落として文字で埋め込む。 */
+  const only = like
+    ? ` AND COALESCE(a.fee_err,'') LIKE '%${like.replace(/['"%_\\]/g, "")}%'`
+    : "";
+  const q = await env.DB.prepare(
+    `SELECT s.jan AS jan, s.name AS name, s.sha AS sha, s.kishu AS kishu,
+            a.asin AS asin, a.price AS price, a.fee_base AS fee_base,
+            a.fee_at AS fee_at, a.fee_err AS fee_err, a.rank_cat AS rank_cat,
+            a.size_tier AS size_tier
+       FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND COALESCE(a.price,0)>0 AND COALESCE(a.fee_total,0)=0
+        AND COALESCE(a.fee_err,'')<>''${only}
+      ORDER BY a.fee_at DESC, s.jan ASC LIMIT ${limit}`).bind(...q0.bind).all();
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+      WHERE ${w} AND COALESCE(a.price,0)>0 AND COALESCE(a.fee_total,0)=0
+        AND COALESCE(a.fee_err,'')<>''${only}`).bind(...q0.bind).first();
+  const rows = ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""), name: String(r.name || ""),
+    sha: String(r.sha || ""), kishu: String(r.kishu || ""),
+    asin: String(r.asin || ""),
+    price: Number(r.price) || 0,
+    /* 送った値段（fee_base）。無ければいまの値段で試せる。 */
+    sent: Number(r.fee_base) || Number(r.price) || 0,
+    at: String(r.fee_at || ""), at_jst: jstText(r.fee_at),
+    why: String(r.fee_err || ""),
+    rank_cat: String(r.rank_cat || ""), size_tier: String(r.size_tier || "") }));
+  return { ok: true, n: rows.length, all: Number((n && n.n) || 0),
+           limit: limit, why: like, rows: rows, mp: MP_FE };
 }
 /* ASIN をまとめて見積もる。price は売値（円）。 */
 async function mwFeeFind(env, run, items) {
@@ -7817,6 +7876,8 @@ async function mwScanPrice(env, run, o, dl) {
    ・**出した売値が今の売値と1割以上ずれた**（fee_base）
    行を、新しいものから順に取り直す。1回20件・2秒。
    ③とは別の持ち時間を持つので、③が時間を使い切っても手数料が止まらない。 */
+/* 7.127（【V】）/mw/amz の1回で返す行数の上限。画面は offset で続きを取る。 */
+const MW_AMZ_PAGE = 1500;
 const MW_FEE_TTL_D = 7;            // 手数料の作り直し（日）
 const MW_FEE_DIFF = 0.1;           // 売値がこれ以上ずれたら取り直す
 async function mwScanFee(env, run, o, dl) {
@@ -7854,8 +7915,32 @@ async function mwScanFee(env, run, o, dl) {
   const stmts = [];
   for (let i = 0; i < rows.length; i += MW_FEE_BATCH) {
     if (Date.now() + MW_FEE_CALL_MS > dl) { st.stopped = "time"; break; }
-    const part = rows.slice(i, i + MW_FEE_BATCH).map((r) => ({
-      asin: String(r.asin), price: Math.round(Number(r.price) || 0) }));
+    const all = rows.slice(i, i + MW_FEE_BATCH).map((r) => ({
+      asin: String(r.asin || "").trim().toUpperCase(),
+      price: Math.round(Number(r.price) || 0) }));
+    /* 7.127（【V】）**Amazon が受けない形は送らない**（枠の無駄づかいと
+       「InvalidParameterValue」の種をつぶす）。理由はその場で残す。 */
+    const part = [], bad = [];
+    for (const y of all) {
+      if (!/^[0-9A-Z]{10}$/.test(y.asin)) {
+        bad.push({ asin: y.asin, price: y.price,
+                   err: "ASIN の形が違うので送っていません（英数字10桁）" });
+      } else if (!(y.price > 0)) {
+        bad.push({ asin: y.asin, price: y.price,
+                   err: "売値が 0 なので送っていません" });
+      } else part.push(y);
+    }
+    for (const b of bad) {
+      st.done++; st.ng++;
+      const k = String(b.err).slice(0, 400);
+      st.whys[k] = (st.whys[k] || 0) + 1;
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET fee_ref=NULL, fee_fba=NULL, fee_tax=NULL,
+           fee_total=NULL, fee_base=NULL, fee_at=?2, fee_err=?3,
+           fee_fba_ship=NULL, fee_fba_store=NULL WHERE asin=?1`)
+        .bind(b.asin, at, b.err));
+    }
+    if (!part.length) continue;
     const fr = await mwFeeFind(env, run, part);
     st.calls += fr.calls;
     const byAsin = {};
@@ -10761,7 +10846,13 @@ async function mwAmzList(env, url) {
   const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
                        ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
                        note_ng: p.get("note_ng"), note_all: p.get("note_all") });
-  const limit = Math.max(1, Math.min(3000, mwNum(p.get("limit")) || 2000));
+  /* 7.127（【V】）**打ち切らずに全件返せるようにする**。
+     v248 までは limit の上限が 3000 で、画面も limit=3000 で1回だけ聞いて
+     いたので、値段ありが 3,411件あると **411件が画面に来ていなかった**
+     （絞り込み・並べ替え・ジャンルの件数・CSV から丸ごと漏れていた）。
+     1回で返す数は抑えたまま、offset で**続きから**取れるようにする。 */
+  const limit = Math.max(1, Math.min(MW_AMZ_PAGE, mwNum(p.get("limit")) || 1500));
+  const offset = Math.max(0, mwNum(p.get("offset")) || 0);
   const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const only = p.get("priced") === "1" ? " AND COALESCE(a.price,0)>0" : "";
   /* 7.126（【T】）在庫の動きの目安も返す。 */
@@ -10810,7 +10901,11 @@ async function mwAmzList(env, url) {
                          MAX(at) AS at
                          FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}
       WHERE ${w}${only}
-      ORDER BY COALESCE(a.price,0) DESC LIMIT ${limit}`).bind(...q0.bind).all();
+      /* 7.127：offset で続きを取るので、**並びを一意にする**
+         （同じ値段の行が多いので、JAN を添えないとページの境目で
+         同じ行が2回出たり、落ちたりする）。 */
+      ORDER BY COALESCE(a.price,0) DESC, s.jan ASC
+      LIMIT ${limit} OFFSET ${offset}`).bind(...q0.bind).all();
   const n = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_stock s WHERE ${w}`).bind(...q0.bind).first();
   const seen = await env.DB.prepare(
@@ -10860,6 +10955,9 @@ async function mwAmzList(env, url) {
            priced: Number((seen && seen.priced) || 0),
            left: Math.max(0, Number((n && n.n) || 0) - Number((seen && seen.n) || 0)),
            per_run: MW_AMZ_MAX, ttl_days: MW_AMZ_TTL_D,
+           /* 7.127（【V】）続きがあるか（画面はこれを見て次の頁を取る）。 */
+           offset: offset, page_max: MW_AMZ_PAGE,
+           more: ((q && q.results) || []).length >= limit,
            last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
            /* 手数料（7.97）。値段が取れている行のうち、手数料が取れた／だめ／まだ。 */
            fee: { n: Number((fee && fee.n) || 0), ok: Number((fee && fee.ok_n) || 0),
@@ -13591,6 +13689,9 @@ export default {
       if (request.method === "GET" && url.pathname === "/schema/check")
         return json(await schemaCheck(env), 200, origin);
       /* 手数料を1件だけ試す（7.104）。Amazon に問い合わせるので管理者だけ。 */
+      /* 7.127（【V】）だめだった行の一覧（見るだけなので作業者でもよい）。 */
+      if (request.method === "GET" && url.pathname === "/mw/fee/ng")
+        return json(await mwFeeNg(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/fee/test") {
         if (role !== "admin")
           return forbidStaff("手数料の試しは管理者用のキーが必要です", [], origin);
@@ -13854,6 +13955,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 【P】在庫CSVの自動取り込み */
   /* 7.121（【Q】） */
   mwNtList, mwNtWhere, notifyBlocks, NOTIFY_MAX, NOTIFY_ROOM,
+  /* 7.127（【V】）件数の打ち切りと、手数料のだめだった行。 */
+  mwFeeNg, MW_FEE_NG_MAX, MW_AMZ_PAGE,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
   mwMoveSweep,

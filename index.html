@@ -1042,15 +1042,17 @@ body.staff #syncOnHandFix{display:none !important}
           <option value="nostock">再入荷なし（在庫処分）を先に</option>
         </select>
       </div>
-      <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ</label></div>
-      <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上</label></div>
-      <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし</label></div>
-      <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）</label></div>
+      <!-- 6.167（【V】）チェックの横に「これを外すと何件増えるか」を出す -->
+      <div class="chk" style="margin-top:4px"><input type="checkbox" id="csvMwAmzWin" checked><label for="csvMwAmzWin" style="flex:1">黒字のみ<span id="csvMwAmzWinN" class="note2" style="margin:0 0 0 4px"></span></label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzMulti"><label for="csvMwAmzMulti" style="flex:1">新品出品者が2人以上<span id="csvMwAmzMultiN" class="note2" style="margin:0 0 0 4px"></span></label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzNoAmz"><label for="csvMwAmzNoAmz" style="flex:1">Amazon本体なし<span id="csvMwAmzNoAmzN" class="note2" style="margin:0 0 0 4px"></span></label></div>
+      <div class="chk"><input type="checkbox" id="csvMwAmzRstOk"><label for="csvMwAmzRstOk" style="flex:1">出品できる行だけ（まだ調べていない行も隠す）<span id="csvMwAmzRstOkN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
       <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
-      <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span><span id="csvMwAmzMinMN" class="note2" style="margin:0 0 0 4px"></span></div>
       <!-- 順位が無い行の出し入れ（6.124）。上限は⚙設定（大分類ごと）で決める -->
       <div class="chk"><input type="checkbox" id="csvMwAmzNoRank"><label for="csvMwAmzNoRank" style="flex:1">順位が無い行も表示</label></div>
+      <div class="note2" id="csvMwAmzRankN" style="margin:2px 0 0"></div>
       <!-- 6.146：全ジャンルに広げたので、ジャンルで絞れるようにする -->
       <div class="rowv"><label>ジャンル</label><select id="csvMwAmzGenre"><option value="" selected>すべて</option></select></div>
       <details class="exp" data-exp="amzRank"><summary>説明</summary>
@@ -1677,6 +1679,17 @@ body.staff #syncOnHandFix{display:none !important}
             <button class="btn" id="mwFeeTestBtn" style="flex:0 0 auto">ためす</button>
           </div>
           <div class="note2" id="mwFeeTestNote" style="margin-top:2px"></div>
+          <!-- 6.167（【V】）だめだった行の中身（ASIN・送った値段・理由の全文）。
+               そのまま「1件で試す」を押せる。 -->
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <button class="btn" id="mwFeeNgBtn" style="flex:1"
+                    onclick="mwFeeNgShow()">だめだった行を見る</button>
+            <input type="number" id="mwFeeNgN" value="30" step="10" min="1"
+                   max="200" inputmode="numeric" style="width:76px">
+            <span class="unit">件</span>
+          </div>
+          <div class="note2" id="mwFeeNgNote" style="margin-top:2px"></div>
+          <div id="mwFeeNgBox"></div>
         </div>
         <!-- 中身は {"ホビー":900000,...} の形。pj-sync と端末の両方に控える -->
         <input type="hidden" id="mwRankCaps" value="">
@@ -11781,8 +11794,13 @@ function mwFeeNote(f){
     ? ('<details style="margin:2px 0 0"><summary class="note2" style="margin:0;'
        +'cursor:pointer">だめだった理由（全文）</summary>'
        +ws.map(function(x){
+           /* 6.167（【V】）その理由の**行**（ASIN・送った値段）を見られるように。 */
            return '<div class="note2" style="margin:2px 0 0;word-break:break-all">'
-             +'<b>'+x.n+'件</b>　'+esc(x.t)+'</div>'; }).join('')
+             +'<b>'+x.n+'件</b>　'+esc(x.t)
+             +' <a href="#" onclick="mwFeeNgShow('
+             +esc(JSON.stringify(x.t.slice(0,40)))+');return false">'
+             +'この理由の行を見る</a>'
+             +'</div>'; }).join('')
        +'</details>')
     : '';
   return '<br>手数料：<b>商品ごとの実額 '+ok+'件</b>'
@@ -11793,6 +11811,73 @@ function mwFeeNote(f){
     +(ng?('　だめ '+ng+'件'+(why?('：'+why):'')):'')
     +full;
 }
+
+/* ---- 6.167（【V】）手数料がだめだった行の中身 ----
+   「だめ 718件：…（ClientError）：Sender: InvalidParameterValue: The…」の
+   **どの ASIN・どの値段**でだめなのかが分からなかったので、
+   その行を並べて、そのまま1件だけ試せるようにする。 */
+function mwFeeNgShow(why){
+  var note=$('mwFeeNgNote'), box=$('mwFeeNgBox');
+  if(!note||!box)return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを入れてください。'; return;
+  }
+  var lim=Math.max(1,Math.min(200,+($('mwFeeNgN')||{}).value||30));
+  var b=$('mwFeeNgBtn'), back=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='読み込み中…'; }
+  note.textContent='pj-sync に聞いています…';
+  box.innerHTML='';
+  var q=amzCondQ();
+  fetch(syncUrl()+'/mw/fee/ng?limit='+lim
+        +'&kishu='+encodeURIComponent(q.kishu)+'&new_only=1'
+        +'&ship_max='+q.ship_max+'&stock_min='+q.stock_min
+        +'&note_ng='+encodeURIComponent(q.note_ng)+'&note_all=0'
+        +(why?('&why='+encodeURIComponent(String(why))):''),
+        {headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(b){ b.disabled=false; b.textContent=back; }
+      if(!d||d.ok!==true){ note.textContent='読めませんでした。'; return; }
+      note.innerHTML='だめだった行 <b>'+mwN(+d.all||0)+'件</b>'
+        +'（うち '+mwN(+d.n||0)+'件を表示）　市場 '+esc(String(d.mp||''))
+        +(d.why?('　理由で絞り込み：'+esc(String(d.why))):'');
+      box.innerHTML=(d.rows||[]).length
+        ?(d.rows||[]).map(mwFeeNgLine).join('')
+        :'<div class="note2">だめだった行はありません。</div>';
+    })
+    ['catch'](function(){
+      if(b){ b.disabled=false; b.textContent=back; }
+      note.textContent='pj-sync に届きませんでした。';
+    });
+}
+function mwFeeNgLine(x){
+  var asin=String(x.asin||''), sent=Math.round(+x.sent||0);
+  return '<div class="note2" style="margin:4px 0 0;padding:4px;'
+    +'border:1px solid var(--line);border-radius:4px;word-break:break-all">'
+    +'<b>'+esc(String(x.name||x.jan).slice(0,40))+'</b>'
+    +'<div style="margin:1px 0 0">ASIN <b>'+esc(asin)+'</b>'
+    +'（'+asin.length+'桁'+(/^B[0-9A-Z]{9}$/.test(asin)?'':'・B で始まらない')+'）'
+    +'　送った値段 <b>'+yen(sent)+'</b>'
+    +'　いまの値段 '+yen(+x.price||0)
+    +'　JAN '+esc(String(x.jan||''))+'</div>'
+    +(x.rank_cat?('<div style="margin:1px 0 0">分類 '+esc(String(x.rank_cat))
+      +(x.size_tier?('　サイズ区分 '+esc(String(x.size_tier))):'')+'</div>'):'')
+    +'<div style="margin:1px 0 0">'+esc(String(x.at_jst||''))+'　'
+    +esc(String(x.why||''))+'</div>'
+    +'<button class="btn" style="margin-top:3px;padding:3px 8px;font-size:12px"'
+    +' onclick="mwFeeNgTry(\''+esc(asin)+'\','+sent+')">この1件で試す</button>'
+    +'</div>';
+}
+/* だめだった行を、そのまま1件だけ試す（送った値段そのままで）。 */
+function mwFeeNgTry(asin,price){
+  if($('mwFeeTestAsin'))$('mwFeeTestAsin').value=String(asin||'');
+  if($('mwFeeTestPrice'))$('mwFeeTestPrice').value=String(Math.round(+price||0));
+  mwFeeTestRun();
+  var el=$('mwFeeTestNote');
+  if(el&&el.scrollIntoView)el.scrollIntoView({ block:'center' });
+}
+
 /* ---- 手数料を1件だけためす（6.142／7.104・管理者だけ）---- */
 function mwFeeTestRun(){
   var n=$('mwFeeTestNote');
@@ -11801,8 +11886,11 @@ function mwFeeTestRun(){
   if(!syncKeyReady('mwFeeTestNote'))return;
   var asin=String($('mwFeeTestAsin').value||'').trim().toUpperCase();
   var price=Math.round(+$('mwFeeTestPrice').value||0);
-  if(!/^B[0-9A-Z]{9}$/.test(asin)){
-    n.textContent='ASIN を B0XXXXXXXX の形で入れてください。'; return;
+  /* 6.167（【V】）本・雑誌の ASIN は B で始まらない10桁（ISBN）なので、
+     B… だけに限ると**だめだった行をそのまま試せなかった**。 */
+  if(!/^[0-9A-Z]{10}$/.test(asin)){
+    n.textContent='ASIN は英数字10桁で入れてください（例 B07MLZ2JKF・4047356123）。';
+    return;
   }
   if(!(price>0)){ n.textContent='売値（円）を入れてください。'; return; }
   var b=$('mwFeeTestBtn'), back=b.textContent;
@@ -12018,14 +12106,22 @@ function amzCondQ(){
            ship_max:amzShipMax(), stock_min:amzStockMin(),
            note_ng:mwNoteNgList().join(','), note_all:0 };
 }
-function mwAmzQuery(priced){
+/* 6.167（【V】）1回に取る行数と、何回まで続きを取るか。
+   v248 までは limit=3000 で**1回だけ**聞いていたので、値段ありが
+   3,411件あると 411件が画面に来ず、絞り込み・並べ替え・ジャンルの件数・
+   CSV から丸ごと漏れていた。offset で続きを取って**全件そろえる**。 */
+var MW_AMZ_PAGE=1500, MW_AMZ_PAGES=20;
+/* 打ち切ったときの件数（0 なら全件そろっている）。 */
+var mwAmzCut=0, mwAmzGot=0;
+function mwAmzQuery(priced,offset,limit){
   var q=amzCondQ();
   return '?kishu='+encodeURIComponent(q.kishu)
     +'&new_only=1'
     +'&ship_max='+q.ship_max+'&stock_min='+q.stock_min
     +'&note_ng='+encodeURIComponent(q.note_ng)
     +'&note_all=0'
-    +(priced?'&priced=1':'')+'&limit=3000';
+    +(priced?'&priced=1':'')
+    +'&limit='+(limit||MW_AMZ_PAGE)+'&offset='+(offset||0);
 }
 function mwAmzLoad(){
   var note=$('csvMwAmzListNote');
@@ -12034,13 +12130,30 @@ function mwAmzLoad(){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
   note.textContent='一覧を取り込んでいます…';
-  fetch(syncUrl()+'/mw/amz'+mwAmzQuery(1),{headers:{'X-PJ-Key':syncKeyReady()}})
-    .then(function(res){
-      if(res.ok)return res.json();
-      return res.text().then(function(t){
-        var b=null; try{ b=JSON.parse(t); }catch(e){}
-        throw new Error(syncPostWhy(res.status,b,t)); });
-    })
+  var rows=[], first=null, page=0;
+  var get1=function(off){
+    return fetch(syncUrl()+'/mw/amz'+mwAmzQuery(1,off),
+                 {headers:{'X-PJ-Key':syncKeyReady()}})
+      .then(function(res){
+        if(res.ok)return res.json();
+        return res.text().then(function(t){
+          var b=null; try{ b=JSON.parse(t); }catch(e){}
+          throw new Error(syncPostWhy(res.status,b,t)); });
+      });
+  };
+  /* 続きがあるあいだ取り続ける（最大 MW_AMZ_PAGES 回）。 */
+  var step=function(d){
+    if(!first)first=d;
+    rows=rows.concat(d.rows||[]);
+    page++;
+    if(note)note.textContent='一覧を取り込んでいます… '+rows.length+'件';
+    if(d.more&&page<MW_AMZ_PAGES)return get1(rows.length).then(step);
+    mwAmzGot=rows.length;
+    /* 値段ありの全件（SQL で数えた数）に届かなければ、そのぶんが残り。 */
+    mwAmzCut=Math.max(0,(+first.priced||0)-rows.length);
+    return Object.assign({},first,{ rows:rows });
+  };
+  return get1(0).then(step)
     .then(function(d){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
       mwAmzView='list';                 // 候補の一覧を出す（6.125）
@@ -12521,22 +12634,100 @@ function mwJanDupLine(r){
 }
 /* ---- 並べ替えと絞り込み（6.93）---- */
 function mwAmzSort(){ return String($('csvMwAmzSort').value||'net'); }
-/* ジャンルの選択肢（6.146）。いまの一覧にあるジャンルを件数の多い順に並べる。 */
+/* ---- 6.167（【V】）絞り込みの数え直し ----
+   検索に当たった行＋計算を1回だけ作って、絞り込みを**少しずつ外した**件数を
+   数え直すのに使い回す（3千件×絞り込みの数ぶん計算し直さないため）。 */
+var mwAmzPairs=[];
+function mwAmzPairsBuild(){
+  mwAmzPairs=[];
+  for(var i=0;i<(mwAmzRows||[]).length;i++){
+    var r=mwAmzRows[i];
+    if(!findMatchAmz(r))continue;
+    mwAmzPairs.push({ r:r, c:mwAmzCalc(r) });
+  }
+  return mwAmzPairs;
+}
+/* f の絞り込みで残る件数（mwRankHid などは数えない）。 */
+function mwAmzCountWith(f){
+  var n=0;
+  for(var i=0;i<mwAmzPairs.length;i++)
+    if(mwAmzKeep(mwAmzPairs[i],f,true))n++;
+  return n;
+}
+/* 絞り込みを1つだけ変えたもの。 */
+function mwAmzFiltOff(f,over){
+  var g={};
+  for(var k in f)g[k]=f[k];
+  for(var k2 in over)g[k2]=over[k2];
+  return g;
+}
+function mwN(n){ return (+n||0).toLocaleString('en-US'); }
+/* ジャンルの選択肢（6.146／6.167）。
+   件数は**ほかの絞り込みをかけたあと**の数にして、選んだときに出る数と
+   そろえる。絞り込み前の数も「（全 1,444件）」で添える。 */
 function mwGenreOpts(){
   var sel=$('csvMwAmzGenre'); if(!sel)return;
-  var by={};
+  var all={}, now={};
   (mwAmzRows||[]).forEach(function(r){
     var g=mwAmzGenre(r)||'（その他）';
-    by[g]=(by[g]||0)+1;
+    all[g]=(all[g]||0)+1;
   });
-  var ks=Object.keys(by).sort(function(a,b){ return by[b]-by[a]; });
+  /* ジャンル以外の絞り込みだけをかけて数える。 */
+  var g0=mwAmzFiltOff(mwAmzFilters(),{ genre:'' });
+  for(var i=0;i<mwAmzPairs.length;i++){
+    if(!mwAmzKeep(mwAmzPairs[i],g0,true))continue;
+    var k=mwAmzGenre(mwAmzPairs[i].r)||'（その他）';
+    now[k]=(now[k]||0)+1;
+  }
+  var total=0;
+  Object.keys(now).forEach(function(k){ total+=now[k]; });
+  var ks=Object.keys(all).sort(function(a,b){
+    return ((now[b]||0)-(now[a]||0))||((all[b]||0)-(all[a]||0)); });
   var cur=String(sel.value||'');
-  var h='<option value="">すべて（'+(mwAmzRows||[]).length+'件）</option>'
+  var h='<option value="">すべて（'+mwN(total)+'件／全 '
+    +mwN((mwAmzRows||[]).length)+'件）</option>'
     +ks.map(function(k){
-      return '<option value="'+esc(k)+'">'+esc(k)+' '+by[k]+'件</option>'; }).join('');
+      return '<option value="'+esc(k)+'">'+esc(k)+' '+mwN(now[k]||0)+'件'
+        +'（全 '+mwN(all[k])+'件）</option>'; }).join('');
   if(sel.innerHTML!==h){
     sel.innerHTML=h;
-    sel.value=(cur&&by[cur])?cur:'';
+    sel.value=(cur&&all[cur])?cur:'';
+  }
+}
+/* ---- 6.167（【V】）「これを外すと何件増えるか」----
+   どの条件で減っているのかが分かるように、チェックの横に出す。 */
+var MW_FILT=[
+  { id:'csvMwAmzWin', over:{ win:false } },
+  { id:'csvMwAmzMulti', over:{ multi:false } },
+  { id:'csvMwAmzNoAmz', over:{ noAmz:false } },
+  { id:'csvMwAmzRstOk', over:{ rstOk:false } }
+];
+function mwAmzPlusRender(){
+  var f=mwAmzFilters();
+  var base=mwAmzCountWith(f);
+  var put=function(id,on,over,word,none){
+    var el=$(id); if(!el)return;
+    if(!on){ el.textContent=''; return; }
+    var d=mwAmzCountWith(mwAmzFiltOff(f,over))-base;
+    el.textContent=d>0?('（'+(word||'外すと')+' +'+mwN(d)+'件）')
+                       :('（'+(none||'外しても増えません')+'）');
+  };
+  MW_FILT.forEach(function(x){
+    var chk=$(x.id);
+    put(x.id+'N',!!(chk&&chk.checked),x.over);
+  });
+  /* 利益率の下限（数の欄）。 */
+  put('csvMwAmzMinMN',f.minM>0,{ minM:0 },'0%にすると',
+      '0%にしても増えません');
+  /* ランキングの基準（⚙で決めた上限・順位が無い行を隠す）。 */
+  var rk=$('csvMwAmzRankN');
+  if(rk){
+    var on=!!(f.capAny||Object.keys(f.caps||{}).length);
+    if(!on)rk.textContent='';
+    else{
+      var d=mwAmzCountWith(mwAmzFiltOff(f,{ caps:{}, capAny:false }))-base;
+      rk.textContent=d>0?('ランキングの基準を外すと +'+mwN(d)+'件'):'';
+    }
   }
 }
 function mwAmzGenreSel(){ return String(($('csvMwAmzGenre')||{}).value||''); }
@@ -12572,17 +12763,16 @@ var mwFindHid=0;
 function mwAmzPicked(){
   var f=mwAmzFilters();
   mwRankHid=0; mwFindHid=0;
-  return mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
-    .filter(function(x){
-      /* 検索欄（6.115）。当たらない行は先に外す（絞り込みの数にも入れない）。 */
-      if(!findMatchAmz(x.r))return false;
-      var keep=mwAmzKeep(x,f);
-      if(!keep)mwFindHid++;
-      return keep;
-    });
+  /* 6.167：検索に当たった行＋計算は1回だけ作る（数え直しでも使う）。 */
+  return mwAmzPairsBuild().filter(function(x){
+    var keep=mwAmzKeep(x,f);
+    if(!keep)mwFindHid++;
+    return keep;
+  });
 }
-/* 検索以外の絞り込み。残すなら true。 */
-function mwAmzKeep(x,f){
+/* 検索以外の絞り込み。残すなら true。
+   quiet=true のときは隠した数（mwRankHid）を足さない（数え直し用・6.167）。 */
+function mwAmzKeep(x,f,quiet){
       /* 「JAN重複だけ」のときは重複の行だけ（値段が無くても出す・6.112）。 */
       if(f.dup)return mwJanDup(x.r);
       /* JAN重複の行は ASIN が無いので値段も利益も出ない。
@@ -12598,11 +12788,11 @@ function mwAmzKeep(x,f){
          （順位が小さいほど売れている）。 */
       var rk=mwRankOf(x.r), cap=mwRankCapOf(x.r,f.caps);
       if(rk>0){
-        if(cap&&rk>cap){ mwRankHid++; return false; }
+        if(cap&&rk>cap){ if(!quiet)mwRankHid++; return false; }
       }else if(f.capAny&&!f.noRank){
         /* 順位がまだ取れていない行は、上限を入れているあいだは隠す
            （判断できないので）。「順位が無い行も表示」で出せる。 */
-        mwRankHid++; return false;
+        if(!quiet)mwRankHid++; return false;
       }
       if(f.minM&&x.c.margin<f.minM)return false;
       return true;
@@ -13786,11 +13976,15 @@ function mwAmzRender(){
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
   /* ⚙の「ランキングの上限」の表は、いまの一覧の大分類と件数で作る（6.124）。 */
   try{ mwRankCapRender(); }catch(e){}
-  try{ mwGenreOpts(); }catch(e){}        // ジャンルの選択肢（6.146）
+  /* 6.167（【V】）検索に当たった行＋計算を先に作る
+     （ジャンルの件数と「外すと +n件」が同じ土台で数えられるように）。 */
+  try{ mwAmzPairsBuild(); }catch(e){}
+  try{ mwGenreOpts(); }catch(e){}        // ジャンルの選択肢（6.146／6.167）
   var d=mwAmzMeta||{};
   var all=mwAmzRows.map(function(r){ return { r:r, c:mwAmzCalc(r) }; })
     .filter(function(x){ return x.c; });
   var list=mwAmzPicked();
+  try{ mwAmzPlusRender(); }catch(e){}    // 「外すと +n件」（6.167）
   var f=mwAmzFilters(), sort=mwAmzSort();
   var dn=$('csvMwAmzDupN');
   if(dn)dn.textContent=mwJanDupN()?('（'+mwJanDupN()+'件）'):'';
@@ -13805,8 +13999,20 @@ function mwAmzRender(){
     +((d.n&&d.left)?('<span class="note2">（自動で 1時間 '+amzAutoPerHour()
       +'件・残り およそ '+Math.max(1,Math.ceil((d.left||0)/(amzAutoPerHour()*24)))
       +'日）</span>'):'')
-    +'　／　<b>'+list.length+'件</b>を表示'
-    +'（値段あり '+all.length+'件のうち）'
+    /* 6.167（【V】）「3,000件のうち」をやめる。
+       ・読み込んだ … pj-sync から画面に来た行数（打ち切りがあればそう書く）
+       ・計算できた … そのうち利益を出せた行（JAN重複は出せない）
+       ・表示 … いまの絞り込みと検索に当たった行 */
+    +'　／　<b>'+mwN(list.length)+'件</b>を表示'
+    +'（読み込んだ '+mwN(mwAmzRows.length)+'件・計算できた '
+    +mwN(all.length)+'件）'
+    +(mwAmzCut>0
+      ?('<br><b style="color:var(--bad)">※ 多いので '+mwN(mwAmzGot)
+        +'件で打ち切りました（値段あり '+mwN(+d.priced||0)+'件のうち・残り '
+        +mwN(mwAmzCut)+'件は出ていません）</b>'
+        +'<span class="note2">　絞り込み・並べ替え・CSV・ジャンルの件数は'
+        +'読み込んだぶんだけで出しています。</span>')
+      :'')
     +(mwJanDupN()?('　<b style="color:var(--bad)">JAN重複 '+mwJanDupN()
       +'件</b>（下の絞り込みで見られます）'):'')
     /* ランキングの上限（⚙設定・大分類ごと）で落ちた行（6.124）。 */
@@ -21482,7 +21688,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v248';   // sw.js の const V と必ず同じ値にする
+var APP_V='v249';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
