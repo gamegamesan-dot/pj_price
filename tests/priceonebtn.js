@@ -184,7 +184,10 @@ console.log('\n=== ④の2 自動が見送る行にも出す（6.174）===');
   },old);
   console.log('   '+JSON.stringify(r));
   ok(r.drop.btn,'★★★無在庫（dropship=1）の行にもボタンを出す');
-  ok(/無在庫/.test(r.drop.label),'★★自動が見送った理由を添える');
+  /* 7.132（v257）で無在庫も自動追従の対象になったので、
+     この行のラベルは「自動では見送り」ではなく追従の目標になる。 */
+  ok(/再調達中の売値/.test(r.drop.label),
+     '★★★無在庫は自動でも追従するので、追従の目標を出す（7.132）');
   ok(r.drop.drop===true,'★★無在庫だと分かる印を返す');
   ok(r.oneoff.btn,'★★★一点物の行にもボタンを出す');
   ok(/一点物/.test(r.oneoff.label),'★★理由を添える');
@@ -193,6 +196,25 @@ console.log('\n=== ④の2 自動が見送る行にも出す（6.174）===');
   ok(/最安値が古い/.test(r.oldlow.label),'★★理由を添える');
   ok(r.nolow.btn&&r.nolow.old===true,'★★★最安値が未取得の行にも出す');
   ok(r.drop.next>0&&r.oldlow.next>0,'★★どの場合も推奨売値を出す');
+  /* ⚙「無在庫の行も追従する」をオフにすると、自動は見送るがボタンは出る。
+     再調達中の印が付いている行は⚙に関わらず追従するので、
+     ここは「再調達中ではない無在庫の行」で見る。 */
+  const off=await p.evaluate(()=>{
+    const base=(syncData.items||[]).filter((x)=>x.asin==='B075LC617B')[0];
+    const row=Object.assign({},base,{ restocking:0, dropship:1,
+      mode:'' });
+    $('autoRkDrop').checked=false;
+    const t=syncPriceOneTarget(row);
+    const why=syncRkTargetOf(row).why||'';
+    $('autoRkDrop').checked=true;
+    return { btn:!!t, label:(t||{}).why||'', why:why };
+  });
+  console.log('   ⚙オフ: '+JSON.stringify(off));
+  ok(off.btn,'★★★⚙をオフにしてもボタンは出る（人が直せる）');
+  ok(off.label==='売値の見直し',
+     '★★★オフの行は追従の対象外なので、ふつうの「売値の見直し」で出す');
+  ok(/無在庫/.test(off.why)&&/オフ/.test(off.why),
+     '★★★行の案内には「⚙がオフ」と理由が出る');
 }
 {
   /* ボタンの文と確認の文に「最安値が古い」が出る。 */

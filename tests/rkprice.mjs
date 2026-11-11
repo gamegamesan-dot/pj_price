@@ -58,7 +58,8 @@ async function seed(asin,extra){
   seq++;
   const d=Object.assign({cond:'used',ebay_item_id:String(770000+seq),ebay_qty:1,
     ebay_price:84.36,restocking:1,restock_price:84.36,restock_max_cost:2500,
-    one_off:0,dropship:0,ebay_sale:null,ebay_bo:0,ebay_bo_accept:null,
+    one_off:0,dropship:0,sku:'E-'+asin+'-U',
+    ebay_sale:null,ebay_bo:0,ebay_bo_accept:null,
     amazon_lowest:5000,amazon_offers:3,amazon_lowest_at:now,amazon_new_low:null,
     rk_want:101.23,rk_floor:70,rk_low:5000,rk_n:3,rk_max_cost:7000,
     rk_want_at:now,rk_fail:0},extra||{});
@@ -69,7 +70,7 @@ async function seed(asin,extra){
     rk_want,rk_floor,rk_low,rk_n,rk_max_cost,rk_want_at,rk_fail,updated_at)
     VALUES (?1,?2,'ebay',?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
             ?20,?21,?22,?23,?24,?25,?26,?27,?8)`)
-    .bind(asin,d.cond,asin+'の商品','E-'+asin+'-U',d.ebay_item_id,d.ebay_qty,
+    .bind(asin,d.cond,asin+'の商品',d.sku,d.ebay_item_id,d.ebay_qty,
       d.ebay_price,now,d.restocking,d.restock_price,d.restock_max_cost,d.one_off,
       d.dropship,d.ebay_sale,d.ebay_bo,d.ebay_bo_accept,d.amazon_lowest,
       d.amazon_offers,d.amazon_lowest_at,d.amazon_new_low,d.rk_want,d.rk_floor,
@@ -195,17 +196,71 @@ ok(/<Quantity>0<\/Quantity>/.test(calls[0].body),'★送るのは数量0だけ')
 ok(/Amazonの在庫が消えた 1件/.test(notes[0]||''),'★★知らせる');
 ok(res.skipped===1,'★すでに数量0の行はとばす');
 
-console.log('\n=== 対象外（セール中・一点物・無在庫・再調達中でない）===');
+console.log('\n=== 対象外（セール中・一点物・再調達中でない・MW無在庫）===');
 await wipe(); calls=[];
 await seed('B0RKH00001',{ebay_sale:1});
 await seed('B0RKH00002',{one_off:1});
-await seed('B0RKH00003',{dropship:1});
 await seed('B0RKH00004',{restocking:0});
+/* 7.132：MW 無在庫（ebay_sku が W-<JAN>）は段取り D が見るので対象外。 */
+await seed('B0RKH00005',{restocking:0,dropship:1,sku:'W-4902370550467'});
 res=await rk();
 console.log('   '+JSON.stringify({picked:res.picked,skipped:res.skipped,
   calls:calls.length}));
 ok(res.picked===0&&calls.length===0,'★★どれも対象にしない');
-ok(res.skipped===3,'★再調達中でない行は候補にも入らない');
+ok(res.skipped===2,
+   '★再調達中でない行と MW 無在庫は候補にも入らない');
+
+console.log('\n=== 7.132 無在庫（dropship=1）も追従する（⚙ 既定オン）===');
+await wipe(); calls=[];
+/* 再調達中ではないが無在庫の行。最安値が上がって赤字なので上げる。 */
+await seed('B0RKD00001',{restocking:0,dropship:1});
+res=await rk();
+console.log('   '+JSON.stringify({picked:res.picked,up:res.up,down:res.down,
+  skipped:res.skipped,drop:res.drop}));
+ok(res.drop===true,'★★★⚙は既定オン');
+ok(res.picked===1,'★★★無在庫の行も対象にする');
+ok(res.up===1&&calls.length>=1,'★★★売値を直す（赤字の解消）');
+{
+  const g=await env.DB.prepare(
+    `SELECT ebay_price FROM items WHERE asin='B0RKD00001'`).first();
+  ok(Math.abs(+g.ebay_price-101.23)<0.01,'★★新しい売値が入る');
+}
+/* 下げも最低売値より下げない（再調達中と同じ決まり）。 */
+await wipe(); calls=[];
+await seed('B0RKD00002',{restocking:0,dropship:1,ebay_price:200,
+  rk_want:50,rk_floor:70});
+res=await rk();
+console.log('   '+JSON.stringify({picked:res.picked,down:res.down}));
+ok(res.down===1,'★★★下げも追従する');
+{
+  const g=await env.DB.prepare(
+    `SELECT ebay_price FROM items WHERE asin='B0RKD00002'`).first();
+  ok(Math.abs(+g.ebay_price-70)<0.01,
+     '★★★最低売値（$70）より下げない（下限利益を守る）');
+}
+/* ⚙でオフにすると今までどおり触らない。 */
+await wipe(); calls=[];
+await seed('B0RKD00003',{restocking:0,dropship:1});
+await env.DB.prepare(
+  `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,'x')
+   ON CONFLICT(k) DO UPDATE SET v=excluded.v`)
+  .bind(JSON.stringify({ at:now, settings:{ autoRkDrop:false } })).run();
+res=await rk();
+console.log('   '+JSON.stringify({picked:res.picked,skipped:res.skipped,
+  drop:res.drop,calls:calls.length}));
+ok(res.drop===false,'★★★⚙でオフにできる');
+ok(res.picked===0&&calls.length===0,'★★★オフなら無在庫は触らない');
+await env.DB.prepare(`DELETE FROM sync_state WHERE k='ui.settings'`).run();
+ok(W.rkCovered({ restocking:1, ebay_qty:1 },false)===true,
+   '★再調達中は⚙に関係なく対象');
+ok(W.rkCovered({ dropship:1, ebay_qty:1, ebay_sku:'E-B0X-U' },true)===true,
+   '★★無在庫はオンのとき対象');
+ok(W.rkCovered({ dropship:1, ebay_qty:1, ebay_sku:'E-B0X-U' },false)===false,
+   '★★オフなら対象外');
+ok(W.rkCovered({ dropship:1, ebay_qty:1, ebay_sku:'W-4902370550467' },true)
+   ===false,'★★★MW 無在庫はオンでも対象外');
+ok(W.rkIsMwDrop({ ebay_sku:'W-4902370550467' })===true
+   &&W.rkIsMwDrop({ ebay_sku:'E-B0X-U' })===false,'★MW 無在庫の見分け');
 
 console.log('\n=== ベストオファーのある出品 ===');
 await wipe(); calls=[];

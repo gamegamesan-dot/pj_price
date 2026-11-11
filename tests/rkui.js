@@ -261,5 +261,47 @@ let cfg=await p.evaluate(()=>{
   return getComputedStyle($('autoRkMode').closest('.rowv')).display; });
 ok(cfg==='none','★★⚙設定の項目も出さない');
 
-await T.done();
+await 
+console.log('\n=== 6.175 無在庫の行も追従する（⚙ 既定オン）===');
+{
+  await setup({ items:null });
+  await openCsvBoxes(p);
+  const r=await p.evaluate(()=>{
+    const base=(syncData.items||[]).filter((x)=>x.asin==='B0RKU00001')[0];
+    const drop=Object.assign({},base,{ restocking:0, dropship:1,
+      ebay_sku:'E-B0RKU00001-U' });
+    const mw=Object.assign({},base,{ restocking:0, dropship:1,
+      asin:'W4902370550467', ebay_sku:'W-4902370550467' });
+    const on=$('autoRkDrop').checked;
+    const a={ cov:syncRkCovered(drop), why:syncRkTargetOf(drop).why||'',
+              kind:syncRkTargetOf(drop).kind||'',
+              mwCov:syncRkCovered(mw), mwWhy:syncRkTargetOf(mw).why||'' };
+    $('autoRkDrop').checked=false;
+    const b={ cov:syncRkCovered(drop), why:syncRkTargetOf(drop).why||'' };
+    $('autoRkDrop').checked=on;
+    return { on:on, a:a, b:b };
+  });
+  console.log('   '+JSON.stringify(r));
+  ok(r.on===true,'★★★⚙は既定オン');
+  ok(r.a.cov===true,'★★★無在庫の行も追従の対象にする');
+  ok(r.a.kind==='up'||r.a.kind==='down','★★★売値の予定が出る');
+  ok(r.a.mwCov===false,'★★★MW 無在庫（W-<JAN>）は対象外');
+  ok(/段取り D/.test(r.a.mwWhy),'★★理由に段取り D と出す');
+  ok(r.b.cov===false,'★★★⚙をオフにすると対象外に戻る');
+  ok(/オフ/.test(r.b.why),'★★オフだと分かる理由を出す');
+}
+{
+  /* 帯に内訳を出す。 */
+  const t=await p.evaluate(async()=>{
+    const base=(syncData.items||[]).filter((x)=>x.asin==='B0RKU00001')[0];
+    syncData.items=[base,Object.assign({},base,{ asin:'B0RKU00009',
+      ebay_sku:'E-B0RKU00009-U', restocking:0, dropship:1 })];
+    syncData.rk_plan=null;
+    syncRender();
+    return ($('syncRkNote').textContent||'').replace(/\s+/g,' ');
+  });
+  console.log('   '+t);
+  ok(/再調達中 1件・無在庫 1件/.test(t),'★★★帯に内訳を出す');
+}
+T.done();
 })();

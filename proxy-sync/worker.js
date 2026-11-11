@@ -2570,7 +2570,16 @@ async function syncPricing(env, run) {
    ③の候補の行より**必ず先に**取り直す。 */
 const PRICING_HOT_KEEP_MS = 24 * 60 * 60 * 1000;
 function pricingHotPri() {
+  /* 7.132：**無在庫（dropship=1）の行も大事な行に入れる**。
+     v254 までは pricingHotWhere が無在庫を丸ごと外していたので、
+     無在庫の行は最安値が**一度も取り直されなかった**
+     （E-B075LC617B-U の最安値が 11-06 のまま4日古かったのはこれ）。
+     売値の追従（7.48・7.132）も手で直すボタン（6.172）も最安値を見るので、
+     ここに入れておかないと動かない。
+     MW 無在庫（W-<JAN>）は Amazon の ASIN を持たないので外す。 */
   return `(restocking=1
+           OR (COALESCE(dropship,0)=1
+               AND COALESCE(ebay_sku,'') NOT LIKE 'W-%')
            OR EXISTS (SELECT 1 FROM amz_drop d
                        WHERE d.asin=items.asin AND d.cond=items.cond))`;
 }
@@ -2582,16 +2591,19 @@ function pricingHotWhere() {
      ③ **再調達の候補**（在庫0時の動作＝再調達・FBAの販売可能が0・出品あり。7.96）
         数量0にしたあとの行は ② から外れる（ebay_qty>0 でなくなる）ので、
         最安値が古いまま「古いので再調達しません」で止まっていた。 */
+  /* 7.132：**大事な行（pricingHotPri）は on_hand / dropship の条件の外に出す**。
+     ②③（フェイズBの対象と再調達の候補）は「手元にも無く無在庫でもない行」が
+     前提なので、その条件は②③だけにかける。
+     こうしないと、無在庫の行が最安値の取り直しから丸ごと外れてしまう。 */
   return `scope='ebay' AND COALESCE(ebay_item_id,'')<>''
-            AND COALESCE(on_hand,0)=0
-            AND COALESCE(dropship,0)=0
-            AND (restocking=1
-                 OR EXISTS (SELECT 1 FROM amz_drop d
-                             WHERE d.asin=items.asin AND d.cond=items.cond)
-                 OR (COALESCE(fba_available,-1)=0
-                     AND COALESCE(one_off,0)=0
-                     AND (ebay_qty>0 OR COALESCE(mode,'')='restock'))
-                 OR (COALESCE(mode,'')='restock' AND COALESCE(pb_act,'')='restock'))`;
+            AND (${pricingHotPri()}
+                 OR (COALESCE(on_hand,0)=0
+                     AND COALESCE(dropship,0)=0
+                     AND ((COALESCE(fba_available,-1)=0
+                           AND COALESCE(one_off,0)=0
+                           AND (ebay_qty>0 OR COALESCE(mode,'')='restock'))
+                          OR (COALESCE(mode,'')='restock'
+                              AND COALESCE(pb_act,'')='restock'))))`;
 }
 async function syncPricingHot(env, run) {
   const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0,
@@ -3664,7 +3676,11 @@ async function rkSettings(env) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
   const mode = String(st.autoRkMode || "auto");
-  return { mode: RK_MODES[mode] ? mode : "auto" };
+  /* 7.132：無在庫（dropship=1）の行も追従させるか（⚙ autoRkDrop・**既定オン**）。
+     設定が無いデータベースでもオンで動く。 */
+  const d = st.autoRkDrop;
+  return { mode: RK_MODES[mode] ? mode : "auto",
+           drop: (d === undefined || d === null) ? true : !!d };
 }
 /* ベストオファーの金額。自動拒否額（min）は必ず新しい売値より下にする。
    自動承諾額（acc）は、いまの値が新しい売値以上になる行だけ下げる（mdBo と同じ式）。 */
@@ -3676,16 +3692,40 @@ function rkBo(r, next) {
   const acc0 = Number(r.ebay_bo_accept || 0);
   return { min: min > 0 ? min : 0, acc: (acc0 > 0 && acc0 >= next) ? cap : 0 };
 }
+/* 7.132：無在庫（dropship=1）の行も追従の対象にする（⚙ autoRkDrop・既定オン）。
+   無在庫の行は「売れてから仕入れる」ので、再調達中とまったく同じ理屈で
+   Amazon最安値が動くと利益が動く。
+   ただし **MW 無在庫（ebay_sku が W-<JAN>）は外す**。
+   あちらは Amazon の ASIN を持たず（見かけの ASIN は W＋JAN）、
+   売値は MW の卸値から**段取り D（jobMwDrop）が動かす**ので、
+   二つの仕組みが同じ行の売値を取り合わないようにする。 */
+function rkIsMwDrop(r) {
+  return !!mwJanOfSku((r || {}).ebay_sku);
+}
+/* この行が追従の対象か。drop は⚙「無在庫も追従する」。 */
+function rkCovered(r, drop) {
+  if (isRestocking(r)) return true;
+  return !!(drop && Number((r || {}).dropship || 0)
+            && Number((r || {}).ebay_qty || 0) >= 1 && !rkIsMwDrop(r));
+}
 /* この行に何をするか。
    { kind:'up'|'down'|'zero', from, to, want, under, held, why } か
-   { kind:'', why:理由 }（とばす）を返す。held は「下げを保留した」。 */
-function rkTarget(r) {
+   { kind:'', why:理由 }（とばす）を返す。held は「下げを保留した」。
+   o.drop … ⚙「無在庫も追従する」（既定オン。渡さないときはオフ扱い）。 */
+function rkTarget(r, o) {
   const no = (why) => ({ kind: "", why: why });
-  if (!isRestocking(r)) return no("再調達中ではありません");
+  const drop = !!(o && o.drop);
+  if (!rkCovered(r, drop))
+    return no(Number((r || {}).dropship || 0)
+      ? (rkIsMwDrop(r) ? "MW 無在庫（段取り D が見ます）"
+                       : "無在庫（⚙「無在庫も追従する」がオフ）")
+      : "再調達中ではありません");
   if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
   if (Number(r.ebay_sale || 0)) return no("eBayのセール中");
   if (Number(r.one_off || 0)) return no("一点物");
-  if (Number(r.dropship || 0)) return no("無在庫");
+  /* 無在庫で、かつ MW 無在庫のものは上で外してある。 */
+  if (Number(r.dropship || 0) && rkIsMwDrop(r))
+    return no("MW 無在庫（段取り D が見ます）");
   const now = Math.round(Number(r.ebay_price || 0) * 100) / 100;
   if (!(now > 0)) return no("売値が分かりません");
   /* Amazon 無在庫（7.102）の行は、最安値が分からなくなったら**数量0**にする
@@ -3838,10 +3878,19 @@ async function rkFailN(env) {
   } catch (e) { return 0; }
 }
 /* 予定の一覧（画面に出す。確認モードでなくても、次に何が起きるかが見える）。 */
-async function rkPlanRows(env, run) {
+async function rkPlanRows(env, run, drop) {
+  /* 7.132：⚙「無在庫も追従する」がオンのときは、無在庫の行も候補に入れる。
+     MW 無在庫（W-<JAN>）は段取り D が見るので SQL の段階で外す
+     （件数が多いので、持ち時間と RK_PICK_LIMIT を食いつぶさないため）。 */
+  const where = drop
+    ? `scope='ebay' AND COALESCE(ebay_item_id,'')<>''
+         AND (restocking=1
+              OR (COALESCE(dropship,0)=1 AND COALESCE(ebay_qty,0)>=1
+                  AND COALESCE(ebay_sku,'') NOT LIKE 'W-%'))`
+    : `scope='ebay' AND restocking=1 AND COALESCE(ebay_item_id,'')<>''`;
   const q = await env.DB.prepare(
     `SELECT ${ITEM_COLS} FROM items
-      WHERE scope='ebay' AND restocking=1 AND COALESCE(ebay_item_id,'')<>''
+      WHERE ${where}
       ORDER BY COALESCE(rk_at,'') ASC LIMIT ${RK_PICK_LIMIT}`).all();
   /* 目標（rk_want など）を自分で計算して埋める（7.52）。 */
   const self0 = await selfFill(env, run || newRun("rk"), (q && q.results) || []);
@@ -3849,7 +3898,7 @@ async function rkPlanRows(env, run) {
   const due = [], hold = [];
   let skipped = 0;
   for (const r of rows) {
-    const a = rkTarget(r);
+    const a = rkTarget(r, { drop: drop });
     if (!a.kind) {
       if (a.held) hold.push({ r: r, asin: r.asin, cond: r.cond, why: a.why });
       else skipped++;
@@ -3872,7 +3921,8 @@ async function jobRkPrice(env, opt) {
   try {
     const st = await rkSettings(env);
     res.mode = approve ? "approve" : st.mode;
-    const pick = await rkPlanRows(env, run);
+    res.drop = !!st.drop;
+    const pick = await rkPlanRows(env, run, st.drop);
     res.picked = pick.due.length;
     res.held = pick.hold.length;
     res.skipped = pick.skipped;
@@ -14622,6 +14672,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         /* 7.131（v254）大事な行の優先と、1行だけの売値直し。 */
                         pricingHotPri, PRICING_HOT_KEEP_MS, syncPricingHot,
+                        /* 7.132（v257）無在庫も追従する。 */
+                        rkCovered, rkIsMwDrop, rkSettings,
                         oneTarget, oneBo, jobPriceOne,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,

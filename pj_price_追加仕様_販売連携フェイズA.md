@@ -8690,3 +8690,65 @@ Discord に1行出す。
 ### 4. テスト
 
 `tests/pricehot.mjs`（42本）。
+
+---
+
+## 7.132 無在庫（dropship=1）の行も Amazon最安値に追従させる（v257）
+
+### なぜ
+
+無在庫の行は「売れてから仕入れる」ので、**再調達中とまったく同じ理屈で
+Amazon最安値が動くと利益が動く**。それなのに 7.48 の追従は
+`if (Number(r.dropship || 0)) return no("無在庫")` で外していた。
+
+さらに v254 までは **`pricingHotWhere()` が無在庫を丸ごと外していた**ので、
+無在庫の行は **Amazon最安値が一度も取り直されなかった**。
+E-B075LC617B-U の最安値が 11-06 のまま4日古かったのはこれで、
+7.131 で書いた「上限40件で押しのけられていた」より**こちらが主な原因**だった。
+
+### 1. 追従の対象を広げる（⚙ `autoRkDrop`・既定オン）
+
+```js
+function rkCovered(r, drop) {
+  if (isRestocking(r)) return true;
+  return !!(drop && Number(r.dropship || 0)
+            && Number(r.ebay_qty || 0) >= 1 && !rkIsMwDrop(r));
+}
+```
+
+- `rkSettings` が ⚙ `autoRkDrop` を読む。**設定が無いデータベースでもオン**
+- `rkPlanRows` の SQL も広げる
+  （`restocking=1 OR (dropship=1 AND ebay_qty>=1 AND ebay_sku NOT LIKE 'W-%')`）
+- 決まりは再調達中とまったく同じ。**上げも下げも承認なし／
+  最低売値（`rk_floor`）より下げない／差が $1未満かつ3%未満なら触らない／
+  最安値が24時間より古い行は触らない／最安グループが2人未満なら下げを保留／
+  1日30件まで**
+
+### 2. MW 無在庫（`ebay_sku` が `W-<JAN>`）は対象外
+
+- Amazon の ASIN を持たない（見かけの ASIN は `W＋JAN`・7.113）
+- 売値は MW の卸値から **段取り D（`jobMwDrop`）が動かす**。
+  二つの仕組みが同じ行の売値を取り合わないようにする
+- 理由は「MW 無在庫（段取り D が見ます）」と返す
+
+### 3. 最安値の取り直しにも入れる（7.131 の直し）
+
+`pricingHotPri()` に無在庫（`dropship=1` かつ `ebay_sku NOT LIKE 'W-%'`）を足し、
+`pricingHotWhere()` の **`on_hand=0` / `dropship=0` の条件を②③だけにかける**
+ように組み替えた。
+
+```sql
+scope='ebay' AND COALESCE(ebay_item_id,'')<>''
+  AND (<大事な行>
+       OR (COALESCE(on_hand,0)=0 AND COALESCE(dropship,0)=0
+           AND (<フェイズBの対象> OR <再調達の候補>)))
+```
+
+これで無在庫の行も**3時間ごとに、大事な行として先に**取り直される。
+
+### 4. テスト
+
+`tests/rkprice.mjs`（80本・+15）と `tests/pricinghot.mjs`（33本）。
+無在庫の行が上げも下げも追従すること・最低売値より下げないこと・
+⚙でオフにできること・MW 無在庫がオンでも対象外であること・
+最安値の取り直しの対象に入り、MW 無在庫は要求しないことを見る。

@@ -1614,6 +1614,9 @@ body.staff #syncOnHandFix{display:none !important}
       <details class="exp" data-exp="cfgAutoBase"><summary>自動の処理が使う値の説明</summary>
       <div class="note2 cfgprice" style="margin:0 0 8px">自動の処理（<b>自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達</b>）と、<b>出品CSV・販売連携タブの推奨売値・最低売値・利益の表示</b>は、この料率で計算します。<b>pj-sync に送るのはこの値だけ</b>です。eBayタブの「広告料率」はその場の計算用（0%と見比べるときなどに使い、pj-sync には送りません）。</div>
       </details>
+      <!-- 6.175（v257）無在庫の行も Amazon最安値に追従させる。既定オン。 -->
+      <div class="chk cfgprice"><input type="checkbox" id="autoRkDrop" checked><label for="autoRkDrop" style="flex:1"><b>無在庫の行も</b> Amazon最安値に追従する（既定オン）</label></div>
+      <div class="note2 cfgprice" style="margin:0 0 8px">無在庫（手元にも FBA にも在庫を持たず、売れてから仕入れる行）も、再調達中とまったく同じ理屈で <b>Amazon最安値が動くと利益が動きます</b>。オンにすると、上げも下げも pj-sync が自動で eBay に反映します（<b>最低売値より下げません</b>）。<br><b>MW 無在庫（SKU が <code>W-&lt;JAN&gt;</code> の行）は対象外</b>です。あちらは Amazon の ASIN を持たず、売値は MW の卸値から<b>段取り D</b>が動かすので、二つの仕組みが同じ行を取り合わないようにしています。</div>
       <div class="rowv cfgprice"><label>再調達中の売値</label><select id="autoRkMode"><option value="auto" selected>自動で更新する（承認なし）</option><option value="confirm">確認してから（予定を出すだけ）</option></select><div class="note2" style="margin-top:2px">再調達中の行は「売れてから Amazon で買い直す」ので、<b>Amazon最安値が動くと利益がそのまま動きます</b>。この行だけは <b>上げも下げも</b> pj-sync が自動で eBay に反映します（上の「売値の自動反映」の対象からは外れます）。売値は<b>Amazon最安値（送料込み・中古は可を除く）を仕入値とみなした推奨売値</b>で、保存済みの仕入値は使いません。上げは赤字を解消する値段まで一度で上げ、下げは<b>最低売値より下げません</b>。差が $1未満かつ3%未満のときは更新しません。最安値が24時間より古い行は触らず、<b>最安グループが2人未満のときは下げを保留</b>します。Amazonの在庫が消えた行は<b>数量0</b>にして知らせます。1日30件まで。</div></div>
       <div class="note2" style="margin-top:0" id="autoRvCfgNote"></div>
       </div>
@@ -2681,7 +2684,9 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
 /* eBayタブの広告料率（adRate）は**送らない**（その場の計算用・6.74）。
    自動処理が使う広告料率は autoAdRate で、こちらを送る。 */
 var ADV_CALC=['fx','fxc','fee','intlFee','feeTax','fixed','pack'];
-var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero'];
+var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero',
+               /* 6.175（v257）無在庫も追従する（Worker の rkSettings が読む）。 */
+               'autoRkDrop'];
 /* 真偽値で送るチェック欄の全部（6.142）。 */
 function advChecks(){ return ADV_CHECK.concat(ADV_AMZCHK); }
 var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
@@ -17971,7 +17976,7 @@ function syncNextHtml(r){
   if(!id)return '';
   /* ⑥ 再調達中の売値の追従（6.70）。この行は「売値の自動反映」ではなく
      こちらが上げも下げも見るので、先に出す。 */
-  if(syncIsRestocking(r)){
+  if(syncRkCovered(r)){
     var rk=syncRkTargetOf(r);
     if(rk.kind==='zero')
       return nextLine('要対応','#b00020',
@@ -18902,11 +18907,16 @@ function syncRkOffers(r){ return PJP.nearN(pricingSettings(),r); }
    kind … 'up'／'down'／'zero'（Amazonの在庫なし）／''（とばす） */
 function syncRkTargetOf(r){
   var no=function(why){ return { kind:'', why:why }; };
-  if(!r||!syncIsRestocking(r))return no('再調達中ではありません');
+  /* 6.175（v257）無在庫の行も対象にする（⚙ 既定オン）。
+     MW 無在庫は段取り D が見るので対象外のまま。 */
+  if(!r||!syncRkCovered(r))
+    return no(syncIsDropship(r)
+      ? (syncRkIsMwDrop(r)?'MW 無在庫（段取り D が見ます）'
+                          :'無在庫（⚙「無在庫の行も追従する」がオフ）')
+      : '再調達中ではありません');
   if(!String(r.ebay_item_id||'').trim())return no('出品していません');
   if(Number(r.ebay_sale||0))return no('eBayのセール中');
   if(Number(r.one_off||0))return no('一点物');
-  if(syncIsDropship(r))return no('無在庫');
   var now=Math.round((+r.ebay_price||0)*100)/100;
   if(!(now>0))return no('売値が分かりません');
   var lo=syncPbLow(r);                        // Amazon最安値（可を除く・新品優先）
@@ -18940,7 +18950,8 @@ function syncRkTargetOf(r){
            why:(to>now)?'最安値が上がりました':'最安値が下がりました' };
 }
 function syncRkRows(){
-  return ((syncData&&syncData.items)||[]).filter(syncIsRestocking);
+  /* 6.175：無在庫の行も入れる（⚙ 既定オン）。 */
+  return ((syncData&&syncData.items)||[]).filter(syncRkCovered);
 }
 /* 目標（売値・最低売値・最安値・人数・仕入値の上限）を送る必要がある行。 */
 function syncRkNeed(){
@@ -19191,9 +19202,13 @@ function syncRkBarRender(){
   var last=(syncData&&syncData.rk_last)||null;
   var f3=rows.filter(syncRkAlert).length;
   var trouble=rows.filter(function(r){ return syncRestockTrouble(r)==='loss'; }).length;
+  /* 6.175：無在庫の行も入るので、内訳を出す。 */
+  var nDrop=rows.filter(function(r){
+    return !syncIsRestocking(r)&&syncIsDropship(r); }).length;
   $('syncRkNote').innerHTML=
     '<b>再調達中の売値：'+(mode==='auto'?'自動で更新':'確認してから')+'</b>'
-    +'（再調達中 '+rows.length+'件）　変更の予定：'+pl.n+'件'
+    +'（再調達中 '+(rows.length-nDrop)+'件'
+    +(nDrop?('・無在庫 '+nDrop+'件'):'')+'）　変更の予定：'+pl.n+'件'
     +(pl.from==='sync'
       ? ('（pj-sync の予定 '+esc(jstText(pl.at))+'）')
       : '（この端末の計算）')
@@ -20319,6 +20334,19 @@ function syncNoBasisGo(t,r,keep){
 function syncIsRestocking(r){
   return !!Number(r.restocking||0) && Number(r.ebay_qty||0)>=1;
 }
+/* 6.175（v257）⚙「無在庫の行も追従する」（既定オン）。 */
+function autoRkDrop(){
+  var el=$('autoRkDrop');
+  return el?!!el.checked:true;
+}
+/* MW 無在庫（SKU が W-<JAN>）。段取り D が売値を動かすので追従の対象外。 */
+function syncRkIsMwDrop(r){ return !!syncMwJanOf(r); }
+/* 売値の追従の対象か（Worker の rkCovered と同じ決まり）。 */
+function syncRkCovered(r){
+  if(syncIsRestocking(r))return true;
+  return autoRkDrop()&&syncIsDropship(r)&&Number((r||{}).ebay_qty||0)>=1
+    &&!syncRkIsMwDrop(r);
+}
 function syncIsRestock(r){
   return Number(r.ebay_qty||0)>=1 && Number(r.fba_available||0)===0
       && r.fba_available!==null && !Number(r.one_off||0) && !Number(r.on_hand||0)
@@ -20485,7 +20513,7 @@ function syncPriceOneTarget(r){
   var out=function(next,why,from){
     return { now:now, next:+next, why:why, from:from, old:old, drop:drop };
   };
-  if(syncIsRestocking(row)){
+  if(syncRkCovered(row)){
     var rk=syncRkTargetOf(row);
     if(rk&&rk.kind&&rk.kind!=='zero'&&+rk.to>0)
       return out(rk.to,'再調達中の売値','rk');
@@ -22411,7 +22439,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v256';   // sw.js の const V と必ず同じ値にする
+var APP_V='v257';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

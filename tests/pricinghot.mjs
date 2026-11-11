@@ -53,12 +53,13 @@ async function seed(asin,extra){
   seq++;
   const d=Object.assign({cond:'used',ebay_item_id:String(550000+seq),ebay_qty:1,
     restocking:0,fba_available:5,on_hand:0,dropship:0,one_off:0,
+    sku:'E-'+asin+'-U',
     amazon_lowest:null,amazon_lowest_at:null},extra||{});
   await env.DB.prepare(`INSERT INTO items (asin,cond,scope,title,ebay_sku,ebay_item_id,
     ebay_qty,ebay_price,ebay_seen_at,restocking,fba_available,fba_inbound,fba_reserved,
     on_hand,dropship,one_off,one_off_known,amazon_lowest,amazon_lowest_at,updated_at)
     VALUES (?1,?2,'ebay',?3,?4,?5,?6,30,?7,?8,?9,0,0,?10,?11,?12,1,?13,?14,?7)`)
-    .bind(asin,d.cond,asin+'の商品','E-'+asin+'-U',d.ebay_item_id,d.ebay_qty,now,
+    .bind(asin,d.cond,asin+'の商品',d.sku,d.ebay_item_id,d.ebay_qty,now,
       d.restocking,d.fba_available,d.on_hand,d.dropship,d.one_off,
       d.amazon_lowest,d.amazon_lowest_at).run();
 }
@@ -79,7 +80,11 @@ await seed('B0HOT00001',{restocking:1});                 // 再調達中 → 対
 await seed('B0HOT00002',{fba_available:0});              // FBAで売れた → 対象
 await seed('B0HOT00003');                                // FBA在庫あり → 対象外
 await seed('B0HOT00004',{fba_available:0,on_hand:1});    // 手元在庫 → 対象外
-await seed('B0HOT00005',{fba_available:0,dropship:1});   // 無在庫 → 対象外
+/* 7.132：無在庫（dropship=1）も**対象**になった（売値の追従がこの値を見る）。
+   ただし MW 無在庫（W-<JAN>）は Amazon の ASIN が無いので対象外。 */
+await seed('B0HOT00005',{fba_available:0,dropship:1});   // 無在庫 → 対象
+await seed('B0HOT00010',{fba_available:0,dropship:1,
+  sku:'W-4902370550467'});                               // MW 無在庫 → 対象外
 await seed('B0HOT00006',{fba_available:0,one_off:1});    // 一点物 → 対象外
 await seed('B0HOT00007',{fba_available:0,ebay_qty:0});   // 数量0 → 対象外
 await seed('B0HOT00008',{fba_available:0,ebay_item_id:''}); // 未出品 → 対象外
@@ -87,14 +92,18 @@ await seed('B0HOT00009',{fba_available:null});           // FBA未確認 → 対
 let r=await hot();
 console.log('   '+JSON.stringify(r.hot));
 console.log('   送った要求: '+JSON.stringify(calls));
-ok(r.hot.picked===2&&r.hot.rows===2,'★★対象は再調達中とFBAで売れた行の2件だけ');
+ok(r.hot.picked===3&&r.hot.rows===3,
+   '★★対象は再調達中・FBAで売れた行・無在庫の3件（7.132）');
+ok(calls.flat().every((x)=>x.indexOf('B0HOT00010')<0),
+   '★★★MW 無在庫（W-<JAN>）は要求しない（段取り D が見る）');
 ok(r.hot.left===0,'★上限の中に収まっている');
 const sent=calls.flat().map((x)=>x.split('|')[0]);
-ok(sent.indexOf('B0HOT00001')>=0&&sent.indexOf('B0HOT00002')>=0,
-   '★★その2件を要求する');
-ok(['B0HOT00003','B0HOT00004','B0HOT00005','B0HOT00006','B0HOT00007','B0HOT00008',
-    'B0HOT00009'].every((a)=>sent.indexOf(a)<0),
-   '★★対象外の行は要求しない');
+ok(sent.indexOf('B0HOT00001')>=0&&sent.indexOf('B0HOT00002')>=0
+   &&sent.indexOf('B0HOT00005')>=0,
+   '★★その3件を要求する（再調達中・FBAで売れた行・無在庫）');
+ok(['B0HOT00003','B0HOT00004','B0HOT00006','B0HOT00007','B0HOT00008',
+    'B0HOT00009','B0HOT00010'].every((a)=>sent.indexOf(a)<0),
+   '★★対象外の行は要求しない（手元在庫・一点物・数量0・未出品・MW無在庫）');
 
 console.log('\n=== 取り直した値を書く ===');
 await wipe(); calls=[]; offers={};
