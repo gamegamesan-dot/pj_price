@@ -125,15 +125,16 @@ ok(calls.flat()[1]==='B0HOT20002|new','★★次に古い行');
 
 console.log('\n=== 上限で取り切れなかった件数 ===');
 await wipe(); calls=[]; notes=[];
-/* 新品の行だけにして、1行＝1要求にする（40件＝2回の呼び出し）。 */
-for(let i=0;i<45;i++)await seed('B0HOTM'+String(1000+i),{cond:'new',restocking:1});
+/* 新品の行だけにして、1行＝1要求にする（60件＝3回の呼び出し）。
+   7.131 で上限が 40 → 60 になったので、65件で上限を超えさせる。 */
+for(let i=0;i<65;i++)await seed('B0HOTM'+String(1000+i),{cond:'new',restocking:1});
 r=await hot();
 console.log('   '+JSON.stringify(r.hot)+' / note: '+JSON.stringify(r.note||r));
-ok(r.hot&&r.hot.picked===45&&r.hot.rows===W.PRICING_HOT_MAX&&r.hot.left===5,
-   '★★対象45件・取り直し40件・取り切れなかった5件');
-ok(calls.flat().length===40,'★要求は40件（1回20件×2回）');
+ok(r.hot&&r.hot.picked===65&&r.hot.rows===W.PRICING_HOT_MAX&&r.hot.left===5,
+   '★★対象65件・取り直し60件・取り切れなかった5件');
+ok(calls.flat().length===60,'★要求は60件（1回20件×3回）');
 console.log('   '+(notes[0]||'').replace(/\n/g,' / '));
-ok(/3時間ごと/.test(notes[0]||'')&&/45件のうち 40件/.test(notes[0]||''),
+ok(/3時間ごと/.test(notes[0]||'')&&/65件のうち 60件/.test(notes[0]||''),
    '★★Discord に取り切れなかったことを出す');
 ok(/取り切れなかった 5件/.test(notes[0]||''),'★★件数を出す');
 ok(/上限を上げてください/.test(notes[0]||''),'★上限を上げるよう促す');
@@ -142,7 +143,7 @@ console.log('   /status: '+JSON.stringify(st.body.hot_pricing));
 ok(st.body.hot_pricing&&st.body.hot_pricing.left===5
    &&st.body.hot_pricing.max===W.PRICING_HOT_MAX,
    '★★/status（hot_pricing）にも出す');
-ok(st.body.hot_pricing.picked===45&&st.body.hot_pricing.rows===40,'★内訳も返す');
+ok(st.body.hot_pricing.picked===65&&st.body.hot_pricing.rows===60,'★内訳も返す');
 
 console.log('\n=== 同じ知らせは24時間に1回 ===');
 notes=[];
@@ -155,7 +156,7 @@ ok(st.body.hot_pricing.left===5,'★★画面にはいつも出す（知らせ�
 // 24時間より前に知らせたことにすると、また知らせる
 await env.DB.prepare(
   `UPDATE sync_state SET v=?1 WHERE k='pricing.hot'`)
-  .bind(JSON.stringify({ at:now, picked:45, rows:40, left:5, max:40, wrote:40,
+  .bind(JSON.stringify({ at:now, picked:65, rows:60, left:5, max:60, wrote:60,
     warn_at:ago(DAY+60000) })).run();
 notes=[];
 r=await hot();
@@ -195,7 +196,8 @@ ok(/fba_available,-1\)=0/.test(w),'★★FBA未確認（NULL）は含めない')
 ok(/on_hand,0\)=0/.test(w)&&/dropship,0\)=0/.test(w)&&/one_off,0\)=0/.test(w),
    '★手元在庫・無在庫・一点物を外す');
 ok(/ebay_qty>0/.test(w),'★数量0は外す');
-ok(W.PRICING_HOT_MAX===40,'★★1回の上限は40件');
+ok(W.PRICING_HOT_MAX===60,
+   '★★1回の上限は60件（7.131 で 40 → 60。中古は新品も聞くので呼び出し6回ぶん）');
 
 globalThis.setTimeout=realTimeout;
 await T.done();

@@ -75,7 +75,9 @@ const PRICING_MAX_CALLS = 6;       // 0.1回/秒なので1回の実行では6回
 /* 3時間ごとに取り直す行の上限（7.49）。再調達中とフェイズBの対象だけを見る。
    1行につき最大2件（その行の状態＋新品）要求するので、40行＝最大80件＝4回。
    0.1回/秒なので1回の実行で約42秒かかる。 */
-const PRICING_HOT_MAX = 40;
+/* 7.131：40 → 60。中古の行は「中古＋新品」で2件ずつ聞くので、
+   60行＝120件＝PRICING_MAX_CALLS（6回）ぴったり。SP-API の間隔は変えない。 */
+const PRICING_HOT_MAX = 60;
 const PRICING_HOT_KEY = "pricing.hot";       // 前回の結果（sync_state）
 const PRICING_HOT_WARN_MS = 24 * 60 * 60 * 1000;  // 取り切れない知らせの間隔
 /* GetMyeBaySelling の1ページ件数。OutputSelector を外して全項目を受けるので、
@@ -2561,6 +2563,17 @@ async function syncPricing(env, run) {
    動かなかった。この2種類だけを3時間ごとに取り直す。
    上限（PRICING_HOT_MAX）を超えた回は、取り切れなかった件数を
    画面（/status の hot_pricing）と Discord に出す。 */
+/* 7.131（v254）**大事な行**＝再調達中（restocking=1）／Amazon 無在庫（amz_drop）。
+   この2種類は「売れてから Amazon で買い直す」ので、最安値が動くと利益が
+   そのまま動き、売値の追従（7.48）もこの値で判断する。
+   24時間より古くなると rkTarget が「最安値が古い」で**何もしなくなる**ので、
+   ③の候補の行より**必ず先に**取り直す。 */
+const PRICING_HOT_KEEP_MS = 24 * 60 * 60 * 1000;
+function pricingHotPri() {
+  return `(restocking=1
+           OR EXISTS (SELECT 1 FROM amz_drop d
+                       WHERE d.asin=items.asin AND d.cond=items.cond))`;
+}
 function pricingHotWhere() {
   /* 次の3種類。pbTarget の細かい条件（予約済みの内訳・入庫中・セール中）までは
      ここで見ない（少し広めに取るだけなので害がない）。
@@ -2581,22 +2594,39 @@ function pricingHotWhere() {
                  OR (COALESCE(mode,'')='restock' AND COALESCE(pb_act,'')='restock'))`;
 }
 async function syncPricingHot(env, run) {
-  const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0 };
+  const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0,
+                /* 7.131：大事な行（再調達中・Amazon 無在庫）の件数と、
+                   そのうち24時間より古いまま残った件数。 */
+                pri: 0, pri_rows: 0, pri_old: 0, pri_old_after: 0 };
+  const old24 = new Date(Date.now() - PRICING_HOT_KEEP_MS).toISOString();
   /* 全体の件数を先に数える（上限で取り切れなかった件数を出すため）。 */
   try {
     const c = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM items WHERE ${pricingHotWhere()}`).first();
+      `SELECT COUNT(*) AS n,
+              SUM(CASE WHEN ${pricingHotPri()} THEN 1 ELSE 0 END) AS pri,
+              SUM(CASE WHEN ${pricingHotPri()}
+                        AND (amazon_lowest_at IS NULL OR amazon_lowest_at < ?1)
+                       THEN 1 ELSE 0 END) AS pri_old
+         FROM items WHERE ${pricingHotWhere()}`).bind(old24).first();
     res.picked = Number((c && c.n) || 0);
+    res.pri = Number((c && c.pri) || 0);
+    res.pri_old = Number((c && c.pri_old) || 0);
   } catch (e) { run.notes.push("3時間ごとの最安値：件数が数えられません " + e.message); }
   if (!res.picked) return res;
   const q = await env.DB.prepare(
-    /* 最安値が古い行（まだ一度も取っていない行を含む）から順に取る。 */
-    `SELECT asin, cond FROM items WHERE ${pricingHotWhere()}
-       ORDER BY amazon_lowest_at IS NOT NULL, amazon_lowest_at
+    /* 7.131：**大事な行を先に**（pri=0）、そのあと最安値が古い行から順に取る
+       （まだ一度も取っていない行を含む）。こうしないと、③の候補の行が増えた
+       ぶんだけ再調達中の行が後ろに回され、何日も古いままになる。 */
+    `SELECT asin, cond,
+            CASE WHEN ${pricingHotPri()} THEN 0 ELSE 1 END AS pri
+       FROM items WHERE ${pricingHotWhere()}
+       ORDER BY pri ASC, amazon_lowest_at IS NOT NULL, amazon_lowest_at
        LIMIT ?1`).bind(PRICING_HOT_MAX).all();
   const keys = (q && q.results) || [];
   res.rows = keys.length;
+  res.pri_rows = keys.filter((k) => Number(k.pri) === 0).length;
   res.left = Math.max(0, res.picked - res.rows);
+  res.pri_old_after = Math.max(0, res.pri_old - res.pri_rows);
   if (!keys.length) return res;
   const low = await amazonLowest(env, run, lowestReqs(keys));
   const at = nowIso();
@@ -2621,6 +2651,10 @@ async function syncPricingHot(env, run) {
   res.wrote = stmts.length;
   run.notes.push("3時間ごとの最安値：対象 " + res.picked + "件のうち " + res.rows
     + "件を取り直し（書き込み " + res.wrote + "件）"
+    + "／大事な行（再調達中・Amazon無在庫）" + res.pri + "件のうち "
+    + res.pri_rows + "件"
+    + (res.pri_old ? ("・24時間より古かった " + res.pri_old + "件") : "")
+    + (res.pri_old_after ? ("・まだ古いまま " + res.pri_old_after + "件") : "")
     + (res.left ? ("／上限 " + PRICING_HOT_MAX + "件で取り切れなかった " + res.left + "件は次回")
                 : ""));
   /* 結果を残す（画面の帯と、次回の知らせの間隔に使う）。 */
@@ -2633,15 +2667,28 @@ async function syncPricingHot(env, run) {
   try {
     await stateSet(env, PRICING_HOT_KEY, JSON.stringify({
       at: at, picked: res.picked, rows: res.rows, left: res.left,
-      max: PRICING_HOT_MAX, wrote: res.wrote, warn_at: warnAt })).run();
+      max: PRICING_HOT_MAX, wrote: res.wrote, warn_at: warnAt,
+      /* 7.131：大事な行の様子も残す（画面の帯に出す）。 */
+      pri: res.pri, pri_rows: res.pri_rows, pri_old: res.pri_old,
+      pri_old_after: res.pri_old_after })).run();
   } catch (e) { /* 控えの失敗で本処理を落とさない */ }
-  // 取り切れなかったときだけ知らせる（同じ知らせは24時間に1回まで）
+  /* 取り切れなかったときだけ知らせる（同じ知らせは24時間に1回まで）。
+     7.131：**大事な行が24時間より古いまま残った**ぶんも同じ知らせに入れる。
+     ここが古いと売値の追従（7.48）が「最安値が古い」で何もしないので、
+     高いままの売値で出品が残る（E-B075LC617B-U で起きた）。
+     大事な行が残るのは上限を使い切った回だけなので、知らせは1通で足りる。 */
   if (res.left && warnAt === at)
     await notify(env, run, "⏱️ Amazon最安値（3時間ごと）：対象 " + res.picked
       + "件のうち " + res.rows + "件しか取り直せませんでした（上限 " + PRICING_HOT_MAX
       + "件）。\n取り切れなかった " + res.left
       + "件は次の回に回ります。対象が増えているので、上限を上げてください"
-      + "（再調達中とフェイズBの対象の合計）。");
+      + "（再調達中とフェイズBの対象の合計）。"
+      + (res.pri_old_after
+        ? ("\n\n⚠️ うち**再調達中・Amazon無在庫の行 " + res.pri_old_after
+           + "件**が、Amazon最安値を24時間以上取り直せていません。"
+           + "この行は最安値が古いと**売値の追従が止まる**ので、"
+           + "売値が高いままになります（大事な行は " + res.pri + "件）。")
+        : ""));
   return res;
 }
 async function pricingHotLast(env) {
@@ -3976,6 +4023,121 @@ async function jobRkPrice(env, opt) {
   } catch (e) {
     run.errors++;
     run.notes.push("例外 " + e.message);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
+/* ================= 1行だけ売値を直す（7.131・v254）=================
+   販売連携タブの「売値の見直し $64.96 → $55.25」は**表示だけ**だった。
+   ・自動反映（jobReview）は**値上げだけ**で、再調達中の行は対象外（rvSkip）
+   ・自動値下げ（jobMarkdown）は3日ごとの決まった刻み
+   なので「いま出ている推奨売値に、この行だけ直す」手段が無かった。
+
+   そこで**1行だけ**直す口を作る。人が確認して押すものなので上げ下げ両方。
+   ・売値は**Worker が計算する**（画面から来た値は使わない）。
+     PRICING.rvTarget の推奨売値（rv_want）を使い、最低売値（rv_floor）より
+     下げない。
+   ・セール中・出品なし・数量0の行は触らない。
+   ・ベストオファーのある出品は自動拒否額も一緒に直す（22003 を避ける）。
+   ・1日の上限は見ない（人が1件ずつ押すものなので）。 */
+function oneBo(r, next, floor) {
+  if (!Number(r.ebay_bo || 0)) return { min: 0, acc: 0 };
+  const cap = Math.round((next - 0.01) * 100) / 100;
+  const fl = Math.round(Number(floor || 0) * 100) / 100;
+  const min = (fl > 0 && fl < cap) ? fl : cap;
+  const acc0 = Number(r.ebay_bo_accept || 0);
+  return { min: min > 0 ? min : 0, acc: (acc0 > 0 && acc0 >= next) ? cap : 0 };
+}
+/* この行をいくらに直すか。{ ok, from, to, want, floor, under, why } */
+function oneTarget(S, r) {
+  const no = (why) => ({ ok: false, why: why });
+  if (!String(r.ebay_item_id || "").trim()) return no("出品していません");
+  if (Number(r.ebay_sale || 0)) return no("eBayのセール中です");
+  const now = Math.round(Number(r.ebay_price || 0) * 100) / 100;
+  if (!(now > 0)) return no("いまの売値が分かりません");
+  if (Number(r.ebay_qty || 0) <= 0)
+    return no("数量0の出品です（復活のときに売値を直してください）");
+  const t = PRICING.rvTarget(S, r);
+  const want = Math.round(Number((t && t.rv_want) || 0) * 100) / 100;
+  if (!(want > 0)) return no("推奨売値を計算できません"
+    + ((t && t.rv_kind === "skip") ? "（相場が最低売値に届きません）" : ""));
+  const fl = Math.round(Number((t && t.rv_floor) || 0) * 100) / 100;
+  let to = want, under = false;
+  if (fl > 0 && to < fl - 0.001) { to = fl; under = true; }
+  if (Math.abs(to - now) < 0.01)
+    return no("いまの売値と同じです（$" + now.toFixed(2) + "）");
+  return { ok: true, from: now, to: to, want: want, floor: fl, under: under,
+           why: "" };
+}
+/* 画面の「この行の売値を直す」。管理者だけ。 */
+async function jobPriceOne(env, opt) {
+  const o = opt || {};
+  const run = newRun("price-one");
+  const res = { ok: false, asin: String(o.asin || ""), cond: String(o.cond || ""),
+                from: 0, to: 0, want: 0, floor: 0, under: false, why: "" };
+  try {
+    if (!res.asin || !res.cond) {
+      res.why = "行が分かりません（asin と cond が要ります）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const q = await env.DB.prepare(
+      `SELECT ${ITEM_COLS} FROM items WHERE asin=?1 AND cond=?2 LIMIT 1`)
+      .bind(res.asin, res.cond).first();
+    if (!q) {
+      res.why = "その行がありません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 目標を自分で計算して埋める（7.52）。画面から来た値は使わない。 */
+    const self0 = await selfFill(env, run, [q]);
+    const r = (self0.rows || [q])[0];
+    const ps = await pricingSettings(env, run);
+    const t = oneTarget(ps.S, r);
+    Object.assign(res, { from: t.from || 0, to: t.to || 0, want: t.want || 0,
+                         floor: t.floor || 0, under: !!t.under });
+    if (!t.ok) {
+      res.why = t.why;
+      run.notes.push("1行の売値：" + res.asin + "|" + res.cond + " → " + t.why);
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const token = await ebayToken(env, run);
+    const itemId = String(r.ebay_item_id || "").trim();
+    const bo = oneBo(r, t.to, t.floor);
+    const v = await ebayRevise(env, run, token, itemId, t.to, bo, null);
+    const at = nowIso();
+    if (!v.ok) {
+      res.why = v.why || ("eBay が断りました（" + v.ack + "）");
+      /* セール中で断られた行には印を立てる（6.59 と同じ扱い）。 */
+      if (SALE_ERR.test(String(v.why || ""))) {
+        await runBatch(env, run, [env.DB.prepare(
+          `UPDATE items SET ebay_sale=1, updated_at=?3
+            WHERE asin=?1 AND cond=?2`).bind(res.asin, res.cond, at)]);
+        res.why = "eBayのセール中です（印を立てました）";
+      } else {
+        await runBatch(env, run, [env.DB.prepare(
+          `UPDATE items SET revise_err=?3, revise_err_at=?4, updated_at=?4
+            WHERE asin=?1 AND cond=?2`)
+          .bind(res.asin, res.cond, String(res.why).slice(0, 200), at)]);
+      }
+      run.errors++;
+      run.notes.push("1行の売値：" + itemId + " を直せませんでした（" + res.why + "）");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* 書けた。控えも新しい売値にそろえる（再調達中の行は出し直した売値も）。 */
+    await runBatch(env, run, [env.DB.prepare(
+      `UPDATE items SET ebay_price=?3,
+         restock_price=CASE WHEN restocking=1 THEN ?3 ELSE restock_price END,
+         revise_err=NULL, revise_err_at=NULL, updated_at=?4
+        WHERE asin=?1 AND cond=?2`).bind(res.asin, res.cond, t.to, at)]);
+    res.ok = true;
+    run.notes.push("1行の売値：" + itemId + " を $" + t.from.toFixed(2)
+      + " → $" + t.to.toFixed(2) + " に直しました"
+      + (t.under ? "（最低売値で止めました）" : ""));
+    await notify(env, run, "💲 売値の見直しを1件反映：" + (r.title || r.ebay_sku
+      || res.asin) + "\n$" + t.from.toFixed(2) + " → $" + t.to.toFixed(2)
+      + (t.under ? "（最低売値 $" + t.floor.toFixed(2) + "で止めました）" : ""));
+  } catch (e) {
+    run.errors++; run.notes.push("price-one: " + String((e && e.message) || e));
+    res.why = String((e && e.message) || e);
   }
   return Object.assign(await saveRun(env, run), res);
 }
@@ -14323,6 +14485,14 @@ export default {
         if (kind === "soldkeep")
           return json(await jobSoldKeep(env, { approve: body.approve === true }),
             200, origin);
+        /* 7.131（v254）画面の行から1件だけ売値を直す。管理者だけ。
+           売値は Worker が計算する（画面から来た値は使わない）。 */
+        if (kind === "price-one") {
+          if (role !== "admin")
+            return forbidStaff("売値の変更は管理者用のキーが必要です", [], origin);
+          return json(await jobPriceOne(env, { asin: body.asin, cond: body.cond }),
+            200, origin);
+        }
         /* 再調達中の売値の追従（7.48）。既定は自動なので、ふだんは Cron が回す。
            approve:true は「確認してから」のときの手動実行。 */
         if (kind === "restockprice")
@@ -14389,6 +14559,15 @@ export default {
         try { await syncPricingHot(env, run); }
         catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
         await saveRun(env, run);
+        /* 7.131（v254）**取り直した直後に売値を合わせる**。
+           v253 までは jobRkPrice が日次（1日1回）だけだったので、
+           3時間ごとに最安値が新しくなっても、売値は次の日次まで
+           最大24時間ほど古い値のままだった（E-B075LC617B-U：最安値が
+           下がっても $64.96 のまま）。1日の上限（RK_MAX 30件）は
+           「直近24時間に変えた件数」で数えているので、回数を増やしても
+           変える件数は増えない。 */
+        try { await jobRkPrice(env, {}); }
+        catch (e) { /* ここで落ちても本体は止めない */ }
       }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
@@ -14441,6 +14620,9 @@ export default {
    本番の動きには関与しない（fetch / scheduled からは使わない）。 */
 export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
+                        /* 7.131（v254）大事な行の優先と、1行だけの売値直し。 */
+                        pricingHotPri, PRICING_HOT_KEEP_MS, syncPricingHot,
+                        oneTarget, oneBo, jobPriceOne,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,
                         skSettings, skPlanRows, jobSoldKeep, SK_MAX, SK_FAIL_WARN,
