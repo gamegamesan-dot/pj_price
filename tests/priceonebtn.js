@@ -155,6 +155,82 @@ console.log('\n=== ④ 下げを保留している行も、人が押せば下げ
   ok(/下げを保留/.test(t),'★★自動では保留のままだと分かる');
 }
 
+console.log('\n=== ④の2 自動が見送る行にも出す（6.174）===');
+/* v254 では、再調達中の行で「再調達中の売値の追従」が見送ると
+   ボタンが消えていた。推奨売値が画面に出ているのに押せなかった
+   （E-B075LC617B-U：無在庫・最安値が4日古い）。 */
+{
+  const old=new Date(Date.now()-96*3600000).toISOString();
+  await setup({ items:null });
+  await openCsvBoxes(p);
+  const r=await p.evaluate((old)=>{
+    const base=(syncData.items||[]).filter((x)=>x.asin==='B075LC617B')[0];
+    const cases={
+      drop:{ dropship:1 },
+      oneoff:{ one_off:1 },
+      oldlow:{ amazon_lowest_at:old },
+      nolow:{ amazon_lowest_at:'' }
+    };
+    const out={};
+    for(const k in cases){
+      const row=Object.assign({},base,cases[k]);
+      const rk=syncRkTargetOf(row);
+      const t=syncPriceOneTarget(row);
+      out[k]={ why:rk.why||'', btn:!!t, next:(t||{}).next||0,
+               old:!!(t||{}).old, drop:!!(t||{}).drop,
+               label:(t||{}).why||'' };
+    }
+    return out;
+  },old);
+  console.log('   '+JSON.stringify(r));
+  ok(r.drop.btn,'★★★無在庫（dropship=1）の行にもボタンを出す');
+  ok(/無在庫/.test(r.drop.label),'★★自動が見送った理由を添える');
+  ok(r.drop.drop===true,'★★無在庫だと分かる印を返す');
+  ok(r.oneoff.btn,'★★★一点物の行にもボタンを出す');
+  ok(/一点物/.test(r.oneoff.label),'★★理由を添える');
+  ok(r.oldlow.btn,'★★★最安値が4日古い行にもボタンを出す');
+  ok(r.oldlow.old===true,'★★★「最安値が古い」の印を返す');
+  ok(/最安値が古い/.test(r.oldlow.label),'★★理由を添える');
+  ok(r.nolow.btn&&r.nolow.old===true,'★★★最安値が未取得の行にも出す');
+  ok(r.drop.next>0&&r.oldlow.next>0,'★★どの場合も推奨売値を出す');
+}
+{
+  /* ボタンの文と確認の文に「最安値が古い」が出る。 */
+  const old=new Date(Date.now()-96*3600000).toISOString();
+  await setup({ items:null });
+  await openCsvBoxes(p);
+  await p.evaluate((old)=>{
+    syncData.items.forEach((x)=>{ if(x.asin==='B075LC617B')
+      x.amazon_lowest_at=old; });
+    syncRender();
+  },old);
+  const b=await btn('B075LC617B');
+  console.log('   '+(b&&b.txt));
+  ok(b&&/※最安値が古い/.test(b.txt),
+     '★★★押す前にボタンに「最安値が古い」と出す');
+  dlg=[];
+  await click('B075LC617B');
+  console.log('   '+(dlg[0]||'').replace(/\n/g,' / '));
+  ok(/Amazon最安値が古い/.test(dlg[0]||''),'★★★確認にも注意を出す');
+  ok(/最安値を今すぐ取り直す/.test(dlg[0]||''),
+     '★★★先に取り直すよう案内する');
+  const s=await p.evaluate(()=>JSON.parse(JSON.stringify(window.__sync)));
+  ok(s.length===1&&s[0].kind==='price-one','★★それでも押せば送る');
+}
+{
+  /* 無在庫の行は段取り D の注意も出す。 */
+  await setup({ items:null });
+  await openCsvBoxes(p);
+  await p.evaluate(()=>{
+    syncData.items.forEach((x)=>{ if(x.asin==='B075LC617B')x.dropship=1; });
+    syncRender();
+  });
+  dlg=[];
+  await click('B075LC617B');
+  ok(/段取り D/.test(dlg[0]||''),
+     '★★★無在庫の行は「段取り D で変わることがある」と出す');
+}
+
 console.log('\n=== ⑤ 触らない行にはボタンを出さない ===');
 {
   ok(await btn('B0PX000003')===null,'★★★セール中の行には出さない');

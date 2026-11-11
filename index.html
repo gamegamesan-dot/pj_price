@@ -20461,29 +20461,49 @@ function syncPriceOneBtn(r,key){
   return '<button class="btn cfgprice" data-spx="'+esc(key)+'"'
     +' style="padding:5px 8px;font-size:12px;background:#b35c00;color:#fff;'
     +'border-color:#b35c00">この行の売値を直す（'+usd(x.now)+' → '
-    +usd(x.next)+'）</button>';
+    +usd(x.next)+'）'+(x.old?'※最安値が古い':'')+'</button>';
+}
+/* Amazon最安値が古い（または未取得）か。6.174 で注意に出す。 */
+function syncLowOldOf(r){
+  var row=r||{};
+  if(!String(row.amazon_lowest_at||'').trim())return true;
+  return !syncPbLow(row).fresh;
 }
 /* ボタンを出すかどうかと、出す数字。
-   再調達中の行は「再調達中の売値の追従」が見るので、その目標を出す。
-   それ以外は「売値の見直し」の推奨売値。どちらも無い行にはボタンを出さない。 */
+   ① 再調達中の行は「再調達中の売値の追従」の目標
+   ② 追従が見送る行（無在庫・一点物・最安値が古い…）でも、
+      **画面に「売値の見直し」が出ているなら人が押して直せる**（6.174）
+   ③ 再調達中でない行は「売値の見直し」の推奨売値
+   どれも無い行にはボタンを出さない。 */
 function syncPriceOneTarget(r){
   var row=r||{};
   if(!String(row.ebay_item_id||'').trim())return null;
   if(Number(row.ebay_sale||0))return null;
   if(syncQtyOf(row)===0)return null;
   var now=+row.ebay_price||0; if(!(now>0))return null;
+  var old=syncLowOldOf(row), drop=syncIsDropship(row);
+  var out=function(next,why,from){
+    return { now:now, next:+next, why:why, from:from, old:old, drop:drop };
+  };
   if(syncIsRestocking(row)){
     var rk=syncRkTargetOf(row);
     if(rk&&rk.kind&&rk.kind!=='zero'&&+rk.to>0)
-      return { now:now, next:+rk.to, why:'再調達中の売値', from:'rk' };
+      return out(rk.to,'再調達中の売値','rk');
     /* 下げを保留している行も、人が押すなら下げられる（下限は守る）。 */
     if(rk&&rk.held&&+rk.want>0)
-      return { now:now, next:+rk.want, why:'下げを保留中', from:'rk' };
+      return out(rk.want,'下げを保留中','rk');
+    /* 6.174：自動の追従が見送っていても、画面に推奨売値が出ているなら
+       人が直せるようにする。v254 ではここで null を返していたので、
+       **無在庫・一点物・最安値が古い**行にボタンが出ていなかった
+       （E-B075LC617B-U：$64.96 のまま、推奨 $55.25 が出ているのに押せない）。 */
+    var v0=syncPriceReview(row);
+    if(v0&&+v0.next>0)
+      return out(v0.next,'売値の見直し（自動では'
+        +((rk&&rk.why)||'見送り')+'）','rv');
     return null;
   }
   var v=syncPriceReview(row);
-  if(v&&+v.next>0)return { now:now, next:+v.next, why:'売値の見直し',
-                           from:'rv' };
+  if(v&&+v.next>0)return out(v.next,'売値の見直し','rv');
   return null;
 }
 /* 確認してから送る。pj-sync が売値を計算するので、画面の値は送らない。 */
@@ -20499,7 +20519,14 @@ function syncPriceOneGo(t,r,key){
     +(r.title||r.ebay_sku||r.asin)+'\n'
     +usd(x.now)+' → '+usd(x.next)+'（'+x.why+'）\n\n'
     +'※ 実際の売値は pj-sync が計算し直します'
-    +'（最低売値より下げません）。よろしいですか？'))return;
+    +'（最低売値より下げません）。\n'
+    /* 6.174：推奨売値のもとが古いときは、先に取り直したほうが確実。 */
+    +(x.old?('※ Amazon最安値が古い（または未取得）ので、推奨売値も'
+      +'古い値から出ています。\n　 先に「最安値を今すぐ取り直す」を'
+      +'押すのが確実です。\n'):'')
+    +(x.drop?('※ 無在庫の行です。MW の見直し（段取り D）で'
+      +'売値が変わることがあります。\n'):'')
+    +'\nよろしいですか？'))return;
   t.disabled=true; t.textContent='直しています…';
   $('syncFixNote').textContent='eBay に書き込んでいます…（'
     +(r.title||r.asin)+'）';
@@ -22384,7 +22411,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v255';   // sw.js の const V と必ず同じ値にする
+var APP_V='v256';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
