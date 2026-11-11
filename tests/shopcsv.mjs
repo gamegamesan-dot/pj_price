@@ -142,6 +142,25 @@ ok(cell(t1,1,'SEO title')==='スーパーマリオパーティ ジャンボリ�
 ok(A.build([IT],{ option1:{ name:'Title2', value:'X' } }).indexOf('Title2')>0,
    '★★Option1 の値は設定で変えられる（ストアの実際に合わせる）');
 
+console.log('\n=== 重さ（6.173）Amazon の梱包重量＋⚙の足し分 ===');
+ok(A.weightOf({ size_g:110 },{})===110,
+   '★★★既定（足し分0g）は Amazon の梱包重量そのまま');
+ok(A.weightOf({ size_g:110 },{ addG:40 })===150,
+   '★★★⚙「Shopify に出す重さの足し分」を足す');
+ok(A.weightOf({ size_g:0 },{ addG:40 })===0,
+   '★★★重さが取れていない行は 0 のまま（足し分だけの嘘の重さにしない）');
+ok(A.weightOf({},{})===0,'★何も無ければ 0');
+ok(A.weightOf({ size_g:110 },{ addG:-50 })===110,
+   '★負の足し分は無視する');
+ok(cell(A.build([IT],{ addG:40 }),1,'Weight value (grams)')==='150',
+   '★★★CSV にも足した値が出る');
+ok(cell(t1,1,'Weight value (grams)')==='110',
+   '★★足し分を入れなければ今までどおり');
+/* eBay の梱包マージン（ゲーム60g／フィギュア250g）はここには足さない。
+   あれは eBay の送料計算用で、0 にはできない欄なので混ぜない。 */
+ok(A.weightOf({ size_g:110, csvPackGame:60 },{})===110,
+   '★★★eBay の梱包マージンは足さない（別の欄）');
+
 console.log('\n=== Collection（読み込みのときだけ足せる唯一の列）===');
 ok(A.COLS.indexOf('Collection')>=0,'★列として持っている');
 ok(cells(t1)[0].indexOf('Collection')<0,

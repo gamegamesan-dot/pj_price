@@ -280,6 +280,45 @@ await load();
      '★★★印が1つも無いときは書き出さず、そう言う');
 }
 
+console.log('\n=== ③の2 重さの足し分（6.173）===');
+{
+  await setup({ rows:[row(0)], sub:SUB });
+  await load();
+  const d=await p.evaluate(async()=>{
+    const def=$('mwSubAddG').value;
+    $('mwSubCollection').value='';
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    const a=window.__dl[0].text;
+    $('mwSubAddG').value='40';
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    return { def:def, a:a, b:window.__dl[0].text, opt:mwSubOpt().addG };
+  });
+  ok(d.def==='0','★★★既定は 0g（Amazon の梱包重量をそのまま使う）');
+  ok(cellOf(d.a,1,'Weight value (grams)')==='110',
+     '★★★足し分0なら Amazon の梱包重量そのまま');
+  ok(cellOf(d.b,1,'Weight value (grams)')==='150',
+     '★★★⚙の足し分（40g）を足して出す');
+  ok(d.opt===40,'★★⚙の値を CSV の設定に渡している');
+  const ng=await p.evaluate(()=>{
+    $('mwSubAddG').value='-50'; return mwSubOpt().addG; });
+  ok(ng===0,'★負の値は 0 にする');
+  await p.evaluate(()=>{ $('mwSubAddG').value='0'; });
+}
+{
+  /* eBay の梱包マージンは別の欄。こちらを変えても Shopify の重さは変わらない。 */
+  const t=await p.evaluate(async()=>{
+    $('csvPackGame').value='60'; $('csvPackFig').value='250';
+    $('mwSubAddG').value='0';
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    return window.__dl[0].text;
+  });
+  ok(cellOf(t,1,'Weight value (grams)')==='110',
+     '★★★eBay の梱包マージン（60g）は Shopify の重さに足さない（別の欄）');
+}
+
 console.log('\n=== ④ 在庫CSV（ロケーション名が要る）===');
 {
   const a=await p.evaluate(async()=>{

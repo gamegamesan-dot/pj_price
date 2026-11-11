@@ -1844,6 +1844,23 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row"><label>知らせる上位の件数</label><input type="number" id="mwNtTop" value="100" step="1" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
         <!-- 6.164：知らせに出す項目の出し分け（【S】の4）。 -->
         <div class="rowv cfgprice"><label for="mwNtAudience">知らせに出す項目</label><select id="mwNtAudience"><option value="staff" selected>社内用（卸値・社・MW在庫を出す）</option><option value="member">会員用（卸値・社・MW在庫は出さない）</option></select><div class="note2" style="margin-top:2px"><b>社内用</b>は今までどおり <b>卸値・社・MW在庫</b>を出します。<b>会員用</b>は<b>卸値・社・MW在庫・MW の画像・備考を出さず</b>、代わりに<b>販売価格・見込みの Amazon 粗利・購入できる数</b>を出します（会員向けのリストに流すときに使います）。<b>いまは社内用のままにしてください。</b></div></div>
+        <!-- 6.173（【U の改】）会員向け（Shopify）の重さの足し分。
+             eBay の送料計算に使う「梱包マージン（ゲーム60g／フィギュア250g）」
+             とは**別**にする。あちらは Amazon の梱包重量に足して eBay の
+             送料を出すためのもので、0 にはできない。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
+        <div class="row cfgprice"><label for="mwSubAddG">Shopify に出す重さの足し分</label><input type="number" id="mwSubAddG" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
+        <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
+          <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
+          Shopify は<b>重さの段</b>で送料を決めるので、ここを増やすと段が上に動きます。
+          <b>既定は 0g</b>（Amazon の梱包重量をそのまま使う）。<br>
+          ⚙「見直しのしきい値・既定重量・梱包」の<b>梱包マージン（ゲーム60g／
+          フィギュア250g）は eBay の送料計算用</b>で、こちらには足しません
+          （別の欄です）。<br>
+          Shopify 側の <b>設定 → 配送と配達 → 梱包</b>にある
+          「<b>既定の梱包の重さ</b>」は <b>Shopify 自身の設定</b>で、
+          商品1点ごとに足されます。重さの段をずらしたくないので
+          <b>Shopify 側は 0g</b> にし、足し分はこの欄で持ってください。</div>
         <!-- 6.166（【T】）在庫の動きの記録と目安 -->
         <div class="note2" style="margin:10px 0 2px"><b>在庫の動きと目安（売れる速さ・再入荷）</b></div>
         <details class="exp" data-exp="mwMove"><summary>何を記録して何が分かるかの説明</summary>
@@ -5383,9 +5400,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 在庫CSVの自動取り込み（6.160・【P】）。取得先の URL もここ。
                     （「すぐ止める」は真偽値なので ADV_AMZCHK 側で持つ） */
                  'mwCsvAuto','mwCsvUrl','mwCsvEveryH','mwCsvBodyH',
-                 /* 6.170（【U の改】）Shopify 用 CSV の設定。 */
+                 /* 6.170（【U の改】）Shopify 用 CSV の設定。
+                    6.173：重さの足し分（eBay の梱包マージンとは別）。 */
                  'mwSubType','mwSubVendor','mwSubCollection','mwSubMarkup',
-                 'mwSubLoc'];
+                 'mwSubLoc','mwSubAddG'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -14587,7 +14605,13 @@ function mwSubOpt(){
            collection:String(($('mwSubCollection')||{}).value||'').trim(),
            location:String(($('mwSubLoc')||{}).value||'').trim(),
            first:!!($('mwSubInvFirst')||{}).checked,
+           /* 6.173：Shopify に出す重さの足し分（eBay の梱包マージンとは別）。 */
+           addG:mwSubAddG(),
            date:new Date() };
+}
+/* Shopify に出す重さの足し分（g）。既定 0。 */
+function mwSubAddG(){
+  return Math.max(0,Math.min(2000,+(($('mwSubAddG')||{}).value)||0));
 }
 /* CSV に出す品物。pj-sync の控え（/mw/sub）を正とし、
    名前・ASIN・機種・重さもそちらの値を使う（画面を開いていなくても同じ）。 */
@@ -22360,7 +22384,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v254';   // sw.js の const V と必ず同じ値にする
+var APP_V='v255';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

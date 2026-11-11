@@ -139,6 +139,24 @@
     return h.join("");
   }
 
+  /* ---- 重さ（6.173）----
+     Shopify は**重さの段**で送料を決めるので、ここがずれると送料がずれる。
+     使うのは **Amazon の梱包重量（なければ商品の重量）**。
+     `size_g` は mw_amz の列で、Amazon の Catalog の package を優先して
+     入っている（取れなければ item の重量・7.112 の size_src が 'pkg'/'item'）。
+     そこに ⚙「Shopify に出す重さの足し分」（既定 0g）を足す。
+
+     ⚠ pj の⚙「梱包マージン（ゲーム60g／フィギュア250g）」は
+     **eBay の送料計算用**なので、ここには足さない（別の欄）。
+     Shopify 自身の「既定の梱包の重さ」も段をずらすので 0g にしてもらう。 */
+  function weightOf(r, opt) {
+    var o = opt || {};
+    var g = Math.round(num((r || {}).size_g) || num(o.grams) || 0);
+    if (g <= 0) return 0;              // 取れていない行は 0（画面が注意を出す）
+    /* 足し分は0以上だけ（負の値で軽くはしない）。 */
+    var add = Math.round(num(o.addG));
+    return g + (add > 0 ? add : 0);
+  }
   /* ---- 送料の区分 ----
      採寸（cm・g）があればクリックポストに入るかで見る。
      無ければ Amazon のサイズ区分（size_tier：s/m/l）で代わりに見る。 */
@@ -207,8 +225,7 @@
     row["Inventory tracker"] = "shopify";
     row["Inventory quantity"] = String(Math.max(0, Math.round(num(r.max_qty))));
     row["Continue selling when out of stock"] = "deny";
-    row["Weight value (grams)"] = String(Math.max(0,
-      Math.round(num(r.size_g) || num(o.grams) || 0)));
+    row["Weight value (grams)"] = String(weightOf(r, o));
     row["Weight unit for display"] = "g";
     row["Requires shipping"] = "true";
     row["Fulfillment service"] = "manual";
@@ -373,6 +390,7 @@
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
     invCsv: invCsv, splitCsv: splitCsv, transFill: transFill,
+    weightOf: weightOf,
     TR_DEF: TR_DEF, TR_OUT: TR_OUT
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
