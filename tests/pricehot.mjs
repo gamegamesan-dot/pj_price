@@ -19,6 +19,15 @@ const { worker, T:W }=await loadWorker('pricehot');
 
 const now=new Date().toISOString();
 const ago=(h)=>new Date(Date.now()-h*3600000).toISOString();
+/* SP-API の呼び出し間隔（10.5秒）はテストでは待たない（7.136 で呼び出しが
+   増えたので、待つと1分以上かかる）。長い待ちだけ短く差し替える。 */
+const realTimeout=globalThis.setTimeout;
+globalThis.setTimeout=(fn,ms,...a)=>realTimeout(fn,(ms>50?1:ms),...a);
+/* ⚙「3時間ごとに取り直す上限」（syncHotMax）。0・未設定なら自動（7.136）。 */
+const setHotMax=(env,n)=>env.DB.prepare(
+  `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
+   ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
+  .bind(JSON.stringify({ at:now, settings:{ syncHotMax:n } }), now).run();
 const env0=()=>makeEnv({ STAFF_KEY:'staff-key-123',
   EBAY_CLIENT_ID:'x', EBAY_CLIENT_SECRET:'y', EBAY_REFRESH:'z' });
 const item=(env,o)=>env.DB.prepare(
@@ -49,8 +58,8 @@ ok(!/fba_available/.test(pri),
    '★★★フェイズBの候補は「大事な行」に入れない（こちらは後回しでよい）');
 ok(W.PRICING_HOT_KEEP_MS===24*60*60*1000,
    '★★★大事な行は24時間より古くしない');
-ok(W.PRICING_HOT_MAX===60,
-   '★★★1回の上限は60件（中古は新品も聞くので 120件＝呼び出し6回ぶん）');
+ok(W.PRICING_HOT_MAX===150,
+   '★★★既定の上限は150件（7.136 で 60 → 150。⚙ syncHotMax で変えられる）');
 ok(/restocking=1/.test(W.pricingHotWhere()),'★対象の条件にも入っている');
 
 console.log('\n=== ② 大事な行を先に取り直す（候補の行に押しのけられない）===');
@@ -89,7 +98,9 @@ console.log('\n=== ② 大事な行を先に取り直す（候補の行に押し
     after:res.pri_old_after }));
   ok(res.picked===81,'★★対象は81件（大事な行1＋候補80）');
   ok(res.pri===1&&res.pri_old===1,'★★★大事な行1件・24時間より古い1件');
-  ok(res.rows===60,'★★1回に取るのは上限の60件');
+  /* 7.136：既定が150件になったので、81件はそのまま取り切れる。 */
+  ok(res.rows===81&&res.left===0,'★★★対象81件を1回で取り切る（既定150件）');
+  ok(res.max===150&&res.auto===true,'★★上限は自動で 150件');
   ok(res.pri_rows===1,
      '★★★候補が80件あっても大事な行は必ず入る（押しのけられない）');
   ok(res.pri_old_after===0,'★★★古いまま残った大事な行は0件');
@@ -103,6 +114,9 @@ console.log('\n=== ② 大事な行を先に取り直す（候補の行に押し
 console.log('\n=== ③ 大事な行が上限を超えたら、古い順に取って残りを知らせる ===');
 {
   const env=env0();
+  /* 7.136：既定（150件）では 70件は取り切れてしまうので、
+     ⚙「3時間ごとに取り直す上限」を 60件にして上限を超えさせる。 */
+  await setHotMax(env,60);
   for(let i=0;i<70;i++)
     await item(env,{ asin:'B'+String(200000000+i), restocking:1,
       low_at:ago(30+i), low:40, lowN:3, offers:5 });
@@ -132,6 +146,7 @@ console.log('\n=== ③ 大事な行が上限を超えたら、古い順に取っ
   console.log('   '+JSON.stringify({ pri:res.pri, pri_rows:res.pri_rows,
     pri_old:res.pri_old, after:res.pri_old_after })+'／知らせ '+msg.length+'件');
   ok(res.pri===70&&res.pri_old===70,'★★70件ぜんぶが大事な行で24時間より古い');
+  ok(res.max===60&&res.auto===false,'★★⚙の上限（60件）を使う');
   ok(res.pri_rows===60,'★★上限ぶんだけ取る');
   ok(res.pri_old_after===10,'★★★古いまま残った10件を数える');
   ok(msg.some((t)=>/24時間以上取り直せていません/.test(t)),
@@ -265,6 +280,7 @@ console.log('\n=== ⑧ 最安値を取り直した直後に売値を合わせる
   ok(/jobRkPrice/.test(between),
      '★★★3時間ごとの最安値のすぐあとに jobRkPrice を回す');
   ok(/getUTCHours\(\) % 3 === 0/.test(src),'★3時間ごとのまま');
-  ok(W.PRICING_HOT_MAX>40,'★★上限を上げた（40→60）');
+  ok(W.PRICING_HOT_MAX>40,'★★上限を上げた（40→60→150）');
 }
+globalThis.setTimeout=realTimeout;
 T.done();

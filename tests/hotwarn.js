@@ -34,7 +34,8 @@ const view=async()=>await p.evaluate(()=>({
   txt:$('syncHotWarn').textContent }));
 
 console.log('=== 取り切れていないとき ===');
-await setup({hot:{at:'2026-10-19T15:00:00Z',picked:45,rows:40,left:5,max:40,wrote:40}});
+await setup({hot:{at:'2026-10-19T15:00:00Z',picked:45,rows:40,left:5,max:40,
+  wrote:40,auto:true,cap:1150}});
 await openCsvBoxes(p);
 let v=await view();
 console.log('   '+v.txt);
@@ -43,8 +44,36 @@ ok(/対象 45件のうち 40件だけ取り直しました/.test(v.txt),'★★�
 ok(/上限 40件/.test(v.txt),'★★上限を出す');
 ok(/取り切れなかった 5件は次の回に回ります/.test(v.txt),'★★取り切れなかった件数を出す');
 ok(/前回 2026-10-20 00:00/.test(v.txt),'★前回の時刻を出す');
-ok(/上限（PRICING_HOT_MAX）を上げるか、再調達中の行を減らしてください/.test(v.txt),
-   '★上限を上げるか行を減らすよう促す');
+/* 7.136：上限は⚙「3時間ごとに取り直す上限」。空なら自動（既定150件）。 */
+ok(/自動/.test(v.txt),'★★上限が自動か⚙かを出す');
+ok(/再調達中・無在庫の行を減らしてください/.test(v.txt),
+   '★★取り切れないときの直し方を出す');
+ok(/収まる上限（1150件）/.test(v.txt),'★★自動の上限の上限も出す');
+
+console.log('=== 7.136 ⚙で上限を決めたとき ===');
+await setup({hot:{at:'2026-10-19T15:00:00Z',picked:116,rows:60,left:56,max:60,
+  wrote:60,auto:false,cap:1150}});
+await openCsvBoxes(p);
+v=await view();
+console.log('   '+v.txt);
+ok(/上限 60件・⚙/.test(v.txt),'★★★⚙で決めた上限だと分かる');
+ok(/空にすると/.test(v.txt)&&/1150件まで/.test(v.txt),
+   '★★★空にすれば自動になることと、自動の上限を出す');
+
+console.log('=== 6.180 ⚙の欄 ===');
+{
+  const t=await p.evaluate(()=>({
+    hot:!!document.getElementById('syncHotMax'),
+    hotVal:($('syncHotMax')||{}).value,
+    hotPh:($('syncHotMax')||{}).placeholder,
+    px:($('syncPxMax')||{}).value,
+    pxMax:(typeof pxMaxOf==='function')?pxMaxOf():null }));
+  console.log('   '+JSON.stringify(t));
+  ok(t.hot===true,'★★★⚙「3時間ごとに取り直す上限」の欄がある');
+  ok(t.hotVal===''&&t.hotPh==='自動','★★★既定は空（自動）');
+  ok(t.px==='80','★★★「まとめて直す上限（1日）」の既定が 80件（30 → 80）');
+  ok(t.pxMax===80,'★★空にしても 80件として扱う');
+}
 
 console.log('=== 取り切れているとき ===');
 await setup({hot:{at:'2026-10-19T15:00:00Z',picked:18,rows:18,left:0,max:40,wrote:18}});

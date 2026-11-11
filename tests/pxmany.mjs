@@ -93,7 +93,7 @@ console.log('=== ① まとめて売値を直す ===');
      '★★★eBay に行ごとに1回ずつ書く');
   ok((r.body.rows||[]).every((x)=>x.ok&&x.from>0&&x.to>0),
      '★★★行ごとに いくら→いくら を返す');
-  ok(r.body.max===30,'★★★1日の上限は既定30件');
+  ok(r.body.max===80,'★★★1日の上限は既定80件（7.136 で 30 → 80）');
   ok(r.body.used===3,'★★使った件数を返す');
   ok(msg.some((t)=>/売値を 3件直しました/.test(t)),'★★Discord にも出す');
   const g=await env.DB.prepare(
@@ -249,10 +249,11 @@ ok(W.pxKeys({ items:[{asin:'A',cond:'used'},{asin:'A',cond:'used'},
 ok(W.pxKeys({ items:[1,2,3].map((i)=>({asin:'A'+i,cond:'used'})) },2).length===2,
   '★★上限で切る');
 ok(W.pxKeys({},10).length===0,'★空でも落ちない');
-ok(W.PX_MAX_DEFAULT===30&&W.RESTOCK_ONE_MAX===30,'★上限の既定');
+ok(W.PX_MAX_DEFAULT===80&&W.RESTOCK_ONE_MAX===30,
+  '★★上限の既定（まとめて直す 80件・再調達中にする 30件）');
 {
   const env=env0();
-  ok((await W.pxSettings(env)).max===30,'★★⚙が無ければ既定30');
+  ok((await W.pxSettings(env)).max===80,'★★⚙が無ければ既定80');
   await env.DB.prepare(
     `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,'x')`)
     .bind(JSON.stringify({ settings:{ syncPxMax:9999 } })).run();

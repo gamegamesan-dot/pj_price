@@ -80,7 +80,14 @@ const PRICING_MAX_CALLS = 6;       // 0.1回/秒なので1回の実行では6回
    0.1回/秒なので1回の実行で約42秒かかる。 */
 /* 7.131：40 → 60。中古の行は「中古＋新品」で2件ずつ聞くので、
    60行＝120件＝PRICING_MAX_CALLS（6回）ぴったり。SP-API の間隔は変えない。 */
-const PRICING_HOT_MAX = 60;
+/* 7.136（v261）60 では足りなくなった（対象 116件のうち 60件しか取り直せず、
+   再調達中・Amazon無在庫の 21件が24時間以上古いままになった）。
+   ・既定を 150件にする
+   ・⚙ syncHotMax で変えられる（空・0 なら**対象の件数に合わせて自動**）
+   ・SP-API の間隔（10.5秒に1回・1回20件）で**3時間ごとの回に収まる件数**で止める
+   1行＝最大2件（その行の状態＋新品）聞くので、行数は件数の半分で数える。 */
+const PRICING_HOT_MAX = 150;                      // 既定（自動のときの下限）
+const PRICING_HOT_WINDOW_MS = 20 * 60 * 1000;     // 1回に使ってよい SP-API の時間
 const PRICING_HOT_KEY = "pricing.hot";       // 前回の結果（sync_state）
 const PRICING_HOT_WARN_MS = 24 * 60 * 60 * 1000;  // 取り切れない知らせの間隔
 /* GetMyeBaySelling の1ページ件数。OutputSelector を外して全項目を受けるので、
@@ -887,12 +894,16 @@ function offerN(p, cond) {
 }
 /* stat を渡すと、何回呼んで何回失敗したかを入れて返す（7.115）。
    呼べなかった回を「出品が無い」と読み違えないために要る。 */
-async function amazonLowest(env, run, keys, stat) {
+/* 7.136：maxCalls を渡すと、その回数まで呼ぶ（既定は PRICING_MAX_CALLS＝6回）。
+   3時間ごとの最安値（syncPricingHot）だけは、SP-API の間隔の範囲で
+   もっと多く呼ぶ（上限は pricingHotCap で決める）。 */
+async function amazonLowest(env, run, keys, stat, maxCalls) {
   const out = {};
   const sv = stat || {};
   sv.calls = 0; sv.failed = 0;
+  const cap = Math.max(1, Math.round(Number(maxCalls) || 0) || PRICING_MAX_CALLS);
   let skipped = 0, noCond = 0;
-  for (let i = 0; i < keys.length && i / PRICING_BATCH < PRICING_MAX_CALLS; i += PRICING_BATCH) {
+  for (let i = 0; i < keys.length && i / PRICING_BATCH < cap; i += PRICING_BATCH) {
     const part = keys.slice(i, i + PRICING_BATCH);
     const body = JSON.stringify({
       requests: part.map((k) => ({
@@ -2572,6 +2583,35 @@ async function syncPricing(env, run) {
    24時間より古くなると rkTarget が「最安値が古い」で**何もしなくなる**ので、
    ③の候補の行より**必ず先に**取り直す。 */
 const PRICING_HOT_KEEP_MS = 24 * 60 * 60 * 1000;
+/* 7.136（v261）SP-API の間隔で「3時間ごとの回に収まる行数」。
+   getItemOffersBatch は 10.5秒に1回・1回20件。1回に使ってよい時間を
+   PRICING_HOT_WINDOW_MS（20分）とすると、
+     呼べる回数 ＝ 20分 ÷ 10.5秒 ＋ 1 ＝ 115回 → 2,300件
+   1行＝最大2件（その行の状態＋新品）なので、行数はその半分。 */
+function pricingHotCap() {
+  const gap = SP_GAP.getItemOffersBatch || SP_GAP_DEFAULT;
+  const calls = Math.max(1, Math.floor(PRICING_HOT_WINDOW_MS / gap) + 1);
+  return Math.max(PRICING_BATCH, Math.floor(calls * PRICING_BATCH / 2));
+}
+/* 上限の設定（⚙ syncHotMax）。0・空なら**対象の件数に合わせて自動**。
+   自動のときは「既定（150件）か対象の件数の大きいほう」を、
+   SP-API の間隔で収まる件数（pricingHotCap）で止める。 */
+async function hotSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const n = Math.round(Number(st.syncHotMax) || 0);
+  const cap = pricingHotCap();
+  return { auto: !(n > 0), set: (n > 0) ? Math.min(cap, n) : 0,
+           cap: cap, dflt: PRICING_HOT_MAX };
+}
+/* その回に取る行数（対象の件数から決める）。 */
+function hotMaxOf(cfg, picked) {
+  const c = cfg || {};
+  const cap = Math.max(1, Math.round(Number(c.cap) || PRICING_HOT_MAX));
+  if (!c.auto) return Math.max(1, Math.min(cap, Math.round(Number(c.set) || 0)));
+  const d = Math.max(1, Math.round(Number(c.dflt) || PRICING_HOT_MAX));
+  return Math.min(cap, Math.max(d, Math.round(Number(picked) || 0)));
+}
 function pricingHotPri() {
   /* 7.132：**無在庫（dropship=1）の行も大事な行に入れる**。
      v254 までは pricingHotWhere が無在庫を丸ごと外していたので、
@@ -2609,7 +2649,10 @@ function pricingHotWhere() {
                               AND COALESCE(pb_act,'')='restock'))))`;
 }
 async function syncPricingHot(env, run) {
-  const res = { picked: 0, rows: 0, left: 0, max: PRICING_HOT_MAX, wrote: 0,
+  /* 7.136：上限は⚙（syncHotMax）。空なら対象の件数に合わせて自動。 */
+  const cfg = await hotSettings(env);
+  const res = { picked: 0, rows: 0, left: 0, max: hotMaxOf(cfg, 0), wrote: 0,
+                auto: cfg.auto, cap: cfg.cap, calls: 0, reqs: 0,
                 /* 7.131：大事な行（再調達中・Amazon 無在庫）の件数と、
                    そのうち24時間より古いまま残った件数。 */
                 pri: 0, pri_rows: 0, pri_old: 0, pri_old_after: 0 };
@@ -2627,6 +2670,8 @@ async function syncPricingHot(env, run) {
     res.pri = Number((c && c.pri) || 0);
     res.pri_old = Number((c && c.pri_old) || 0);
   } catch (e) { run.notes.push("3時間ごとの最安値：件数が数えられません " + e.message); }
+  /* 7.136：対象の件数が分かったところで、その回の上限を決める。 */
+  res.max = hotMaxOf(cfg, res.picked);
   if (!res.picked) return res;
   const q = await env.DB.prepare(
     /* 7.131：**大事な行を先に**（pri=0）、そのあと最安値が古い行から順に取る
@@ -2636,14 +2681,19 @@ async function syncPricingHot(env, run) {
             CASE WHEN ${pricingHotPri()} THEN 0 ELSE 1 END AS pri
        FROM items WHERE ${pricingHotWhere()}
        ORDER BY pri ASC, amazon_lowest_at IS NOT NULL, amazon_lowest_at
-       LIMIT ?1`).bind(PRICING_HOT_MAX).all();
+       LIMIT ?1`).bind(res.max).all();
   const keys = (q && q.results) || [];
   res.rows = keys.length;
   res.pri_rows = keys.filter((k) => Number(k.pri) === 0).length;
   res.left = Math.max(0, res.picked - res.rows);
   res.pri_old_after = Math.max(0, res.pri_old - res.pri_rows);
   if (!keys.length) return res;
-  const low = await amazonLowest(env, run, lowestReqs(keys));
+  /* 7.136：聞く件数ぶんだけ呼ぶ（既定の6回では 150行を取り切れない）。
+     SP-API の間隔は spSlot／spSlotKv がそのまま守る。 */
+  const reqs = lowestReqs(keys);
+  res.reqs = reqs.length;
+  res.calls = Math.ceil(reqs.length / PRICING_BATCH);
+  const low = await amazonLowest(env, run, reqs, null, res.calls);
   const at = nowIso();
   const stmts = [];
   for (const k of keys) {
@@ -2670,8 +2720,8 @@ async function syncPricingHot(env, run) {
     + res.pri_rows + "件"
     + (res.pri_old ? ("・24時間より古かった " + res.pri_old + "件") : "")
     + (res.pri_old_after ? ("・まだ古いまま " + res.pri_old_after + "件") : "")
-    + (res.left ? ("／上限 " + PRICING_HOT_MAX + "件で取り切れなかった " + res.left + "件は次回")
-                : ""));
+    + "／上限 " + res.max + "件" + (res.auto ? "（自動）" : "（⚙）")
+    + (res.left ? ("で取り切れなかった " + res.left + "件は次回") : ""));
   /* 結果を残す（画面の帯と、次回の知らせの間隔に使う）。 */
   let prev = null;
   try { const t = await stateGet(env, PRICING_HOT_KEY); prev = t ? JSON.parse(t) : null; }
@@ -2682,7 +2732,8 @@ async function syncPricingHot(env, run) {
   try {
     await stateSet(env, PRICING_HOT_KEY, JSON.stringify({
       at: at, picked: res.picked, rows: res.rows, left: res.left,
-      max: PRICING_HOT_MAX, wrote: res.wrote, warn_at: warnAt,
+      max: res.max, auto: res.auto, cap: res.cap,
+      calls: res.calls, reqs: res.reqs, wrote: res.wrote, warn_at: warnAt,
       /* 7.131：大事な行の様子も残す（画面の帯に出す）。 */
       pri: res.pri, pri_rows: res.pri_rows, pri_old: res.pri_old,
       pri_old_after: res.pri_old_after })).run();
@@ -2694,10 +2745,15 @@ async function syncPricingHot(env, run) {
      大事な行が残るのは上限を使い切った回だけなので、知らせは1通で足りる。 */
   if (res.left && warnAt === at)
     await notify(env, run, "⏱️ Amazon最安値（3時間ごと）：対象 " + res.picked
-      + "件のうち " + res.rows + "件しか取り直せませんでした（上限 " + PRICING_HOT_MAX
-      + "件）。\n取り切れなかった " + res.left
-      + "件は次の回に回ります。対象が増えているので、上限を上げてください"
-      + "（再調達中とフェイズBの対象の合計）。"
+      + "件のうち " + res.rows + "件しか取り直せませんでした（上限 " + res.max
+      + "件" + (res.auto ? "・自動" : "・⚙ syncHotMax") + "）。\n取り切れなかった "
+      + res.left + "件は次の回に回ります。"
+      + (res.auto
+        ? ("これは SP-API の間隔（10.5秒に1回・1回20件）で3時間ごとの回に"
+           + "収まる上限（" + res.cap + "件）です。"
+           + "対象を減らしてください（再調達中とフェイズBの対象の合計）。")
+        : ("⚙「3時間ごとに取り直す上限」を空にすると、対象の件数に合わせて"
+           + "自動（" + res.cap + "件まで）になります。"))
       + (res.pri_old_after
         ? ("\n\n⚠️ うち**再調達中・Amazon無在庫の行 " + res.pri_old_after
            + "件**が、Amazon最安値を24時間以上取り直せていません。"
@@ -4206,7 +4262,9 @@ async function jobPriceOne(env, opt) {
    どちらも**売値は Worker が計算する**（画面から来た値は使わない）。
    1回の上限は⚙（syncPxMax・既定30件）。使った件数は sync_state に控えるので
    **D1 の列は増やさない**。自動の処理（jobReview / jobRkPrice）の枠とは別。 */
-const PX_MAX_DEFAULT = 30;           // 1日に直す上限（⚙ syncPxMax）
+/* 7.136（v261）30 → 80。3時間ごとの最安値の上限を上げたので、
+   直す候補も増える（1日に 30件では追いつかない）。 */
+const PX_MAX_DEFAULT = 80;           // 1日に直す上限（⚙ syncPxMax）
 const PX_MAX_CAP = 200;              // ⚙で指定できる上限の上限
 const PX_LOG_KEY = "px.log";         // 使った件数の控え（24時間ぶん）
 const PX_DAY_MS = 24 * 60 * 60 * 1000;
@@ -15176,6 +15234,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         rkTarget, rkBo, pricingHotWhere, PRICING_HOT_MAX,
                         /* 7.131（v254）大事な行の優先と、1行だけの売値直し。 */
                         pricingHotPri, PRICING_HOT_KEEP_MS, syncPricingHot,
+                        /* 7.136（v261）上限を⚙・自動にする。 */
+                        pricingHotCap, hotSettings, hotMaxOf,
+                        PRICING_HOT_WINDOW_MS,
                         /* 7.132（v257）無在庫も追従する。 */
                         rkCovered, rkIsMwDrop, rkSettings,
                         oneTarget, oneBo, jobPriceOne,

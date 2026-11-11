@@ -1625,8 +1625,11 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2 cfgprice" style="margin:0 0 8px">自動の処理（<b>自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達</b>）と、<b>出品CSV・販売連携タブの推奨売値・最低売値・利益の表示</b>は、この料率で計算します。<b>pj-sync に送るのはこの値だけ</b>です。eBayタブの「広告料率」はその場の計算用（0%と見比べるときなどに使い、pj-sync には送りません）。</div>
       </details>
       <!-- 6.177（【Z】）まとめて直すときの1日の上限。 -->
-      <div class="row cfgprice"><label for="syncPxMax">まとめて直す上限（1日）</label><input type="number" id="syncPxMax" value="30" step="5" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
-      <div class="note2 cfgprice" style="margin:0 0 8px">販売連携タブの黒い帯の「<b>取り直してから直す</b>」「売値をまとめて直す」で、<b>直近24時間に直せる件数</b>の上限です。超えた分は「上限のため次回」と出ます。自動の処理（売値の自動反映・再調達中の売値）の枠とは<b>別</b>に数えます。</div>
+      <div class="row cfgprice"><label for="syncPxMax">まとめて直す上限（1日）</label><input type="number" id="syncPxMax" value="80" step="5" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2 cfgprice" style="margin:0 0 8px">販売連携タブの黒い帯の「<b>取り直してから直す</b>」「売値をまとめて直す」で、<b>直近24時間に直せる件数</b>の上限です。超えた分は「上限のため次回」と出ます。自動の処理（売値の自動反映・再調達中の売値）の枠とは<b>別</b>に数えます。<b>既定は 80件</b>（6.180 で 30 → 80 に上げました。3時間ごとの最安値の上限を上げたぶん、直す候補も増えるためです）。</div>
+      <!-- 6.180（v261）3時間ごとに Amazon最安値を取り直す行数の上限。 -->
+      <div class="row cfgprice"><label for="syncHotMax">3時間ごとに取り直す上限</label><input type="number" id="syncHotMax" value="" step="10" min="0" max="2000" inputmode="numeric" placeholder="自動"><span class="unit">件</span></div>
+      <div class="note2 cfgprice" style="margin:0 0 8px"><b>再調達中・Amazon無在庫・フェイズBの対象</b>の Amazon最安値を、3時間ごとに取り直す行数の上限です。<br><b>空のままにしておくと自動</b>です（対象の件数に合わせて増え、<b>既定は 150件</b>）。SP-API の間隔（<b>10.5秒に1回・1回20件</b>）で<b>3時間ごとの回に収まる件数</b>までで止まります。<br>対象がその上限を超えた回は、取り切れなかった件数を Discord と上の帯に出します。<b>ふだんは空（自動）のままでよい欄です。</b></div>
       <!-- 6.175（v257）無在庫の行も Amazon最安値に追従させる。既定オン。 -->
       <div class="chk cfgprice"><input type="checkbox" id="autoRkDrop" checked><label for="autoRkDrop" style="flex:1"><b>無在庫の行も</b> Amazon最安値に追従する（既定オン）</label></div>
       <div class="note2 cfgprice" style="margin:0 0 8px">無在庫（手元にも FBA にも在庫を持たず、売れてから仕入れる行）も、再調達中とまったく同じ理屈で <b>Amazon最安値が動くと利益が動きます</b>。オンにすると、上げも下げも pj-sync が自動で eBay に反映します（<b>最低売値より下げません</b>）。<br><b>MW 無在庫（SKU が <code>W-&lt;JAN&gt;</code> の行）は対象外</b>です。あちらは Amazon の ASIN を持たず、売値は MW の卸値から<b>段取り D</b>が動かすので、二つの仕組みが同じ行を取り合わないようにしています。</div>
@@ -2745,7 +2748,7 @@ var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
                'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes',
                'autoAdRate',
                /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
-               'syncPxMax'];
+               'syncPxMax','syncHotMax'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
@@ -5469,7 +5472,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
-                 'syncPxMax'];
+                 'syncPxMax','syncHotMax'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -16670,8 +16673,8 @@ function syncCutWarnRender(){
 }
 /* 3時間ごとの最安値（6.72／Worker は 7.49）。
    再調達中とフェイズBの対象だけを3時間ごとに取り直している。
-   上限（既定40件）で取り切れなかった回があれば、その件数をここに出す
-   （上限を上げる判断に使う）。 */
+   上限（⚙「3時間ごとに取り直す上限」。空なら自動・既定150件）で
+   取り切れなかった回があれば、その件数をここに出す（6.180）。 */
 function syncHotWarnRender(){
   var el=$('syncHotWarn'); if(!el)return;
   var h=(syncData&&syncData.hot_pricing)||null;
@@ -16692,12 +16695,23 @@ function syncHotWarnRender(){
     +'対象 '+Number(h.picked||0)+'件のうち '+Number(h.rows||0)+'件'
     +(Number(h.left||0)?'だけ':'を')+'取り直しました'
     +'（上限 '+Number(h.max||0)+'件'
+    /* 6.180（v261）上限は⚙「3時間ごとに取り直す上限」。空なら自動。 */
+    +((h.auto===false)?'・⚙':'・自動')
     +(h.pri?('・大事な行 '+Number(h.pri)+'件のうち '+Number(h.pri_rows||0)+'件'):'')
     +'）'
     +(Number(h.left||0)?('。取り切れなかった '+Number(h.left||0)
       +'件は次の回に回ります'):'')
     +(h.at?('　前回 '+jstText(h.at)):'')
-    +'。上限（PRICING_HOT_MAX）を上げるか、再調達中の行を減らしてください。';
+    +(Number(h.left||0)
+      /* 6.180：上限が⚙か自動かで、直し方の案内を変える。
+         cap（自動の上限の上限）は v261 からの項目なので、無ければ出さない。 */
+      ?('。'+((h.auto===false)
+          ?('⚙「3時間ごとに取り直す上限」を空にすると、対象の件数に合わせて自動'
+            +(Number(h.cap||0)?('（'+Number(h.cap)+'件まで）'):'')+'になります。')
+          :('これは SP-API の間隔（10.5秒に1回・1回20件）で3時間ごとの回に収まる上限'
+            +(Number(h.cap||0)?('（'+Number(h.cap)+'件）'):'')
+            +'です。再調達中・無在庫の行を減らしてください。')))
+      :'。');
 }
 /* 相場（総額$）を D1 にも残す。出品リストを空にしても、ほかの端末からでも
    同じ相場で値付けできるようにする。失敗しても端末の入力は残る。 */
@@ -17644,7 +17658,8 @@ function pxFixText(pl){
   return t;
 }
 function pxMaxOf(){
-  return Math.max(1,Math.min(200,+(($('syncPxMax')||{}).value)||30));
+  /* 6.180（v261）既定 30 → 80（Worker の PX_MAX_DEFAULT と同じ値）。 */
+  return Math.max(1,Math.min(200,+(($('syncPxMax')||{}).value)||80));
 }
 function pxFixBulk(rows){
   var pl=pxFixPlan(rows);
@@ -22877,7 +22892,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v260';   // sw.js の const V と必ず同じ値にする
+var APP_V='v261';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

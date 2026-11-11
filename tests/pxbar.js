@@ -217,11 +217,11 @@ console.log('\n=== ③ 売値をまとめて直す（確認の一覧）===');
      &&/出品していません/.test(dlg[0]),'★★★とばす理由を書く');
   ok(/→ \$/.test(dlg[0]),'★★★いくら → いくら を出す');
   ok(/最低売値より下げません/.test(dlg[0]),'★★下限を守ると書く');
-  ok(/1日の上限（30件）/.test(dlg[0]),'★★★上限のことも書く');
+  ok(/1日の上限（80件）/.test(dlg[0]),'★★★上限のことも書く（既定80件）');
   ok(d.low===0,'★★★「売値だけ」では最安値を取り直さない');
   ok(d.posts.length===1&&d.posts[0].kind==='price-many','★★★kind:price-many');
   ok((d.posts[0].items||[]).length===2,'★★★直せる2件だけ送る');
-  ok(d.posts[0].max===30,'★★⚙の上限も送る');
+  ok(d.posts[0].max===80,'★★⚙の上限も送る（既定80件）');
   ok(d.posts[0].items.every((x)=>x.asin&&x.cond&&x.price===undefined),
      '★★★売値は送らない（pj-sync が計算する）');
   ok(/売値を直した 2件/.test(d.note),'★★★結果を帯に出す');

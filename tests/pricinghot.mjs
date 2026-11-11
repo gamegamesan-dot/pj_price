@@ -71,6 +71,15 @@ const wipe=async()=>{
   await env.DB.prepare('DELETE FROM items').bind().run();
   await env.DB.prepare("DELETE FROM sync_state WHERE k='pricing.hot'").bind().run();
 };
+/* 7.136：⚙「3時間ごとに取り直す上限」（syncHotMax）。0・未設定なら自動。 */
+const setHotMax=async(n)=>{
+  const v=JSON.stringify({ at:new Date().toISOString(),
+    settings:(n===null?{}:{ syncHotMax:n }) });
+  await env.DB.prepare(
+    `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
+     ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
+    .bind(v,new Date().toISOString()).run();
+};
 const hot=async()=>(await asJson(await worker.fetch(
   post('/sync',{kind:'pricing-hot'}),env))).body;
 
@@ -132,27 +141,67 @@ console.log('   送った順: '+JSON.stringify(calls.flat()));
 ok(calls.flat()[0]==='B0HOT20003|new','★★まだ取っていない行が最初');
 ok(calls.flat()[1]==='B0HOT20002|new','★★次に古い行');
 
-console.log('\n=== 上限で取り切れなかった件数 ===');
+console.log('\n=== 7.136 対象の件数に合わせて自動で決める ===');
 await wipe(); calls=[]; notes=[];
-/* 新品の行だけにして、1行＝1要求にする（60件＝3回の呼び出し）。
-   7.131 で上限が 40 → 60 になったので、65件で上限を超えさせる。 */
+await setHotMax(null);                      // ⚙ は空（自動）
+/* 新品の行だけにして、1行＝1要求にする。
+   7.136：既定 150件なので、65件なら**取り切れる**（v260 は 60件で止まっていた）。 */
 for(let i=0;i<65;i++)await seed('B0HOTM'+String(1000+i),{cond:'new',restocking:1});
 r=await hot();
+console.log('   '+JSON.stringify(r.hot));
+ok(r.hot.picked===65&&r.hot.rows===65&&r.hot.left===0,
+   '★★★対象65件を1回で取り切る（既定150件・v260 は60件で止まっていた）');
+ok(r.hot.max===150&&r.hot.auto===true,'★★★上限は自動で 150件');
+ok(calls.length===4&&calls.flat().length===65,
+   '★★★1回20件で4回呼ぶ（既定の6回の枠に縛られない）');
+ok(notes.length===0,'★★取り切れたので知らせない');
+/* 対象が既定より多ければ、そのぶん上限も増える（上限の上限まで）。 */
+ok(W.hotMaxOf({auto:true,dflt:150,cap:1150},400)===400,
+   '★★★対象が多ければ上限も増える');
+ok(W.hotMaxOf({auto:true,dflt:150,cap:1150},2000)===1150,
+   '★★★SP-API の間隔で収まる件数（上限の上限）で止める');
+ok(W.hotMaxOf({auto:true,dflt:150,cap:1150},10)===150,
+   '★対象が少なくても既定（150件）までは取る');
+ok(W.hotMaxOf({auto:false,set:60,dflt:150,cap:1150},900)===60,
+   '★★⚙で決めた件数はそのまま使う');
+ok(W.hotMaxOf({auto:false,set:9999,dflt:150,cap:1150},900)===1150,
+   '★★⚙の値も上限の上限で止める');
+
+console.log('\n=== 7.136 上限の上限は SP-API の間隔から出す ===');
+{
+  const cap=W.pricingHotCap();
+  const calls2=Math.floor(W.PRICING_HOT_WINDOW_MS/10500)+1;
+  console.log('   1回に使ってよい時間 '+(W.PRICING_HOT_WINDOW_MS/60000)
+    +'分／呼べる回数 '+calls2+'回／上限の上限 '+cap+'件');
+  ok(cap===Math.floor(calls2*20/2),
+     '★★★10.5秒に1回・1回20件・1行は最大2件 で出す');
+  ok(cap>=150,'★既定（150件）はその中に収まっている');
+}
+
+console.log('\n=== 上限で取り切れなかった件数（⚙で小さくしたとき）===');
+await setHotMax(60);
+calls=[]; notes=[];
+await env.DB.prepare("DELETE FROM sync_state WHERE k='pricing.hot'").bind().run();
+r=await hot();
 console.log('   '+JSON.stringify(r.hot)+' / note: '+JSON.stringify(r.note||r));
-ok(r.hot&&r.hot.picked===65&&r.hot.rows===W.PRICING_HOT_MAX&&r.hot.left===5,
+ok(r.hot&&r.hot.picked===65&&r.hot.rows===60&&r.hot.left===5,
    '★★対象65件・取り直し60件・取り切れなかった5件');
+ok(r.hot.max===60&&r.hot.auto===false,'★★⚙の上限（60件）を使う');
 ok(calls.flat().length===60,'★要求は60件（1回20件×3回）');
 console.log('   '+(notes[0]||'').replace(/\n/g,' / '));
 ok(/3時間ごと/.test(notes[0]||'')&&/65件のうち 60件/.test(notes[0]||''),
    '★★Discord に取り切れなかったことを出す');
 ok(/取り切れなかった 5件/.test(notes[0]||''),'★★件数を出す');
-ok(/上限を上げてください/.test(notes[0]||''),'★上限を上げるよう促す');
+ok(/空にすると/.test(notes[0]||'')&&/自動/.test(notes[0]||''),
+   '★★★⚙を空にすれば自動になることを知らせる');
 let st=await asJson(await worker.fetch(get('/status?limit=5'),env));
 console.log('   /status: '+JSON.stringify(st.body.hot_pricing));
 ok(st.body.hot_pricing&&st.body.hot_pricing.left===5
-   &&st.body.hot_pricing.max===W.PRICING_HOT_MAX,
+   &&st.body.hot_pricing.max===60,
    '★★/status（hot_pricing）にも出す');
 ok(st.body.hot_pricing.picked===65&&st.body.hot_pricing.rows===60,'★内訳も返す');
+ok(st.body.hot_pricing.auto===false&&st.body.hot_pricing.cap>=150,
+   '★★自動かどうかと、上限の上限も返す（画面の帯に出す）');
 
 console.log('\n=== 同じ知らせは24時間に1回 ===');
 notes=[];
@@ -166,13 +215,13 @@ ok(st.body.hot_pricing.left===5,'★★画面にはいつも出す（知らせ�
 await env.DB.prepare(
   `UPDATE sync_state SET v=?1 WHERE k='pricing.hot'`)
   .bind(JSON.stringify({ at:now, picked:65, rows:60, left:5, max:60, wrote:60,
-    warn_at:ago(DAY+60000) })).run();
+    auto:false, warn_at:ago(DAY+60000) })).run();
 notes=[];
 r=await hot();
 ok(notes.length===1,'★★24時間たてばまた知らせる');
 
 console.log('\n=== 取り切れていれば知らせない ===');
-await wipe(); calls=[]; notes=[];
+await wipe(); calls=[]; notes=[]; await setHotMax(null);
 await seed('B0HOT30001',{cond:'new',restocking:1});
 r=await hot();
 console.log('   '+JSON.stringify(r.hot)+' / 知らせ '+notes.length+'件');
@@ -205,8 +254,8 @@ ok(/fba_available,-1\)=0/.test(w),'★★FBA未確認（NULL）は含めない')
 ok(/on_hand,0\)=0/.test(w)&&/dropship,0\)=0/.test(w)&&/one_off,0\)=0/.test(w),
    '★手元在庫・無在庫・一点物を外す');
 ok(/ebay_qty>0/.test(w),'★数量0は外す');
-ok(W.PRICING_HOT_MAX===60,
-   '★★1回の上限は60件（7.131 で 40 → 60。中古は新品も聞くので呼び出し6回ぶん）');
+ok(W.PRICING_HOT_MAX===150,
+   '★★★既定の上限は150件（7.136 で 60 → 150。⚙ syncHotMax で変えられる）');
 
 globalThis.setTimeout=realTimeout;
 await T.done();
