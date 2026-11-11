@@ -4192,6 +4192,304 @@ async function jobPriceOne(env, opt) {
   return Object.assign(await saveRun(env, run), res);
 }
 
+/* ================= 選んだ行をまとめて直す（7.133・【Z】）=================
+   画面の黒い帯から、選んだ行を**まとめて**直す。
+   ① price-many … 推奨売値に直す（1行ずつの price-one と同じ決まり）
+   ② restock-start … 再調達の候補を「再調達中」にして、売値を Amazon最安値
+      基準に直し、数量を1に戻すところまで1回で
+
+   どちらも**売値は Worker が計算する**（画面から来た値は使わない）。
+   1回の上限は⚙（syncPxMax・既定30件）。使った件数は sync_state に控えるので
+   **D1 の列は増やさない**。自動の処理（jobReview / jobRkPrice）の枠とは別。 */
+const PX_MAX_DEFAULT = 30;           // 1日に直す上限（⚙ syncPxMax）
+const PX_MAX_CAP = 200;              // ⚙で指定できる上限の上限
+const PX_LOG_KEY = "px.log";         // 使った件数の控え（24時間ぶん）
+const PX_DAY_MS = 24 * 60 * 60 * 1000;
+const RESTOCK_ONE_MAX = 30;          // 1回に再調達中にする上限
+
+async function pxSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const n = Math.round(Number(st.syncPxMax) || 0);
+  return { max: (n > 0) ? Math.min(PX_MAX_CAP, n) : PX_MAX_DEFAULT };
+}
+/* 直近24時間に直した件数。 */
+async function pxUsed(env) {
+  try {
+    const t = await stateGet(env, PX_LOG_KEY);
+    const a = t ? JSON.parse(t) : [];
+    const from = Date.now() - PX_DAY_MS;
+    let n = 0;
+    for (const x of (Array.isArray(a) ? a : []))
+      if (Date.parse(String(x.at || "")) >= from) n += Number(x.n) || 0;
+    return n;
+  } catch (e) { return 0; }
+}
+async function pxAdd(env, n) {
+  if (!(n > 0)) return;
+  try {
+    const t = await stateGet(env, PX_LOG_KEY);
+    const a = t ? JSON.parse(t) : [];
+    const from = Date.now() - PX_DAY_MS;
+    const keep = (Array.isArray(a) ? a : [])
+      .filter((x) => Date.parse(String(x.at || "")) >= from).slice(-200);
+    keep.push({ at: nowIso(), n: Math.round(n) });
+    await stateSet(env, PX_LOG_KEY, JSON.stringify(keep)).run();
+  } catch (e) { /* 控えの失敗で本処理を落とさない */ }
+}
+/* 送られてきた { asin, cond } の並びを整える（多すぎる分は切る）。 */
+function pxKeys(body, cap) {
+  const list = Array.isArray(body && body.items) ? body.items : [];
+  const out = [], seen = {};
+  for (const x of list) {
+    const asin = String((x && x.asin) || "").trim();
+    const cond = String((x && x.cond) || "").trim();
+    if (!asin || !cond) continue;
+    const id = asin + "|" + cond;
+    if (seen[id]) continue;
+    seen[id] = 1;
+    out.push({ asin: asin, cond: cond });
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+/* ---- ① 選んだ行の売値を推奨売値に直す ---- */
+async function jobPriceMany(env, body) {
+  const run = newRun("price-many");
+  const res = { ok: false, n: 0, done: 0, skipped: 0, failed: 0, capped: 0,
+                used: 0, max: PX_MAX_DEFAULT, rows: [] };
+  try {
+    const set = await pxSettings(env);
+    const b = body || {};
+    /* ⚙の上限。body の max は⚙より小さいときだけ効かせる（増やせない）。 */
+    const want = Math.round(Number(b.max) || 0);
+    res.max = (want > 0) ? Math.min(set.max, want) : set.max;
+    res.used = await pxUsed(env);
+    const left = Math.max(0, res.max - res.used);
+    const keys = pxKeys(b, PX_MAX_CAP);
+    res.n = keys.length;
+    if (!keys.length) {
+      res.ok = true;
+      run.notes.push("まとめて直す：対象なし");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const ps = await pricingSettings(env, run);
+    const token0 = { t: null };
+    const stmts = [];
+    const at = nowIso();
+    let changed = 0;
+    for (const k of keys) {
+      const add = (o) => res.rows.push(Object.assign(
+        { asin: k.asin, cond: k.cond }, o));
+      const q = await env.DB.prepare(
+        `SELECT ${ITEM_COLS} FROM items WHERE asin=?1 AND cond=?2 LIMIT 1`)
+        .bind(k.asin, k.cond).first();
+      if (!q) { res.skipped++; add({ ok: false, why: "その行がありません" }); continue; }
+      const self0 = await selfFill(env, run, [q]);
+      const r = (self0.rows || [q])[0];
+      const t = oneTarget(ps.S, r);
+      if (!t.ok) {
+        res.skipped++;
+        add({ ok: false, why: t.why, from: t.from || 0 });
+        continue;
+      }
+      /* 上限に当たった分は「次回」として返す（eBay は呼ばない）。 */
+      if (changed >= left) {
+        res.capped++;
+        add({ ok: false, capped: true, from: t.from, to: t.to,
+              why: "上限のため次回（1日 " + res.max + "件）" });
+        continue;
+      }
+      if (!token0.t) token0.t = await ebayToken(env, run);
+      const bo = oneBo(r, t.to, t.floor);
+      const v = await ebayRevise(env, run, token0.t,
+        String(r.ebay_item_id || "").trim(), t.to, bo, null);
+      if (!v.ok) {
+        const why = v.why || ("eBay が断りました（" + v.ack + "）");
+        res.failed++; run.errors++;
+        if (SALE_ERR.test(String(why))) {
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET ebay_sale=1, updated_at=?3
+              WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, at));
+          add({ ok: false, why: "eBayのセール中です（印を立てました）",
+                from: t.from, to: t.to });
+        } else {
+          stmts.push(env.DB.prepare(
+            `UPDATE items SET revise_err=?3, revise_err_at=?4, updated_at=?4
+              WHERE asin=?1 AND cond=?2`)
+            .bind(k.asin, k.cond, String(why).slice(0, 200), at));
+          add({ ok: false, why: why, from: t.from, to: t.to });
+        }
+        continue;
+      }
+      changed++;
+      res.done++;
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET ebay_price=?3,
+           restock_price=CASE WHEN restocking=1 THEN ?3 ELSE restock_price END,
+           revise_err=NULL, revise_err_at=NULL, updated_at=?4
+          WHERE asin=?1 AND cond=?2`).bind(k.asin, k.cond, t.to, at));
+      add({ ok: true, from: t.from, to: t.to, floor: t.floor,
+            under: !!t.under, why: "" });
+    }
+    await runBatch(env, run, stmts);
+    await pxAdd(env, res.done);
+    res.used = res.used + res.done;
+    run.notes.push("まとめて直す：" + res.n + "件のうち " + res.done + "件を直し"
+      + "（とばした " + res.skipped + "・失敗 " + res.failed
+      + (res.capped ? ("・上限で次回 " + res.capped) : "") + "）"
+      + "／1日の上限 " + res.max + "件のうち " + res.used + "件");
+    if (res.done)
+      await notify(env, run, "💲 選んだ行の売値を " + res.done + "件直しました"
+        + (res.skipped ? ("（とばした " + res.skipped + "件）") : "")
+        + (res.failed ? ("（失敗 " + res.failed + "件）") : "")
+        + (res.capped ? ("\n上限のため次回に回した " + res.capped + "件") : ""));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("price-many: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* ---- ② 選んだ行を「再調達中」にする（売値を直して数量1に戻す）---- */
+async function jobRestockStart(env, body) {
+  const run = newRun("restock-start");
+  const res = { ok: false, n: 0, done: 0, skipped: 0, failed: 0, rows: [],
+                low: null };
+  try {
+    const keys = pxKeys(body, RESTOCK_ONE_MAX);
+    res.n = keys.length;
+    if (!keys.length) {
+      res.ok = true;
+      run.notes.push("再調達中にする：対象なし");
+      return Object.assign(await saveRun(env, run), res);
+    }
+    /* まず行を読み、**Amazon最安値を取り直す**（古いと pb_want が出ない）。 */
+    const rows0 = [];
+    for (const k of keys) {
+      const q = await env.DB.prepare(
+        `SELECT ${ITEM_COLS} FROM items WHERE asin=?1 AND cond=?2 LIMIT 1`)
+        .bind(k.asin, k.cond).first();
+      if (q) rows0.push(q);
+      else res.rows.push({ asin: k.asin, cond: k.cond, ok: false,
+                           why: "その行がありません" });
+    }
+    res.skipped += res.rows.length;
+    /* 最安値を**選んだ行ぶんだけ取り直す**。pbLowRefresh は mode='restock' の
+       行しか見ないので、手で選んだ行には使えない（/lowest と同じ口を使う）。 */
+    if (rows0.length) {
+      const keys2 = rows0
+        .filter((r) => /^B[0-9A-Z]{9}$/.test(String(r.asin || "")))
+        .map((r) => ({ asin: r.asin, cond: r.cond }));
+      if (keys2.length) {
+        try {
+          const d = await getLowestNow(env, { items: keys2 });
+          res.low = { picked: keys2.length,
+                      got: Object.keys((d && d.lowest) || {}).length };
+        } catch (e) {
+          res.low = { picked: keys2.length, got: 0,
+                      why: String((e && e.message) || e).slice(0, 200) };
+          run.notes.push("最安値の取り直しに失敗：" + (res.low.why || ""));
+        }
+      }
+    }
+    /* 取り直したあとの行で、目標（pb_want）を計算し直す。 */
+    const rows = [];
+    for (const r0 of rows0) {
+      const q = await env.DB.prepare(
+        `SELECT ${ITEM_COLS} FROM items WHERE asin=?1 AND cond=?2 LIMIT 1`)
+        .bind(r0.asin, r0.cond).first();
+      rows.push(q || r0);
+    }
+    const self0 = await selfFill(env, run, rows);
+    const list = self0.rows;
+    const token0 = { t: null };
+    const stmts = [];
+    const at = nowIso();
+    for (const r of list) {
+      const add = (o) => res.rows.push(Object.assign(
+        { asin: r.asin, cond: r.cond, name: r.title || r.ebay_sku || r.asin }, o));
+      const itemId = String(r.ebay_item_id || "").trim();
+      if (!itemId) { res.skipped++; add({ ok: false, why: "出品していません" }); continue; }
+      /* 数量0でも印が立っている行は「すでに再調達中」として扱う
+         （isRestocking は数量1以上だけを見るので、ここでは列を直に見る）。 */
+      if (Number(r.restocking || 0)) {
+        res.skipped++; add({ ok: false, why: "すでに再調達中です" }); continue;
+      }
+      if (Number(r.one_off || 0)) {
+        res.skipped++; add({ ok: false, why: "一点物です" }); continue;
+      }
+      if (Number(r.dropship || 0)) {
+        res.skipped++; add({ ok: false, why: "無在庫の行です" }); continue;
+      }
+      if (Number(r.ebay_sale || 0)) {
+        res.skipped++; add({ ok: false, why: "eBayのセール中です" }); continue;
+      }
+      if (Number(r.on_hand || 0)) {
+        res.skipped++; add({ ok: false, why: "手元在庫の印が付いています" }); continue;
+      }
+      if (Number(r.fba_available || 0) > 0) {
+        res.skipped++;
+        add({ ok: false, why: "FBA に在庫があります（再調達は要りません）" });
+        continue;
+      }
+      const why = pbRestockWhy(r);
+      if (why) { res.skipped++; add({ ok: false, why: why }); continue; }
+      const want = Math.round(Number(r.pb_want || 0) * 100) / 100;
+      if (!token0.t) token0.t = await ebayToken(env, run);
+      /* 売値と数量1を1回で送る。ベストオファーのある出品は
+         ReviseFixedPriceItem（自動拒否額も直す）。 */
+      let ok = false, bad = "";
+      if (Number(r.ebay_bo || 0)) {
+        const fx = await reviseFix(env, run, token0.t, r, want, mdBo(r, want), 1,
+                                   numOf(r, "md_floor"));
+        if (fx.stmt) stmts.push(fx.stmt);
+        ok = fx.v.ok; bad = fx.v.why;
+      } else {
+        const v2 = await ebayReviseInv(env, run, token0.t,
+          [{ item_id: itemId, kind: "restock", to: want, qty: 1 }]);
+        ok = v2.ok(itemId);
+        bad = ok ? "" : ((v2.errFor(itemId) || {}).why || v2.why);
+        if (!ok && BO_ERR.test(String(bad || ""))) {
+          const fx = await boRetry(env, run, token0.t, r, want, 1,
+                                   numOf(r, "md_floor"), bad);
+          if (fx.stmt) stmts.push(fx.stmt);
+          if (fx.fixed) { ok = true; bad = ""; }
+        }
+      }
+      if (!ok) {
+        res.failed++; run.errors++;
+        add({ ok: false, why: bad || "eBay が断りました",
+              from: Number(r.ebay_price || 0), to: want });
+        continue;
+      }
+      res.done++;
+      stmts.push(env.DB.prepare(
+        `UPDATE items SET ebay_qty=1, ebay_price=?3, restocking=1, restock_at=?4,
+           restock_price=?3, restock_max_cost=COALESCE(?5, restock_max_cost),
+           pb_act=NULL, pb_why='再調達中にしました（手で）', pb_done_at=?4,
+           pb_fail=0, revise_err=NULL, revise_err_at=NULL, updated_at=?4
+          WHERE asin=?1 AND cond=?2`)
+        .bind(r.asin, r.cond, want, at, numOf(r, "pb_max_cost")));
+      add({ ok: true, from: Number(r.ebay_price || 0), to: want, qty: 1,
+            why: "" });
+    }
+    await runBatch(env, run, stmts);
+    run.notes.push("再調達中にする：" + res.n + "件のうち " + res.done + "件"
+      + "（とばした " + res.skipped + "・失敗 " + res.failed + "）");
+    if (res.done)
+      await notify(env, run, "♻️ " + res.done + "件を再調達中にしました"
+        + "（売値を Amazon最安値の基準に直し、数量を1に戻しました）"
+        + (res.skipped ? ("\nとばした " + res.skipped + "件") : "")
+        + (res.failed ? ("\n失敗 " + res.failed + "件") : ""));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("restock-start: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+
 /* ================= 目標を Worker が自分で計算する（7.52）=================
    これまで、自動の処理が使う目標（rk_want・pb_want・rv_want・md_*）は
    **pj_price が計算して D1 に送った値**だけだった。式が index.html の中にしか
@@ -14535,6 +14833,18 @@ export default {
         if (kind === "soldkeep")
           return json(await jobSoldKeep(env, { approve: body.approve === true }),
             200, origin);
+        /* 7.133（【Z】）選んだ行をまとめて直す。管理者だけ。 */
+        if (kind === "price-many") {
+          if (role !== "admin")
+            return forbidStaff("売値の変更は管理者用のキーが必要です", [], origin);
+          return json(await jobPriceMany(env, body), 200, origin);
+        }
+        if (kind === "restock-start") {
+          if (role !== "admin")
+            return forbidStaff("再調達中にするのは管理者用のキーが必要です",
+              [], origin);
+          return json(await jobRestockStart(env, body), 200, origin);
+        }
         /* 7.131（v254）画面の行から1件だけ売値を直す。管理者だけ。
            売値は Worker が計算する（画面から来た値は使わない）。 */
         if (kind === "price-one") {
@@ -14675,6 +14985,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
                         /* 7.132（v257）無在庫も追従する。 */
                         rkCovered, rkIsMwDrop, rkSettings,
                         oneTarget, oneBo, jobPriceOne,
+                        /* 7.133（【Z】）まとめて直す。 */
+                        jobPriceMany, jobRestockStart, pxSettings, pxUsed, pxAdd,
+                        pxKeys, PX_MAX_DEFAULT, PX_MAX_CAP, RESTOCK_ONE_MAX,
                         fxGet, fxCached, fxOk, FX_TTL_MS, FX_DEFAULT,
                         PRICING, pricingSettings, AUTO_AD_DEFAULT,
                         skSettings, skPlanRows, jobSoldKeep, SK_MAX, SK_FAIL_WARN,

@@ -57,6 +57,56 @@
     "SEO description",
     "Collection"             // 読み込みのときだけ足せる唯一の列
   ];
+  /* ---- 列名の形（6.176）----
+     Shopify は列名を新しい名前に変えたが、**ストアの「商品のエクスポート」が
+     返す形は古い名前のまま**のことがある（omakase-ship で確認：Handle /
+     Body (HTML) / Variant Price … ）。
+     上書き（Overwrite products with matching handles）のときに列名が違うと
+     ずれるので、**ストアが書き出す形に合わせる**のを既定にする。
+
+     どちらの名前でも Shopify は読み込める（公式が後方互換を明記）。
+     **古い名前でしか／新しい名前でしか入らない項目は無い**
+     （下の表のすべてに両方の名前がある）。 */
+  var COL_OLD = {
+    "URL handle": "Handle",
+    "Description": "Body (HTML)",
+    "Product category": "Product Category",
+    "Published on online store": "Published",
+    "Option1 name": "Option1 Name",
+    "Option1 value": "Option1 Value",
+    "SKU": "Variant SKU",
+    "Barcodes": "Variant Barcodes",
+    "Price": "Variant Price",
+    "Compare-at price": "Variant Compare At Price",
+    "Charge tax": "Variant Taxable",
+    "Inventory tracker": "Variant Inventory Tracker",
+    "Inventory quantity": "Variant Inventory Qty",
+    "Continue selling when out of stock": "Variant Inventory Policy",
+    "Weight value (grams)": "Variant Grams",
+    "Weight unit for display": "Variant Weight Unit",
+    "Requires shipping": "Variant Requires Shipping",
+    "Fulfillment service": "Variant Fulfillment Service",
+    "Gift card": "Gift Card",
+    "SEO title": "SEO Title",
+    "SEO description": "SEO Description",
+    "Product image URL": "Image Src",
+    "Image position": "Image Position",
+    "Image alt text": "Image Alt Text",
+    "Variant image URL": "Variant Image",
+    "Packed product length": "Variant Packed Length",
+    "Packed product width": "Variant Packed Width",
+    "Packed product height": "Variant Packed Height",
+    "Packed product dimension unit": "Variant Packed Dimension Unit"
+    /* Title / Vendor / Type / Tags / Status / Cost per item / Collection は
+       どちらの形でも同じ名前。 */
+  };
+  /* 'old'（既定）＝ストアの書き出しに合わせる／'new'＝Shopify の今の名前。 */
+  function colName(c, style) {
+    return (String(style || "old") === "new") ? c : (COL_OLD[c] || c);
+  }
+  function headers(cols, style) {
+    return (cols || []).map(function (c) { return colName(c, style); });
+  }
   /* 1商品＝1バリアントなので、オプションはこの決まった値を入れる。
      ※ 公式の2ページで書き方が食い違っている（商品CSVのページは
        「1つしかオプションが無いなら Default Title」、在庫CSVのページは
@@ -252,8 +302,8 @@
     var t = s(v);
     return /[",\r\n]/.test(t) ? ('"' + t.replace(/"/g, '""') + '"') : t;
   }
-  function toCsv(cols, rows) {
-    var out = [cols.map(q).join(",")];
+  function toCsv(cols, rows, style) {
+    var out = [headers(cols, style).map(q).join(",")];
     for (var i = 0; i < (rows || []).length; i++) {
       var r = rows[i] || {};
       var line = [];
@@ -270,14 +320,18 @@
     if (!s(o.collection)) cols = cols.filter(function (c) {
       return c !== "Collection";
     });
-    return toCsv(cols, rowsOf(items, o));
+    return toCsv(cols, rowsOf(items, o), o.style);
   }
 
   /* ---- 在庫CSV（ロケーションが2つ以上の店）----
      Handle / Location / Option1 Value が必須。On hand (current) を空に
      しておくと「うっかり上書きを防ぐ検査」が外れるので、新しく置くときの
      Not stocked だけを入れる。 */
-  var INV_COLS = ["Handle", "Title", "Option1 Name", "Option1 Value", "SKU",
+  /* 在庫CSV は商品CSV と**別の形**。公式（Exporting and importing inventory
+     with a CSV file・2026-11-10 に確認）の表どおり、オプションの列名は
+     **`Option 1 Name` / `Option 1 Value`（数字の前後に空き）**。
+     商品CSV の `Option1 Name`（空きなし）とは違うので混ぜない。 */
+  var INV_COLS = ["Handle", "Title", "Option 1 Name", "Option 1 Value", "SKU",
                   "Location", "On hand (current)", "On hand (new)"];
   function invCsv(items, opt) {
     var o = opt || {};
@@ -291,7 +345,7 @@
       if (Math.round(num(r.max_qty)) <= 0) continue;
       rows.push({
         "Handle": handleOf(jan), "Title": titleOf(r.name),
-        "Option1 Name": s(o1.name), "Option1 Value": s(o1.value),
+        "Option 1 Name": s(o1.name), "Option 1 Value": s(o1.value),
         "SKU": skuOf(jan, o.date), "Location": loc,
         /* 置いていない場所に新しく置くときは Not stocked（公式の例）。 */
         "On hand (current)": o.first ? "Not stocked" : "",
@@ -384,6 +438,7 @@
 
   var API = {
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
+    COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,
     CP: CP, NOTE_JA: NOTE_JA,
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,

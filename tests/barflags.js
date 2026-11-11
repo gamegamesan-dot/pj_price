@@ -43,8 +43,12 @@ await p.evaluate(()=>{
   $('syncPageAll').checked=true; $('syncPageAll').dispatchEvent(new Event('change'));
 });
 await p.waitForTimeout(120);
+/* 6.177 で上に「まとめて直す」の行が増えたので、
+   もとの4つは **syncBarRev がいる行**で見る。 */
 const bar=await p.evaluate(()=>({
-  main:Array.from(document.querySelectorAll('#syncBar > div:nth-child(2) button'))
+  main:Array.from($('syncBarRev').parentNode.querySelectorAll('button'))
+    .map(b=>b.textContent),
+  px:Array.from($('syncBarPxGo').parentNode.querySelectorAll('button'))
     .map(b=>b.textContent),
   n:$('syncBarN').textContent,
   flags:getComputedStyle($('syncBarFlags')).display }));
@@ -52,6 +56,10 @@ console.log('   '+JSON.stringify(bar));
 ok(bar.main.length===4,'★iPhoneで1行に収まる4つ');
 ok(bar.main.join('|')==='見直し価格にする|最低売値まで下げる|印を付ける ▾|選択解除',
    '★並びは 見直し価格・最低売値・印を付ける ▾・選択解除');
+/* 6.177（【Z】）まとめて直す行は「取り直してから直す」と「▾」の2つ。 */
+ok(bar.px.length===2&&/取り直してから直す/.test(bar.px[0])&&bar.px[1]==='▾',
+   '★★まとめて直す行は既定のボタンと「▾」の2つ');
+
 ok(bar.flags==='none','★印の欄は押すまで閉じている');
 const open=await p.evaluate(()=>{
   $('syncBarMarkBtn').click();

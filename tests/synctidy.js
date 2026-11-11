@@ -137,9 +137,11 @@ await p.evaluate(()=>{
   cb.checked=true; cb.dispatchEvent(new Event('change',{bubbles:true}));
 });
 await p.waitForTimeout(120);
+/* 6.177 で上に「まとめて直す」の行が増えたので、
+   もとの4つは syncBarRev がいる行で見る。 */
 bar=await p.evaluate(()=>({ show:getComputedStyle($('syncBar')).display,
   n:$('syncBarN').textContent,
-  btn:Array.from(document.querySelectorAll('#syncBar > div:nth-child(2) button'))
+  btn:Array.from($('syncBarRev').parentNode.querySelectorAll('button'))
     .map(b=>b.textContent) }));
 console.log('   '+JSON.stringify(bar));
 ok(bar.show!=='none'&&/選択 1件/.test(bar.n),'★選ぶと画面の下に出る');

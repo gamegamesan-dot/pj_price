@@ -50,6 +50,74 @@ ok(A.COLS.indexOf('Barcodes')>=0&&A.COLS.indexOf('Barcode')<0,
 ok(A.COLS.indexOf('Image Src')<0&&A.COLS.indexOf('Product image URL')<0,
    '★★★画像の列は出さない（MW・Amazon の画像は使わない）');
 
+console.log('\n=== 列名の形（6.176）ストアの書き出しに合わせる ===');
+/* omakase-ship のエクスポートが返した列名（カジが確認・2026-11-11）。
+   上書きのときに列名が違うとずれるので、**既定はこの形**。 */
+const EXPORTED=['Handle','Title','Body (HTML)','Vendor','Product Category','Type',
+  'Tags','Published','Option1 Name','Option1 Value','Option1 Linked To',
+  'Variant SKU','Variant Grams','Variant Inventory Tracker',
+  'Variant Inventory Qty','Variant Inventory Policy',
+  'Variant Fulfillment Service','Variant Price','Variant Compare At Price',
+  'Variant Requires Shipping','Variant Taxable',
+  'Variant Barcodes','Image Src','Image Position','Image Alt Text','Gift Card',
+  'SEO Title','SEO Description','Variant Image','Variant Weight Unit',
+  'Variant Tax Code','Cost per item','Status',
+  'Variant Packed Length','Variant Packed Width','Variant Packed Height',
+  'Variant Packed Dimension Unit'];
+{
+  const head=cells(A.build([IT],{}))[0];
+  console.log('   '+head.join(','));
+  ok(head[0]==='Handle','★★★既定は古い形（Handle）');
+  ok(head.indexOf('Body (HTML)')>=0&&head.indexOf('Description')<0,
+     '★★★Body (HTML) で出す');
+  ok(head.indexOf('Variant Price')>=0&&head.indexOf('Price')<0,
+     '★★★Variant Price で出す');
+  ok(head.indexOf('Variant SKU')>=0&&head.indexOf('Variant Grams')>=0,
+     '★★★Variant SKU・Variant Grams で出す');
+  ok(head.indexOf('Variant Inventory Policy')>=0
+     &&head.indexOf('Continue selling when out of stock')<0,
+     '★★★在庫切れの扱いは Variant Inventory Policy');
+  ok(head.indexOf('Published')>=0
+     &&head.indexOf('Published on online store')<0,'★★★Published で出す');
+  ok(head.indexOf('Variant Barcodes')>=0&&head.indexOf('Barcodes')<0,
+     '★★★JAN は Variant Barcodes（ストアの書き出しと同じ）');
+  ok(head.indexOf('Variant Taxable')>=0&&head.indexOf('Variant Weight Unit')>=0
+     &&head.indexOf('Variant Requires Shipping')>=0
+     &&head.indexOf('Variant Fulfillment Service')>=0,
+     '★★Variant 系の名前でそろえる');
+  /* 出す列がぜんぶストアの書き出しに入っていること（Collection は
+     読み込みのときだけの列なので、書き出しには入らない・公式）。 */
+  const miss=head.filter((c)=>EXPORTED.indexOf(c)<0);
+  console.log('   書き出しに無い列: '+JSON.stringify(miss));
+  ok(miss.length===0,
+     '★★★出す列はぜんぶストアの書き出しにある（上書きでずれない）');
+}
+{
+  const head=cells(A.build([IT],{ style:'new' }))[0];
+  ok(head[0]==='URL handle'&&head.indexOf('Description')>=0
+     &&head.indexOf('Price')>=0,'★★★style:new で今の名前にできる');
+  ok(A.colName('SKU','new')==='SKU'&&A.colName('SKU','old')==='Variant SKU'
+     &&A.colName('SKU')==='Variant SKU','★★colName（既定は古い形）');
+  ok(A.colName('Title','old')==='Title'&&A.colName('Status','old')==='Status'
+     &&A.colName('Vendor','old')==='Vendor'&&A.colName('Tags','old')==='Tags',
+     '★★どちらでも同じ名前の列はそのまま');
+  ok(A.colName('Collection','old')==='Collection',
+     '★Collection はどちらでも同じ');
+}
+{
+  /* 中身は形を変えても同じ（列名だけが変わる）。 */
+  const a=cells(A.build([IT],{}));
+  const b=cells(A.build([IT],{ style:'new' }));
+  ok(JSON.stringify(a[1])===JSON.stringify(b[1]),
+     '★★★中身は同じで、列名だけが変わる');
+  ok(a[0].length===b[0].length,'★列の数も同じ');
+}
+{
+  const iv=cells(A.invCsv([IT],{ location:'本社' }));
+  ok(iv[0][0]==='Handle'&&iv[0].indexOf('Option 1 Value')>=0,
+     '★★在庫CSV は公式の形（Option 1 Value・空きあり）のまま');
+}
+
 console.log('\n=== Handle と SKU ===');
 ok(A.handleOf('4902370550467')==='sub-4902370550467',
    '★★★Handle は sub-<JAN>');
@@ -115,30 +183,32 @@ ok(A.CP.hei===3&&A.CP.g===1000,'★クリックポストの決まり（厚さ3cm
 console.log('\n=== 1行ぶんの中身 ===');
 const t1=A.build([IT],{ type:'ゲームソフト', date:DAY });
 console.log('   '+cells(t1)[1].slice(0,8).join(' | '));
-ok(cell(t1,1,'URL handle')==='sub-4902370550467','★★★Handle');
+ok(cell(t1,1,'Handle')==='sub-4902370550467','★★★Handle');
 ok(cell(t1,1,'Title')==='スーパーマリオパーティ ジャンボリー','★★★Title');
-ok(cell(t1,1,'SKU')==='SUB-4902370550467-20261110','★★★SKU');
-ok(cell(t1,1,'Barcodes')==='4902370550467','★★★JAN は Barcodes に入れる');
-ok(cell(t1,1,'Price')==='5300','★★★販売価格（税込）');
-ok(cell(t1,1,'Inventory quantity')==='3','★★★販売数の上限が在庫数になる');
-ok(cell(t1,1,'Continue selling when out of stock')==='deny',
+ok(cell(t1,1,'Variant SKU')==='SUB-4902370550467-20261110','★★★SKU');
+ok(cell(t1,1,'Variant Barcodes')==='4902370550467',
+   '★★★JAN は Variant Barcodes に入れる');
+ok(cell(t1,1,'Variant Price')==='5300','★★★販売価格（税込）');
+ok(cell(t1,1,'Variant Inventory Qty')==='3','★★★販売数の上限が在庫数になる');
+ok(cell(t1,1,'Variant Inventory Policy')==='deny',
    '★★★売り切れで止める（deny）');
-ok(cell(t1,1,'Inventory tracker')==='shopify',
+ok(cell(t1,1,'Variant Inventory Tracker')==='shopify',
    '★★★shopify にしないと在庫が入らない');
-ok(cell(t1,1,'Charge tax')==='true'&&cell(t1,1,'Requires shipping')==='true',
+ok(cell(t1,1,'Variant Taxable')==='true'
+   &&cell(t1,1,'Variant Requires Shipping')==='true',
    '★★課税する・発送が要る');
-ok(cell(t1,1,'Weight value (grams)')==='110'
-   &&cell(t1,1,'Weight unit for display')==='g',
+ok(cell(t1,1,'Variant Grams')==='110'
+   &&cell(t1,1,'Variant Weight Unit')==='g',
    '★★★重さはグラムで入れる（重さの段の送料に効く）');
-ok(cell(t1,1,'Option1 name')==='Title'
-   &&cell(t1,1,'Option1 value')==='Default Title',
+ok(cell(t1,1,'Option1 Name')==='Title'
+   &&cell(t1,1,'Option1 Value')==='Default Title',
    '★★★Option1 は Title / Default Title');
-ok(cell(t1,1,'Published on online store')==='true'
+ok(cell(t1,1,'Published')==='true'
    &&cell(t1,1,'Status')==='active','★★公開・active');
 ok(cell(t1,1,'Type')==='ゲームソフト','★★Type は設定から');
 ok(cell(t1,1,'Vendor')==='','★★★Vendor は既定で空（保留）');
-ok(cell(t1,1,'Gift card')==='false','★ギフトカードではない');
-ok(cell(t1,1,'SEO title')==='スーパーマリオパーティ ジャンボリー','★SEO title');
+ok(cell(t1,1,'Gift Card')==='false','★ギフトカードではない');
+ok(cell(t1,1,'SEO Title')==='スーパーマリオパーティ ジャンボリー','★SEO Title');
 ok(A.build([IT],{ option1:{ name:'Title2', value:'X' } }).indexOf('Title2')>0,
    '★★Option1 の値は設定で変えられる（ストアの実際に合わせる）');
 
@@ -152,9 +222,9 @@ ok(A.weightOf({ size_g:0 },{ addG:40 })===0,
 ok(A.weightOf({},{})===0,'★何も無ければ 0');
 ok(A.weightOf({ size_g:110 },{ addG:-50 })===110,
    '★負の足し分は無視する');
-ok(cell(A.build([IT],{ addG:40 }),1,'Weight value (grams)')==='150',
+ok(cell(A.build([IT],{ addG:40 }),1,'Variant Grams')==='150',
    '★★★CSV にも足した値が出る');
-ok(cell(t1,1,'Weight value (grams)')==='110',
+ok(cell(t1,1,'Variant Grams')==='110',
    '★★足し分を入れなければ今までどおり');
 /* eBay の梱包マージン（ゲーム60g／フィギュア250g）はここには足さない。
    あれは eBay の送料計算用で、0 にはできない欄なので混ぜない。 */
@@ -189,8 +259,10 @@ console.log('\n=== 在庫CSV（ロケーションが2つ以上の店）===');
 const iv=A.invCsv([IT],{ location:'本社', first:true, date:DAY });
 console.log('   '+cells(iv)[1].join(' | '));
 ok(cells(iv)[0][0]==='Handle','★★★必須の Handle が先頭');
-ok(A.INV_COLS.indexOf('Location')>=0&&A.INV_COLS.indexOf('Option1 Value')>=0,
-   '★★★Location と Option1 Value が必須なので入れる');
+ok(A.INV_COLS.indexOf('Location')>=0&&A.INV_COLS.indexOf('Option 1 Value')>=0,
+   '★★★Location と Option 1 Value が必須なので入れる');
+ok(A.INV_COLS.indexOf('Option1 Value')<0,
+   '★★★在庫CSV は「Option 1 Value」（数字の前後に空き）。商品CSV と違う');
 ok(cell(iv,1,'Location')==='本社','★★ロケーション名が入る');
 ok(cell(iv,1,'On hand (new)')==='3','★★★新しい在庫数が入る');
 ok(cell(iv,1,'On hand (current)')==='Not stocked',

@@ -1026,6 +1026,8 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="mwSubInvCsv" style="flex:0 0 auto" onclick="mwSubInvGo()">在庫CSV</button>
       </div>
       <div class="note2" id="mwSubNote" style="margin-top:2px"></div>
+      <!-- 6.176：列名の形。ストアの「商品のエクスポート」に合わせるのが既定。 -->
+      <div class="rowv"><label for="mwSubCols">列名の形</label><select id="mwSubCols"><option value="old" selected>ストアの書き出しに合わせる（Handle／Body (HTML)／Variant Price …）</option><option value="new">Shopify の今の名前（URL handle／Description／Price …）</option></select><div class="note2" style="margin-top:2px">Shopify は列名を新しい名前に変えましたが、<b>ストアの「商品のエクスポート」が返す形は古い名前のまま</b>のことがあります（omakase-ship で確認済み）。<b>上書き（Overwrite products with matching handles）で列名の違いでずれない</b>ように、既定は<b>書き出しに合わせる</b>です。どちらの名前でも Shopify は読み込めます（公式が後方互換を明記）。<b>どちらかの形でしか入らない項目はありません。</b><br>確かめ方：Shopify の <b>商品 → エクスポート</b>で1件だけ書き出し、1行目の列名を見てください。</div></div>
       <div class="row" style="margin-top:6px"><label>Type（商品の種類）</label><input type="text" id="mwSubType" value="ゲームソフト" style="flex:1"></div>
       <div class="row"><label>Vendor（空のままでよい）</label><input type="text" id="mwSubVendor" value="" style="flex:1"></div>
       <div class="row"><label>Collection（空なら列を出さない）</label><input type="text" id="mwSubCollection" value="" style="flex:1"></div>
@@ -1614,6 +1616,9 @@ body.staff #syncOnHandFix{display:none !important}
       <details class="exp" data-exp="cfgAutoBase"><summary>自動の処理が使う値の説明</summary>
       <div class="note2 cfgprice" style="margin:0 0 8px">自動の処理（<b>自動値下げ・売値の自動反映・再調達中の売値・フェイズBの再調達</b>）と、<b>出品CSV・販売連携タブの推奨売値・最低売値・利益の表示</b>は、この料率で計算します。<b>pj-sync に送るのはこの値だけ</b>です。eBayタブの「広告料率」はその場の計算用（0%と見比べるときなどに使い、pj-sync には送りません）。</div>
       </details>
+      <!-- 6.177（【Z】）まとめて直すときの1日の上限。 -->
+      <div class="row cfgprice"><label for="syncPxMax">まとめて直す上限（1日）</label><input type="number" id="syncPxMax" value="30" step="5" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
+      <div class="note2 cfgprice" style="margin:0 0 8px">販売連携タブの黒い帯の「<b>取り直してから直す</b>」「売値をまとめて直す」で、<b>直近24時間に直せる件数</b>の上限です。超えた分は「上限のため次回」と出ます。自動の処理（売値の自動反映・再調達中の売値）の枠とは<b>別</b>に数えます。</div>
       <!-- 6.175（v257）無在庫の行も Amazon最安値に追従させる。既定オン。 -->
       <div class="chk cfgprice"><input type="checkbox" id="autoRkDrop" checked><label for="autoRkDrop" style="flex:1"><b>無在庫の行も</b> Amazon最安値に追従する（既定オン）</label></div>
       <div class="note2 cfgprice" style="margin:0 0 8px">無在庫（手元にも FBA にも在庫を持たず、売れてから仕入れる行）も、再調達中とまったく同じ理屈で <b>Amazon最安値が動くと利益が動きます</b>。オンにすると、上げも下げも pj-sync が自動で eBay に反映します（<b>最低売値より下げません</b>）。<br><b>MW 無在庫（SKU が <code>W-&lt;JAN&gt;</code> の行）は対象外</b>です。あちらは Amazon の ASIN を持たず、売値は MW の卸値から<b>段取り D</b>が動かすので、二つの仕組みが同じ行を取り合わないようにしています。</div>
@@ -2169,6 +2174,19 @@ body.staff #syncOnHandFix{display:none !important}
 <div id="syncBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:55;
      background:var(--ink);color:#fff;padding:8px 10px;box-shadow:0 -2px 6px rgba(0,0,0,.2)">
   <div style="font-size:12px;margin-bottom:6px" id="syncBarN">選択 0件</div>
+  <!-- 6.177（【Z】）選んだ行をまとめて直す。既定は「取り直してから直す」。 -->
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+    <button class="btn cfgprice" id="syncBarPxGo" style="flex:1 1 0;min-width:0;padding:7px 3px;font-size:12px;background:#b35c00;color:#fff;border-color:#b35c00">取り直してから直す</button>
+    <button class="btn cfgprice" id="syncBarPxMore" style="flex:0 0 auto;padding:7px 8px;font-size:12px">▾</button>
+  </div>
+  <div id="syncBarPxMenu" style="display:none;margin-bottom:6px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn cfgprice" id="syncBarPxLow" style="flex:1 1 46%;padding:7px 3px;font-size:12px">最安値をまとめて取り直す</button>
+      <button class="btn cfgprice" id="syncBarPxFix" style="flex:1 1 46%;padding:7px 3px;font-size:12px">売値をまとめて直す</button>
+      <button class="btn cfgprice" id="syncBarRestockGo" style="flex:1 1 100%;padding:7px 3px;font-size:12px">再調達中にする（売値を直して数量1に戻す）</button>
+    </div>
+  </div>
+  <div class="note2" id="syncBarPxNote" style="display:none;margin:0 0 6px;color:#fff;opacity:.95"></div>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="btn" id="syncBarRev" style="flex:1 1 0;min-width:0;padding:7px 3px;font-size:12px">見直し価格にする</button>
     <button class="btn" id="syncBarFloor" style="flex:1 1 0;min-width:0;padding:7px 3px;font-size:12px">最低売値まで下げる</button>
@@ -2692,7 +2710,9 @@ function advChecks(){ return ADV_CHECK.concat(ADV_AMZCHK); }
 var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
                'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
                'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes',
-               'autoAdRate'];
+               'autoAdRate',
+               /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
+               'syncPxMax'];
 // 端末の設定欄に入っていて、D1 にも送るもの（戻すときは csvSaveCfg も呼ぶ）
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
@@ -5408,7 +5428,11 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 6.170（【U の改】）Shopify 用 CSV の設定。
                     6.173：重さの足し分（eBay の梱包マージンとは別）。 */
                  'mwSubType','mwSubVendor','mwSubCollection','mwSubMarkup',
-                 'mwSubLoc','mwSubAddG'];
+                 'mwSubLoc','mwSubAddG',
+                 /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
+                 'mwSubCols',
+                 /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
+                 'syncPxMax'];
 
 var csvList=[], csvLog=[];
 function csvLoad(){
@@ -14612,7 +14636,14 @@ function mwSubOpt(){
            first:!!($('mwSubInvFirst')||{}).checked,
            /* 6.173：Shopify に出す重さの足し分（eBay の梱包マージンとは別）。 */
            addG:mwSubAddG(),
+           /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
+           style:mwSubColStyle(),
            date:new Date() };
+}
+/* 列名の形（6.176）。'old'＝ストアの書き出しに合わせる（既定）／'new'。 */
+function mwSubColStyle(){
+  var v=String((($('mwSubCols')||{}).value)||'old');
+  return (v==='new')?'new':'old';
 }
 /* Shopify に出す重さの足し分（g）。既定 0。 */
 function mwSubAddG(){
@@ -14658,7 +14689,9 @@ function mwSubCsvGo(){
     dl('shopify-products-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
     /* 6.171：重さの無い行は送料の段がずれるので、件数を出して知らせる。 */
     var noG=d.rows.filter(mwSubNoG).length;
-    n.innerHTML='✓ '+mwN(rows.length)+'件を書き出しました。'
+    n.innerHTML='✓ '+mwN(rows.length)+'件を書き出しました'
+      +'（列名は'+(o.style==='new'?'<b>Shopify の今の名前</b>'
+                                  :'<b>ストアの書き出しに合わせた形</b>')+'）。'
       +'Shopify の <b>商品 → インポート</b>で読み込み、'
       +'<b>「Overwrite products with matching handles」にチェック</b>'
       +'してください。'
@@ -17261,8 +17294,27 @@ function syncBarRender(){
   el.style.display=n?'block':'none';
   if(!n){ $('syncBarFlags').style.display='none'; return; }
   var off=syncPickOff();
+  /* 6.177（【Z】）まとめて直すボタンに件数を出す（押す前に分かるように）。 */
+  var pl=pxFixPlan(rows);
+  var go=$('syncBarPxGo');
+  if(go)go.textContent='取り直してから直す（'+n+'件）';
+  var fx=$('syncBarPxFix');
+  if(fx)fx.textContent='売値をまとめて直す（'+pl.go.length+'件）';
+  var lw=$('syncBarPxLow');
+  if(lw)lw.textContent='最安値をまとめて取り直す（'+pxLowKeys(rows).length+'件）';
+  var rs=$('syncBarRestockGo');
+  if(rs){
+    var can=rows.filter(function(r){
+      return !Number(r.restocking||0)&&!Number(r.one_off||0)
+        &&!syncIsDropship(r)&&!Number(r.on_hand||0)
+        &&String(r.ebay_item_id||'').trim(); }).length;
+    rs.textContent='再調達中にする（'+can+'件・売値を直して数量1に戻す）';
+  }
   $('syncBarN').textContent='選択 '+n+'件'
-    +(off?('（他のページ '+off+'件を含む）'):'');
+    +(off?('（他のページ '+off+'件を含む）'):'')
+    +'　まとめて直せる '+pl.go.length+'件'
+    +(pl.same.length?('・変わらない '+pl.same.length+'件'):'')
+    +(pl.skip.length?('・とばす '+pl.skip.length+'件'):'');
 }
 /* 選んだ行の印をまとめて付け外しする。
    その行に付けられない印はとばし、何件とばしたかを出す。 */
@@ -17356,6 +17408,289 @@ $('syncBarFlags').addEventListener('click',function(e){
 });
 /* 選んだ行を「売値の見直し」の価格にする（上げも下げもする）。
    ⚙設定の「見直しが要る行だけ」に関係なく、選んだ行すべてが対象。 */
+/* ===== 6.177（【Z】）選んだ行をまとめて直す =====
+   ① 最安値をまとめて取り直す（20件ずつ・SP-API の間隔は pj-sync が守る）
+   ② 売値をまとめて直す（確認の一覧を出してから送る）
+   ③ ①→②を1回で（既定のボタン）
+   ④ 再調達中にする（売値を直して数量1に戻すところまで）
+   売値は pj-sync が計算する（画面の数字は送らない・7.133）。 */
+var PX_LOW_CHUNK=20;                 // 1回に取り直す件数（進み具合を細かく出す）
+var PX_LOW_SEC=16;                   // 1回ぶんの見込みの秒数（残りの目安に使う）
+var pxBusy=false;
+function pxNote(html,keep){
+  var el=$('syncBarPxNote'); if(!el)return;
+  if(!html&&!keep){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display=''; el.innerHTML=html||'';
+}
+function pxLock(on){
+  pxBusy=!!on;
+  ['syncBarPxGo','syncBarPxLow','syncBarPxFix','syncBarRestockGo','syncBarPxMore']
+    .forEach(function(id){ var b=$(id); if(b)b.disabled=!!on; });
+}
+/* 選んだ行のうち、ASIN が本物のもの（MW 無在庫の見かけの ASIN は除く）。 */
+function pxLowKeys(rows){
+  var out=[], seen={};
+  (rows||[]).forEach(function(r){
+    var a=String(r.asin||'').trim();
+    if(!/^B[0-9A-Z]{9}$/.test(a))return;
+    var c=(r.cond==='new')?'new':'used';
+    var id=a+'|'+c;
+    if(seen[id])return;
+    seen[id]=1;
+    out.push({ asin:a, cond:c });
+  });
+  return out;
+}
+/* ① 最安値をまとめて取り直す。進み具合と残りの目安を帯に出す。 */
+function pxLowBulk(rows){
+  var keys=pxLowKeys(rows);
+  if(!keys.length){
+    pxNote('最安値を取り直せる行がありません（ASIN が入っている行を選んでください）。');
+    return Promise.resolve({ got:0, fail:[] });
+  }
+  var total=keys.length, done=0, got=0, fail=[];
+  var t0=Date.now();
+  var step=function(){
+    if(done>=total)return Promise.resolve({ got:got, fail:fail });
+    var part=keys.slice(done,done+PX_LOW_CHUNK);
+    var chunks=Math.ceil((total-done)/PX_LOW_CHUNK);
+    var per=(done>0)?((Date.now()-t0)/done*PX_LOW_CHUNK/1000):PX_LOW_SEC;
+    pxNote('最安値を取り直しています… <b>'+done+'/'+total+'件</b>'
+      +'（残り約 '+Math.max(1,Math.round(chunks*per))+'秒）');
+    return mwPost('/lowest',{ items:part })
+      .then(function(d){
+        var lo=(d&&d.lowest)||{};
+        part.forEach(function(k){
+          var v=lo[k.asin+'|'+k.cond];
+          if(v&&+v.low>0){
+            got++;
+            /* 行にその場で当てる（取り込み直しを待たせない）。 */
+            ((syncData&&syncData.items)||[]).forEach(function(r){
+              if(String(r.asin)!==k.asin)return;
+              if(((r.cond==='new')?'new':'used')!==k.cond)return;
+              r.amazon_lowest=+v.low||0;
+              r.amazon_lowest_n=+v.lowN||0;
+              r.amazon_offers=+v.total||0;
+              r.amazon_offers_json=JSON.stringify(v.offers||[]);
+              r.amazon_lowest_at=d.at||new Date().toISOString();
+            });
+          }else{
+            fail.push({ asin:k.asin, why:'Amazon に出品が見つかりませんでした' });
+          }
+        });
+        done+=part.length;
+        return step();
+      })
+      ['catch'](function(e){
+        part.forEach(function(k){
+          fail.push({ asin:k.asin, why:'取り直せませんでした：'+e.message }); });
+        done+=part.length;
+        return step();
+      });
+  };
+  return step();
+}
+/* ② 売値をまとめて直す。確認の一覧（上げ／下げ／変わらない）を出してから送る。 */
+function pxFixPlan(rows){
+  var up=[], down=[], same=[], skip=[];
+  (rows||[]).forEach(function(r){
+    var t=syncPriceOneTarget(r);
+    var nm=r.title||r.ebay_sku||r.asin;
+    if(!t){
+      var why='推奨売値が出ません';
+      if(!String(r.ebay_item_id||'').trim())why='出品していません';
+      else if(Number(r.ebay_sale||0))why='eBayのセール中';
+      else if(syncQtyOf(r)===0)why='数量0';
+      skip.push({ r:r, name:nm, why:why });
+      return;
+    }
+    var d=Math.round((t.next-t.now)*100)/100;
+    var o={ r:r, name:nm, now:t.now, next:t.next, diff:d, why:t.why };
+    if(Math.abs(d)<0.01)same.push(o);
+    else if(d>0)up.push(o);
+    else down.push(o);
+  });
+  return { up:up, down:down, same:same, skip:skip,
+           go:up.concat(down) };
+}
+function pxFixText(pl){
+  var line=function(x){
+    return '・'+String(x.name).slice(0,28)+'　'+usd(x.now)+' → '+usd(x.next)
+      +'（'+(x.diff>0?'＋':'−')+usd(Math.abs(x.diff))+'）';
+  };
+  var part=function(title,list){
+    if(!list.length)return '';
+    var t='\n【'+title+' '+list.length+'件】\n'+list.slice(0,12).map(line).join('\n');
+    if(list.length>12)t+='\n…ほか '+(list.length-12)+'件';
+    return t+'\n';
+  };
+  var t='選んだ行の売値を直します（合計 '+pl.go.length+'件）。\n';
+  t+=part('値上げ',pl.up);
+  t+=part('値下げ',pl.down);
+  if(pl.same.length)t+='\n【変わらない '+pl.same.length+'件】送りません\n';
+  if(pl.skip.length){
+    t+='\n【とばす '+pl.skip.length+'件】\n'
+      +pl.skip.slice(0,8).map(function(x){
+        return '・'+String(x.name).slice(0,28)+'（'+x.why+'）'; }).join('\n');
+    if(pl.skip.length>8)t+='\n…ほか '+(pl.skip.length-8)+'件';
+    t+='\n';
+  }
+  t+='\n※ 実際の売値は pj-sync が計算し直します（最低売値より下げません）。'
+    +'\n※ 1日の上限（'+pxMaxOf()+'件）を超えた分は「上限のため次回」になります。'
+    +'\n\nよろしいですか？';
+  return t;
+}
+function pxMaxOf(){
+  return Math.max(1,Math.min(200,+(($('syncPxMax')||{}).value)||30));
+}
+function pxFixBulk(rows){
+  var pl=pxFixPlan(rows);
+  if(!pl.go.length){
+    pxNote('直す行がありません（変わらない '+pl.same.length+'件／とばす '
+      +pl.skip.length+'件）。');
+    return Promise.resolve(null);
+  }
+  if(!confirm(pxFixText(pl)))return Promise.resolve(null);
+  pxNote('eBay に書き込んでいます… <b>'+pl.go.length+'件</b>');
+  return mwPost('/sync',{ kind:'price-many', max:pxMaxOf(),
+      items:pl.go.map(function(x){
+        return { asin:x.r.asin, cond:x.r.cond }; }) })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        pxNote('<b>直せませんでした</b>：'+esc(String((d&&d.error)||'')));
+        return d||null;
+      }
+      /* 行にその場で当てる。 */
+      ((d.rows)||[]).forEach(function(x){
+        if(!x.ok)return;
+        ((syncData&&syncData.items)||[]).forEach(function(r){
+          if(String(r.asin)!==String(x.asin)||String(r.cond)!==String(x.cond))return;
+          r.ebay_price=+x.to||r.ebay_price;
+          if(Number(r.restocking||0))r.restock_price=+x.to||r.restock_price;
+        });
+      });
+      return d;
+    });
+}
+/* 結果のまとめを帯に出す。 */
+function pxDoneNote(d,low){
+  var t=[];
+  if(low)t.push('最安値を取り直した <b>'+(+low.got||0)+'件</b>'
+    +((low.fail||[]).length?('／取り直せなかった '+low.fail.length+'件'):''));
+  if(d){
+    t.push('売値を直した <b>'+(+d.done||0)+'件</b>');
+    if(+d.skipped)t.push('とばした '+d.skipped+'件');
+    if(+d.failed)t.push('失敗 '+d.failed+'件');
+    if(+d.capped)t.push('<b>上限のため次回 '+d.capped+'件</b>');
+    t.push('1日の上限 '+(+d.max||0)+'件のうち '+(+d.used||0)+'件');
+  }
+  var why=[];
+  if(d)((d.rows)||[]).forEach(function(x){
+    if(x.ok)return;
+    why.push(String(x.asin)+'：'+String(x.why||''));
+  });
+  if(low)(low.fail||[]).forEach(function(x){
+    why.push(String(x.asin)+'：'+String(x.why||'')); });
+  pxNote('✓ '+t.join('／')
+    +(why.length?('<br><span style="opacity:.9">'
+      +esc(why.slice(0,6).join('　'))
+      +(why.length>6?('　ほか '+(why.length-6)+'件'):'')+'</span>'):''),true);
+  syncRender();
+}
+/* ボタンの入り口。kind は 'low'／'fix'／'both'。 */
+function pxRun(kind){
+  if(pxBusy)return;
+  if(roleDenyPrice('syncBarPxNote'))return;
+  var rows=syncPickRows();
+  if(!rows.length){ alert('一覧のチェックで行を選んでください。'); return; }
+  if(!syncKeyReady('syncBarPxNote'))return;
+  pxLock(true);
+  var low=null;
+  var p=(kind==='fix')?Promise.resolve(null)
+    :pxLowBulk(rows).then(function(x){ low=x; syncRender(); return x; });
+  p.then(function(){
+    if(kind==='low'){ pxDoneNote(null,low); return null; }
+    /* 取り直したあとの行で、推奨売値を出し直してから確認する。 */
+    return pxFixBulk(syncPickRows());
+  })
+    .then(function(d){
+      pxLock(false);
+      if(kind==='low')return;
+      if(d===null&&!low){ pxNote(''); return; }
+      pxDoneNote(d,low);
+    })
+    ['catch'](function(e){
+      pxLock(false);
+      pxNote('<b>できませんでした</b>：'+esc(e.message));
+    });
+}
+/* ④ 再調達中にする（売値を直して数量1に戻すところまで1回で）。 */
+function pxRestockStart(){
+  if(pxBusy)return;
+  if(roleDenyPrice('syncBarPxNote'))return;
+  var rows=syncPickRows();
+  if(!rows.length){ alert('一覧のチェックで行を選んでください。'); return; }
+  if(!syncKeyReady('syncBarPxNote'))return;
+  var go=rows.filter(function(r){
+    return !Number(r.restocking||0)&&!Number(r.one_off||0)
+      &&!syncIsDropship(r)&&!Number(r.on_hand||0)
+      &&String(r.ebay_item_id||'').trim();
+  });
+  if(!go.length){
+    pxNote('再調達中にできる行がありません（すでに再調達中・一点物・無在庫・'
+      +'手元在庫・未出品の行は対象外です）。');
+    return;
+  }
+  if(!confirm('選んだ '+go.length+'件を<再調達中>にします。\n\n'
+    +go.slice(0,10).map(function(r){
+      return '・'+String(r.title||r.asin).slice(0,28); }).join('\n')
+    +(go.length>10?('\n…ほか '+(go.length-10)+'件'):'')
+    +'\n\nこのあと pj-sync が1回で行います：\n'
+    +'　1. Amazon最安値を取り直す\n'
+    +'　2. 最安値を仕入値とみなした推奨売値に直す（下限利益は守ります）\n'
+    +'　3. eBay の数量を1に戻す\n\n'
+    +'よろしいですか？'))return;
+  pxLock(true);
+  pxNote('再調達中にしています…（最安値を取り直して売値と数量を直します）');
+  mwPost('/sync',{ kind:'restock-start',
+      items:go.map(function(r){ return { asin:r.asin, cond:r.cond }; }) })
+    .then(function(d){
+      pxLock(false);
+      if(!d||d.ok!==true){
+        pxNote('<b>できませんでした</b>：'+esc(String((d&&d.error)||'')));
+        return;
+      }
+      ((d.rows)||[]).forEach(function(x){
+        if(!x.ok)return;
+        ((syncData&&syncData.items)||[]).forEach(function(r){
+          if(String(r.asin)!==String(x.asin)||String(r.cond)!==String(x.cond))return;
+          r.ebay_price=+x.to||r.ebay_price;
+          r.ebay_qty=1; r.restocking=1; r.restock_price=+x.to||r.restock_price;
+        });
+      });
+      var why=((d.rows)||[]).filter(function(x){ return !x.ok; })
+        .map(function(x){ return String(x.asin)+'：'+String(x.why||''); });
+      pxNote('✓ 再調達中にした <b>'+(+d.done||0)+'件</b>'
+        +(+d.skipped?('／とばした '+d.skipped+'件'):'')
+        +(+d.failed?('／失敗 '+d.failed+'件'):'')
+        +(why.length?('<br><span style="opacity:.9">'
+          +esc(why.slice(0,6).join('　'))
+          +(why.length>6?('　ほか '+(why.length-6)+'件'):'')+'</span>'):''),true);
+      syncRender();
+    })
+    ['catch'](function(e){
+      pxLock(false);
+      pxNote('<b>できませんでした</b>：'+esc(e.message));
+    });
+}
+$('syncBarPxGo').onclick=function(){ pxRun('both'); };
+$('syncBarPxLow').onclick=function(){ pxRun('low'); };
+$('syncBarPxFix').onclick=function(){ pxRun('fix'); };
+$('syncBarRestockGo').onclick=pxRestockStart;
+$('syncBarPxMore').onclick=function(){
+  var m=$('syncBarPxMenu');
+  m.style.display=(m.style.display==='none')?'block':'none';
+};
 $('syncBarRev').onclick=function(){ syncRevRun(true); };
 $('syncBarFloor').onclick=function(){ syncFloorRun(); };
 
@@ -22439,7 +22774,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v257';   // sw.js の const V と必ず同じ値にする
+var APP_V='v259';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

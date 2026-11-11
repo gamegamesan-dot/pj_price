@@ -8487,3 +8487,178 @@ Worker 側は §7.132。
 ### テスト
 
 `tests/rkui.js`（60本・+8）と `tests/priceonebtn.js`（51本・+3）。
+
+## 6.176 列名はストアの書き出しに合わせる（v258・カジの確認を反映）
+
+### 分かったこと（カジが omakase-ship で確認・2026-11-11）
+
+- **`Option1 Name`＝`Title` / `Option1 Value`＝`Default Title`**（6.170 の既定で合っていた）
+- **ストアの「商品のエクスポート」が返す列名は「古い形」だった**
+
+```
+Handle / Title / Body (HTML) / Vendor / Product Category / Type / Tags / Published /
+Option1 Name / Option1 Value / Option1 Linked To / Option2… / Option3… /
+Variant SKU / Variant Grams / Variant Inventory Tracker / Variant Inventory Qty /
+Variant Inventory Policy / Variant Fulfillment Service / Variant Price /
+Variant Compare At Price / Variant Requires Shipping / Variant Taxable /
+Unit Price Total Measure …（4列） / Variant Barcodes / Image Src / Image Position /
+Image Alt Text / Gift Card / SEO Title / SEO Description / Variant Image /
+Variant Weight Unit / Variant Tax Code / Cost per item / Status /
+Variant Packed Length / Width / Height / Dimension Unit
+```
+
+6.170 は Shopify の**今の名前**（公式ドキュメントの形）で出していたので、
+上書き（Overwrite products with matching handles）で列名が食い違う恐れがあった。
+
+### 直したこと
+
+**既定を「ストアの書き出しに合わせる」（古い形）**にした。
+⚙「3. 仕入れ」→「会員向け（Shopify）」に **「列名の形」** を足し、
+`ストアの書き出しに合わせる`（既定）／`Shopify の今の名前` を選べる。
+
+出す列の対応（`shared/shopcsv.js` の `COL_OLD` 1か所）
+
+| 今の名前 | ストアの書き出し（既定） |
+|---|---|
+| URL handle | **Handle** |
+| Description | **Body (HTML)** |
+| Published on online store | **Published** |
+| SKU | **Variant SKU** |
+| Barcodes | **Variant Barcodes** |
+| Price | **Variant Price** |
+| Charge tax | **Variant Taxable** |
+| Inventory tracker | **Variant Inventory Tracker** |
+| Inventory quantity | **Variant Inventory Qty** |
+| Continue selling when out of stock | **Variant Inventory Policy** |
+| Weight value (grams) | **Variant Grams** |
+| Weight unit for display | **Variant Weight Unit** |
+| Requires shipping | **Variant Requires Shipping** |
+| Fulfillment service | **Variant Fulfillment Service** |
+| Gift card | **Gift Card** |
+| SEO title / SEO description | **SEO Title / SEO Description** |
+| Option1 name / value | **Option1 Name / Option1 Value** |
+| Product category | **Product Category** |
+
+`Title` / `Vendor` / `Type` / `Tags` / `Status` / `Cost per item` /
+`Collection` は**どちらでも同じ名前**。
+
+**中身は変わらない**（値はどちらの形でも同じ。列名だけが変わる）。
+
+### どちらかの形でしか入らない項目は「ありません」
+
+カジの質問への答え。pj が出す**24列すべてに古い形の名前があり、
+すべてストアの書き出しに入っている**（テストで突き合わせている）。
+`Collection` だけは**読み込みのときだけ足せる列**で、公式どおり
+エクスポートには出てこない（これは形の違いではない）。
+
+### 在庫CSV は別の形
+
+在庫CSV（商品 → 在庫 → インポート）はオプションの列名が
+**`Option 1 Name` / `Option 1 Value`（数字の前後に空き）**。
+商品CSV の `Option1 Name`（空きなし）とは違う。公式の表に合わせて直した
+（6.170 では空きなしで出していた）。
+**こちらは書き出して確かめていないので、ロケーションが2つ以上になったら
+1件だけ在庫をエクスポートして列名を見てください。**
+
+### テスト
+
+`tests/shopcsv.mjs`（107本）と `tests/shopui.js`（73本）。
+カジが送ってくれた**実際の書き出しの列名の一覧**をテストに入れて、
+pj が出す列がぜんぶその中にあることを見ている。
+
+## 6.177 黒い帯から選んだ行をまとめて直す（v259・【Z】）
+
+### ボタン
+
+既定は **「取り直してから直す（n件）」**。1・2は **「▾」** の中。
+
+| ボタン | すること |
+|---|---|
+| **取り直してから直す**（既定） | ①→② を1回で（取り直し → 新しい推奨売値で確認 → 送信） |
+| 最安値をまとめて取り直す | ① 選んだ行の Amazon最安値を**20件ずつ**取り直す |
+| 売値をまとめて直す | ② 推奨売値と違う行を推奨売値に直す |
+| 再調達中にする | ⑤ 売値を直して数量1に戻すところまで1回で |
+
+帯の1行目に **「選択 n件　まとめて直せる n件・変わらない n件・とばす n件」**
+を出すので、押す前に何が起きるか分かる。ボタンにも件数を出す。
+
+### ① 最安値をまとめて取り直す
+
+- **20件ずつ**（`PX_LOW_CHUNK`）送る。SP-API の間隔は pj-sync が守る
+  （`/lowest` の中で 20件/回・0.1回/秒）
+- 進み具合を帯に出す … **「最安値を取り直しています… 20/25件（残り約 12秒）」**
+  （残りは、実際にかかった時間から計算する。最初の回だけ見込みの16秒）
+- 取り直せた行は**その場で行に当てる**（取り込み直しを待たせない）
+- 取り直せなかった行は理由を残す（「Amazon に出品が見つかりませんでした」など）
+- ASIN が本物でない行（MW 無在庫の `W＋JAN`）は数えない
+
+### ② 売値をまとめて直す（確認の一覧）
+
+送る前に確認を出す。
+
+```
+選んだ行の売値を直します（合計 2件）。
+
+【値上げ 1件】
+・B0ZB000002の商品　$40.00 → $90.00（＋$50.00）
+
+【値下げ 1件】
+・B0ZB000001の商品　$120.00 → $90.00（−$30.00）
+
+【変わらない 3件】送りません
+
+【とばす 3件】
+・…（数量0）
+・…（eBayのセール中）
+・…（出品していません）
+
+※ 実際の売値は pj-sync が計算し直します（最低売値より下げません）。
+※ 1日の上限（30件）を超えた分は「上限のため次回」になります。
+```
+
+- **上げ・下げ・変わらない・とばす**を分けて出す（12件まで＋「ほか n件」）
+- 送るのは `{asin, cond}` だけ。**売値は送らない**（pj-sync が計算する）
+- ⚙ **「まとめて直す上限（1日）」**（`syncPxMax`・既定30件）も一緒に送る
+
+### ④ 結果
+
+- 直せた行の売値を**その場で行に当てる**
+- 帯にまとめを出す
+  **「✓ 最安値を取り直した 5件／売値を直した 2件／とばした 1件／
+  上限のため次回 1件／1日の上限 30件のうち 3件」**
+  ＋ 行ごとの理由（6件まで＋「ほか n件」）
+
+### ⑤ 再調達中にする
+
+「今どこから再調達を始めるのか分かりにくい」ので帯に置いた
+（例：マリオパーティ スーパースターズ -Switch。FBA で売れて数量0・再調達の候補）。
+確認に、1回で行う3つの手順を書く。
+
+```
+選んだ 3件を<再調達中>にします。
+…
+このあと pj-sync が1回で行います：
+　1. Amazon最安値を取り直す
+　2. 最安値を仕入値とみなした推奨売値に直す（下限利益は守ります）
+　3. eBay の数量を1に戻す
+```
+
+できない行（すでに再調達中・一点物・無在庫・手元在庫・未出品）は
+**送る前に数から外す**。pj-sync 側でとばした行の理由も帯に出す。
+
+### 作業者のキー
+
+ボタンは `cfgprice`（管理者だけ）。押しても1件も送らない。
+
+### id の名前
+
+「再調達中にする」のボタンの id は **`syncBarRestockGo`**。
+`syncBarRestock` は 6.99 で消した**再調達CSV**のボタンの id で、
+「もう無いこと」をテストが見張っているので、同じ名前を使わない。
+
+### テスト
+
+`tests/pxbar.js`（53本）。
+もとの4つのボタン（見直し価格・最低売値・印を付ける・選択解除）を見ている
+`tests/barflags.js` と `tests/synctidy.js` は、上に行が増えたので
+**`syncBarRev` がいる行**で見るように直した。

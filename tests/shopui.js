@@ -155,7 +155,7 @@ console.log('\n=== ①の2 重さが取れていない行は注意を出す（6.
   ok(/重さが取れていない行が 1件/.test(d.note),
      '★★★書き出したあとに件数で知らせる');
   ok(/Amazonで調べる/.test(d.note),'★★★どうすれば直るか書く');
-  ok(cellOf(d.text,2,'Weight value (grams)')==='0',
+  ok(cellOf(d.text,2,'Variant Grams')==='0',
      '★重さが無い行は 0 で出る（だから注意が要る）');
 }
 
@@ -230,14 +230,15 @@ await load();
   ok(/^shopify-products-\d{8}\.csv$/.test(d.dl[0].name),
      '★★ファイル名に日付が入る');
   const t=d.dl[0].text;
-  ok(cellOf(t,1,'URL handle')==='sub-4902370550467','★★★Handle は sub-<JAN>');
+  ok(cellOf(t,1,'Handle')==='sub-4902370550467','★★★Handle は sub-<JAN>');
   ok(cellOf(t,1,'Title')==='スーパーマリオパーティ ジャンボリー','★★★Title');
-  ok(cellOf(t,1,'Price')==='5300','★★★販売価格');
-  ok(cellOf(t,1,'Inventory quantity')==='3','★★★上限が在庫数になる');
-  ok(cellOf(t,1,'Continue selling when out of stock')==='deny',
+  ok(cellOf(t,1,'Variant Price')==='5300','★★★販売価格');
+  ok(cellOf(t,1,'Variant Inventory Qty')==='3','★★★上限が在庫数になる');
+  ok(cellOf(t,1,'Variant Inventory Policy')==='deny',
      '★★★売り切れで止める');
-  ok(cellOf(t,1,'Weight value (grams)')==='110','★★★重さ（送料に効く）');
-  ok(cellOf(t,1,'Barcodes')==='4902370550467','★★JAN は Barcodes');
+  ok(cellOf(t,1,'Variant Grams')==='110','★★★重さ（送料に効く）');
+  ok(cellOf(t,1,'Variant Barcodes')==='4902370550467',
+     '★★JAN は Variant Barcodes');
   ok(cellOf(t,1,'Type')==='ゲームソフト','★★Type は⚙から');
   ok(/member-list/.test(cellOf(t,1,'Tags'))
      &&/ship-small/.test(cellOf(t,1,'Tags')),'★★★タグが付く');
@@ -296,9 +297,9 @@ console.log('\n=== ③の2 重さの足し分（6.173）===');
     return { def:def, a:a, b:window.__dl[0].text, opt:mwSubOpt().addG };
   });
   ok(d.def==='0','★★★既定は 0g（Amazon の梱包重量をそのまま使う）');
-  ok(cellOf(d.a,1,'Weight value (grams)')==='110',
+  ok(cellOf(d.a,1,'Variant Grams')==='110',
      '★★★足し分0なら Amazon の梱包重量そのまま');
-  ok(cellOf(d.b,1,'Weight value (grams)')==='150',
+  ok(cellOf(d.b,1,'Variant Grams')==='150',
      '★★★⚙の足し分（40g）を足して出す');
   ok(d.opt===40,'★★⚙の値を CSV の設定に渡している');
   const ng=await p.evaluate(()=>{
@@ -315,8 +316,44 @@ console.log('\n=== ③の2 重さの足し分（6.173）===');
     await new Promise((x)=>setTimeout(x,400));
     return window.__dl[0].text;
   });
-  ok(cellOf(t,1,'Weight value (grams)')==='110',
+  ok(cellOf(t,1,'Variant Grams')==='110',
      '★★★eBay の梱包マージン（60g）は Shopify の重さに足さない（別の欄）');
+}
+
+console.log('\n=== ③の3 列名の形（6.176）===');
+{
+  await setup({ rows:[row(0)], sub:SUB });
+  await load();
+  const d=await p.evaluate(async()=>{
+    const def=$('mwSubCols').value;
+    $('mwSubCollection').value='';
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    const a=window.__dl[0].text;
+    const noteA=($('mwSubNote').textContent||'').replace(/\s+/g,' ');
+    $('mwSubCols').value='new';
+    window.__dl=[]; mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,400));
+    const b=window.__dl[0].text;
+    const noteB=($('mwSubNote').textContent||'').replace(/\s+/g,' ');
+    $('mwSubCols').value='old';
+    return { def:def, a:a, b:b, noteA:noteA, noteB:noteB,
+             style:mwSubOpt().style };
+  });
+  ok(d.def==='old','★★★既定は「ストアの書き出しに合わせる」');
+  ok(d.style==='old','★★⚙の値を CSV の設定に渡している');
+  const ha=require('../shared/shopcsv.js').splitCsv(d.a)[0];
+  const hb=require('../shared/shopcsv.js').splitCsv(d.b)[0];
+  console.log('   既定: '+ha.slice(0,6).join(','));
+  console.log('   new : '+hb.slice(0,6).join(','));
+  ok(ha[0]==='Handle'&&ha.indexOf('Body (HTML)')>=0
+     &&ha.indexOf('Variant Price')>=0,
+     '★★★既定はストアの書き出しの形（Handle／Body (HTML)／Variant Price）');
+  ok(hb[0]==='URL handle'&&hb.indexOf('Description')>=0,
+     '★★★「新しい名前」に切り替えられる');
+  ok(/ストアの書き出しに合わせた形/.test(d.noteA),
+     '★★どの形で出したかを書き出しのあとに出す');
+  ok(/Shopify の今の名前/.test(d.noteB),'★★切り替えたらそう出す');
 }
 
 console.log('\n=== ④ 在庫CSV（ロケーション名が要る）===');

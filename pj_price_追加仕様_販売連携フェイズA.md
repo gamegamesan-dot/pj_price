@@ -8752,3 +8752,47 @@ scope='ebay' AND COALESCE(ebay_item_id,'')<>''
 無在庫の行が上げも下げも追従すること・最低売値より下げないこと・
 ⚙でオフにできること・MW 無在庫がオンでも対象外であること・
 最安値の取り直しの対象に入り、MW 無在庫は要求しないことを見る。
+
+---
+
+## 7.133 選んだ行をまとめて直す（v259・【Z】）
+
+画面の黒い帯から、選んだ行を**まとめて**直す口を2本足した。
+どちらも**売値は Worker が計算する**（画面から来た値は使わない・7.131 と同じ）。
+**D1 の列は増やしていない**（使った件数は `sync_state` に控える）。
+
+### 1. `POST /sync {kind:'price-many', items:[{asin,cond}], max}`
+
+- **管理者だけ**
+- 行ごとに `selfFill` → `oneTarget`（7.131 と同じ）→ `ReviseFixedPriceItem`
+- **最低売値より下げない**（止めたら `under:true`）
+- とばす行は理由を返す（出品なし・セール中・数量0・推奨売値が出ない・同額）
+- **1日の上限**＝⚙ `syncPxMax`（既定 **30**・上限 200）。
+  `max` を body で送れるが⚙より**小さくするときだけ**効く（増やせない）
+  - 直近24時間に直した件数を `sync_state` の `px.log` に控え、超えた分は
+    `capped` として **eBay を呼ばずに**「上限のため次回」と返す
+  - 自動の処理（`jobReview` / `jobRkPrice`）の枠とは**別**に数える
+- 返り：`{ ok, n, done, skipped, failed, capped, used, max,
+  rows:[{asin,cond,ok,from,to,floor,under,capped,why}] }`
+
+### 2. `POST /sync {kind:'restock-start', items:[{asin,cond}]}`
+
+「再調達の候補」を**再調達中にして、売値を直し、数量を1に戻す**まで1回で。
+
+1. **先に Amazon最安値を取り直す**（`getLowestNow`。古いと `pb_want` が出ない）
+   - `pbLowRefresh` は `mode='restock'` の行しか見ないので、手で選んだ行には使えない
+2. `selfFill` で `pb_want`（最安値を仕入値とみなした推奨売値）を出し直す
+3. `pbRestockWhy(r)` でだめな行をとばす（目標が出ない・最安グループ2人未満・
+   いまの最安値では下限利益を割る）
+4. 売値と**数量1**を1回で送る（ベストオファーのある出品は
+   `ReviseFixedPriceItem` で自動拒否額も直す。22003 は `boRetry` でやり直す）
+5. `ebay_qty=1 / ebay_price / restocking=1 / restock_at / restock_price /
+   restock_max_cost` を書く
+
+とばす行の理由：すでに再調達中（`restocking` の列を直に見る。数量0でも立っていれば
+そう返す）・一点物・無在庫・手元在庫・FBA に在庫あり・セール中・出品なし。
+1回に 30件まで（`RESTOCK_ONE_MAX`）。**管理者だけ**。
+
+### 3. テスト
+
+`tests/pxmany.mjs`（50本）。
