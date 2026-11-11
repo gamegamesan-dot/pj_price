@@ -121,7 +121,7 @@
     "note": [
       "ロールごとのテスト配信（8.9・test-post.mjs がこれを読む）。",
       "・posts … 送り先（ch は channels の key）と件数。形の確認なので少しでよい",
-      "・markup … 仮の販売価格の掛け率（卸値×1.1×markup・100円単位に切り上げ）",
+      "・price … 販売価格の決め方（shared/subprice.js。ship/pack/addMin/addMax/cardFee）",
       "　　本番の販売価格は仕入れタブで人が決める（【U の改】の1）",
       "・ship … 送料の区分の言い方（Amazon のサイズ区分 s/m/l から出す）",
       "・buyUrl … 購入リンク。空だと「準備中」と出る。{jan} を JAN に置き換える",
@@ -134,7 +134,7 @@
       { "ch": "deal-early", "n": 1 },
       { "ch": "deal", "n": 1 }
     ],
-    "markup": 1.3,
+    "price": { "ship": 0, "pack": 30, "addMin": 10, "addMax": 150, "cardFee": 3.55 },
     "ship": {
       "s": "小型（クリックポスト相当）",
       "m": "レターパックプラス相当",

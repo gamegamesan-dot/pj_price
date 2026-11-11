@@ -55,6 +55,7 @@
     "Gift card",
     "SEO title",
     "SEO description",
+    "Cost per item",         // 仕入原価（6.178・管理画面だけに入る。客には出ない）
     "Collection"             // 読み込みのときだけ足せる唯一の列
   ];
   /* ---- 列名の形（6.176）----
@@ -282,8 +283,17 @@
     row["Gift card"] = "false";
     row["SEO title"] = titleOf(r.name, 70);
     row["SEO description"] = "";
+    /* 6.178（【2】）仕入原価（卸値×1.1＋MW送料）。Shopify の Cost per item は
+       **管理画面と利益レポートだけ**に出る列で、客には見えない。
+       行に cost が入っていなければ空にする（0 を入れて上書きしない）。 */
+    row["Cost per item"] = costOf(r);
     row["Collection"] = s(o.collection);
     return row;
+  }
+  /* 仕入原価。式は shared/subprice.js（画面が cost を入れて渡す）。 */
+  function costOf(r) {
+    var c = Math.round(num((r || {}).cost));
+    return c > 0 ? String(c) : "";
   }
   function rowsOf(items, opt) {
     var out = [];

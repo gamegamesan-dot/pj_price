@@ -556,6 +556,7 @@ CREATE TABLE IF NOT EXISTS mw_stat (
   back_n     INTEGER NOT NULL DEFAULT 0,      -- 欠品から戻った回数
   back_qty   INTEGER NOT NULL DEFAULT 0,      -- 戻ったときの数の合計
   gone_days  REAL NOT NULL DEFAULT 0,         -- 欠品していた日数の合計
+  base_qty   INTEGER,                         -- 基準の数（はじめて記録したとき・7.134）
   created_at TEXT NOT NULL,
   PRIMARY KEY (jan, sha)
 );

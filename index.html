@@ -1002,10 +1002,6 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
         <button class="btn" id="csvMwBuyShow" style="flex:1">仕入れる一覧</button>
       </div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
-        <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
-      </div>
       <!-- 6.170（【U の改】）会員に出す商品と Shopify 用 CSV -->
       <div data-toc="会員に出す（Shopify）"></div>
       <details class="exp" data-exp="subShop"><summary>説明</summary>
@@ -1031,7 +1027,6 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row" style="margin-top:6px"><label>Type（商品の種類）</label><input type="text" id="mwSubType" value="ゲームソフト" style="flex:1"></div>
       <div class="row"><label>Vendor（空のままでよい）</label><input type="text" id="mwSubVendor" value="" style="flex:1"></div>
       <div class="row"><label>Collection（空なら列を出さない）</label><input type="text" id="mwSubCollection" value="" style="flex:1"></div>
-      <div class="row"><label>おすすめ値の掛け率</label><input type="number" id="mwSubMarkup" value="1.3" step="0.05" min="1" max="3" inputmode="decimal"><span class="unit">倍</span></div>
       <div class="row"><label>ロケーション名（在庫CSV用）</label><input type="text" id="mwSubLoc" value="" style="flex:1"></div>
       <div class="chk"><input type="checkbox" id="mwSubInvFirst"><label for="mwSubInvFirst" style="flex:1">在庫CSV：初めて置く（<code>Not stocked</code> を入れる）</label></div>
       <!-- 英語版：Shopify から出した翻訳CSVに英題を書き込む（【U の改】の3） -->
@@ -1104,6 +1099,19 @@ body.staff #syncOnHandFix{display:none !important}
         出しているのは<b>大きい分類</b>の順位で、せどりすと と同じです。
         上限を入れているあいだは、<b>順位がまだ取れていない行</b>は隠します
         （この印を付けると出します）。</div>
+      </details>
+      <!-- 6.179：ふだん使わないので畳んである（消さない。吉田さんへの注文の
+           受け渡しに使う可能性があるため）。「仕入れる行の JAN をコピー」は
+           今までの場所に置いたまま。 -->
+      <details id="csvMwMoreBox" data-box="1" data-toc="その他" style="margin-top:8px">
+        <summary class="note2" style="margin:0;cursor:pointer">その他（ときどき使う）</summary>
+        <div style="padding:6px 0 0">
+          <div style="display:flex;gap:6px">
+            <button class="btn" id="csvMwAmzCsv" style="flex:1">CSVで書き出す</button>
+            <button class="btn" id="csvMwBuyCsv" style="flex:1">注文用CSV</button>
+          </div>
+          <div class="note2" style="margin-top:2px"><b>CSVで書き出す</b>は刈取の一覧をそのまま表にしたもの、<b>注文用CSV</b>は「仕入れる」の印が付いた行を注文のかたちにしたものです。</div>
+        </div>
       </details>
       <!-- 一覧のすぐ上の検索欄（6.126）。タブの上の検索欄と**連動**する
            （どちらに入れても同じ結果）。下にスクロールしても画面の上に残る
@@ -1856,6 +1864,24 @@ body.staff #syncOnHandFix{display:none !important}
              eBay の送料計算に使う「梱包マージン（ゲーム60g／フィギュア250g）」
              とは**別**にする。あちらは Amazon の梱包重量に足して eBay の
              送料を出すためのもので、0 にはできない。 -->
+        <!-- 6.178（【2】）会員に出す販売価格。方針は「商品代に利益を載せない。
+             会費が収益」。掛け率（×1.3）はやめた。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>会員向けの販売価格</b></div>
+        <div class="note2" style="margin:0 0 4px"><b>商品代に利益を載せません</b>（収益は会費）。おすすめ値は<br>
+          <b>仕入原価（卸値×1.1＋MW送料）＋ 梱包材 ＋ 上乗せ</b> を、
+          <b>カード決済手数料ぶん割り戻した額</b>です。
+          <b>10円単位の切り上げはしません</b>（端数を残します。きれいな値段にすると卸値を逆算されやすいため）。
+          卸値そのもの・卸値×1.1 と同じ額になったときは1円ずらします。</div>
+        <div class="row cfgprice"><label for="mwSubCardFee">カード決済手数料</label><input type="number" id="mwSubCardFee" value="3.55" step="0.05" min="0" max="20" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="row cfgprice"><label for="mwSubPack">梱包材</label><input type="number" id="mwSubPack" value="30" step="5" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="mwSubAddMin">上乗せ（下）</label><input type="number" id="mwSubAddMin" value="10" step="5" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="mwSubAddMax">上乗せ（上）</label><input type="number" id="mwSubAddMax" value="150" step="5" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 4px">上乗せは<b>出し直すたびに、この範囲の乱数で決め直します</b>（同じ商品でも毎回変わります）。
+          同じ Handle で上書きすると Shopify の値段が変わりますが、それでかまいません。
+          <b>人が直した値段（おすすめ値の範囲の外）は、そのまま使います。</b></div>
+        <div class="row cfgprice"><label for="mwSubGrossMin">会員の粗利の下限</label><input type="number" id="mwSubGrossMin" value="800" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>（Amazon の実売 − Amazon の手数料 − 販売価格）が
+          この額を下回る商品は「<b>会員向きではありません</b>」と出します。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
         <div class="row cfgprice"><label for="mwSubAddG">Shopify に出す重さの足し分</label><input type="number" id="mwSubAddG" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
@@ -2300,6 +2326,8 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwstat.js"></script>
 <!-- Shopify の商品CSV（【U の改】）。列の名前と作り方はこの1か所だけ。 -->
 <script src="./shared/shopcsv.js"></script>
+<!-- 会員に出す販売価格（【2】）。画面・pj-sync・Discord が同じこの式を読む。 -->
+<script src="./shared/subprice.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2318,6 +2346,11 @@ var MWCSV=PJ_MWCSV;
 if(typeof PJ_MWSTAT==='undefined')
   throw new Error('shared/mwstat.js が読み込めていません（在庫の動きの目安）');
 var MWSTAT=PJ_MWSTAT;
+/* 会員に出す販売価格の式（6.178・【2】）。pj-sync と Discord の配信も
+   同じこのファイルを読む（商品代に利益を載せない＝会費が収益）。 */
+if(typeof PJ_SUBPRICE==='undefined')
+  throw new Error('shared/subprice.js が読み込めていません（会員の販売価格）');
+var SUBPX=PJ_SUBPRICE;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -5427,7 +5460,11 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwCsvAuto','mwCsvUrl','mwCsvEveryH','mwCsvBodyH',
                  /* 6.170（【U の改】）Shopify 用 CSV の設定。
                     6.173：重さの足し分（eBay の梱包マージンとは別）。 */
-                 'mwSubType','mwSubVendor','mwSubCollection','mwSubMarkup',
+                 'mwSubType','mwSubVendor','mwSubCollection',
+                 /* 6.178（【2】）会員に出す販売価格。掛け率（mwSubMarkup）は
+                    やめたので一覧からも外した。 */
+                 'mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
+                 'mwSubGrossMin',
                  'mwSubLoc','mwSubAddG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
@@ -10692,11 +10729,16 @@ function mwStatHtml(r){
   var t=[];
   if(r.mv_prev!==null&&r.mv_prev!==undefined)
     t.push('在庫 <b>'+(+r.mv_prev||0)+'→'+(+r.mv_cur||0)+'</b>');
-  t.push((c.speed!==null&&c.speed>0)
-    ?('<b>1日 '+c.speed+'点</b>'
-      +(c.speedSrc==='week'?'（直近7日）':'（全期間）'))
-    :'減っていません');
-  if(c.outDays!==null)t.push('<b>欠品まで '+c.outDays+'日</b>');
+  /* 7.134（【T】の直し）記録を控えたばかり（1日に届かない）ときは、
+     1日あたりの数を出さない。基準の数だけ出す。 */
+  t.push(c.tooNew
+    ?('記録を控えたところ'+(c.base!==null?('（基準 '+c.base+'点）'):'')
+      +'・1日あたりはまだ出せません')
+    :((c.speed!==null&&c.speed>0)
+      ?('<b>1日 '+c.speed+'点</b>'
+        +(c.speedSrc==='week'?'（直近7日）':'（全期間）'))
+      :'減っていません'));
+  if(c.outDays!==null&&!c.tooNew)t.push('<b>欠品まで '+c.outDays+'日</b>');
   t.push(c.backN>0
     ?('再入荷 '+c.backN+'回'
       +(c.backAvg!==null?('・平均 '+c.backAvg+'点'):'')
@@ -10705,7 +10747,8 @@ function mwStatHtml(r){
   if(c.sale)t.push('<span class="badge" style="background:'
     +(c.noBack?'var(--bad)':'#b07000')+'">在庫処分'
     +(c.noBack?'・再入荷なし':'')+'</span>');
-  t.push('記録 '+c.days+'日'+(c.thin?'<b>・目安は参考程度</b>':''));
+  t.push('記録 '+c.days+'日'
+    +((c.thin&&!c.tooNew)?'<b>・目安は参考程度</b>':''));
   return '<div class="note2" style="margin:2px 0 0"><b>動き</b> '+t.join('　')
     +more+'</div>';
 }
@@ -14484,17 +14527,37 @@ function dl(name,text){ return csvDownload(name,text); }
 var mwSubMap={};                        // { jan: {on,max_qty,price,grades} }
 function mwSubOf(jan){ return mwSubMap[String(jan)]||null; }
 function mwSubOn(jan){ return !!((mwSubOf(jan)||{}).on); }
-/* おすすめの販売価格（税込）。卸値（税抜）×1.1 を仕入原価にして掛け率を掛け、
-   100円単位に切り上げる。本番はカジが直す（これは最初の値）。 */
-function mwSubMarkup(){
-  var v=+($('mwSubMarkup')||{}).value||1.3;
-  return Math.max(1,Math.min(3,v));
+/* ===== 会員に出す販売価格（6.178・【2】）=====
+   方針：**商品代に利益を載せない。会費が収益。** だから掛け率（×1.3）はやめた。
+     仕入原価（卸値×1.1＋MW送料）＋ 梱包材 ＋ 上乗せ を、
+     カード決済手数料ぶん割り戻した額。10円単位の切り上げはしない。
+   式は shared/subprice.js の1か所だけ（pj-sync・Discord も同じものを読む）。 */
+function mwSubPxOpt(){
+  return { ship:mwShipFee(),
+           cardFee:+(($('mwSubCardFee')||{}).value)||SUBPX.CARD_FEE*100,
+           pack:(($('mwSubPack')||{}).value===''
+                 ?SUBPX.PACK_YEN:+(($('mwSubPack')||{}).value)||0),
+           addMin:(($('mwSubAddMin')||{}).value===''
+                   ?SUBPX.ADD_MIN:+(($('mwSubAddMin')||{}).value)||0),
+           addMax:(($('mwSubAddMax')||{}).value===''
+                   ?SUBPX.ADD_MAX:+(($('mwSubAddMax')||{}).value)||0),
+           grossMin:(($('mwSubGrossMin')||{}).value===''
+                     ?SUBPX.GROSS_MIN:+(($('mwSubGrossMin')||{}).value)||0) };
 }
+/* おすすめの販売価格（税込）。上乗せが乱数なので呼ぶたびに変わるが、
+   **一覧の行は書き直すたびに値段が動くと落ち着かない**ので、
+   JAN ごとにこの画面を開いているあいだだけ控える。
+   配信（Shopify 用 CSV の書き出し）のときは mwSubItems が決め直す。 */
+var mwSubPxCache={};
+function mwSubPriceOf(r){ return SUBPX.priceOf(r||{},mwSubPxOpt()); }
 function mwSubSuggest(r){
-  var w=+((r||{}).wholesale)||0;
-  if(w<=0)return 0;
-  return Math.ceil(w*1.1*mwSubMarkup()/100)*100;
+  var j=String((r||{}).jan||'');
+  if(!j)return mwSubPriceOf(r).price;
+  if(!mwSubPxCache[j])mwSubPxCache[j]=mwSubPriceOf(r).price;
+  return mwSubPxCache[j];
 }
+/* 仕入原価（Shopify の Cost per item に入れる）。 */
+function mwSubCostOf(r){ return SUBPX.costOf(r||{},mwSubPxOpt()); }
 /* おすすめの販売数の上限。MW の在庫数とプランの上限（10点）のうち小さいほう。 */
 function mwSubQtySuggest(r){
   return Math.max(1,Math.min(10,+((r||{}).stock)||1));
@@ -14579,6 +14642,7 @@ function mwSubLine(r){
   var jan=String((r||{}).jan||'');
   var v=mwSubVal(r);
   var g=mwSubGrossOf(r,v.px);
+  var fit=mwSubFitOf(r,v.px);
   return '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;'
     +'flex-wrap:wrap">'
     +'<label class="note2" style="margin:0;flex:1 1 120px;display:flex;gap:6px;'
@@ -14590,10 +14654,15 @@ function mwSubLine(r){
     +' min="1" max="99" step="1" inputmode="numeric" style="flex:0 0 64px"'
     +' onchange="mwSubChange(\''+esc(jan)+'\')"><span class="unit">点まで</span>'
     +'<input type="number" id="mwSubPx_'+esc(jan)+'" value="'+v.px+'"'
-    +' min="0" step="100" inputmode="numeric" style="flex:0 0 88px"'
+    /* 6.178：10円単位の切り上げをやめたので、刻みも1円にする。 */
+    +' min="0" step="1" inputmode="numeric" style="flex:0 0 88px"'
     +' onchange="mwSubChange(\''+esc(jan)+'\')"><span class="unit">円（税込）</span>'
     +(g===null?'':('<span class="note2" style="margin:0">会員の粗利の目安 '
       +yen(g)+'</span>'))
+    /* 6.178（【2】）粗利の目安が⚙の下限を下回る商品は会員向きではない。 */
+    +((g!==null&&!fit.ok)
+      ?('<span class="note2" style="margin:0;color:var(--bad)">'
+        +'⚠ 会員向きではありません（粗利の下限 '+yen(fit.min)+'）</span>'):'')
     /* 6.171：重さが無いと Shopify の「重さの段」の送料がずれる
        （ぜんぶ 0g 扱いでいちばん安い段に入ってしまう）。 */
     +(mwSubNoG(r)?('<span class="note2" style="margin:0;color:var(--bad)">'
@@ -14612,8 +14681,18 @@ function mwSubGrossOf(r,px){
   var row=r||{};
   var p=+row.price||0;
   var f=mwFeeOf(row);
-  if(!(p>0&&(+px||0)>0&&f&&(f.real||f.mfn)&&f.fee>0))return null;
-  return Math.round(p-f.fee-(+px||0));
+  if(!(f&&(f.real||f.mfn)))return null;
+  return SUBPX.grossOf(p,f.fee,px);
+}
+/* 6.178（【2】）会員向きかどうか（粗利の目安が⚙の下限以上か）。
+   下回る商品は「会員向きではありません」と出す。 */
+function mwSubFitOf(r,px){
+  var row=r||{};
+  var f=mwFeeOf(row);
+  if(!(f&&(f.real||f.mfn)))
+    return { ok:false, gross:null, min:SUBPX.fitOf(0,0,0,mwSubPxOpt()).min,
+             why:'no_fee' };
+  return SUBPX.fitOf(+row.price||0,f.fee,px,mwSubPxOpt());
 }
 /* 上のまとめ（何件を会員に出すか）。 */
 function mwSubBarRender(){
@@ -14638,6 +14717,8 @@ function mwSubOpt(){
            addG:mwSubAddG(),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
+           /* 6.178（【2】）仕入原価（Cost per item）と販売価格の決め方。 */
+           px:mwSubPxOpt(),
            date:new Date() };
 }
 /* 列名の形（6.176）。'old'＝ストアの書き出しに合わせる（既定）／'new'。 */
@@ -14652,16 +14733,30 @@ function mwSubAddG(){
 /* CSV に出す品物。pj-sync の控え（/mw/sub）を正とし、
    名前・ASIN・機種・重さもそちらの値を使う（画面を開いていなくても同じ）。 */
 function mwSubItems(){
+  var o=mwSubPxOpt();
   return mwGet('/mw/sub?limit=2000').then(function(d){
     if(d&&d.table_ok===false)return { rows:[], table_ok:false };
-    return { rows:((d&&d.rows)||[]).map(function(x){
-      return { jan:String(x.jan||''), name:String(x.name||''),
-               asin:String(x.asin||''), kishu:String(x.kishu||''),
-               price:+x.price||0, max_qty:+x.max_qty||0,
-               grades:String(x.grades||''),
-               size_tier:String(x.size_tier||''), size_g:+x.size_g||0,
-               size_long:+x.size_long||0 };
-    }), table_ok:true };
+    var reroll=0;
+    var rows=((d&&d.rows)||[]).map(function(x){
+      var r={ jan:String(x.jan||''), name:String(x.name||''),
+              asin:String(x.asin||''), kishu:String(x.kishu||''),
+              price:+x.price||0, max_qty:+x.max_qty||0,
+              grades:String(x.grades||''),
+              /* 6.178：pj-sync は**卸値を返さず仕入原価だけ**を返す。 */
+              cost:+x.cost||0,
+              size_tier:String(x.size_tier||''), size_g:+x.size_g||0,
+              size_long:+x.size_long||0 };
+      /* 6.178（【2】）**上乗せは出し直すたびに決め直す**。
+         おすすめ値の範囲の中の値（＝人が直していない値）だけ振り直し、
+         範囲の外の値（人が決めた値）はそのまま使う。 */
+      var p=SUBPX.priceOf(r,o);
+      if(p.price>0&&(r.price<=0||SUBPX.inBand(r.price,r,o))){
+        if(r.price!==p.price)reroll++;
+        r.price=p.price;
+      }
+      return r;
+    });
+    return { rows:rows, table_ok:true, reroll:reroll };
   });
 }
 function mwSubCsvGo(){
@@ -14697,9 +14792,17 @@ function mwSubCsvGo(){
       +'してください。'
       +(noG?('<br><span style="color:var(--bad)">⚠ 重さが取れていない行が '
         +mwN(noG)+'件あります</span>（0g で出るので<b>送料の段がずれます</b>。'
-        +'「Amazonで調べる」で採寸を取ってから出し直してください）。'):'');
-    /* 出した印（SKU の日付に使う）。失敗しても CSV は出せている。 */
-    mwPost('/mw/sub/put',{ jans:d.rows.map(function(x){ return x.jan; }) })
+        +'「Amazonで調べる」で採寸を取ってから出し直してください）。'):'')
+      /* 6.178（【2】）上乗せを振り直した件数。 */
+      +(d.reroll?('<br>販売価格の<b>上乗せを '+mwN(d.reroll)
+        +'件ぶん決め直しました</b>（出し直すたびに変わります。'
+        +'人が直した値はそのままです）。'):'');
+    /* 出した印（SKU の日付に使う）と、決め直した販売価格。
+       失敗しても CSV は出せている。 */
+    var px={};
+    d.rows.forEach(function(x){ px[x.jan]=x.price; });
+    mwPost('/mw/sub/put',{ jans:d.rows.map(function(x){ return x.jan; }),
+                           prices:px })
       ['catch'](function(){});
   })['catch'](function(e){
     n.textContent='⚠ 書き出せませんでした：'+e.message;
@@ -22774,7 +22877,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v259';   // sw.js の const V と必ず同じ値にする
+var APP_V='v260';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

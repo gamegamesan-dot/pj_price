@@ -14,8 +14,11 @@
      mv_back_n    … 欠品から戻った回数 ／ mv_back_qty … 戻ったときの数の合計
      mv_gone_days … 欠品していた日数の合計
      mv7_down     … 直近7日に減った合計 ／ mv7_n … その回数
+     mv_base      … 基準の数（はじめて記録したときの掲載数・7.134）
    返すもの
      days      … 記録のある日数（はじめて記録した日から今まで）
+     tooNew    … 記録が1日に届いていない（＝1日あたりの数は出せない・7.134）
+     base      … 基準の数（はじめて記録したときの掲載数）
      per7      … 直近7日の「1日あたりに減った数」（記録が無ければ null）
      perAll    … 全期間の「1日あたりに減った数」（同じく null あり）
      speed     … 目安に使う速さ（直近7日があればそれ、無ければ全期間）
@@ -35,6 +38,11 @@
                     "廃盤", "最終"];
   var THIN_DAYS = 14;               // これより記録が短ければ「参考程度」
   var WEEK = 7;
+  /* 7.134（【T】の直し）記録がこの日数に届かないうちは「1日あたり」を
+     出さない。v248 は記録を控えた当日の1回の減りを「÷1日」として
+     そのまま速さにしていたので、20点減った商品が「20点/日・残り1日」と
+     出ていた（記録 1日分）。 */
+  var MIN_DAYS = 1;
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function ms(iso) {
     var t = Date.parse(String(iso || ""));
@@ -67,10 +75,13 @@
     var down = Math.max(0, num(row.mv_down));
     var down7 = Math.max(0, num(row.mv7_down));
     /* 1日あたり。全期間は「記録のある日数」で割る（1日未満は1日と見る）。 */
-    var perAll = (down > 0 && days > 0) ? (down / Math.max(1, days)) : null;
+    /* 記録が1日に届かないうちは出せない（7.134）。 */
+    var tooNew = !!first && days < MIN_DAYS;
+    var perAll = (down > 0 && days > 0 && !tooNew)
+      ? (down / Math.max(1, days)) : null;
     /* 直近7日は、記録が7日に届いていなければその日数で割る。 */
     var win = days > 0 ? Math.min(WEEK, Math.max(1, days)) : WEEK;
-    var per7 = down7 > 0 ? (down7 / win) : null;
+    var per7 = (down7 > 0 && !tooNew) ? (down7 / win) : null;
     var speed = (per7 !== null) ? per7 : perAll;
     var speedSrc = (per7 !== null) ? "week" : (perAll !== null ? "all" : "");
     var stock = Math.max(0, num(row.stock));
@@ -102,6 +113,9 @@
          記録が短いうちは言い切れないので thin のときは false。 */
       noBack: !!hit && backN === 0 && days >= thinDays,
       thin: !first || days < thinDays,
+      tooNew: tooNew,
+      base: (row.mv_base === null || row.mv_base === undefined)
+        ? null : Math.max(0, num(row.mv_base)),
       none: !first };
     out.label = text(out);
     return out;
@@ -110,7 +124,11 @@
   function text(c) {
     if (!c || c.none) return "記録なし";
     var t = [];
-    if (c.speed !== null && c.speed > 0) {
+    if (c.tooNew) {
+      t.push("記録を控えたところ"
+        + (c.base !== null ? ("（基準 " + c.base + "点）") : "")
+        + "・1日あたりはまだ出せません");
+    } else if (c.speed !== null && c.speed > 0) {
       t.push("1日 " + c.speed + "点"
         + (c.speedSrc === "week" ? "（直近7日）" : "（全期間）"));
       if (c.outDays !== null) t.push("残り " + c.outDays + "日");
@@ -120,7 +138,7 @@
         + (c.backAvg !== null ? ("・平均 " + c.backAvg + "点") : ""));
     } else if (c.goneN > 0) t.push("再入荷なし");
     if (c.sale) t.push(c.noBack ? "在庫処分（再入荷なし）" : "在庫処分");
-    if (c.thin) t.push("記録 " + c.days + "日分・目安は参考程度");
+    if (c.thin && !c.tooNew) t.push("記録 " + c.days + "日分・目安は参考程度");
     return t.join("／");
   }
   var API = { calc: calc, text: text, saleHit: saleHit, words: words,

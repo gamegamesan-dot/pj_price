@@ -38,6 +38,9 @@ import PRICING from "../shared/pricing.js";
 import MWCSV from "../shared/mwcsv.js";
 /* 7.126（【T】）在庫の動きから出す目安。式は shared/mwstat.js の1か所だけ。 */
 import MWSTAT from "../shared/mwstat.js";
+/* 6.178（【2】）会員に出す販売価格と仕入原価。式は shared/subprice.js だけ
+   （画面・Discord の配信も同じものを読む）。 */
+import SUBPX from "../shared/subprice.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -2780,6 +2783,8 @@ async function jobHourly(env) {
 async function jobDaily(env) {
   const run = newRun("rollcall");
   try {
+    /* 7.134（【T】の直し）在庫の記録の基準を控え直す（一度だけ）。 */
+    await mwBaseOnce(env, run);
     /* 7.126（【T】）古い在庫の動きを捨てる（合計は mw_stat に残る）。 */
     await mwMoveSweep(env, run);
     const keys = await syncRollcall(env, run);
@@ -5977,7 +5982,8 @@ function mwNtEmbed(x, kind, aud) {
                  ? (c.speed + " 点/日"
                     + (c.speedSrc === "week" ? "（直近7日）" : "（全期間）"))
                  : "減っていません", inline: true });
-      if (c.outDays !== null)
+      /* 7.134：**もう欠品している行に「欠品までの見込み」は出さない**。 */
+      if (c.outDays !== null && kind !== "gone")
         f.push({ name: "欠品までの見込み", value: c.outDays + " 日",
                  inline: true });
       f.push({ name: "再入荷",
@@ -6067,7 +6073,14 @@ async function mwImportNotify(env, run, at, res) {
      ③ Amazon 刈取の見込みあり（実測の粗利、無ければ定価からの目安）
      ①〜③のどれにも当たらない欠品は**件数だけ**にする
      （毎回何十件も並んで、肝心の行が埋もれていた）。 */
-  const all = gone.concat(zero);
+  /* 7.134（【T】の直し）**変化のない行は知らせに出さない**。
+     その回の在庫数の変化が「前の数＝今の数」の行を外す
+     （社Aの行が欠品して社Bの行が戻った回など、JAN の合計は動いていない）。
+     JAN にまだ生きている行が残っている商品は mwNtGone の SQL で外している。 */
+  const all0 = gone.concat(zero);
+  const all = all0.filter((x) => !(x.stat && x.stat.chg
+    && x.stat.chg.prev === x.stat.chg.cur));
+  res.note_same = all0.length - all.length;
   const drop = onDrop ? all.filter((x) => x.ebay) : [];
   const buy = onBuy ? all.filter((x) => x.buy && !x.ebay) : [];
   const hope = all.filter((x) => x.amz_hope && !x.ebay && !x.buy);
@@ -6227,6 +6240,11 @@ async function mwNtGone(env, at, st) {
                mw_move が無いデータベースでは mvq.chg が空になる。 */${mvq.chg}${mvq.cols}
        FROM mw_stock s${mvq.join}
       WHERE s.gone_at = ?1
+        /* 7.134（【T】の直し）**ほかの社にまだ在庫が残っている商品は
+           「欠品」ではない**。v248 は1社の行が消えただけで赤く出していた
+           （例：20点のまま買えるのに「欠品・残り1日」と出ていた）。 */
+        AND NOT EXISTS (SELECT 1 FROM mw_stock t
+                         WHERE t.jan = s.jan AND t.gone_at IS NULL)
       GROUP BY s.jan`).bind(at).all();
   return mwNtRows(q, st);
 }
@@ -6455,6 +6473,104 @@ async function mwMoveSweep(env, run) {
   }
   return n;
 }
+/* ===== 7.134（【T】の直し）基準を控えて、入ってしまった誤りを取り除く =====
+   v248 の作りでは「掲載数が変わった回だけ」書いていたので、
+   商品ごとの**基準**（はじめて見た日と、そのときの数）が残らず、
+   その商品の**最初の変化が「初回の記録」**になっていた。
+   ここで3つのことをする（どれも読み書きは D1 だけ・外には何も送らない）。
+     ① 基準を控える … mw_stock の created_at（はじめて見た日）と
+        いまの掲載数から、(JAN,社) ごとの基準を入れる。
+        すでに記録がある行は、first_at を**より古い created_at に戻す**だけ
+        （記録のある日数が 0日にならないように）。
+     ② 合計を 0 に戻す。
+     ③ mw_move から積み直す … **前の数が無い記録（基準）は数えない**。
+        v248 の 'new'・'back' はどちらも prev が NULL なので、
+        「戻った回数・戻った数・欠品日数」はここで落ちる。
+        これからの 'back' は prev=0 で入るので正しく数える。
+   欠品日数（gone_days）は書くときに計算していて mw_move には残らないため、
+   積み直しでは 0 に戻す（v248 の 'back' は全部が基準あつかいなので、
+   取り除くのが正しい。これからの分は書くときに足される）。 */
+const MW_BASE_KEY = "mw.base.fix";        // 一度やったら控える（sync_state）
+async function mwBaseFix(env, run) {
+  const res = { ok: false, base: 0, stat: 0, moved: 0 };
+  if (!(await mwMoveOk(env))) {
+    res.error = "no_table";
+    res.detail = "mw_move がありません（migrate-0049）";
+    return res;
+  }
+  if (!(await colOk(env, "mw_stat", "base_qty"))) {
+    res.error = "no_column";
+    res.detail = "mw_stat の base_qty がありません（migrate-0052）";
+    return res;
+  }
+  /* ① 基準（はじめて見た日と、そのときの数）。 */
+  const a = await env.DB.prepare(
+    `INSERT INTO mw_stat (jan,sha,first_at,last_at,base_qty,created_at)
+     SELECT jan, sha, MIN(created_at), MAX(seen_at),
+            SUM(CASE WHEN gone_at IS NULL THEN COALESCE(stock,0) ELSE 0 END),
+            MIN(created_at)
+       FROM mw_stock GROUP BY jan, sha
+     ON CONFLICT(jan,sha) DO UPDATE SET
+       first_at=CASE WHEN excluded.first_at IS NOT NULL
+                      AND (mw_stat.first_at IS NULL
+                           OR excluded.first_at < mw_stat.first_at)
+                     THEN excluded.first_at ELSE mw_stat.first_at END,
+       base_qty=COALESCE(mw_stat.base_qty, excluded.base_qty)`).run();
+  res.base = Number((a && a.meta && a.meta.changes) || 0);
+  /* ② 合計を 0 に戻す（基準と日付は残す）。 */
+  await env.DB.prepare(
+    `UPDATE mw_stat SET down_n=0, down_qty=0, up_n=0, up_qty=0,
+       gone_n=0, back_n=0, back_qty=0, gone_days=0`).run();
+  /* ③ mw_move から積み直す（前の数が無い記録は数えない）。 */
+  const c = await env.DB.prepare(
+    `INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,up_qty,
+       gone_n,back_n,back_qty,gone_days,created_at)
+     SELECT jan, sha, MIN(at), MAX(at),
+            SUM(CASE WHEN d<0 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN d<0 THEN -d ELSE 0 END),
+            SUM(CASE WHEN kind='up' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN kind='up' AND d>0 THEN d ELSE 0 END),
+            SUM(CASE WHEN kind='gone' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN kind='back' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN kind='back' THEN COALESCE(cur,0) ELSE 0 END),
+            0, MIN(at)
+       FROM mw_move WHERE prev IS NOT NULL
+      GROUP BY jan, sha
+     ON CONFLICT(jan,sha) DO UPDATE SET
+       last_at=CASE WHEN excluded.last_at > COALESCE(mw_stat.last_at,'')
+                    THEN excluded.last_at ELSE mw_stat.last_at END,
+       down_n=excluded.down_n, down_qty=excluded.down_qty,
+       up_n=excluded.up_n, up_qty=excluded.up_qty,
+       gone_n=excluded.gone_n, back_n=excluded.back_n,
+       back_qty=excluded.back_qty, gone_days=excluded.gone_days`).run();
+  res.stat = Number((c && c.meta && c.meta.changes) || 0);
+  const n = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_move WHERE prev IS NULL`).first();
+  res.moved = Number((n && n.n) || 0);
+  res.ok = true;
+  if (run) run.notes.push("在庫の記録の基準を控え直しました（基準 "
+    + res.base + "行・合計 " + res.stat + "行・初回あつかいの記録 "
+    + res.moved + "行は数えません）");
+  return res;
+}
+/* 一度だけ自動でやる（日次の先頭）。落ちても日次処理は止めない。 */
+async function mwBaseOnce(env, run) {
+  try {
+    const got = await stateGet(env, MW_BASE_KEY);
+    if (got) return 0;
+    const r = await mwBaseFix(env, run);
+    if (!r.ok) {
+      if (run) run.notes.push("mw-base: " + String(r.detail || r.error || ""));
+      return 0;
+    }
+    await stateSet(env, MW_BASE_KEY, JSON.stringify(
+      { at: nowIso(), base: r.base, stat: r.stat, moved: r.moved })).run();
+    return r.stat;
+  } catch (e) {
+    if (run) run.notes.push("mw-base: " + String((e && e.message) || e));
+    return 0;
+  }
+}
 /* まとめの中身（週に1回の知らせと、⚙の表示に使う）。 */
 async function mwWeekData(env, opt) {
   const o = opt || {};
@@ -6664,22 +6780,47 @@ async function mwMoveOk(env) {
   return (await colOk(env, "mw_move", "jan"))
     && (await colOk(env, "mw_stat", "down_qty"));
 }
-/* 1行ぶんの動き。記録するものが無ければ null。 */
+/* 1行ぶんの動き。記録するものが無ければ null。
+   7.134（【T】の直し）**前の数が無い行（prev が NULL）＝基準**。
+   基準は「出来事」として数えない（戻った・増えた・減ったに足さない）。
+     ・はじめて見た行（kind 'new'）… 前の数が無いので基準。d は 0。
+     ・欠品から戻った行（kind 'back'）… **前の数は 0**（欠品していたので
+       0点だった）。これは出来事なので prev に 0 を入れて数える。
+   v248 は 'back' の prev も NULL にしていたため、mw_stat にその商品の
+   記録がまだ無くても「戻った1回・欠品N日」に数えてしまっていた。 */
 function mwMvOf(r, old, at) {
   const cur = Math.max(0, mwNum(r.stock));
   if (!old) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
-                     prev: null, cur: cur, d: cur, kind: "new" };
+                     prev: null, cur: cur, d: 0, kind: "new" };
   if (old.gone_at) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
-                            prev: null, cur: cur, d: cur, kind: "back",
+                            prev: 0, cur: cur, d: cur, kind: "back",
                             gone_at: String(old.gone_at || "") };
   const prev = Math.max(0, mwNum(old.stock));
   if (prev === cur) return null;        // **数が変わらない回は書かない**
   return { at: at, jan: r.jan, sha: r.sha, idx: r.idx, prev: prev, cur: cur,
            d: cur - prev, kind: (cur < prev) ? "down" : "up" };
 }
-/* 動きを D1 に書く文（1つの動きにつき2文）。 */
-function mwMvStmts(env, list) {
+/* mw_stat に渡す値の並び（7.134）。base_qty の列が無いデータベースでは
+   12個目を外す（D1 は欲しい数と合わないと落ちる）。 */
+function mvBind(m, dn, upq, gn, bn, bq, gd, bqty) {
+  const a = [m.jan, m.sha, m.at, dn ? 1 : 0, dn, upq ? 1 : 0, upq,
+             gn, bn, bq, gd];
+  if (bqty !== undefined) a.push(bqty);
+  return a;
+}
+/* 動きを D1 に書く文（1つの動きにつき2文）。
+   7.134：base_qty（基準の数）は migrate-0052 で足した列。流す前でも
+   記録が止まらないよう、列があるときだけ入れる（取り込みは命綱）。 */
+function mwMvStmts(env, list, hasBase) {
   const out = [];
+  const bq0 = hasBase !== false;
+  /* 7.118：SQL の文の中で三項演算子（? :）を書くと「番号なしの ?」に
+     見えてしまうので、入れる文字はここで先に作っておく。 */
+  const bqCol = bq0 ? ",base_qty" : "";
+  const bqVal = bq0 ? ",?12" : "";
+  const bqSet = bq0
+    ? "\n         base_qty=COALESCE(mw_stat.base_qty, excluded.base_qty),"
+    : "";
   for (const m of (list || []).slice(0, MOVE_MAX)) {
     out.push(env.DB.prepare(
       `INSERT INTO mw_move (at,jan,sha,idx,prev,cur,d,kind,created_at)
@@ -6688,26 +6829,31 @@ function mwMvStmts(env, list) {
             (m.prev === null || m.prev === undefined) ? null : m.prev,
             (m.cur === null || m.cur === undefined) ? null : m.cur,
             Math.round(m.d || 0), String(m.kind || "")));
+    /* 7.134：**前の数が無い行は基準**。出来事として1つも数えない
+       （基準の数 base_qty だけを控える）。 */
+    const base = (m.prev === null || m.prev === undefined);
     /* 減った数（補充は入れない）＝売れた数の目安。 */
-    const dn = (m.d < 0) ? -m.d : 0;
-    const upq = (m.kind === "up") ? Math.max(0, m.d) : 0;
-    const gn = (m.kind === "gone") ? 1 : 0;
-    const bn = (m.kind === "back") ? 1 : 0;
-    const bq = (m.kind === "back") ? Math.max(0, mwNum(m.cur)) : 0;
+    const dn = (!base && m.d < 0) ? -m.d : 0;
+    const upq = (!base && m.kind === "up") ? Math.max(0, m.d) : 0;
+    const gn = (!base && m.kind === "gone") ? 1 : 0;
+    const bn = (!base && m.kind === "back") ? 1 : 0;
+    const bq = (!base && m.kind === "back") ? Math.max(0, mwNum(m.cur)) : 0;
     /* 欠品していた日数（戻ったときに足す）。 */
     let gd = 0;
-    if (m.kind === "back" && m.gone_at) {
+    if (!base && m.kind === "back" && m.gone_at) {
       const a = Date.parse(m.at), b = Date.parse(m.gone_at);
       if (isFinite(a) && isFinite(b) && a > b)
         gd = Math.round((a - b) / 86400000 * 100) / 100;
     }
+    /* 基準の数（はじめて記録したときの掲載数）。あとから上書きしない。 */
+    const bqty = base ? Math.max(0, mwNum(m.cur)) : null;
     out.push(env.DB.prepare(
       `INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,
-         up_qty,gone_n,back_n,back_qty,gone_days,created_at)
-       VALUES (?1,?2,?3,?3,?4,?5,?6,?7,?8,?9,?10,?11,?3)
+         up_qty,gone_n,back_n,back_qty,gone_days${bqCol},created_at)
+       VALUES (?1,?2,?3,?3,?4,?5,?6,?7,?8,?9,?10,?11${bqVal},?3)
        ON CONFLICT(jan,sha) DO UPDATE SET
          last_at=excluded.last_at,
-         first_at=COALESCE(mw_stat.first_at, excluded.first_at),
+         first_at=COALESCE(mw_stat.first_at, excluded.first_at),${bqSet}
          down_n=mw_stat.down_n+excluded.down_n,
          down_qty=mw_stat.down_qty+excluded.down_qty,
          up_n=mw_stat.up_n+excluded.up_n,
@@ -6716,8 +6862,7 @@ function mwMvStmts(env, list) {
          back_n=mw_stat.back_n+excluded.back_n,
          back_qty=mw_stat.back_qty+excluded.back_qty,
          gone_days=mw_stat.gone_days+excluded.gone_days`)
-      .bind(m.jan, m.sha, m.at, dn ? 1 : 0, dn, upq ? 1 : 0, upq,
-            gn, bn, bq, gd));
+      .bind(...mvBind(m, dn, upq, gn, bn, bq, gd, bq0 ? bqty : undefined)));
   }
   return out;
 }
@@ -6728,7 +6873,13 @@ function mwMvStmts(env, list) {
      （nowIso から作るので外から混ぜられる余地はない）。 */
 async function mwStatSql(env, alias, agg) {
   if (!(await mwMoveOk(env))) return { cols: "", join: "", chg: "" };
+  /* 7.134：base_qty は migrate-0052 で足した列。流す前でも口が落ちないよう、
+     列があるときだけ出す。 */
+  const hb = await colOk(env, "mw_stat", "base_qty");
   const a = alias || "s";
+  /* 7.118：SQL の中に三項演算子（? :）を書かない（番号なしの ? に見える）。 */
+  const bCol = hb ? "\n            MAX_BASE AS mv_base," : "";
+  const bSum = hb ? ",\n                           SUM(base_qty) AS mv_base" : "";
   const since = new Date(Date.now() - MW_MV_DAYS * 86400000)
     .toISOString().replace(/\.\d+Z$/, "Z");
   const f = (x) => agg ? ("MAX(" + x + ")") : x;
@@ -6741,7 +6892,8 @@ async function mwStatSql(env, alias, agg) {
             ${f("COALESCE(v.mv_gone_n,0)")} AS mv_gone_n,
             ${f("COALESCE(v.mv_back_n,0)")} AS mv_back_n,
             ${f("COALESCE(v.mv_back_qty,0)")} AS mv_back_qty,
-            ${f("COALESCE(v.mv_gone_days,0)")} AS mv_gone_days,
+            ${f("COALESCE(v.mv_gone_days,0)")} AS mv_gone_days,${bCol
+              .replace("MAX_BASE", f("v.mv_base"))}
             ${f("COALESCE(w.mv7_down,0)")} AS mv7_down,
             ${f("COALESCE(w.mv7_n,0)")} AS mv7_n`;
   const join = `
@@ -6751,17 +6903,22 @@ async function mwStatSql(env, alias, agg) {
                            SUM(up_qty) AS mv_up, SUM(up_n) AS mv_up_n,
                            SUM(gone_n) AS mv_gone_n, SUM(back_n) AS mv_back_n,
                            SUM(back_qty) AS mv_back_qty,
-                           SUM(gone_days) AS mv_gone_days
+                           SUM(gone_days) AS mv_gone_days${bSum}
                       FROM mw_stat GROUP BY jan) v ON v.jan = ${a}.jan
          LEFT JOIN (SELECT jan, SUM(-d) AS mv7_down, COUNT(*) AS mv7_n
                       FROM mw_move WHERE d < 0 AND at >= '${since}'
+                        AND prev IS NOT NULL
                       GROUP BY jan) w ON w.jan = ${a}.jan`;
-  /* その回の在庫数の変化（?1 が取り込みの日時であるときだけ使う）。 */
+  /* その回の在庫数の変化（?1 が取り込みの日時であるときだけ使う）。
+     7.134：**前の数が無い記録（基準）は変化として出さない**
+     （v248 は「0 → 20」と出していた）。 */
   const chg = `,
             (SELECT SUM(COALESCE(mm.prev,0)) FROM mw_move mm
-              WHERE mm.jan = ${a}.jan AND mm.at = ?1) AS mv_prev,
+              WHERE mm.jan = ${a}.jan AND mm.at = ?1
+                AND mm.prev IS NOT NULL) AS mv_prev,
             (SELECT SUM(COALESCE(mm.cur,0)) FROM mw_move mm
-              WHERE mm.jan = ${a}.jan AND mm.at = ?1) AS mv_cur`;
+              WHERE mm.jan = ${a}.jan AND mm.at = ?1
+                AND mm.prev IS NOT NULL) AS mv_cur`;
   return { cols: cols, join: join, chg: chg };
 }
 /* 「在庫処分」と見なす言葉（⚙ mwSaleNote）。 */
@@ -6828,6 +6985,8 @@ async function mwStockPut(env, body) {
       : "";
     /* 7.126（【T】）在庫の動きを記録する（表があるときだけ）。 */
     const moveOk = await mwMoveOk(env);
+    /* 7.134：基準の数の列（migrate-0052）。無くても記録は続ける。 */
+    const hasBase = moveOk ? await colOk(env, "mw_stat", "base_qty") : false;
     const mv = [];
     const stmts = [];
     for (const r of rows) {
@@ -6869,7 +7028,7 @@ async function mwStockPut(env, body) {
     /* 7.126：動きの記録（mw_move＋mw_stat）。落ちても取り込みは止めない。 */
     if (mv.length) {
       try {
-        await runBatch(env, run, mwMvStmts(env, mv));
+        await runBatch(env, run, mwMvStmts(env, mv, hasBase));
         res.moved += mv.length;
       } catch (e) { run.notes.push("mw-move: " + String((e && e.message) || e)); }
     }
@@ -6905,7 +7064,7 @@ async function mwStockPut(env, body) {
                        d: -prev, kind: "gone" };
             });
             if (mv2.length) {
-              await runBatch(env, run, mwMvStmts(env, mv2));
+              await runBatch(env, run, mwMvStmts(env, mv2, hasBase));
               res.moved += mv2.length;
             }
           } catch (e) {
@@ -9906,11 +10065,21 @@ async function mwSubList(env, url) {
   const p = url.searchParams;
   const all = p.get("all") === "1";
   const limit = Math.max(1, Math.min(2000, mwNum(p.get("limit")) || 1000));
+  /* 6.178（【2】）仕入原価に足す MW の1点あたりの仕入れ送料（⚙ mwShipFee）。 */
+  let subShip = 0;
+  try {
+    const st = (await settingsGet(env)).settings || {};
+    subShip = Math.max(0, Math.round(Number(st.mwShipFee) || 0));
+  } catch (e) { subShip = 0; }
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.on_sale AS on_sale, b.max_qty AS max_qty,
             b.price AS price, COALESCE(b.grades,'') AS grades,
             b.at AS at, b.put_at AS put_at,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+            /* 6.178（【2】）Shopify の Cost per item（仕入原価）に使う。
+               **卸値そのものは返さない**（この口は会員向けの中身を返すので、
+               卸値が漏れないようにする・§8.2）。下で仕入原価に直す。 */
+            s.wholesale AS wholesale,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
             a.size_g AS size_g, a.size_long AS size_long
@@ -9931,6 +10100,10 @@ async function mwSubList(env, url) {
     name: String(r.amz_name || r.mw_name || ""),
     kishu: String(r.kishu || ""),
     asin: String(r.asin || ""),
+    /* 仕入原価（卸値×1.1＋MW の1点あたりの仕入れ送料）。式は
+       shared/subprice.js の1か所だけ。**卸値そのものは返さない。** */
+    cost: SUBPX.costOf({ wholesale: Number(r.wholesale) || 0 },
+                       { ship: subShip }),
     amz_price: Number(r.amz_price) || 0,
     fee_total: Number(r.fee_total) || 0,
     /* 在庫は「いま何点まで出せるか」の目安として返す（MW在庫そのもの）。
@@ -9951,11 +10124,25 @@ async function mwSubPutAt(env, body) {
   if (!jans.length) return { ok: true, n: 0 };
   const run = newRun("mw-sub-put");
   const at = nowIso();
-  const stmts = jans.map((j) => env.DB.prepare(
-    `UPDATE mw_sub SET put_at=?2 WHERE jan=?1`).bind(j, at));
+  /* 6.178（【2】）上乗せは出し直すたびに決め直すので、そのとき使った
+     販売価格も一緒に控える（画面に「Shopify に出した値段」が残るように）。 */
+  const px = (o.prices && typeof o.prices === "object") ? o.prices : {};
+  let npx = 0;
+  const stmts = jans.map((j) => {
+    const p = Math.round(Number(px[j]) || 0);
+    if (p > 0 && p <= SUB_PRICE_MAX) {
+      npx++;
+      return env.DB.prepare(
+        `UPDATE mw_sub SET put_at=?2, price=?3 WHERE jan=?1`).bind(j, at, p);
+    }
+    return env.DB.prepare(
+      `UPDATE mw_sub SET put_at=?2 WHERE jan=?1`).bind(j, at);
+  });
   await runBatch(env, run, stmts);
-  run.notes.push("Shopify に出した印：" + jans.length + "件");
-  return Object.assign(await saveRun(env, run), { ok: true, n: jans.length, at: at });
+  run.notes.push("Shopify に出した印：" + jans.length + "件"
+    + (npx ? ("／販売価格を控え直した " + npx + "件") : ""));
+  return Object.assign(await saveRun(env, run),
+    { ok: true, n: jans.length, at: at, prices: npx });
 }
 /* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。
    7.105：**控え（mw_buy 側）を優先**して返す。
@@ -13896,6 +14083,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["base_qty", "migrate-0052-mw-base.sql"],
   ["mw_sub", "migrate-0051-mw-sub.sql"],
   ["on_sale", "migrate-0051-mw-sub.sql"],
   ["fee_kind", "migrate-0050-fee-kind.sql"],
@@ -14359,7 +14547,9 @@ export default {
             || url.pathname === "/mw/restrict" || url.pathname === "/mw/reg"
             || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
             /* 【P】在庫CSVの自動取り込みを動かす・止めるのも管理者だけ。 */
-            || url.pathname === "/mw/csv/run" || url.pathname === "/mw/csv/on"))
+            || url.pathname === "/mw/csv/run" || url.pathname === "/mw/csv/on"
+            /* 7.134：在庫の記録の作り直しも管理者だけ。 */
+            || url.pathname === "/mw/move/fix"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 7.111：**Amazon への登録は作業者の端末からもできる**。
        ただし送る中身（売値・SKU・申告・仕入原価）は pj-sync 側で組み立て、
@@ -14616,6 +14806,10 @@ export default {
       /* 7.126（【T】）1商品の在庫の動きと、目安のまとめ（見るだけ）。 */
       if (request.method === "GET" && url.pathname === "/mw/move")
         return json(await mwMoveList(env, url), 200, origin);
+      /* 7.134（【T】の直し）在庫の記録の基準を控え直す（管理者だけ）。
+         日次で一度だけ自動でも走る。手で押し直せるように口も置く。 */
+      if (request.method === "POST" && url.pathname === "/mw/move/fix")
+        return json(await mwBaseFix(env, null), 200, origin);
       if (request.method === "GET" && url.pathname === "/mw/week")
         return json(await mwWeekData(env,
           { top: url.searchParams.get("top") }), 200, origin);
@@ -15051,6 +15245,10 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
   mwMoveSweep,
+  /* 7.134（【T】の直し）基準を控える・入ってしまった誤りを取り除く。 */
+  mwBaseFix, mwBaseOnce, MW_BASE_KEY,
+  /* 6.178（【2】）会員に出す販売価格。 */
+  SUBPX,
   mwSaleWords, mwSaleLike, mwNtStat, MOVE_MAX, MW_MV_DAYS,
   MW_MOVE_KEEP_DAYS, MW_WEEK_TOP, MW_WEEK_KEY, MWSTAT,
   colOk,

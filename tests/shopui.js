@@ -30,6 +30,12 @@ const setup=async(o)=>await p.evaluate((o)=>{
   $('syncApi').value='https://sync.example'; $('syncKey').value='k';
   $('csvTitleApi').value='https://title.example'; $('csvTitleKey').value='tk';
   $('fx').value='160'; $('mwShipFee').value='176';
+  /* 6.178（【2】）上乗せは乱数なので、テストでは幅を 10円に固定する。
+     仕入原価 3,300＋176＝3,476 ＋梱包材30 ＋上乗せ10 ＝3,516
+     → カード決済手数料 3.55% ぶん割り戻して 3,645。 */
+  $('mwSubCardFee').value='3.55'; $('mwSubPack').value='30';
+  $('mwSubAddMin').value='10'; $('mwSubAddMax').value='10';
+  $('mwSubGrossMin').value='800';
   $('mwAmzFeeGame').value='15'; $('mwAmzFbaGame').value='530';
   $('csvMwAmzWin').checked=false;
   if($('csvMwAmzFbaNg'))$('csvMwAmzFbaNg').checked=false;
@@ -96,8 +102,9 @@ await load();
   console.log('   上限 '+t.qty+'／価格 '+t.px);
   ok(t.chk,'★★★「会員に出す」のチェックが行にある');
   ok(/会員に出す/.test(t.txt),'★★見出しも出る');
-  ok(t.px==='4300',
-     '★★★販売価格のおすすめ値が入る（卸値3,000×1.1×1.3＝4,290→4,300）');
+  ok(t.px==='3645',
+     '★★★おすすめ値が入る（仕入原価3,476＋梱包材30＋上乗せ10 ÷0.9645＝3,645）');
+  ok(t.px.slice(-1)!=='0','★★★10円単位の切り上げはしない（端数を残す）');
   ok(t.qty==='10','★★★上限のおすすめ値（在庫12・プランの上限10 の小さいほう）');
   ok(/会員の粗利の目安/.test(t.txt),
      '★★★会員から見た粗利の目安を出す（実売−手数料−販売価格）');
@@ -113,14 +120,36 @@ await load();
      '★★FBA 不可の行（販売手数料が実額）は出す');
 }
 {
-  const m=await p.evaluate(()=>{
-    $('mwSubMarkup').value='1.5';
-    return mwSubSuggest({ wholesale:3000 });
+  /* 6.178（【2】）掛け率（mwSubMarkup）はやめた。⚙にも無い。 */
+  ok(await p.evaluate(()=>!document.getElementById('mwSubMarkup')),
+     '★★★掛け率の欄（mwSubMarkup）は画面から外した');
+  /* 上乗せの範囲を広げると、出し直すたびに値段が変わる。 */
+  const many=await p.evaluate(()=>{
+    $('mwSubAddMin').value='10'; $('mwSubAddMax').value='150';
+    const seen={};
+    for(let i=0;i<120;i++)seen[mwSubSuggest({ wholesale:3000 })]=1;
+    $('mwSubAddMin').value='10'; $('mwSubAddMax').value='10';
+    return Object.keys(seen).length;
   });
-  ok(m===5000,'★★★掛け率を変えるとおすすめ値も変わる（3,300×1.5＝4,950→5,000）');
-  await p.evaluate(()=>{ $('mwSubMarkup').value='1.3'; });
+  ok(many>20,'★★★上乗せは出し直すたびに変わる（配信ごとに決め直す）');
+  /* ⚙の梱包材・手数料を変えるとおすすめ値も変わる。 */
+  const m2=await p.evaluate(()=>{
+    $('mwSubPack').value='0';
+    const v=mwSubSuggest({ wholesale:3000 });
+    $('mwSubPack').value='30';
+    return v;
+  });
+  ok(m2===Math.round(3486/(1-0.0355)),'★★★梱包材を⚙で変えられる');
   ok(await p.evaluate(()=>mwSubSuggest({ wholesale:0 }))===0,
      '★卸値が無ければ0');
+  /* 粗利の目安が⚙の下限を下回る行は「会員向きではありません」。 */
+  const fit=await p.evaluate(()=>{
+    const r={ price:4600, fee_total:900, fee_ref:600, fee_fba:200,
+              fee_tax:100, size_tier:'s' };
+    return [mwSubFitOf(r,3645).ok, mwSubFitOf(r,3645).gross];
+  });
+  console.log('   粗利 '+fit[1]+'（下限 800）');
+  ok(fit[0]===false,'★★★粗利の目安が下限を下回れば会員向きではない');
 }
 
 console.log('\n=== ①の2 重さが取れていない行は注意を出す（6.171）===');
@@ -172,7 +201,7 @@ await load();
   });
   console.log('   '+JSON.stringify(q));
   ok(q.length===1&&q[0].on===1,'★★★印を送る');
-  ok(q[0].max_qty===10&&q[0].price===4300,'★★★上限と価格も一緒に送る');
+  ok(q[0].max_qty===10&&q[0].price===3645,'★★★上限と価格も一緒に送る');
   ok(q[0].jan==='4902371510000','★★JAN を送る');
 }
 {

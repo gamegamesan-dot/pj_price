@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v259';
+const V = 'pj-pricing-v260';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,10 @@ const ASSETS = [
   // MW の在庫CSVの読み方（【P】）。pj-sync も同じこのファイルを読む。
   './shared/mwcsv.js',
   './shared/mwstat.js',
+  // Shopify の商品CSV（【U の改】）と会員に出す販売価格（【2】）。
+  // v252 で shopcsv.js を入れ忘れていたので、ここで一緒に束ねる。
+  './shared/shopcsv.js',
+  './shared/subprice.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

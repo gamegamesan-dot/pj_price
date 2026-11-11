@@ -22,6 +22,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeApi, botState, canWriteCh, permJa, errJa, expandKeys }
   from "./setup-discord.mjs";
+/* 販売価格の式（6.178）。画面・pj-sync と同じこのファイルを読む。 */
+import SUBPX from "../shared/subprice.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,7 +32,6 @@ export const TEST_MARK = "🧪 テスト配信";
 export const TEST_HEAD = TEST_MARK
   + "（本番と同じ形の確認です。**購入はできません**）";
 export const TEST_COLOR = 0x8e24aa;      // 本番の色（緑・赤・黄）と変える
-export const TEST_MARKUP = 1.3;          // 仮の販売価格の掛け率
 export const EMB_MAX = 10;               // 1通に入れられる箱の数
 export const EMB_CHARS = 5600;           // 1通の字数（6,000 の手前）
 /* 会員用では出してはいけない項目（§8.2 の NT_MEMBER_NG と同じ）。
@@ -70,14 +71,16 @@ export function shipJa(r, map) {
   const m = Object.assign({}, SHIP_JA, map || {});
   return m[shipTier(r)] || m.unknown;
 }
-/* ---- 仮の販売価格（税込）----
-   本番は仕入れタブで人が決める（【U の改】の1）。ここは形の確認なので、
-   卸値（税抜）×1.1 を仕入原価にして掛け率を掛け、100円単位に切り上げる。 */
-export function sellPrice(r, markup) {
-  const w = Number((r || {}).wholesale) || 0;
-  if (w <= 0) return 0;
-  const m = Number(markup) > 0 ? Number(markup) : TEST_MARKUP;
-  return Math.ceil((w * 1.1 * m) / 100) * 100;
+/* ---- 販売価格（税込）----
+   式は shared/subprice.js の1か所だけ（画面・pj-sync と同じもの・6.178）。
+   **商品代に利益を載せない。会費が収益。** 掛け率（×1.3）はやめた。
+     仕入原価（卸値×1.1＋MW送料）＋ 梱包材 ＋ 上乗せ を、
+     カード決済手数料ぶん割り戻した額。10円単位の切り上げはしない。
+   上乗せは配信のたびに乱数で決め直すので、同じ商品でも毎回変わる。
+   **会員のカードには販売価格だけを出し、仕入原価・上乗せの額は出さない。** */
+export function sellPrice(r, opt) {
+  const o = (opt && typeof opt === "object") ? opt : {};
+  return SUBPX.priceOf(r || {}, o).price;
 }
 /* 会員から見た見込みの Amazon 粗利
    ＝ Amazon の実売 − Amazon の手数料 − 販売価格（会員が払う額）。
@@ -103,7 +106,7 @@ export function pickItems(rows, opt) {
     /* 出品できない行（赤）は出さない。 */
     if (String(r.rst || "") === "blocked") continue;
     if ((Number(r.stock) || 0) <= 0) continue;
-    const sell = sellPrice(r, o.markup);
+    const sell = sellPrice(r, o.px);
     const gross = memberGross(r, sell);
     if (gross === null || gross <= 0) continue;
     out.push({
@@ -322,7 +325,7 @@ export async function post(opt) {
   /* ---- 出す品物 ---- */
   const got = await fetchRows({ url: o.syncUrl, key: o.syncKey,
                                 fetch: o.fetch, rows: o.rows });
-  let items = pickItems(got.rows, { markup: tcfg.markup });
+  let items = pickItems(got.rows, { px: tcfg.price });
   if (items.length) {
     plan.src = "pj-sync の実データ（" + got.rows.length + "行から "
       + items.length + "件）";

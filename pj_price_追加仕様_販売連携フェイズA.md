@@ -8796,3 +8796,143 @@ scope='ebay' AND COALESCE(ebay_item_id,'')<>''
 ### 3. テスト
 
 `tests/pxmany.mjs`（50本）。
+
+## 7.134 在庫の記録の「基準」を控える（v260・【T】の不具合）
+
+### 何が起きていたか
+
+v248（7.126）で入れた MW の在庫の記録で、**変化のない商品が「欠品から戻った」
+として Discord に出ていた**。
+
+例：あつまれ どうぶつの森 Switch 2 Edition（JAN 4902370553901・社 E027）
+
+```
+在庫の変化 20 → 20点 ／ 売れる速さ 20点/日（直近7日）
+欠品までの見込み 1日 ／ 再入荷 1回・平均20点・欠品1.4日 ／ 記録 1日分
+赤い縁（欠品の色）
+```
+
+### 原因（4つが重なっていた）
+
+**① 商品ごとの「基準」がどこにも残らない。**
+`mw_move`・`mw_stat` は「掲載数が**変わった回だけ**」書く作りで、変わらない回は
+1行も書かない。そのため「はじめて見た日と、そのときの数」が残らず、
+**その商品の最初の変化が「初回の記録」**になる。
+`mv_first`（はじめて記録した日時）はその最初の変化の日時なので、
+記録のある日数は 0日（＝1日として扱う）。
+`MWSTAT.calc` は `down / max(1, days)` で割るので、
+**その1回の減り（欠品で CSV から消えた 20点）がそのまま「20点/日」**になり、
+`stock / speed` ＝ 20÷20 ＝「欠品までの見込み 1日」、「記録 1日分」と出る。
+
+**② 前の数が無い記録を出来事として数えていた。**
+`mwMvOf` は「はじめて見た行」を `kind:'new'`・`prev: NULL`・`d: +cur` で、
+「欠品から戻った行」を `kind:'back'`・`prev: NULL`・`d: +cur` で残していた。
+`mw_stat` にその商品の記録がまだ無くても `back_n`＋1・
+`gone_days`＋（いま − `mw_stock.gone_at`）を足すので、
+**記録を控えたばかりの商品に「再入荷 1回・平均20点・欠品1.4日」が付く**。
+`gone_at` は 7.126 より前から `mw_stock` にあるので、
+表を作った直後の取り込みでいっせいにこれが起きた。
+
+**③ 基準を「0 → 20」の変化として出していた。**
+`mv_prev` は `SUM(COALESCE(mm.prev,0))` なので `prev` が NULL の記録は 0 になり、
+知らせに「0 → 20」と出る。例の「20 → 20」は、同じ JAN で
+**社Aの行が欠品（prev 20・cur NULL）**、**社Bの行が戻った（prev NULL・cur 20）**
+が同じ回に入り、合計が 20 → 20 になったもの。
+
+**④ 1社の行が欠品しただけで「欠品」として赤く出していた。**
+`mwNtGone` は `WHERE s.gone_at = ?1 GROUP BY s.jan` なので、
+**ほかの社にまだ在庫が残っている商品**（例の 20点）も欠品として並んでいた。
+
+### 直したこと
+
+**1. 前の数が無い行＝基準。出来事に数えない。**
+
+| 種類 | 前の数（prev） | 差（d） | 数えるか |
+|---|---|---|---|
+| `new`（はじめて見た行） | **空（NULL）** | **0** | **数えない（基準）** |
+| `back`（欠品から戻った） | **0**（欠品中は0点） | +今の数 | 数える |
+| `down` / `up` | 前の数 | 差 | 数える |
+| `gone`（CSV から消えた） | 消える前の数 | −前の数 | 数える |
+
+`mwMvStmts` は `prev` が NULL の記録では
+`down_n`・`down_qty`・`up_n`・`up_qty`・`gone_n`・`back_n`・`back_qty`・`gone_days`
+を**1つも足さない**。代わりに `mw_stat.base_qty`（基準の数）だけを控える。
+
+**2. 基準の数の列（migrate-0052）。** `mw_stat.base_qty`。
+`COALESCE(mw_stat.base_qty, excluded.base_qty)` なのであとから上書きしない。
+この列が無いデータベース（マイグレーション前）でも記録が止まらないよう、
+`colOk` で見て**列があるときだけ**入れる（取り込みは命綱）。
+
+**3. 基準は変化として出さない。** `mwStatSql` の `mv_prev`・`mv_cur`・`mv7_down`
+に `AND prev IS NOT NULL` を足した。基準の回は `mv_prev` が NULL になるので、
+知らせの「在庫の変化」の欄が出ない（「0 → 20」が消える）。
+
+**4. 記録が1日に届かないうちは「1日あたり」を出さない**（`shared/mwstat.js`）。
+`tooNew`（`days < 1`）のときは `per7`・`perAll`・`speed`・`outDays` を
+すべて null にし、文は「記録を控えたところ（基準 20点）・1日あたりはまだ出せません」。
+`thin`（記録 14日未満）の「目安は参考程度」は `tooNew` のときは出さない（重なるため）。
+
+**5. ほかの社に在庫が残っている商品は「欠品」として出さない。**
+`mwNtGone` に
+`AND NOT EXISTS (SELECT 1 FROM mw_stock t WHERE t.jan=s.jan AND t.gone_at IS NULL)`
+を足した。あわせて `mwImportNotify` で、その回の変化が
+**「前の数＝今の数」の行**（`stat.chg.prev === stat.chg.cur`）を外す
+（件数は `note_same` で返す）。
+もう欠品している行には「欠品までの見込み」を出さない（`kind==='gone'` のとき）。
+
+**6. 入ってしまった誤りを取り除く（`mwBaseFix`）。** D1 の中だけで3文。
+
+```
+① 基準を控える
+   INSERT INTO mw_stat (jan,sha,first_at,last_at,base_qty,created_at)
+   SELECT jan, sha, MIN(created_at), MAX(seen_at),
+          SUM(生きている行の stock), MIN(created_at)
+     FROM mw_stock GROUP BY jan, sha
+   ON CONFLICT DO UPDATE SET
+     first_at = より古い created_at に戻す,
+     base_qty = COALESCE(いまの値, 新しい値)
+② 合計を 0 に戻す（基準と日付は残す）
+③ mw_move から積み直す（WHERE prev IS NOT NULL ＝ 基準は数えない）
+```
+
+`gone_days` は書くときに計算していて `mw_move` には残らないので、
+積み直しでは 0 に戻す。v248 の `back` は**すべて** `prev` が NULL
+（＝基準あつかい）なので、取り除くのが正しい。これからの `back` は
+`prev=0` で入るので書くときに正しく足される。
+
+- 日次（`jobDaily`）の先頭で**一度だけ**自動で走る
+  （`sync_state` の `mw.base.fix` に控える）。
+- `POST /sync { kind }` ではなく **`POST /mw/move/fix`**（管理者だけ）で
+  手でも押し直せる。
+
+例の商品は、直したあと `first_at` が `mw_stock.created_at`（はじめて見た日）
+まで戻るので「記録 40日分」になり、売れる速さは 20÷7日＝**2.9点/日**、
+再入荷は **0回**、欠品日数は **0日**になる。
+
+### テスト
+
+`tests/mwbase.mjs`（27）… 基準は出来事に数えない／戻った行の前の数は0／
+記録が1日に届かないうちは1日あたりを出さない／基準は変化として出さない／
+`mwBaseFix` の積み直し／ほかの社に在庫が残っていれば欠品に出さない。
+`tests/mwmove.mjs` は 7.126 の期待（初回を `d:+cur`、`back` の prev を NULL）
+を新しい決まりに直した。
+
+## 7.135 会員に出す商品の仕入原価を返す（v260・【2】）
+
+`GET /mw/sub` は**会員向けの中身を返す口**なので、§8.2 の決まりどおり
+**卸値・社・備考・MW の商品番号を返さない**（`tests/mwsub.mjs` が見張っている）。
+
+Shopify の `Cost per item` に仕入原価を入れたいので、
+pj-sync 側で**仕入原価だけ**を計算して `cost` で返すようにした。
+
+```
+cost ＝ round(卸値（税抜）×1.1) ＋ ⚙ mwShipFee（1点あたりの仕入れ送料）
+```
+
+式は `shared/subprice.js`（`SUBPX.costOf`）の1か所だけ。
+画面・Discord の配信も同じこれを読む（6.178）。
+
+`POST /mw/sub/put` に `prices`（JAN → 円）を足した。
+上乗せは出し直すたびに決め直すので、そのとき使った販売価格を
+`mw_sub.price` に控え直す（0 より大きく `SUB_PRICE_MAX` 以下の値だけ）。
+`run.notes` に「販売価格を控え直した n件」を残す。

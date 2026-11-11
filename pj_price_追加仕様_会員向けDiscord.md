@@ -527,3 +527,18 @@ Discord の**「ロールで表示」**（サーバー設定→ロール→… �
 
 `tests/discordtest.mjs`（97本）。偽の Discord がチャンネルの権限を本当に見て、
 書けないチャンネルには 403（50013）を返す。
+
+## 8.10 配信の販売価格を shared/subprice.js に寄せる（v260・【2】）
+
+`discord/test-post.mjs` の `sellPrice` は、卸値×1.1×掛け率（1.3）を
+100円単位に切り上げる**仮の式**だった。
+**商品代に利益を載せない（収益は会費）**方針になったので、
+画面・pj-sync と同じ `shared/subprice.js` を読むように直した。
+
+- `TEST_MARKUP`（1.3）と `server.config.json` の `test.markup` は**外した**。
+  代わりに `test.price`（`ship` / `pack` / `addMin` / `addMax` / `cardFee`）で
+  決める。
+- **会員のカードに出すのは販売価格だけ**（仕入原価・上乗せ・手数料の額は出さない）。
+  箱に渡す品物からも卸値・社・備考を外してあるので、うっかり出せない
+  （`MEMBER_NG` と `tests/discordtest.mjs` が見張っている）。
+- 上乗せが乱数なので、テストは `px: { rnd:()=>0, … }` を渡して決める。

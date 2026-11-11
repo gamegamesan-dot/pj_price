@@ -303,4 +303,19 @@ f=A.transFill(TR,{ 'ゼルダの伝説 知恵のかりもの':'The Legend of Zel
   { fields:['title','body_html'] });
 ok(f.n===1,'★★入れる項目は選べる');
 ok(A.transFill('',{}).n===0,'★空でも落ちない');
+
+console.log('\n=== 仕入原価（Cost per item・6.178／【2】）===');
+{
+  ok(A.COLS.indexOf('Cost per item')>=0,'★★★Cost per item の列を出す');
+  ok(A.colName('Cost per item','old')==='Cost per item'
+     &&A.colName('Cost per item','new')==='Cost per item',
+     '★★★古い形でも今の名前でも同じ列名（ストアの書き出しに合わせられる）');
+  const t=A.build([Object.assign({},IT,{ cost:3476 })],{ date:DAY });
+  ok(cell(t,1,'Cost per item')==='3476','★★★仕入原価が入る（卸値×1.1＋MW送料）');
+  /* 仕入原価が分からない行は空にする（0 を入れて上書きしない）。 */
+  const t2=A.build([IT],{ date:DAY });
+  ok(cell(t2,1,'Cost per item')==='','★★★取れていない行は空（0 で上書きしない）');
+  /* 客に見える列ではないが、卸値そのものは入れない。 */
+  ok(!/wholesale/i.test(t),'★★★卸値そのものは入れない');
+}
 T.done();

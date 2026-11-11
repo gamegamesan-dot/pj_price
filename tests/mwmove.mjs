@@ -60,8 +60,15 @@ console.log('=== ① 変わった行だけ記録する ===');
   console.log('   1回目: '+JSON.stringify(m.map((x)=>x.kind+' '+x.d)));
   ok(m.length===2&&m.every((x)=>x.kind==='new'),
      '★★★はじめて出てきた行は「new」で残す');
-  ok(m[0].prev===null&&+m[0].cur===12&&+m[0].d===12,
-     '★★前の数は空・今の数と差を残す');
+  /* 7.134（【T】の直し）はじめての行は**基準**。前の数が無いので
+     差は 0 にして、出来事（減った・増えた）には数えない。 */
+  ok(m[0].prev===null&&+m[0].cur===12&&+m[0].d===0,
+     '★★★はじめての行は基準（前の数は空・差は0）');
+  const s0=await stat(env,J1);
+  ok(+s0.down_n===0&&+s0.down_qty===0&&+s0.up_n===0&&+s0.up_qty===0
+     &&+s0.back_n===0&&+s0.gone_n===0,
+     '★★★基準は「戻った・増えた・減った」に1つも数えない');
+  ok(+s0.base_qty===12,'★★★基準の数（はじめて記録したときの掲載数）を控える');
   /* 同じ数でもう一度取り込む → 1行も増えない */
   await impo(env,'2026-11-02T00:00:00Z',[row({jan:J1,stock:12}),
                                          row({jan:J2,stock:5})]);
@@ -109,7 +116,10 @@ console.log('\n=== ① 欠品と、欠品から戻ったとき ===');
                                                   row({jan:J2,stock:7})]));
   m=await moves(env);
   const b=m.filter((x)=>x.kind==='back')[0]||{};
-  ok(b.jan===J1&&b.prev===null&&+b.cur===6,'★★★戻った行は「back」');
+  /* 7.134：戻った行の**前の数は 0**（欠品していたので0点だった）。
+     v248 は空（NULL）にしていたので「初回の記録」と見分けがつかず、
+     記録がまだ無い商品でも「戻った1回・欠品N日」に数えていた。 */
+  ok(b.jan===J1&&+b.prev===0&&+b.cur===6,'★★★戻った行は「back」（前の数は0）');
   const s=await stat(env,J1);
   console.log('   戻り: '+s.back_n+'回 '+s.back_qty+'点 欠品 '+s.gone_days+'日');
   ok(+s.back_n===1&&+s.back_qty===6,'★★★戻った回数と、戻ったときの数');

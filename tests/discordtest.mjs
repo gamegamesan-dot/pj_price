@@ -164,10 +164,19 @@ ok(shipJa({ size_tier:'s' },{ s:'ゆうパケット' })==='ゆうパケット',
    '★★★設定（test.ship）で言い方を変えられる');
 ok(/採寸/.test(shipJa({})),'★分からないときもそう書く');
 
-console.log('\n=== 仮の販売価格と、会員から見た粗利 ===');
-ok(sellPrice({ wholesale:3000 })===4300,
-   '★★★卸値3,000（税抜）→ 3,300×1.3＝4,290 → 100円単位で 4,300');
-ok(sellPrice({ wholesale:3000 },1.5)===5000,'★★掛け率を変えられる');
+console.log('\n=== 販売価格（shared/subprice.js）と、会員から見た粗利 ===');
+/* 6.178（【2】）**商品代に利益を載せない**。掛け率（×1.3）はやめた。
+   卸値3,000（税抜）→ 仕入原価 3,300 ＋ 梱包材 30 ＋ 上乗せ 10 ＝ 3,340
+   → カード決済手数料 3.55% ぶん割り戻して 3,463（10円単位にしない）。 */
+const PX0={ ship:0, pack:30, addMin:10, addMax:10, cardFee:3.55 };
+ok(sellPrice({ wholesale:3000 },PX0)===3463,
+   '★★★卸値3,000 → 3,463（仕入原価＋梱包材＋上乗せ ÷ 0.9645）');
+ok(sellPrice({ wholesale:3000 },PX0)%10!==0,
+   '★★★10円単位の切り上げはしない');
+ok(sellPrice({ wholesale:3000 },PX0)!==4300,'★★★×1.3 の掛け率はやめた');
+ok(sellPrice({ wholesale:3000 },
+   Object.assign({},PX0,{ ship:120 }))===3587,
+   '★★MW の仕入れ送料を足せる');
 ok(sellPrice({ wholesale:0 })===0,'★卸値が無ければ0');
 ok(memberGross({ price:6000, fee_total:900 },4300)===800,
    '★★★粗利＝Amazon の実売 − 手数料 − 販売価格');
@@ -182,7 +191,7 @@ const ROWS=[
   { jan:'4900000000028', amz_name:'もうけが小さい', asin:'B000000028',
     wholesale:2000, price:3700, fee_total:600, stock:5 },
   { jan:'4900000000080', amz_name:'赤字', asin:'B000000080',
-    wholesale:2000, price:3000, fee_total:600, stock:5 },
+    wholesale:2000, price:2800, fee_total:600, stock:5 },
   { jan:'4900000000035', amz_name:'FBA 不可', asin:'B000000035',
     wholesale:2000, price:9000, fee_total:800, stock:5, fee_kind:'fba_ng' },
   { jan:'4900000000042', amz_name:'出品できない（赤）', asin:'B000000042',
@@ -194,7 +203,9 @@ const ROWS=[
   { jan:'4900000000073', amz_name:'まんなか', asin:'B000000073',
     wholesale:2000, price:5000, fee_total:700, stock:2 },
 ];
-const picked=pickItems(ROWS,{});
+/* 上乗せは乱数なので、テストでは rnd を渡して決める（6.178）。 */
+const picked=pickItems(ROWS,{ px:{ ship:0, pack:30, addMin:10, addMax:10,
+                                   cardFee:3.55, rnd:()=>0 } });
 console.log('   '+picked.map((x)=>x.name+' '+x.gross).join('／'));
 ok(picked.length===3,'★★★FBA不可・赤・在庫なし・手数料なしは出さない');
 ok(picked[0].name==='もうけが大きい'&&picked[1].name==='まんなか'
