@@ -109,6 +109,29 @@ console.log('\n=== 出し分け（社内用／会員用）===');
   const all=JSON.stringify(m);
   ok(all.indexOf('3,160')<0&&all.indexOf('いろは商会')<0,
      '★★★会員用の箱に卸値と社の値が1つも入っていない');
+  /* 7.138：**MW の URL は会員用に出さない**
+     （MW から仕入れていることは会員に伏せている）。 */
+  ok(!/matchingworld/.test(all)&&!/MW で開く/.test(all),
+     '★★★会員用の箱に MW のリンクが1つも入っていない');
+}
+
+console.log('\n=== 7.138 社内用のカードに「MW で開く」===');
+{
+  const t=W.mwNtEmbed(row(),'new','staff');
+  const lk=String(fieldOf(t,'リンク'));
+  console.log('   '+lk);
+  ok(/\[Amazon\]/.test(lk)&&/\[Keepa\]/.test(lk),
+     '★今までの Amazon・Keepa はそのまま');
+  ok(/\[MW で開く\]/.test(lk),'★★★社内用には「MW で開く」を足す');
+  ok(lk.indexOf('https://matchingworld.asia/buy/?q=4902370550001')>=0,
+     '★★★JAN の検索結果を開く（画面の「MW で検索」と同じ URL）');
+  /* 13桁でない行にはリンクを出さない（空の URL を書かない）。 */
+  const bad=W.mwNtEmbed(Object.assign({},row(),{ jan:'123' }),'new','staff');
+  ok(!/MW で開く/.test(String(fieldOf(bad,'リンク'))),
+     '★★JAN が13桁でなければ出さない');
+  ok(W.mwNtMwUrl('4902370550001')
+     ==='https://matchingworld.asia/buy/?q=4902370550001','★URL の作り方');
+  ok(W.mwNtMwUrl('')===''&&W.mwNtMwUrl('12345')==='','★短い JAN は空');
 }
 ok(W.mwNtAud({})==='staff','★★★既定は社内用');
 ok(W.mwNtAud({ mwNtAudience:'member' })==='member','★★会員用に切り替えられる');

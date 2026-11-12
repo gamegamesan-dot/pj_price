@@ -215,6 +215,15 @@ ok(picked.every((x)=>x.gross>0)
 ok(!('wholesale' in picked[0])&&!('sha' in picked[0])
    &&!('note' in picked[0]),
    '★★★箱に渡す品物に卸値・社・備考を入れない（うっかり出せないように）');
+/* 7.138：**会員用の配信に MW の URL を出さない**
+   （MW から仕入れていることは会員に伏せている）。 */
+{
+  const e=testEmbed(picked[0],{ maxQty:3 });
+  const all=JSON.stringify(e);
+  ok(!/matchingworld/.test(all)&&!/MW で開く/.test(all),
+     '★★★会員用のカードに MW のリンクが1つも入っていない');
+  ok(!/MW/.test(all),'★★「MW」の文字も入っていない');
+}
 ok(picked[0].name==='もうけが大きい'&&picked[0].asin==='B000000011',
    '★★商品名は Amazon の名前を使う');
 

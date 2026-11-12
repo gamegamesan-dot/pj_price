@@ -2373,6 +2373,8 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/subprice.js"></script>
 <!-- Amazon の手数料の目安（7.137）。画面と pj-sync が同じこの式を読む。 -->
 <script src="./shared/mwfee.js"></script>
+<!-- MW のサイトの URL（7.138）。画面と pj-sync が同じこれを読む。 -->
+<script src="./shared/mwsite.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2401,6 +2403,11 @@ var SUBPX=PJ_SUBPRICE;
 if(typeof PJ_MWFEE==='undefined')
   throw new Error('shared/mwfee.js が読み込めていません（手数料の目安）');
 var MWFEE=PJ_MWFEE;
+/* MW のサイトの URL（7.138）。pj-sync（社内用の知らせ）も同じこれを読む。
+   **会員には見せない**（MW から仕入れていることは伏せている・§8.2）。 */
+if(typeof PJ_MWSITE==='undefined')
+  throw new Error('shared/mwsite.js が読み込めていません（MW のURL）');
+var MWSITE=PJ_MWSITE;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -15240,7 +15247,7 @@ function mwListRun(){
    ブックマークレットは pj を**新しいタブで開いて渡す**ので、
    **鍵をブックマークに書かない**（ブックマークは iCloud で同期され、
    人に見える形で残るため）。 */
-var MW_SITE='https://matchingworld.asia';
+var MW_SITE=MWSITE.SITE;   /* 7.138：URL は shared/mwsite.js の1か所だけ */
 /* ホーム画面のアプリ（PWA）として開いているか（6.131）。
    このときリンクを開くと**アプリの中のブラウザ**で開き、
    Safari のブックマーク（ブックマークレット）が使えない。 */
@@ -15251,12 +15258,11 @@ function mwStandalone(){
   }catch(e){ return false; }
 }
 function mwSearchUrl(jan,safari){
-  var j=String(jan||'').replace(/\D/g,'');
-  var u=MW_SITE+'/buy/?q='+encodeURIComponent(j);
-  /* iPhone では x-safari-https: で**Safari 本体**が開く。
+  /* 7.138：URL の作り方は shared/mwsite.js の1か所だけ。
+     iPhone では x-safari-https: で**Safari 本体**が開く。
      ホーム画面のアプリから押したときだけ使う（ブックマークを使うため）。 */
-  if(safari===undefined?mwStandalone():safari)return 'x-safari-'+u;
-  return u;
+  var sf=(safari===undefined)?mwStandalone():safari;
+  return sf?MWSITE.safariUrl(jan):MWSITE.searchUrl(jan);
 }
 /* 行に置く「MW で検索」。新しいタブで開く（押した人の操作なので開ける）。 */
 function mwFindBtn(jan){
@@ -23030,7 +23036,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v263';   // sw.js の const V と必ず同じ値にする
+var APP_V='v264';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

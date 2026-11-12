@@ -8875,3 +8875,18 @@ Amazon の梱包重量は1本ごとにばらつくので、そのままだと本
 
 テストは `tests/shopcsv.mjs`（122・`isGame`／`weightOf`／CSV の列／段との合い方）と
 `tests/subpxui.js`（26・⚙の既定と書き出した値）。
+
+## 6.184 MW のサイトの URL を shared/mwsite.js に移す（v264・【3】）
+
+画面の `MW_SITE`（`https://matchingworld.asia`）と `mwSearchUrl` の作り方を
+**`shared/mwsite.js`** に移した。pj-sync（社内用の知らせの「MW で開く」・§7.138）
+が同じこれを読む。
+
+- `MW_SITE` は `MWSITE.SITE` を指すだけにし、`mwSearchUrl(jan,safari)` は
+  `MWSITE.searchUrl` ／ `MWSITE.safariUrl` に渡すだけにした
+  （画面の「MW で検索」ボタンの動きは今までどおり。
+  ホーム画面のアプリのときに `x-safari-https:` を使うのも同じ）
+- JAN が13桁でなければ空を返す（リンクを出さない）
+- `sw.js` の `ASSETS` に足した
+- 取得先（stocks.csv）の URL は⚙に置く決まり（【P】）なので、
+  ここには**人が見に行くページの URL だけ**を置いた

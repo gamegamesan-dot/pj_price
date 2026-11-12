@@ -44,6 +44,9 @@ import SUBPX from "../shared/subprice.js";
 /* 7.137（v262）Amazon の手数料の「目安」。式は shared/mwfee.js の1か所だけ
    （画面と同じものを読む）。実額が取れている行では使わない。 */
 import MWFEE from "../shared/mwfee.js";
+/* 7.138（v264）MW のサイトの URL。画面と同じこれを読む。
+   **社内用のカードだけ**に出す（会員には MW を見せない・§8.2）。 */
+import MWSITE from "../shared/mwsite.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -5977,6 +5980,11 @@ function mwNtKeepaUrl(jan, asin) {
     ? ("https://keepa.com/#!product/5-" + asin)
     : ("https://keepa.com/#!search/5-" + encodeURIComponent(String(jan || "")));
 }
+/* 7.138：MW のその商品のページ。商品番号は pj が持っていないので
+   **JAN の検索結果**を開く（画面の「MW で検索」と同じ URL）。
+   13桁でなければ空（リンクを出さない）。
+   **社内用のカードだけ**。会員用に出してはいけない（§8.2）。 */
+function mwNtMwUrl(jan) { return MWSITE.searchUrl(jan); }
 /* ---- 出し分け（7.125 の4）----
    社内用（いまの #一般）… 卸値・社・MW在庫を出す
    会員用（あとで使う）  … 卸値・社・MW在庫・MW の画像・備考は**出さない**。
@@ -6080,9 +6088,14 @@ function mwNtEmbed(x, kind, aud) {
     }
   }
   /* いちばん下にリンク（Amazon・Keepa）。 */
+  /* 7.138：社内用のカードには「MW で開く」も出す。
+     **会員用には出さない**（MW から仕入れていることは会員に伏せている）。
+     送り先が社内用か会員用かは ⚙「知らせに出す項目」（mwNtAudience）で決まる。 */
+  const mw = member ? "" : mwNtMwUrl(jan);
   f.push({ name: "リンク",
            value: "[Amazon](" + mwNtAmzUrl(jan, x.asin) + ")　"
-             + "[Keepa](" + mwNtKeepaUrl(jan, x.asin) + ")",
+             + "[Keepa](" + mwNtKeepaUrl(jan, x.asin) + ")"
+             + (mw ? ("　[MW で開く](" + mw + ")") : ""),
            inline: false });
   return {
     /* 見出しをタップすると Amazon の JAN 検索が開く。 */
@@ -15395,6 +15408,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   notifyRaw, notifyEmbeds, mwNtEmbed, mwNtEmbedLen, mwNtAud, mwNtGross,
   mwNtAmzUrl, mwNtJanUrl, mwNtKeepaUrl, EMB_MAX, EMB_CHARS, EMB_COLOR,
   NT_MEMBER_NG,
+  /* 7.138（v264）社内用のカードの「MW で開く」。 */
+  MWSITE, mwNtMwUrl,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,
   jobMwCsv, mwCsvCfg, mwCsvRuns, mwCsvResume, mwCsvBad, mwCsvHash, mwCsvNextAt,
   mwStockHave, MW_CSV_ROWS_MAX,

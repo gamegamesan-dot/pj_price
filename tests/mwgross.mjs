@@ -151,4 +151,39 @@ console.log('\n=== ⑤ 取り込みのときにも基準を控え直す（7.134�
   ok(!!st&&!!st.first_at,'★★基準の日時が入る');
 }
 
+console.log('\n=== ⑥ 7.138 MW のリンクは社内用のカードだけ ===');
+{
+  const setAud=(env,v)=>env.DB.prepare(
+    `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
+     ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
+    .bind(JSON.stringify({ at:new Date().toISOString(),
+      settings:{ mwNtAudience:v } }), new Date().toISOString()).run();
+  /* 社内用（既定）。 */
+  const env=env0();
+  const F=fill(12);
+  await setAud(env,'staff');
+  await impo(env,ago(3),F.concat([row({jan:JAN,stock:48})]));
+  emb=[];
+  await impo(env,ago(1),F);
+  const staff=JSON.stringify(emb);
+  console.log('   社内用: '+(/matchingworld/.test(staff)?'MW あり':'MW なし'));
+  ok(/\[MW で開く\]/.test(staff),'★★★社内用のカードには「MW で開く」が出る');
+  ok(staff.indexOf('matchingworld.asia/buy/?q='+JAN)>=0,
+     '★★JAN の検索結果を開く');
+  /* 会員用のチャンネルに切り替えると、MW のリンクは出ない。 */
+  const env2=env0();
+  await setAud(env2,'member');
+  await impo(env2,ago(3),F.concat([row({jan:JAN,stock:48})]));
+  emb=[];
+  await impo(env2,ago(1),F);
+  const mem=JSON.stringify(emb);
+  console.log('   会員用: '+(/matchingworld/.test(mem)?'MW あり':'MW なし'));
+  ok(emb.length>0,'★会員用でもカードは出る');
+  ok(!/matchingworld/.test(mem),
+     '★★★会員用のチャンネルに MW の URL が1つも出ない');
+  ok(!/MW で開く/.test(mem),'★★★「MW で開く」の文字も出ない');
+  ok(!/卸値/.test(mem)&&!/Q086/.test(mem),
+     '★★会員用には卸値も社も出ない（今までどおり）');
+}
+
 T.done();

@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v263';
+const V = 'pj-pricing-v264';
 const ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,8 @@ const ASSETS = [
   './shared/subprice.js',
   // Amazon の手数料の目安（7.137）。pj-sync も同じこのファイルを読む。
   './shared/mwfee.js',
+  // MW のサイトの URL（7.138）。pj-sync も同じこのファイルを読む。
+  './shared/mwsite.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
