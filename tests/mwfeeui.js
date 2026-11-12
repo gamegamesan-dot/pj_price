@@ -114,7 +114,8 @@ ok(c.tmp.real===false,'★★★取れていない行は「仮」');
 console.log('\n=== 画面の表示 ===');
 const card=async(jan)=>await p.evaluate((jan)=>{
   const box=document.getElementById('mwBuyChk_'+jan);
-  const el=box?box.closest('div[style*="border"]'):null;
+  /* 6.182：一覧は 1商品＝1行の details.mwrow になった。 */
+  const el=box?(box.closest('details.mwrow')||box.closest('div[style*="border"]')):null;
   return el?el.outerHTML:'';
 },jan);
 let sc=await card('4944076005667');

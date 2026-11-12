@@ -98,7 +98,7 @@ const table=()=>p.evaluate(()=>{
 const names=()=>p.evaluate(()=>{
   switchTab('F');
   return Array.prototype.map.call(
-    document.querySelectorAll('#csvMwAmzList > div'),
+    document.querySelectorAll('#csvMwAmzList [data-mwrow]'),
     (el)=>((el.innerText||'').match(/\b\d{13}\b/)||[''])[0]).filter(Boolean);
 });
 const setCap=async(cat,v)=>await p.evaluate(([cat,v])=>{

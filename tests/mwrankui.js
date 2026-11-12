@@ -64,12 +64,12 @@ await p.waitForTimeout(500);
 
 /* 行の見分けは JAN（札に出ている）で。 */
 const names=()=>p.evaluate(()=>Array.prototype.map.call(
-  document.querySelectorAll('#csvMwAmzList > div'),
+  document.querySelectorAll('#csvMwAmzList [data-mwrow]'),
   (el)=>((el.innerText||'').match(/\b\d{13}\b/)||[''])[0])
   .filter(Boolean));
 const txt=(jan)=>p.evaluate((jan)=>{
   const el=Array.prototype.filter.call(
-    document.querySelectorAll('#csvMwAmzList > div'),
+    document.querySelectorAll('#csvMwAmzList [data-mwrow]'),
     (x)=>(x.innerText||'').indexOf(jan)>=0)[0];
   return el?(el.innerText||'').replace(/\s+/g,' '):'';
 },jan);

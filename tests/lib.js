@@ -78,6 +78,12 @@ async function openCsvBoxes(page){
     });
     Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
       function(d){ d.open=true; });
+    /* 6.182：刈取の一覧は 1商品＝1行（畳んである）のが既定。
+       今までの確認は**中身を見る**ものばかりなので、ここで開いておく。
+       畳んだ状態そのものは tests/mwrowui.js で見る。 */
+    try{ if(typeof mwOpenAll!=='undefined'){ mwOpenAll=1; mwOpenSave(); } }catch(e){}
+    Array.prototype.forEach.call(document.querySelectorAll('details.mwrow'),
+      function(d){ d.open=true; });
     // ⚙設定のグループ（6.50）も開く
     /* 開いたことを端末に覚えさせない（data-cfgauto はアプリ側の仕組み）。 */
     /* 6.150：⚙にも「説明 ▸」（details.exp）が入ったので、
@@ -92,6 +98,9 @@ async function openCsvBoxes(page){
 async function openRowDet(page){
   await page.evaluate(()=>{
     Array.prototype.forEach.call(document.querySelectorAll('details[data-det]'),
+      function(d){ d.open=true; });
+    /* 6.182：一覧の行（1商品＝1行）も開く。 */
+    Array.prototype.forEach.call(document.querySelectorAll('details.mwrow'),
       function(d){ d.open=true; });
   });
   await page.waitForTimeout(60);

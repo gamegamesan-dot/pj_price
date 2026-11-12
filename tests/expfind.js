@@ -57,7 +57,7 @@ const setup=async()=>await p.evaluate((META)=>{
 const load=async()=>{ await p.evaluate(()=>{ $('csvMwAmzLoad').click(); });
   await p.waitForTimeout(400); };
 const names=()=>p.evaluate(()=>Array.prototype.map.call(
-  document.querySelectorAll('#csvMwAmzList > div'),
+  document.querySelectorAll('#csvMwAmzList [data-mwrow]'),
   (el)=>((el.innerText||'').match(/\b\d{13}\b/)||[''])[0]).filter(Boolean));
 
 console.log('=== 1. 長い説明文を畳む ===');
@@ -211,7 +211,7 @@ const head=async(v)=>{
   await p.waitForTimeout(300);
   return p.evaluate(()=>({
     head:(($('csvMwAmzList').innerText||'').split('\n')[0]||'').trim(),
-    order:Array.prototype.map.call(document.querySelectorAll('#csvMwAmzList > div'),
+    order:Array.prototype.map.call(document.querySelectorAll('#csvMwAmzList [data-mwrow]'),
       (el)=>((el.innerText||'').match(/\b\d{13}\b/)||[''])[0]).filter(Boolean) }));
 };
 let h=await head('net');

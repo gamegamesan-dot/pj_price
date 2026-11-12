@@ -200,8 +200,31 @@
      ⚠ pj の⚙「梱包マージン（ゲーム60g／フィギュア250g）」は
      **eBay の送料計算用**なので、ここには足さない（別の欄）。
      Shopify 自身の「既定の梱包の重さ」も段をずらすので 0g にしてもらう。 */
+  /* 手数料の区分（ゲーム／フィギュア／その他）は shared/mwfee.js の1か所だけ。
+     画面・pj-sync と同じ見分け方を使う（6.183）。 */
+  function feeMod() {
+    var g = (typeof globalThis !== "undefined") ? globalThis : root;
+    if (g && g.PJ_MWFEE) return g.PJ_MWFEE;
+    if (typeof require === "function") {
+      try { return require("./mwfee.js"); } catch (e) { /* 無くても止めない */ }
+    }
+    return null;
+  }
+  /* ゲームソフトかどうか（機種で見る）。限定版・通常版の区別は pj に
+     データが無いので、**機種がゲームなら一律**として扱う。 */
+  function isGame(r) {
+    var F = feeMod();
+    return !!F && F.genreOf(r || {}) === "ゲーム";
+  }
   function weightOf(r, opt) {
     var o = opt || {};
+    /* 6.183：**ゲームソフトは一律の重さ**（⚙ mwSubGameG・既定 100g）。
+       Shopify の送料は本数ではなく**合計の重さ**で段が変わるので、
+       Amazon の梱包重量（1本ごとにばらつく）のままだと本数と段が
+       合わなかった。ゲームソフト以外は今までどおり
+       「Amazon の梱包重量（なければ商品の重量）＋足し分」。 */
+    var gg = Math.round(num(o.gameG));
+    if (gg > 0 && isGame(r)) return gg;
     var g = Math.round(num((r || {}).size_g) || num(o.grams) || 0);
     if (g <= 0) return 0;              // 取れていない行は 0（画面が注意を出す）
     /* 足し分は0以上だけ（負の値で軽くはしない）。 */
@@ -447,6 +470,7 @@
   }
 
   var API = {
+    isGame: isGame, weightOf: weightOf,
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,

@@ -101,7 +101,7 @@ const find=async(q)=>{
   await p.waitForTimeout(300);
 };
 const names=()=>p.evaluate(()=>Array.prototype.map.call(
-  document.querySelectorAll('#csvMwAmzList > div'),
+  document.querySelectorAll('#csvMwAmzList [data-mwrow],#csvMwAmzList [data-buyrow]'),
   (el)=>((el.innerText||'').match(/\b\d{13}\b/)||[''])[0]).filter(Boolean));
 
 console.log('=== 外す（確認は出さず、元に戻すを出す）===');

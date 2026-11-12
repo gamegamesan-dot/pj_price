@@ -304,6 +304,34 @@ f=A.transFill(TR,{ 'ゼルダの伝説 知恵のかりもの':'The Legend of Zel
 ok(f.n===1,'★★入れる項目は選べる');
 ok(A.transFill('',{}).n===0,'★空でも落ちない');
 
+console.log('\n=== ゲームソフトは一律の重さ（6.183／【2】）===');
+{
+  /* Shopify の送料は本数ではなく**合計の重さ**で段が変わるので、
+     1本ごとにばらつく Amazon の梱包重量だと本数と段が合わない。 */
+  ok(A.isGame({ kishu:'NS' })===true&&A.isGame({ kishu:'NS2' })===true,
+     '★★★機種がゲームの行を見分ける');
+  ok(A.isGame({ kishu:'FIG' })===false&&A.isGame({ kishu:'' })===false,
+     '★★ゲーム以外は当てはまらない');
+  ok(A.weightOf({ kishu:'NS', size_g:118 },{ gameG:100 })===100,
+     '★★★ゲームソフトは⚙の一律の重さ（118g でも 100g）');
+  ok(A.weightOf({ kishu:'NS', size_g:118 },{ gameG:100, addG:50 })===100,
+     '★★★ゲームソフトには足し分も足さない');
+  ok(A.weightOf({ kishu:'FIG', size_g:400 },{ gameG:100, addG:50 })===450,
+     '★★★ゲーム以外は今までどおり（梱包重量＋足し分）');
+  ok(A.weightOf({ kishu:'NS', size_g:118 },{ gameG:0, addG:0 })===118,
+     '★★★⚙を 0 にすると今までどおり');
+  ok(A.weightOf({ kishu:'NS', size_g:0 },{ gameG:100 })===100,
+     '★★重さが取れていないゲームソフトも 100g で出せる');
+  ok(A.weightOf({ kishu:'FIG', size_g:0 },{ gameG:100 })===0,
+     '★ゲーム以外で重さが無ければ 0（画面が注意を出す）');
+  const t=A.build([Object.assign({},IT,{ kishu:'NS', size_g:118 })],
+    { date:DAY, gameG:100 });
+  ok(cell(t,1,'Variant Grams')==='100','★★★CSV にも一律の重さで入る');
+  /* 1〜2本 ¥200（0〜250g）・3本 ¥300（251〜350g）・4本〜 ¥600（351g〜）。 */
+  ok(100*2<=250&&100*3>250&&100*3<=350&&100*4>350,
+     '★★★100g なら 1〜2本／3本／4本以上 が送料の段と合う');
+}
+
 console.log('\n=== 仕入原価（Cost per item・6.178／【2】）===');
 {
   ok(A.COLS.indexOf('Cost per item')>=0,'★★★Cost per item の列を出す');

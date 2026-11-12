@@ -17,6 +17,7 @@ const p=await T.open();
 const SUB=(o)=>Object.assign({
   jan:'4902370550467', name:'スーパーマリオパーティ ジャンボリー',
   asin:'B0D1GSZJ8T', kishu:'Switch', on:1, max_qty:3,
+  /* 6.183：機種がゲームかどうかで重さの決め方が変わる。 */
   price:0, grades:'', cost:3476, size_tier:'s', size_g:110, size_long:14,
   amz_price:6000, fee_total:900 },o||{});
 
@@ -126,6 +127,54 @@ await setup({ rows:[SUB({ price:9800 })] });
     return rows[1][i];
   });
   ok(px==='9800','★★★人が直した値は決め直さない');
+}
+
+console.log('\n=== ③の2 ゲームソフトは一律の重さ（6.183・【2】）===');
+await setup({ rows:[SUB({ kishu:'NS', size_g:118 })] });
+{
+  const t=await p.evaluate(()=>({
+    g:($('mwSubGameG')||{}).value,
+    fn:(typeof mwSubGameG==='function')?mwSubGameG():null }));
+  console.log('   '+JSON.stringify(t));
+  ok(t.g==='100','★★★⚙「ゲームソフト1本の重さ」の既定は 100g');
+  ok(t.fn===100,'★★⚙の値を1か所で読む');
+  const w=await p.evaluate(async()=>{
+    window.__dl=[];
+    await mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,250));
+    const rows=PJ_SHOPCSV.splitCsv(window.__dl[0].text);
+    const i=rows[0].indexOf('Variant Grams');
+    return rows[1][i];
+  });
+  console.log('   Variant Grams '+w);
+  ok(w==='100','★★★ゲームソフトは 118g ではなく 100g で出る');
+  /* ⚙を 0 にすると今までどおり（Amazon の梱包重量＋足し分）。 */
+  const w2=await p.evaluate(async()=>{
+    $('mwSubGameG').value='0';
+    window.__dl=[];
+    await mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,250));
+    $('mwSubGameG').value='100';
+    const rows=PJ_SHOPCSV.splitCsv(window.__dl[0].text);
+    const i=rows[0].indexOf('Variant Grams');
+    return rows[1][i];
+  });
+  ok(w2==='118','★★★0 にすると今までどおり（118g）');
+}
+await setup({ rows:[SUB({ kishu:'FIG', size_g:400 })] });
+{
+  const w=await p.evaluate(async()=>{
+    $('mwSubAddG').value='50';
+    window.__dl=[];
+    await mwSubCsvGo();
+    await new Promise((x)=>setTimeout(x,250));
+    $('mwSubAddG').value='0';
+    const rows=PJ_SHOPCSV.splitCsv(window.__dl[0].text);
+    const i=rows[0].indexOf('Variant Grams');
+    return rows[1][i];
+  });
+  console.log('   フィギュア: '+w);
+  ok(w==='450','★★★ゲーム以外は今までどおり（梱包重量＋足し分）');
 }
 
 console.log('\n=== ④ 仕入れタブの畳んである欄（6.179・【5】）===');

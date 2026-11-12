@@ -294,12 +294,14 @@ ok(again.net===Math.round(again.profit*0.9),'★税抜も付いてくる');
 
 /* ===== v221（6.133）：写真の様子と手数料の様子 ===== */
 console.log('\n=== 行に写真の様子を出す ===');
-await p.evaluate(()=>{ switchTab('F'); mwAmzRender(); });
+/* 6.182：一覧は 1商品＝1行（畳んである）が既定なので、中身を見るために開く。 */
+await p.evaluate(()=>{ switchTab('F'); mwOpenAll=1; mwAmzRender(); });
 await p.waitForTimeout(150);
 const pics=await p.evaluate(()=>{
   const d=document.querySelector('#csvMwAmzList');
-  const rows=Array.prototype.map.call(d.querySelectorAll('div'),
-    (x)=>x.innerText||'');
+  /* 6.182：行は details.mwrow。開いていれば中身まで innerText に入る。 */
+  const rows=Array.prototype.map.call(
+    d.querySelectorAll('details.mwrow,div'),(x)=>x.innerText||'');
   const hit=rows.filter((t)=>/千銃士/.test(t))[0]||'';
   const none=rows.filter((t)=>/グリザイア/.test(t))[0]||'';
   const img=d.querySelector('img');

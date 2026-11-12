@@ -149,6 +149,36 @@ details.exp>summary::-webkit-details-marker{display:none}
 details.exp>summary::after{content:' ▸'}
 details.exp[open]>summary::after{content:' ▾'}
 details.exp>summary:active{opacity:.6}
+/* ===== 6.182（v263）刈取・仕入れの一覧は 1商品＝1行 =====
+   畳んだ状態（既定）は 商品名の1行＋数字の1行だけ。押すと今までの中身が
+   そのまま開く（消した項目はない）。
+   ・2行目は**スマホの幅（375px）で折り返さない**こと。
+     nowrap＋はみ出しは隠す。数字は tabular-nums で桁をそろえる
+   ・印は**行の高さを増やさない**よう、1行目の右端に小さな丸で出す */
+details.mwrow{margin:6px 0;padding:0;border:1px solid var(--line);
+        border-radius:6px;overflow:hidden;border-top:1px solid var(--line)}
+details.mwrow.ok{border-color:var(--good);background:#f6fff4}
+details.mwrow.dup{border-color:var(--bad);background:#fff7f7}
+details.mwrow>summary{list-style:none;cursor:pointer;display:block;
+        padding:5px 7px;font-weight:400;font-size:12px;color:var(--fg)}
+details.mwrow>summary::-webkit-details-marker{display:none}
+details.mwrow>summary::after{content:none}
+details.mwrow>summary:active{opacity:.6}
+details.mwrow>.mwbody{padding:0 7px 7px}
+.mwsum1{display:flex;gap:5px;align-items:center;min-width:0}
+.mwsum1 .nm{flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;
+        text-overflow:ellipsis;font-size:12.5px}
+.mwsum2{display:flex;gap:6px;align-items:baseline;margin-top:2px;
+        white-space:nowrap;overflow:hidden;font-size:11.5px;color:var(--mute);
+        font-variant-numeric:tabular-nums}
+.mwsum2 b{color:var(--fg)}
+.mwsum2 .c1{flex:0 0 52px;text-align:right}
+.mwsum2 .c2{flex:0 0 70px}
+.mwsum2 .c3{flex:0 0 74px}
+.mwsum2 .c4{flex:0 0 auto}
+.mwsum2 .bad{color:var(--bad)}
+.mwdot{display:inline-block;width:8px;height:8px;border-radius:50%;
+        flex:0 0 auto}
 /* タブの目次（6.150）。欄が増えてスクロールが長くなったので、
    タブの上に「どこに何があるか」を並べ、押すとその欄へ飛ぶ（畳んでいたら開く）。 */
 .toc{display:flex;flex-wrap:wrap;gap:5px;margin:10px 0 0}
@@ -1132,6 +1162,11 @@ body.staff #syncOnHandFix{display:none !important}
       </div>
       <div class="note2" id="csvMwAmzListNote" style="margin-top:2px"
         data-toc="刈取の一覧"></div>
+      <!-- 6.182（v263）一覧は 1商品＝1行。押すと詳しい項目が開く。 -->
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+        <button class="btn" id="mwOpenAllBtn" onclick="mwOpenAllSet(!mwOpenAll);return false" style="flex:0 0 auto;padding:4px 10px;font-size:12px">すべて開く</button>
+        <span class="note2" style="margin:0;flex:1 1 0;min-width:0">行を押すと、手数料の内訳・JAN・ASIN・MW在庫・動き・備考・Keepa・「仕入れる」「会員に出す」が開きます（開閉はこの端末に覚えます）。</span>
+      </div>
       <div id="csvMwAmzList" style="margin-top:6px"></div>
     </div>
   </section>
@@ -1886,6 +1921,11 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>（Amazon の実売 − Amazon の手数料 − 販売価格）が
           この額を下回る商品は「<b>会員向きではありません</b>」と出します。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
+        <!-- 6.183（v263）ゲームソフトは一律の重さ。Shopify の送料は本数ではなく
+             合計の重さで段が変わるので、1本ごとにばらつく Amazon の梱包重量だと
+             本数と段が合わない。 -->
+        <div class="row cfgprice"><label for="mwSubGameG">ゲームソフト1本の重さ（Shopify 用）</label><input type="number" id="mwSubGameG" value="100" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>機種がゲームの行</b>（NS／NS2／PS5 など）の <code>Variant Grams</code> は、Amazon の梱包重量ではなく<b>この値</b>にします。Shopify の送料は<b>本数ではなく合計の重さ</b>で段が変わるので、1本ごとにばらつく梱包重量のままだと本数と段が合いません（例：2本で段が上がってしまう）。<br><b>0 にすると今までどおり</b>（Amazon の梱包重量＋下の足し分）になります。ゲームソフト以外は下の足し分のままです。<br>送料の段は <b>0〜250g ¥200／251〜350g ¥300／351g〜 ¥600</b> の予定なので、100g なら 1〜2本 ¥200・3本 ¥300・4本以上 ¥600 になります（4本以上を無料にするなら、Shopify 側で「¥○○以上は送料無料」を足してください）。<br><b>限定版など重いものは機種がゲームでも 100g で出ます</b>。重さで分けたい商品は、この欄を 0 にするか、Shopify 側で個別に直してください。</div>
         <div class="row cfgprice"><label for="mwSubAddG">Shopify に出す重さの足し分</label><input type="number" id="mwSubAddG" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
           <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
@@ -5476,6 +5516,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
                  'mwSubGrossMin',
                  'mwSubLoc','mwSubAddG',
+                 /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
+                 'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
@@ -14298,6 +14340,105 @@ function mwRegGo(){
       });
   });
 }
+/* ===== 6.182（v263）一覧は 1商品＝1行。詳しい項目は畳む =====
+   スマホで1画面に1商品しか出ず、一覧として見比べられなかった。
+   畳んだ状態（既定）は
+     1行目 … 商品名（1行で切る・末尾は…）＋ 印（小さな丸）
+     2行目 … 大分類ランキング ／ MW卸値（税抜）／ Amazon の販売価格 ／
+              利益額（MW送料込み・税抜。カードの先頭に出していたもの）
+   行を押すと、今までのカードの中身がそのまま開く（消した項目はない）。
+   開閉の状態は端末に覚える（localStorage）。 */
+var MW_OPEN_KEY='pj_mw_open';
+var MW_OPEN_MAX=400;             // 覚えておく行の数（これを超えたら忘れる）
+var mwOpenAll=0, mwOpenRow={};
+function mwOpenLoad(){
+  try{
+    var o=JSON.parse(localStorage.getItem(MW_OPEN_KEY)||'{}')||{};
+    mwOpenAll=o.all?1:0;
+    mwOpenRow=(o.rows&&typeof o.rows==='object')?o.rows:{};
+  }catch(e){ mwOpenAll=0; mwOpenRow={}; }
+}
+function mwOpenSave(){
+  try{
+    if(Object.keys(mwOpenRow).length>MW_OPEN_MAX)mwOpenRow={};
+    localStorage.setItem(MW_OPEN_KEY,
+      JSON.stringify({ all:mwOpenAll, rows:mwOpenRow }));
+  }catch(e){}
+}
+/* その行をいま開くか。個別に押した行はその通り、ほかは「すべて」に従う。 */
+function mwRowOpen(jan){
+  var v=mwOpenRow[String(jan||'')];
+  if(v===1)return true;
+  if(v===0)return false;
+  return !!mwOpenAll;
+}
+function mwRowOpenSet(jan,on){
+  var j=String(jan||''), v=on?1:0;
+  if(v===(mwOpenAll?1:0))delete mwOpenRow[j]; else mwOpenRow[j]=v;
+  mwOpenSave();
+}
+/* 「すべて開く／すべて畳む」。個別の記憶は捨てて、全部そろえる。 */
+function mwOpenAllSet(on){
+  mwOpenAll=on?1:0; mwOpenRow={}; mwOpenSave();
+  mwOpenBtnRender();
+  if(mwAmzView==='buy'){ if(mwBuyRows&&mwBuyRows.length)mwBuyRender(); }
+  else if(mwAmzRows&&mwAmzRows.length)mwAmzRender();
+}
+function mwOpenBtnRender(){
+  var b=$('mwOpenAllBtn'); if(!b)return;
+  b.textContent=mwOpenAll?'すべて畳む':'すべて開く';
+}
+/* 畳んだ状態でも分かる印（小さな丸）。行の高さは増やさない。 */
+function mwRowDots(r){
+  var row=r||{}, jan=String(row.jan||''), d=[];
+  if(mwBuyQtyOf(jan))d.push(['var(--good)','仕入れる']);
+  if(typeof mwSubOn==='function'&&mwSubOn(jan))d.push(['#1668c1','会員に出す']);
+  if(row.amz)d.push(['var(--bad)','Amazon本体あり']);
+  var st=mwRstOf(row);
+  if(st==='blocked')d.push(['var(--bad)','出品できない']);
+  else if(st==='approval')d.push(['#a86b00','許可が要る']);
+  else if(st==='ok')d.push(['var(--good)','出品できる']);
+  var c=null;
+  try{ c=mwStat(row); }catch(e){ c=null; }
+  if(c&&c.noBack)d.push(['#b07000','在庫処分・再入荷なし']);
+  return d.map(function(x){
+    return '<span class="mwdot" style="background:'+x[0]+'" title="'+esc(x[1])
+      +'" aria-label="'+esc(x[1])+'"></span>';
+  }).join('');
+}
+/* 畳んだ状態の2行（商品名＋数字）。 */
+function mwRowSum(r,c){
+  var row=r||{};
+  var name=String(row.amz_name||row.mw_name||row.name||row.jan||'');
+  var rk=mwRankOf(row);
+  var net=c?(+c.net||0):null;
+  return '<div class="mwsum1"><span class="nm">'+esc(name)+'</span>'
+    +mwRowDots(row)+'</div>'
+    +'<div class="mwsum2">'
+    +'<span class="c1">'+(rk?(mwN(rk)+'位'):'—')+'</span>'
+    +'<span class="c2">卸 '+yen(+row.wholesale||0)+'</span>'
+    +'<span class="c3">売 '+(c?yen(+c.price||0):'—')+'</span>'
+    +'<span class="c4'+((net!==null&&net<0)?' bad':'')+'">利 <b'
+    +((net!==null&&net<0)?' class="bad"':'')+'>'
+    +(net===null?'—':yen(net))+'</b></span>'
+    +'</div>';
+}
+/* 行（details）の外側。中身（body）はそのまま入れる。 */
+function mwRowWrap(jan,cls,sum,body){
+  return '<details class="mwrow'+(cls?(' '+cls):'')+'"'
+    +' data-mwrow="'+esc(jan)+'"'+(mwRowOpen(jan)?' open':'')+'>'
+    +'<summary>'+sum+'</summary>'
+    +'<div class="mwbody">'+body+'</div></details>';
+}
+/* 開閉を端末に覚える（一覧を作り直すたびに結び直す）。 */
+function mwRowBind(){
+  var el=$('csvMwAmzList'); if(!el)return;
+  Array.prototype.forEach.call(el.querySelectorAll('details[data-mwrow]'),
+    function(d){
+      d.ontoggle=function(){ mwRowOpenSet(d.getAttribute('data-mwrow'),d.open); };
+    });
+  mwOpenBtnRender();
+}
 function mwAmzRender(){
   mwAmzView='list';
   var note=$('csvMwAmzListNote'), el=$('csvMwAmzList');
@@ -14394,9 +14535,8 @@ function mwAmzRender(){
     /* JAN重複の行は ASIN が無いので利益が出せない。短い札だけ出して
        候補を選べるようにする（6.112）。 */
     if(!c)
-      return '<div style="margin:6px 0;padding:6px;border:1px solid var(--bad);'
-        +'border-radius:6px;background:#fff7f7">'
-        +'<b style="color:var(--bad)">JAN重複（要確認）</b>'
+      return mwRowWrap(jan,'dup',mwRowSum(r,null),
+        '<b style="color:var(--bad)">JAN重複（要確認）</b>'
         +'<div class="note2" style="margin:2px 0 0">'
         +esc(String(r.mw_name||'').slice(0,60))+'</div>'
         +'<div class="note2" style="margin:2px 0 0">'
@@ -14404,13 +14544,11 @@ function mwAmzRender(){
         +' style="text-decoration:underline dotted">'+esc(jan)+'</a>'
         +'　社 '+esc(r.sha||'')+'　'+esc(r.kishu||'')
         +'　<b>MW卸値</b> '+yen(+r.wholesale||0)+'（税抜）</div>'
-        +mwJanDupLine(r)
-        +'</div>';
-    /* data-mwrow：行を見分ける印（6.146。ジャンルの絞り込みの確認にも使う）。 */
-    return '<div data-mwrow="'+esc(jan)+'"'
-      +' style="margin:6px 0;padding:6px;border:1px solid var(--line);'
-      +'border-radius:6px'+(q?';border-color:var(--good);background:#f6fff4':'')+'">'
-      +'<b>'+yen(c.net)+'</b>'
+        +mwJanDupLine(r));
+    /* data-mwrow：行を見分ける印（6.146。ジャンルの絞り込みの確認にも使う）。
+       6.182：畳んだ状態は mwRowSum の2行だけ。中身はそのまま下に入る。 */
+    return mwRowWrap(jan,(q?'ok':''),mwRowSum(r,c),
+      '<b>'+yen(c.net)+'</b>'
       +' <span class="note2">（税抜・'+esc(mwNetLabel())+'・税込 '+yen(c.profit)
       +'・利益率 '+c.margin+'%）</span>'
       +(r.amz?' <span class="badge" style="background:var(--bad)">Amazon本体あり</span>':'')
@@ -14473,8 +14611,7 @@ function mwAmzRender(){
       +' onchange="mwBuyQtyChange(\''+esc(jan)+'\')"><span class="unit">点</span>'
       +'</div>'
       /* 6.170（【U の改】）会員に出す印・販売数の上限・販売価格。 */
-      +mwSubLine(r)
-      +'</div>';
+      +mwSubLine(r));
   };
   if(sort==='genre'){
     var g={};
@@ -14501,6 +14638,7 @@ function mwAmzRender(){
       +'<b>'+mwAmzSortName(sort)+'</b>（全ジャンル）</div>'
       +listMoreHtml('mwamzall',list.map(line),'',10);
   }
+  mwRowBind();
   mwBuyBarRender();
 }
 /* ===== 6.170（【U の改】）会員に出す商品と Shopify 用 CSV =====
@@ -14708,6 +14846,8 @@ function mwSubOpt(){
            first:!!($('mwSubInvFirst')||{}).checked,
            /* 6.173：Shopify に出す重さの足し分（eBay の梱包マージンとは別）。 */
            addG:mwSubAddG(),
+           /* 6.183：ゲームソフト1本の重さ（0 なら今までどおり）。 */
+           gameG:mwSubGameG(),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
            /* 6.178（【2】）仕入原価（Cost per item）と販売価格の決め方。 */
@@ -14722,6 +14862,13 @@ function mwSubColStyle(){
 /* Shopify に出す重さの足し分（g）。既定 0。 */
 function mwSubAddG(){
   return Math.max(0,Math.min(2000,+(($('mwSubAddG')||{}).value)||0));
+}
+/* 6.183：ゲームソフト1本の重さ（Shopify 用・既定 100g）。0 なら使わない。 */
+function mwSubGameG(){
+  var el=$('mwSubGameG');
+  if(!el)return 100;
+  var n=+el.value;
+  return (isFinite(n)&&n>=0)?Math.min(2000,Math.round(n)):100;
 }
 /* CSV に出す品物。pj-sync の控え（/mw/sub）を正とし、
    名前・ASIN・機種・重さもそちらの値を使う（画面を開いていなくても同じ）。 */
@@ -22822,6 +22969,7 @@ csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRe
 roleLoad(); roleApply();          // 作業者用キーなら価格の欄を出さない（6.52）
 uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
 syncSentLoad(); syncMoreLoad(); detLoad(); boxApply();   // 折りたたみの開閉（6.80）
+mwOpenLoad(); mwOpenBtnRender();   // 6.182：一覧の行の開閉
 /* 1ページの件数は⚙設定と一覧の上の2か所にある。保存された値を両方に入れる。 */
 $('csvPerPage2').value=$('csvPerPage').value;
 $('syncPerPage2').value=$('syncPerPage').value;
@@ -22882,7 +23030,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v262';   // sw.js の const V と必ず同じ値にする
+var APP_V='v263';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
