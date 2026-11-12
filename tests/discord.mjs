@@ -81,8 +81,13 @@ ok(chNames.indexOf('はじめに')>=0&&chNames.indexOf('リスト-プレミア�
    '★★★表のチャンネルがぜんぶある');
 ok(!CFG.categories.some((c)=>c.channels.some((x)=>Number(x.type)===2)),
    '★★通話チャンネルは作らない');
-ok(CFG.plans.length===4&&CFG.plans[2].deal==='24時間先行',
+/* 8.11（【Y】）プランの表は shared/subplan.js と同じ中身にする。 */
+ok(CFG.plans.length===4
+   &&(CFG.plans.filter((p)=>p.role==='premium')[0]||{}).deal==='24時間先行',
    '★プランの表も JSON に持つ（配信の設定で使う）');
+ok((CFG.plans.filter((p)=>p.role==='monitor')[0]||{}).on===true
+   &&CFG.plans.filter((p)=>p.role!=='monitor').every((p)=>p.on===false),
+   '★★★いま動かすのはモニターだけ（ほかは設定だけ持って止める）');
 
 console.log('\n=== --dry-run は1回も書き込まない ===');
 let g=fakeGuild();
@@ -272,8 +277,13 @@ ok(rd.indexOf('permissions='+permBits(INVITE_PERMS).toString())>0,
 ok(/PowerShell/.test(rd)&&/--dry-run/.test(rd)&&/もう一度/.test(rd),
    '★★実行手順（PowerShell・dry-run → 実行 → もう一度）');
 ok(/ids\.json/.test(rd)&&/\.gitignore/.test(rd),'★ids.json のことも書く');
-ok(/ライト \| 未定 \| 20件/.test(rd.replace(/\s*\|\s*/g,' | ')),
+/* 8.11：表に「出す商品」と「いま動かす」の列が増えた。 */
+ok(/ライト \| 未定 \| ゲームソフト全件 \| 20件/
+     .test(rd.replace(/\s*\|\s*/g,' | ')),
    '★★プランの表を README に残す');
+ok(/モニター \| 無料または割引 \| ゲームソフト通常版のみ \| 10件 \| 1点/
+     .test(rd.replace(/\s*\|\s*/g,' | ')),
+   '★★★モニターだけ動かすことが README にも書いてある');
 ok(/特権インテント/.test(rd),'★★特権インテントは要らないと書く');
 
 console.log('\n=== 置き場所と .gitignore ===');

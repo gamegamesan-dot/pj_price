@@ -127,8 +127,9 @@ ok(maskPerms(['ADMINISTRATOR'],undefined).bits===PERM.ADMINISTRATOR
    '★★権限が読めなかったときは絞らない（今までどおり）');
 let bad=''; try{ maskPerms(['NO_SUCH'],EIGHT); }catch(e){ bad=e.message; }
 ok(/知らない権限/.test(bad),'★知らない権限の名前はエラーにする');
-ok(permNames(EIGHT).length===8&&permNames(INV).length===11,
-   '★★ビット→名前の一覧（招待の権限は11個）');
+/* 8.14：ピン留めの権限（PIN_MESSAGES）を足したので12個。 */
+ok(permNames(EIGHT).length===8&&permNames(INV).length===12,
+   '★★ビット→名前の一覧（招待の権限は12個）');
 ok(permJa('ADD_REACTIONS')==='リアクションの追加（ADD_REACTIONS）',
    '★日本語の権限名を出す');
 ok(INVITE_PERMS.indexOf('ADD_REACTIONS')>=0
@@ -309,7 +310,7 @@ ok(rows2.some((r)=>(BigInt(r.deny)&PERM.ADD_REACTIONS)===PERM.ADD_REACTIONS),
 console.log('\n=== README の案内 ===');
 const rd=fs.readFileSync('README.md','utf8');
 ok(rd.indexOf('permissions='+permBits(INVITE_PERMS).toString())>0,
-   '★★★招待 URL の権限が11個ぶんに更新されている');
+   '★★★招待 URL の権限が12個ぶんに更新されている（8.14）');
 ok(/管理者（Administrator）は入れません/.test(rd),
    '★★ボットに管理者は持たせないと書く');
 ok(/いちばん上/.test(rd)&&/50013/.test(rd),

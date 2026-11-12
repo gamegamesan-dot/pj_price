@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v264';
+const V = 'pj-pricing-v265';
 const ASSETS = [
   './',
   './index.html',
@@ -20,6 +20,9 @@ const ASSETS = [
   './shared/mwfee.js',
   // MW のサイトの URL（7.138）。pj-sync も同じこのファイルを読む。
   './shared/mwsite.js',
+  // 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。
+  './shared/subplan.js',
+  './shared/subcard.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

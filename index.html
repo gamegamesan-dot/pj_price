@@ -1071,6 +1071,44 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="mwSubTrBtn" style="flex:0 0 auto" onclick="mwSubTransGo()">英題を入れる</button>
       </div>
       <div class="note2" id="mwSubTrNote" style="margin-top:2px"></div>
+      <!-- 8.11（【Y】）会員向け Discord の配信と、Shopify の注文の取り込み -->
+      <div data-toc="会員に配信する"></div>
+      <details class="exp" data-exp="subSend"><summary>説明</summary>
+        <div class="note2">
+          Shopify 用 CSV を書き出して <b>Shopify に読み込んだら</b>、
+          下の「<b>Shopify に読み込みました</b>」を押してください。
+          <b>印を付けた商品だけ</b>が会員向けの配信に載ります
+          （CSV を出しただけでは、Shopify に入ったか pj には分かりません）。<br>
+          カードに出る販売価格は、<b>CSV を書き出したときに決めて控えた値</b>です
+          （配信のときに引き直さないので、Shopify と必ず同じになります）。<br>
+          配信は<b>平日の朝</b>（⚙で時刻を決める）に自動で出ますが、
+          <b>「今すぐ送る」を押す運用でも始められます</b>。
+          同じ商品を同じチャンネルに二重には送らず、値段や残り数が変われば
+          <b>前のカードを書き換え</b>ます。
+        </div>
+      </details>
+      <div id="subBar" style="margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="subLoaded" style="flex:1" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
+        <button class="btn cfgprice" id="subPlanBtn" style="flex:1" onclick="subPlanGo();return false">今日の配信の予定を見る</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
+        <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
+      </div>
+      <div class="note2" id="subNote" style="margin-top:2px"></div>
+      <div id="subPlanList" style="margin-top:4px"></div>
+      <!-- 注文CSV の取り込み（8.13） -->
+      <div class="note2" style="margin-top:8px"><b>Shopify の注文を取り込む</b>　
+        Shopify の <b>注文 → エクスポート</b>（CSV）を選んでください。
+        同じファイルを2回読んでも二重には数えません。
+        <b>氏名・住所・メールは保存しません</b>（注文番号だけで追います）。</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+        <input type="file" id="subOrdFile" accept=".csv,text/csv" style="flex:1">
+        <button class="btn cfgprice" id="subOrdBtn" style="flex:0 0 auto" onclick="subOrdGo();return false">注文を取り込む</button>
+      </div>
+      <div class="note2" id="subOrdNote" style="margin-top:2px"></div>
+      <div id="subOrdList" style="margin-top:4px"></div>
       <!-- 仕入れる行の JAN だけをコピー（6.110） -->
       <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
       <div class="note2" id="csvMwJanNote" style="margin-top:2px;color:var(--good)"></div>
@@ -1920,6 +1958,29 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="mwSubGrossMin">会員の粗利の下限</label><input type="number" id="mwSubGrossMin" value="800" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
         <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>（Amazon の実売 − Amazon の手数料 − 販売価格）が
           この額を下回る商品は「<b>会員向きではありません</b>」と出します。</div>
+        <!-- 8.11（【Y】）会員向け Discord の配信。いまはモニターだけ動かす。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>会員向け Discord の配信</b></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOn"><label for="subOn" style="flex:1"><b>配信を使う</b>（平日の朝に自動で送る）</label></div>
+        <div class="note2" style="margin:0 0 4px">オフのあいだは<b>自動では送りません</b>。仕入れタブの「<b>今すぐ送る</b>」は、オフでも押せます（最初はこの形で始められます）。</div>
+        <div class="row cfgprice"><label for="subHour">配信の時刻（平日）</label><input type="number" id="subHour" value="8" step="1" min="0" max="23" inputmode="numeric"><span class="unit">時（日本時間）</span></div>
+        <div class="note2" style="margin:0 0 4px">毎時07分の回で見るので、8時の設定なら <b>8:07 ごろ</b>に出ます。土日は送りません。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subPre" checked><label for="subPre" style="flex:1">前日に「明日 ○時に配信します」の予告を出す</label></div>
+        <div class="row cfgprice"><label for="subDomain">Shopify のドメイン</label><input type="text" id="subDomain" value="" placeholder="omakase-ship.myshopify.com" style="flex:1"></div>
+        <div class="note2" style="margin:0 0 6px">購入リンクは <code>https://&lt;ここ&gt;/products/sub-&lt;JAN&gt;</code> になります。独自ドメインにしたらここを書き換えてください。<b>鍵（SHOPLOCK）がかかっているので、ログインしていない人はログイン画面に飛びます</b>（そのままでよいです）。</div>
+        <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
+        <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ）</label></div>
+        <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="subNLight">　1回の件数／1商品の数</label><input type="number" id="subNLight" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（いまは止めています）</label></div>
+        <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="subNStandard">　1回の件数／1商品の数</label><input type="number" id="subNStandard" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（いまは止めています）</label></div>
+        <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（いまは止めています・1点ものの先行）</label></div>
+        <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
         <!-- 6.183（v263）ゲームソフトは一律の重さ。Shopify の送料は本数ではなく
              合計の重さで段が変わるので、1本ごとにばらつく Amazon の梱包重量だと
@@ -2375,6 +2436,9 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwfee.js"></script>
 <!-- MW のサイトの URL（7.138）。画面と pj-sync が同じこれを読む。 -->
 <script src="./shared/mwsite.js"></script>
+<!-- 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。 -->
+<script src="./shared/subplan.js"></script>
+<script src="./shared/subcard.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2408,6 +2472,13 @@ var MWFEE=PJ_MWFEE;
 if(typeof PJ_MWSITE==='undefined')
   throw new Error('shared/mwsite.js が読み込めていません（MW のURL）');
 var MWSITE=PJ_MWSITE;
+/* 8.11（【Y】）会員向け Discord のプランの表とカードの作り方。
+   pj-sync（配信）も同じこれを読む。 */
+if(typeof PJ_SUBPLAN==='undefined')
+  throw new Error('shared/subplan.js が読み込めていません（プランの表）');
+if(typeof PJ_SUBCARD==='undefined')
+  throw new Error('shared/subcard.js が読み込めていません（会員用のカード）');
+var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -5523,6 +5594,12 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
                  'mwSubGrossMin',
                  'mwSubLoc','mwSubAddG',
+                 /* 8.11（【Y】）会員向け Discord の配信。 */
+                 'subOn','subHour','subPre','subDomain',
+                 'subOnMonitor','subNMonitor','subQMonitor','subChMonitor',
+                 'subOnLight','subNLight','subQLight','subChLight',
+                 'subOnStandard','subNStandard','subQStandard','subChStandard',
+                 'subOnPremium','subNPremium','subQPremium','subChPremium',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -12511,6 +12588,8 @@ function mwAmzLoad(){
       mwAmzRender();
       mwBuyLoad(true).then(function(){ mwAmzRender(); });
       mwSubLoad(true).then(function(){ mwAmzRender(); });
+      /* 8.11／8.13（【Y】）配信の帯と、取り込んだ注文のまとめも出す。 */
+      try{ subBarRender(); subOrdList(); }catch(e){}
     })
     ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
@@ -13358,6 +13437,10 @@ function mwBuyRowHtml(r){
     +' style="flex:0 0 auto;padding:4px 10px;font-size:12px">'
     +(gone?'この区分から外す':'外す')+'</button>'
     +'</div>'
+    /* 8.13（【Y】）会員の注文ぶん（MW への発注数に足す）。 */
+    +((+r.sub_qty>0)?('<div class="note2" style="margin:2px 0 0;color:#1668c1">'
+      +'<b>会員の注文 '+(+r.sub_qty)+'点</b>（Shopify・この数も仕入れてください）'
+      +'</div>'):'')
     +'<div class="note2" style="margin:2px 0 0">JAN '+esc(jan)
     +'　社 '+esc(r.sha||'')+'　機種 '+esc(r.kishu||'')
     +'　'+esc(r.cond||'')
@@ -14861,6 +14944,204 @@ function mwSubOpt(){
            px:mwSubPxOpt(),
            date:new Date() };
 }
+/* ===== 8.11／8.13（【Y】）会員向け Discord の配信と、Shopify の注文 =====
+   ・配信に載るのは「会員に出す」の印＋**Shopify に読み込みました**の印が
+     付いた商品だけ（CSV を出しただけでは Shopify に入ったか分からない）
+   ・カードの販売価格は CSV を書き出したときに控えた値（引き直さない）
+   ・同じ商品を同じチャンネルに二重に送らず、変わったら書き換える
+   式と表は shared/subplan.js・shared/subcard.js の1か所だけ。 */
+var subPlanData=null;
+function subNote(msg,bad){
+  var n=$('subNote'); if(!n)return;
+  n.innerHTML=msg||'';
+  n.style.color=bad?'var(--bad)':'';
+}
+function subReady(){
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    subNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return false;
+  }
+  return true;
+}
+/* 配信の様子の帯。 */
+function subBarRender(){
+  var el=$('subBar'); if(!el)return;
+  var d=subPlanData;
+  if(!d){ el.innerHTML='<span class="note2">「今日の配信の予定を見る」を押すと、'
+    +'今日どれが送られるか出ます。</span>'; return; }
+  if(d.table_ok===false){
+    el.innerHTML='<span style="color:var(--bad)">⚠ pj-sync 側の D1 に sub_post が'
+      +'ありません（migrate-0053-sub-post.sql を流してください）。</span>';
+    return;
+  }
+  var on=d.plans.filter(function(p){ return p.on&&p.ch; });
+  var add=on.reduce(function(a,p){ return a+(+p.add||0); },0);
+  var ed=on.reduce(function(a,p){ return a+(+p.edit||0); },0);
+  var kp=on.reduce(function(a,p){ return a+(+p.keep||0); },0);
+  el.innerHTML='<b>配信できる商品 '+mwN(+d.rows||0)+'件</b>'
+    +'（Shopify に読み込み済みの印が付いた行）'
+    +'　<b>新しく送る '+mwN(add)+'件</b>・書き換える '+mwN(ed)+'件'
+    +'・そのまま '+mwN(kp)+'件'
+    +'<div class="note2" style="margin:2px 0 0">'
+    +(d.on?'自動：<b>オン</b>（平日 '+(+d.hour||8)+'時台）'
+          :'自動：<b>オフ</b>（「今すぐ送る」で送れます）')
+    +(d.pre?'　予告：オン':'　予告：オフ')
+    +(d.skip?'　<b style="color:var(--bad)">今日は送らない印が付いています</b>':'')
+    +(d.token?'':'　<b style="color:var(--bad)">ボットのトークンが'
+      +'pj-sync に登録されていません</b>')
+    +(d.domain?'':'　<b style="color:var(--bad)">⚙の Shopify のドメインが'
+      +'空です（購入リンクが出ません）</b>')
+    +'</div>'
+    +'<div class="note2" style="margin:2px 0 0">'
+    +d.plans.map(function(p){
+      return esc(p.name)+' '+(p.on?(p.ch?('<b>'+mwN(p.items.length)+'件</b>')
+        :'<span style="color:var(--bad)">チャンネルID なし</span>'):'止めています');
+    }).join('　／　')+'</div>';
+}
+/* 今日の配信の予定を見る。 */
+/* quiet を渡すと、下の知らせ（結果の文）を上書きしない。
+   送ったあとに出し直すときに使う。 */
+function subPlanGo(quiet){
+  if(roleDenyPrice('subNote'))return;
+  if(!subReady())return;
+  if(!quiet)subNote('調べています…');
+  return mwGet('/sub/plan').then(function(d){
+    subPlanData=d; subBarRender();
+    var on=(d.plans||[]).filter(function(p){ return p.on&&p.ch; });
+    var rows=[];
+    on.forEach(function(p){
+      (p.items||[]).forEach(function(x){
+        rows.push('<div class="note2" style="margin:2px 0 0">'
+          +(x.sent?(x.same?'<span style="opacity:.6">そのまま</span>'
+                          :'<b>書き換え</b>'):'<b style="color:var(--good)">新しく送る</b>')
+          +'　'+esc(String(x.name||x.jan).slice(0,40))
+          +'　'+yen(+x.price||0)
+          +'　残り '+(+x.left||0)+'点'
+          +(x.gross!==null&&x.gross!==undefined?('　粗利の目安 '+yen(+x.gross)):'')
+          +'</div>');
+      });
+    });
+    $('subPlanList').innerHTML=rows.length?rows.join('')
+      :'<div class="note2">送る商品がありません（「Shopify に読み込みました」の'
+       +'印が付いた商品だけが載ります）。</div>';
+    if(!quiet)subNote('✓ 予定を出しました。');
+  })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
+}
+/* 今すぐ送る（確認してから）。 */
+function subSendGo(){
+  if(roleDenyPrice('subNote'))return;
+  if(!subReady())return;
+  var d=subPlanData;
+  if(!d){ subNote('先に「今日の配信の予定を見る」を押してください。',1); return; }
+  var on=(d.plans||[]).filter(function(p){ return p.on&&p.ch; });
+  var add=on.reduce(function(a,p){ return a+(+p.add||0); },0);
+  var ed=on.reduce(function(a,p){ return a+(+p.edit||0); },0);
+  if(!add&&!ed){ subNote('送るものがありません（ぜんぶ送り済みです）。'); return; }
+  var t='会員向けの Discord に送ります。\n\n'
+    +on.map(function(p){ return '・'+p.name+'：新しく '+p.add+'件・書き換え '
+      +p.edit+'件'; }).join('\n')
+    +'\n\n※ 販売価格は Shopify に入っている値をそのまま出します。'
+    +'\n※ 同じ商品は二重に送らず、変わったぶんは前のカードを書き換えます。'
+    +'\n\nよろしいですか？';
+  if(!confirm(t))return;
+  subNote('送っています…');
+  return mwPost('/sub/send',{ approve:true }).then(function(r){
+    if(r&&r.error){
+      subNote('⚠ 送れませんでした：'+esc(String(r.detail||r.error)),1); return;
+    }
+    subNote('✓ 新しく '+mwN(+r.sent||0)+'件・書き換え '+mwN(+r.edited||0)
+      +'件・そのまま '+mwN(+r.skipped||0)+'件');
+    return subPlanGo(true);
+  })['catch'](function(e){ subNote('⚠ 送れませんでした：'+e.message,1); });
+}
+/* 今日は送らない（印の付け外し）。 */
+function subSkipGo(){
+  if(roleDenyPrice('subNote'))return;
+  if(!subReady())return;
+  var off=!!(subPlanData&&subPlanData.skip);
+  return mwPost('/sub/skip',off?{ off:true }:{}).then(function(r){
+    subNote(r&&r.skip?'✓ 今日は自動で送りません（手で「今すぐ送る」は押せます）。'
+                     :'✓ 印を外しました。');
+    return subPlanGo(true);
+  })['catch'](function(e){ subNote('⚠ 印を変えられませんでした：'+e.message,1); });
+}
+/* 「Shopify に読み込みました」の印（CSV を読み込んだあとに押す）。 */
+function subLoadedGo(){
+  if(roleDenyPrice('subNote'))return;
+  if(!subReady())return;
+  subNote('印を付けています…');
+  return mwSubItems().then(function(d){
+    if(!d.table_ok){ subNote('⚠ pj-sync 側の D1 に mw_sub がありません。',1); return; }
+    var jans=(d.rows||[]).map(function(x){ return x.jan; });
+    if(!jans.length){ subNote('会員に出す印の付いた行がありません。',1); return; }
+    if(!confirm('いま「会員に出す」の印が付いている '+jans.length+'件に、'
+      +'「Shopify に読み込みました」の印を付けます。\n'
+      +'この印が付いた商品だけが会員向けの配信に載ります。\n\nよろしいですか？'))
+      return;
+    return mwPost('/sub/loaded',{ jans:jans }).then(function(r){
+      if(r&&r.error){
+        subNote('⚠ 印を付けられませんでした：'+esc(String(r.detail||r.error)),1);
+        return;
+      }
+      subNote('✓ '+mwN(+r.n||0)+'件に印を付けました。');
+      return subPlanGo(true);
+    });
+  })['catch'](function(e){ subNote('⚠ 印を付けられませんでした：'+e.message,1); });
+}
+/* 注文CSV を読み込む（8.13）。 */
+function subOrdGo(){
+  var n=$('subOrdNote');
+  if(roleDenyPrice('subOrdNote'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    n.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+  }
+  var f=($('subOrdFile')||{}).files;
+  if(!f||!f.length){ n.textContent='注文CSV のファイルを選んでください。'; return; }
+  n.textContent='読んでいます…';
+  var file=f[0];
+  var rd=new FileReader();
+  rd.onload=function(){
+    mwPost('/sub/orders',{ text:String(rd.result||''), name:file.name })
+      .then(function(r){
+        if(r&&r.error){
+          n.innerHTML='⚠ 取り込めませんでした：'
+            +esc(String(r.detail||r.error)); return;
+        }
+        n.innerHTML='✓ '+mwN(+r.added||0)+'件を取り込みました'
+          +'（二重 '+mwN(+r.dup||0)+'件・会員用でない行 '+mwN(+r.other||0)+'件）。'
+          +'　カードを書き換え '+mwN(+r.edited||0)+'件'
+          +'・完売 '+mwN(+r.sold_out||0)+'件'
+          +((r.short||[]).length?('<br><span style="color:var(--bad)">'
+            +'⚠ MW の在庫が足りない商品が '+mwN(r.short.length)
+            +'件あります（返金が必要かもしれません）。社内用の Discord にも'
+            +'知らせました。</span>'):'');
+        return subOrdList();
+      })['catch'](function(e){ n.textContent='⚠ 取り込めませんでした：'+e.message; });
+  };
+  rd.onerror=function(){ n.textContent='⚠ ファイルを読めませんでした。'; };
+  rd.readAsText(file);
+}
+/* 取り込んだ注文のまとめ。 */
+function subOrdList(){
+  var el=$('subOrdList'); if(!el)return Promise.resolve();
+  return mwGet('/sub/orders').then(function(d){
+    if(!d||d.table_ok===false){ el.innerHTML=''; return; }
+    var rows=(d.rows||[]).slice(0,50);
+    if(!rows.length){ el.innerHTML='<div class="note2">まだ注文はありません。</div>';
+      return; }
+    el.innerHTML='<div class="note2" style="margin:4px 0 2px"><b>会員の注文 '
+      +mwN(+d.qty||0)+'点</b>（'+mwN(+d.all||0)+'行）</div>'
+      +rows.map(function(x){
+        return '<div class="note2" style="margin:2px 0 0">'
+          +esc(String(x.name||x.jan).slice(0,36))
+          +'　<b>'+(+x.qty||0)+'点</b>'
+          +'　残り '+(+x.left||0)+'点'
+          +(x.sold_out?' <span class="badge" style="background:#8a8a8a">完売</span>':'')
+          +'</div>';
+      }).join('');
+  })['catch'](function(){ });
+}
 /* 列名の形（6.176）。'old'＝ストアの書き出しに合わせる（既定）／'new'。 */
 function mwSubColStyle(){
   var v=String((($('mwSubCols')||{}).value)||'old');
@@ -14943,7 +15224,10 @@ function mwSubCsvGo(){
       /* 6.178（【2】）上乗せを振り直した件数。 */
       +(d.reroll?('<br>販売価格の<b>上乗せを '+mwN(d.reroll)
         +'件ぶん決め直しました</b>（出し直すたびに変わります。'
-        +'人が直した値はそのままです）。'):'');
+        +'人が直した値はそのままです）。'):'')
+      /* 8.11（【Y】）Shopify に読み込んだら印を付けてもらう。 */
+      +'<br><b>Shopify に読み込んだら、下の「Shopify に読み込みました」を'
+      +'押してください</b>（印が付いた商品だけが会員向けの配信に載ります）。';
     /* 出した印（SKU の日付に使う）と、決め直した販売価格。
        失敗しても CSV は出せている。 */
     var px={};
@@ -23036,7 +23320,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v264';   // sw.js の const V と必ず同じ値にする
+var APP_V='v265';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

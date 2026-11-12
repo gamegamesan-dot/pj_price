@@ -57,6 +57,12 @@ on:
         description: 'このファイルを流し直す（例 0048・mw-auto・空なら指定なし）'
         type: string
         default: ''
+      # 8.11（【Y】）GitHub の Secrets に入れた鍵を Worker に移す。
+      # 値はここにも記録にも出ない（wrangler が標準入力から受け取る）。
+      put_secrets:
+        description: '鍵を Worker に登録し直す（GitHub の Secrets から）'
+        type: boolean
+        default: false
 
 # 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
 # 走っている途中のものは止めない（D1 の作業を中断させない）。
@@ -164,6 +170,34 @@ jobs:
             | sed 's/.*: *//')" || true
           echo "version=$VER" >> "$GITHUB_OUTPUT"
 
+      # ---- 鍵を Worker に登録する（8.11・【Y】）----
+      # スマホからでも鍵を入れ直せるように、GitHub の Secrets から移す。
+      # ・値は echo しない（`wrangler secret put` に標準入力で渡す）
+      # ・Secrets が空のものは飛ばす（消したいときは Cloudflare の画面で消す）
+      # ・dry_run のときは何もしない
+      - name: 鍵を Worker に登録する
+        if: inputs.put_secrets && !inputs.dry_run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          set -o pipefail
+          put() {
+            name="$1"
+            # eval を使わずに中身を取る（値はここで表示しない）。
+            val="$(printf '%s' "${!name}")"
+            if [ -z "$val" ]; then
+              echo "$name: GitHub の Secrets が空なので飛ばします"
+              return 0
+            fi
+            printf '%s' "$val" \
+              | node ../node_modules/wrangler/bin/wrangler.js secret put "$name" \
+              > /dev/null
+            echo "$name: 登録しました（${#val} 文字）"
+          }
+          put DISCORD_BOT_TOKEN
+
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run
         run: echo "確かめだけ（dry_run）なのでデプロイしません。"
@@ -181,6 +215,7 @@ jobs:
           DEP: ${{ inputs.deploy }}
           BASE: ${{ inputs.baseline_to }}
           ALLOW: ${{ inputs.allow_data }}
+          SEC: ${{ inputs.put_secrets }}
           MIG_OUT: ${{ steps.migrate.outcome }}
           DEP_OUT: ${{ steps.deploy.outcome }}
           VER: ${{ steps.deploy.outputs.version }}
@@ -207,6 +242,9 @@ jobs:
             fi
             if [ "$ALLOW" = "true" ]; then
               printf 'データを動かすファイルも流す：オン\n'
+            fi
+            if [ "$SEC" = "true" ]; then
+              printf '鍵の登録：オン（値は出しません）\n'
             fi
             if [ -n "$VER" ]; then
               printf 'デプロイした版：%s\n' "$VER"

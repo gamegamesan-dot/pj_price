@@ -47,6 +47,11 @@ import MWFEE from "../shared/mwfee.js";
 /* 7.138（v264）MW のサイトの URL。画面と同じこれを読む。
    **社内用のカードだけ**に出す（会員には MW を見せない・§8.2）。 */
 import MWSITE from "../shared/mwsite.js";
+/* 8.11（【Y】）会員向け Discord の配信。プランの表・カードの作り方・
+   Shopify の CSV の読み方は shared の1か所だけ（画面と同じものを読む）。 */
+import SUBPLAN from "../shared/subplan.js";
+import SUBCARD from "../shared/subcard.js";
+import SHOPCSV from "../shared/shopcsv.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -238,6 +243,14 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/open\.er-api\.com\/v6\/latest\/USD$/ },
   { m: "GET",  re: /^https:\/\/api\.frankfurter\.app\/latest\?from=USD&to=JPY$/ },
   { m: "POST", re: /^https:\/\/discord(app)?\.com\/api\/webhooks\// },
+  /* 8.11（【Y】）会員向けの配信。ボットでカードを**送る・書き換える**。
+     Webhook は1つのチャンネルにしか出せず、別のメッセージも直せないので、
+     ここだけボットの口を使う（トークンは env.DISCORD_BOT_TOKEN）。
+     読むことはしない（メッセージの取得は許していない）。 */
+  { m: "POST",  write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages$/ },
+  { m: "PATCH", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages\/\d+$/ },
   /* MW（マッチングワールド）の商品画像（6.1）。**読み取りの1本だけ**。
      画像URLはログインなしで見られる。会員サイト（/buy/?q=）は見に行かない。
      MW が利用を許諾した画像だけを使い、Amazon の画像は使わない。 */
@@ -10291,6 +10304,538 @@ async function mwSubPutAt(env, body) {
   return Object.assign(await saveRun(env, run),
     { ok: true, n: jans.length, at: at, prices: npx });
 }
+/* ===== 8.11（【Y】）会員向け Discord の配信 =====
+   モニター5人に、平日の朝に商品リストを Discord で配信する。
+   ・配信するのは「会員に出す」の印が付いていて、**Shopify に読み込み済み**の
+     商品だけ（mw_sub.loaded_at）。CSV を書き出しただけでは Shopify に
+     入ったか pj には分からないので、**カジが印を付けてから**配信に載る
+   ・カードの販売価格は **mw_sub.price**（Shopify に入っている値）をそのまま出す。
+     上乗せ（¥10〜150 の乱数）は CSV を書き出したときに決めて控えてあるので、
+     配信のときに引き直さない（6.178）
+   ・同じ商品を同じチャンネルに二重に送らない（sub_post）。
+     出し直すときは前のカードを**書き換える**（msg_id）
+   ・プランの表は shared/subplan.js。いまはモニターだけ動かす
+   ・トークンは env.DISCORD_BOT_TOKEN（コード・ログ・知らせに出さない） */
+const SUB_SKIP_KEY = "sub.skip";        // 「今日は送らない」印（JSTの日）
+const SUB_PRE_KEY = "sub.pre";          // 予告を出した日
+const SUB_SEND_KEY = "sub.send";        // 配信した日
+const SUB_HOUR_DEFAULT = 8;             // 配信時刻（JST の時）
+const SUB_ROWS_MAX = 200;               // 1回に見る商品の数の上限
+const DC_API = "https://discord.com/api/v10";
+/* 表があるか（migrate-0053 を流す前は配信を動かさない）。 */
+async function subPostOk(env) {
+  return (await colOk(env, "sub_post", "msg_id"))
+    && (await colOk(env, "mw_sub", "loaded_at"));
+}
+/* JST の日（YYYY-MM-DD）と曜日（0=日）。 */
+function subJst(v) {
+  const t = Date.parse(String(v || "") || nowIso());
+  const d = new Date((isFinite(t) ? t : Date.now()) + JST_MS);
+  const p = (n) => (n < 10 ? "0" : "") + n;
+  return { day: d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-"
+             + p(d.getUTCDate()),
+           hour: d.getUTCHours(), dow: d.getUTCDay() };
+}
+/* ⚙ の設定。プランの表は shared/subplan.js に当てる。 */
+async function subSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const h = Math.round(Number(st.subHour) || 0);
+  return {
+    on: !!st.subOn,
+    hour: (h >= 0 && h <= 23) ? h : SUB_HOUR_DEFAULT,
+    pre: st.subPre === undefined ? true : !!st.subPre,
+    domain: String(st.subDomain || "").trim(),
+    plans: SUBPLAN.list(st),
+    active: SUBPLAN.active(st),
+  };
+}
+/* Discord のボットの口。トークンが無ければ何もしない（false を返す）。 */
+async function dcApi(env, run, method, path, body) {
+  if (!env.DISCORD_BOT_TOKEN)
+    return { ok: false, status: 0, err: "no_token" };
+  for (let i = 0; i < 4; i++) {
+    const resp = await net(run, DC_API + path, {
+      method: method,
+      headers: { "authorization": "Bot " + env.DISCORD_BOT_TOKEN,
+                 "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      write: true,          // 送る・書き換えるので（ALLOWED の write:true）
+    });
+    if (resp.ok) {
+      let d = null;
+      try { d = await resp.json(); } catch (e) { d = null; }
+      return { ok: true, status: resp.status, data: d };
+    }
+    if (resp.status === 429 && i < 3) {
+      let wait = 1;
+      try { wait = Number((await resp.json()).retry_after) || 1; }
+      catch (e) { wait = 1; }
+      await sleep(Math.min(5, Math.max(0.2, wait)) * 1000);
+      continue;
+    }
+    /* 本文は出さない（トークンや個人の情報が混ざらないように番号だけ）。 */
+    if (run) { run.errors++; run.notes.push("discord(bot) -> " + resp.status); }
+    return { ok: false, status: resp.status };
+  }
+  return { ok: false, status: 0 };
+}
+/* 配信できる商品。印あり＋Shopify に読み込み済み＋値段と数がある行だけ。 */
+async function subRows(env) {
+  if (!(await subPostOk(env))) return [];
+  const q = await env.DB.prepare(
+    `SELECT b.jan AS jan, b.max_qty AS max_qty, b.price AS price,
+            COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
+            b.put_at AS put_at,
+            s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+            a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
+            a.fee_total AS fee_total, a.size_tier AS size_tier,
+            a.size_g AS size_g
+       FROM mw_sub b
+            LEFT JOIN mw_stock s ON s.jan = b.jan
+            LEFT JOIN mw_amz a ON a.jan = b.jan
+      WHERE COALESCE(b.on_sale,0)=1
+        AND COALESCE(b.loaded_at,'') <> ''
+        AND COALESCE(b.price,0) > 0
+        AND COALESCE(b.max_qty,0) > 0
+      ORDER BY b.at DESC, b.jan ASC LIMIT ${SUB_ROWS_MAX}`).all();
+  return ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""),
+    name: String(r.amz_name || r.mw_name || ""),
+    asin: String(r.asin || ""),
+    kishu: String(r.kishu || ""),
+    price: Number(r.price) || 0,
+    qty: Number(r.max_qty) || 0,
+    grades: String(r.grades || ""),
+    loaded_at: String(r.loaded_at || ""),
+    /* 会員の粗利の目安（Amazon の実売 − 手数料 − 販売価格）。
+       手数料が取れていない行は null（当てずっぽうは出さない）。 */
+    gross: SUBPX.grossOf(Number(r.amz_price) || 0, Number(r.fee_total) || 0,
+                         Number(r.price) || 0),
+    size_tier: String(r.size_tier || ""),
+    size_g: Number(r.size_g) || 0,
+  }));
+}
+/* 送ったカードの控え（JAN → 行）。 */
+async function subPosts(env, ch) {
+  if (!(await subPostOk(env))) return {};
+  const q = await env.DB.prepare(
+    `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at, edited_at
+       FROM sub_post WHERE ch = ?1`).bind(String(ch || "")).all();
+  const m = {};
+  for (const r of ((q && q.results) || [])) m[String(r.jan)] = r;
+  return m;
+}
+/* そのプランに出す行を選ぶ（件数の上限まで）。 */
+function subPick(rows, plan, sent) {
+  const out = [];
+  for (const r of (rows || [])) {
+    if (out.length >= plan.n) break;
+    if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
+    const old = (sent || {})[r.jan];
+    /* 二重に送らない。すでに送っていて、値段も数も変わっていなければ飛ばす。 */
+    const same = old && Number(old.price) === r.price
+      && Number(old.qty) === r.qty;
+    out.push(Object.assign({}, r, {
+      sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
+      sold: old ? Number(old.sold) || 0 : 0,
+      same: !!same,
+      left: Math.max(0, r.qty - (old ? Number(old.sold) || 0 : 0)),
+    }));
+  }
+  return out;
+}
+/* 今日の配信の予定（画面の「予定を見る」と、配信の中身の両方に使う）。 */
+async function subPlanBuild(env) {
+  const cfg = await subSettings(env);
+  const rows = await subRows(env);
+  const day = subJst().day;
+  let skip = "";
+  try { skip = String(await stateGet(env, SUB_SKIP_KEY) || ""); } catch (e) {}
+  const out = { ok: true, day: day, skip: skip === day, on: cfg.on,
+                hour: cfg.hour, pre: cfg.pre, domain: cfg.domain,
+                rows: rows.length, token: !!env.DISCORD_BOT_TOKEN,
+                table_ok: await subPostOk(env), plans: [] };
+  for (const p of cfg.plans) {
+    const sent = p.ch ? await subPosts(env, p.ch) : {};
+    const pick = p.ch ? subPick(rows, p, sent) : [];
+    out.plans.push({
+      key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
+      n: p.n, q: p.q, kinds: p.kinds,
+      items: pick.map((x) => ({
+        jan: x.jan, name: x.name, price: x.price, qty: x.qty,
+        left: x.left, gross: x.gross, sent: x.sent, same: x.same })),
+      /* 送る（新しい）／書き換える（値段や数が変わった）／そのまま */
+      add: pick.filter((x) => !x.sent).length,
+      edit: pick.filter((x) => x.sent && !x.same).length,
+      keep: pick.filter((x) => x.same).length,
+    });
+  }
+  return out;
+}
+/* 1件ぶんのカード（shared/subcard.js）。 */
+function subCardOf(x, p, cfg, note) {
+  return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note });
+}
+/* 配信する。approve でないときは送らずに予定だけ返す。 */
+async function jobSubSend(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-send");
+  const res = { ok: false, sent: 0, edited: 0, skipped: 0, plans: [],
+                approve: o.approve === true };
+  try {
+    if (!(await subPostOk(env))) {
+      res.error = "no_table";
+      res.detail = "sub_post がありません（migrate-0053-sub-post.sql）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const cfg = await subSettings(env);
+    const rows = await subRows(env);
+    const day = subJst().day;
+    if (o.auto) {
+      let skip = "";
+      try { skip = String(await stateGet(env, SUB_SKIP_KEY) || ""); } catch (e) {}
+      if (skip === day) { res.why = "今日は送らない印が付いています"; res.ok = true;
+                          return Object.assign(await saveRun(env, run), res); }
+      if (!cfg.on) { res.why = "⚙で配信をオフにしています"; res.ok = true;
+                     return Object.assign(await saveRun(env, run), res); }
+    }
+    if (res.approve && !env.DISCORD_BOT_TOKEN) {
+      res.error = "no_token";
+      res.detail = "DISCORD_BOT_TOKEN が登録されていません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const only = String(o.plan || "").trim();
+    for (const p of cfg.active) {
+      if (only && p.key !== only) continue;
+      const sent = await subPosts(env, p.ch);
+      const pick = subPick(rows, p, sent);
+      const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0 };
+      for (const x of pick) {
+        if (x.same) { r.keep++; res.skipped++; continue; }
+        const card = subCardOf(x, p, cfg);
+        if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
+        const at = nowIso();
+        if (x.sent && x.msg_id) {
+          const e = await dcApi(env, run, "PATCH",
+            "/channels/" + p.ch + "/messages/" + x.msg_id, { embeds: [card] });
+          if (!e.ok) { r.fail++; continue; }
+          await env.DB.prepare(
+            `UPDATE sub_post SET price=?3, qty=?4, sold_out=?5, edited_at=?6
+              WHERE jan=?1 AND ch=?2`)
+            .bind(x.jan, p.ch, x.price, x.qty, x.left ? 0 : 1, at).run();
+          r.edit++; res.edited++;
+        } else {
+          const m = await dcApi(env, run, "POST",
+            "/channels/" + p.ch + "/messages", { embeds: [card] });
+          const id = String(((m.data || {}).id) || "");
+          if (!m.ok || !id) { r.fail++; continue; }
+          await env.DB.prepare(
+            `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,
+               at,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,0,0,?7,?7)
+             ON CONFLICT(jan,ch) DO UPDATE SET
+               msg_id=excluded.msg_id, price=excluded.price,
+               qty=excluded.qty, sold_out=0, edited_at=excluded.at`)
+            .bind(x.jan, p.ch, p.key, id, x.price, x.qty, at).run();
+          r.add++; res.sent++;
+        }
+      }
+      res.plans.push(r);
+    }
+    if (res.approve) {
+      try { await stateSet(env, SUB_SEND_KEY, day).run(); } catch (e) {}
+      run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
+        + res.edited + "件・そのまま " + res.skipped + "件");
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-send: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 前日の予告（オン／オフ）。同じ日に2回出さない。 */
+async function jobSubPre(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-pre");
+  const res = { ok: false, sent: 0 };
+  try {
+    const cfg = await subSettings(env);
+    if (!cfg.pre || !cfg.on) { res.why = "予告はオフです"; res.ok = true;
+                               return Object.assign(await saveRun(env, run), res); }
+    const day = subJst().day;
+    let done = "";
+    try { done = String(await stateGet(env, SUB_PRE_KEY) || ""); } catch (e) {}
+    if (done === day && !o.force) { res.why = "今日はもう出しています"; res.ok = true;
+                                    return Object.assign(await saveRun(env, run), res); }
+    const plan = await subPlanBuild(env);
+    const hh = (cfg.hour < 10 ? "0" : "") + cfg.hour;
+    for (const p of cfg.active) {
+      const pp = plan.plans.filter((z) => z.key === p.key)[0] || { items: [] };
+      const n = pp.items.length;
+      if (!n) continue;
+      const text = "🗓️ **明日 " + hh + ":00 に商品リストを配信します**（"
+        + n + "件の予定）。\nお買い逃しのないよう、朝にこのチャンネルをご覧ください。";
+      const m = await dcApi(env, run, "POST", "/channels/" + p.ch + "/messages",
+        { content: text });
+      if (m.ok) res.sent++;
+    }
+    if (res.sent) { try { await stateSet(env, SUB_PRE_KEY, day).run(); } catch (e) {} }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-pre: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 「今日は送らない」。印を付ける／外す。 */
+async function subSkipSet(env, on) {
+  const day = subJst().day;
+  await stateSet(env, SUB_SKIP_KEY, on ? day : "").run();
+  return { ok: true, day: day, skip: !!on };
+}
+/* 「Shopify に読み込みました」の印（CSV を読み込んだあとに人が押す）。 */
+async function subLoadedSet(env, body) {
+  if (!(await colOk(env, "mw_sub", "loaded_at")))
+    return { ok: false, error: "no_column",
+             detail: "mw_sub の loaded_at がありません（migrate-0053-sub-post.sql）" };
+  const o = body || {};
+  const jans = (Array.isArray(o.jans) ? o.jans : [])
+    .map((x) => String(x || "").replace(/\D/g, "")).filter(janOk).slice(0, 2000);
+  if (!jans.length) return { ok: true, n: 0 };
+  const run = newRun("sub-loaded");
+  const at = o.off ? null : nowIso();
+  await runBatch(env, run, jans.map((j) => env.DB.prepare(
+    `UPDATE mw_sub SET loaded_at=?2 WHERE jan=?1`).bind(j, at)));
+  run.notes.push((o.off ? "読み込みの印を外した：" : "Shopify に読み込んだ印：")
+    + jans.length + "件");
+  return Object.assign(await saveRun(env, run), { ok: true, n: jans.length,
+                                                  at: at || "", off: !!o.off });
+}
+/* ===== 8.13（【Y】の3）Shopify の注文を取り込む（当面は CSV）=====
+   Shopify の「注文のエクスポート」の CSV を読み、SKU（SUB-<JAN>-<日付>）で
+   突き合わせて残り数を数える。
+   ・**氏名・住所・メールは保存しない**（顧客は注文番号だけで追う）
+   ・同じ CSV を2回読んでも二重に数えない（(order_no, sku) で一意）
+   ・残り数が変わったカードは Discord で書き換え、0 になったら「完売」に
+   ・MW の在庫が足りない商品は「返金が必要」として社内用チャンネルに知らせる */
+const SUB_CSV_MAX = 20000;              // 1回に読む行の上限
+const SKU_RE = /^SUB-(\d{8,14})-(\d{8})$/i;
+function subSkuJan(sku) {
+  const m = SKU_RE.exec(String(sku || "").trim());
+  return m ? m[1] : "";
+}
+/* 注文CSV の1行から要るものだけ取り出す（ほかの列は読まない）。 */
+function subOrderRows(text) {
+  const rows = SHOPCSV.splitCsv(String(text || ""));
+  if (!rows.length) return { ok: false, error: "empty", rows: [] };
+  const head = (rows[0] || []).map((x) => String(x || "").trim());
+  const at = (names) => {
+    for (const n of names) {
+      const i = head.indexOf(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const iNo = at(["Name", "Order", "注文番号"]);
+  const iSku = at(["Lineitem sku", "Lineitem SKU", "SKU"]);
+  const iQty = at(["Lineitem quantity", "Quantity", "数量"]);
+  const iPx = at(["Lineitem price", "Price"]);
+  const iAt = at(["Created at", "Processed at", "作成日"]);
+  if (iNo < 0 || iSku < 0 || iQty < 0)
+    return { ok: false, error: "no_column", rows: [],
+             detail: "注文番号（Name）・SKU（Lineitem sku）・数量"
+               + "（Lineitem quantity）の列が要ります" };
+  const out = [];
+  let skipped = 0, nojan = 0;
+  for (let i = 1; i < rows.length && out.length < SUB_CSV_MAX; i++) {
+    const r = rows[i] || [];
+    const no = String(r[iNo] || "").trim();
+    const sku = String(r[iSku] || "").trim();
+    if (!no || !sku) { skipped++; continue; }
+    const jan = subSkuJan(sku);
+    if (!jan) { nojan++; continue; }        // 会員用でない商品（SUB- 以外）
+    const q = Math.round(Number(r[iQty]) || 0);
+    if (q <= 0) { skipped++; continue; }
+    out.push({ order_no: no, sku: sku, jan: jan, qty: q,
+               price: (iPx >= 0) ? Math.round(Number(r[iPx]) || 0) : 0,
+               at: (iAt >= 0) ? String(r[iAt] || "").trim() : "" });
+  }
+  return { ok: true, rows: out, skipped: skipped, other: nojan,
+           lines: Math.max(0, rows.length - 1) };
+}
+/* 注文を D1 に入れる。すでにある (order_no, sku) は数えない。 */
+async function jobSubOrders(env, body) {
+  const o = body || {};
+  const run = newRun("sub-orders");
+  const res = { ok: false, lines: 0, taken: 0, added: 0, dup: 0, other: 0,
+                skipped: 0, jans: 0, edited: 0, sold_out: 0, short: [] };
+  try {
+    if (!(await subPostOk(env))) {
+      res.error = "no_table";
+      res.detail = "sub_order がありません（migrate-0053-sub-post.sql）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const p = subOrderRows(o.text);
+    if (!p.ok) { res.error = p.error; res.detail = p.detail || "";
+                 return Object.assign(await saveRun(env, run), res); }
+    res.lines = p.lines; res.taken = p.rows.length;
+    res.other = p.other; res.skipped = p.skipped;
+    const src = String(o.name || "").slice(0, 80);
+    const at = nowIso();
+    /* すでに入っている (order_no, sku) を引く（二重に数えないため）。 */
+    const have = {};
+    const step = d1Step(2);
+    for (let i = 0; i < p.rows.length; i += step) {
+      const part = p.rows.slice(i, i + step);
+      const where = part.map(() => "(order_no=? AND sku=?)").join(" OR ");
+      const bind = [];
+      for (const r of part) bind.push(r.order_no, r.sku);
+      const q = await env.DB.prepare(
+        `SELECT order_no, sku FROM sub_order WHERE ${where}`).bind(...bind).all();
+      for (const y of ((q && q.results) || []))
+        have[y.order_no + "|" + y.sku] = 1;
+    }
+    const stmts = [], touched = {};
+    for (const r of p.rows) {
+      if (have[r.order_no + "|" + r.sku]) { res.dup++; continue; }
+      have[r.order_no + "|" + r.sku] = 1;
+      touched[r.jan] = (touched[r.jan] || 0) + r.qty;
+      stmts.push(env.DB.prepare(
+        `INSERT INTO sub_order (order_no,sku,jan,qty,price,at,src,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+         ON CONFLICT(order_no,sku) DO NOTHING`)
+        .bind(r.order_no, r.sku, r.jan, r.qty, r.price || null,
+              r.at || null, src, at));
+      res.added++;
+    }
+    if (stmts.length) await runBatch(env, run, stmts);
+    res.jans = Object.keys(touched).length;
+    /* 売れた数を sub_post に足して、カードを書き換える。 */
+    if (res.added) {
+      const up = Object.keys(touched).map((j) => env.DB.prepare(
+        `UPDATE sub_post SET sold = sold + ?2 WHERE jan = ?1`)
+        .bind(j, touched[j]));
+      await runBatch(env, run, up);
+      const e = await subEditLeft(env, run, Object.keys(touched));
+      res.edited = e.edited; res.sold_out = e.sold_out;
+      /* MW の在庫が足りない商品（返金が必要）。 */
+      res.short = await subShort(env, Object.keys(touched));
+      if (res.short.length)
+        await notify(env, run, "⚠️ **会員の注文に対して MW の在庫が足りません**"
+          + "（返金が必要かもしれません）… " + res.short.length + "件\n"
+          + res.short.slice(0, 20).map((x) => "・" + x.jan + "　注文 "
+            + x.sold + "点／MW在庫 " + x.stock + "点").join("\n"));
+      run.notes.push("会員の注文：" + res.added + "件を取り込み（二重 "
+        + res.dup + "件）／カードを書き換え " + res.edited + "件・完売 "
+        + res.sold_out + "件");
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-orders: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 残り数が変わったカードを書き換える（0 なら完売）。 */
+async function subEditLeft(env, run, jans) {
+  const out = { edited: 0, sold_out: 0 };
+  const list = (jans || []).map((x) => String(x || "")).filter(Boolean);
+  if (!list.length || !env.DISCORD_BOT_TOKEN) return out;
+  const cfg = await subSettings(env);
+  const rows = await subRows(env);
+  const byJan = {};
+  for (const r of rows) byJan[r.jan] = r;
+  const step = d1Step(1);
+  const posts = [];
+  for (let i = 0; i < list.length; i += step) {
+    const part = list.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT jan, ch, plan, msg_id, price, qty, sold FROM sub_post
+        WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const y of ((q && q.results) || [])) posts.push(y);
+  }
+  for (const y of posts) {
+    const r = byJan[String(y.jan)];
+    /* 「会員に出す」や「Shopify に読み込みました」の印を外した商品は、
+       中身が引けないので**書き換えない**（商品名の無いカードにしない）。 */
+    if (!r) continue;
+    const left = Math.max(0, (Number(y.qty) || 0) - (Number(y.sold) || 0));
+    const p = cfg.plans.filter((z) => z.key === String(y.plan))[0]
+      || { q: 0, key: String(y.plan) };
+    const card = SUBCARD.card(Object.assign({}, r, {
+      price: Number(y.price) || r.price, qty: Number(y.qty) || 0,
+      left: left }), { domain: cfg.domain, maxQty: p.q });
+    const e = await dcApi(env, run, "PATCH",
+      "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
+    if (!e.ok) continue;
+    out.edited++;
+    if (!left) out.sold_out++;
+    await env.DB.prepare(
+      `UPDATE sub_post SET sold_out=?3, edited_at=?4 WHERE jan=?1 AND ch=?2`)
+      .bind(String(y.jan), String(y.ch), left ? 0 : 1, nowIso()).run();
+  }
+  return out;
+}
+/* MW の在庫が足りない商品（注文の合計 > MW在庫）。 */
+async function subShort(env, jans) {
+  const list = (jans || []).map((x) => String(x || "")).filter(Boolean);
+  if (!list.length) return [];
+  const out = [];
+  const step = d1Step(1);
+  for (let i = 0; i < list.length; i += step) {
+    const part = list.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT o.jan AS jan, SUM(o.qty) AS sold,
+              COALESCE((SELECT SUM(COALESCE(s.stock,0)) FROM mw_stock s
+                         WHERE s.jan=o.jan AND s.gone_at IS NULL),0) AS stock
+         FROM sub_order o
+        WHERE o.jan IN (${part.map(() => "?").join(",")})
+        GROUP BY o.jan`).bind(...part).all();
+    for (const y of ((q && q.results) || [])) {
+      const sold = Number(y.sold) || 0, stock = Number(y.stock) || 0;
+      if (sold > stock) out.push({ jan: String(y.jan), sold: sold, stock: stock });
+    }
+  }
+  return out;
+}
+/* 会員の注文の数（仕入れの一覧に「会員の注文 n点」として出す）。 */
+async function subOrderQty(env) {
+  if (!(await subPostOk(env))) return {};
+  const q = await env.DB.prepare(
+    `SELECT jan, SUM(qty) AS n FROM sub_order GROUP BY jan`).all();
+  const m = {};
+  for (const r of ((q && q.results) || [])) m[String(r.jan)] = Number(r.n) || 0;
+  return m;
+}
+/* GET /sub/orders … 取り込んだ注文のまとめ（画面に出す）。 */
+async function subOrderList(env, url) {
+  if (!(await subPostOk(env)))
+    return { ok: true, table_ok: false, rows: [], n: 0,
+             fix: "migrate-0053-sub-post.sql" };
+  const limit = Math.max(1, Math.min(500,
+    mwNum((url && url.searchParams.get("limit")) || "") || 200));
+  const q = await env.DB.prepare(
+    `SELECT o.jan AS jan, SUM(o.qty) AS qty, COUNT(*) AS n,
+            MAX(o.at) AS last_at,
+            (SELECT p.sold_out FROM sub_post p WHERE p.jan=o.jan LIMIT 1) AS sold_out,
+            (SELECT p.qty FROM sub_post p WHERE p.jan=o.jan LIMIT 1) AS put_qty,
+            (SELECT s.name FROM mw_stock s WHERE s.jan=o.jan LIMIT 1) AS name
+       FROM sub_order o GROUP BY o.jan
+       ORDER BY MAX(o.created_at) DESC LIMIT ${limit}`).all();
+  const rows = ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""), name: String(r.name || ""),
+    qty: Number(r.qty) || 0, orders: Number(r.n) || 0,
+    put_qty: Number(r.put_qty) || 0,
+    left: Math.max(0, (Number(r.put_qty) || 0) - (Number(r.qty) || 0)),
+    sold_out: !!Number(r.sold_out), last_at: String(r.last_at || ""),
+  }));
+  const a = await env.DB.prepare(
+    `SELECT COUNT(*) AS n, SUM(qty) AS q FROM sub_order`).first();
+  return { ok: true, table_ok: true, rows: rows, n: rows.length,
+           all: Number((a && a.n) || 0), qty: Number((a && a.q) || 0) };
+}
 /* GET /mw/buy … 印が付いている行を、MW と Amazon の中身つきで返す（注文用）。
    7.105：**控え（mw_buy 側）を優先**して返す。
    ・卸値・商品名・社・機種・新中は、印を付けた時点の値（仕入れ時の値）
@@ -10366,8 +10911,21 @@ async function mwBuyList(env, url) {
     yen += Math.round(w * 1.1) * (Number(r.qty) || 0);
   }
   const goneRows = rows.filter((r) => Number(r.gone) === 1);
+  /* 8.13（【Y】）会員の注文ぶんを足す（MW への発注数に効く）。
+     表が無いデータベースでは 0 のまま（取り込みは止めない）。 */
+  let subN = 0;
+  try {
+    const sq = await subOrderQty(env);
+    for (const r of rows) {
+      const q2 = Number(sq[String(r.jan)] || 0);
+      r.sub_qty = q2;
+      if (q2 && Number(r.gone) !== 1) subN += q2;
+    }
+  } catch (e) { run.notes.push("sub-qty: " + String((e && e.message) || e)); }
   await saveRun(env, run);
   return { ok: true, rows, n: rows.length, qty: n, yen,
+           /* 8.13：会員の注文の合計（仕入れの一覧に出す）。 */
+           sub_qty: subN,
            /* gone … CSV から消えた件数（仕入れ済みの区分に出す件数）。 */
            gone: goneRows.length,
            live: rows.length - goneRows.length,
@@ -14205,6 +14763,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub",
+  "sub_post", "sub_order",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
   "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
@@ -14230,6 +14789,9 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["sub_post", "migrate-0053-sub-post.sql"],
+  ["sub_order", "migrate-0053-sub-post.sql"],
+  ["loaded_at", "migrate-0053-sub-post.sql"],
   ["base_qty", "migrate-0052-mw-base.sql"],
   ["mw_sub", "migrate-0051-mw-sub.sql"],
   ["on_sale", "migrate-0051-mw-sub.sql"],
@@ -14698,6 +15260,11 @@ export default {
             /* 7.134：在庫の記録の作り直しも管理者だけ。 */
             || url.pathname === "/mw/move/fix"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
+    /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
+       値段が会員に出て、Discord にも流れるため。 */
+    if (role !== "admin" && request.method === "POST"
+        && url.pathname.indexOf("/sub/") === 0)
+      return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
     /* 7.111：**Amazon への登録は作業者の端末からもできる**。
        ただし送る中身（売値・SKU・申告・仕入原価）は pj-sync 側で組み立て、
        画面から来た値は使わない（mwPutRun の staff の枝）。
@@ -14953,6 +15520,33 @@ export default {
       /* 7.126（【T】）1商品の在庫の動きと、目安のまとめ（見るだけ）。 */
       if (request.method === "GET" && url.pathname === "/mw/move")
         return json(await mwMoveList(env, url), 200, origin);
+      /* ===== 8.11／8.13（【Y】）会員向け Discord の配信と注文の取り込み =====
+         どれも**管理者だけ**（上の枝で弾いている）。値段と配信が動くため。 */
+      if (request.method === "GET" && url.pathname === "/sub/plan")
+        return json(await subPlanBuild(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/sub/send") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubSend(env, { approve: b && b.approve === true,
+          plan: b && b.plan }), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/sub/pre") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubPre(env, { force: !!(b && b.force) }), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/sub/skip") {
+        const b = await request.json().catch(() => ({}));
+        return json(await subSkipSet(env, !(b && b.off)), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/sub/loaded") {
+        const b = await request.json().catch(() => ({}));
+        return json(await subLoadedSet(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/sub/orders")
+        return json(await subOrderList(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/sub/orders") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubOrders(env, b), 200, origin);
+      }
       /* 7.134（【T】の直し）在庫の記録の基準を控え直す（管理者だけ）。
          日次で一度だけ自動でも走る。手で押し直せるように口も置く。 */
       if (request.method === "POST" && url.pathname === "/mw/move/fix")
@@ -15270,6 +15864,21 @@ export default {
         try { await jobRkPrice(env, {}); }
         catch (e) { /* ここで落ちても本体は止めない */ }
       }
+      /* 8.11（【Y】）会員向けの配信。平日の決まった時刻（⚙ subHour・
+         既定 8時）の回で送り、前の日の同じ時刻に予告を出す。
+         毎時 :07 の回で見るので、8時の設定なら 8:07 ごろに出る。
+         落ちても本体は止めない。 */
+      try {
+        const sc = await subSettings(env);
+        const jt = subJst();
+        const weekday = (jt.dow >= 1 && jt.dow <= 5);
+        if (sc.on && jt.hour === sc.hour) {
+          if (weekday) await jobSubSend(env, { approve: true, auto: true });
+          /* 予告は「明日が平日」の日に出す（金曜の夜は出さない）。 */
+          const tomo = (jt.dow + 1) % 7;
+          if (sc.pre && tomo >= 1 && tomo <= 5) await jobSubPre(env, {});
+        }
+      } catch (e) { /* 配信で落ちても本体は止めない */ }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
       await jobSoldKeep(env, {});        // 在庫補充（数量を1に戻す）（7.53）
@@ -15410,6 +16019,13 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   NT_MEMBER_NG,
   /* 7.138（v264）社内用のカードの「MW で開く」。 */
   MWSITE, mwNtMwUrl,
+  /* 8.11／8.13（【Y】）会員向けの配信と、Shopify の注文の取り込み。 */
+  SUBPLAN, SUBCARD, SHOPCSV,
+  subSettings, subRows, subPosts, subPick, subPlanBuild, subJst,
+  jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
+  subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
+  subOrderQty, subOrderList, dcApi,
+  SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,
   jobMwCsv, mwCsvCfg, mwCsvRuns, mwCsvResume, mwCsvBad, mwCsvHash, mwCsvNextAt,
   mwStockHave, MW_CSV_ROWS_MAX,

@@ -827,10 +827,47 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   grades     TEXT,                         -- 見せるプラン（空＝ぜんぶ）
   by_role    TEXT,
   put_at     TEXT,                         -- 最後に CSV に出した日時
+  loaded_at  TEXT,                         -- Shopify に読み込んだ印（8.11）
   at         TEXT,
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_sub_on_sale ON mw_sub(on_sale, at);
+
+/* ===== 8.11（【Y】）会員向け Discord の配信と Shopify の注文 ===== */
+/* 送ったカード。同じ商品を同じチャンネルに二重に送らないための控えで、
+   出し直すときは msg_id でそのカードを書き換える。 */
+CREATE TABLE IF NOT EXISTS sub_post (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  jan        TEXT NOT NULL,
+  ch         TEXT NOT NULL,                  -- Discord のチャンネルID
+  plan       TEXT NOT NULL,                  -- monitor / light / standard / premium
+  msg_id     TEXT NOT NULL,
+  price      INTEGER,                        -- 送ったときの販売価格（税込）
+  qty        INTEGER NOT NULL DEFAULT 0,     -- 出した点数
+  sold       INTEGER NOT NULL DEFAULT 0,     -- 売れた点数
+  sold_out   INTEGER NOT NULL DEFAULT 0,
+  at         TEXT NOT NULL,
+  edited_at  TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_post_one ON sub_post(jan, ch);
+CREATE INDEX IF NOT EXISTS idx_sub_post_at ON sub_post(at);
+
+/* Shopify の注文。**氏名・住所・メールは入れない**
+   （顧客は Shopify の注文番号だけで追う）。 */
+CREATE TABLE IF NOT EXISTS sub_order (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_no   TEXT NOT NULL,                  -- Shopify の注文番号
+  sku        TEXT NOT NULL,                  -- SUB-<JAN>-<YYYYMMDD>
+  jan        TEXT NOT NULL,
+  qty        INTEGER NOT NULL DEFAULT 0,
+  price      INTEGER,
+  at         TEXT,
+  src        TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_order_one ON sub_order(order_no, sku);
+CREATE INDEX IF NOT EXISTS idx_sub_order_jan ON sub_order(jan, at);
 
 /* ===== 国内FBA：出品の可否（7.76）===== */
 CREATE TABLE IF NOT EXISTS mw_restrict (

@@ -24,6 +24,9 @@ import { makeApi, botState, canWriteCh, permJa, errJa, expandKeys }
   from "./setup-discord.mjs";
 /* 販売価格の式（6.178）。画面・pj-sync と同じこのファイルを読む。 */
 import SUBPX from "../shared/subprice.js";
+/* 8.11（【Y】）会員用のカードの作り方。本番の配信（pj-sync）と**同じ**
+   ファイルを読む（形がずれないように）。 */
+import SUBCARD from "../shared/subcard.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -153,35 +156,29 @@ export const SAMPLE = [
 ];
 
 /* ---- 1商品＝1つの箱（embed）---- */
+/* 8.11（【Y】）カードの作り方は shared/subcard.js の1か所だけ。
+   ここは「テスト配信」の印と色を足すだけにする（本番と形がずれないように）。
+   buyUrl は config の文字（{jan} を差し替える形）でも、ドメインでも受ける。 */
 export function testEmbed(it, opt) {
   const o = opt || {};
-  const jan = String((it || {}).jan || "");
-  const url = amzUrl(jan, it.asin);
-  const f = [];
-  /* JAN は**コードの書式で1行に単独**（長押しでコピーできる形・8.2）。 */
-  f.push({ name: "JAN", value: "```\n" + jan + "\n```", inline: false });
-  if (it.kishu)
-    f.push({ name: "機種", value: String(it.kishu).slice(0, 60), inline: true });
-  f.push({ name: "販売価格（税込）", value: yen(it.sell), inline: true });
-  f.push({ name: "見込みの Amazon 粗利", value: yen(it.gross), inline: true });
-  f.push({ name: "購入できる数",
-           value: (Number(o.maxQty) > 0
-             ? ("お一人 " + Number(o.maxQty) + "点まで／") : "")
-             + "残り " + (Number(it.stock) || 0) + "点", inline: true });
-  f.push({ name: "送料の区分", value: shipJa(it, o.shipJa), inline: true });
-  f.push({ name: "購入リンク",
-           value: o.buyUrl
-             ? ("[購入する](" + String(o.buyUrl).replace("{jan}", jan) + ")")
-             : "**準備中**（本番はここに購入リンクが入ります）",
-           inline: false });
-  return {
-    /* 見出しをタップすると Amazon の商品ページが開く。 */
-    title: (TEST_MARK + "｜" + String(it.name || jan)).slice(0, 200),
-    url: url,
-    color: Number(o.color) || TEST_COLOR,
-    fields: f.slice(0, 25),
-    footer: { text: TEST_MARK + "・販売価格と残り数は仮の値です" },
-  };
+  const x = it || {};
+  const jan = String(x.jan || "");
+  const e = SUBCARD.card({
+    jan: jan, name: x.name, asin: x.asin, kishu: x.kishu,
+    price: x.sell, gross: x.gross,
+    qty: Number(x.stock) || 0, left: Number(x.stock) || 0,
+    size_tier: x.size_tier, size_g: x.size_g,
+  }, { maxQty: o.maxQty, shipJa: o.shipJa, color: Number(o.color) || TEST_COLOR,
+       mark: TEST_MARK,
+       note: TEST_MARK + "・販売価格と残り数は仮の値です" });
+  /* 購入リンクは config の形（{jan} 入り）を優先する。 */
+  if (o.buyUrl) {
+    for (const f of e.fields || []) {
+      if (f.name !== "購入リンク") continue;
+      f.value = "[購入する](" + String(o.buyUrl).replace("{jan}", jan) + ")";
+    }
+  }
+  return e;
 }
 export function embedLen(e) {
   const o = e || {};

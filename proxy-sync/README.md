@@ -151,7 +151,28 @@ npx wrangler secret put EBAY_USER_REFRESH_TOKEN  # 1-3 で取得
 npx wrangler secret put DISCORD_WEBHOOK_URL      # keepa-hunter とは別チャンネル推奨
 npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・無くても動く）
 npx wrangler secret put SP_SELLER_ID             # 出品者トークン（7.78・出品の可否で必須）
+npx wrangler secret put DISCORD_BOT_TOKEN       # 会員向けの配信（8.11・無くても動く）
 ```
+
+### 1-6. スマホから鍵を入れ直す（GitHub Actions・8.11）
+
+出先では PowerShell が使えないので、**GitHub の Secrets に入れた値を
+Actions から Worker に移す**。値はどこにも表示されない。
+
+1. GitHub の **Settings → Secrets and variables → Actions → New repository secret**
+   - 名前 `DISCORD_BOT_TOKEN`／値はボットのトークン
+   - （ボットのトークンは Discord Developer Portal の **Bot → Reset Token**）
+2. GitHub アプリで **Actions → deploy-pj-sync → Run workflow**
+   - **確かめだけ（dry_run）を外す**
+   - **鍵を Worker に登録し直す（put_secrets）を オン**
+3. 「✅ pj-sync のデプロイ」の知らせに
+   「鍵の登録：オン（値は出しません）」と出れば終わり
+
+> ・Actions の記録に出るのは**名前と文字数だけ**（値は出ない）。
+> ・GitHub の Secrets が空の鍵は**飛ばす**（消したいときは
+>   Cloudflare の画面で消す）。
+> ・**トークンを Discord・会話・コード・ログに貼らない。**
+>   貼ってしまったら Discord 側で **Reset Token** して入れ直す。
 
 ## マイグレーションの流し方（`--file` が通らないとき）
 

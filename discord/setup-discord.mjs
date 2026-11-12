@@ -40,11 +40,23 @@ export const PERM = {
   MANAGE_ROLES: 1n << 28n,
   CREATE_PUBLIC_THREADS: 1n << 35n,
   SEND_MESSAGES_IN_THREADS: 1n << 38n,
+  /* 8.14（【Y】の5）**ピン留めは専用の権限になった**。
+     「メッセージの管理」（MANAGE_MESSAGES）だけでは留められず、
+     ピン留めが 403 で落ちていた。
+     値は Discord の権限表の PIN_MESSAGES（1 << 51）。
+     もし将来ここが変わったら、症状は「ピン留めだけ 403」になる。 */
+  PIN_MESSAGES: 1n << 51n,
 };
+/* ピン留めに要る権限（8.14）。**両方**を見る。
+   どちらか片方しか要らない Discord でも、両方あれば必ず留められる。 */
+export const PIN_PERMS = ["MANAGE_MESSAGES", "PIN_MESSAGES"];
 /* ボットの招待に必要な権限（README の招待URLに入れる）。
    メッセージを読む権限（特権インテント）は要らない。 */
 export const INVITE_PERMS = [
   "MANAGE_CHANNELS", "MANAGE_ROLES", "SEND_MESSAGES", "MANAGE_MESSAGES",
+  /* 8.14（【Y】の5）ピン留めの権限。招待URLにも入れる
+     （入れないと、あとから手で付けることになる）。 */
+  "PIN_MESSAGES",
   "VIEW_CHANNEL", "READ_MESSAGE_HISTORY", "EMBED_LINKS", "ATTACH_FILES",
   /* 読むだけのチャンネルを作るのに要る（8.7）。
      ボットが持っていない権限は overwrites にも書けないため。 */
@@ -74,6 +86,7 @@ export const PERM_JA = {
   READ_MESSAGE_HISTORY: "メッセージ履歴を読む", MANAGE_ROLES: "ロールの管理",
   CREATE_PUBLIC_THREADS: "公開スレッドの作成",
   SEND_MESSAGES_IN_THREADS: "スレッドでメッセージを送信",
+  PIN_MESSAGES: "メッセージをピン留め",
 };
 export function permJa(n) {
   return (PERM_JA[n] || n) + "（" + n + "）";
@@ -159,8 +172,9 @@ export function colorNum(s) {
 const READ = ["VIEW_CHANNEL", "READ_MESSAGE_HISTORY"];
 const WRITE = ["SEND_MESSAGES", "ADD_REACTIONS"];
 const THREAD = ["CREATE_PUBLIC_THREADS", "SEND_MESSAGES_IN_THREADS"];
-/* 配信ボットが書けるチャンネルでは、ピン留めと貼り直しもできるように（8.8）。 */
-const BOTX = ["MANAGE_MESSAGES"];
+/* 配信ボットが書けるチャンネルでは、ピン留めと貼り直しもできるように（8.8）。
+   8.14：ピン留めは専用の権限（PIN_MESSAGES）になったので、それも足す。 */
+const BOTX = ["MANAGE_MESSAGES", "PIN_MESSAGES"];
 export function expandKeys(keys, cfg) {
   const out = [];
   for (const k of keys || []) {
@@ -664,7 +678,7 @@ export async function setup(opt) {
         const rows = want.permission_overwrites;
         if (!canWriteCh(rows, botRoles, bot.perms, guild)) noWrite.push(ch.name);
         else if (ch.pin && !canWriteCh(rows, botRoles, bot.perms, guild,
-                                       ["MANAGE_MESSAGES"])) noPin.push(ch.name);
+                                       PIN_PERMS)) noPin.push(ch.name);
       }
       const cur = chByName[ch.name];
       if (!cur) {
@@ -768,7 +782,7 @@ export async function setup(opt) {
         how: "#" + p.name + " に案内文を投稿できませんでした"
           + "（ボットが書けない設定です）。チャンネルの権限で「" + selfName
           + "」に「チャンネルを見る」「メッセージを送信」"
-          + (p.pin ? "「メッセージの管理」" : "")
+          + (p.pin ? "「メッセージの管理」と「メッセージをピン留め」" : "")
           + "を許可して、もう一度実行してください。"
           + "急ぐときは server.config.json の post の文を手で貼っても構いません。" });
       continue;

@@ -9,40 +9,117 @@
     "・管理者（admin）とスタッフ（staff）は、どのチャンネルも必ず見られる",
     "・post … 最初に投稿する案内文（pin:true ならピン留めする）",
     "・配信ボット（bot）は、ボット自身にも自動で付ける（8.8）。",
-    "　案内のチャンネルも bot が書ける（案内文の投稿とピン留めのため）"
+    "　案内のチャンネルも bot が書ける（案内文の投稿とピン留めのため）",
+    "・plans は shared/subplan.js と同じ中身にしておく（配信の件数と1商品あたりの数は⚙でも変えられる・8.11）"
   ],
   "server": {
     "name": "pj 会員向け（商品リスト配信）",
     "note": "社内用の通知サーバーとは別。会員に見せるサーバー。"
   },
   "roles": [
-    { "key": "admin", "name": "管理者", "who": "カジ", "color": "#e53935",
-      "hoist": true, "mentionable": false, "permissions": ["ADMINISTRATOR"] },
-    { "key": "staff", "name": "スタッフ", "who": "吉田さん・パートさん",
-      "color": "#fb8c00", "hoist": true, "mentionable": true,
-      "permissions": ["VIEW_CHANNEL", "SEND_MESSAGES", "READ_MESSAGE_HISTORY",
-                      "MANAGE_MESSAGES", "ADD_REACTIONS",
-                      "CREATE_PUBLIC_THREADS", "SEND_MESSAGES_IN_THREADS"] },
-    { "key": "premium", "name": "プレミアム", "who": "会員", "color": "#d4af37",
-      "hoist": true, "mentionable": false, "permissions": [] },
-    { "key": "standard", "name": "スタンダード", "who": "会員", "color": "#1e88e5",
-      "hoist": true, "mentionable": false, "permissions": [] },
-    { "key": "light", "name": "ライト", "who": "会員", "color": "#43a047",
-      "hoist": true, "mentionable": false, "permissions": [] },
-    { "key": "monitor", "name": "モニター", "who": "試用中の会員（中身はスタンダードと同じ）",
-      "color": "#8e24aa", "hoist": true, "mentionable": false, "permissions": [] },
-    { "key": "bot", "name": "配信ボット", "who": "このボット・pj", "color": "#9e9e9e",
-      "hoist": false, "mentionable": false,
-      "permissions": ["VIEW_CHANNEL", "SEND_MESSAGES", "READ_MESSAGE_HISTORY",
-                      "MANAGE_MESSAGES", "EMBED_LINKS", "ATTACH_FILES"] }
+    {
+      "key": "admin",
+      "name": "管理者",
+      "who": "カジ",
+      "color": "#e53935",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": [
+        "ADMINISTRATOR"
+      ]
+    },
+    {
+      "key": "staff",
+      "name": "スタッフ",
+      "who": "吉田さん・パートさん",
+      "color": "#fb8c00",
+      "hoist": true,
+      "mentionable": true,
+      "permissions": [
+        "VIEW_CHANNEL",
+        "SEND_MESSAGES",
+        "READ_MESSAGE_HISTORY",
+        "MANAGE_MESSAGES",
+        "ADD_REACTIONS",
+        "CREATE_PUBLIC_THREADS",
+        "SEND_MESSAGES_IN_THREADS"
+      ]
+    },
+    {
+      "key": "premium",
+      "name": "プレミアム",
+      "who": "会員",
+      "color": "#d4af37",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "key": "standard",
+      "name": "スタンダード",
+      "who": "会員",
+      "color": "#1e88e5",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "key": "light",
+      "name": "ライト",
+      "who": "会員",
+      "color": "#43a047",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "key": "monitor",
+      "name": "モニター",
+      "who": "試用中の会員（中身はスタンダードと同じ）",
+      "color": "#8e24aa",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": []
+    },
+    {
+      "key": "bot",
+      "name": "配信ボット",
+      "who": "このボット・pj",
+      "color": "#9e9e9e",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [
+        "VIEW_CHANNEL",
+        "SEND_MESSAGES",
+        "READ_MESSAGE_HISTORY",
+        "MANAGE_MESSAGES",
+        "EMBED_LINKS",
+        "ATTACH_FILES"
+      ]
+    }
   ],
-  "memberRoles": ["light", "standard", "premium", "monitor"],
+  "memberRoles": [
+    "light",
+    "standard",
+    "premium",
+    "monitor"
+  ],
   "selfRole": "bot",
   "categories": [
     {
-      "key": "info", "name": "案内",
+      "key": "info",
+      "name": "案内",
       "channels": [
-        { "key": "start", "name": "はじめに", "view": ["@everyone"], "send": ["admin", "bot"],
+        {
+          "key": "start",
+          "name": "はじめに",
+          "view": [
+            "@everyone"
+          ],
+          "send": [
+            "admin",
+            "bot"
+          ],
           "topic": "まずここを読んでください。",
           "pin": true,
           "post": [
@@ -58,62 +135,200 @@
             "・ご注文は週1回まとめて仕入れ、まとめて発送します。",
             "・仕入れ先で品切れになった商品は、お支払いいただいた分を返金します。",
             "・分からないことは #質問 に書いてください。"
-          ] },
-        { "key": "rules", "name": "ルール・規約", "view": ["@everyone"], "send": ["admin", "bot"],
+          ]
+        },
+        {
+          "key": "rules",
+          "name": "ルール・規約",
+          "view": [
+            "@everyone"
+          ],
+          "send": [
+            "admin",
+            "bot"
+          ],
           "topic": "利用規約・特定商取引法に基づく表記・返金と欠品の扱い・発送の締め日。",
           "pin": true,
           "post": [
             "（ここに利用規約・特定商取引法に基づく表記・返金と欠品の扱い・発送の締め日を載せます。準備中）"
-          ] },
-        { "key": "news", "name": "お知らせ", "view": ["@everyone"], "send": ["admin", "bot"],
+          ]
+        },
+        {
+          "key": "news",
+          "name": "お知らせ",
+          "view": [
+            "@everyone"
+          ],
+          "send": [
+            "admin",
+            "bot"
+          ],
           "topic": "運営からのお知らせ。",
           "pin": true,
           "post": [
             "サーバーを開設しました。モニター期間中は、使いにくい点を #質問 で教えていただけると助かります。"
-          ] },
-        { "key": "faq", "name": "よくある質問", "view": ["@everyone"], "send": ["admin", "bot"],
-          "topic": "よくある質問と答え。" }
+          ]
+        },
+        {
+          "key": "faq",
+          "name": "よくある質問",
+          "view": [
+            "@everyone"
+          ],
+          "send": [
+            "admin",
+            "bot"
+          ],
+          "topic": "よくある質問と答え。"
+        }
       ]
     },
     {
-      "key": "list", "name": "リスト",
+      "key": "list",
+      "name": "リスト",
       "channels": [
-        { "key": "list-light", "name": "リスト-ライト", "view": ["light"],
-          "send": ["bot", "admin"], "topic": "ライトのリスト。書き込みはできません（質問は #質問 へ）。" },
-        { "key": "list-standard", "name": "リスト-スタンダード", "view": ["standard", "monitor"],
-          "send": ["bot", "admin"], "topic": "スタンダード・モニターのリスト。書き込みはできません（質問は #質問 へ）。" },
-        { "key": "list-premium", "name": "リスト-プレミアム", "view": ["premium"],
-          "send": ["bot", "admin"], "topic": "プレミアムのリスト。書き込みはできません（質問は #質問 へ）。" },
-        { "key": "deal-early", "name": "目玉商品-先行", "view": ["premium"],
-          "send": ["bot", "admin"], "topic": "目玉商品の先行公開（24時間）。書き込みはできません。" },
-        { "key": "deal", "name": "目玉商品", "view": ["@members"],
-          "send": ["bot", "admin"], "topic": "目玉商品。書き込みはできません（質問は #質問 へ）。" }
+        {
+          "key": "list-light",
+          "name": "リスト-ライト",
+          "view": [
+            "light"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "ライトのリスト。書き込みはできません（質問は #質問 へ）。"
+        },
+        {
+          "key": "list-standard",
+          "name": "リスト-スタンダード",
+          "view": [
+            "standard",
+            "monitor"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "スタンダード・モニターのリスト。書き込みはできません（質問は #質問 へ）。"
+        },
+        {
+          "key": "list-premium",
+          "name": "リスト-プレミアム",
+          "view": [
+            "premium"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "プレミアムのリスト。書き込みはできません（質問は #質問 へ）。"
+        },
+        {
+          "key": "deal-early",
+          "name": "目玉商品-先行",
+          "view": [
+            "premium"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "目玉商品の先行公開（24時間）。書き込みはできません。"
+        },
+        {
+          "key": "deal",
+          "name": "目玉商品",
+          "view": [
+            "@members"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "目玉商品。書き込みはできません（質問は #質問 へ）。"
+        }
       ]
     },
     {
-      "key": "order", "name": "注文",
+      "key": "order",
+      "name": "注文",
       "channels": [
-        { "key": "order-recv", "name": "受付と欠品のお知らせ", "view": ["@members"],
-          "send": ["bot", "admin"], "topic": "ご注文の受付と、仕入れ先で品切れになった商品のお知らせ。" },
-        { "key": "order-ship", "name": "発送のお知らせ", "view": ["@members"],
-          "send": ["bot", "admin"], "topic": "発送のお知らせ。" }
+        {
+          "key": "order-recv",
+          "name": "受付と欠品のお知らせ",
+          "view": [
+            "@members"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "ご注文の受付と、仕入れ先で品切れになった商品のお知らせ。"
+        },
+        {
+          "key": "order-ship",
+          "name": "発送のお知らせ",
+          "view": [
+            "@members"
+          ],
+          "send": [
+            "bot",
+            "admin"
+          ],
+          "topic": "発送のお知らせ。"
+        }
       ]
     },
     {
-      "key": "members", "name": "会員",
+      "key": "members",
+      "name": "会員",
       "channels": [
-        { "key": "ask", "name": "質問", "view": ["@members"], "send": ["@members"],
+        {
+          "key": "ask",
+          "name": "質問",
+          "view": [
+            "@members"
+          ],
+          "send": [
+            "@members"
+          ],
           "threads": true,
-          "topic": "ご質問はこちらへ。返信はスレッドで行います。" }
+          "topic": "ご質問はこちらへ。返信はスレッドで行います。"
+        }
       ]
     },
     {
-      "key": "manage", "name": "管理",
+      "key": "manage",
+      "name": "管理",
       "channels": [
-        { "key": "log", "name": "管理-ログ", "view": ["admin", "staff"],
-          "send": ["bot", "admin", "staff"], "topic": "配信・注文・支払いの記録（ボットが書き込みます）。" },
-        { "key": "staff-talk", "name": "スタッフ連絡", "view": ["admin", "staff"],
-          "send": ["admin", "staff"], "topic": "スタッフの連絡用。" }
+        {
+          "key": "log",
+          "name": "管理-ログ",
+          "view": [
+            "admin",
+            "staff"
+          ],
+          "send": [
+            "bot",
+            "admin",
+            "staff"
+          ],
+          "topic": "配信・注文・支払いの記録（ボットが書き込みます）。"
+        },
+        {
+          "key": "staff-talk",
+          "name": "スタッフ連絡",
+          "view": [
+            "admin",
+            "staff"
+          ],
+          "send": [
+            "admin",
+            "staff"
+          ],
+          "topic": "スタッフの連絡用。"
+        }
       ]
     }
   ],
@@ -128,13 +343,34 @@
       "・head … 1通目の先頭に出す文（空だと「🧪 テスト配信…」）"
     ],
     "posts": [
-      { "ch": "list-light", "n": 3 },
-      { "ch": "list-standard", "n": 5 },
-      { "ch": "list-premium", "n": 8 },
-      { "ch": "deal-early", "n": 1 },
-      { "ch": "deal", "n": 1 }
+      {
+        "ch": "list-light",
+        "n": 3
+      },
+      {
+        "ch": "list-standard",
+        "n": 5
+      },
+      {
+        "ch": "list-premium",
+        "n": 8
+      },
+      {
+        "ch": "deal-early",
+        "n": 1
+      },
+      {
+        "ch": "deal",
+        "n": 1
+      }
     ],
-    "price": { "ship": 0, "pack": 30, "addMin": 10, "addMax": 150, "cardFee": 3.55 },
+    "price": {
+      "ship": 0,
+      "pack": 30,
+      "addMin": 10,
+      "addMax": 150,
+      "cardFee": 3.55
+    },
     "ship": {
       "s": "小型（クリックポスト相当）",
       "m": "レターパックプラス相当",
@@ -145,13 +381,45 @@
     "head": ""
   },
   "plans": [
-    { "name": "ライト", "role": "light", "price": "未定", "per_post": 20, "max_qty": 2,
-      "deal": "通常公開" },
-    { "name": "スタンダード", "role": "standard", "price": "未定", "per_post": 50,
-      "max_qty": 5, "deal": "通常公開" },
-    { "name": "プレミアム", "role": "premium", "price": "未定", "per_post": 100,
-      "max_qty": 10, "deal": "24時間先行" },
-    { "name": "モニター", "role": "monitor", "price": "無料または割引", "per_post": 50,
-      "max_qty": 5, "deal": "通常公開" }
+    {
+      "name": "モニター",
+      "role": "monitor",
+      "price": "無料または割引",
+      "per_post": 10,
+      "max_qty": 1,
+      "deal": "通常公開",
+      "on": true,
+      "note": "ゲームソフト通常版のみ。いま動かしているのはこれだけ（8.11）"
+    },
+    {
+      "name": "ライト",
+      "role": "light",
+      "price": "未定",
+      "per_post": 20,
+      "max_qty": 2,
+      "deal": "通常公開",
+      "on": false,
+      "note": "ゲームソフト全件。いまは止めています"
+    },
+    {
+      "name": "スタンダード",
+      "role": "standard",
+      "price": "未定",
+      "per_post": 50,
+      "max_qty": 5,
+      "deal": "通常公開",
+      "on": false,
+      "note": "全部。いまは止めています"
+    },
+    {
+      "name": "プレミアム",
+      "role": "premium",
+      "price": "未定",
+      "per_post": 100,
+      "max_qty": 5,
+      "deal": "24時間先行",
+      "on": false,
+      "note": "全部＋1点もの（先行）。いまは止めています"
+    }
   ]
 }
