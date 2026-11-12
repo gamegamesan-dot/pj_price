@@ -53,7 +53,9 @@ console.log('=== 1商品＝1つの埋め込み（社内用）===');
   const g=String(fieldOf(e,'見込み粗利'));
   console.log('   見込み粗利：'+JSON.stringify(g));
   ok(/¥2,024/.test(g),'★★★見込み粗利を出す');
-  ok(/Amazon の実売 ¥9,000 − 手数料/.test(g),'★★★出どころも出す');
+  /* 7.137：実額のときは「Amazon ¥9,000 − 手数料」。 */
+  ok(/Amazon ¥9,000 − 手数料/.test(g)&&!/手数料の目安/.test(g),
+     '★★★出どころも出す（実額）');
   const lk=String(fieldOf(e,'リンク'));
   ok(/\[Amazon\]\(https:\/\/www\.amazon\.co\.jp\/dp\/B0TEST0001\)/.test(lk),
      '★★★下に Amazon のリンク（ASIN が分かれば商品のページ）');
@@ -70,9 +72,13 @@ console.log('=== 1商品＝1つの埋め込み（社内用）===');
      '★★ASIN が無ければ Amazon は JAN の検索');
   ok(/keepa\.com\/#!search\/5-4902370550001/.test(lk),
      '★★ASIN が無ければ Keepa も JAN の検索');
-  ok(/¥3,226/.test(String(fieldOf(e,'見込み粗利')))
-     &&/定価からの目安/.test(String(fieldOf(e,'見込み粗利'))),
+  /* 7.137：Amazon の値段が無い行は、欄の名前も「（未確認）」で分け、
+     「Amazon 未確認」と必ず書く（定価の目安は高く出すぎるため）。 */
+  const h=String(fieldOf(e,'見込み粗利（未確認）'));
+  ok(/¥3,226/.test(h)&&/定価からの目安/.test(h),
      '★★★Amazon の値段が無い行は「定価からの目安」と書く');
+  ok(/Amazon 未確認/.test(h),'★★★「Amazon 未確認」と必ず書く');
+  ok(!fieldOf(e,'見込み粗利'),'★★欄の名前も「（未確認）」で分ける');
 }
 
 console.log('\n=== 区分ごとの色 ===');

@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v261';
+const V = 'pj-pricing-v262';
 const ASSETS = [
   './',
   './index.html',
@@ -16,6 +16,8 @@ const ASSETS = [
   // v252 で shopcsv.js を入れ忘れていたので、ここで一緒に束ねる。
   './shared/shopcsv.js',
   './shared/subprice.js',
+  // Amazon の手数料の目安（7.137）。pj-sync も同じこのファイルを読む。
+  './shared/mwfee.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

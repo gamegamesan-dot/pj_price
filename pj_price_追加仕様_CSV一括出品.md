@@ -8775,3 +8775,20 @@ Cost per item・出し直すたびに変わること・人が直した値はそ�
 - `pxMaxOf()` の既定も 30 → 80（Worker の `PX_MAX_DEFAULT` と同じ値）。
 
 式と上限の決め方は §7.136。テストは `tests/hotwarn.js`（20）。
+
+## 6.181 仮の手数料の式を shared/mwfee.js に移す（v262）
+
+画面の `mwAmzGenre`／`mwFbaSizeOf`／`mwFbaSizeFrom`／`mwFbaGuess`／`mwAmzFee` を
+**`shared/mwfee.js`** に移した。画面に残したのは
+**⚙の欄から値を集めて渡すところ（`mwFeeOpt`）だけ**。
+
+- `MW_AMZ_GAME`／`MW_AMZ_HOBBY`／`MW_FBA_SIZE`／`MW_FEE_TAX_PCT` は
+  shared の値をそのまま指す（ほかの場所の書き方は変えていない）。
+- `mwFeeOf`（実額と仮を使い分けるところ）は画面に残した。
+  実額の扱い（`fee_mfn`・在庫管理の足し・消費税の補い）は画面だけの話なので。
+- `mwNum0` は欄が無くても落ちないようにした（Worker と同じ既定に寄せるため）。
+- `sw.js` の `ASSETS` に `shared/mwfee.js` を足した。
+
+**画面に出る数字は1円も変わらない**（`tests/mwfeeui.js`・`tests/mwsedori.js`・
+`tests/mwfeekindui.js` がそのまま通る）。
+これで pj-sync（Discord の知らせ）が同じ式で「手数料の目安」を出せる（§7.137）。

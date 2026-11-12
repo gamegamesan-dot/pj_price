@@ -2331,6 +2331,8 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/shopcsv.js"></script>
 <!-- 会員に出す販売価格（【2】）。画面・pj-sync・Discord が同じこの式を読む。 -->
 <script src="./shared/subprice.js"></script>
+<!-- Amazon の手数料の目安（7.137）。画面と pj-sync が同じこの式を読む。 -->
+<script src="./shared/mwfee.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2354,6 +2356,11 @@ var MWSTAT=PJ_MWSTAT;
 if(typeof PJ_SUBPRICE==='undefined')
   throw new Error('shared/subprice.js が読み込めていません（会員の販売価格）');
 var SUBPX=PJ_SUBPRICE;
+/* Amazon の手数料の「目安」（仮の手数料）の式（7.137）。
+   pj-sync（Discord の知らせ）も同じこのファイルを読む。 */
+if(typeof PJ_MWFEE==='undefined')
+  throw new Error('shared/mwfee.js が読み込めていません（手数料の目安）');
+var MWFEE=PJ_MWFEE;
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -11715,64 +11722,47 @@ function mwPushSkipHtml(skip){
    仕入値 ＝ 卸値 × 1.1（税込）＋ 1点あたりの仕入れ送料
    粗利（税抜）＝ 粗利 × 10 / 11（消費税を引いた額） */
 var mwAmzRows=[], mwAmzMeta=null;
-var MW_AMZ_GAME={ NS:1, NS2:1, NS2H:1, P5:1, P4:1, '3DS':1, PS5:1, PS4:1, SW:1,
-  PP:1, PV:1, XB:1, XBX:1, WIN:1, PCC:1, '68':1 };
-var MW_AMZ_HOBBY={ b2cchara_figure:1, figure:1, FIG:1, GF:1, plasticmodel:1 };
+/* 7.137（v262）**仮の手数料の式は shared/mwfee.js の1か所だけ**。
+   pj-sync（Discord の知らせ）も同じこれを読む。ここに残っているのは
+   ⚙の欄から値を集めて渡すところだけ。 */
+var MW_AMZ_GAME=MWFEE.GAME;
+var MW_AMZ_HOBBY=MWFEE.HOBBY;
 /* その行のジャンル（手数料の区分）。10/7 のファイルの「ジャンル」に相当。 */
-function mwAmzGenre(r){
-  var k=String((r||{}).kishu||'');
-  if(MW_AMZ_GAME[k])return 'ゲーム';
-  if(MW_AMZ_HOBBY[k])return 'フィギュア';
-  return 'その他';
-}
+function mwAmzGenre(r){ return MWFEE.genreOf(r); }
 /* 0 を入れたときに既定値へ戻ってしまわないよう、数かどうかで見る
    （`+v||既定` だと 0 が falsy なので既定に戻る）。 */
 function mwNum0(id,def){
-  var n=+$(id).value;
+  var el=$(id); if(!el)return def;
+  var n=+el.value;
   return (isFinite(n)&&n>=0)?n:def;
 }
 /* 手数料の消費税の率（6.145）。せどりすと は販売手数料の10%を足している。 */
-var MW_FEE_TAX_PCT=10;
+var MW_FEE_TAX_PCT=MWFEE.TAX_PCT;
 /* サイズ区分ごとの仮の FBA手数料（6.145）。配送代行と在庫管理に分ける。 */
-var MW_FBA_SIZE={ s:'小型', m:'標準', l:'大型' };
+var MW_FBA_SIZE=MWFEE.SIZE;
+/* ⚙の欄 → shared/mwfee.js に渡す値（7.137）。 */
+function mwFeeOpt(){
+  return { feeGame:mwNum0('mwAmzFeeGame',15),
+           feeHobby:mwNum0('mwAmzFeeHobby',10),
+           feeOther:mwNum0('amzFeeRate',15),
+           shipS:mwNum0('mwFbaShipS',288), storeS:mwNum0('mwFbaStoreS',1),
+           shipM:mwNum0('mwFbaShipM',425), storeM:mwNum0('mwFbaStoreM',16),
+           shipL:mwNum0('mwFbaShipL',675), storeL:mwNum0('mwFbaStoreL',93),
+           fbaGame:mwNum0('mwAmzFbaGame',530),
+           fbaHobby:mwNum0('mwAmzFbaHobby',580),
+           fbaOther:mwNum0('amzFbaFee',400),
+           sizeGame:String((($('mwFbaSizeGame')||{}).value)||'s'),
+           sizeHobby:String((($('mwFbaSizeHobby')||{}).value)||'m') };
+}
 /* サイズ区分（6.147）。**Catalog の寸法・重さから決めた区分（size_tier）を優先**し、
    取れていない行だけ⚙の既定（ゲーム＝小型／フィギュア＝標準）を使う。 */
-function mwFbaSizeOf(r){
-  var t=String((r||{}).size_tier||'');
-  if(MW_FBA_SIZE[t])return t;
-  var g=mwAmzGenre(r);
-  var v=(g==='ゲーム')?String(($('mwFbaSizeGame')||{}).value||'s')
-       :((g==='フィギュア')?String(($('mwFbaSizeHobby')||{}).value||'m'):'m');
-  return MW_FBA_SIZE[v]?v:'m';
-}
+function mwFbaSizeOf(r){ return MWFEE.sizeOf(r,mwFeeOpt()); }
 /* その区分がどこから来たか（画面に出す）。 */
-function mwFbaSizeFrom(r){
-  return MW_FBA_SIZE[String((r||{}).size_tier||'')]?'寸法から':'既定';
-}
-function mwFbaGuess(r){
-  var k=mwFbaSizeOf(r);
-  var pick={ s:['mwFbaShipS',288,'mwFbaStoreS',1],
-             m:['mwFbaShipM',425,'mwFbaStoreM',16],
-             l:['mwFbaShipL',675,'mwFbaStoreL',93] }[k];
-  var ship=mwNum0(pick[0],pick[1]), store=mwNum0(pick[2],pick[3]);
-  /* 古い設定（FBA手数料（ゲーム）／（ホビー））しか入っていない端末では、
-     そちらを配送代行として使う（いきなり数字が変わらないように）。 */
-  if(!ship&&!store){
-    var g=mwAmzGenre(r);
-    ship=(g==='ゲーム')?mwNum0('mwAmzFbaGame',530)
-        :((g==='フィギュア')?mwNum0('mwAmzFbaHobby',580):mwNum0('amzFbaFee',400));
-  }
-  return { size:k, sizeName:MW_FBA_SIZE[k], from:mwFbaSizeFrom(r),
-           ship:ship, store:store, fba:ship+store };
-}
+function mwFbaSizeFrom(r){ return MWFEE.sizeFrom(r); }
+function mwFbaGuess(r){ return MWFEE.fbaGuess(r,mwFeeOpt()); }
 function mwAmzFee(r){
-  var g=mwAmzGenre(r);
-  var fb=mwFbaGuess(r);
-  if(g==='ゲーム')
-    return { rate:mwNum0('mwAmzFeeGame',15), fba:fb.fba, fb:fb };
-  if(g==='フィギュア')
-    return { rate:mwNum0('mwAmzFeeHobby',10), fba:fb.fba, fb:fb };
-  return { rate:mwNum0('amzFeeRate',15), fba:fb.fba, fb:fb };
+  var o=mwFeeOpt(), fb=MWFEE.fbaGuess(r,o);
+  return { rate:MWFEE.rateOf(r,o), fba:fb.fba, fb:fb };
 }
 /* 1行ぶんの利益。値段が取れていない行は null。 */
 /* 商品ごとの手数料（6.108・7.85）。Amazon から取れていればそれを使う。
@@ -22892,7 +22882,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v261';   // sw.js の const V と必ず同じ値にする
+var APP_V='v262';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

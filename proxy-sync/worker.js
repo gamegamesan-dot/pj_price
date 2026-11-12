@@ -41,6 +41,9 @@ import MWSTAT from "../shared/mwstat.js";
 /* 6.178（【2】）会員に出す販売価格と仕入原価。式は shared/subprice.js だけ
    （画面・Discord の配信も同じものを読む）。 */
 import SUBPX from "../shared/subprice.js";
+/* 7.137（v262）Amazon の手数料の「目安」。式は shared/mwfee.js の1か所だけ
+   （画面と同じものを読む）。実額が取れている行では使わない。 */
+import MWFEE from "../shared/mwfee.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -5989,13 +5992,23 @@ const NT_MEMBER_NG = ["卸値", "社", "MW在庫", "備考", "画像"];
 function mwNtYen(n) {
   return "¥" + Math.round(Number(n) || 0).toLocaleString("en-US");
 }
-/* 見込み粗利と、その出どころ。 */
+/* 見込み粗利と、その出どころ（7.137）。
+   ① 実額 … Amazon の実売 − 実額の手数料
+   ② 目安 … Amazon の値段 − 手数料の目安（⚙の率とFBA）
+   ③ 未確認 … Amazon の値段そのものが無い行。定価からの目安に
+      **「Amazon 未確認」と必ず書く**（ゲームは定価から2〜4割引きで売れるので、
+      この目安は高く出すぎる）。 */
 function mwNtGross(x) {
-  if (x && x.gross !== null && x.gross !== undefined)
-    return { yen: Number(x.gross) || 0,
-             src: "Amazon の実売 " + mwNtYen(x.amz_price) + " − 手数料" };
-  const g = Math.round(Number((x || {}).hope) || 0);
-  return g ? { yen: g, src: "定価からの目安" } : null;
+  const o = x || {};
+  if (o.gross !== null && o.gross !== undefined) {
+    const guess = String(o.gross_src || "") === "guess";
+    return { yen: Number(o.gross) || 0, real: !guess,
+             src: "Amazon " + mwNtYen(o.amz_price) + " − 手数料"
+               + (guess ? "の目安" : "") };
+  }
+  const g = Math.round(Number(o.hope) || 0);
+  return g ? { yen: g, real: false, hope: true,
+               src: "定価からの目安・**Amazon 未確認**" } : null;
 }
 /* 1商品ぶんの埋め込み。kind は 'new' / 'gone' / 'buy'。 */
 function mwNtEmbed(x, kind, aud) {
@@ -6011,7 +6024,7 @@ function mwNtEmbed(x, kind, aud) {
     /* 会員用：販売価格・見込みの Amazon 粗利・購入できる数。 */
     if (Number(x.amz_price) > 0)
       f.push({ name: "販売価格", value: mwNtYen(x.amz_price), inline: true });
-    if (gr) f.push({ name: "見込みの Amazon 粗利",
+    if (gr) f.push({ name: gr.hope ? "見込み（未確認）" : "見込みの Amazon 粗利",
                      value: mwNtYen(gr.yen), inline: true });
     f.push({ name: "購入できる数",
              value: (Number(x.stock) > 0 ? (Number(x.stock) + "点") : "—"),
@@ -6022,7 +6035,7 @@ function mwNtEmbed(x, kind, aud) {
              inline: true });
     if (x.sha) f.push({ name: "社", value: String(x.sha).slice(0, 60),
                         inline: true });
-    if (gr) f.push({ name: "見込み粗利",
+    if (gr) f.push({ name: gr.hope ? "見込み粗利（未確認）" : "見込み粗利",
                      value: mwNtYen(gr.yen) + "\n（" + gr.src + "）",
                      inline: true });
     f.push({ name: "MW在庫",
@@ -6035,11 +6048,15 @@ function mwNtEmbed(x, kind, aud) {
         f.push({ name: "在庫の変化",
                  value: Math.max(0, Number(x.mv_prev)) + " → "
                    + Math.max(0, Number(x.mv_cur) || 0) + " 点", inline: true });
+      /* 7.137：記録を控えたばかりの行に「減っていません」と出していた
+         （48 → 0 で欠品した行にも出ていた）。出せない理由を書く。 */
       f.push({ name: "売れる速さ",
                value: (c.speed !== null && c.speed > 0)
                  ? (c.speed + " 点/日"
                     + (c.speedSrc === "week" ? "（直近7日）" : "（全期間）"))
-                 : "減っていません", inline: true });
+                 : (c.tooNew
+                   ? ("まだ出せません（記録 " + c.days + " 日分）")
+                   : "減っていません"), inline: true });
       /* 7.134：**もう欠品している行に「欠品までの見込み」は出さない**。 */
       if (c.outDays !== null && kind !== "gone")
         f.push({ name: "欠品までの見込み", value: c.outDays + " 日",
@@ -6276,6 +6293,10 @@ async function mwNtGone(env, at, st) {
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
+            /* 7.137：手数料が実額で取れていない行に「手数料の目安」を出す。 */
+            (SELECT a.low FROM mw_amz a WHERE a.jan = s.jan) AS amz_low,
+            (SELECT a.size_tier FROM mw_amz a WHERE a.jan = s.jan) AS size_tier,
+            (SELECT a.fee_kind FROM mw_amz a WHERE a.jan = s.jan) AS fee_kind,
             EXISTS (SELECT 1 FROM items i
                      WHERE i.ebay_sku = 'W-' || s.jan
                        AND COALESCE(i.ebay_item_id,'') <> '') AS ebay,
@@ -6322,6 +6343,10 @@ async function mwNtZero(env, at, st) {
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
             (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
+            /* 7.137：手数料が実額で取れていない行に「手数料の目安」を出す。 */
+            (SELECT a.low FROM mw_amz a WHERE a.jan = s.jan) AS amz_low,
+            (SELECT a.size_tier FROM mw_amz a WHERE a.jan = s.jan) AS size_tier,
+            (SELECT a.fee_kind FROM mw_amz a WHERE a.jan = s.jan) AS fee_kind,
             EXISTS (SELECT 1 FROM items i
                      WHERE i.ebay_sku = 'W-' || s.jan
                        AND COALESCE(i.ebay_item_id,'') <> '') AS ebay,
@@ -6358,26 +6383,65 @@ function mwNtStat(r, st) {
     chg: (isFinite(prev) && r.mv_prev !== null && r.mv_prev !== undefined)
       ? { prev: prev, cur: (isFinite(cur) ? cur : 0) } : null });
 }
+/* ===== 7.137（v262）知らせに出す見込み粗利 =====
+   これまでは「Amazon の実売と手数料が**両方**取れている行」だけで粗利を出し、
+   どちらか欠けると**定価からの目安**（定価×0.85 − 卸値×1.1）に落としていた。
+   ゲームは定価から2〜4割引きで売れるので、この目安は**高く出すぎる**。
+     例 ガンダムブレイカー4（定価 7,700・卸値 2,600）
+        定価からの目安 … ¥3,685
+        Amazon 4,980 − 手数料の目安 1,111 − 卸値×1.1 2,860 … **¥1,009**
+   そこで3段にする。
+     ① 実額  … Amazon の値段 − **実額の手数料**（今までどおり）
+     ② 目安  … Amazon の値段 − **手数料の目安**（shared/mwfee.js・⚙の率とFBA）
+     ③ 未確認 … Amazon の値段が取れていない行だけ「定価からの目安」。
+                 **「Amazon 未確認」と必ず書く**
+   値段は mw_amz.price（カート価格・無ければ最安値）。それも無ければ low を見る。 */
+function mwNtFeeOpt(st) {
+  const o = st || {};
+  return { feeGame: o.mwAmzFeeGame, feeHobby: o.mwAmzFeeHobby,
+           feeOther: o.amzFeeRate,
+           shipS: o.mwFbaShipS, storeS: o.mwFbaStoreS,
+           shipM: o.mwFbaShipM, storeM: o.mwFbaStoreM,
+           shipL: o.mwFbaShipL, storeL: o.mwFbaStoreL,
+           fbaGame: o.mwAmzFbaGame, fbaHobby: o.mwAmzFbaHobby,
+           fbaOther: o.amzFbaFee,
+           sizeGame: o.mwFbaSizeGame, sizeHobby: o.mwFbaSizeHobby };
+}
+function mwNtGrossOf(r, st) {
+  const w = Number((r || {}).wholesale) || 0;
+  const cost = w * 1.1;
+  const hope = Math.max(0, Math.round((Number(r.list_price) || 0) * 0.85 - cost));
+  /* カート価格（無ければ最安値）。どちらも無ければ 0。 */
+  const price = Number(r.amz_price) || Number(r.amz_low) || 0;
+  const fee = Number(r.fee_total) || 0;
+  if (price > 0 && fee > 0)
+    return { gross: Math.round(price - fee - cost), src: "real",
+             price: price, fee: fee, hope: hope };
+  if (price > 0) {
+    const g = MWFEE.guess({ kishu: r.kishu, price: price,
+                            size_tier: r.size_tier }, mwNtFeeOpt(st));
+    if (g) return { gross: Math.round(price - g.fee - cost), src: "guess",
+                    price: price, fee: g.fee, hope: hope };
+  }
+  return { gross: null, src: "hope", price: 0, fee: 0, hope: hope };
+}
 function mwNtRows(q, st) {
   return ((q && q.results) || []).map((r) => {
     const w = Number(r.wholesale) || 0;
-    /* 定価からの見込み（今までの目安）。 */
-    const hope = Math.max(0, Math.round((Number(r.list_price) || 0) * 0.85
-      - w * 1.1));
-    /* 7.121：Amazon の実売価格と手数料が取れている行は、そちらで粗利を出す。
-       取れていない行は null（知らせには出さない）。 */
-    const price = Number(r.amz_price) || 0;
-    const fee = Number(r.fee_total) || 0;
-    const gross = (price > 0 && fee > 0) ? Math.round(price - fee - w * 1.1) : null;
+    const gz = mwNtGrossOf(r, st);
+    const hope = gz.hope;
+    const price = gz.price;
+    const fee = gz.fee;
+    const gross = gz.gross;
     return {
       jan: String(r.jan || ""), name: String(r.name || ""),
       sha: String(r.sha || ""), kishu: String(r.kishu || ""),
       stock: Number(r.stock) || 0,
       wholesale: w, hope: hope,
       asin: String(r.asin || ""), amz_price: price, fee_total: fee,
-      gross: gross,
+      gross: gross, gross_src: gz.src,
       /* 「Amazon 刈取の見込みあり」。実測の粗利があればそれで、
-         無ければ定価からの目安で見る。 */
+         無ければ定価からの目安で見る（7.137：目安の行は「未確認」と書く）。 */
       amz_hope: (gross !== null) ? (gross > MW_HOPE_YEN) : (hope > MW_HOPE_YEN),
       note: String(r.note || ""),
       /* 7.126（【T】）在庫の動きの目安（生の列も残す）。 */
@@ -6409,25 +6473,31 @@ async function mwNtNew(env, at, st) {
             MAX(s.sha) AS sha,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
             (SELECT a.price FROM mw_amz a WHERE a.jan = s.jan) AS amz_price,
-            (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total${mvq.chg}${mvq.cols}
+            (SELECT a.fee_total FROM mw_amz a WHERE a.jan = s.jan) AS fee_total,
+            /* 7.137：手数料が実額で取れていない行に「手数料の目安」を出す。 */
+            (SELECT a.low FROM mw_amz a WHERE a.jan = s.jan) AS amz_low,
+            (SELECT a.size_tier FROM mw_amz a WHERE a.jan = s.jan) AS size_tier,
+            (SELECT a.fee_kind FROM mw_amz a WHERE a.jan = s.jan) AS fee_kind${mvq.chg}${mvq.cols}
        FROM mw_stock s${mvq.join}
       WHERE s.created_at = ?1 AND s.gone_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM mw_stock t
                          WHERE t.jan = s.jan AND t.created_at <> ?1)
       GROUP BY s.jan`).bind(at).all();
   const rows = ((q && q.results) || []).map((r) => {
-    const price = Number(r.amz_price) || 0;
-    const fee = Number(r.fee_total) || 0;
+    /* 7.137：粗利の出し方は mwNtGrossOf の1か所だけ（3段）。 */
+    const gz = mwNtGrossOf(r, st);
+    const price = gz.price;
+    const fee = gz.fee;
     const w = Number(r.wholesale) || 0;
     return {
       jan: String(r.jan || ""), name: String(r.name || ""),
       wholesale: w,
-      hope: Math.round((Number(r.list_price) || 0) * 0.85 - w * 1.1),
+      hope: gz.hope,
       kishu: String(r.kishu || ""), stock: Number(r.stock) || 0,
       ship_days: Number(r.ship_days) || 99, cond: String(r.cond || ""),
       note: String(r.note || ""), sha: String(r.sha || ""),
       asin: String(r.asin || ""), amz_price: price, fee_total: fee,
-      gross: (price > 0 && fee > 0) ? Math.round(price - fee - w * 1.1) : null,
+      gross: gz.gross, gross_src: gz.src,
       /* 7.126（【T】）目安（新しく出てきた商品でも、以前の記録があれば出る）。 */
       mv_prev: (r.mv_prev === null || r.mv_prev === undefined)
         ? null : Number(r.mv_prev),
@@ -7092,6 +7162,12 @@ async function mwStockPut(env, body) {
     }
     /* 最後の便。欠品の判定と、JANごとの代表選び。 */
     if (res.part >= res.parts) {
+      /* 7.137：**基準の控え直し（7.134）は取り込みのときにも一度だけ走らせる**。
+         日次（jobDaily）だけだと、デプロイしてから次の日次まで基準が無いままで、
+         その間に欠品した行は「記録 0日分」になり、売れる速さが出せなかった
+         （ガンダムブレイカー4：48 → 0 なのに「減っていません」と出ていた）。
+         2回目からは sync_state を1回読むだけ。欠品の判定より前に置く。 */
+      await mwBaseOnce(env, run);
       const a = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM mw_stock WHERE seen_at=?1`).bind(at).first();
       const b = await env.DB.prepare(
@@ -15310,6 +15386,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwBaseFix, mwBaseOnce, MW_BASE_KEY,
   /* 6.178（【2】）会員に出す販売価格。 */
   SUBPX,
+  /* 7.137（v262）手数料の目安と、知らせの見込み粗利（3段）。 */
+  MWFEE, mwNtGrossOf, mwNtFeeOpt,
   mwSaleWords, mwSaleLike, mwNtStat, MOVE_MAX, MW_MV_DAYS,
   MW_MOVE_KEEP_DAYS, MW_WEEK_TOP, MW_WEEK_KEY, MWSTAT,
   colOk,
