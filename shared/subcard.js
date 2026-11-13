@@ -11,7 +11,11 @@
 
    販売価格は **Shopify に入っている値**（mw_sub.price）をそのまま出す。
    上乗せ（¥10〜150 の乱数）は「Shopify 用 CSV を書き出したとき」に決めて
-   pj に控えてあるので、配信のときに引き直さない（6.178／8.11）。 */
+   pj に控えてあるので、配信のときに引き直さない（6.178／8.11）。
+
+   機種は **正式な呼び名**（NS → Nintendo Switch）で出す（8.15・【返事】）。
+   呼び名の表は `shared/mwfee.js` の1か所だけ（Shopify の説明文と同じもの）。
+   呼び名が分からない記号（NS2H・PP・GF・68）は記号のまま出す。 */
 (function (root) {
   "use strict";
   var EMB_MAX = 10;                // 1通に入れられる箱の数
@@ -30,6 +34,20 @@
   };
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function s(v) { return (v === null || v === undefined) ? "" : String(v); }
+  /* 機種の正式な呼び名（8.15）。表は shared/mwfee.js の1か所だけ。
+     読めないときは記号のまま出す（欄が消えないように）。
+     ブラウザ … index.html が <script src> で読む（globalThis.PJ_MWFEE）
+     pj-sync  … worker.js が import している（同じく globalThis に入る）
+     Node     … require で読む */
+  function kishuJa(v) {
+    var g = (typeof globalThis !== "undefined") ? globalThis : root;
+    var F = (g && g.PJ_MWFEE) ? g.PJ_MWFEE : null;
+    if (!F && typeof require === "function") {
+      try { F = require("./mwfee.js"); } catch (e) { F = null; }
+    }
+    if (F && typeof F.kishuJa === "function") return F.kishuJa(v);
+    return s(v).trim();
+  }
   function yen(n) {
     return "¥" + Math.round(num(n)).toLocaleString("en-US");
   }
@@ -80,8 +98,10 @@
     var f = [];
     /* JAN は**コードの書式で1行に単独**（長押しでコピーできる形・§8.2）。 */
     f.push({ name: "JAN", value: "```\n" + jan + "\n```", inline: false });
-    if (x.kishu) f.push({ name: "機種", value: s(x.kishu).slice(0, 60),
-                          inline: true });
+    /* 8.15（【返事】）記号ではなく正式な呼び名で出す（会員が読むので）。 */
+    var kishu = kishuJa(x.kishu);
+    if (kishu) f.push({ name: "機種", value: kishu.slice(0, 60),
+                        inline: true });
     f.push({ name: "販売価格（税込）", value: yen(x.price), inline: true });
     if (x.gross !== null && x.gross !== undefined)
       f.push({ name: "見込みの Amazon 粗利", value: yen(x.gross), inline: true });
@@ -126,7 +146,7 @@
       return { content: i === 0 ? s(head) : "", embeds: es };
     });
   }
-  var API = { card: card, cardLen: cardLen, split: split,
+  var API = { card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
               buyUrl: buyUrl, amzUrl: amzUrl, shipTier: shipTier,
               shipJa: shipJa, leftText: leftText, yen: yen,
               EMB_MAX: EMB_MAX, EMB_CHARS: EMB_CHARS, COLOR: COLOR,

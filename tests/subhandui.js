@@ -15,7 +15,9 @@
      ② 書き出しのあと必ず控え、**画面の欄を控えの値に書き直す**
      ③ 値段が変わって読み込み済みの印が外れたら、はっきり知らせる
      ④ 控え損なったら「この CSV は読み込まないで」と知らせる
-     ⑤ 「Shopify に読み込みました」のボタンの在りか（会員に配信する の欄） */
+     ⑤ 「Shopify に読み込みました」のボタンの在りか（会員に配信する の欄）
+     ⑥ ⚙「会員価格に含める MW 送料」を変えても、**手入れの価格は書き換えない**
+        （6.187・【1】） */
 const { harness, openCsvBoxes } = require('./lib');
 const T = harness('画面：販売価格が Shopify と食い違わない（6.185）');
 const ok = T.ok;
@@ -238,6 +240,33 @@ await setup({ sub:{ price:2528, px_hand:1 } });
   ok(r.q.length===1&&r.q[0].b.hand===0,'★★★hand:0 を送る');
   ok(+r.hand===0,'★★★印が外れる（次の書き出しで引き直される）');
   ok(!/手入れ/.test(String(r.note||'')),'★★画面の印も消える');
+}
+
+console.log('\n=== ⑦の前 ⚙の MW 送料を変えても、手入れの価格は書き換えない'
+  +'（6.187・【1】）===');
+await setup({ sub:{ price:2528, px_hand:1 } });
+{
+  const r=await p.evaluate(async(j)=>{
+    const out=[];
+    for(const v of ['176','0']){
+      $('mwSubShip').value=v;
+      window.__dl=[];
+      await mwSubCsvGo();
+      await new Promise((x)=>setTimeout(x,400));
+      const rows=PJ_SHOPCSV.splitCsv((window.__dl[0]||{}).text||'');
+      const k=rows[0].indexOf('Variant Price');
+      out.push({ ship:v, csv:rows[1]?rows[1][k]:null,
+        px:(document.getElementById('mwSubPx_'+j)||{}).value,
+        pj:window.__sub[j].price });
+    }
+    $('mwSubShip').value='0';
+    return out;
+  },JAN);
+  console.log('   '+JSON.stringify(r));
+  ok(r.every((x)=>x.csv==='2528'),
+     '★★★⚙の送料を変えても、手入れの価格は CSV で書き換わらない');
+  ok(r.every((x)=>x.px==='2528'),'★★★画面の欄も変わらない');
+  ok(r.every((x)=>+x.pj===2528),'★★★pj の控え（mw_sub.price）も変わらない');
 }
 
 console.log('\n=== ⑦ 「Shopify に読み込みました」のボタンの在りか ===');

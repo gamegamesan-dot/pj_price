@@ -133,6 +133,12 @@ console.log('\n=== ③ 送る・二重に送らない・書き換える ===');
   ok(/¥3,645/.test(JSON.stringify(card)),'★★★販売価格は ¥3,645');
   ok(/products\/sub-4902370550467/.test(JSON.stringify(card)),
      '★★★購入リンクは Shopify の商品ページ');
+  /* 8.15（【返事】）機種は記号（NS）ではなく正式な呼び名で出す。
+     表は shared/mwfee.js の1か所だけ（Shopify の説明文と同じもの）。 */
+  const kf=(card.fields||[]).filter((f)=>f.name==='機種')[0]||{};
+  console.log('   機種 '+JSON.stringify(kf.value));
+  ok(kf.value==='Nintendo Switch',
+     '★★★会員用のカードの機種は正式な呼び名（NS → Nintendo Switch）');
   /* もう一度押しても二重に送らない。 */
   dc=[];
   r=await api(env,'/sub/send',{ approve:true });

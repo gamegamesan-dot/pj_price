@@ -27,6 +27,9 @@ import SUBPX from "../shared/subprice.js";
 /* 8.11（【Y】）会員用のカードの作り方。本番の配信（pj-sync）と**同じ**
    ファイルを読む（形がずれないように）。 */
 import SUBCARD from "../shared/subcard.js";
+/* 8.15（【返事】）機種の正式な呼び名の表。読み込むと globalThis.PJ_MWFEE に
+   入り、subcard.js がそれを使う（pj-sync も同じやり方）。 */
+import "../shared/mwfee.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 

@@ -145,6 +145,21 @@ ok(/\(https:\/\/shop\.example\.com\/products\/sub-4902370550467\)/
 ok(!/お一人/.test(testEmbed(IT,{}).fields
      .filter((f)=>f.name==='購入できる数')[0].value),
    '★★プランが決まらないときは残り数だけ');
+/* 8.15（【返事】）機種は記号ではなく正式な呼び名で出す
+   （Shopify の説明文と同じ表・shared/mwfee.js の1か所だけ）。 */
+{
+  const kv=(it)=>(testEmbed(it,{}).fields
+    .filter((f)=>f.name==='機種')[0]||{}).value;
+  console.log('   機種 '+JSON.stringify([kv(Object.assign({},IT,{kishu:'NS'})),
+    kv(SAMPLE[3]), kv(Object.assign({},IT,{kishu:'NS2H'}))]));
+  ok(kv(Object.assign({},IT,{ kishu:'NS' }))==='Nintendo Switch',
+     '★★★NS → Nintendo Switch');
+  ok(kv(Object.assign({},IT,{ kishu:'NS2' }))==='Nintendo Switch 2',
+     '★★NS2 → Nintendo Switch 2');
+  ok(kv(SAMPLE[3])==='PlayStation 5','★★PS5 → PlayStation 5');
+  ok(kv(Object.assign({},IT,{ kishu:'NS2H' }))==='NS2H',
+     '★★★呼び名が分からない記号はそのまま出す');
+}
 
 console.log('\n=== 出してはいけない項目の名前は §8.2 と同じ ===');
 {

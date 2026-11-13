@@ -672,3 +672,42 @@ Shopify の「注文 → エクスポート」の CSV を画面から読み込�
 > この値は Discord の権限表の PIN_MESSAGES です。
 > この環境から `discord.com` を読めなかったので**表そのものでは確かめていません**。
 > もし番号が変わっていたら、症状は「ピン留めだけ 403」になります。
+
+## 8.15 会員用カードの機種を正式な呼び名にする（v268・【返事】）
+
+カジ（2026-11-13）
+
+> Discord の会員用カードの「機種」も、Shopify の説明文と同じ正式名
+> （shared/mwfee.js の表）にそろえてください。
+> SW・P5・P4 は推測どおりでよいです。NS2H・PP・GF・68 は、呼び名が分かるまで
+> 記号のままで構いません。
+
+`shared/subcard.js` の「機種」の欄を、`shared/mwfee.js` の `kishuJa()` で
+正式な呼び名に直して出すようにした（§6.186 の Shopify の説明文と**同じ表**）。
+
+```
+機種：NS   →  機種：Nintendo Switch
+機種：PS5  →  機種：PlayStation 5
+機種：NS2H →  機種：NS2H（呼び名が分からない記号はそのまま）
+```
+
+表の読み込み方（`shared/shopcsv.js` と同じやり方）
+
+| どこ | どう読むか |
+|---|---|
+| 画面 | `index.html` が `<script src="./shared/mwfee.js">` で読む（`globalThis.PJ_MWFEE`） |
+| pj-sync | `worker.js` が `import MWFEE from "../shared/mwfee.js"`（同じく `globalThis` に入る） |
+| `discord/test-post.mjs` | `import "../shared/mwfee.js"`（**この版で足した**。読み込みの副作用で `globalThis` に入る） |
+| テスト（Node） | `require("./mwfee.js")` |
+
+読めなかったときは**記号のまま**出す（欄が消えないように）。
+
+本番の配信（pj-sync）とテスト配信（`discord/test-post.mjs`）は同じ
+`shared/subcard.js` を読むので、**両方そろって**直る。
+
+### テスト
+
+`tests/subsend.mjs`（55）… 本番の配信のカードの機種が
+「Nintendo Switch」になること。
+`tests/discordtest.mjs`（106）… テスト配信のカードで NS・NS2・PS5 が
+正式名になり、`NS2H` は記号のまま出ること。
