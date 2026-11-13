@@ -16067,7 +16067,8 @@ function subDraftHtml(plans){
         +'<input type="checkbox" id="'+esc(id)+'" checked'
         +' style="margin-top:2px">'
         +'<span style="flex:1 1 auto;min-width:0">'
-        +'<b>'+esc(String(x.name||x.jan).slice(0,38))+'</b>'
+        +'<b>'+esc(PJ_SHOPCSV.titleOf(String(x.name||x.jan)).slice(0,38)
+                  ||esc(String(x.jan)))+'</b>'
         +(x.sale?'<span class="badge" style="background:#b07000">在庫処分</span>':'')
         +'<br>'+yen(x.price)+'・'+mwN(x.qty)+'点まで'
         +(x.gross===null||x.gross===undefined?''
@@ -16076,6 +16077,18 @@ function subDraftHtml(plans){
         +'・1日 '+(Math.round((+x.speed||0)*10)/10)+'点'
         +'・MW在庫 '+mwN(x.stock)+'点'
         +'<span style="opacity:.6"> '+esc(x.jan)+'</span>'
+        /* 8.20（【6】）出すプランを行ごとに変えられる。
+           「ぜんぶのプラン」は grades を空にする（どのプランにも出る）。
+           ライト・スタンダード・プレミアムを試すときに、
+           同じ商品をそのプランにも出せるようにする。 */
+        +'<br><span class="note2" style="margin:0">出すプラン </span>'
+        +'<select id="'+esc('subDraftPlan_'+p.key+'_'+x.jan)+'"'
+        +' style="max-width:160px;padding:2px 4px;font-size:12px">'
+        +SUBPLAN.list({}).map(function(q){
+          return '<option value="'+esc(q.key)+'"'
+            +(q.key===p.key?' selected':'')+'>'+esc(q.name)+'</option>'; }).join('')
+        +'<option value="all">ぜんぶのプラン</option>'
+        +'</select>'
         +'</span></label>');
     });
   });
@@ -16094,7 +16107,11 @@ function subDraftPicked(){
     p.items.forEach(function(x){
       var el=$('subDraftChk_'+p.key+'_'+x.jan);
       if(el&&!el.checked)return;
-      out.push(Object.assign({},x,{ plan:p.key }));
+      /* 8.20（【6】）行ごとに選んだプラン。'all' は grades を空にする。 */
+      var sel=$('subDraftPlan_'+p.key+'_'+x.jan);
+      var k=sel?String(sel.value||p.key):p.key;
+      out.push(Object.assign({},x,{ plan:(k==='all')?'':k,
+                                    planKey:(k==='all')?'all':k }));
     });
   });
   return out;
@@ -16107,8 +16124,10 @@ function subDraftApply(){
   if(!pick.length){ subDraftNote('出す行がありません（ぜんぶ外れています）。',1);
     return; }
   var sum=pick.reduce(function(a,x){ return a+(+x.qty||0); },0);
+  var allN=pick.filter(function(x){ return x.planKey==='all'; }).length;
   if(!confirm('この案で出します。\n\n'
     +'・商品：'+pick.length+'件（のべ '+sum+'点）\n'
+    +(allN?('・そのうち '+allN+'件は「ぜんぶのプラン」に出します\n'):'')
     +'・「会員に出す」の印・販売数の上限・販売価格をまとめて付けます\n'
     +'・そのあと Shopify 用 CSV を書き出します\n\n'
     +'※ 読み込んだら「Shopify に読み込みました」を押してください。\n'
@@ -16140,8 +16159,9 @@ function subDraftApply(){
     /* 案の中身を控える（あとで「どの案から何が売れたか」を見る）。 */
     return mwPost('/sub/draft',{ at:subDraftData.at,
       items:pick.map(function(x){
-        return { jan:x.jan, plan:x.plan, name:x.name, price:x.price,
-                 qty:x.qty, gross:x.gross, speed:x.speed }; }) })
+        return { jan:x.jan, plan:x.planKey||x.plan||'all', name:x.name,
+                 price:x.price, qty:x.qty, gross:x.gross,
+                 speed:x.speed }; }) })
       ['catch'](function(){ return null; });
   }).then(function(r){
     if(r&&r.ok===false&&r.error==='no_table')
@@ -16280,10 +16300,30 @@ function subPlanGo(quiet){
   if(!quiet)subNote('調べています…');
   return mwGet('/sub/plan').then(function(d){
     subPlanData=d; subBarRender();
-    var on=(d.plans||[]).filter(function(p){ return p.on&&p.ch; });
+    /* 8.20（【6】）**プランごとに見出し**を出す（ライト・スタンダード・
+       プレミアムまで試すとき、どのプランのぶんか分かるように）。
+       0件のプランは**なぜ0件か**を出し、プランごとに送れるようにする。 */
     var rows=[];
-    on.forEach(function(p){
-      (p.items||[]).forEach(function(x){
+    (d.plans||[]).forEach(function(p){
+      var items=p.items||[];
+      /* 止めているプランは、理由だけ小さく出す（画面を長くしない）。 */
+      if(!p.on&&!items.length){
+        rows.push('<div class="note2" style="margin:6px 0 0;opacity:.6">'
+          +'<b>'+esc(p.name)+'</b>　'+esc(String(p.why||'止めています'))+'</div>');
+        return;
+      }
+      rows.push('<div class="note2" style="margin:8px 0 2px">'
+        +'<b>'+esc(p.name)+'</b>　'+mwN(items.length)+'件'
+        +'（新しく '+mwN(+p.add||0)+'・書き換え '+mwN(+p.edit||0)
+        +'・そのまま '+mwN(+p.keep||0)+'）'
+        +(p.ch?'':'<span style="color:var(--bad)">　チャンネルID なし</span>')
+        +'</div>');
+      if(!items.length){
+        rows.push('<div class="note2" style="margin:0;color:var(--bad)">'
+          +'0件：'+esc(String(p.why||''))+'</div>');
+        return;
+      }
+      items.forEach(function(x){
         rows.push('<div class="note2" style="margin:2px 0 0">'
           +(x.sent?(x.same?'<span style="opacity:.6">そのまま</span>'
                           :'<b>書き換え</b>'):'<b style="color:var(--good)">新しく送る</b>')
@@ -16293,6 +16333,12 @@ function subPlanGo(quiet){
           +(x.gross!==null&&x.gross!==undefined?('　粗利の目安 '+yen(+x.gross)):'')
           +'</div>');
       });
+      /* そのプランだけ送る（1つずつ試せるように）。 */
+      if(p.on&&p.ch&&((+p.add||0)+(+p.edit||0)))
+        rows.push('<button class="btn cfgprice" style="width:100%;margin-top:4px"'
+          +' onclick="subSendGo(\''+esc(p.key)+'\');return false">'
+          +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
+          +mwN(+p.edit||0)+'）</button>');
     });
     $('subPlanList').innerHTML=rows.length?rows.join('')
       :'<div class="note2">送る商品がありません（「Shopify に読み込みました」の'
@@ -16301,16 +16347,25 @@ function subPlanGo(quiet){
   })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
 }
 /* 今すぐ送る（確認してから）。 */
-function subSendGo(){
+/* 8.20（【6】）plan を渡すと**そのプランだけ**送る
+   （ライト・スタンダード・プレミアムを1つずつ試せるように）。 */
+function subSendGo(plan){
   if(roleDenyPrice('subNote'))return;
   if(!subReady())return;
   var d=subPlanData;
   if(!d){ subNote('先に「今日の配信の予定を見る」を押してください。',1); return; }
-  var on=(d.plans||[]).filter(function(p){ return p.on&&p.ch; });
+  var only=String(plan||'').trim();
+  var on=(d.plans||[]).filter(function(p){
+    return p.on&&p.ch&&(!only||p.key===only); });
+  if(only&&!on.length){
+    subNote('そのプランは送れません（⚙の「配信する」とチャンネルIDを'
+      +'確かめてください）。',1); return;
+  }
   var add=on.reduce(function(a,p){ return a+(+p.add||0); },0);
   var ed=on.reduce(function(a,p){ return a+(+p.edit||0); },0);
   if(!add&&!ed){ subNote('送るものがありません（ぜんぶ送り済みです）。'); return; }
-  var t='会員向けの Discord に送ります。\n\n'
+  var t=(only?('【'+on[0].name+'】だけに送ります。\n\n')
+             :'会員向けの Discord に送ります。\n\n')
     +on.map(function(p){ return '・'+p.name+'：新しく '+p.add+'件・書き換え '
       +p.edit+'件'; }).join('\n')
     +'\n\n※ 販売価格は Shopify に入っている値をそのまま出します。'
@@ -16318,7 +16373,8 @@ function subSendGo(){
     +'\n\nよろしいですか？';
   if(!confirm(t))return;
   subNote('送っています…');
-  return mwPost('/sub/send',{ approve:true }).then(function(r){
+  return mwPost('/sub/send',only?{ approve:true, plan:only }
+                                :{ approve:true }).then(function(r){
     if(r&&r.error){
       subNote('⚠ 送れませんでした：'+esc(String(r.detail||r.error)),1); return;
     }
@@ -24942,7 +24998,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v278';   // sw.js の const V と必ず同じ値にする
+var APP_V='v279';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

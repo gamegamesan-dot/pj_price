@@ -10978,9 +10978,15 @@ async function subPlanBuild(env) {
   for (const p of cfg.plans) {
     const sent = p.ch ? await subPosts(env, p.ch) : {};
     const pick = p.ch ? subPick(rows, p, sent, false, cfg) : [];
+    /* 8.20（【6】）0件のときは**なぜ0件か**を返す（黙って空にしない）。
+       ライト・スタンダード・プレミアムを試すときに、
+       「印がオフ」「チャンネルID が空」「ほかのプランに振り分けてある」
+       「ゲームソフトだけのプラン」のどれなのかが画面で分かるようにする。 */
+    const why = pick.length ? ""
+      : SUBPLAN.whyNone(p, rows, (r) => MWFEE.genreOf(r) === "ゲーム");
     out.plans.push({
       key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
-      n: p.n, q: p.q, kinds: p.kinds,
+      n: p.n, q: p.q, kinds: p.kinds, why: why,
       items: pick.map((x) => ({
         jan: x.jan, name: x.name, price: x.price, qty: x.qty,
         left: x.left, gross: x.gross, sent: x.sent, same: x.same })),

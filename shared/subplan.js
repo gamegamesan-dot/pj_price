@@ -70,13 +70,45 @@
      ・kinds が 'game' のプランは**ゲームソフトだけ**
      ・1点もの（one_off）は 'one' のプランだけ */
   function fits(plan, row, isGame) {
+    return !fitWhy(plan, row, isGame);
+  }
+  /* 8.20（【6】）**出さない理由**。'' なら出す。
+     プランごとの予定が0件のときに「なぜ0件か」を出すのに使う
+     （画面も pj-sync も同じこの文を使う）。 */
+  function fitWhy(plan, row, isGame) {
     var p = plan || {}, r = row || {};
     var g = s(r.grades).split(",").map(function (x) { return x.trim(); })
       .filter(Boolean);
-    if (g.length && g.indexOf(p.key) < 0) return false;
-    if (r.one_off && p.kinds !== "one") return false;
-    if (p.kinds === "game" && !isGame) return false;
-    return true;
+    if (g.length && g.indexOf(p.key) < 0)
+      return "ほかのプランに振り分けてあります（" + g.join("・") + "）";
+    if (r.one_off && p.kinds !== "one")
+      return "1点ものはこのプランに出しません";
+    if (p.kinds === "game" && !isGame)
+      return "ゲームソフトだけのプランです";
+    return "";
+  }
+  /* そのプランが0件になる理由（まとめて1行にする）。
+     rows … 配信できる商品（「読み込みました」の印が付いた行）
+     isGameOf … 行がゲームソフトかを返す関数（手数料の区分は mwfee.js） */
+  function whyNone(plan, rows, isGameOf) {
+    var p = plan || {};
+    if (!p.on) return "⚙で「配信する」が入っていません";
+    if (!p.ch) return "⚙にチャンネルID が入っていません";
+    var list = rows || [];
+    if (!list.length)
+      return "配信できる商品がありません"
+        + "（「会員に出す」の印と「Shopify に読み込みました」の印が要ります）";
+    var tally = {}, keys = [];
+    for (var i = 0; i < list.length; i++) {
+      var w = fitWhy(p, list[i],
+        (typeof isGameOf === "function") ? !!isGameOf(list[i]) : false);
+      if (!w) continue;
+      if (tally[w] === undefined) keys.push(w);
+      tally[w] = (tally[w] || 0) + 1;
+    }
+    if (!keys.length) return "";
+    return keys.map(function (k) { return k + " " + tally[k] + "件"; })
+      .join("／");
   }
   /* ===== 8.18 今日の配信の案（振り分けの決まり）=====
      仕入れタブの候補（刈取の一覧）を、プランごとに自動で振り分ける。
@@ -185,6 +217,7 @@
   }
   var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX,
               plan: plan, list: list, active: active, fits: fits,
+    fitWhy: fitWhy, whyNone: whyNone,
               keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,
               scoreOf: scoreOf, whyNot: whyNot, draft: draft,
               SPEED_MIN: SPEED_MIN };
