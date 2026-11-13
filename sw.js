@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v276';
+const V = 'pj-pricing-v277';
 const ASSETS = [
   './',
   './index.html',
@@ -23,6 +23,8 @@ const ASSETS = [
   // 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。
   './shared/subplan.js',
   './shared/subcard.js',
+  // 海外向け Shopify の商品CSV（6.188）。pj-sync も同じこれを読む。
+  './shared/osscsv.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

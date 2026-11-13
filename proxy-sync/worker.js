@@ -52,6 +52,7 @@ import MWSITE from "../shared/mwsite.js";
 import SUBPLAN from "../shared/subplan.js";
 import SUBCARD from "../shared/subcard.js";
 import SHOPCSV from "../shared/shopcsv.js";
+import OSSCSV from "../shared/osscsv.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -7620,6 +7621,17 @@ async function mwStockPut(env, body) {
         res.ship_seen = sc.seen;
         res.ship_rows = sc.rows.slice(0, 20);
       } catch (e) { run.notes.push("mw-ship: " + String((e && e.message) || e)); }
+      /* 6.193／7.143：海外向け Shopify（os-）の在庫・値段の追従。
+         eBay の数量を0にするのと**同じ間合い**で、直しが要る商品を見つけて
+         社内用の Discord に「Shopify に読み込んでください ◯件」と知らせる。 */
+      try {
+        if (!res.warn) {
+          const oc = await osCheck(env, run, { at: at });
+          res.os_fix = oc.n;
+          res.os_gone = oc.gone;
+          res.os_px = oc.px;
+        }
+      } catch (e) { run.notes.push("os-check: " + String((e && e.message) || e)); }
       /* 【P】src は自動（Cron）か手動（画面）か。画面の「前回の取り込み」に出す。
          migrate-0046 を流す前のデータベースでも落ちないよう、
          列が無ければ src 抜きで入れ直す。 */
@@ -11229,6 +11241,252 @@ async function subDraftLog(env, url) {
   res.rows = Object.keys(by).sort().reverse().map((k) => by[k]);
   res.ok = true;
   return res;
+}
+/* ===== 7.143 海外向け Shopify（os-）の在庫・値段の追従（6.193・【3】）=====
+   MW 無在庫の eBay 出品と**同じ商品**を、海外の一般のお客さん向けに
+   Shopify にも出している（Handle は os-<JAN>・SKU は eBay と同じ W-<JAN>）。
+   eBay 側は pj-sync が数量を0にしているが、Shopify は人が CSV を読み込む
+   ので、**何を直せばよいか**をここで見つけて知らせる。
+
+   ・品切れ … MW の代表の行が消えた／在庫0 → 数量0・下書きに落とす
+   ・値段   … MW の卸値が ⚙ の割合より大きく変わった → 値段を直す
+   どちらも os_item に印（fix_at・fix_why）を付け、社内用の Discord に
+   「Shopify に読み込んでください ◯件」と1通だけ知らせる。
+   値段そのもの（円）は eBay の売値から出すので、**画面が直しの CSV を
+   作るときに計算する**（式を2か所に持たない）。
+
+   会員向け（sub-）はここに入れない。混ざらないことはテストで見ている。 */
+const OS_MAX = 400;                 // 1回に控える行の上限
+const OS_FIX_MAX = 600;             // 一度に見る行の上限
+const OS_NOTE_MAX = 10;             // 知らせに並べる件数
+const OS_PX_PCT_DEF = 1;            // 値段が変わったとみなす割合（%）
+async function osOk(env) { return await colOk(env, "os_item", "jan"); }
+/* ⚙「値段が変わったとみなす割合」（既定 1%）。0 以下は既定に戻す。 */
+function osPxPct(st) {
+  const v = Number((st || {}).osFixPct);
+  return (isFinite(v) && v > 0) ? v : OS_PX_PCT_DEF;
+}
+async function osSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  return { pct: osPxPct(st) };
+}
+/* POST /os/put … Shopify 用 CSV を書き出した商品を控える（管理者だけ）。
+   { at, items:[{ jan, name, usd, fx, pct, price, qty, wholesale, stock }] }
+   書き出し直したら、前の「直しが要る」印は消す（出し直した形が今の形）。 */
+async function osPut(env, body) {
+  const res = { ok: false, n: 0, at: "", table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const o = body || {};
+  const at = String(o.at || "").trim() || nowIso();
+  const list = Array.isArray(o.items) ? o.items.slice(0, OS_MAX) : [];
+  if (!list.length) { res.ok = true; res.at = at; return res; }
+  const run = newRun("os-put");
+  const stmts = [];
+  for (const x of list) {
+    const jan = String((x && x.jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) continue;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO os_item (jan,handle,sku,name,usd,fx,pct,price,qty,
+         wholesale,stock,at,fix_at,fix_why,fix_qty,fix_price,done_at,
+         created_at,updated_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,
+         NULL,NULL,NULL,NULL,NULL,?12,?12)
+       ON CONFLICT(jan) DO UPDATE SET
+         handle=excluded.handle, sku=excluded.sku, name=excluded.name,
+         usd=excluded.usd, fx=excluded.fx, pct=excluded.pct,
+         price=excluded.price, qty=excluded.qty,
+         wholesale=excluded.wholesale, stock=excluded.stock, at=excluded.at,
+         fix_at=NULL, fix_why=NULL, fix_qty=NULL, fix_price=NULL,
+         done_at=NULL, updated_at=excluded.updated_at`)
+      .bind(jan, OSSCSV.handleOf(jan), OSSCSV.skuOf(jan),
+            String((x && x.name) || "").slice(0, 120),
+            Number((x && x.usd) || 0), Number((x && x.fx) || 0),
+            Math.round(Number((x && x.pct) || 0)) || OSSCSV.PCT_DEF,
+            Math.round(Number((x && x.price) || 0)),
+            Math.max(0, Math.round(Number((x && x.qty) || 0))),
+            Math.round(Number((x && x.wholesale) || 0)),
+            Math.round(Number((x && x.stock) || 0)), at));
+    res.n++;
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("Shopify（海外向け）：" + res.n + "件を控えました");
+  res.at = at;
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 1行の見立て。{ why, qty } を返す（why が '' なら直しは要らない）。 */
+function osFixOf(r, pct) {
+  const live = Number(r.live || 0) > 0;
+  const stock = Math.round(Number(r.now_stock) || 0);
+  const was = Math.round(Number(r.wholesale) || 0);
+  const now = Math.round(Number(r.now_px) || 0);
+  const why = [];
+  const qtyNow = Math.max(0, Math.round(Number(r.qty) || 0));
+  /* もう数量0で出しているなら、品切れの直しは済んでいる（知らせ直さない）。 */
+  if (!live || stock <= 0) { if (qtyNow > 0) why.push("gone"); }
+  else if (was > 0 && now > 0 && Math.abs(now - was) * 100 >= was * pct)
+    why.push("price");
+  const qty = (why[0] === "gone")
+    ? 0 : Math.min(Math.max(0, Math.round(Number(r.qty) || 0)), stock);
+  return { why: why.join(","), qty: qty };
+}
+/* MW の取り込みのあとに見る。印を付けて、**新しく付いたぶんだけ**知らせる。 */
+async function osCheck(env, run, opt) {
+  const res = { ok: false, seen: 0, gone: 0, px: 0, n: 0, rows: [],
+                table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    return res;
+  }
+  const o = opt || {};
+  const pct = (o.pct > 0) ? Number(o.pct) : (await osSettings(env)).pct;
+  const at = String(o.at || "").trim() || nowIso();
+  const q = await env.DB.prepare(
+    `SELECT o.jan AS jan, o.name AS name, o.qty AS qty, o.price AS price,
+            o.wholesale AS wholesale, o.fix_at AS fix_at, o.fix_why AS fix_why,
+            (SELECT COUNT(*) FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL) AS live,
+            (SELECT s.stock FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL
+              LIMIT 1) AS now_stock,
+            (SELECT s.wholesale FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL
+              LIMIT 1) AS now_px
+       FROM os_item o
+      LIMIT ${OS_FIX_MAX}`).all();
+  const stmts = [];
+  for (const r of ((q && q.results) || [])) {
+    res.seen++;
+    const f = osFixOf(r, pct);
+    if (!f.why) continue;
+    if (f.why.indexOf("gone") >= 0) res.gone++; else res.px++;
+    /* もう同じ理由で印が付いているなら、知らせ直さない。 */
+    const had = String(r.fix_at || "").trim() && String(r.fix_why || "") === f.why;
+    if (!had) {
+      res.n++;
+      if (res.rows.length < OS_NOTE_MAX)
+        res.rows.push({ jan: String(r.jan), name: String(r.name || ""),
+                        why: f.why, qty: f.qty,
+                        stock: Math.round(Number(r.now_stock) || 0),
+                        was: Math.round(Number(r.wholesale) || 0),
+                        now: Math.round(Number(r.now_px) || 0) });
+    }
+    stmts.push(env.DB.prepare(
+      `UPDATE os_item SET fix_at=?1, fix_why=?2, fix_qty=?3, updated_at=?1
+        WHERE jan=?4`).bind(at, f.why, f.qty, String(r.jan)));
+  }
+  if (stmts.length) await runBatch(env, run, stmts);
+  if (res.n) {
+    const t = ["🛒 Shopify に読み込んでください " + res.n + "件",
+      "海外向け（os-）の商品で、MW の在庫・値段が変わりました。"
+        + "pj の出品CSVタブで「Shopify の直しCSVを作る」を押して、"
+        + "Shopify の商品の読み込みに通してください。"];
+    for (const x of res.rows)
+      t.push("・" + (x.name || x.jan).slice(0, 30)
+        + "（" + x.jan + "）"
+        + ((x.why.indexOf("gone") >= 0)
+            ? ("品切れ → 数量0・下書き")
+            : ("卸値 " + x.was + " → " + x.now + "円 → 値段を直す")));
+    if (res.gone + res.px > res.rows.length)
+      t.push("ほか " + (res.gone + res.px - res.rows.length) + "件");
+    await notify(env, run, t.join("\n"));
+    run.notes.push("Shopify（海外向け）の直し " + res.n + "件を知らせました");
+  }
+  res.ok = true;
+  return res;
+}
+/* GET /os/diff … 直しが要る行（画面が「直しCSV」を作るのに使う）。 */
+async function osDiff(env, url) {
+  const res = { ok: false, rows: [], n: 0, table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const p = (url && url.searchParams) ? url.searchParams : null;
+  const limit = Math.max(1, Math.min(OS_FIX_MAX,
+    Math.round(Number(p ? p.get("limit") : 0) || 200)));
+  const q = await env.DB.prepare(
+    `SELECT o.jan AS jan, o.handle AS handle, o.sku AS sku, o.name AS name,
+            o.usd AS usd, o.fx AS fx, o.pct AS pct, o.price AS price,
+            o.qty AS qty, o.wholesale AS wholesale, o.fix_at AS fix_at,
+            o.fix_why AS fix_why, o.fix_qty AS fix_qty,
+            (SELECT s.stock FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL
+              LIMIT 1) AS now_stock,
+            (SELECT s.wholesale FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL
+              LIMIT 1) AS now_px
+       FROM os_item o
+      WHERE COALESCE(o.fix_at,'')<>''
+      ORDER BY o.fix_at ASC
+      LIMIT ${limit}`).all();
+  for (const r of ((q && q.results) || []))
+    res.rows.push({
+      jan: String(r.jan), handle: String(r.handle || ""),
+      sku: String(r.sku || ""), name: String(r.name || ""),
+      usd: Number(r.usd) || 0, fx: Number(r.fx) || 0,
+      pct: Math.round(Number(r.pct) || 0) || OSSCSV.PCT_DEF,
+      price: Math.round(Number(r.price) || 0),
+      qty: Math.round(Number(r.qty) || 0),
+      wholesale: Math.round(Number(r.wholesale) || 0),
+      fix_at: String(r.fix_at || ""), fix_at_jst: jstText(r.fix_at),
+      why: String(r.fix_why || ""),
+      fix_qty: Math.max(0, Math.round(Number(r.fix_qty) || 0)),
+      stock: Math.round(Number(r.now_stock) || 0),
+      now_px: Math.round(Number(r.now_px) || 0),
+    });
+  res.n = res.rows.length;
+  res.ok = true;
+  return res;
+}
+/* POST /os/done … Shopify に読み込んだ（直しの印を消す・管理者だけ）。
+   { at, items:[{ jan, qty, price }] }（qty・price はそのとき読み込んだ値） */
+async function osDone(env, body) {
+  const res = { ok: false, n: 0, table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const o = body || {};
+  const at = String(o.at || "").trim() || nowIso();
+  const list = Array.isArray(o.items) ? o.items.slice(0, OS_MAX) : [];
+  if (!list.length) { res.ok = true; return res; }
+  const run = newRun("os-done");
+  const stmts = [];
+  for (const x of list) {
+    const jan = String((x && x.jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) continue;
+    stmts.push(env.DB.prepare(
+      `UPDATE os_item
+          SET qty=COALESCE(?1,qty), price=COALESCE(?2,price),
+              wholesale=COALESCE(?3,wholesale),
+              fix_at=NULL, fix_why=NULL, fix_qty=NULL, fix_price=NULL,
+              done_at=?4, updated_at=?4
+        WHERE jan=?5`)
+      .bind(osNumOrNull(x && x.qty), osNumOrNull(x && x.price),
+            osNumOrNull(x && x.wholesale), at, jan));
+    res.n++;
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("Shopify（海外向け）：" + res.n + "件を読み込み済みにしました");
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+function osNumOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return isFinite(n) ? Math.round(n) : null;
 }
 /* ===== 8.13（【Y】の3）Shopify の注文を取り込む（当面は CSV）=====
    Shopify の「注文のエクスポート」の CSV を読み、SKU（SUB-<JAN>-<日付>）で
@@ -15394,7 +15652,8 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "sub_draft",
+  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "os_item",
+  "sub_draft",
   "sub_post", "sub_order",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
@@ -15421,6 +15680,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["os_item", "migrate-0058-os-item.sql"],
+  ["fix_why", "migrate-0058-os-item.sql"],
   ["card_h", "migrate-0057-sub-card.sql"],
   ["sub_draft", "migrate-0056-sub-draft.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
@@ -15906,6 +16167,11 @@ export default {
         && (request.method === "POST" || url.pathname === "/sub/draft")
         && url.pathname.indexOf("/sub/") === 0)
       return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
+    /* 6.193／7.143：海外向け Shopify（os-）の控えと直しは管理者だけ。
+       値段・仕入原価・MW の卸値が出るため、見るのも管理者だけにする。 */
+    if (role !== "admin" && url.pathname.indexOf("/os/") === 0)
+      return forbidStaff("海外向け Shopify の窓口は管理者用のキーが必要です",
+                         [], origin);
     /* 7.111：**Amazon への登録は作業者の端末からもできる**。
        ただし送る中身（売値・SKU・申告・仕入原価）は pj-sync 側で組み立て、
        画面から来た値は使わない（mwPutRun の staff の枝）。
@@ -16190,6 +16456,22 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/sub/draft")
         return json(await subDraftLog(env, url), 200, origin);
+      /* 6.193／7.143 海外向け Shopify（os-）の控えと直し。 */
+      if (request.method === "POST" && url.pathname === "/os/put") {
+        const b = await request.json().catch(() => ({}));
+        return json(await osPut(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/os/diff")
+        return json(await osDiff(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/os/done") {
+        const b = await request.json().catch(() => ({}));
+        return json(await osDone(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/os/check") {
+        const run = newRun("os-check");
+        const r = await osCheck(env, run, {});
+        return json(Object.assign(await saveRun(env, run), r), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/sub/orders")
         return json(await subOrderList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/orders") {
@@ -16683,6 +16965,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
+  osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
+  OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,
   subCardHash, subPostBind, subPostIns,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,

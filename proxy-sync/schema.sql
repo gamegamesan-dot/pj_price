@@ -1000,3 +1000,32 @@ CREATE TABLE IF NOT EXISTS mw_notify (
   PRIMARY KEY (jan, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_mw_notify_at ON mw_notify (at DESC);
+
+/* ===== 6.193／7.143 海外向け Shopify（os-）の商品 =====
+   eBay 用の出品CSVと一緒に Shopify 用の商品CSVを書き出した商品を控える。
+   MW で品切れ・値段が変わったら fix_at に印を付け、社内用の Discord に
+   「Shopify に読み込んでください ◯件」と知らせる。
+   会員向け（sub-）とは別の商品。ここには**会員向けの行を入れない**。 */
+CREATE TABLE IF NOT EXISTS os_item (
+  jan        TEXT PRIMARY KEY,
+  handle     TEXT NOT NULL,                 -- os-<JAN>
+  sku        TEXT NOT NULL,                 -- W-<JAN>（eBay と同じ）
+  name       TEXT,
+  usd        REAL,                          -- 書き出したときの eBay の売値
+  fx         REAL,                          -- そのときの為替
+  pct        INTEGER,                       -- そのときの⚙の割合（%）
+  price      INTEGER,                       -- 書き出した Shopify の値段（円）
+  qty        INTEGER,                       -- 書き出した数量
+  wholesale  INTEGER,                       -- そのときの MW の卸値
+  stock      INTEGER,                       -- そのときの MW 在庫
+  at         TEXT,                          -- 書き出した日時
+  fix_at     TEXT,                          -- 直しが要るようになった日時
+  fix_why    TEXT,                          -- gone／price／両方
+  fix_qty    INTEGER,                       -- 直したあとの数量
+  fix_price  INTEGER,                       -- 直したあとの値段（円）
+  done_at    TEXT,                          -- Shopify に読み込んだ日時
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_os_item_fix ON os_item(fix_at);
+CREATE INDEX IF NOT EXISTS idx_os_item_at ON os_item(at);

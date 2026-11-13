@@ -791,6 +791,17 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn primary" id="csvExport" style="width:100%">CSVを書き出す（カテゴリごと）</button>
       <button class="btn" id="csvExportPick" style="width:100%;margin-top:8px">選択した行だけ書き出す</button>
       <div class="note2" style="margin-top:0" id="csvPickNote">一覧の各カードの左上のチェックで選びます。</div>
+      <!-- 6.193 海外向け Shopify（os-）。MW 無在庫の行があるときだけ出す。
+           ボタンは全幅（iPhone の 375px で切れないように・6.190）。 -->
+      <div id="csvOsBox" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff">
+        <div class="note2" style="margin:0 0 4px"><b>海外向け Shopify（os-）</b>　印を付けた MW 無在庫の行は、eBay 用のファイルと<b>一緒に</b> Shopify 用の商品CSV にも書き出します（Handle は <code>os-&lt;JAN&gt;</code>・会員用の <code>sub-</code> とは別の商品）。eBay の出品文・同梱物に Shopify への誘導は入れません。</div>
+        <button class="btn" id="csvOsAll" style="width:100%">Shopify にも出す（まとめて印）</button>
+        <button class="btn" id="csvOsNone" style="width:100%;margin-top:6px">Shopify の印を外す</button>
+        <div class="note2" style="margin-top:2px" id="csvOsNote"></div>
+        <button class="btn" id="csvPickNew" style="width:100%;margin-top:6px">まだ書き出していない行だけ選ぶ</button>
+        <button class="btn" id="csvOsFix" style="width:100%;margin-top:6px">Shopify の直しCSVを作る</button>
+        <div class="note2" style="margin-top:2px" id="csvOsFixNote"></div>
+      </div>
       <!-- 選んだ行の売値の決め方をまとめて入れ替える（6.54） -->
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvSoldOn" style="flex:1 1 0;min-width:0;padding:9px 4px">選んだ行を相場で出す</button>
@@ -2213,6 +2224,16 @@ body.staff #syncOnHandFix{display:none !important}
       <button class="btn" id="csvReweigh" style="width:100%;margin:4px 0 10px">取り込み済みの重量を再計算</button>
       <div class="note2" style="margin-top:0">手で重量を直した行は対象外です。hobby/toy はカテゴリを振り分けた時点でも再計算されます。</div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+      <!-- 6.193 海外の一般のお客さん向け Shopify（os-）。eBay の出品CSVと
+           一緒に書き出す商品CSVの決まり。会員向け（sub-）とは別の商品。 -->
+      <div class="cfgsub">海外向け Shopify（os-）</div>
+      <div class="row"><label for="osPricePct">海外向けの値段＝eBay の売値 ×</label><input type="number" id="osPricePct" value="100" step="5" min="10" max="300" inputmode="numeric"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">eBay の売値（総額$）を<b>⚙の為替</b>で円に直し、この割合を掛けた額を Shopify の値段にします（<b>送料込み</b>）。</div>
+      <div class="row"><label for="osFixPct">値段が変わったとみなす割合</label><input type="number" id="osFixPct" value="1" step="0.5" min="0.1" max="50" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0">MW の卸値がこの割合より大きく変わったら、pj-sync が「Shopify に読み込んでください」と社内用の Discord に知らせます。</div>
+      <div class="row"><label for="osVendor">Vendor（空のままでよい）</label><input type="text" id="osVendor" value="" style="flex:1"></div>
+      <div class="row"><label for="osType">Type（商品の種類）</label><input type="text" id="osType" value="" style="flex:1"></div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="cfgsub">判定のしきい値</div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
       <div class="note2" style="margin-top:0">Amazonランクがこの順位より悪い行は、eBay優先マージン率を0%として判定します。</div>
@@ -2546,6 +2567,8 @@ body.staff #syncOnHandFix{display:none !important}
 <!-- 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。 -->
 <script src="./shared/subplan.js"></script>
 <script src="./shared/subcard.js"></script>
+<!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
+<script src="./shared/osscsv.js"></script>
 <script>
 /* ---- 値付けの式は shared/pricing.js に置いてある（C段・2026-10-20）----
    index.html と pj-sync（Worker）が同じファイルを読む。式はあちらだけにあり、
@@ -2586,6 +2609,11 @@ if(typeof PJ_SUBPLAN==='undefined')
 if(typeof PJ_SUBCARD==='undefined')
   throw new Error('shared/subcard.js が読み込めていません（会員用のカード）');
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD;
+/* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
+   pj-sync（在庫・値段の追従）も同じこれを読む。 */
+if(typeof PJ_OSSCSV==='undefined')
+  throw new Error('shared/osscsv.js が読み込めていません（海外向け Shopify）');
+var OSS=PJ_OSSCSV;
 /* ===== 6.191（【1】〜【4】）端末の保存（localStorage が足りない）=====
    iPhone の Safari は1つのサイトに 5MB ほどしか置けない。pj は出品リストや
    ゴミ箱まで localStorage に入れていたので、いっぱいになって
@@ -3293,7 +3321,10 @@ var ADV_SUB=['subHour','subDomain',
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
              'mwSubGrossMin','mwSubRateMin','mwSubGrossFloor',
              /* 会員向け（Shopify）の重さ（6.173／6.183）。 */
-             'mwSubGameG','mwSubAddG'];
+             'mwSubGameG','mwSubAddG',
+             /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
+                （値段が変わったとみなす割合）。 */
+             'osPricePct','osFixPct','osVendor','osType'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -6097,6 +6128,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
+                 /* 6.193 海外向け Shopify（os-）。 */
+                 'osPricePct','osFixPct','osVendor','osType',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
                  'syncPxMax','syncHotMax'];
 
@@ -6106,6 +6139,10 @@ function csvLoad(){
   // 後から足した項目は、既存の保存データにも既定値を入れておく。
   csvList.forEach(function(r){
     if(r.forceEbay===undefined)r.forceEbay=false;
+    /* 6.193 海外向け Shopify（os-）の印と書き出し済みの日。 */
+    if(r.osOn===undefined)r.osOn=false;
+    if(r.osAt===undefined)r.osAt='';
+    if(r.expAt===undefined)r.expAt='';
     if(r.oneOff===undefined)r.oneOff=false;
     if(!Array.isArray(r.pics))r.pics=[];
     /* 2026-09-25 のブランド表記の見直しを、保存済みの行にも反映する。
@@ -8606,6 +8643,13 @@ function csvRender(){
       +'<button class="btn" data-edit="'+r.id+'" style="padding:5px 8px;font-size:12px">出品文を作る</button>'
       +'<button class="btn" data-fba="'+r.id+'" style="padding:5px 8px;font-size:12px">FBA連動 '
       +(r.fba?'オン':'オフ')+'</button>'
+      /* 6.193 海外向け Shopify（os-）の印。MW 無在庫の行にだけ出す。 */
+      +(csvOsCan(r)
+        ? ('<button class="btn" data-oson="'+r.id+'" style="padding:5px 8px;font-size:12px'
+           +(csvOsOn(r)?';background:#1c6fb4;color:#fff;border-color:#1c6fb4':'')
+           +'">Shopify にも出す：'+(csvOsOn(r)?'する':'しない')
+           +(r.osAt?('（書き出し済み '+esc(String(r.osAt))+'）'):'')+'</button>')
+        : '')
       +'<button class="btn" data-zero="'+r.id+'" style="padding:5px 8px;font-size:12px">在庫0時：'
       +({hold:'寝かせる',restock:'再調達',end:'終了'}[r.zeroAct]||'寝かせる')+'</button>'
       +(String(r.uploadErr||'').trim()
@@ -8735,6 +8779,7 @@ $('csvList').addEventListener('click',function(e){
         ||t.getAttribute('data-loose')
         ||t.getAttribute('data-fast')||t.getAttribute('data-mstop')
         ||t.getAttribute('data-pmode')
+        ||t.getAttribute('data-oson')
         ||t.getAttribute('data-ccond')
         ||t.getAttribute('data-regen')
         ||t.getAttribute('data-uperr');
@@ -8795,6 +8840,11 @@ $('csvList').addEventListener('click',function(e){
     var pr=csvList[i];
     if(!(csvSoldPrice(pr)>0))return;
     pr.priceMode=csvSoldMode(pr)?'target':'sold';
+  }
+  /* 6.193 海外向け Shopify（os-）に出す印。MW 無在庫の行だけ。 */
+  else if(t.hasAttribute('data-oson')){
+    csvList[i].osOn=!csvList[i].osOn;
+    csvOsNote();
   }
   else if(t.hasAttribute('data-cart'))csvCartToggle(csvList[i]);
   else if(t.hasAttribute('data-loose'))csvLooseToggle(csvList[i]);
@@ -10205,6 +10255,7 @@ function csvPickNote(){
        +'。この行だけを書き出します（不備・出品済みの行は同じ決まりで除きます）。')
     : '一覧の各カードの左上のチェックで選びます。';
   csvDropNote();   // 無在庫の一括ボタンの件数も合わせる
+  csvOsNote();     // 6.193 Shopify（海外向け）のボタンの件数も合わせる
   csvSoldBtnNote();// 「相場で出す」の件数も合わせる（6.54）
 }
 /* 選んだ行の売値の決め方をまとめて入れ替える（6.54）。
@@ -10736,6 +10787,200 @@ $('csvExportFiles').addEventListener('click',function(e){
 });
 /* ids を渡すとその行だけを書き出す（選択した行だけ書き出すボタン）。
    渡さなければ今までどおり一覧の全行が対象。確認・ZIP・ログの扱いは同じ。 */
+/* ===== 6.193（カジの依頼）海外の一般のお客さん向け Shopify（os-）=====
+   MW 無在庫の eBay 出品ファイルを作るときに、**同じ商品**の Shopify 用の
+   商品CSV（英語・公開）も一緒に書き出す。
+   ・Handle は os-<JAN>（会員用の sub-<JAN> とは**別の商品**）
+   ・SKU は eBay と同じ W-<JAN>／値段は eBay の売値 × ⚙% を円にした額
+   ・画像は MW が許諾した画像だけ（Amazon の画像は使わない）
+   ・Tags は export と機種（member-list・grade-* は付けない）
+   ・eBay の出品文・メッセージ・同梱物に Shopify への誘導は**入れない**
+   CSV の列と作り方は shared/osscsv.js の1か所だけに置いてある。 */
+var OS_SEQ_KEY='pj:os:seq:v1';
+function osPricePct(){
+  var n=+($('osPricePct')&&$('osPricePct').value);
+  return (isFinite(n)&&n>0)?n:OSS.PCT_DEF;
+}
+function osVendor(){ return String(($('osVendor')&&$('osVendor').value)||'').trim(); }
+function osTypeV(){ return String(($('osType')&&$('osType').value)||'').trim(); }
+function osOpt(){
+  return { fx:+$('fx').value||0, pct:osPricePct(),
+           vendor:osVendor(), type:osTypeV() };
+}
+/* 1日ごとの通し番号（書き出すたびに1つ進む）。ファイル名に入れる。 */
+function osSeqNext(){
+  var ymd=OSS.ymd(new Date()), o={};
+  try{ o=JSON.parse(lsGet(OS_SEQ_KEY)||'{}')||{}; }catch(e){ o={}; }
+  var n=(String(o.ymd||'')===ymd)?(Math.round(+o.n||0)+1):1;
+  try{ lsSet(OS_SEQ_KEY,JSON.stringify({ ymd:ymd, n:n })); }catch(e){}
+  return n;
+}
+/* ファイル名に入れるカテゴリの短い名前（2つ以上のときだけ付ける）。 */
+function csvCatSlug(cat){ return (String(cat)==='139973')?'game':'fig'; }
+/* 印を付けられるのは **MW 無在庫の行だけ**（仕入れ先が MW の行）。 */
+function csvOsCan(r){ return csvIsDrop(r); }
+function csvOsOn(r){ return !!(r&&r.osOn&&csvOsCan(r)); }
+/* 出品リストの行 → 海外向け Shopify の品物。
+   重さは **eBay の送料計算に使っている重さ**、仕入原価は行の仕入値。 */
+function csvOsItem(r){
+  return { jan:r.jan, titleEn:r.titleEn, descHtml:r.descHtml,
+    kishu:String(r.mwKishu||''), type:osTypeV(),
+    usd:csvStartPrice(r), qty:+r.qty||0, grams:+r.weight||0,
+    cost:csvCostOf(r), pics:r.pics||[],
+    wholesale:+r.mwWholesale||0, stock:+r.mwStock||0 };
+}
+function csvOsItems(rows){
+  return (rows||[]).filter(csvOsOn).map(csvOsItem);
+}
+function csvOsCanRows(){ return csvList.filter(csvOsCan); }
+function csvRowByJan(jan){
+  var j=String(jan||'').replace(/\D/g,'');
+  for(var i=0;i<csvList.length;i++)
+    if(csvOsCan(csvList[i])&&String(csvList[i].jan||'')===j)return csvList[i];
+  return null;
+}
+/* 「Shopify にも出す」の印をまとめて付ける・外す。
+   行を選んでいればその行だけ、選んでいなければ MW 無在庫の行ぜんぶ。 */
+function csvOsMark(on){
+  var ids=csvPickIds(), only=null;
+  if(ids.length){ only={}; ids.forEach(function(x){ only[x]=1; }); }
+  var n=0;
+  csvOsCanRows().forEach(function(r){
+    if(only&&!only[r.id])return;
+    if(!!r.osOn===!!on)return;
+    r.osOn=!!on; n++;
+  });
+  csvSaveList(); csvRender(); csvOsNote();
+  $('csvOsNote').innerHTML=(n
+    ? ('✓ <b>'+n+'件</b>の印を'+(on?'付けました':'外しました')+'。')
+    : '変わった行はありません。')
+    +'<br>'+csvOsCountText();
+}
+function csvOsCountText(){
+  var can=csvOsCanRows(), on=can.filter(csvOsOn);
+  var sent=on.filter(function(r){ return !!r.osAt; }).length;
+  return 'MW 無在庫 '+can.length+'件／Shopify にも出す印 '+on.length+'件'
+    +'（うち書き出し済み '+sent+'件・まだ '+(on.length-sent)+'件）';
+}
+/* 画面の出し入れと件数の表示。MW 無在庫の行が1件も無ければ丸ごと隠す。 */
+function csvOsNote(){
+  var box=$('csvOsBox'); if(!box)return;
+  var can=csvOsCanRows();
+  box.style.display=can.length?'':'none';
+  if(!can.length)return;
+  var ids=csvPickIds();
+  $('csvOsAll').textContent='Shopify にも出す（'
+    +(ids.length?('選んだ '+ids.length+'件'):('MW 無在庫 '+can.length+'件'))+'）';
+  $('csvOsNone').textContent='Shopify の印を外す'
+    +(ids.length?('（選んだ '+ids.length+'件）'):'');
+  if(!String($('csvOsNote').innerHTML||'').trim())
+    $('csvOsNote').textContent=csvOsCountText();
+}
+/* まだ書き出していない行だけ選ぶ（同じ商品を二重に書き出さないため）。 */
+function csvPickNewGo(){
+  var sp=csvExportSplit(null);
+  csvPick={};
+  var n=0;
+  sp.rows.forEach(function(r){ if(!r.expAt){ csvPick[r.id]=1; n++; } });
+  csvRender(); csvPickNote();
+  $('csvOsNote').innerHTML=n
+    ? ('✓ まだ書き出していない <b>'+n+'件</b>を選びました。'
+       +'このまま「選択した行だけ書き出す」を押してください。')
+    : '書き出していない行はありません（書き出せる行はすべて書き出し済みです）。';
+}
+/* 書き出しのまとめ（eBay ◯件・Shopify ◯件・外した行 ◯件（理由ごと））。 */
+function csvExpSumHtml(sp,os,made){
+  var h='<div class="okbox"><b>書き出しました</b>'
+    +'<br>eBay <b>'+sp.rows.length+'件</b>'
+    +'　/　Shopify（海外向け）<b>'+((os&&os.go.length)||0)+'件</b>';
+  var cut=[];
+  if(sp.bad.length)cut.push('不備 '+sp.bad.length+'件');
+  if(sp.amz.length)cut.push('Amazon優先 '+sp.amz.length+'件');
+  if(sp.done.length)cut.push('出品済み '+sp.done.length+'件');
+  var why={};
+  ((os&&os.no)||[]).forEach(function(x){ why[x.why]=(why[x.why]||0)+1; });
+  Object.keys(why).forEach(function(k){
+    cut.push('Shopify：'+k+' '+why[k]+'件');
+  });
+  h+='<br>外した行 <b>'+(sp.skip+(((os&&os.no)||[]).length))+'件</b>'
+    +(cut.length?('（'+cut.join('・')+'）'):'');
+  if(made&&made.length)h+='<br>ファイル：'+esc(made.join('　/　'));
+  return h+'</div>';
+}
+/* 書き出した商品を pj-sync に控える（MW で品切れ・値段が変わったら
+   「Shopify に読み込んでください」と社内用の Discord に知らせるため）。 */
+function csvOsPut(items,at){
+  if(!items||!items.length)return;
+  try{
+    fetch(syncUrl()+'/os/put',{ method:'POST',
+      headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
+      body:JSON.stringify({ at:at||new Date().toISOString(),
+        items:items.map(function(x){
+          return { jan:x.jan, name:x.titleEn, usd:x.usd, fx:osOpt().fx,
+                   pct:osPricePct(), price:OSS.priceOf(x,osOpt()),
+                   qty:x.qty, wholesale:x.wholesale, stock:x.stock };
+        }) }) })['catch'](function(){});
+  }catch(e){}
+}
+/* 【3】MW で品切れ・値段が変わった商品の「Shopify の在庫・価格を直す CSV」。
+   値段は eBay の売値から出すので、**出品リストにある行だけ**出し直せる。
+   リストに無い行は直さず、そのまま印を残して知らせる（黙って消さない）。 */
+function csvOsFixGo(){
+  var note=$('csvOsFixNote');
+  note.textContent='pj-sync に聞いています…';
+  fetch(syncUrl()+'/os/diff',{ headers:{'X-PJ-Key':syncApiKey()} })
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(d){
+      if(!d||!d.ok){
+        note.innerHTML='<b>読めませんでした</b>'
+          +(d&&d.detail?('（'+esc(String(d.detail))+'）'):'')
+          +'。pj-sync のデプロイと D1 の作業（migrate-0058）が要ります。';
+        return;
+      }
+      var rows=d.rows||[];
+      if(!rows.length){ note.textContent='直すものはありません。'; return; }
+      var go=[], skip=[], o=osOpt();
+      rows.forEach(function(x){
+        if(String(x.why||'').indexOf('gone')>=0){
+          /* 品切れ：数量0・下書き。値段は前のまま（変えない）。 */
+          go.push({ jan:x.jan, qty:0, price:x.price, why:'品切れ' });
+          return;
+        }
+        var r=csvRowByJan(x.jan);
+        if(!r){ skip.push(x); return; }
+        go.push({ jan:x.jan, qty:+r.qty||0,
+                  price:OSS.yenOf(csvStartPrice(r),o), why:'値段' });
+      });
+      if(!go.length){
+        note.innerHTML='<b>直せる行がありません。</b>値段が変わった '
+          +skip.length+'件は出品リストにありません。'
+          +'MW の候補から出品リストに入れ直して書き出してください。';
+        return;
+      }
+      var name=OSS.updName(new Date(),osSeqNext(),go.length);
+      var text=OSS.updCsv(go,o);
+      csvLastFiles=[{ name:name, text:text,
+                      label:'Shopify の直し（'+go.length+'件）' }];
+      csvExportFilesUI();
+      var okd=csvDownload(name,text);
+      /* 直した行だけ「読み込み済み」にする（残りは印を残す）。 */
+      fetch(syncUrl()+'/os/done',{ method:'POST',
+        headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
+        body:JSON.stringify({ items:go.map(function(x){
+          return { jan:x.jan, qty:x.qty, price:x.price }; }) }) })
+        ['catch'](function(){});
+      var gone=go.filter(function(x){ return x.why==='品切れ'; }).length;
+      note.innerHTML='<div class="okbox">'+(okd?'✓ ':'')+'<b>'+go.length
+        +'件</b>の直しCSVを作りました（品切れ '+gone+'件・値段 '
+        +(go.length-gone)+'件）。<br>Shopify の <b>商品 → インポート</b>で'
+        +'「Overwrite products with matching handles」にチェックして'
+        +'読み込んでください。'
+        +(skip.length?('<br><b>'+skip.length+'件</b>は出品リストに無いので'
+          +'直せませんでした（印はそのまま残しています）。'):'')
+        +'</div>';
+    })
+    ['catch'](function(){ note.textContent='pj-sync につながりませんでした。'; });
+}
 function csvExportRun(ids){
   if(!csvList.length){ alert('出品リストが空です。'); return; }
   /* 中古フィギュアの一点物を自動でオンにする（6.94）。
@@ -10770,16 +11015,32 @@ function csvExportRun(ids){
   }
   var byCat={}; rows.forEach(function(r){ (byCat[r.cat]=byCat[r.cat]||[]).push(r); });
   var cats=Object.keys(byCat), stamp=csvStamp(), made=[];
+  /* 6.193（【7】）ファイル名に日付・通し番号・件数を入れる
+     （例 ebay-mw-20261113-01-100.csv／shopify-os-20261113-01-100.csv）。
+     1回の書き出しで出すファイルは**同じ通し番号**にする。 */
+  var day=new Date(), seq=osSeqNext();
+  var mwOnly=rows.length&&rows.every(csvIsDrop);
+  var pre=mwOnly?'ebay-mw':'ebay';
   /* カテゴリが2つ以上あるときは1つのZIPにまとめる。
      iPhoneでは続けてダウンロードすると2つ目以降が保存されないため。 */
   csvLastFiles=cats.map(function(cat){
-    return { name:'ebay_'+cat+'_'+stamp+'.csv', text:csvBuild(cat,byCat[cat],'Add'),
+    return { name:OSS.fileName(pre+(cats.length>1?('-'+csvCatSlug(cat)):''),
+                               day,seq,byCat[cat].length),
+             text:csvBuild(cat,byCat[cat],'Add'),
              label:csvCatName(cat)+'（'+byCat[cat].length+'件）' };
   });
-  if(cats.length>1){
-    var zip='ebay_csv_'+(pick?'pick_':'')+stamp+'.zip';
+  /* 6.193（【1】【7】）印の付いた MW 無在庫の行は、Shopify 用の商品CSV も
+     一緒に出す。出せない行（英題なし・画像なしなど）は理由ごとに数える。 */
+  var osSp=OSS.split(csvOsItems(rows),osOpt());
+  if(osSp.go.length)
+    csvLastFiles.push({ name:OSS.shopName(day,seq,osSp.go.length),
+      text:OSS.build(osSp.go,osOpt()),
+      label:'Shopify（海外向け）（'+osSp.go.length+'件）' });
+  if(csvLastFiles.length>1){
+    var zip=(osSp.go.length?'ebay-shopify-':'ebay-csv-')
+      +OSS.ymd(day)+'-'+OSS.seq2(seq)+'-'+rows.length+'.zip';
     if(csvDownloadBlob(zip,csvZip(csvLastFiles)))
-      made.push(zip+'（'+cats.length+'ファイル・'+rows.length+'件）');
+      made.push(zip+'（'+csvLastFiles.length+'ファイル・'+rows.length+'件）');
   }else{
     var f=csvLastFiles[0];
     if(csvDownload(f.name,f.text))made.push(f.name+'（'+byCat[cats[0]].length+'件）');
@@ -10788,6 +11049,7 @@ function csvExportRun(ids){
   // 書き出した行をログに残す（次回の取り込みで既出を知らせるため）
   var at=jstToday();                 // 書き出した日（日本時間・6.82）
   rows.forEach(function(r){
+    r.expAt=at;                   // 書き出し済みの印（6.193・二重に出さないため）
     r.priceSent=+r.price||0;      // 出した売値を控える（価格更新CSVの絞り込みに使う）
     r.fxSent=+$('fx').value||0;   // そのときの為替も控える（見直しの理由に使う）
     csvLog.push({ jan:r.jan, asin:r.asin, sku:csvCustomLabel(r), title:r.titleJa||r.titleEn,
@@ -10803,16 +11065,29 @@ function csvExportRun(ids){
   /* 価格の元データ（実重量・仕入値・相場・一点物）も送る。これがあると、
      あとで出品リストを空にしても販売連携タブで見直し・値下げができる。 */
   csvSendPriceSrc(rows,'csvExportNote');
+  /* 6.193：Shopify にも出した商品を pj-sync に控える（在庫・値段の追従）。 */
+  if(osSp.go.length){
+    var osJan={}; osSp.go.forEach(function(x){ osJan[String(x.jan)]=1; });
+    rows.forEach(function(r){ if(osJan[String(r.jan)])r.osAt=at; });
+    csvOsPut(osSp.go,new Date().toISOString());
+  }
   // 書き出した行の選択は外す（二重に出さないように）
   if(pick)rows.forEach(function(r){ delete csvPick[r.id]; });
-  csvSaveLog(); csvRender();
-  $('csvExportNote').textContent=made.length
-    ? ((pick?'選択した行を書き出しました：':'書き出しました：')+made.join('　/　')
-       +(csvLastFiles.length>1?'　ZIPを開いて中のCSVをアップロードしてください。'
-                              +'うまく保存できないときは下のボタンで1つずつ保存できます。':''))
+  csvSaveLog(); csvRender(); csvOsNote();
+  /* 6.193（【7】）書き出しのまとめを、ボタンのすぐ下に目立つように出す。 */
+  $('csvExportNote').innerHTML=made.length
+    ? (csvExpSumHtml(sp,osSp,made)
+       +(csvLastFiles.length>1?'<div class="note2" style="margin-top:2px">'
+          +'ZIPを開いて中のCSVをアップロードしてください。'
+          +'うまく保存できないときは下のボタンで1つずつ保存できます。</div>':''))
     : '書き出しに失敗しました。';
 }
 $('csvExport').onclick=function(){ csvExportRun(null); };
+/* 6.193 海外向け Shopify（os-）のボタン。 */
+$('csvOsAll').onclick=function(){ csvOsMark(true); };
+$('csvOsNone').onclick=function(){ csvOsMark(false); };
+$('csvPickNew').onclick=function(){ csvPickNewGo(); };
+$('csvOsFix').onclick=function(){ csvOsFixGo(); };
 $('csvExportPick').onclick=function(){
   var ids=csvPickIds();
   if(!ids.length){
@@ -12321,6 +12596,8 @@ function mwListRow(r,pics,n){
     /* 無在庫の印。仕入れ先は MW。 */
     dropship:true, buySource:'mw', mwSha:String(r.sha||''),
     mwShipDays:+r.ship_days||0, mwShipText:String(r.ship_text||''),
+    /* 6.193：海外向け Shopify のタグ（機種）に使う。 */
+    mwKishu:String(r.kishu||''),
     mwStock:+r.stock||0, mwWholesale:+r.wholesale||0,
     gross:0, rank:+r.rank||0, fba:false, zeroAct:'hold',
     preBuy:false, costTemp:false, baseYen:0,
@@ -24377,7 +24654,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v276';   // sw.js の const V と必ず同じ値にする
+var APP_V='v277';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
