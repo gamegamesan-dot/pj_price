@@ -9188,3 +9188,68 @@ localStorage を消すこと・**書けなかったら消さない**こと・
 `tests/undo.js`（58）・`tests/trash.js`（38）・`tests/kw.js`（34）・
 `tests/mwpic.js`（80）・`tests/picsauto.js`（22）… 大きいものの
 読み書きを `lsGet`／`lsSet` に直した。
+
+## 6.192 スマホの幅（375px）で操作欄がはみ出す（v274）
+
+### 不具合
+
+カジ（iPhone・幅 375px）
+
+> 仕入れタブの「Shopify の注文を取り込む」の「注文を取り込む」ボタンと、
+> 英語版の「英題を入れる」ボタンが画面の右にはみ出していて、横にずらせず、
+> 文字が途中で切れています。
+
+### 原因
+
+1. どちらも **「ファイルを選ぶ欄（`flex:1`）＋ ボタン（`flex:0 0 auto`）」を
+   横に並べていた**。iPhone の「ファイルを選択」は幅が広いので、
+   ボタンが右へ押し出されていた。
+2. ⚙の `<select>` は **いちばん長い選択肢の幅**になるので、箱からあふれていた
+   （ぜんぶのタブを 375px で機械的に当たって見つけた）。
+   `autoMdMode`・`pbRestock`・`autoRvMode`・`mwProfitMode`・`mwAutoMode`・
+   `mwSubCols` の6つ。
+
+### 直し
+
+```css
+select,input,button,textarea{max-width:100%}
+.row select,.row input,.rowv select,.rowv input{min-width:0}
+.rowv select{width:100%}
+.row select{flex:1 1 auto}
+.stackrow{display:flex;flex-direction:column;gap:6px}   /* 縦に積む */
+.stackrow input[type=file],.stackrow .btn{width:100%}
+```
+
+- ファイルを選ぶ2か所（`subOrdFile`＋`subOrdBtn` と
+  `mwSubTrFile`＋`mwSubTrBtn`）は **`.stackrow` で縦に積み**、
+  **ボタンを全幅**にした（文字が切れない）
+- `<select>` は max-width で止め、`min-width:0` で縮むようにした
+- 「注文を取り込む」は目立つように `btn primary` にした
+
+### 取り込みの結果（ボタンのすぐ下）
+
+`.okbox`（枠と薄い色の箱）で、**ボタンのすぐ下**に出す。
+
+```
+✓ 3件を取り込みました（二重 1件・会員用でない行 0件）
+残り数を書き換えたカード 2件・完売にしたカード 1件
+会員の注文 3点（仕入れの一覧の「会員の注文」に足しています）
+```
+
+失敗したときは**赤い箱**（`.okbox.ng`）。点数を出すために
+`POST /sub/orders` に `qty`（取り込んだ注文の合計点数）を足した。
+
+### ほかのタブも見張る
+
+`tests/width375.js` が **ぜんぶのタブ**（出品CSV・販売連携・eBay・出品文・
+刈取・無在庫・Shopee・⚙）を 375px で開き、**説明や⚙の折りたたみも開いて**、
+`button`／`input`／`select`／`textarea` が右（左）にはみ出していないかを
+機械的に当たる。ページが横に動かないことも見る。
+
+### テスト
+
+`tests/width375.js`（16）… ぜんぶのタブで操作欄が収まること・
+ページが横に動かないこと・ファイルの行が縦に積まれてボタンが全幅であること・
+取り込みの結果が**ボタンのすぐ下の目立つ箱**に出て、何件取り込んだか・
+残り数をどう変えたかが読めること・失敗は赤い箱であること・
+⚙の長い選択肢も収まること。

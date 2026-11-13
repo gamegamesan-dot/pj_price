@@ -99,6 +99,28 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
   font-family:inherit;line-height:1.45;
 }
 .rowv textarea{resize:vertical}
+/* ===== 6.192 スマホの幅（375px）で右にはみ出さない =====
+   ・<select> は**いちばん長い選択肢**の幅になるので、箱からあふれていた
+     （⚙の「自動値下げ」「再調達」「売値の自動反映」「粗利の基準」
+      「自動の取り直し」、仕入れタブの「列名の形」）
+   ・ボタンも、長い文字だと flex の行からあふれていた
+     （「英題を入れる」「注文を取り込む」）
+   max-width で止め、min-width:0 で縮められるようにする。
+   横に並べると収まらない行は、HTML 側で**縦に積む**（.stackrow）。 */
+select,input,button,textarea{max-width:100%}
+.row select,.row input,.rowv select,.rowv input{min-width:0}
+.rowv select{width:100%}
+.row select{flex:1 1 auto}
+/* ファイルを選ぶ行（スマホでは縦に積んで、ボタンは全幅）。 */
+.stackrow{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.stackrow input[type=file]{width:100%;font-size:13px}
+.stackrow .btn{width:100%}
+/* 取り込みの結果（件数・残り数）は、ボタンのすぐ下に目立つように出す。 */
+.okbox{margin-top:6px;padding:8px 10px;border-radius:4px;font-size:12.5px;
+       line-height:1.6;border:1px solid var(--line);background:#f7fbff}
+.okbox.ok{border-color:var(--good);background:#f2fbf4}
+.okbox.ng{border-color:var(--bad);background:#fdf4f4}
+.okbox b{font-size:13.5px}
 .btn{padding:9px 14px;font-size:13.5px;font-weight:700;border:1px solid var(--ink);border-radius:2px;
      background:#fff;color:var(--ink);font-family:inherit}
 .btn.primary{background:var(--ink);color:var(--label);border-color:var(--ink)}
@@ -1066,11 +1088,13 @@ body.staff #syncOnHandFix{display:none !important}
         日本語の商品名で突き合わせて、英題（pj-title）を
         <code>Translated content</code> に書き込んで返します。
       </div>
-      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
-        <input type="file" id="mwSubTrFile" accept=".csv,text/csv" style="flex:1">
-        <button class="btn cfgprice" id="mwSubTrBtn" style="flex:0 0 auto" onclick="mwSubTransGo()">英題を入れる</button>
+      <!-- 6.192 スマホ（375px）では横に並べると「英題を入れる」が
+           右にはみ出していた。ファイルの行の下にボタンを全幅で置く。 -->
+      <div class="stackrow">
+        <input type="file" id="mwSubTrFile" accept=".csv,text/csv">
+        <button class="btn cfgprice" id="mwSubTrBtn" onclick="mwSubTransGo()">英題を入れる</button>
       </div>
-      <div class="note2" id="mwSubTrNote" style="margin-top:2px"></div>
+      <div id="mwSubTrNote" class="note2" style="margin-top:2px"></div>
       <!-- 8.11（【Y】）会員向け Discord の配信と、Shopify の注文の取り込み -->
       <div data-toc="会員に配信する"></div>
       <details class="exp" data-exp="subSend"><summary>説明</summary>
@@ -1103,11 +1127,13 @@ body.staff #syncOnHandFix{display:none !important}
         Shopify の <b>注文 → エクスポート</b>（CSV）を選んでください。
         同じファイルを2回読んでも二重には数えません。
         <b>氏名・住所・メールは保存しません</b>（注文番号だけで追います）。</div>
-      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
-        <input type="file" id="subOrdFile" accept=".csv,text/csv" style="flex:1">
-        <button class="btn cfgprice" id="subOrdBtn" style="flex:0 0 auto" onclick="subOrdGo();return false">注文を取り込む</button>
+      <!-- 6.192 同じく、ボタンはファイルの行の下に全幅で置く。
+           取り込みの結果（件数・残り数）はこのすぐ下に目立つように出す。 -->
+      <div class="stackrow">
+        <input type="file" id="subOrdFile" accept=".csv,text/csv">
+        <button class="btn primary cfgprice" id="subOrdBtn" onclick="subOrdGo();return false">注文を取り込む</button>
       </div>
-      <div class="note2" id="subOrdNote" style="margin-top:2px"></div>
+      <div id="subOrdNote" class="note2" style="margin-top:2px"></div>
       <div id="subOrdList" style="margin-top:4px"></div>
       <!-- 仕入れる行の JAN だけをコピー（6.110） -->
       <button class="btn" id="csvMwJanCopy" style="width:100%;margin-top:6px">仕入れる行の JAN をコピー</button>
@@ -15763,37 +15789,50 @@ function subLoadedGo(){
   })['catch'](function(e){ subNote('⚠ 印を付けられませんでした：'+e.message,1); });
 }
 /* 注文CSV を読み込む（8.13）。 */
+/* 6.192 取り込みの結果は**ボタンのすぐ下に目立つように**出す（.okbox）。 */
+function subOrdSay(html,kind){
+  var n=$('subOrdNote'); if(!n)return;
+  n.className=kind?('okbox '+kind):'note2';
+  n.innerHTML=html||'';
+}
 function subOrdGo(){
-  var n=$('subOrdNote');
   if(roleDenyPrice('subOrdNote'))return;
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
-    n.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
+    subOrdSay('pj-sync のURLとキーを⚙設定に入れてください。','ng'); return;
   }
   var f=($('subOrdFile')||{}).files;
-  if(!f||!f.length){ n.textContent='注文CSV のファイルを選んでください。'; return; }
-  n.textContent='読んでいます…';
+  if(!f||!f.length){
+    subOrdSay('注文CSV のファイルを選んでください。','ng'); return;
+  }
+  subOrdSay('読んでいます…');
   var file=f[0];
   var rd=new FileReader();
   rd.onload=function(){
     mwPost('/sub/orders',{ text:String(rd.result||''), name:file.name })
       .then(function(r){
         if(r&&r.error){
-          n.innerHTML='⚠ 取り込めませんでした：'
-            +esc(String(r.detail||r.error)); return;
+          subOrdSay('⚠ 取り込めませんでした：'
+            +esc(String(r.detail||r.error)),'ng'); return;
         }
-        n.innerHTML='✓ '+mwN(+r.added||0)+'件を取り込みました'
-          +'（二重 '+mwN(+r.dup||0)+'件・会員用でない行 '+mwN(+r.other||0)+'件）。'
-          +'　カードを書き換え '+mwN(+r.edited||0)+'件'
-          +'・完売 '+mwN(+r.sold_out||0)+'件'
+        subOrdSay('<b>✓ '+mwN(+r.added||0)+'件を取り込みました</b>'
+          +'（二重 '+mwN(+r.dup||0)+'件・会員用でない行 '+mwN(+r.other||0)+'件）'
+          +'<br><b>残り数を書き換えたカード '+mwN(+r.edited||0)+'件</b>'
+          +'・完売にしたカード '+mwN(+r.sold_out||0)+'件'
+          +'<br>会員の注文 <b>'+mwN(+r.qty||0)+'点</b>'
+          +'（仕入れの一覧の「会員の注文」に足しています）'
           +((r.short||[]).length?('<br><span style="color:var(--bad)">'
             +'⚠ MW の在庫が足りない商品が '+mwN(r.short.length)
             +'件あります（返金が必要かもしれません）。社内用の Discord にも'
-            +'知らせました。</span>'):'');
+            +'知らせました。</span>'):''),'ok');
         return subOrdList();
-      })['catch'](function(e){ n.textContent='⚠ 取り込めませんでした：'+e.message; });
+      })['catch'](function(e){
+        subOrdSay('⚠ 取り込めませんでした：'+esc(e.message),'ng');
+      });
   };
-  rd.onerror=function(){ n.textContent='⚠ ファイルを読めませんでした。'; };
+  rd.onerror=function(){
+    subOrdSay('⚠ ファイルを読めませんでした。','ng');
+  };
   rd.readAsText(file);
 }
 /* 取り込んだ注文のまとめ。 */
@@ -24055,7 +24094,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v273';   // sw.js の const V と必ず同じ値にする
+var APP_V='v274';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

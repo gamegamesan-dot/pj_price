@@ -11161,6 +11161,9 @@ async function jobSubOrders(env, body) {
     }
     if (stmts.length) await runBatch(env, run, stmts);
     res.jans = Object.keys(touched).length;
+    /* 6.192 画面の結果に「会員の注文 ◯点」を出すので、点数も返す。 */
+    res.qty = Object.keys(touched)
+      .reduce((a, k) => a + (Number(touched[k]) || 0), 0);
     /* 売れた数を sub_post に足して、カードを書き換える。 */
     if (res.added) {
       const up = Object.keys(touched).map((j) => env.DB.prepare(
