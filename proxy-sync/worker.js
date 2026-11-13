@@ -10244,11 +10244,15 @@ async function mwSubList(env, url) {
   const p = url.searchParams;
   const all = p.get("all") === "1";
   const limit = Math.max(1, Math.min(2000, mwNum(p.get("limit")) || 1000));
-  /* 6.178（【2】）仕入原価に足す MW の1点あたりの仕入れ送料（⚙ mwShipFee）。 */
+  /* 6.178（【2】）仕入原価に足す MW の1点あたりの仕入れ送料。
+     7.140／6.187（【1】）**会員価格用の送料は ⚙ mwSubShip（既定 ¥0）**。
+     会員のぶんはカジの仕入れとまとめて MW に発注し、5万円以上で送料無料に
+     なることが多いので 1点あたりはほぼ 0。仕入れタブの「カジの利益」が引く
+     ⚙ mwShipFee（既定 ¥176）とは**別の欄**で、ここでは使わない。 */
   let subShip = 0;
   try {
     const st = (await settingsGet(env)).settings || {};
-    subShip = Math.max(0, Math.round(Number(st.mwShipFee) || 0));
+    subShip = Math.max(0, Math.round(Number(st.mwSubShip) || 0));
   } catch (e) { subShip = 0; }
   /* 7.139（【1】）手入れの印と「Shopify に読み込みました」の印。
      migrate を流す前の D1 でも落とさないように、列があるときだけ出す。 */

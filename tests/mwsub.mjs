@@ -5,7 +5,9 @@
       **会員に見せない項目（卸値・社・備考・MW の商品番号）は返さない**
    ④ /mw/amz の行に印・上限・価格が相乗りする
    ⑤ 見せるプラン（grades）を控える。ぜんぶ選んだら空（＝全プラン）
-   ⑥ 表が無い（migrate-0051 の前）でも落ちない */
+   ⑥ 表が無い（migrate-0051 の前）でも落ちない
+   ⑦ 仕入原価に足す送料は **⚙ mwSubShip（会員価格用・既定 ¥0）**（7.140・【1】）
+      仕入れタブの「カジの利益」が引く ⚙ mwShipFee（¥176）とは別の欄 */
 import { harness, loadWorker, makeEnv, asJson } from './lib.mjs';
 const T=harness('Worker：会員に出す商品（7.130）');
 const ok=T.ok;
@@ -168,5 +170,33 @@ console.log('\n=== ⑩ 表が無い（migrate-0051 の前）でも落ちない =
   ok(z.body.rows[0].sub_on===undefined,'★★印の列は付かないだけ');
   z=await c('/mw/sub/put',{ jans:[JAN] });
   ok(z.status===200&&z.body.table_ok===false,'★「出した印」も落ちない');
+}
+console.log('\n=== ⑦ 仕入原価の送料は ⚙ mwSubShip（会員価格用・既定 ¥0）===');
+{
+  const cfg=(env,o)=>env.DB.prepare(
+    `INSERT INTO sync_state (k,v,updated_at) VALUES (?1,?2,?3)
+     ON CONFLICT(k) DO UPDATE SET v=excluded.v`)
+    .bind('ui.settings', JSON.stringify({ at:'2026-11-13T00:00:00Z',
+      settings:o||{} }), '2026-11-13T00:00:00Z').run();
+  const e4=env0();
+  /* 卸値 3,000（test の put が入れる値）→ 卸値×1.1 ＝ 3,300 */
+  await put(e4,{ jan:JAN }); await amz(e4,{ jan:JAN, asin:'B0D1GSZJ8T' });
+  const c4=async(p,b)=>asJson(await worker.fetch(req(p,b),e4));
+  await c4('/mw/sub',{ jan:JAN, on:1, max_qty:3, price:5300 });
+  let z=await c4('/mw/sub');
+  console.log('   ⚙なし cost='+(z.body.rows[0]||{}).cost);
+  ok(+(z.body.rows[0]||{}).cost===3300,
+     '★★★⚙が無いときは送料を足さない（既定 ¥0）');
+  /* カジの利益用の ⚙（mwShipFee）は会員の仕入原価に足さない。 */
+  await cfg(e4,{ mwShipFee:176 });
+  z=await c4('/mw/sub');
+  console.log('   mwShipFee=176 cost='+(z.body.rows[0]||{}).cost);
+  ok(+(z.body.rows[0]||{}).cost===3300,
+     '★★★mwShipFee（¥176）は会員の仕入原価に足さない（別の欄）');
+  await cfg(e4,{ mwShipFee:176, mwSubShip:120 });
+  z=await c4('/mw/sub');
+  console.log('   mwSubShip=120 cost='+(z.body.rows[0]||{}).cost);
+  ok(+(z.body.rows[0]||{}).cost===3420,
+     '★★★mwSubShip を入れたぶんだけ足す（3,300＋120）');
 }
 T.done();

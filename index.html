@@ -1944,10 +1944,14 @@ body.staff #syncOnHandFix{display:none !important}
              会費が収益」。掛け率（×1.3）はやめた。 -->
         <div class="note2" style="margin:10px 0 2px"><b>会員向けの販売価格</b></div>
         <div class="note2" style="margin:0 0 4px"><b>商品代に利益を載せません</b>（収益は会費）。おすすめ値は<br>
-          <b>仕入原価（卸値×1.1＋MW送料）＋ 梱包材 ＋ 上乗せ</b> を、
+          <b>仕入原価（卸値×1.1＋下の「会員価格に含める MW 送料」）＋ 梱包材 ＋ 上乗せ</b> を、
           <b>カード決済手数料ぶん割り戻した額</b>です。
           <b>10円単位の切り上げはしません</b>（端数を残します。きれいな値段にすると卸値を逆算されやすいため）。
           卸値そのもの・卸値×1.1 と同じ額になったときは1円ずらします。</div>
+        <!-- 6.187（【1】）会員のぶんはカジの仕入れとまとめて MW に発注するので、
+             5万円以上で送料無料になることが多い。1点あたりはほぼ 0。 -->
+        <div class="row cfgprice"><label for="mwSubShip">会員価格に含める MW 送料（1点あたり）</label><input type="number" id="mwSubShip" value="0" step="10" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 4px"><b>既定は ¥0</b> です。会員のぶんは<b>カジの仕入れとまとめて MW に発注</b>するので、5万円以上で送料無料になることが多く、1点あたりはほぼ 0 だからです。<br>仕入れタブの<b>利益（カジの利益・せどりすと方式）は今までどおり</b>⚙「MW の1点あたりの仕入れ送料」（既定 ¥176）を引きます。<b>ここは会員価格だけ</b>に効きます（Shopify の <code>Cost per item</code> も会員向けの仕入原価なので、この値で入ります）。</div>
         <div class="row cfgprice"><label for="mwSubCardFee">カード決済手数料</label><input type="number" id="mwSubCardFee" value="3.55" step="0.05" min="0" max="20" inputmode="decimal"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="mwSubPack">梱包材</label><input type="number" id="mwSubPack" value="30" step="5" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
         <div class="row cfgprice"><label for="mwSubAddMin">上乗せ（下）</label><input type="number" id="mwSubAddMin" value="10" step="5" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
@@ -1956,8 +1960,15 @@ body.staff #syncOnHandFix{display:none !important}
           同じ Handle で上書きすると Shopify の値段が変わりますが、それでかまいません。
           <b>人が直した値段（おすすめ値の範囲の外）は、そのまま使います。</b></div>
         <div class="row cfgprice"><label for="mwSubGrossMin">会員の粗利の下限</label><input type="number" id="mwSubGrossMin" value="800" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
-        <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>（Amazon の実売 − Amazon の手数料 − 販売価格）が
-          この額を下回る商品は「<b>会員向きではありません</b>」と出します。</div>
+        <!-- 6.188（【2】）安い商品でも利益率がよければ出せるようにする。 -->
+        <div class="row cfgprice"><label for="mwSubRateMin">会員の利益率の下限</label><input type="number" id="mwSubRateMin" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
+        <div class="row cfgprice"><label for="mwSubGrossFloor">　そのときの粗利の最低額</label><input type="number" id="mwSubGrossFloor" value="300" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>＝Amazon の実売 − Amazon の手数料 − 販売価格。
+          <b>会員の利益率</b>＝会員の粗利の目安 ÷ 販売価格。<br>
+          <b>粗利が下限（既定 ¥800）以上</b>、または
+          <b>利益率が下限（既定 30%）以上で、粗利が最低額（既定 ¥300）以上</b>なら会員向きです。
+          <b>どちらも満たさないときだけ</b>「<b>会員向きではありません</b>」と出します
+          （安い商品でも利益率がよければ出せるように）。</div>
         <!-- 8.11（【Y】）会員向け Discord の配信。いまはモニターだけ動かす。 -->
         <div class="note2" style="margin:10px 0 2px"><b>会員向け Discord の配信</b></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOn"><label for="subOn" style="flex:1"><b>配信を使う</b>（平日の朝に自動で送る）</label></div>
@@ -5593,6 +5604,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                     やめたので一覧からも外した。 */
                  'mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
                  'mwSubGrossMin',
+                 /* 6.187／6.188（【1】【2】）会員価格の MW 送料と、
+                    会員向きの判定（利益率）。 */
+                 'mwSubShip','mwSubRateMin','mwSubGrossFloor',
                  'mwSubLoc','mwSubAddG',
                  /* 8.11（【Y】）会員向け Discord の配信。 */
                  'subOn','subHour','subPre','subDomain',
@@ -14754,7 +14768,10 @@ function mwSubOn(jan){ return !!((mwSubOf(jan)||{}).on); }
      カード決済手数料ぶん割り戻した額。10円単位の切り上げはしない。
    式は shared/subprice.js の1か所だけ（pj-sync・Discord も同じものを読む）。 */
 function mwSubPxOpt(){
-  return { ship:mwShipFee(),
+  return { /* 6.187（【1】）会員価格に含める MW 送料（既定 ¥0）。
+              仕入れタブの「カジの利益」が引く mwShipFee（¥176）とは別。 */
+           ship:(($('mwSubShip')||{}).value===''
+                 ?SUBPX.SHIP_YEN:+(($('mwSubShip')||{}).value)||0),
            cardFee:+(($('mwSubCardFee')||{}).value)||SUBPX.CARD_FEE*100,
            pack:(($('mwSubPack')||{}).value===''
                  ?SUBPX.PACK_YEN:+(($('mwSubPack')||{}).value)||0),
@@ -14763,7 +14780,13 @@ function mwSubPxOpt(){
            addMax:(($('mwSubAddMax')||{}).value===''
                    ?SUBPX.ADD_MAX:+(($('mwSubAddMax')||{}).value)||0),
            grossMin:(($('mwSubGrossMin')||{}).value===''
-                     ?SUBPX.GROSS_MIN:+(($('mwSubGrossMin')||{}).value)||0) };
+                     ?SUBPX.GROSS_MIN:+(($('mwSubGrossMin')||{}).value)||0),
+           /* 6.188（【2】）利益率で通す道。 */
+           rateMin:(($('mwSubRateMin')||{}).value===''
+                    ?SUBPX.RATE_MIN*100:+(($('mwSubRateMin')||{}).value)||0),
+           grossFloor:(($('mwSubGrossFloor')||{}).value===''
+                       ?SUBPX.GROSS_FLOOR
+                       :+(($('mwSubGrossFloor')||{}).value)||0) };
 }
 /* おすすめの販売価格（税込）。上乗せが乱数なので呼ぶたびに変わるが、
    **一覧の行は書き直すたびに値段が動くと落ち着かない**ので、
@@ -14920,12 +14943,17 @@ function mwSubLine(r){
     +(v.hand?('<b>手入れ</b>（書き出しで引き直しません）'
       +'　<a href="#" onclick="mwSubPxFree(\''+esc(jan)
       +'\');return false">おすすめに戻す</a>'):'')+'</span>'
+    /* 6.188（【2】）粗利の目安のとなりに利益率も出す。 */
     +(g===null?'':('<span class="note2" style="margin:0">会員の粗利の目安 '
-      +yen(g)+'</span>'))
-    /* 6.178（【2】）粗利の目安が⚙の下限を下回る商品は会員向きではない。 */
+      +yen(g)+(fit.pct===null?'':('（利益率 '+fit.pct+'%）'))+'</span>'))
+    /* 6.178（【2】）／6.188（【2】）
+       粗利が⚙の下限以上、または 利益率が⚙の下限以上で粗利が最低額以上なら
+       会員向き。どちらも満たさないときだけ出す。 */
     +((g!==null&&!fit.ok)
       ?('<span class="note2" style="margin:0;color:var(--bad)">'
-        +'⚠ 会員向きではありません（粗利の下限 '+yen(fit.min)+'）</span>'):'')
+        +'⚠ 会員向きではありません（粗利の下限 '+yen(fit.min)
+        +'／利益率の下限 '+Math.round(fit.rateMin*100)+'%・そのときの粗利 '
+        +yen(fit.floor)+'以上）</span>'):'')
     /* 6.171：重さが無いと Shopify の「重さの段」の送料がずれる
        （ぜんぶ 0g 扱いでいちばん安い段に入ってしまう）。 */
     +(mwSubNoG(r)?('<span class="note2" style="margin:0;color:var(--bad)">'
@@ -23400,7 +23428,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v266';   // sw.js の const V と必ず同じ値にする
+var APP_V='v267';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

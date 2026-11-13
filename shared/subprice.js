@@ -8,7 +8,11 @@
      だから掛け率（×1.3）はやめて、「出ていくお金をちょうど回収する値段」にする。
 
    販売価格（税込）
-     仕入原価 ＝ round(卸値（税抜）×1.1) ＋ MW の1点あたりの仕入れ送料
+     仕入原価 ＝ round(卸値（税抜）×1.1) ＋ 会員価格に含める MW 送料
+                 （6.187／【1】・⚙ mwSubShip・**既定 ¥0**。会員のぶんは
+                 カジの仕入れとまとめて MW に発注し、5万円以上で送料無料に
+                 なることが多いので、1点あたりはほぼ 0。
+                 仕入れタブの「カジの利益」は今までどおり ⚙ mwShipFee を引く）
      梱包材   ＝ ⚙（既定 ¥30）
      上乗せ   ＝ ⚙ の範囲（既定 ¥10〜150）の**乱数**。
                  配信（出し直し）のたびに決め直すので、同じ商品でも毎回変わる
@@ -21,8 +25,13 @@
        きれいな値段にすると、そこから卸値を逆算されやすいため。
      ・卸値そのもの・卸値×1.1 と**同じ額にならない**ようにする
        （MW の卸値を推測されないため）。当たったら1円ずつずらす。
-     ・会員の粗利の目安（Amazon の実売 − Amazon の手数料 − 販売価格）が
-       ⚙ の下限（既定 ¥800）を下回る商品は「会員向きではありません」と出す。 */
+     ・会員向きかどうか（6.188／【2】）
+         会員の粗利の目安 ＝ Amazon の実売 − Amazon の手数料 − 販売価格
+         会員の利益率     ＝ 会員の粗利の目安 ÷ 販売価格
+       **粗利が ⚙の下限（既定 ¥800）以上**、または
+       **利益率が ⚙の下限（既定 30%）以上 かつ 粗利が ⚙の最低額（既定 ¥300）以上**
+       なら会員向き。どちらも満たさないときだけ「会員向きではありません」。
+       （安い商品でも利益率がよければ出せるようにするため） */
 (function (root) {
   "use strict";
   var TAX = 1.1;                 // 卸値は税抜
@@ -31,6 +40,10 @@
   var ADD_MIN = 10;              // 上乗せの下（⚙ mwSubAddMin）
   var ADD_MAX = 150;             // 上乗せの上（⚙ mwSubAddMax）
   var GROSS_MIN = 800;           // 会員の粗利の下限（⚙ mwSubGrossMin）
+  var RATE_MIN = 0.3;            // 会員の利益率の下限（⚙ mwSubRateMin・30%）
+  var GROSS_FLOOR = 300;         // 利益率で通すときの粗利の最低額
+                                 // （⚙ mwSubGrossFloor）
+  var SHIP_YEN = 0;              // 会員価格に含める MW 送料（⚙ mwSubShip）
   var FEE_MAX = 0.2;             // 手数料の率の上限（入力ミスの歯止め）
   var ADD_CAP = 10000;           // 上乗せの上限（同じ）
 
@@ -51,7 +64,11 @@
     if (c > 0) return Math.round(c);
     var w = num((r || {}).wholesale);
     if (!(w > 0)) return 0;
-    return Math.round(w * TAX) + Math.max(0, yen(opt(o, "ship", 0)));
+    return Math.round(w * TAX) + shipOf(o);
+  }
+  /* 会員価格に含める MW の1点あたりの送料（⚙ mwSubShip・既定 ¥0）。 */
+  function shipOf(o) {
+    return Math.max(0, yen(opt(o, "ship", SHIP_YEN)));
   }
   /* 卸値（避ける額を出すためだけに使う）。卸値が無ければ仕入原価から戻す。 */
   function whOf(r, o) {
@@ -59,7 +76,7 @@
     if (w > 0) return w;
     var c = num((r || {}).cost);
     if (!(c > 0)) return 0;
-    var v = (c - Math.max(0, yen(opt(o, "ship", 0)))) / TAX;
+    var v = (c - shipOf(o)) / TAX;
     return v > 0 ? v : 0;
   }
   /* カード決済手数料の率（0〜0.2）。⚙ は「3.55」でも「0.0355」でも受ける。 */
@@ -127,13 +144,39 @@
     if (!(p > 0 && f > 0 && s > 0)) return null;
     return Math.round(p - f - s);
   }
-  /* 会員向きかどうか（粗利の目安が下限以上か）。 */
+  /* 会員の利益率（粗利 ÷ 販売価格）。出せないときは null。 */
+  function rateOf(gross, px) {
+    var g = Number(gross), s = num(px);
+    if (!isFinite(g) || gross === null || !(s > 0)) return null;
+    return g / s;
+  }
+  /* 利益率の下限（0〜1）。⚙ は「30」でも「0.3」でも受ける。 */
+  function rateMin(o) {
+    var v = opt(o, "rateMin", RATE_MIN);
+    if (v > 1) v = v / 100;
+    return Math.max(0, Math.min(1, v));
+  }
+  /* 会員向きかどうか（6.188・【2】）。
+     ・粗利が ⚙の下限以上                                  → 会員向き
+     ・利益率が ⚙の下限以上 かつ 粗利が ⚙の最低額以上      → 会員向き
+     どちらも満たさないときだけ「会員向きではありません」。 */
   function fitOf(amzPrice, fee, px, o) {
     var min = Math.max(0, yen(opt(o, "grossMin", GROSS_MIN)));
+    var rmin = rateMin(o);
+    var floor = Math.max(0, yen(opt(o, "grossFloor", GROSS_FLOOR)));
     var g = grossOf(amzPrice, fee, px);
-    if (g === null) return { ok: false, gross: null, min: min, why: "no_fee" };
-    return { ok: g >= min, gross: g, min: min,
-             why: g >= min ? "" : "low_gross" };
+    if (g === null)
+      return { ok: false, gross: null, rate: null, pct: null, min: min,
+               rateMin: rmin, floor: floor, by: "", why: "no_fee" };
+    var rate = rateOf(g, px);
+    var byGross = (g >= min);
+    var byRate = (rate !== null && rate >= rmin && g >= floor);
+    return { ok: byGross || byRate, gross: g, rate: rate,
+             /* 画面に出す「利益率 ◯%」（1の位まで）。 */
+             pct: (rate === null) ? null : Math.round(rate * 100),
+             min: min, rateMin: rmin, floor: floor,
+             by: byGross ? "gross" : (byRate ? "rate" : ""),
+             why: (byGross || byRate) ? "" : "low_gross" };
   }
   /* 内訳の文（画面の注意書き用。**会員には出さない**）。 */
   function text(p) {
@@ -144,11 +187,14 @@
       + "（" + (Math.round(num(x.rate) * 10000) / 100) + "%）";
   }
   var API = { costOf: costOf, whOf: whOf, feeRate: feeRate, packOf: packOf,
-              addRange: addRange, addOf: addOf, avoidOf: avoidOf,
-              priceOf: priceOf, inBand: inBand, grossOf: grossOf,
+              shipOf: shipOf, addRange: addRange, addOf: addOf,
+              avoidOf: avoidOf, priceOf: priceOf, inBand: inBand,
+              grossOf: grossOf, rateOf: rateOf, rateMin: rateMin,
               fitOf: fitOf, text: text,
               TAX: TAX, CARD_FEE: CARD_FEE, PACK_YEN: PACK_YEN,
-              ADD_MIN: ADD_MIN, ADD_MAX: ADD_MAX, GROSS_MIN: GROSS_MIN };
+              ADD_MIN: ADD_MIN, ADD_MAX: ADD_MAX, GROSS_MIN: GROSS_MIN,
+              RATE_MIN: RATE_MIN, GROSS_FLOOR: GROSS_FLOOR,
+              SHIP_YEN: SHIP_YEN };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_SUBPRICE = API;
 })(typeof globalThis !== "undefined" ? globalThis : this);
