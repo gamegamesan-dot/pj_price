@@ -860,6 +860,23 @@ CREATE INDEX IF NOT EXISTS idx_sub_post_at ON sub_post(at);
 
 /* Shopify の注文。**氏名・住所・メールは入れない**
    （顧客は Shopify の注文番号だけで追う）。 */
+/* 8.18 今日の配信の案（どの案から何が売れたかを見るための控え）。 */
+CREATE TABLE IF NOT EXISTS sub_draft (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         TEXT NOT NULL,                 -- 案を作った日時（ひとまとまり）
+  plan       TEXT NOT NULL,                 -- 振り分けたプラン
+  jan        TEXT NOT NULL,
+  name       TEXT,
+  price      INTEGER,                       -- そのときの販売価格（税込）
+  qty        INTEGER,                       -- 販売数の上限
+  gross      INTEGER,                       -- そのときの会員の粗利の目安
+  speed      REAL,                          -- そのときの売れる速さ
+  taken      INTEGER NOT NULL DEFAULT 1,    -- 1＝「この案で出す」で確定した
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sub_draft_at ON sub_draft(at);
+CREATE INDEX IF NOT EXISTS idx_sub_draft_jan ON sub_draft(jan, at);
+
 CREATE TABLE IF NOT EXISTS sub_order (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   order_no   TEXT NOT NULL,                  -- Shopify の注文番号

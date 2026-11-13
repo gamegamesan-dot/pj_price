@@ -11062,6 +11062,105 @@ async function subLoadedSet(env, body) {
   return Object.assign(await saveRun(env, run), { ok: true, n: jans.length,
                                                   at: at || "", off: !!o.off });
 }
+/* ===== 8.18 今日の配信の案 =====
+   仕入れタブの候補を、プランごとに自動で振り分けた「案」を控える。
+   振り分けの決まりは shared/subplan.js の1か所だけ（画面が当てて送ってくる）。
+   ここでやるのは**控えること**と、あとで**どの案から何が売れたか**を
+   出すことだけ（カジの依頼の6）。 */
+const SUB_DRAFT_MAX = 400;          // 1回に控える行の上限
+async function subDraftOk(env) {
+  return await colOk(env, "sub_draft", "jan");
+}
+/* POST /sub/draft … 案を控える（管理者だけ）。
+   { at, items:[{ jan, plan, name, price, qty, gross, speed }] } */
+async function subDraftPut(env, body) {
+  const res = { ok: false, n: 0, at: "" };
+  if (!(await subDraftOk(env))) {
+    res.error = "no_table";
+    res.detail = "sub_draft がありません（migrate-0056-sub-draft.sql）";
+    return res;
+  }
+  const o = body || {};
+  const at = String(o.at || "").trim() || nowIso();
+  const list = Array.isArray(o.items) ? o.items.slice(0, SUB_DRAFT_MAX) : [];
+  if (!list.length) { res.ok = true; res.at = at; return res; }
+  const run = newRun("sub-draft");
+  const stmts = [];
+  for (const x of list) {
+    const jan = String((x && x.jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) continue;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO sub_draft (at,plan,jan,name,price,qty,gross,speed,taken,
+         created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?1)`)
+      .bind(at, String(x.plan || "").slice(0, 20), jan,
+            String(x.name || "").slice(0, 120),
+            Math.round(Number(x.price) || 0), Math.round(Number(x.qty) || 0),
+            (x.gross === null || x.gross === undefined)
+              ? null : Math.round(Number(x.gross) || 0),
+            Number(x.speed) || 0,
+            (x.taken === false || x.taken === 0) ? 0 : 1));
+    res.n++;
+  }
+  await runBatch(env, run, stmts);
+  run.notes.push("配信の案：" + res.n + "件を控えました");
+  res.at = at;
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /sub/draft … これまでの案と、**その案から何が売れたか**。
+   売れた数は sub_order を jan で突き合わせ、**その案より後の注文**を数える。 */
+async function subDraftLog(env, url) {
+  const res = { ok: false, rows: [], table_ok: true };
+  if (!(await subDraftOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "sub_draft がありません（migrate-0056-sub-draft.sql）";
+    return res;
+  }
+  const p = (url && url.searchParams) ? url.searchParams : null;
+  const limit = Math.max(1, Math.min(50,
+    Math.round(Number(p ? p.get("limit") : 0) || 10)));
+  const ordOk = await colOk(env, "sub_order", "order_no");
+  const soldSel = ordOk
+    ? ",\n            (SELECT COALESCE(SUM(o.qty),0) FROM sub_order o"
+      + "\n              WHERE o.jan = d.jan AND COALESCE(o.at,'') >= d.at)"
+      + " AS sold"
+    : ",\n            0 AS sold";
+  const q = await env.DB.prepare(
+    `SELECT d.at AS at, d.plan AS plan, d.jan AS jan, d.name AS name,
+            d.price AS price, d.qty AS qty, d.gross AS gross,
+            d.speed AS speed, d.taken AS taken${soldSel}
+       FROM sub_draft d
+      WHERE d.at IN (SELECT at FROM sub_draft GROUP BY at
+                      ORDER BY at DESC LIMIT ${limit})
+      ORDER BY d.at DESC, d.plan ASC, d.id ASC`).all();
+  const by = {};
+  for (const r of ((q && q.results) || [])) {
+    const at = String(r.at || "");
+    if (!by[at]) by[at] = { at: at, at_jst: jstText(at), n: 0, qty: 0,
+                            sold: 0, gross: 0, plans: {}, items: [] };
+    const g = by[at];
+    const row = {
+      plan: String(r.plan || ""), jan: String(r.jan || ""),
+      name: String(r.name || ""), price: Number(r.price) || 0,
+      qty: Number(r.qty) || 0,
+      gross: (r.gross === null || r.gross === undefined)
+        ? null : Number(r.gross),
+      speed: Number(r.speed) || 0, taken: Number(r.taken) ? 1 : 0,
+      sold: Number(r.sold) || 0,
+    };
+    g.items.push(row);
+    g.n++;
+    g.qty += row.qty;
+    g.sold += row.sold;
+    g.gross += (row.gross || 0) * row.sold;
+    g.plans[row.plan] = (g.plans[row.plan] || 0) + 1;
+  }
+  res.rows = Object.keys(by).sort().reverse().map((k) => by[k]);
+  res.ok = true;
+  return res;
+}
 /* ===== 8.13（【Y】の3）Shopify の注文を取り込む（当面は CSV）=====
    Shopify の「注文のエクスポート」の CSV を読み、SKU（SUB-<JAN>-<日付>）で
    突き合わせて残り数を数える。
@@ -15214,7 +15313,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub",
+  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "sub_draft",
   "sub_post", "sub_order",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
@@ -15241,6 +15340,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["sub_draft", "migrate-0056-sub-draft.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
   ["wipe_qty", "migrate-0055-mw-wipe.sql"],
   ["px_hand", "migrate-0054-sub-hand.sql"],
@@ -15718,8 +15818,10 @@ export default {
             || url.pathname === "/mw/move/recount"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
-       値段が会員に出て、Discord にも流れるため。 */
-    if (role !== "admin" && request.method === "POST"
+       値段が会員に出て、Discord にも流れるため。
+       8.18：配信の案は**見るのも**管理者だけ（売値と粗利が出るため）。 */
+    if (role !== "admin"
+        && (request.method === "POST" || url.pathname === "/sub/draft")
         && url.pathname.indexOf("/sub/") === 0)
       return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
     /* 7.111：**Amazon への登録は作業者の端末からもできる**。
@@ -15998,6 +16100,13 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await subLoadedSet(env, b), 200, origin);
       }
+      /* 8.18 今日の配信の案（控えると、あとで見る）。 */
+      if (request.method === "POST" && url.pathname === "/sub/draft") {
+        const b = await request.json().catch(() => ({}));
+        return json(await subDraftPut(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/sub/draft")
+        return json(await subDraftLog(env, url), 200, origin);
       if (request.method === "GET" && url.pathname === "/sub/orders")
         return json(await subOrderList(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/orders") {
@@ -16490,6 +16599,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subSettings, subRows, subPosts, subPick, subPlanBuild, subJst,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
+  subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,

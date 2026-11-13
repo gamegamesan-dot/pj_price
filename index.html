@@ -1095,6 +1095,28 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="mwSubTrBtn" onclick="mwSubTransGo()">英題を入れる</button>
       </div>
       <div id="mwSubTrNote" class="note2" style="margin-top:2px"></div>
+      <!-- 8.18 今日の配信の案（候補をプランごとに自動で振り分ける） -->
+      <div data-toc="今日の配信の案"></div>
+      <details class="exp" data-exp="subDraft"><summary>説明</summary>
+        <div class="note2">
+          いま一覧に出ている<b>候補</b>を、会員のプランに<b>自動で振り分け</b>て
+          「今日の配信の案」を作ります。<b>押しただけでは何も変わりません</b>
+          （案を見てから「この案で出す」を押します）。<br>
+          選び方：<b>会員向き</b>（粗利の下限、または利益率の下限と最低額）で、
+          <b>出品できて</b>、<b>Amazon 本体なし</b>（⚙で切り替え）、
+          <b>「仕入れる」の印が無い</b>（⚙で切り替え）もの。
+          <b>在庫処分・再入荷なしは優先</b>します。<br>
+          並び順は<b>会員の粗利 × 売れる速さ</b>の大きい順。
+          販売数の上限は <b>MW在庫から「MW 自身がこれから売る分」を引いた
+          ◯%</b>と<b>会員の想定購入数</b>の小さいほう（⚙で変えられます）。
+        </div>
+      </details>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="subDraftBtn" onclick="subDraftGo();return false" style="flex:1">今日の配信の案を作る</button>
+        <button class="btn cfgprice" id="subDraftLogBtn" onclick="subDraftLogGo();return false" style="flex:0 0 auto">案の記録</button>
+      </div>
+      <div class="note2" id="subDraftNote" style="margin-top:2px"></div>
+      <div id="subDraftBox"></div>
       <!-- 8.11（【Y】）会員向け Discord の配信と、Shopify の注文の取り込み -->
       <div data-toc="会員に配信する"></div>
       <details class="exp" data-exp="subSend"><summary>説明</summary>
@@ -1995,6 +2017,15 @@ body.staff #syncOnHandFix{display:none !important}
           <b>利益率が下限（既定 30%）以上で、粗利が最低額（既定 ¥300）以上</b>なら会員向きです。
           <b>どちらも満たさないときだけ</b>「<b>会員向きではありません</b>」と出します
           （安い商品でも利益率がよければ出せるように）。</div>
+        <!-- 8.18 今日の配信の案（振り分けの決まり）。
+             決まりそのものは shared/subplan.js の1か所だけ。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>今日の配信の案（自動の振り分け）</b></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subPickNoAmz" checked><label for="subPickNoAmz" style="flex:1">Amazon 本体ありは案に入れない</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subPickSkipBuy" checked><label for="subPickSkipBuy" style="flex:1">「仕入れる」の印を付けた商品は案から外す（自分で刈り取る分）</label></div>
+        <div class="row cfgprice"><label for="subStockPct">MW在庫の何%まで出すか</label><input type="number" id="subStockPct" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
+        <div class="row cfgprice"><label for="subWantQty">会員の想定購入数（1商品）</label><input type="number" id="subWantQty" value="5" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
+        <div class="row cfgprice"><label for="subQtyDays">MW が先に売る日数を引く</label><input type="number" id="subQtyDays" value="2" step="1" min="0" max="60" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="note2" style="margin:0 0 6px">販売数の上限は <b>（MW在庫 − 売れる速さ×日数）× ◯%</b> と <b>会員の想定購入数</b>の<b>小さいほう</b>です（1点も出せない商品は案に出しません）。<br>1回の件数はプランごとの「1回の件数／1商品の数」で決まります。</div>
         <!-- 8.11（【Y】）会員向け Discord の配信。いまはモニターだけ動かす。 -->
         <div class="note2" style="margin:10px 0 2px"><b>会員向け Discord の配信</b></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOn"><label for="subOn" style="flex:1"><b>配信を使う</b>（平日の朝に自動で送る）</label></div>
@@ -3250,6 +3281,8 @@ var ADV_SUB=['subHour','subDomain',
              'subChPremium','subNPremium','subQPremium',
              /* 8.17 カードの「送料」の文（プランごと・Worker が読む）。 */
              'subShipMonitor','subShipLight','subShipStandard','subShipPremium',
+             /* 8.18 今日の配信の案（振り分けの決まり）。 */
+             'subStockPct','subWantQty','subQtyDays',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -3257,7 +3290,9 @@ var ADV_SUB=['subHour','subDomain',
              /* 会員向け（Shopify）の重さ（6.173／6.183）。 */
              'mwSubGameG','mwSubAddG'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
-                'subOnStandard','subOnPremium'];
+                'subOnStandard','subOnPremium',
+                /* 8.18 今日の配信の案（振り分けの決まり）。 */
+                'subPickNoAmz','subPickSkipBuy'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6051,6 +6086,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.17 カードの「送料」の文（プランごと）。 */
                  'subShipMonitor','subShipLight','subShipStandard',
                  'subShipPremium',
+                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
+                 'subStockPct','subWantQty','subQtyDays',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -15625,6 +15662,226 @@ function mwSubOpt(){
            px:mwSubPxOpt(),
            date:new Date() };
 }
+/* ===== 8.18 今日の配信の案 =====
+   いま一覧に出ている候補（mwAmzPicked）を、会員のプランに自動で振り分ける。
+   **振り分けの決まりは shared/subplan.js の1か所だけ**（画面は出し方だけ持つ）。
+   ・「今日の配信の案を作る」… 案を作って出す（**まだ何も変えない**）
+   ・行ごとのチェックで外せる
+   ・「この案で出す」… 印・上限・価格をまとめて付け、Shopify 用 CSV を書き出す
+   ・案の中身は pj-sync に控える（あとで「どの案から何が売れたか」を見る） */
+var subDraftData=null;
+function subDraftNote(t,bad){
+  var el=$('subDraftNote'); if(!el)return;
+  el.innerHTML=t||'';
+  el.style.color=bad?'var(--bad)':'';
+}
+/* ⚙の値（振り分けの決まり）。読み方は shared/subplan.js の pickOpt。 */
+function subPickCfg(){
+  var v=function(id){ var el=$(id); return el?el.value:''; };
+  var c=function(id){ var el=$(id); return el?!!el.checked:undefined; };
+  return { subPickNoAmz:c('subPickNoAmz'), subPickSkipBuy:c('subPickSkipBuy'),
+           subStockPct:v('subStockPct'), subWantQty:v('subWantQty'),
+           subQtyDays:v('subQtyDays') };
+}
+/* プランの⚙（この端末の欄）をまとめて渡す形にする。
+   読み方は shared/subplan.js の list（pj-sync も同じものを読む）。 */
+function subCfgAll(){
+  var o=subPickCfg();
+  ['Monitor','Light','Standard','Premium'].forEach(function(U){
+    var c=$('subOn'+U);
+    if(c)o['subOn'+U]=!!c.checked;
+    ['subN','subQ','subCh','subShip'].forEach(function(k){
+      var el=$(k+U); if(el)o[k+U]=el.value;
+    });
+  });
+  return o;
+}
+/* 案に当てる行（候補1件ぶん）。 */
+function subDraftRows(){
+  var o=SUBPLAN.pickOpt(subPickCfg());
+  return mwAmzPicked().map(function(x){
+    var r=x.r||{};
+    var jan=String(r.jan||'');
+    /* 価格はおすすめ値（JAN ごとにこの画面のあいだは変わらない）。
+       書き出しのときに上乗せを決め直すので、そこでまた控え直す（6.185）。 */
+    var px=mwSubSuggest(r);
+    var fit=mwSubFitOf(r,px);
+    var st=mwStat(r)||{};
+    var cur=mwSubOf(jan)||{};
+    var speed=(st&&st.speed)?+st.speed:0;
+    var stock=+r.stock||0;
+    var row={ jan:jan, name:String(r.amz_name||r.mw_name||''),
+      kishu:String(r.kishu||''), stock:stock, speed:speed,
+      gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
+      rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
+      no_back:!!(st&&st.noBack), one_off:false,
+      grades:String(cur.grades||''), is_game:(MWFEE.genreOf(r)==='ゲーム'),
+      on:!!cur.on, sale:!!(st&&st.sale) };
+    row.qty=SUBPLAN.qtyOf(row,null,o);
+    return row;
+  });
+}
+function subDraftGo(){
+  if(roleDenyPrice('subDraftNote'))return;
+  var box=$('subDraftBox');
+  if(!mwAmzRows.length){
+    subDraftNote('先に一覧を取り込んでください（「取り込む」→「Amazonで調べる」）。',1);
+    return;
+  }
+  var rows=subDraftRows();
+  var plans=SUBPLAN.list(subCfgAll());
+  var d=SUBPLAN.draft(rows,plans,subPickCfg());
+  subDraftData={ at:new Date().toISOString(), plans:d.plans, opt:d.opt,
+                 rows:rows.length };
+  var on=d.plans.filter(function(p){ return p.on; });
+  var n=on.reduce(function(a,p){ return a+p.items.length; },0);
+  subDraftNote('<b>今日の配信の案</b>（まだ何も変えていません）<br>'
+    +'候補 '+mwN(rows.length)+'件 → <b>'+mwN(n)+'件</b>を選びました'
+    +'（'+on.map(function(p){ return esc(p.name)+' '+mwN(p.items.length)+'件'
+      +(p.over?('／あと '+mwN(p.over)+'件'):''); }).join('　')+'）'
+    +'<br><span class="note2">MW在庫の '+(+d.opt.stockPct||0)+'%（'
+    +(+d.opt.qtyDays||0)+'日ぶん先に売れる分を引く）と、想定購入数 '
+    +mwN(+d.opt.wantQty||0)+'点の小さいほうを上限にしています。</span>');
+  if(box)box.innerHTML=subDraftHtml(d.plans);
+}
+function subDraftHtml(plans){
+  var out=[];
+  (plans||[]).forEach(function(p){
+    if(!p.on)return;
+    out.push('<div class="note2" style="margin:6px 0 2px"><b>'+esc(p.name)
+      +'</b>　'+mwN(p.items.length)+'件'
+      +(p.over?('<span style="opacity:.7">（あと '+mwN(p.over)
+        +'件は件数の上限で外しました）</span>'):'')
+      +(p.ch?'':'<span style="color:var(--bad)">　チャンネルID なし</span>')
+      +'</div>');
+    if(!p.items.length){
+      out.push('<div class="note2" style="opacity:.7">選べる商品がありません。</div>');
+      return;
+    }
+    p.items.forEach(function(x){
+      var id='subDraftChk_'+p.key+'_'+x.jan;
+      out.push('<label class="note2" style="margin:2px 0 0;display:flex;'
+        +'gap:6px;align-items:flex-start">'
+        +'<input type="checkbox" id="'+esc(id)+'" checked'
+        +' style="margin-top:2px">'
+        +'<span style="flex:1 1 auto;min-width:0">'
+        +'<b>'+esc(String(x.name||x.jan).slice(0,38))+'</b>'
+        +(x.sale?'<span class="badge" style="background:#b07000">在庫処分</span>':'')
+        +'<br>'+yen(x.price)+'・'+mwN(x.qty)+'点まで'
+        +(x.gross===null||x.gross===undefined?''
+          :('・粗利 '+yen(x.gross)
+            +(x.rate===null||x.rate===undefined?'':('（'+x.rate+'%）'))))
+        +'・1日 '+(Math.round((+x.speed||0)*10)/10)+'点'
+        +'・MW在庫 '+mwN(x.stock)+'点'
+        +'<span style="opacity:.6"> '+esc(x.jan)+'</span>'
+        +'</span></label>');
+    });
+  });
+  if(!out.length)return '<div class="note2">動かしているプランがありません'
+    +'（⚙で「配信する」を入れてください）。</div>';
+  return out.join('')
+    +'<div style="display:flex;gap:6px;margin-top:8px">'
+    +'<button class="btn primary cfgprice" onclick="subDraftApply();return false"'
+    +' style="flex:1">この案で出す</button></div>';
+}
+/* 案のうち、チェックが入っている行だけ。 */
+function subDraftPicked(){
+  var out=[];
+  ((subDraftData||{}).plans||[]).forEach(function(p){
+    if(!p.on)return;
+    p.items.forEach(function(x){
+      var el=$('subDraftChk_'+p.key+'_'+x.jan);
+      if(el&&!el.checked)return;
+      out.push(Object.assign({},x,{ plan:p.key }));
+    });
+  });
+  return out;
+}
+/* 「この案で出す」。印・上限・価格をまとめて付け、CSV まで書き出す。 */
+function subDraftApply(){
+  if(roleDenyPrice('subDraftNote'))return;
+  if(!subDraftData){ subDraftNote('先に案を作ってください。',1); return; }
+  var pick=subDraftPicked();
+  if(!pick.length){ subDraftNote('出す行がありません（ぜんぶ外れています）。',1);
+    return; }
+  var sum=pick.reduce(function(a,x){ return a+(+x.qty||0); },0);
+  if(!confirm('この案で出します。\n\n'
+    +'・商品：'+pick.length+'件（のべ '+sum+'点）\n'
+    +'・「会員に出す」の印・販売数の上限・販売価格をまとめて付けます\n'
+    +'・そのあと Shopify 用 CSV を書き出します\n\n'
+    +'※ 読み込んだら「Shopify に読み込みました」を押してください。\n'
+    +'※ 価格は書き出しのときに上乗せを決め直します（そのぶんも控えます）。\n'
+    +'\nよろしいですか？'))return;
+  subDraftNote('印を付けています…');
+  var items=pick.map(function(x){
+    return { jan:x.jan, on:1, max_qty:x.qty, price:x.price, grades:x.plan };
+  });
+  var chunks=[];
+  for(var i=0;i<items.length;i+=100)chunks.push(items.slice(i,i+100));
+  var step=chunks.reduce(function(pr,c){
+    return pr.then(function(){ return mwPost('/mw/sub',{ items:c }); });
+  },Promise.resolve());
+  return step.then(function(){
+    /* 案の中身を控える（あとで「どの案から何が売れたか」を見る）。 */
+    return mwPost('/sub/draft',{ at:subDraftData.at,
+      items:pick.map(function(x){
+        return { jan:x.jan, plan:x.plan, name:x.name, price:x.price,
+                 qty:x.qty, gross:x.gross, speed:x.speed }; }) })
+      ['catch'](function(){ return null; });
+  }).then(function(r){
+    if(r&&r.ok===false&&r.error==='no_table')
+      subDraftNote('✓ 印を付けました（案の記録は pj-sync の'
+        +' migrate-0056-sub-draft.sql を流すと残せます）。');
+    else subDraftNote('✓ '+mwN(pick.length)+'件に印を付けました。'
+      +'Shopify 用 CSV を書き出します…');
+    return mwSubLoad(true);
+  }).then(function(){
+    try{ mwAmzRender(); }catch(e){}
+    try{ subBarRender(); }catch(e){}
+    var box=$('subDraftBox'); if(box)box.innerHTML='';
+    /* そのまま CSV まで（書き出しの知らせは「会員に出す」の欄に出る）。 */
+    return mwSubCsvGo();
+  })['catch'](function(e){
+    subDraftNote('⚠ 出せませんでした：'+esc(e.message),1);
+  });
+}
+/* 案の記録（どの案から何が売れたか）。 */
+function subDraftLogGo(){
+  if(roleDenyPrice('subDraftNote'))return;
+  var box=$('subDraftBox');
+  subDraftNote('読んでいます…');
+  return mwGet('/sub/draft?limit=10').then(function(d){
+    if(!d||d.ok!==true){
+      subDraftNote('⚠ 読めませんでした：'
+        +esc(String((d&&(d.detail||d.error))||'')),1);
+      return;
+    }
+    if(!(d.rows||[]).length){
+      subDraftNote('まだ案の記録はありません。');
+      if(box)box.innerHTML=''; return;
+    }
+    subDraftNote('<b>案の記録</b>（新しい順に '+mwN(d.rows.length)+'回）');
+    if(box)box.innerHTML=d.rows.map(function(g){
+      return '<div class="note2" style="margin:6px 0 0"><b>'+esc(g.at_jst||'')
+        +'</b>　'+mwN(g.n)+'件・のべ '+mwN(g.qty)+'点　'
+        +'<b style="color:var(--good)">売れた '+mwN(g.sold)+'点</b>'
+        +(g.gross?('・粗利の目安 '+yen(g.gross)):'')+'</div>'
+        +g.items.slice(0,12).map(function(x){
+          return '<div class="note2" style="margin:1px 0 0;opacity:'
+            +(x.sold?'1':'.75')+'">'
+            +(x.sold?('<b style="color:var(--good)">'+mwN(x.sold)+'点</b>　')
+                    :'　　')
+            +esc(String(x.name||x.jan).slice(0,30))
+            +'　'+yen(x.price)+'・'+mwN(x.qty)+'点まで'
+            +'<span style="opacity:.6"> '+esc(x.plan)+'</span></div>';
+        }).join('')
+        +(g.items.length>12?('<div class="note2" style="opacity:.6">ほか '
+          +mwN(g.items.length-12)+'件</div>'):'');
+    }).join('');
+  })['catch'](function(e){
+    subDraftNote('⚠ 読めませんでした：'+esc(e.message),1);
+  });
+}
 /* ===== 8.11／8.13（【Y】）会員向け Discord の配信と、Shopify の注文 =====
    ・配信に載るのは「会員に出す」の印＋**Shopify に読み込みました**の印が
      付いた商品だけ（CSV を出しただけでは Shopify に入ったか分からない）
@@ -24094,7 +24351,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v274';   // sw.js の const V と必ず同じ値にする
+var APP_V='v275';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

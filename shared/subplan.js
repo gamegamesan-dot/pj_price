@@ -78,9 +78,116 @@
     if (p.kinds === "game" && !isGame) return false;
     return true;
   }
+  /* ===== 8.18 今日の配信の案（振り分けの決まり）=====
+     仕入れタブの候補（刈取の一覧）を、プランごとに自動で振り分ける。
+     決まりはここ1か所だけ（画面・pj-sync が同じこれを読む）。
+
+     共通の条件
+       ・会員向きの判定（粗利の下限、または利益率の下限と最低額）を満たす
+         … 判定は shared/subprice.js の fitOf（6.188）
+       ・出品できる（Amazon の出品制限が ok）
+       ・Amazon 本体ありは除く（⚙ subPickNoAmz・既定オン）
+       ・カジが「仕入れる」の印を付けた商品は外す（⚙ subPickSkipBuy・既定オン）
+       ・在庫処分・再入荷なしの商品を**優先**（並びの点数を上げる）
+     並び順
+       会員の粗利 × 売れる速さ の大きい順（売れる速さが出せない行は
+       1日 0.3点とみなす＝出さないほどではないが後ろに回る）
+     販売数の上限のおすすめ
+       MW 在庫から「MW 自身がこれから売る分」（売れる速さ × ⚙日数）を引き、
+       その ⚙% と、会員の想定購入数の小さいほう */
+  var PICK = {
+    noAmz: true,        // ⚙ subPickNoAmz   … Amazon 本体ありを除く
+    skipBuy: true,      // ⚙ subPickSkipBuy … 「仕入れる」印を外す
+    stockPct: 30,       // ⚙ subStockPct    … MW 在庫の何%まで出すか
+    wantQty: 5,         // ⚙ subWantQty     … 会員の想定購入数（1商品あたり）
+    qtyDays: 2,         // ⚙ subQtyDays     … MW 自身がこれから売る日数
+    saleBoost: 1.5      // 在庫処分・再入荷なしの点数の倍率（優先）
+  };
+  function bool(v, dflt) {
+    if (v === undefined || v === null || v === "") return dflt;
+    return !!(v === true || v === 1 || v === "1" || v === "true");
+  }
+  function pickOpt(cfg) {
+    var o = cfg || {};
+    var n = function (k, d, lo, hi) {
+      var v = Number(o[k]);
+      if (!isFinite(v) || v < lo || v > hi) return d;
+      return v;
+    };
+    return {
+      noAmz: bool(o.subPickNoAmz, PICK.noAmz),
+      skipBuy: bool(o.subPickSkipBuy, PICK.skipBuy),
+      stockPct: n("subStockPct", PICK.stockPct, 0, 100),
+      wantQty: Math.round(n("subWantQty", PICK.wantQty, 0, 999)),
+      qtyDays: n("subQtyDays", PICK.qtyDays, 0, 60),
+      saleBoost: PICK.saleBoost
+    };
+  }
+  /* 販売数の上限のおすすめ（8.18 の2）。0 なら案に出さない。
+     row … { stock, speed }（speed は shared/mwstat.js の「1日あたり」） */
+  function qtyOf(row, plan, opt) {
+    var r = row || {}, p = plan || {}, o = opt || pickOpt(null);
+    var stock = Math.max(0, num(r.stock));
+    if (!stock) return 0;
+    var speed = Math.max(0, num(r.speed));
+    /* MW 自身がこれから売る分を引く（売れる速さ × 日数）。 */
+    var left = Math.max(0, stock - speed * num(o.qtyDays));
+    var n = Math.floor(left * num(o.stockPct) / 100);
+    var q = Math.min(n, Math.max(0, Math.round(num(o.wantQty))));
+    /* 1点も出せないときは 0（案に出さない）。 */
+    return Math.max(0, Math.round(q));
+  }
+  /* 並びの点数（大きいほど先）。会員の粗利 × 売れる速さ。 */
+  var SPEED_MIN = 0.3;             // 売れる速さが出せない行の見なし
+  function scoreOf(row, opt) {
+    var r = row || {}, o = opt || pickOpt(null);
+    var g = Math.max(0, num(r.gross));
+    var sp = num(r.speed);
+    if (!(sp > 0)) sp = SPEED_MIN;
+    var sc = g * sp;
+    /* 在庫処分・再入荷なしは優先（刈り切る候補）。 */
+    if (r.no_back) sc *= num(o.saleBoost) || 1;
+    return sc;
+  }
+  /* 共通の条件。通らない理由を返す（通れば ''）。 */
+  function whyNot(row, opt) {
+    var r = row || {}, o = opt || pickOpt(null);
+    if (!r.fit) return "会員向きではありません";
+    if (s(r.rst) === "blocked") return "出品できません";
+    if (o.noAmz && r.amz) return "Amazon 本体あり";
+    if (o.skipBuy && num(r.buy_qty) > 0) return "仕入れる印が付いています";
+    if (!(num(r.price) > 0)) return "販売価格が出せません";
+    return "";
+  }
+  /* プランごとの案（件数の上限まで）。
+     rows は画面・pj-sync が作った行の配列（下の項目を入れておく）
+       jan, name, kishu, stock, speed, gross, price, qty（上限のおすすめ）,
+       fit（会員向きか）, rst, amz, buy_qty, no_back, one_off, grades */
+  function draft(rows, plans, cfg) {
+    var o = pickOpt(cfg);
+    var out = [];
+    (plans || []).forEach(function (p) {
+      var pick = [], skip = [];
+      (rows || []).forEach(function (r) {
+        var why = whyNot(r, o);
+        if (!why && !fits(p, r, !!r.is_game)) why = (p.kinds === "game")
+          ? "ゲームソフト通常版ではありません" : "このプラン向きではありません";
+        if (!why && !(num(r.qty) > 0)) why = "出せる数がありません";
+        if (why) { skip.push({ jan: r.jan, why: why }); return; }
+        pick.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key }));
+      });
+      pick.sort(function (a, b) { return b.score - a.score; });
+      out.push({ key: p.key, name: p.name, n: p.n, on: p.on, ch: p.ch,
+                 items: pick.slice(0, p.n), over: Math.max(0, pick.length - p.n),
+                 skip: skip.length });
+    });
+    return { plans: out, opt: o };
+  }
   var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX,
               plan: plan, list: list, active: active, fits: fits,
-              keyUp: keyUp };
+              keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,
+              scoreOf: scoreOf, whyNot: whyNot, draft: draft,
+              SPEED_MIN: SPEED_MIN };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_SUBPLAN = API;
 })(typeof globalThis !== "undefined" ? globalThis : this);
