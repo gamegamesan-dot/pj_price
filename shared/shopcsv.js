@@ -127,6 +127,51 @@
      長辺 34cm・短辺 25cm・厚さ 3cm 以内、1kg 以内。
      ゲームソフト通常版は 1本 約1.5cm・約110g なので 1〜2本は入る。 */
   var CP = { len: 34, wid: 25, hei: 3, g: 1000 };
+  /* 送料の段（Shopify の「重さの段」。6.183／8.17）。
+     Shopify は**本数ではなく合計の重さ**で送料が変わるので、
+     ゲームソフト1本の重さ（⚙ mwSubGameG・既定100g）から
+     「1〜2本 ¥200／3本 ¥300／4本以上 ¥600」を出せる。
+     会員用カードの「送料」もここから作る（表はこの1か所だけ）。
+     g は「この重さまで」。最後の 0 は「それより上はぜんぶ」。 */
+  var SHIP_TIERS = [{ g: 250, yen: 200, name: "クリックポスト" },
+                    { g: 350, yen: 300, name: "クリックポスト" },
+                    { g: 0, yen: 600, name: "宅配便" }];
+  var SHIP_MAX_N = 12;             // 何本ぶんまで見るか
+  /* 1本 oneG の商品を n 本買ったときの段。 */
+  function tierOf(grams) {
+    var g = num(grams);
+    for (var i = 0; i < SHIP_TIERS.length; i++) {
+      var t = SHIP_TIERS[i];
+      if (!t.g || g <= t.g) return t;
+    }
+    return SHIP_TIERS[SHIP_TIERS.length - 1];
+  }
+  /* 本数ごとの送料を「1〜2本 ¥200／3本 ¥300／4本以上 ¥600」の形にする。
+     opt.free … この本数以上は送料無料（プランごとに変えられる・8.17）
+     opt.max  … 何本ぶんまで見るか（既定 12） */
+  function shipSteps(oneG, opt) {
+    var o = opt || {};
+    var g = Math.round(num(oneG));
+    if (!(g > 0)) return null;
+    var free = Math.round(num(o.free));
+    var max = Math.round(num(o.max)) || SHIP_MAX_N;
+    var steps = [], cur = null, i, t, yen;
+    for (i = 1; i <= max; i++) {
+      if (free > 0 && i >= free) { yen = 0; t = { name: "送料無料" }; }
+      else { t = tierOf(g * i); yen = t.yen; }
+      if (cur && cur.yen === yen) { cur.to = i; continue; }
+      cur = { from: i, to: i, yen: yen, name: t.name };
+      steps.push(cur);
+    }
+    /* いちばん上の段は「◯本以上」にする。 */
+    if (steps.length) steps[steps.length - 1].to = 0;
+    var txt = steps.map(function (x) {
+      var n = (x.to === 0) ? (x.from + "本以上")
+        : ((x.from === x.to) ? (x.from + "本") : (x.from + "〜" + x.to + "本"));
+      return n + " " + (x.yen ? ("¥" + x.yen) : "送料無料");
+    }).join("／");
+    return { steps: steps, text: txt, name: steps[0].name, oneG: g };
+  }
 
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function s(v) { return (v === null || v === undefined) ? "" : String(v); }
@@ -487,6 +532,7 @@
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,
+    SHIP_TIERS: SHIP_TIERS, tierOf: tierOf, shipSteps: shipSteps,
     CP: CP, NOTE_JA: NOTE_JA, kishuJa: kishuJa,
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,

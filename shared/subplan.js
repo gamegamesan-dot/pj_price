@@ -18,7 +18,9 @@
 
    ⚙ で変えられるもの（Worker の subSettings が渡す）
      on<Key>  … そのプランを動かすか
-     n<Key>   … 1回の件数　q<Key> … 1商品あたりの数　ch<Key> … チャンネルID */
+     n<Key>   … 1回の件数　q<Key> … 1商品あたりの数　ch<Key> … チャンネルID
+     ship<Key>… カードの「送料」の文（8.17）。空なら重さから出した文を使う
+                （モニターは「4本以上 送料無料」など、プランごとに変えられる） */
 (function (root) {
   "use strict";
   var PLANS = [
@@ -54,6 +56,8 @@
                  ? p.on : !!(on === true || on === 1 || on === "1"),
                n: (n > 0) ? Math.min(N_MAX, Math.round(n)) : p.n,
                q: (q > 0) ? Math.min(Q_MAX, Math.round(q)) : p.q,
+               /* 8.17 カードの「送料」の文（プランごと・空なら既定）。 */
+               ship: s(o["subShip" + U]).trim().slice(0, 300),
                ch: s(o["subCh" + U]).replace(/\D/g, "") };
     });
   }

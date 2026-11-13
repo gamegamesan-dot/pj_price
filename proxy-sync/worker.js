@@ -10714,7 +10714,18 @@ async function mwSubPutAt(env, body) {
 const SUB_SKIP_KEY = "sub.skip";        // 「今日は送らない」印（JSTの日）
 const SUB_PRE_KEY = "sub.pre";          // 予告を出した日
 const SUB_SEND_KEY = "sub.send";        // 配信した日
-const SUB_HOUR_DEFAULT = 8;             // 配信時刻（JST の時）
+const SUB_HOUR_DEFAULT = 8;
+/* 8.17 ゲームソフト1本の重さの既定（⚙ mwSubGameG と同じ・6.183）。 */
+const SUB_GAME_G = 100;
+function subGameG(st) {
+  const v = (st || {}).mwSubGameG;
+  if (v === undefined || v === null || v === "") return SUB_GAME_G;
+  const n = Number(v);
+  return (isFinite(n) && n >= 0) ? Math.round(n) : SUB_GAME_G;
+}
+/* 8.17 カードの形が変わったことを控える（sync_state）。
+   版が上がったら、すでに送ったカードも次の配信で書き換える。 */
+const SUB_CARDV_KEY = "sub.card.v";             // 配信時刻（JST の時）
 const SUB_ROWS_MAX = 200;               // 1回に見る商品の数の上限
 const DC_API = "https://discord.com/api/v10";
 /* 表があるか（migrate-0053 を流す前は配信を動かさない）。 */
@@ -10743,6 +10754,11 @@ async function subSettings(env) {
     /* 8.16（【3】）https:// や末尾の / が付いていても受け付ける。
        整え方は shared/subcard.js の domainOf の1か所だけ（画面も同じ）。 */
     domain: SUBCARD.domainOf(st.subDomain || ""),
+    /* 8.17 ゲームソフト1本の重さ（⚙ mwSubGameG・既定100g）。
+       Shopify に出す重さと**同じ値**でカードの送料を出す。 */
+    /* ⚙に 0 と入れたら「一律の重さをやめる」（6.183 と同じ読み方）。
+       そのときは採寸（size_g）から出す。空なら既定の 100g。 */
+    gameG: subGameG(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
   };
@@ -10787,7 +10803,10 @@ async function subRows(env) {
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
-            a.size_g AS size_g
+            a.size_g AS size_g,
+            /* 8.17（会員の目線）カードに「Amazon の販売価格（カート／最安・
+               ◯月◯日 ◯時 時点）」を出すので、基準と取った日時も引く。 */
+            a.basis AS basis, a.price_at AS price_at, a.low AS amz_low
        FROM mw_sub b
             LEFT JOIN mw_stock s ON s.jan = b.jan
             LEFT JOIN mw_amz a ON a.jan = b.jan
@@ -10811,6 +10830,10 @@ async function subRows(env) {
                          Number(r.price) || 0),
     size_tier: String(r.size_tier || ""),
     size_g: Number(r.size_g) || 0,
+    /* 8.17 カードに出す Amazon の販売価格（カート価格・無ければ最安値）。 */
+    amz_price: Number(r.amz_price) || Number(r.amz_low) || 0,
+    amz_basis: String(r.basis || ""),
+    amz_at: String(r.price_at || ""),
   }));
 }
 /* 送ったカードの控え（JAN → 行）。 */
@@ -10824,14 +10847,16 @@ async function subPosts(env, ch) {
   return m;
 }
 /* そのプランに出す行を選ぶ（件数の上限まで）。 */
-function subPick(rows, plan, sent) {
+function subPick(rows, plan, sent, reform) {
   const out = [];
   for (const r of (rows || [])) {
     if (out.length >= plan.n) break;
     if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
     const old = (sent || {})[r.jan];
-    /* 二重に送らない。すでに送っていて、値段も数も変わっていなければ飛ばす。 */
-    const same = old && Number(old.price) === r.price
+    /* 二重に送らない。すでに送っていて、値段も数も変わっていなければ飛ばす。
+       8.17：**カードの形が変わった回だけ**は、値段が同じでも書き換える
+       （すでに送ったカードも新しい形にそろえるため）。 */
+    const same = !reform && old && Number(old.price) === r.price
       && Number(old.qty) === r.qty;
     out.push(Object.assign({}, r, {
       sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
@@ -10872,7 +10897,16 @@ async function subPlanBuild(env) {
 }
 /* 1件ぶんのカード（shared/subcard.js）。 */
 function subCardOf(x, p, cfg, note) {
-  return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note });
+  /* 8.17 送料は「本数ごとの額」で出す。
+     ・ゲームソフト通常版は Shopify に出す重さ（⚙ mwSubGameG・既定100g）と
+       同じ決まりで出す（段の表は shared/shopcsv.js の1か所だけ）
+     ・プランごとに文を差し替えられる（⚙ subShip<Key>。
+       モニターは「4本以上 送料無料」など）
+     ・ゲーム以外は今までどおり採寸から出す（取れていなければ区分の名前） */
+  const game = MWFEE.genreOf(x) === "ゲーム";
+  const oneG = game ? (Number(cfg.gameG) || 0) : (Number(x.size_g) || 0);
+  return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note,
+                           shipText: p.ship, oneG: oneG });
 }
 /* 配信する。approve でないときは送らずに予定だけ返す。 */
 async function jobSubSend(env, opt) {
@@ -10902,11 +10936,21 @@ async function jobSubSend(env, opt) {
       res.detail = "DISCORD_BOT_TOKEN が登録されていません";
       return Object.assign(await saveRun(env, run), res);
     }
+    /* 8.17 カードの形の版。前に送ったときと違えば、値段が同じカードも
+       書き換えて新しい形にそろえる（カジの【6】）。 */
+    let cardV = "";
+    try { cardV = String(await stateGet(env, SUB_CARDV_KEY) || ""); }
+    catch (e) { cardV = ""; }
+    const reform = (cardV !== SUBCARD.CARD_V);
+    res.reform = reform;
+    res.card_v = SUBCARD.CARD_V;
+    if (reform) res.why_reform = "カードの形が変わったので、送ったぶんも"
+      + "書き換えます（" + (cardV || "はじめて") + " → " + SUBCARD.CARD_V + "）";
     const only = String(o.plan || "").trim();
     for (const p of cfg.active) {
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent);
+      const pick = subPick(rows, p, sent, reform);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0 };
       for (const x of pick) {
         if (x.same) { r.keep++; res.skipped++; continue; }
@@ -10942,8 +10986,16 @@ async function jobSubSend(env, opt) {
     }
     if (res.approve) {
       try { await stateSet(env, SUB_SEND_KEY, day).run(); } catch (e) {}
+      /* 8.17 形をそろえ終えたら版を控える（次からはふつうに飛ばす）。
+         失敗した行が無いときだけ（残っていれば次の回でもう一度そろえる）。 */
+      const fail = res.plans.reduce((a, x) => a + (Number(x.fail) || 0), 0);
+      if (reform && !fail) {
+        try { await stateSet(env, SUB_CARDV_KEY, SUBCARD.CARD_V).run(); }
+        catch (e) {}
+      }
       run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
-        + res.edited + "件・そのまま " + res.skipped + "件");
+        + res.edited + "件・そのまま " + res.skipped + "件"
+        + (reform ? "（カードの形を新しくしました）" : ""));
     }
     res.ok = true;
   } catch (e) {

@@ -54,12 +54,15 @@ const stock=(env,jan,o)=>env.DB.prepare(
    VALUES (?1,'いろは商会',0,?2,?3,?4,'h',?5,?5)`)
   .bind(jan,(o||{}).kishu||'NS',(o||{}).name||('商品'+jan),
         (o||{}).stock===undefined?9:(o||{}).stock,new Date().toISOString()).run();
+/* 8.17：カードに「Amazon の販売価格（カート・◯月◯日 ◯時 時点）」を出すので、
+   基準（basis）と取った日時（price_at）も入れておく。 */
 const amz=(env,jan,o)=>env.DB.prepare(
-  `INSERT INTO mw_amz (jan,asin,name,price,fee_total,size_tier,checked_at)
-   VALUES (?1,?2,?3,?4,?5,?6,?7)`)
+  `INSERT INTO mw_amz (jan,asin,name,price,fee_total,size_tier,checked_at,
+     basis,price_at)
+   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?7)`)
   .bind(jan,(o||{}).asin||'B0D1GSZJ8T',(o||{}).name||'Amazonの名前',
         (o||{}).price||9000,(o||{}).fee||1200,(o||{}).tier||'s',
-        new Date().toISOString()).run();
+        new Date().toISOString(),(o||{}).basis||'カート').run();
 const sub=(env,jan,o)=>env.DB.prepare(
   `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,put_at,loaded_at,at,created_at)
    VALUES (?1,1,?2,?3,?4,?5,?6,?5,?5)`)
@@ -157,6 +160,35 @@ console.log('\n=== ③ 送る・二重に送らない・書き換える ===');
      ==='omakase-ship.myshopify.com','★★/ から後ろは落とす');
   ok(SUBCARD.domainOf('')===''&&SUBCARD.buyUrl('','4902370550467')==='',
      '★空なら購入リンクを出さない');
+  /* 8.17（会員の目線）項目の名前・並び・中身。 */
+  {
+    const nm=(card.fields||[]).map((f)=>f.name);
+    const fv=(n)=>((card.fields||[]).filter((f)=>f.name===n)[0]||{}).value||'';
+    console.log('   並び '+nm.join('→'));
+    console.log('   '+JSON.stringify({ px:fv('仕入れ価格（税込・送料別）'),
+      amz:fv('Amazon の販売価格'), gr:fv('見込みの Amazon 粗利'),
+      ship:fv('送料') }));
+    ok(JSON.stringify(nm)===JSON.stringify(['JAN','機種',
+       '仕入れ価格（税込・送料別）','Amazon の販売価格','見込みの Amazon 粗利',
+       '購入できる数','送料','購入リンク']),
+       '★★★頼まれた並び順と名前（商品名は見出し）');
+    ok(/^¥3,645$/.test(fv('仕入れ価格（税込・送料別）')),
+       '★★★「仕入れ価格（税込・送料別）」＝会員が当社から買う値段');
+    ok(/¥9,000/.test(fv('Amazon の販売価格')),
+       '★★★Amazon の販売価格も出す');
+    ok(/時点/.test(fv('Amazon の販売価格')),
+       '★★★取った日時も出す（◯月◯日 ◯時 時点）');
+    ok(/カート/.test(fv('Amazon の販売価格')),'★★基準（カート／最安）も出す');
+    ok(/利益率 \d+%/.test(fv('見込みの Amazon 粗利')),
+       '★★★粗利の横に利益率（粗利 ÷ 仕入れ価格）');
+    ok(/Amazon の手数料を引いたあと・送料は別/.test(fv('見込みの Amazon 粗利')),
+       '★★★「手数料を引いたあと・送料は別」と添える');
+    ok(/クリックポスト/.test(fv('送料'))&&/1〜2本 ¥200/.test(fv('送料'))
+       &&/3本 ¥300/.test(fv('送料'))&&/4本以上 ¥600/.test(fv('送料')),
+       '★★★送料は本数ごとの額（ゲームソフトは Shopify と同じ 1本100g）');
+    ok(!/まだ採寸していません/.test(fv('送料')),
+       '★★★「—（まだ採寸していません）」とは出さない');
+  }
   const kf=(card.fields||[]).filter((f)=>f.name==='機種')[0]||{};
   console.log('   機種 '+JSON.stringify(kf.value));
   ok(kf.value==='Nintendo Switch',
@@ -175,6 +207,76 @@ console.log('\n=== ③ 送る・二重に送らない・書き換える ===');
   ok(dc.length===1&&dc[0].method==='PATCH'&&dc[0].msg==='900001',
      '★★★前のカードを書き換える（新しく送らない）');
   ok(/¥3,900/.test(JSON.stringify(dc[0].body)),'★★新しい値段になる');
+}
+
+console.log('\n=== ③の2 カードの形が変わったら、送ったぶんも書き換える（8.17）===');
+{
+  const env=env0();
+  await setCfg(env,{});
+  await stock(env,JAN); await amz(env,JAN); await sub(env,JAN);
+  dc=[];
+  let r=await api(env,'/sub/send',{ approve:true });
+  ok(r.sent===1,'★1件送る');
+  dc=[];
+  r=await api(env,'/sub/send',{ approve:true });
+  ok(r.skipped===1&&r.sent===0&&r.edited===0,'★★二度目はそのまま');
+  ok(r.reform===false,'★★形は変わっていない');
+  /* 前の版で送ってあったことにする（カードの形が変わった回）。 */
+  await env.DB.prepare(
+    `INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.card.v','8.11',?1)
+     ON CONFLICT(k) DO UPDATE SET v=excluded.v`)
+    .bind(new Date().toISOString()).run();
+  dc=[];
+  r=await api(env,'/sub/send',{});          // まず予定（送らない）
+  console.log('   予定: '+JSON.stringify({ reform:r.reform,
+    why:r.why_reform, edit:(r.plans[0]||{}).edit }));
+  ok(r.reform===true&&/形が変わった/.test(String(r.why_reform||'')),
+     '★★★予定にも「形が変わったので書き換えます」と出す');
+  ok((r.plans[0]||{}).edit===1,'★★★値段が同じでも「書き換え」に数える');
+  ok(dc.length===0,'★予定では送らない');
+  dc=[];
+  r=await api(env,'/sub/send',{ approve:true });
+  console.log('   '+JSON.stringify({ edited:r.edited, m:dc.map((x)=>x.method) }));
+  ok(r.edited===1&&dc.length===1&&dc[0].method==='PATCH',
+     '★★★前のカードを新しい形に書き換える（新しく送らない）');
+  ok(/仕入れ価格（税込・送料別）/.test(JSON.stringify(dc[0].body)),
+     '★★★書き換えた中身は新しい形');
+  const v=await env.DB.prepare(
+    `SELECT v FROM sync_state WHERE k='sub.card.v'`).first();
+  ok(String((v||{}).v||'')===SUBCARD.CARD_V,'★★そろえ終えたら版を控える');
+  dc=[];
+  r=await api(env,'/sub/send',{ approve:true });
+  ok(r.skipped===1&&r.edited===0,
+     '★★★次からはまた「そのまま」（毎回書き換えない）');
+}
+
+console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.17）===');
+{
+  const env=env0();
+  await setCfg(env,{ subShipMonitor:'クリックポスト（1〜2本 ¥200／3本 ¥300'
+    +'／4本以上 送料無料）' });
+  await stock(env,JAN); await amz(env,JAN); await sub(env,JAN);
+  dc=[];
+  await api(env,'/sub/send',{ approve:true });
+  const f=((dc[0]||{}).body||{}).embeds[0].fields
+    .filter((x)=>x.name==='送料')[0]||{};
+  console.log('   '+JSON.stringify(f.value));
+  ok(/4本以上 送料無料/.test(String(f.value||'')),
+     '★★★⚙に入れた文をそのまま出す（モニターは4本以上 送料無料）');
+  /* ⚙の「ゲームソフト1本の重さ」を 0 にして、採寸も無い行は
+     今までどおり区分の名前（6.183 と同じ読み方）。 */
+  const e2=env0();
+  await setCfg(e2,{ mwSubGameG:0 });
+  await stock(e2,JAN2); await amz(e2,JAN2,{ tier:'' }); await sub(e2,JAN2);
+  await e2.DB.prepare(`UPDATE mw_amz SET size_g=0, size_tier='' WHERE jan=?1`)
+    .bind(JAN2).run();
+  dc=[];
+  await api(e2,'/sub/send',{ approve:true });
+  const f2=(((dc[0]||{}).body||{ embeds:[{ fields:[] }] })
+    .embeds[0].fields||[]).filter((x)=>x.name==='送料')[0]||{};
+  console.log('   '+JSON.stringify(f2.value));
+  ok(/まだ採寸していません/.test(String(f2.value||'')),
+     '★★重さも区分も分からない行は今までどおり');
 }
 
 console.log('\n=== ④ 会員用のカードに出さないもの ===');

@@ -1985,15 +1985,19 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ）</label></div>
+        <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNLight">　1回の件数／1商品の数</label><input type="number" id="subNLight" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（いまは止めています）</label></div>
+        <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNStandard">　1回の件数／1商品の数</label><input type="number" id="subNStandard" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（いまは止めています）</label></div>
+        <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（いまは止めています・1点ものの先行）</label></div>
+        <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="note2" id="subCfgNote2" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
@@ -3218,6 +3222,8 @@ var ADV_SUB=['subHour','subDomain',
              'subChLight','subNLight','subQLight',
              'subChStandard','subNStandard','subQStandard',
              'subChPremium','subNPremium','subQPremium',
+             /* 8.17 カードの「送料」の文（プランごと・Worker が読む）。 */
+             'subShipMonitor','subShipLight','subShipStandard','subShipPremium',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -6016,6 +6022,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subNLight','subQLight','subChLight',
                  'subNStandard','subQStandard','subChStandard',
                  'subNPremium','subQPremium','subChPremium',
+                 /* 8.17 カードの「送料」の文（プランごと）。 */
+                 'subShipMonitor','subShipLight','subShipStandard',
+                 'subShipPremium',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -24046,7 +24055,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v272';   // sw.js の const V と必ず同じ値にする
+var APP_V='v273';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -116,11 +116,24 @@ console.log('   '+names.join('／'));
 ok(names.indexOf('JAN')===0,'★★★JAN を先に出す');
 ok(/^```\n4902370550467\n```$/.test(e.fields[0].value),
    '★★★JAN はコードの書式で1行に単独（長押しでコピーできる）');
-ok(names.indexOf('販売価格（税込）')>=0
+/* 8.17（会員の目線）項目の名前と並びを変えた。
+   商品名（見出し）→ JAN → 機種 → 仕入れ価格 → Amazon の販売価格 →
+   見込みの粗利（利益率）→ 購入できる数 → 送料 → 購入リンク */
+ok(names.indexOf('仕入れ価格（税込・送料別）')>=0
    &&names.indexOf('見込みの Amazon 粗利')>=0
    &&names.indexOf('購入できる数')>=0
-   &&names.indexOf('送料の区分')>=0
+   &&names.indexOf('送料')>=0
    &&names.indexOf('購入リンク')>=0,'★★★頼まれた項目がぜんぶある');
+ok(names.indexOf('販売価格（税込）')<0,
+   '★★★「販売価格」とは書かない（会員が当社から買う値段だと分かる名前にした）');
+{
+  const want=['JAN','機種','仕入れ価格（税込・送料別）','Amazon の販売価格',
+              '見込みの Amazon 粗利','購入できる数','送料','購入リンク'];
+  const got=names.filter((n)=>want.indexOf(n)>=0);
+  console.log('   並び '+got.join('→'));
+  ok(JSON.stringify(got)===JSON.stringify(want.filter((n)=>names.indexOf(n)>=0)),
+     '★★★頼まれた並び順で出す');
+}
 ok(MEMBER_NG.every((x)=>names.indexOf(x)<0),
    '★★★卸値・社・MW在庫・備考・画像は項目に出さない');
 const flat=JSON.stringify(e);
@@ -292,7 +305,7 @@ console.log('\n=== --dry-run は1件も送らない（中身だけ出す）===')
      '★★★モニターも同じリストを見ることが分かる');
   ok(/#目玉商品 … 1件（モニター・ライト・スタンダード・プレミアム）/.test(t),
      '★★数が決まらないチャンネルは「お一人n点」を出さない');
-  ok(/🧪 テスト配信/.test(t)&&/販売価格（税込）：¥/.test(t),
+  ok(/🧪 テスト配信/.test(t)&&/仕入れ価格（税込・送料別）：¥/.test(t),
      '★★★送る中身（箱の文字）も出す');
   ok(!/卸値|MW在庫/.test(t),'★★★一覧にも卸値と MW在庫を出さない');
 }
