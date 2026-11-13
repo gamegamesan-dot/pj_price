@@ -536,7 +536,9 @@ CREATE TABLE IF NOT EXISTS mw_move (
   prev       INTEGER,                         -- 前の数（新しく出た・戻ったは NULL）
   cur        INTEGER,                         -- 今の数（欠品は NULL）
   d          INTEGER NOT NULL DEFAULT 0,      -- 今の数 − 前の数（減ったら負）
-  kind       TEXT NOT NULL,                   -- new/down/up/gone/back
+  kind       TEXT NOT NULL,                   -- new/down/up/gone/back/
+                                              -- wipe（一度に消えた・7.141）/
+                                              -- csvback（CSV の抜けから戻った）
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_move_at   ON mw_move(at);
@@ -557,6 +559,8 @@ CREATE TABLE IF NOT EXISTS mw_stat (
   back_qty   INTEGER NOT NULL DEFAULT 0,      -- 戻ったときの数の合計
   gone_days  REAL NOT NULL DEFAULT 0,         -- 欠品していた日数の合計
   base_qty   INTEGER,                         -- 基準の数（はじめて記録したとき・7.134）
+  wipe_n     INTEGER NOT NULL DEFAULT 0,      -- 一度に消えた回数（7.141）
+  wipe_qty   INTEGER NOT NULL DEFAULT 0,      -- そのとき消えた数の合計
   created_at TEXT NOT NULL,
   PRIMARY KEY (jan, sha)
 );

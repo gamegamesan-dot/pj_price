@@ -76,14 +76,26 @@ console.log('\n=== ② 戻った行の前の数は 0 ===');
   const F=fill(12);
   await impo(env,ago(5),F.concat([row({jan:J1,stock:20})]));
   await impo(env,ago(4),F);                       // J1 が消える（欠品）
-  await impo(env,ago(2),F.concat([row({jan:J1,stock:20})]));  // 戻る
+  /* 7.141（【3】）**同じ数で戻った回は CSV の抜け**とみなして「戻った」に
+     数えないので、ここは数が変わって戻る形にする（18点）。 */
+  await impo(env,ago(2),F.concat([row({jan:J1,stock:18})]));  // 戻る
   const b=(await moves(env)).filter((x)=>x.kind==='back')[0]||{};
-  ok(+b.prev===0&&+b.cur===20,'★★★戻った行は 0 → 20（前の数は 0）');
+  ok(+b.prev===0&&+b.cur===18,'★★★戻った行は 0 → 18（前の数は 0）');
   const s=await stat(env,J1);
   console.log('   '+JSON.stringify({ back_n:s.back_n, back_qty:s.back_qty,
     gone_n:s.gone_n, gone_days:s.gone_days }));
-  ok(+s.back_n===1&&+s.back_qty===20,'★★戻った回数と数を数える');
+  ok(+s.back_n===1&&+s.back_qty===18,'★★戻った回数と数を数える');
   ok(Math.abs(+s.gone_days-2)<0.05,'★★欠品していた日数（2日）');
+  /* 7.141（【3】）同じ数で戻った回は「戻った」に数えない。 */
+  const e2=env0();
+  await impo(e2,ago(5),F.concat([row({jan:J1,stock:20})]));
+  await impo(e2,ago(4),F);
+  await impo(e2,ago(2),F.concat([row({jan:J1,stock:20})]));
+  const s3=await stat(e2,J1);
+  console.log('   同じ数で戻った: '+JSON.stringify({ back_n:s3.back_n,
+    gone_n:s3.gone_n, wipe_n:s3.wipe_n }));
+  ok(+s3.back_n===0&&+s3.gone_n===0,
+     '★★★同じ数で戻った回は「戻った・欠品」に数えない（7.141・CSV の抜け）');
 }
 
 console.log('\n=== ③ 記録が1日に届かないうちは1日あたりを出さない ===');

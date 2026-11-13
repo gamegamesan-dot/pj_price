@@ -109,8 +109,14 @@ console.log('\n=== ① 欠品と、欠品から戻ったとき ===');
   ok(g.jan===J1&&+g.prev===12&&g.cur===null&&+g.d===-12,
      '★★★欠品は「gone」で、**消える前の数**を残す（12→欠品）');
   ok(+(await stat(env,J1)).gone_n===1,'★★欠品の回数を積む');
-  ok(+(await stat(env,J1)).down_qty===12,
-     '★★★欠品のぶんも「減った数」に入れる（売れた数の目安）');
+  /* 7.141（【2】）**CSV から行がなくなった回は「売れた」と数えない**
+     （買い占め・取り下げ・CSV の抜けのどれか）。v268 までは消える前の
+     掲載数をまるごと down_qty に足していたので、415点が消えた商品が
+     「売れる速さ 64.3点/日」と出ていた。 */
+  ok(+(await stat(env,J1)).down_qty===0,
+     '★★★欠品のぶんは「減った数（売れた数の目安）」に入れない（7.141）');
+  ok(+(await stat(env,J1)).wipe_n===1&&+(await stat(env,J1)).wipe_qty===12,
+     '★★★「一度に消えた」として別に控える');
   /* 2日半あとに戻ってくる */
   await impo(env,'2026-11-04T12:00:00Z',F.concat([row({jan:J1,stock:6}),
                                                   row({jan:J2,stock:7})]));
@@ -189,7 +195,11 @@ console.log('\n=== ③ 一覧にも目安の列を足す（/mw/nt・/mw/amz・/m
   const r=nt.rows[0]||{};
   console.log('   /mw/nt: '+JSON.stringify({ mv_down:r.mv_down,
     mv7:r.mv7_down, first:r.mv_first }));
-  ok(+r.mv_down===12&&+r.mv_down_n===2,'★★★/mw/nt に減った合計と回数を返す');
+  /* 7.141（【2】）12→4 の 8点だけが「減った（売れた）」。
+     4→欠品の 4点は「一度に消えた」なので入らない。 */
+  ok(+r.mv_down===8&&+r.mv_down_n===1,'★★★/mw/nt に減った合計と回数を返す');
+  ok(+r.mv_wipe_n===1&&+r.mv_wipe===4,
+     '★★★一度に消えた回（欠品のぶん）も返す');
   ok(r.mv_first==='2026-11-01T00:00:00Z','★★はじめて記録した日時も返す');
   ok(+r.mv_prev===4&&+r.mv_cur===0,'★★★その回の在庫の変化（4→0）も返す');
   const li=(await asJson(await worker.fetch(

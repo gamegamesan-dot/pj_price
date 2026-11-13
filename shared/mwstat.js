@@ -15,6 +15,11 @@
      mv_gone_days … 欠品していた日数の合計
      mv7_down     … 直近7日に減った合計 ／ mv7_n … その回数
      mv_base      … 基準の数（はじめて記録したときの掲載数・7.134）
+     mv_wipe_n    … **一度に消えた**回数（7.141・【2】）
+     mv_wipe      … そのとき消えた数の合計
+                    （1回の確認で大量に減って0になった／CSV から行が
+                     なくなった回。買い占め・取り下げ・CSV の抜けのどれか。
+                     **売れた数には入れない**ので mv_down にも入らない）
    返すもの
      days      … 記録のある日数（はじめて記録した日から今まで）
      tooNew    … 記録が1日に届いていない（＝1日あたりの数は出せない・7.134）
@@ -29,6 +34,7 @@
      goneAvg   … 欠品していた日数の平均（同じく null）
      sale      … 備考に「在庫処分」などがある（true/false）
      noBack    … 在庫処分で、**戻ったことが1度もない**（＝刈り切る候補）
+     wipeN     … 一度に消えた回数 ／ wipeQty … そのとき消えた数の合計
      thin      … 記録が少ない（既定14日未満）→「目安は参考程度」と出す
      label     … 画面と Discord に出す短い文（「1日 1.4点・残り 8日」など） */
 (function (root) {
@@ -105,6 +111,11 @@
       upN: Math.max(0, num(row.mv_up_n)),
       up: Math.max(0, num(row.mv_up)),
       goneN: goneN,
+      /* 7.141（【2】）一度に消えた回（売れる速さ・欠品までの見込みには
+         入れない。入っていた v268 までは「415点が1日で売れた」ことに
+         なって 64.3点/日 と出ていた）。 */
+      wipeN: Math.max(0, num(row.mv_wipe_n)),
+      wipeQty: Math.max(0, num(row.mv_wipe)),
       backN: backN,
       backAvg: backAvg === null ? null : round1(backAvg),
       goneAvg: goneAvg === null ? null : round1(goneAvg),

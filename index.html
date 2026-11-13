@@ -2029,6 +2029,12 @@ body.staff #syncOnHandFix{display:none !important}
           <b>在庫処分の印</b>（備考に下の言葉があるもの。再入荷したことがあるかも出します）。
           記録が14日に届かないうちは「<b>目安は参考程度</b>」と添えます。</div>
         </details>
+        <!-- 7.141／6.189（【2】）一度に消えた回のしきい値。
+             1回の確認で「前の数の○%以上」かつ「○点以上」が減って0になったら、
+             売れたとは数えず「一度に消えた」として別に控える。 -->
+        <div class="row cfgprice"><label for="mwWipePct">一度に消えたと見なす割合</label><input type="number" id="mwWipePct" value="80" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
+        <div class="row cfgprice"><label for="mwWipeMin">　そのときの減った数</label><input type="number" id="mwWipeMin" value="50" step="10" min="0" max="100000" inputmode="numeric"><span class="unit">点以上</span></div>
+        <div class="note2" style="margin:0 0 6px">1回の確認で<b>前の数のこの割合以上</b>、かつ<b>この点数以上</b>が減って<b>0になった</b>ときは、「売れた」とは数えず<b>「一度に消えた」</b>として別に控えます（買い占め・取り下げ・CSV の抜けのどれか）。<b>MW の CSV から行がなくなった回も同じ扱い</b>です。<br>売れる速さ・欠品までの見込みには<b>入れません</b>（例：415点が1回で消えた商品が「64.3点/日」と出ていました）。</div>
         <div class="rowv cfgprice"><label for="mwSaleNote">「在庫処分」と見なす備考の言葉</label><input type="text" id="mwSaleNote" value="" placeholder="在庫処分,在庫限り,終売,生産終了,完売,廃盤,最終" inputmode="text"><div class="note2" style="margin-top:2px">カンマ区切り。空のままなら<b>在庫処分・在庫限り・終売・生産終了・完売・廃盤・最終</b>を見ます。この言葉が備考にある商品は、<b>再入荷したことがあるか</b>を一覧と知らせに出します（<b>再入荷なし</b>＝全部刈り取る候補）。</div></div>
         <div class="chk"><input type="checkbox" id="mwNtRest" checked><label for="mwNtRest" style="flex:1">そのほかの欠品も<b>商品ごとに</b>知らせる（オフで件数だけ）</label></div>
         <div class="chk"><input type="checkbox" id="mwWeek" checked><label for="mwWeek" style="flex:1">週に1回、目安のまとめを知らせる（日本時間の月曜9時台）</label></div>
@@ -2839,6 +2845,9 @@ var ADV_AMZCOND=['amzKishu','amzShipMax','amzStockMin','mwAutoPerHour',
                  'mwNtTop','mwPutDay','mwUsedPct','mwNtAudience',
                  /* 6.166（【T】）在庫の動きの目安と知らせの形。 */
                  'mwSaleNote','mwNtThread',
+                 /* 7.141（【2】）一度に消えた回のしきい値。
+                    **Worker が取り込みで読む**設定なので必ず D1 に送る。 */
+                 'mwWipePct','mwWipeMin',
                  /* 在庫CSVの自動取り込み（6.160／7.120・【P】）。
                     **Worker が毎時読んで動く設定**なので必ず D1 に送る。
                     取得先の URL もここ（コードに直書きしない）。 */
@@ -5630,6 +5639,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwNtTop','mwPutDay','mwUsedPct','mwNtAudience',
                  /* 6.166（【T】）在庫の動きの目安と知らせの形。 */
                  'mwSaleNote','mwNtThread',
+                 /* 7.141（【2】）一度に消えた回のしきい値。 */
+                 'mwWipePct','mwWipeMin',
                  'mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
@@ -10999,7 +11010,10 @@ function mwStatHtml(r){
     :((c.speed!==null&&c.speed>0)
       ?('<b>1日 '+c.speed+'点</b>'
         +(c.speedSrc==='week'?'（直近7日）':'（全期間）'))
-      :'減っていません'));
+      /* 6.189（【2】）一度に消えた回しかない商品に「減っていません」は
+         紛らわしいので分ける。 */
+      :(c.wipeN>0?'出せません（一度に消えた回しかありません）'
+                 :'減っていません')));
   if(c.outDays!==null&&!c.tooNew)t.push('<b>欠品まで '+c.outDays+'日</b>');
   t.push(c.backN>0
     ?('再入荷 '+c.backN+'回'
@@ -11009,6 +11023,10 @@ function mwStatHtml(r){
   if(c.sale)t.push('<span class="badge" style="background:'
     +(c.noBack?'var(--bad)':'#b07000')+'">在庫処分'
     +(c.noBack?'・再入荷なし':'')+'</span>');
+  /* 6.189（【2】）一度に消えた回（買い占め・取り下げ・CSV の抜けのどれか）。
+     **売れた数には数えていない**ので、1日あたりにも入っていない。 */
+  if(c.wipeN>0)t.push('<span style="color:var(--bad)">一度に消えた '
+    +c.wipeN+'回・'+c.wipeQty+'点</span>（売れた数に数えていません）');
   t.push('記録 '+c.days+'日'
     +((c.thin&&!c.tooNew)?'<b>・目安は参考程度</b>':''));
   return '<div class="note2" style="margin:2px 0 0"><b>動き</b> '+t.join('　')
@@ -11119,10 +11137,14 @@ function mwMoveShow(jan){
     ['catch'](function(){ note.textContent='pj-sync に届きませんでした。'; });
 }
 var MW_MOVE_KIND={ 'new':'新しく出た', down:'減った', up:'増えた（補充）',
-                   gone:'欠品', back:'欠品から戻った' };
+                   gone:'欠品', back:'欠品から戻った',
+                   /* 7.141（【2】【3】）売れた数に数えない2つ。 */
+                   wipe:'一度に消えた（売れた数に数えない）',
+                   csvback:'CSV の抜けから戻った（再入荷に数えない）' };
 function mwMoveLine(x){
   var k=String(x.kind||'');
-  var col=(k==='gone')?'var(--bad)':((k==='back'||k==='up')?'var(--good)':'');
+  var col=(k==='gone'||k==='wipe')?'var(--bad)'
+    :((k==='back'||k==='up')?'var(--good)':'');
   var a=(x.prev===null||x.prev===undefined)?'—':(+x.prev);
   var b=(x.cur===null||x.cur===undefined)?'—':(+x.cur);
   return '<div class="note2" style="margin:1px 0 0">'
@@ -23558,7 +23580,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v269';   // sw.js の const V と必ず同じ値にする
+var APP_V='v270';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

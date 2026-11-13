@@ -6059,8 +6059,16 @@ function mwNtEmbed(x, kind, aud) {
     if (gr) f.push({ name: gr.hope ? "見込み粗利（未確認）" : "見込み粗利",
                      value: mwNtYen(gr.yen) + "\n（" + gr.src + "）",
                      inline: true });
+    /* 7.141（【1】）**今の数**を出す。CSV から行がなくなった商品は
+       もう買えないので 0 点（消える前の数も書く）。 */
+    const last = Math.max(0, Number(x.last_stock) || 0);
     f.push({ name: "MW在庫",
-             value: (Number(x.stock) > 0 ? (Number(x.stock) + "点") : "—"),
+             value: (Number(x.stock) > 0
+               ? (Number(x.stock) + "点")
+               : (x.gone_row
+                 ? ("**0点**（MW の CSV から行がなくなりました"
+                    + (last > 0 ? ("・消える前 " + last + "点") : "") + "）")
+                 : "**0点**")),
              inline: true });
     /* 7.126（【T】）在庫の動きの目安（社内用だけ。会員用には出さない）。 */
     const c = x.stat;
@@ -6077,11 +6085,23 @@ function mwNtEmbed(x, kind, aud) {
                     + (c.speedSrc === "week" ? "（直近7日）" : "（全期間）"))
                  : (c.tooNew
                    ? ("まだ出せません（記録 " + c.days + " 日分）")
-                   : "減っていません"), inline: true });
+                   /* 7.141（【2】）一度に消えた回しかない商品に
+                      「減っていません」と出すと紛らわしい。 */
+                   : (c.wipeN > 0
+                     ? "出せません（一度に消えた回しかありません）"
+                     : "減っていません")), inline: true });
       /* 7.134：**もう欠品している行に「欠品までの見込み」は出さない**。 */
       if (c.outDays !== null && kind !== "gone")
         f.push({ name: "欠品までの見込み", value: c.outDays + " 日",
                  inline: true });
+      /* 7.141（【2】）一度に消えた回（買い占め・取り下げ・CSV の抜けの
+         どれか）。**売れた数には数えていない**ので、売れる速さ・
+         欠品までの見込みにも入っていない。 */
+      if (c.wipeN > 0)
+        f.push({ name: "一度に消えた",
+                 value: c.wipeN + " 回・" + c.wipeQty + "点\n"
+                   + "（買い占め・取り下げ・CSV の抜けのどれか。"
+                   + "**売れた数には数えていません**）", inline: true });
       f.push({ name: "再入荷",
                value: c.backN > 0
                  ? (c.backN + " 回"
@@ -6313,7 +6333,13 @@ async function mwNtGone(env, at, st) {
             /* 7.121：知らせと一覧に出すために社・機種と Amazon の事実も引く。
                7.125：MW在庫（会員用では「購入できる数」）も出すので引く。 */
             MAX(s.sha) AS sha, MAX(s.kishu) AS kishu,
-            MAX(COALESCE(s.stock,0)) AS stock,
+            /* 7.141（【1】）**MW在庫は「今の数」を出す**。CSV から行が
+               なくなった商品はもう買えないので 0 点。消える前の数は
+               別に返して「消える前 415点」と書く（v268 までは消える前の
+               数を「MW在庫 415点」と出していた）。 */
+            0 AS stock,
+            MAX(COALESCE(s.stock,0)) AS last_stock,
+            1 AS gone_row,
             /* 7.126：「在庫処分」の印に使う。 */
             MAX(COALESCE(s.note,'')) AS note,
             (SELECT a.asin FROM mw_amz a WHERE a.jan = s.jan) AS asin,
@@ -6463,6 +6489,10 @@ function mwNtRows(q, st) {
       jan: String(r.jan || ""), name: String(r.name || ""),
       sha: String(r.sha || ""), kishu: String(r.kishu || ""),
       stock: Number(r.stock) || 0,
+      /* 7.141（【1】）CSV から行がなくなった商品（stock は 0）と、
+         消える前の掲載数。カードに「0点（消える前 415点）」と出す。 */
+      gone_row: Number(r.gone_row) > 0,
+      last_stock: Number(r.last_stock) || 0,
       wholesale: w, hope: hope,
       asin: String(r.asin || ""), amz_price: price, fee_total: fee,
       gross: gross, gross_src: gz.src,
@@ -6478,6 +6508,8 @@ function mwNtRows(q, st) {
       mv_back_n: Number(r.mv_back_n) || 0,
       mv_back_qty: Number(r.mv_back_qty) || 0,
       mv_gone_days: Number(r.mv_gone_days) || 0,
+      /* 7.141（【2】）一度に消えた回（売れた数には入っていない）。 */
+      mv_wipe_n: Number(r.mv_wipe_n) || 0, mv_wipe: Number(r.mv_wipe) || 0,
       mv7_down: Number(r.mv7_down) || 0, mv7_n: Number(r.mv7_n) || 0,
       mv_prev: (r.mv_prev === null || r.mv_prev === undefined)
         ? null : Number(r.mv_prev),
@@ -6930,6 +6962,32 @@ async function mwNtList(env, url) {
 const MOVE_MAX = 4000;             // 1回に残す動きの上限（D1 の問い合わせ数の歯止め）
 const MW_MV_DAYS = 7;              // 「直近」の窓（日）
 const MW_MOVE_KEEP_DAYS = 90;      // 詳しい記録を残す日数（合計は mw_stat に残る）
+/* 7.141（【2】）「一度に消えた」と見なすしきい値の既定（⚙で変えられる）。
+   1回の確認で **前の数の WIPE_PCT% 以上** かつ **WIPE_MIN 点以上**が減って
+   **0になった**とき。買い占め・取り下げ・CSV の抜けのどれかなので、
+   「売れた」とは数えない。 */
+const MW_WIPE_PCT = 80;            // ⚙ mwWipePct
+const MW_WIPE_MIN = 50;            // ⚙ mwWipeMin
+/* ⚙ から読む（無ければ既定）。0 を入れたら 0 として使う。 */
+function mwWipeOpt(st) {
+  const o = st || {};
+  const pct = Number(o.mwWipePct);
+  const min = Number(o.mwWipeMin);
+  return {
+    pct: (isFinite(pct) && pct >= 0 && pct <= 100) ? pct : MW_WIPE_PCT,
+    min: (isFinite(min) && min >= 0) ? Math.round(min) : MW_WIPE_MIN,
+  };
+}
+/* その回の減りが「一度に消えた」か（7.141）。
+   **0 になった回だけ**見る（途中まで減った回はふつうの「減った」）。 */
+function mwWipeHit(prev, cur, opt) {
+  const o = opt || { pct: MW_WIPE_PCT, min: MW_WIPE_MIN };
+  const p = Math.max(0, Number(prev) || 0);
+  const c = Math.max(0, Number(cur) || 0);
+  if (c !== 0 || p <= 0) return false;
+  const gone = p - c;
+  return gone >= o.min && (gone / p) * 100 >= o.pct;
+}
 async function mwMoveOk(env) {
   return (await colOk(env, "mw_move", "jan"))
     && (await colOk(env, "mw_stat", "down_qty"));
@@ -6942,38 +7000,69 @@ async function mwMoveOk(env) {
        0点だった）。これは出来事なので prev に 0 を入れて数える。
    v248 は 'back' の prev も NULL にしていたため、mw_stat にその商品の
    記録がまだ無くても「戻った1回・欠品N日」に数えてしまっていた。 */
-function mwMvOf(r, old, at) {
+function mwMvOf(r, old, at, wipe) {
   const cur = Math.max(0, mwNum(r.stock));
   if (!old) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
                      prev: null, cur: cur, d: 0, kind: "new" };
-  if (old.gone_at) return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
-                            prev: 0, cur: cur, d: cur, kind: "back",
-                            gone_at: String(old.gone_at || "") };
+  if (old.gone_at) {
+    const last = Math.max(0, mwNum(old.stock));
+    /* 7.141（【3】）**CSV から行が抜けただけ**で、あとで**同じ数**で
+       戻ってきた回は「戻った・再入荷」に数えない（抜けの穴埋め）。
+       消えたときに数えた「欠品1回」「一度に消えた」も取り消す。 */
+    if (last > 0 && cur === last)
+      return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
+               prev: 0, cur: cur, d: cur, kind: "csvback",
+               wipe: last, gone_at: String(old.gone_at || "") };
+    return { at: at, jan: r.jan, sha: r.sha, idx: r.idx,
+             prev: 0, cur: cur, d: cur, kind: "back",
+             gone_at: String(old.gone_at || "") };
+  }
   const prev = Math.max(0, mwNum(old.stock));
   if (prev === cur) return null;        // **数が変わらない回は書かない**
+  /* 7.141（【2】）1回で大量に減って0になった回は「売れた」と数えない。 */
+  if (mwWipeHit(prev, cur, wipe))
+    return { at: at, jan: r.jan, sha: r.sha, idx: r.idx, prev: prev, cur: cur,
+             d: cur - prev, kind: "wipe", wipe: prev - cur };
   return { at: at, jan: r.jan, sha: r.sha, idx: r.idx, prev: prev, cur: cur,
            d: cur - prev, kind: (cur < prev) ? "down" : "up" };
 }
 /* mw_stat に渡す値の並び（7.134）。base_qty の列が無いデータベースでは
    12個目を外す（D1 は欲しい数と合わないと落ちる）。 */
-function mvBind(m, dn, upq, gn, bn, bq, gd, bqty) {
+function mvBind(m, dn, upq, gn, bn, bq, gd, bqty, wpn, wpq) {
   const a = [m.jan, m.sha, m.at, dn ? 1 : 0, dn, upq ? 1 : 0, upq,
              gn, bn, bq, gd];
   if (bqty !== undefined) a.push(bqty);
+  if (wpn !== undefined) a.push(wpn, wpq);
   return a;
 }
 /* 動きを D1 に書く文（1つの動きにつき2文）。
    7.134：base_qty（基準の数）は migrate-0052 で足した列。流す前でも
    記録が止まらないよう、列があるときだけ入れる（取り込みは命綱）。 */
-function mwMvStmts(env, list, hasBase) {
+function mwMvStmts(env, list, hasBase, hasWipe) {
   const out = [];
   const bq0 = hasBase !== false;
+  const wp0 = hasWipe === true;
   /* 7.118：SQL の文の中で三項演算子（? :）を書くと「番号なしの ?」に
-     見えてしまうので、入れる文字はここで先に作っておく。 */
+     見えてしまうので、入れる文字はここで先に作っておく。
+     ?N は 1 から詰める決まりなので、**出す列で番号が動く**。 */
+  const nBase = bq0 ? 12 : 0;
+  const nWpN = wp0 ? (bq0 ? 13 : 12) : 0;
+  const nWpQ = wp0 ? (nWpN + 1) : 0;
   const bqCol = bq0 ? ",base_qty" : "";
-  const bqVal = bq0 ? ",?12" : "";
+  const bqVal = bq0 ? (",?" + nBase) : "";
   const bqSet = bq0
     ? "\n         base_qty=COALESCE(mw_stat.base_qty, excluded.base_qty),"
+    : "";
+  /* 7.141（【2】）一度に消えた回（migrate-0055）。列があるときだけ。
+     CSV の抜けから戻った回（csvback）は -1 を入れて取り消すので、
+     0 より下がらないように MAX(0, …) で足す。 */
+  const wpCol = wp0 ? ",wipe_n,wipe_qty" : "";
+  const wpVal = wp0 ? (",MAX(?" + nWpN + ",0),MAX(?" + nWpQ + ",0)") : "";
+  /* excluded.wipe_n は VALUES 側で MAX(…,0) をかけているので、
+     取り消し（-1）が効くように**生の ?N** を足す。 */
+  const wpSet = wp0
+    ? "\n         wipe_n=MAX(0, mw_stat.wipe_n+?" + nWpN + "),"
+      + "\n         wipe_qty=MAX(0, mw_stat.wipe_qty+?" + nWpQ + "),"
     : "";
   for (const m of (list || []).slice(0, MOVE_MAX)) {
     out.push(env.DB.prepare(
@@ -6986,12 +7075,29 @@ function mwMvStmts(env, list, hasBase) {
     /* 7.134：**前の数が無い行は基準**。出来事として1つも数えない
        （基準の数 base_qty だけを控える）。 */
     const base = (m.prev === null || m.prev === undefined);
-    /* 減った数（補充は入れない）＝売れた数の目安。 */
-    const dn = (!base && m.d < 0) ? -m.d : 0;
+    /* 7.141（【2】）一度に消えた回（wipe）と CSV から行が消えた回（gone）は
+       **「売れた」と数えない**（買い占め・取り下げ・CSV の抜けのどれか）。
+       v268 までは gone の掲載数をまるごと down_qty に足していたので、
+       415点が消えた商品が「売れる速さ 64.3点/日」と出ていた。 */
+    const wipeish = (m.kind === "wipe" || m.kind === "gone");
+    /* 減った数（補充・一度に消えた回は入れない）＝売れた数の目安。 */
+    const dn = (!base && !wipeish && m.d < 0) ? -m.d : 0;
     const upq = (!base && m.kind === "up") ? Math.max(0, m.d) : 0;
     const gn = (!base && m.kind === "gone") ? 1 : 0;
     const bn = (!base && m.kind === "back") ? 1 : 0;
     const bq = (!base && m.kind === "back") ? Math.max(0, mwNum(m.cur)) : 0;
+    /* 一度に消えた回数と、そのとき消えた数。
+       7.141（【3】）CSV の抜けから**同じ数で**戻った回（csvback）は、
+       消えたときに数えた「一度に消えた」と「欠品1回」を取り消す。 */
+    let wpn = (!base && wipeish) ? 1 : 0;
+    let wpq = (!base && wipeish)
+      ? Math.max(0, Math.round(Number(m.wipe) || Math.abs(m.d) || 0)) : 0;
+    let gnx = gn;
+    if (m.kind === "csvback") {
+      wpn = -1;
+      wpq = -Math.max(0, Math.round(Number(m.wipe) || 0));
+      gnx = -1;
+    }
     /* 欠品していた日数（戻ったときに足す）。 */
     let gd = 0;
     if (!base && m.kind === "back" && m.gone_at) {
@@ -7003,20 +7109,21 @@ function mwMvStmts(env, list, hasBase) {
     const bqty = base ? Math.max(0, mwNum(m.cur)) : null;
     out.push(env.DB.prepare(
       `INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,
-         up_qty,gone_n,back_n,back_qty,gone_days${bqCol},created_at)
-       VALUES (?1,?2,?3,?3,?4,?5,?6,?7,?8,?9,?10,?11${bqVal},?3)
+         up_qty,gone_n,back_n,back_qty,gone_days${bqCol}${wpCol},created_at)
+       VALUES (?1,?2,?3,?3,?4,?5,?6,?7,MAX(?8,0),?9,?10,?11${bqVal}${wpVal},?3)
        ON CONFLICT(jan,sha) DO UPDATE SET
          last_at=excluded.last_at,
-         first_at=COALESCE(mw_stat.first_at, excluded.first_at),${bqSet}
+         first_at=COALESCE(mw_stat.first_at, excluded.first_at),${bqSet}${wpSet}
          down_n=mw_stat.down_n+excluded.down_n,
          down_qty=mw_stat.down_qty+excluded.down_qty,
          up_n=mw_stat.up_n+excluded.up_n,
          up_qty=mw_stat.up_qty+excluded.up_qty,
-         gone_n=mw_stat.gone_n+excluded.gone_n,
+         gone_n=MAX(0, mw_stat.gone_n+?8),
          back_n=mw_stat.back_n+excluded.back_n,
          back_qty=mw_stat.back_qty+excluded.back_qty,
          gone_days=mw_stat.gone_days+excluded.gone_days`)
-      .bind(...mvBind(m, dn, upq, gn, bn, bq, gd, bq0 ? bqty : undefined)));
+      .bind(...mvBind(m, dn, upq, gnx, bn, bq, gd, bq0 ? bqty : undefined,
+                      wp0 ? wpn : undefined, wp0 ? wpq : undefined)));
   }
   return out;
 }
@@ -7030,10 +7137,19 @@ async function mwStatSql(env, alias, agg) {
   /* 7.134：base_qty は migrate-0052 で足した列。流す前でも口が落ちないよう、
      列があるときだけ出す。 */
   const hb = await colOk(env, "mw_stat", "base_qty");
+  /* 7.141（【2】）一度に消えた回（migrate-0055）。無い D1 でも落とさない。 */
+  const hw = await colOk(env, "mw_stat", "wipe_n");
   const a = alias || "s";
   /* 7.118：SQL の中に三項演算子（? :）を書かない（番号なしの ? に見える）。 */
   const bCol = hb ? "\n            MAX_BASE AS mv_base," : "";
   const bSum = hb ? ",\n                           SUM(base_qty) AS mv_base" : "";
+  const wCol = hw
+    ? "\n            MAX_WIPEN AS mv_wipe_n,\n            MAX_WIPEQ AS mv_wipe,"
+    : "";
+  const wSum = hw
+    ? ",\n                           SUM(wipe_n) AS mv_wipe_n,"
+      + "\n                           SUM(wipe_qty) AS mv_wipe"
+    : "";
   const since = new Date(Date.now() - MW_MV_DAYS * 86400000)
     .toISOString().replace(/\.\d+Z$/, "Z");
   const f = (x) => agg ? ("MAX(" + x + ")") : x;
@@ -7047,7 +7163,9 @@ async function mwStatSql(env, alias, agg) {
             ${f("COALESCE(v.mv_back_n,0)")} AS mv_back_n,
             ${f("COALESCE(v.mv_back_qty,0)")} AS mv_back_qty,
             ${f("COALESCE(v.mv_gone_days,0)")} AS mv_gone_days,${bCol
-              .replace("MAX_BASE", f("v.mv_base"))}
+              .replace("MAX_BASE", f("v.mv_base"))}${wCol
+              .replace("MAX_WIPEN", f("COALESCE(v.mv_wipe_n,0)"))
+              .replace("MAX_WIPEQ", f("COALESCE(v.mv_wipe,0)"))}
             ${f("COALESCE(w.mv7_down,0)")} AS mv7_down,
             ${f("COALESCE(w.mv7_n,0)")} AS mv7_n`;
   const join = `
@@ -7057,7 +7175,7 @@ async function mwStatSql(env, alias, agg) {
                            SUM(up_qty) AS mv_up, SUM(up_n) AS mv_up_n,
                            SUM(gone_n) AS mv_gone_n, SUM(back_n) AS mv_back_n,
                            SUM(back_qty) AS mv_back_qty,
-                           SUM(gone_days) AS mv_gone_days${bSum}
+                           SUM(gone_days) AS mv_gone_days${bSum}${wSum}
                       FROM mw_stat GROUP BY jan) v ON v.jan = ${a}.jan
          LEFT JOIN (SELECT jan, SUM(-d) AS mv7_down, COUNT(*) AS mv7_n
                       FROM mw_move WHERE d < 0 AND at >= '${since}'
@@ -7141,12 +7259,20 @@ async function mwStockPut(env, body) {
     const moveOk = await mwMoveOk(env);
     /* 7.134：基準の数の列（migrate-0052）。無くても記録は続ける。 */
     const hasBase = moveOk ? await colOk(env, "mw_stat", "base_qty") : false;
+    /* 7.141（【2】）一度に消えた回の列（migrate-0055）と、そのしきい値（⚙）。
+       設定が読めなくても取り込みは止めない（既定で動かす）。 */
+    const hasWipe = moveOk ? await colOk(env, "mw_stat", "wipe_n") : false;
+    let wipeOpt = mwWipeOpt(null);
+    if (moveOk) {
+      try { wipeOpt = mwWipeOpt((await settingsGet(env)).settings || {}); }
+      catch (e) { wipeOpt = mwWipeOpt(null); }
+    }
     const mv = [];
     const stmts = [];
     for (const r of rows) {
       const old = have[r.jan + "|" + r.sha + "|" + r.idx];
       if (moveOk) {
-        const m = mwMvOf(r, old, at);
+        const m = mwMvOf(r, old, at, wipeOpt);
         if (m && mv.length < MOVE_MAX) mv.push(m);
       }
       if (old && old.row_hash === r.row_hash && !old.gone_at) {
@@ -7182,8 +7308,15 @@ async function mwStockPut(env, body) {
     /* 7.126：動きの記録（mw_move＋mw_stat）。落ちても取り込みは止めない。 */
     if (mv.length) {
       try {
-        await runBatch(env, run, mwMvStmts(env, mv, hasBase));
+        await runBatch(env, run, mwMvStmts(env, mv, hasBase, hasWipe));
         res.moved += mv.length;
+        /* 7.141（【2】）一度に消えた行は、取り込みの記録にも残す。 */
+        const wn = mv.filter((m) => m.kind === "wipe").length;
+        const cb = mv.filter((m) => m.kind === "csvback").length;
+        if (wn) run.notes.push("一度に消えた（買い占め・取り下げ・CSV の抜けの"
+          + "どれか）：" + wn + "行（売れた数には数えていません）");
+        if (cb) run.notes.push("CSV の抜けから同じ数で戻った：" + cb
+          + "行（再入荷には数えていません）");
       } catch (e) { run.notes.push("mw-move: " + String((e && e.message) || e)); }
     }
     /* 最後の便。欠品の判定と、JANごとの代表選び。 */
@@ -7224,8 +7357,12 @@ async function mwStockPut(env, body) {
                        d: -prev, kind: "gone" };
             });
             if (mv2.length) {
-              await runBatch(env, run, mwMvStmts(env, mv2, hasBase));
+              await runBatch(env, run, mwMvStmts(env, mv2, hasBase, hasWipe));
               res.moved += mv2.length;
+              /* 7.141（【2】）CSV から行がなくなった回は「売れた」と
+                 数えず、「一度に消えた」として控える。 */
+              run.notes.push("CSV から行がなくなった：" + mv2.length
+                + "行（一度に消えた扱い。売れた数には数えていません）");
             }
           } catch (e) {
             run.notes.push("mw-move(gone): " + String((e && e.message) || e));
@@ -14872,6 +15009,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["wipe_n", "migrate-0055-mw-wipe.sql"],
+  ["wipe_qty", "migrate-0055-mw-wipe.sql"],
   ["px_hand", "migrate-0054-sub-hand.sql"],
   ["sub_post", "migrate-0053-sub-post.sql"],
   ["sub_order", "migrate-0053-sub-post.sql"],
@@ -16087,6 +16226,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   SUB_MAX_QTY, SUB_PRICE_MAX, SUB_GRADES,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,
+  mwWipeOpt, mwWipeHit, MW_WIPE_PCT, MW_WIPE_MIN,
   mwMoveSweep,
   /* 7.134（【T】の直し）基準を控える・入ってしまった誤りを取り除く。 */
   mwBaseFix, mwBaseOnce, MW_BASE_KEY,
