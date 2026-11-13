@@ -279,6 +279,87 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
      '★★重さも区分も分からない行は今までどおり');
 }
 
+console.log('\n=== ③の4 残り数は「上限 − 取り込んだ注文の点数」（8.19・不具合1）===');
+{
+  const env=env0();
+  await setCfg(env,{});
+  await stock(env,JAN); await amz(env,JAN); await sub(env,JAN,{ qty:10 });
+  dc=[];
+  await api(env,'/sub/send',{ approve:true });
+  const f=(x)=>((((dc[0]||{}).body||{}).embeds||[{}])[0].fields||[])
+    .filter((y)=>y.name===x)[0]||{};
+  ok(/残り 10点/.test(String(f('購入できる数').value||'')),'★はじめは残り10点');
+  /* 注文を1点取り込む。 */
+  await env.DB.prepare(
+    `INSERT INTO sub_order (order_no,sku,jan,qty,price,at,created_at)
+     VALUES ('#1001','SUB-'||?1||'-20261113',?1,1,2539,?2,?2)`)
+    .bind(JAN,'2026-11-13T02:00:00Z').run();
+  let r=await api(env,'/sub/plan');
+  const it=((r.plans||[]).filter((p)=>p.key==='monitor')[0]||{}).items||[];
+  console.log('   予定: '+JSON.stringify(it.map((x)=>({ jan:x.jan,
+    left:x.left, same:x.same }))));
+  ok((it[0]||{}).left===9,
+     '★★★配信の予定の残り数も「上限 − 注文の点数」（10 − 1 ＝ 9）');
+  ok((it[0]||{}).same===false,'★★★残りが変わったので「書き換え」になる');
+  /* **チャンネルを入れ替えても**同じ（新しいチャンネルに控えが無くても）。 */
+  const e2=env0();
+  await setCfg(e2,{ subChMonitor:'999888777666555444' });
+  await stock(e2,JAN); await amz(e2,JAN); await sub(e2,JAN,{ qty:10 });
+  await e2.DB.prepare(
+    `INSERT INTO sub_order (order_no,sku,jan,qty,price,at,created_at)
+     VALUES ('#1001','SUB-'||?1||'-20261113',?1,1,2539,?2,?2)`)
+    .bind(JAN,'2026-11-13T02:00:00Z').run();
+  dc=[];
+  await api(e2,'/sub/send',{ approve:true });
+  const f2=((((dc[0]||{}).body||{}).embeds||[{}])[0].fields||[])
+    .filter((y)=>y.name==='購入できる数')[0]||{};
+  console.log('   新しいチャンネル: '+JSON.stringify(f2.value));
+  ok(/残り 9点/.test(String(f2.value||'')),
+     '★★★チャンネルを入れ替えたあとのカードも残り 9点');
+}
+
+console.log('\n=== ③の5 カードの中身が変われば書き換える（8.19・不具合2）===');
+{
+  const env=env0();
+  await setCfg(env,{});
+  await stock(env,JAN); await amz(env,JAN); await sub(env,JAN);
+  dc=[];
+  let r=await api(env,'/sub/send',{ approve:true });
+  ok(r.sent===1,'★1件送る');
+  const h0=await env.DB.prepare(
+    `SELECT card_h FROM sub_post WHERE jan=?1`).bind(JAN).first();
+  ok(!!(h0||{}).card_h,'★★★カードの指紋を控える');
+  r=await api(env,'/sub/send',{ approve:true });
+  ok(r.skipped===1,'★★中身が同じならそのまま');
+  /* ⚙の送料の文だけを変える（値段も数も変わらない）。 */
+  await setCfg(env,{ subShipMonitor:'クリックポスト（1〜2本 ¥200／'
+    +'3本 ¥300／4本以上 送料無料）' });
+  r=await api(env,'/sub/plan');
+  const it=((r.plans||[]).filter((p)=>p.key==='monitor')[0]||{}).items||[];
+  ok((it[0]||{}).same===false,
+     '★★★送料の文を変えただけでも「書き換え」と分かる（予定）');
+  dc=[];
+  r=await api(env,'/sub/send',{ approve:true });
+  console.log('   '+JSON.stringify({ edited:r.edited, m:dc.map((x)=>x.method) }));
+  ok(r.edited===1&&dc.length===1&&dc[0].method==='PATCH',
+     '★★★値段も数も同じでも、中身が変われば書き換える');
+  ok(/4本以上 送料無料/.test(JSON.stringify(dc[0].body)),
+     '★★★新しい送料の文になる');
+  const h1=await env.DB.prepare(
+    `SELECT card_h FROM sub_post WHERE jan=?1`).bind(JAN).first();
+  ok((h1||{}).card_h!==(h0||{}).card_h,'★★指紋も新しくなる');
+  r=await api(env,'/sub/send',{ approve:true });
+  ok(r.skipped===1,'★★★書き換えたあとはまた「そのまま」');
+  /* 「送ったカードをすべて今の形で書き直す」（redo）。 */
+  dc=[];
+  r=await api(env,'/sub/send',{ approve:true, redo:true });
+  console.log('   redo: '+JSON.stringify({ edited:r.edited, redo:r.redo,
+    why:r.why_reform, m:dc.map((x)=>x.method) }));
+  ok(r.redo===true&&r.edited===1&&dc[0].method==='PATCH',
+     '★★★「書き直す」は中身が同じでも書き換える（送り直さない）');
+  ok(/書き直します/.test(String(r.why_reform||'')),'★★理由も返す');
+}
+
 console.log('\n=== ④ 会員用のカードに出さないもの ===');
 {
   const env=env0();

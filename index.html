@@ -1142,6 +1142,11 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
         <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
       </div>
+      <!-- 8.19（不具合2）送ったカードを今の形に書き直す（送り直しではない） -->
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="subRedoBtn" style="flex:1" onclick="subRedoGo();return false">送ったカードをすべて今の形で書き直す</button>
+      </div>
+      <div class="note2" style="margin:2px 0 0">⚙（送料の文など）を変えたときに押してください。<b>新しく送り直すのではなく、前のカードを書き換えます</b>。</div>
       <div class="note2" id="subNote" style="margin-top:2px"></div>
       <div id="subPlanList" style="margin-top:4px"></div>
       <!-- 注文CSV の取り込み（8.13） -->
@@ -16010,6 +16015,27 @@ function subSendGo(){
     return subPlanGo(true);
   })['catch'](function(e){ subNote('⚠ 送れませんでした：'+e.message,1); });
 }
+/* 8.19（不具合2）送ったカードをすべて今の形で書き直す。
+   送り直しではなく**書き換え**（PATCH）。⚙を変えたときに押す。 */
+function subRedoGo(){
+  if(roleDenyPrice('subNote'))return;
+  if(!subReady())return;
+  if(!confirm('送ったカードを、すべて今の形に書き直します。\n\n'
+    +'※ 新しく送り直すのではなく、前のカードを書き換えます。\n'
+    +'※ 中身が同じカードも書き直します。\n\nよろしいですか？'))return;
+  subNote('書き直しています…');
+  return mwPost('/sub/send',{ approve:true, redo:true }).then(function(r){
+    if(r&&r.error){
+      subNote('⚠ 書き直せませんでした：'+esc(String(r.detail||r.error)),1);
+      return;
+    }
+    subNote('✓ '+mwN(+r.edited||0)+'件を今の形に書き直しました'
+      +((+r.sent)?('・新しく '+mwN(+r.sent)+'件'):'')+'。');
+    return subPlanGo(true);
+  })['catch'](function(e){
+    subNote('⚠ 書き直せませんでした：'+e.message,1);
+  });
+}
 /* 今日は送らない（印の付け外し）。 */
 function subSkipGo(){
   if(roleDenyPrice('subNote'))return;
@@ -24351,7 +24377,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v275';   // sw.js の const V と必ず同じ値にする
+var APP_V='v276';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

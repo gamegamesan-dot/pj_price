@@ -853,6 +853,7 @@ CREATE TABLE IF NOT EXISTS sub_post (
   sold_out   INTEGER NOT NULL DEFAULT 0,
   at         TEXT NOT NULL,
   edited_at  TEXT,
+  card_h     TEXT,                           -- カードの中身の指紋（8.19）
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_post_one ON sub_post(jan, ch);

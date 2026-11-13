@@ -151,6 +151,40 @@ console.log('\n=== ③ 今すぐ送る（確認してから）===');
   ok(d2===0,'★★★「いいえ」では送らない');
 }
 
+console.log('\n=== ③の2 送ったカードをすべて今の形で書き直す（8.19）===');
+{
+  await setup({ plan:PLAN, yes:true,
+    send:{ ok:true, sent:0, edited:2, skipped:0, redo:true, plans:[] } });
+  await p.evaluate(async()=>{ await subPlanGo(); });
+  await p.waitForTimeout(200);
+  const d=await p.evaluate(async()=>{
+    window.__q=[]; window.__ask=0;
+    await subRedoGo();
+    await new Promise((x)=>setTimeout(x,250));
+    return { q:window.__q, ask:window.__ask,
+             note:($('subNote').textContent||''),
+             btn:!!document.getElementById('subRedoBtn') };
+  });
+  console.log('   '+JSON.stringify(d.q.map((x)=>x.u))+' / '+d.note);
+  ok(d.btn,'★★★「送ったカードをすべて今の形で書き直す」ボタンがある');
+  ok(d.ask===1,'★★確認を出してから書き直す');
+  const send=d.q.filter((x)=>x.u==='send')[0];
+  ok(!!send&&send.b.redo===true&&send.b.approve===true,
+     '★★★redo を付けて送る（送り直しではなく書き換え）');
+  ok(/2件を今の形に書き直しました/.test(d.note),'★★★結果を出す');
+  /* 「いいえ」では書き直さない。 */
+  await setup({ plan:PLAN, yes:false });
+  await p.evaluate(async()=>{ await subPlanGo(); });
+  await p.waitForTimeout(200);
+  const n=await p.evaluate(async()=>{
+    window.__q=[];
+    await subRedoGo();
+    await new Promise((x)=>setTimeout(x,200));
+    return window.__q.filter((x)=>x.u==='send').length;
+  });
+  ok(n===0,'★★「いいえ」では書き直さない');
+}
+
 console.log('\n=== ④ 今日は送らない ===');
 {
   await setup({ plan:PLAN });

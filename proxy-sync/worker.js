@@ -10806,7 +10806,13 @@ async function subRows(env) {
             a.size_g AS size_g,
             /* 8.17（会員の目線）カードに「Amazon の販売価格（カート／最安・
                ◯月◯日 ◯時 時点）」を出すので、基準と取った日時も引く。 */
-            a.basis AS basis, a.price_at AS price_at, a.low AS amz_low
+            a.basis AS basis, a.price_at AS price_at, a.low AS amz_low,
+            /* 8.19（不具合1）**取り込んだ注文の点数**（カジの言葉どおり
+               「上限 − 取り込んだ注文の点数」で残り数を出す）。
+               sub_order に入るのは会員用の SKU（SUB-…）の行だけなので、
+               その JAN の注文をぜんぶ数える。 */
+            (SELECT COALESCE(SUM(o.qty),0) FROM sub_order o
+              WHERE o.jan = b.jan) AS sold
        FROM mw_sub b
             LEFT JOIN mw_stock s ON s.jan = b.jan
             LEFT JOIN mw_amz a ON a.jan = b.jan
@@ -10834,36 +10840,84 @@ async function subRows(env) {
     amz_price: Number(r.amz_price) || Number(r.amz_low) || 0,
     amz_basis: String(r.basis || ""),
     amz_at: String(r.price_at || ""),
+    /* 8.19（不具合1）**取り込んだ注文の点数**。残り数はここから出す
+       （送ったカードの控え sub_post.sold は、チャンネルを入れ替えると
+       新しいチャンネルに控えが無く 0 のままだった）。 */
+    sold: Number(r.sold) || 0,
   }));
 }
 /* 送ったカードの控え（JAN → 行）。 */
 async function subPosts(env, ch) {
   if (!(await subPostOk(env))) return {};
+  /* 8.19 カードの指紋（migrate-0057）。無い D1 でも落とさない。 */
+  const hCol = (await colOk(env, "sub_post", "card_h")) ? ", card_h" : "";
   const q = await env.DB.prepare(
-    `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at, edited_at
+    `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at, edited_at${hCol}
        FROM sub_post WHERE ch = ?1`).bind(String(ch || "")).all();
   const m = {};
   for (const r of ((q && q.results) || [])) m[String(r.jan)] = r;
   return m;
 }
 /* そのプランに出す行を選ぶ（件数の上限まで）。 */
-function subPick(rows, plan, sent, reform) {
+/* 8.19 カードの中身の指紋（FNV-1a）。**カードぜんぶ**から作るので、
+   送料の文・Amazon の販売価格・粗利・利益率・機種・購入リンクなど、
+   どれが変わっても違う値になる（＝書き換える）。 */
+function subCardHash(card) {
+  const t = JSON.stringify(card || {});
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return ("0000000" + h.toString(16)).slice(-8);
+}
+/* 8.19 sub_post に書くときの欠片と bind（指紋の列が無い D1 でも動く）。
+   §7.118：?N は 1 から詰める。列を出すかどうかで番号が変わるので、
+   ここで作ってから渡す。 */
+function subPostBind(x, p, at, hasH) {
+  /* UPDATE … jan=?1, ch=?2, price=?3, qty=?4, sold=?5, sold_out=?6,
+     edited_at=?7（＋ card_h=?8） */
+  const a = [x.jan, p.ch, x.price, x.qty, Number(x.sold) || 0,
+             x.left ? 0 : 1, at];
+  if (hasH) a.push(String(x.card_h || ""));
+  return a;
+}
+function subPostIns(x, p, id, at, hasH) {
+  /* INSERT … ?1 jan ?2 ch ?3 plan ?4 msg_id ?5 price ?6 qty ?7 sold
+     ?8 sold_out ?9 at（＋ ?10 card_h） */
+  const a = [x.jan, p.ch, p.key, id, x.price, x.qty, Number(x.sold) || 0,
+             x.left ? 0 : 1, at];
+  if (hasH) a.push(String(x.card_h || ""));
+  return a;
+}
+function subPick(rows, plan, sent, reform, cfg) {
   const out = [];
   for (const r of (rows || [])) {
     if (out.length >= plan.n) break;
     if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
     const old = (sent || {})[r.jan];
-    /* 二重に送らない。すでに送っていて、値段も数も変わっていなければ飛ばす。
-       8.17：**カードの形が変わった回だけ**は、値段が同じでも書き換える
-       （すでに送ったカードも新しい形にそろえるため）。 */
-    const same = !reform && old && Number(old.price) === r.price
-      && Number(old.qty) === r.qty;
-    out.push(Object.assign({}, r, {
+    /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
+       送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
+       新しいチャンネルに控えが無く 0 のままだった。 */
+    const sold = Math.max(0, Number(r.sold) || 0);
+    const left = Math.max(0, (Number(r.qty) || 0) - sold);
+    const x = Object.assign({}, r, {
       sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
-      sold: old ? Number(old.sold) || 0 : 0,
-      same: !!same,
-      left: Math.max(0, r.qty - (old ? Number(old.sold) || 0 : 0)),
-    }));
+      sold: sold, left: left,
+    });
+    /* カードを先に作って指紋を取る（送るときもこれをそのまま使う）。 */
+    x.card = subCardOf(x, plan, cfg || {});
+    x.card_h = subCardHash(x.card);
+    /* 二重に送らない。すでに送っていて、**カードの中身が同じ**なら飛ばす。
+       8.19（不具合2）値段と数だけでなく、出す中身ぜんぶで見る。
+       指紋の控えが無い（migrate-0057 の前に送ったぶん）ときは、
+       今までどおり値段と数で見る。 */
+    const h = old ? String(old.card_h || "") : "";
+    const same = !reform && old
+      && (h ? (h === x.card_h)
+            : (Number(old.price) === r.price && Number(old.qty) === r.qty));
+    x.same = !!same;
+    out.push(x);
   }
   return out;
 }
@@ -10878,9 +10932,11 @@ async function subPlanBuild(env) {
                 hour: cfg.hour, pre: cfg.pre, domain: cfg.domain,
                 rows: rows.length, token: !!env.DISCORD_BOT_TOKEN,
                 table_ok: await subPostOk(env), plans: [] };
+  /* 8.19 予定でも**カードの中身で**「そのまま」かどうかを見るので、
+     ⚙（送料の文・ドメイン・ゲームソフトの重さ）を渡す。 */
   for (const p of cfg.plans) {
     const sent = p.ch ? await subPosts(env, p.ch) : {};
-    const pick = p.ch ? subPick(rows, p, sent) : [];
+    const pick = p.ch ? subPick(rows, p, sent, false, cfg) : [];
     out.plans.push({
       key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
       n: p.n, q: p.q, kinds: p.kinds,
@@ -10941,20 +10997,32 @@ async function jobSubSend(env, opt) {
     let cardV = "";
     try { cardV = String(await stateGet(env, SUB_CARDV_KEY) || ""); }
     catch (e) { cardV = ""; }
-    const reform = (cardV !== SUBCARD.CARD_V);
+    /* 8.19（不具合2）カジが「送ったカードを今の形で書き直す」を押した回は、
+       中身が同じでも**ぜんぶ書き換える**（redo）。 */
+    const redo = (o.redo === true || o.redo === 1 || o.redo === "1");
+    const reform = redo || (cardV !== SUBCARD.CARD_V);
     res.reform = reform;
+    res.redo = redo;
     res.card_v = SUBCARD.CARD_V;
-    if (reform) res.why_reform = "カードの形が変わったので、送ったぶんも"
+    if (redo) res.why_reform = "送ったカードをぜんぶ今の形に書き直します";
+    else if (reform) res.why_reform = "カードの形が変わったので、送ったぶんも"
       + "書き換えます（" + (cardV || "はじめて") + " → " + SUBCARD.CARD_V + "）";
+    /* 8.19 指紋の列（migrate-0057）。無い D1 でも落とさない。 */
+    const hasH = await colOk(env, "sub_post", "card_h");
+    const hCol = hasH ? ",card_h" : "";
+    const hVal = hasH ? ",?10" : "";
+    const hSet = hasH ? ", card_h=?8" : "";
+    const hSet2 = hasH ? ", card_h=excluded.card_h" : "";
     const only = String(o.plan || "").trim();
     for (const p of cfg.active) {
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent, reform);
+      const pick = subPick(rows, p, sent, reform, cfg);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0 };
       for (const x of pick) {
         if (x.same) { r.keep++; res.skipped++; continue; }
-        const card = subCardOf(x, p, cfg);
+        /* 8.19 指紋を取ったときのカードをそのまま送る（作り直さない）。 */
+        const card = x.card || subCardOf(x, p, cfg);
         if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
         const at = nowIso();
         if (x.sent && x.msg_id) {
@@ -10962,9 +11030,9 @@ async function jobSubSend(env, opt) {
             "/channels/" + p.ch + "/messages/" + x.msg_id, { embeds: [card] });
           if (!e.ok) { r.fail++; continue; }
           await env.DB.prepare(
-            `UPDATE sub_post SET price=?3, qty=?4, sold_out=?5, edited_at=?6
-              WHERE jan=?1 AND ch=?2`)
-            .bind(x.jan, p.ch, x.price, x.qty, x.left ? 0 : 1, at).run();
+            `UPDATE sub_post SET price=?3, qty=?4, sold=?5, sold_out=?6,
+               edited_at=?7${hSet} WHERE jan=?1 AND ch=?2`)
+            .bind(...subPostBind(x, p, at, hasH)).run();
           r.edit++; res.edited++;
         } else {
           const m = await dcApi(env, run, "POST",
@@ -10973,12 +11041,13 @@ async function jobSubSend(env, opt) {
           if (!m.ok || !id) { r.fail++; continue; }
           await env.DB.prepare(
             `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,
-               at,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,0,0,?7,?7)
+               at,created_at${hCol})
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9${hVal})
              ON CONFLICT(jan,ch) DO UPDATE SET
                msg_id=excluded.msg_id, price=excluded.price,
-               qty=excluded.qty, sold_out=0, edited_at=excluded.at`)
-            .bind(x.jan, p.ch, p.key, id, x.price, x.qty, at).run();
+               qty=excluded.qty, sold=excluded.sold, sold_out=excluded.sold_out,
+               edited_at=excluded.at${hSet2}`)
+            .bind(...subPostIns(x, p, id, at, hasH)).run();
           r.add++; res.sent++;
         }
       }
@@ -11307,25 +11376,37 @@ async function subEditLeft(env, run, jans) {
         WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
     for (const y of ((q && q.results) || [])) posts.push(y);
   }
+  /* 8.19 指紋の列（migrate-0057）。無い D1 でも落とさない。 */
+  const hasH = await colOk(env, "sub_post", "card_h");
+  const hSet = hasH ? ", card_h=?6" : "";
   for (const y of posts) {
     const r = byJan[String(y.jan)];
     /* 「会員に出す」や「Shopify に読み込みました」の印を外した商品は、
        中身が引けないので**書き換えない**（商品名の無いカードにしない）。 */
     if (!r) continue;
-    const left = Math.max(0, (Number(y.qty) || 0) - (Number(y.sold) || 0));
+    /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
+       送ったカードの控え（sub_post.sold）はチャンネルを入れ替えると
+       新しいチャンネルに無いので、注文のほうから出す。 */
+    const qty = Number(r.qty) || Number(y.qty) || 0;
+    const sold = Math.max(0, Number(r.sold) || 0);
+    const left = Math.max(0, qty - sold);
     const p = cfg.plans.filter((z) => z.key === String(y.plan))[0]
       || { q: 0, key: String(y.plan) };
-    const card = SUBCARD.card(Object.assign({}, r, {
-      price: Number(y.price) || r.price, qty: Number(y.qty) || 0,
-      left: left }), { domain: cfg.domain, maxQty: p.q });
+    /* 8.19（不具合2）カードは**配信と同じ作り方**で作る（subCardOf）。
+       ここだけ素の SUBCARD.card を呼んでいたので、注文を取り込むたびに
+       送料の文（⚙）やゲームソフトの重さが抜けたカードに戻っていた。 */
+    const x = Object.assign({}, r, { qty: qty, sold: sold, left: left });
+    const card = subCardOf(x, p, cfg);
     const e = await dcApi(env, run, "PATCH",
       "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
     if (!e.ok) continue;
     out.edited++;
     if (!left) out.sold_out++;
+    const bind = [String(y.jan), String(y.ch), sold, left ? 0 : 1, nowIso()];
+    if (hasH) bind.push(subCardHash(card));
     await env.DB.prepare(
-      `UPDATE sub_post SET sold_out=?3, edited_at=?4 WHERE jan=?1 AND ch=?2`)
-      .bind(String(y.jan), String(y.ch), left ? 0 : 1, nowIso()).run();
+      `UPDATE sub_post SET sold=?3, sold_out=?4, edited_at=?5${hSet}
+        WHERE jan=?1 AND ch=?2`).bind(...bind).run();
   }
   return out;
 }
@@ -15340,6 +15421,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["card_h", "migrate-0057-sub-card.sql"],
   ["sub_draft", "migrate-0056-sub-draft.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
   ["wipe_qty", "migrate-0055-mw-wipe.sql"],
@@ -16086,7 +16168,8 @@ export default {
       if (request.method === "POST" && url.pathname === "/sub/send") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubSend(env, { approve: b && b.approve === true,
-          plan: b && b.plan }), 200, origin);
+          /* 8.19 送ったカードをすべて今の形で書き直す。 */
+          redo: !!(b && b.redo), plan: b && b.plan }), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/sub/pre") {
         const b = await request.json().catch(() => ({}));
@@ -16600,6 +16683,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
+  subCardHash, subPostBind, subPostIns,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,
