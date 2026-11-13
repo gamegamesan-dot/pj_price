@@ -149,6 +149,13 @@
     if (!d || j.length < 8) return "";
     return "https://" + d + "/products/sub-" + j;
   }
+  /* 8.22（【2】）1点ものの購入リンク（Handle は one-<連番>）。 */
+  function oneUrl(domain, id) {
+    var d = domainOf(domain);
+    var i = s(id).replace(/\D/g, "");
+    if (!d || !i) return "";
+    return "https://" + d + "/products/one-" + i;
+  }
   /* 残りの文。0 なら「完売」。 */
   function leftText(left, qty, maxQty) {
     var n = Math.max(0, Math.round(num(left)));
@@ -166,8 +173,17 @@
     var left = Math.max(0, Math.round(
       (x.left === undefined || x.left === null) ? num(x.qty) : num(x.left)));
     var f = [];
-    /* JAN は**コードの書式で1行に単独**（長押しでコピーできる形・§8.2）。 */
-    f.push({ name: "JAN", value: "```\n" + jan + "\n```", inline: false });
+    /* JAN は**コードの書式で1行に単独**（長押しでコピーできる形・§8.2）。
+       8.22（【2】）1点ものは JAN が無いことがあるので、そのときは出さない。 */
+    if (jan) f.push({ name: "JAN", value: "```\n" + jan + "\n```",
+                      inline: false });
+    /* 8.22（【2】）1点ものは**状態**を先に出す（中古が混ざるため）。 */
+    if (s(x.cond).trim())
+      f.push({ name: "状態",
+               value: (s(x.cond).trim()
+                 + (s(x.cond_note).trim()
+                     ? ("（" + s(x.cond_note).trim() + "）") : "")).slice(0, 200),
+               inline: true });
     /* 8.15（【返事】）記号ではなく正式な呼び名で出す（会員が読むので）。 */
     var kishu = kishuJa(x.kishu);
     if (kishu) f.push({ name: "機種", value: kishu.slice(0, 60),
@@ -195,7 +211,11 @@
     f.push({ name: "購入できる数",
              value: leftText(left, x.qty, opt.maxQty), inline: true });
     f.push({ name: "送料", value: shipText(x, opt), inline: true });
-    var u = buyUrl(opt.domain, jan);
+    /* 8.22（【2】）メモ（カジが書いた一言）。 */
+    if (s(x.note).trim())
+      f.push({ name: "メモ", value: s(x.note).trim().slice(0, 300),
+               inline: false });
+    var u = x.one_id ? oneUrl(opt.domain, x.one_id) : buyUrl(opt.domain, jan);
     f.push({ name: "購入リンク",
              value: left
                ? (u ? ("[購入する](" + u + ")")
@@ -203,13 +223,18 @@
                : "**完売しました**（次の配信をお待ちください）",
              inline: false });
     var mark = s(opt.mark);
-    return {
+    var e = {
       title: ((mark ? (mark + "｜") : "") + nameJa(x.name) || jan).slice(0, 200),
-      url: amzUrl(jan, x.asin),
+      url: (jan || x.asin) ? amzUrl(jan, x.asin) : undefined,
       color: left ? (num(opt.color) || COLOR) : SOLD_COLOR,
       fields: f.slice(0, 25),
       footer: opt.note ? { text: s(opt.note).slice(0, 2048) } : undefined
     };
+    /* 8.22（【2】）写真（カジが撮った写真）。Discord に一緒に送った
+       添付を指す（attachment://…）か、そのままの URL。
+       **Amazon・MW の画像は使わない**（この欄に入れない）。 */
+    if (s(opt.picUrl).trim()) e.image = { url: s(opt.picUrl).trim() };
+    return e;
   }
   function cardLen(e) {
     var o = e || {}, n = s(o.title).length + s(o.description).length
@@ -234,7 +259,7 @@
     });
   }
   var API = {
-    nameJa: nameJa, card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
+    nameJa: nameJa, oneUrl: oneUrl, card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
               buyUrl: buyUrl, domainOf: domainOf, shipText: shipText,
               amzWhen: amzWhen, jstShort: jstShort, CARD_V: CARD_V, amzUrl: amzUrl, shipTier: shipTier,
               shipJa: shipJa, leftText: leftText, yen: yen,

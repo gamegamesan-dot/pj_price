@@ -1029,3 +1029,44 @@ CREATE TABLE IF NOT EXISTS os_item (
 );
 CREATE INDEX IF NOT EXISTS idx_os_item_fix ON os_item(fix_at);
 CREATE INDEX IF NOT EXISTS idx_os_item_at ON os_item(at);
+
+/* ===== 8.22 1点もの（秋葉原などで仕入れた商品）=====
+   MW の無在庫（mw_sub）とは別の表。Shopify の Handle は one-<id>、
+   SKU は ONE-<id>-<日付>。送ったカードの控えは sub_post を使い、
+   jan の欄に 'one-<id>' を入れる。
+   写真は**カジが撮った写真だけ**（Amazon・MW の画像は使わない）。
+   写真そのものは KV（SYNC_CACHE）に置き、ここには置き場のキーだけ持つ。 */
+CREATE TABLE IF NOT EXISTS one_item (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- 連番（Handle に使う）
+  handle     TEXT NOT NULL,                      -- one-<id>
+  name       TEXT NOT NULL,
+  jan        TEXT,                               -- どちらも無くてよい
+  asin       TEXT,
+  cond       TEXT,                               -- 新品／中古
+  cond_note  TEXT,                               -- 状態のメモ
+  cost       INTEGER,                            -- 仕入原価（会員に出さない）
+  price      INTEGER,                            -- 販売価格（税込）
+  qty        INTEGER NOT NULL DEFAULT 1,
+  sold       INTEGER NOT NULL DEFAULT 0,         -- 取り込んだ注文の点数
+  ship_kind  TEXT,                               -- 送料の区分（カードの文）
+  note       TEXT,                               -- メモ（カードに出す）
+  pic_key    TEXT,                               -- 写真の置き場（KV）
+  pic_name   TEXT,
+  pic_type   TEXT,
+  amz_price  INTEGER,                            -- Amazon の販売価格
+  amz_fee    INTEGER,                            -- 手数料
+  amz_basis  TEXT,                               -- カート／最安
+  amz_at     TEXT,
+  gross      INTEGER,                            -- 見込みの粗利
+  pre_at     TEXT,                               -- 先行に出した時刻
+  open_at    TEXT,                               -- みんなに出した時刻
+  loaded_at  TEXT,                               -- Shopify に読み込んだ印
+  put_at     TEXT,                               -- CSV に出した印
+  off        INTEGER NOT NULL DEFAULT 0,         -- 取り下げ
+  at         TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_one_item_at ON one_item(at DESC);
+CREATE INDEX IF NOT EXISTS idx_one_item_live ON one_item(off, loaded_at);
+CREATE INDEX IF NOT EXISTS idx_one_item_jan ON one_item(jan);

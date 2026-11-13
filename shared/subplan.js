@@ -25,6 +25,8 @@
   "use strict";
   var PLANS = [
     { key: "monitor",  name: "モニター",     kinds: "game", n: 10, q: 1,
+      /* 8.21（【1】）normal … **通常版だけ**のプラン（限定版・特装版などを外す）。 */
+      normal: true,
       on: true,  note: "ゲームソフト通常版のみ・1回10件まで・1商品1点まで" },
     { key: "light",    name: "ライト",       kinds: "game", n: 20, q: 2,
       on: false, note: "ゲームソフト全件（いまは止めています）" },
@@ -33,11 +35,72 @@
     { key: "premium",  name: "プレミアム",   kinds: "one",  n: 100, q: 5,
       on: false, note: "全部＋1点もの（先行）（いまは止めています）" }
   ];
+  /* ===== 8.21（【1】）通常版かどうか =====
+     モニターは「ゲームソフト通常版のみ」なのに、限定版・初回生産の商品が
+     案に入っていた（2026-11-14・カジの報告）。
+     **言葉の表はここ1か所だけ**。⚙「通常版でない言葉」（subNormalNg）で
+     足せる（読点・カンマ・改行・空白で区切る）。
+
+     見分け方
+       ① 下の言葉が商品名にあれば「通常版ではない」
+       ② 無くて「通常版」と書いてあれば通常版
+       ③ 無くて「版」が入っているだけなら **通常版か要確認**（印を出す）
+          … 「薔薇と椿 〜お豪華絢爛版〜」のように作品名に「版」が入るものは
+            通常版なので、外さずに印だけ出す
+     見るのは**掃除したあとの名前**（6.194 の titleOf）。
+     【特典】…の中の「限定版特典」「同梱」で外さないため。 */
+  var NORMAL_NG = [
+    "限定版", "特装版", "初回限定", "初回生産", "完全生産限定", "数量限定",
+    "豪華版", "コレクターズ", "コレクター", "同梱", "セット", "BOX",
+    "ＢＯＸ", "ボックス", "DXパック", "DX パック", "デラックスエディション",
+    "プレミアムエディション", "アニバーサリーエディション", "特別版",
+    "ツインパック", "ダブルパック", "トリプルパック"
+  ];
   var N_MAX = 200;                 // 1回に送れる件数の上限の上限
   var Q_MAX = 99;                  // 1商品あたりの数の上限
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function s(v) { return (v === null || v === undefined) ? "" : String(v); }
   function keyUp(k) { return s(k).charAt(0).toUpperCase() + s(k).slice(1); }
+  /* 商品名の掃除（6.194）は shared/shopcsv.js の1か所だけ。
+     読めないときは元の名前で見る（判定が消えないように）。 */
+  function shopMod() {
+    var g = (typeof globalThis !== "undefined") ? globalThis : root;
+    if (g && g.PJ_SHOPCSV) return g.PJ_SHOPCSV;
+    if (typeof require === "function") {
+      try { return require("./shopcsv.js"); } catch (e) { return null; }
+    }
+    return null;
+  }
+  function cleanName(v) {
+    var S = shopMod();
+    var t = (S && typeof S.titleOf === "function") ? S.titleOf(v, 200) : s(v);
+    return t || s(v);
+  }
+  /* ⚙ で足した言葉を入れた表。 */
+  function ngWords(cfg) {
+    var add = s((cfg || {}).subNormalNg).split(/[,、\s\n]+/)
+      .map(function (x) { return x.trim(); }).filter(Boolean);
+    var out = NORMAL_NG.slice();
+    for (var i = 0; i < add.length; i++)
+      if (out.indexOf(add[i]) < 0) out.push(add[i]);
+    return out;
+  }
+  /* 通常版か。{ ok, hit, maybe } を返す。
+     ok=false … 通常版ではない（hit がその言葉）
+     maybe=true … 通常版か要確認（名前に「版」が入っているだけ） */
+  function normalOf(name, words) {
+    var t = cleanName(name);
+    var up = t.toUpperCase();
+    var list = (words && words.length) ? words : NORMAL_NG;
+    for (var i = 0; i < list.length; i++) {
+      var w = s(list[i]).trim();
+      if (!w) continue;
+      if (up.indexOf(w.toUpperCase()) >= 0)
+        return { ok: false, hit: w, maybe: false };
+    }
+    if (t.indexOf("通常版") >= 0) return { ok: true, hit: "", maybe: false };
+    return { ok: true, hit: "", maybe: t.indexOf("版") >= 0 };
+  }
   function plan(key) {
     for (var i = 0; i < PLANS.length; i++)
       if (PLANS[i].key === s(key)) return PLANS[i];
@@ -58,6 +121,8 @@
                q: (q > 0) ? Math.min(Q_MAX, Math.round(q)) : p.q,
                /* 8.17 カードの「送料」の文（プランごと・空なら既定）。 */
                ship: s(o["subShip" + U]).trim().slice(0, 300),
+               /* 8.21（【1】）通常版だけのプランと、⚙で足した言葉。 */
+               normal: !!p.normal, ng: ngWords(o),
                ch: s(o["subCh" + U]).replace(/\D/g, "") };
     });
   }
@@ -85,6 +150,11 @@
       return "1点ものはこのプランに出しません";
     if (p.kinds === "game" && !isGame)
       return "ゲームソフトだけのプランです";
+    /* 8.21（【1】）通常版だけのプラン（モニター）。 */
+    if (p.normal) {
+      var nm = normalOf(r.name, p.ng);
+      if (!nm.ok) return "通常版ではありません（" + nm.hit + "）";
+    }
     return "";
   }
   /* そのプランが0件になる理由（まとめて1行にする）。
@@ -110,6 +180,82 @@
     return keys.map(function (k) { return k + " " + tally[k] + "件"; })
       .join("／");
   }
+  /* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
+     MW の無在庫とは別に、カジが手で登録した1点ものを配信する。
+     ・#目玉商品-先行（プレミアム）に**先に**出す
+     ・⚙の時間（既定 24時間）のあと #目玉商品（スタンダード以上）に出す
+     チャンネルID は ⚙（subChPre／subChHot）。表はここ1か所だけ。 */
+  var ONE_PLANS = [
+    { key: "one_pre", name: "目玉商品-先行（プレミアム）",
+      cfgCh: "subChPre", grade: "premium", pre: true,
+      note: "プレミアムだけに先に出す" },
+    { key: "one_open", name: "目玉商品（スタンダード以上）",
+      cfgCh: "subChHot", grade: "standard", pre: false,
+      note: "先行から⚙の時間がたった商品を出す" }
+  ];
+  var ONE_PRE_HOURS = 24;          // ⚙ subPreHours … 先行だけに出す時間
+  var ONE_OPEN_GRADES = "standard,premium";   // ⚙ subOneOpenGrades
+  function oneHours(cfg) {
+    var v = num((cfg || {}).subPreHours);
+    return (v > 0 && v <= 24 * 30) ? v : ONE_PRE_HOURS;
+  }
+  /* Shopify のタグに入れるグレード。
+     先行のあいだは premium だけ、あいたら ⚙ の分（既定 standard・premium）。 */
+  function oneGrades(cfg, open) {
+    if (!open) return "premium";
+    var v = s((cfg || {}).subOneOpenGrades).trim();
+    return v || ONE_OPEN_GRADES;
+  }
+  function oneList(cfg) {
+    var o = cfg || {};
+    return ONE_PLANS.map(function (p) {
+      var ch = s(o[p.cfgCh]).replace(/\D/g, "");
+      return { key: p.key, name: p.name, note: p.note, grade: p.grade,
+               pre: p.pre, ch: ch, on: !!ch, hours: oneHours(o),
+               one: true };
+    });
+  }
+  /* その1点ものをこのプランに出すか。'' なら出す。
+     row … { off, loaded_at, qty, sold, pre_at }
+     now … いまの時刻（ISO。テストで固定できるように渡す） */
+  function oneWhy(plan, row, now) {
+    var p = plan || {}, r = row || {};
+    if (num(r.off)) return "取り下げています";
+    if (!s(r.loaded_at).trim())
+      return "Shopify に読み込みました の印がありません";
+    if (p.pre) return "";
+    /* #目玉商品（スタンダード以上）は、先行から⚙の時間がたってから。 */
+    if (!s(r.pre_at).trim()) return "まだ先行に出していません";
+    var t0 = Date.parse(s(r.pre_at)), t1 = Date.parse(s(now) || "");
+    if (!isFinite(t0)) return "先行に出した時刻が読めません";
+    if (!isFinite(t1)) t1 = Date.now();
+    var h = (t1 - t0) / 3600000;
+    if (h < num(p.hours))
+      return "先行のあと " + Math.ceil(num(p.hours) - h) + "時間待ちです";
+    return "";
+  }
+  function oneFits(plan, row, now) { return !oneWhy(plan, row, now); }
+  /* そのプランが0件になる理由（8.20 と同じ出し方）。 */
+  function oneWhyNone(plan, rows, now) {
+    var p = plan || {};
+    if (!p.ch) return "⚙にチャンネルID が入っていません";
+    var list = rows || [];
+    if (!list.length)
+      return "1点ものがありません（仕入れタブの「1点ものを登録する」で"
+        + "登録し、Shopify 用 CSV を読み込んでから「読み込みました」を"
+        + "押してください）";
+    var tally = {}, keys = [];
+    for (var i = 0; i < list.length; i++) {
+      var w = oneWhy(p, list[i], now);
+      if (!w) continue;
+      if (tally[w] === undefined) keys.push(w);
+      tally[w] = (tally[w] || 0) + 1;
+    }
+    if (!keys.length) return "";
+    return keys.map(function (k) { return k + " " + tally[k] + "件"; })
+      .join("／");
+  }
+
   /* ===== 8.18 今日の配信の案（振り分けの決まり）=====
      仕入れタブの候補（刈取の一覧）を、プランごとに自動で振り分ける。
      決まりはここ1か所だけ（画面・pj-sync が同じこれを読む）。
@@ -206,9 +352,19 @@
           ? "ゲームソフト通常版ではありません" : "このプラン向きではありません";
         if (!why && !(num(r.qty) > 0)) why = "出せる数がありません";
         if (why) { skip.push({ jan: r.jan, why: why }); return; }
-        pick.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key }));
+        /* 8.21（【1】）案に出す印
+             maybe … 通常版か要確認（名前に「版」が入っているだけ）
+             slow  … 売れる速さが 1日 0点（後ろに回す） */
+        var nm = normalOf(r.name, p.ng);
+        pick.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
+                                         maybe: !!nm.maybe,
+                                         slow: !(num(r.speed) > 0) }));
       });
-      pick.sort(function (a, b) { return b.score - a.score; });
+      /* 速さ 0点の行は**いちばん後ろ**に回す（点数より先に見る）。 */
+      pick.sort(function (a, b) {
+        if (!!a.slow !== !!b.slow) return a.slow ? 1 : -1;
+        return b.score - a.score;
+      });
       out.push({ key: p.key, name: p.name, n: p.n, on: p.on, ch: p.ch,
                  items: pick.slice(0, p.n), over: Math.max(0, pick.length - p.n),
                  skip: skip.length });
@@ -218,6 +374,12 @@
   var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX,
               plan: plan, list: list, active: active, fits: fits,
     fitWhy: fitWhy, whyNone: whyNone,
+    NORMAL_NG: NORMAL_NG, ngWords: ngWords, normalOf: normalOf,
+    cleanName: cleanName,
+    ONE_PLANS: ONE_PLANS, ONE_PRE_HOURS: ONE_PRE_HOURS,
+    ONE_OPEN_GRADES: ONE_OPEN_GRADES, oneHours: oneHours,
+    oneGrades: oneGrades, oneList: oneList, oneWhy: oneWhy,
+    oneFits: oneFits, oneWhyNone: oneWhyNone,
               keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,
               scoreOf: scoreOf, whyNot: whyNot, draft: draft,
               SPEED_MIN: SPEED_MIN };

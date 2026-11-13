@@ -173,5 +173,45 @@ await p.waitForTimeout(700);
      '★★確認の文にも件数を出す');
 }
 
+console.log('=== 8.21（【1】）通常版の印と速さ0の印 ===');
+{
+  const t=await p.evaluate(()=>{
+    $('subNormalNg').value='アルティメット、スペシャルパック';
+    subDraftData={ at:'2026-11-14T00:00:00Z', rows:3, opt:{ stockPct:30,
+      qtyDays:2, wantQty:5 }, plans:[
+      { key:'monitor', name:'モニター', on:true, ch:'111', over:0, items:[
+        { jan:'4902370550001', name:'薔薇と椿 〜お豪華絢爛版〜', price:3000,
+          qty:1, gross:800, rate:30, speed:1, stock:9, sale:false,
+          maybe:true, slow:false },
+        { jan:'4902370550002', name:'ふつうのゲーム', price:3000, qty:1,
+          gross:900, rate:30, speed:0, stock:9, sale:false,
+          maybe:false, slow:true }] }] };
+    $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
+    return { html:$('subDraftBox').innerHTML,
+             cfg:subPickCfg().subNormalNg,
+             ng:SUBPLAN.ngWords(subPickCfg()).indexOf('アルティメット')>=0,
+             mon:SUBPLAN.list(subCfgAll()).filter((x)=>x.key==='monitor')[0] };
+  });
+  ok(/通常版か要確認/.test(t.html),'★★★「通常版か要確認」の印が出る');
+  ok(/売れる速さ 0/.test(t.html),'★★★「売れる速さ 0」の印が出る');
+  ok(t.cfg==='アルティメット、スペシャルパック',
+     '★★⚙「通常版でない言葉」を読む');
+  ok(t.ng===true,'★★★⚙で足した言葉が判定の表に入る');
+  ok(t.mon.normal===true,'★★モニターは通常版だけのプラン');
+  const judge=await p.evaluate(()=>{
+    const m=SUBPLAN.list(subCfgAll()).filter((x)=>x.key==='monitor')[0];
+    return { ng:SUBPLAN.fitWhy(m,{ name:'SW版 東方少女綺想譚 限定版',
+               grades:'' },true),
+             ok:SUBPLAN.fitWhy(m,{ name:'薔薇と椿 〜お豪華絢爛版〜',
+               grades:'' },true),
+             add:SUBPLAN.fitWhy(m,{ name:'◯◯ アルティメット',
+               grades:'' },true) };
+  });
+  ok(/通常版ではありません（限定版）/.test(judge.ng),
+     '★★★画面でも限定版はモニターから外れる');
+  ok(judge.ok==='','★★「お豪華絢爛版」は外さない');
+  ok(/アルティメット/.test(judge.add),'★★★⚙で足した言葉でも外れる');
+}
+
 await T.done();
 })();

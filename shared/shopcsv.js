@@ -469,6 +469,135 @@
     return out;
   }
 
+  /* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
+     MW の無在庫（sub-<JAN>）とは**別の商品**として出す。
+     ・Handle は one-<連番>／SKU は ONE-<連番>-<YYYYMMDD>
+     ・タグは member-list と grade-*（先行のあいだは grade-premium だけ）
+     ・**画像は入れない**（カジが Shopify の商品ページで入れる）
+     ・仕入原価は Cost per item（管理画面だけ・客には見えない） */
+  function oneHandleOf(id) { return "one-" + digits(id); }
+  function oneSkuOf(id, d) { return "ONE-" + digits(id) + "-" + ymdOf(d); }
+  function isOne(h) { return s(h).toLowerCase().indexOf("one-") === 0; }
+  /* 送料の区分。**重さは Shopify の送料の段を当てるためだけ**に使う
+     （カジが選んだ区分の名前は、会員のカードにそのまま出す）。 */
+  var ONE_SHIP = [
+    { key: "small", name: "クリックポスト", g: 200 },
+    { key: "letter", name: "レターパックプラス", g: 800 },
+    { key: "box", name: "宅配便", g: 2000 }
+  ];
+  function oneShipOf(key) {
+    var k = s(key).trim();
+    for (var i = 0; i < ONE_SHIP.length; i++)
+      if (ONE_SHIP[i].key === k || ONE_SHIP[i].name === k) return ONE_SHIP[i];
+    return null;
+  }
+  function oneShipName(key) {
+    var o = oneShipOf(key);
+    return o ? o.name : s(key).trim();
+  }
+  function oneGramsOf(it) {
+    var r = it || {};
+    var g = Math.round(num(r.grams));
+    if (g > 0) return g;
+    var o = oneShipOf(r.ship_kind);
+    return o ? o.g : 0;
+  }
+  function oneLeftOf(it) {
+    var r = it || {};
+    return Math.max(0, Math.round(num(r.qty)) - Math.max(0, Math.round(num(r.sold))));
+  }
+  function oneWhyNot(it) {
+    var r = it || {};
+    if (!titleOf(r.name)) return "商品名がありません";
+    if (Math.round(num(r.price)) <= 0) return "販売価格が入っていません";
+    if (Math.round(num(r.qty)) <= 0) return "数量が0です";
+    if (num(r.off)) return "取り下げています";
+    return "";
+  }
+  /* 説明（1点もの）。状態・メモ・特典は会員に要る話なので出す。
+     仕入原価・仕入れ先・MW のことは出さない（§8.2）。 */
+  function oneBodyOf(it, opt) {
+    var o = opt || {};
+    var r = it || {};
+    var h = [];
+    h.push("<ul>");
+    if (s(r.cond).trim()) h.push("<li>状態：" + esc(tidy(r.cond)
+      + (s(r.cond_note).trim() ? ("（" + tidy(r.cond_note) + "）") : "")) + "</li>");
+    if (digits(r.jan)) h.push("<li>JAN：" + esc(digits(r.jan)) + "</li>");
+    var kishu = kishuJa(r.kishu);
+    if (kishu) h.push("<li>機種：" + esc(kishu) + "</li>");
+    if (/^B[0-9A-Z]{9}$/.test(s(r.asin).toUpperCase()))
+      h.push('<li><a href="' + esc(amzUrl(digits(r.jan), r.asin)) + '"'
+        + ' target="_blank" rel="noopener">Amazon の商品ページ</a></li>');
+    if (s(r.note).trim()) h.push("<li>メモ：" + esc(tidy(r.note)) + "</li>");
+    h.push("</ul>");
+    h.push("<p>" + esc(o.oneNote || ONE_NOTE_JA) + "</p>");
+    return h.join("");
+  }
+  var ONE_NOTE_JA = "1点ものです。売り切れの場合はご容赦ください。"
+    + "用意できない場合は、全額返金します。";
+  function oneRowOf(it, opt) {
+    var o = opt || {};
+    var r = it || {};
+    var o1 = o.option1 || OPT1;
+    var row = {};
+    row["URL handle"] = oneHandleOf(r.id);
+    row["Title"] = titleOf(r.name);
+    row["Description"] = oneBodyOf(r, o);
+    row["Vendor"] = s(o.vendor);
+    row["Type"] = s(r.type || o.type);
+    /* タグ。grades は「先行のあいだは premium だけ」を入れて渡す。 */
+    row["Tags"] = [TAG_MEMBER].concat(gradeTags(r.grades)).join(", ");
+    row["Published on online store"] = "true";
+    row["Status"] = "active";
+    row["Option1 name"] = s(o1.name);
+    row["Option1 value"] = s(o1.value);
+    row["SKU"] = oneSkuOf(r.id, o.date);
+    row["Barcodes"] = digits(r.jan);
+    row["Price"] = String(Math.round(num(r.price)));
+    row["Charge tax"] = "true";
+    row["Inventory tracker"] = "shopify";
+    row["Inventory quantity"] = String(oneLeftOf(r));
+    row["Continue selling when out of stock"] = "deny";
+    row["Weight value (grams)"] = String(oneGramsOf(r));
+    row["Weight unit for display"] = "g";
+    row["Requires shipping"] = "true";
+    row["Fulfillment service"] = "manual";
+    row["Gift card"] = "false";
+    row["SEO title"] = titleOf(r.name, 70);
+    row["SEO description"] = "";
+    row["Cost per item"] = costOf(r);
+    row["Collection"] = s(o.collection);
+    return row;
+  }
+  function oneSplit(items, opt) {
+    var go = [], no = [], seen = {};
+    for (var i = 0; i < (items || []).length; i++) {
+      var r = items[i] || {};
+      var why = oneWhyNot(r);
+      if (why) { no.push({ it: r, why: why }); continue; }
+      var h = oneHandleOf(r.id);
+      if (seen[h]) { no.push({ it: r, why: "同じ番号が2行あります（" + h + "）" });
+                     continue; }
+      seen[h] = 1;
+      go.push(r);
+    }
+    return { go: go, no: no };
+  }
+  function oneRowsOf(items, opt) {
+    var go = oneSplit(items, opt).go, out = [];
+    for (var i = 0; i < go.length; i++) out.push(oneRowOf(go[i], opt));
+    return out;
+  }
+  function oneBuild(items, opt) {
+    var o = opt || {};
+    var cols = COLS.slice();
+    if (!s(o.collection)) cols = cols.filter(function (c) {
+      return c !== "Collection";
+    });
+    return toCsv(cols, oneRowsOf(items, o), o.style);
+  }
+
   /* ---- CSV の文字 ---- */
   function q(v) {
     var t = s(v);
@@ -622,6 +751,12 @@
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
     maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
+    ONE_SHIP: ONE_SHIP, ONE_NOTE_JA: ONE_NOTE_JA,
+    oneHandleOf: oneHandleOf, oneSkuOf: oneSkuOf, isOne: isOne,
+    oneShipOf: oneShipOf, oneShipName: oneShipName, oneGramsOf: oneGramsOf,
+    oneLeftOf: oneLeftOf, oneWhyNot: oneWhyNot, oneBodyOf: oneBodyOf,
+    oneRowOf: oneRowOf, oneSplit: oneSplit, oneRowsOf: oneRowsOf,
+    oneBuild: oneBuild,
     invCsv: invCsv, splitCsv: splitCsv, transFill: transFill,
     weightOf: weightOf,
     TR_DEF: TR_DEF, TR_OUT: TR_OUT

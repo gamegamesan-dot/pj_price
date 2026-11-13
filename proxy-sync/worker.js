@@ -10802,6 +10802,11 @@ async function subSettings(env) {
     gameG: subGameG(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
+    /* 8.22（【2】）1点ものの配信先（#目玉商品-先行／#目玉商品）。 */
+    one: SUBPLAN.oneList(st),
+    one_hours: SUBPLAN.oneHours(st),
+    one_grades_pre: SUBPLAN.oneGrades(st, false),
+    one_grades_open: SUBPLAN.oneGrades(st, true),
   };
 }
 /* Discord のボットの口。トークンが無ければ何もしない（false を返す）。 */
@@ -10996,6 +11001,21 @@ async function subPlanBuild(env) {
       keep: pick.filter((x) => x.same).length,
     });
   }
+  /* 8.22（【2】）1点もの（#目玉商品-先行／#目玉商品）も同じ形で足す。 */
+  try {
+    if (await oneOk(env)) {
+      const ones = await oneRows(env, {});
+      const sent = {};
+      for (const p of cfg.one)
+        if (p.ch && sent[p.ch] === undefined) sent[p.ch] = await subPosts(env, p.ch);
+      const op = await onePlanBuild(env, cfg, ones, sent);
+      for (const x of op) {
+        delete x.pick;                       // 画面に返すのは中身だけ
+        out.plans.push(x);
+      }
+      out.one_rows = ones.length;
+    }
+  } catch (e) { out.one_error = String((e && e.message) || e); }
   return out;
 }
 /* 1件ぶんのカード（shared/subcard.js）。 */
@@ -11010,6 +11030,435 @@ function subCardOf(x, p, cfg, note) {
   const oneG = game ? (Number(cfg.gameG) || 0) : (Number(x.size_g) || 0);
   return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note,
                            shipText: p.ship, oneG: oneG });
+}
+/* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
+   カジが手で登録した商品を、会員向けに配信する。MW の無在庫とは別の表。
+   ・Shopify の Handle は one-<連番>／SKU は ONE-<連番>-<YYYYMMDD>
+   ・#目玉商品-先行（プレミアム）に先に出し、⚙の時間のあと #目玉商品へ
+   ・写真は**カジが撮った写真だけ**（Amazon・MW の画像は使わない）。
+     写真そのものは KV に置き、Discord には添付として送る
+   ・送ったカードの控えは sub_post（jan の欄に 'one-<連番>'）。
+     注文の取り込みも今の仕組みのまま（SKU で見分ける・subSkuJan） */
+const ONE_MAX = 300;                    // 一覧の上限
+const ONE_PIC_MAX = 2 * 1024 * 1024;    // 写真（base64 の長さ）
+const ONE_PIC_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+async function oneOk(env) { return await colOk(env, "one_item", "handle"); }
+function onePicKey(id) { return "one:pic:" + Math.round(Number(id) || 0); }
+function onePicName(r) {
+  const t = String((r || {}).pic_type || "image/jpeg");
+  const ext = t.indexOf("png") >= 0 ? "png"
+    : (t.indexOf("webp") >= 0 ? "webp" : (t.indexOf("gif") >= 0 ? "gif" : "jpg"));
+  return "pic." + ext;
+}
+/* 写真を KV に置く（base64 のまま）。空なら消す。 */
+async function onePicPut(env, id, b64, type) {
+  const key = onePicKey(id);
+  if (!b64) { try { await env.SYNC_CACHE.delete(key); } catch (e) {} return ""; }
+  await env.SYNC_CACHE.put(key, String(b64));
+  return key;
+}
+async function onePicGet(env, id) {
+  try { return await env.SYNC_CACHE.get(onePicKey(id)); } catch (e) { return null; }
+}
+function b64Bytes(b64) {
+  const t = String(b64 || "").replace(/^data:[^;]*;base64,/, "");
+  const bin = atob(t);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+/* POST /one … 1点ものを足す・直す（管理者だけ）。
+   { id?, name, jan, asin, cond, cond_note, cost, price, qty, ship_kind,
+     note, pic, pic_type, pic_name, off } */
+async function onePut(env, body) {
+  const res = { ok: false, id: 0, table_ok: true };
+  if (!(await oneOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "one_item がありません（migrate-0059-one-item.sql）";
+    return res;
+  }
+  const o = body || {};
+  const name = String(o.name || "").trim().slice(0, 200);
+  if (!name) { res.error = "no_name"; res.detail = "商品名が要ります"; return res; }
+  const run = newRun("one-put");
+  const at = nowIso();
+  const id = Math.round(Number(o.id) || 0);
+  const num0 = (v) => Math.max(0, Math.round(Number(v) || 0));
+  const jan = String(o.jan || "").replace(/\D/g, "").slice(0, 14);
+  const asin = String(o.asin || "").trim().toUpperCase().slice(0, 10);
+  const vals = {
+    name: name,
+    jan: jan, asin: /^[0-9A-Z]{10}$/.test(asin) ? asin : "",
+    cond: String(o.cond || "").trim().slice(0, 20),
+    cond_note: String(o.cond_note || "").trim().slice(0, 200),
+    cost: num0(o.cost), price: num0(o.price),
+    qty: Math.max(0, Math.min(999, Math.round(Number(o.qty) || 1))),
+    ship_kind: String(o.ship_kind || "").trim().slice(0, 40),
+    note: String(o.note || "").trim().slice(0, 300),
+    off: (o.off === 1 || o.off === true || o.off === "1") ? 1 : 0,
+  };
+  let rowId = id;
+  if (id > 0) {
+    await env.DB.prepare(
+      `UPDATE one_item SET name=?2, jan=?3, asin=?4, cond=?5, cond_note=?6,
+         cost=?7, price=?8, qty=?9, ship_kind=?10, note=?11, off=?12,
+         updated_at=?13
+        WHERE id=?1`)
+      .bind(id, vals.name, vals.jan, vals.asin, vals.cond, vals.cond_note,
+            vals.cost, vals.price, vals.qty, vals.ship_kind, vals.note,
+            vals.off, at).run();
+  } else {
+    const r = await env.DB.prepare(
+      `INSERT INTO one_item (handle,name,jan,asin,cond,cond_note,cost,price,
+         qty,ship_kind,note,off,at,created_at,updated_at)
+       VALUES ('',?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12,?12)`)
+      .bind(vals.name, vals.jan, vals.asin, vals.cond, vals.cond_note,
+            vals.cost, vals.price, vals.qty, vals.ship_kind, vals.note,
+            vals.off, at).run();
+    rowId = Math.round(Number((r && r.meta && r.meta.last_row_id) || 0));
+    if (!rowId) {
+      const q = await env.DB.prepare(
+        `SELECT MAX(id) AS id FROM one_item`).first();
+      rowId = Math.round(Number((q && q.id) || 0));
+    }
+    await env.DB.prepare(`UPDATE one_item SET handle=?2 WHERE id=?1`)
+      .bind(rowId, "one-" + rowId).run();
+  }
+  /* 写真（カジが撮った写真だけ）。'' を送ると消す。 */
+  if (o.pic !== undefined && o.pic !== null) {
+    const b64 = String(o.pic || "").replace(/^data:[^;]*;base64,/, "");
+    const type = String(o.pic_type || "image/jpeg").toLowerCase();
+    if (b64 && b64.length > ONE_PIC_MAX) {
+      res.error = "pic_big";
+      res.detail = "写真が大きすぎます（2MB まで）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (b64 && ONE_PIC_TYPES.indexOf(type) < 0) {
+      res.error = "pic_type";
+      res.detail = "写真は JPEG・PNG・WebP・GIF だけです";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const key = await onePicPut(env, rowId, b64, type);
+    await env.DB.prepare(
+      `UPDATE one_item SET pic_key=?2, pic_name=?3, pic_type=?4, updated_at=?5
+        WHERE id=?1`)
+      .bind(rowId, key, String(o.pic_name || "").slice(0, 100),
+            b64 ? type : "", at).run();
+    res.pic = !!b64;
+  }
+  run.notes.push("1点もの：" + (id > 0 ? "直した" : "足した") + " one-" + rowId);
+  res.id = rowId;
+  res.handle = "one-" + rowId;
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 1点ものの行（配信とカードに使う形）。jan の欄は 'one-<連番>'。 */
+async function oneRows(env, opt) {
+  if (!(await oneOk(env))) return [];
+  const o = opt || {};
+  const all = o.all === true;
+  const ordOk = await colOk(env, "sub_order", "order_no");
+  const soldSel = ordOk
+    ? "(SELECT COALESCE(SUM(s.qty),0) FROM sub_order s WHERE s.jan = b.handle)"
+    : "0";
+  const q = await env.DB.prepare(
+    `SELECT b.id AS id, b.handle AS handle, b.name AS name, b.jan AS jan,
+            b.asin AS asin, b.cond AS cond, b.cond_note AS cond_note,
+            b.cost AS cost, b.price AS price, b.qty AS qty,
+            b.ship_kind AS ship_kind, b.note AS note,
+            b.pic_key AS pic_key, b.pic_type AS pic_type,
+            b.amz_price AS amz_price, b.amz_fee AS amz_fee,
+            b.amz_basis AS amz_basis, b.amz_at AS amz_at, b.gross AS gross,
+            b.pre_at AS pre_at, b.open_at AS open_at,
+            b.loaded_at AS loaded_at, b.put_at AS put_at, b.off AS off,
+            b.at AS at,
+            ${soldSel} AS sold
+       FROM one_item b
+      ${all ? "" : "WHERE COALESCE(b.off,0)=0"}
+      ORDER BY b.id DESC LIMIT ${ONE_MAX}`).all();
+  return ((q && q.results) || []).map((r) => {
+    const qty = Math.max(0, Number(r.qty) || 0);
+    const sold = Math.max(0, Number(r.sold) || 0);
+    return {
+      /* sub_post・sub_order と同じキー（'one-<連番>'）。 */
+      jan: String(r.handle || ("one-" + r.id)),
+      one_id: Number(r.id) || 0,
+      handle: String(r.handle || ""),
+      name: String(r.name || ""),
+      real_jan: String(r.jan || ""),
+      asin: String(r.asin || ""),
+      kishu: "",
+      cond: String(r.cond || ""), cond_note: String(r.cond_note || ""),
+      cost: Number(r.cost) || 0,
+      price: Number(r.price) || 0,
+      qty: qty, sold: sold, left: Math.max(0, qty - sold),
+      ship_kind: String(r.ship_kind || ""),
+      note: String(r.note || ""),
+      pic: !!String(r.pic_key || ""), pic_type: String(r.pic_type || ""),
+      amz_price: Number(r.amz_price) || 0,
+      amz_fee: Number(r.amz_fee) || 0,
+      basis: String(r.amz_basis || ""),
+      price_at: String(r.amz_at || ""),
+      gross: (r.gross === null || r.gross === undefined)
+        ? null : Number(r.gross),
+      pre_at: String(r.pre_at || ""), pre_at_jst: jstText(r.pre_at),
+      open_at: String(r.open_at || ""), open_at_jst: jstText(r.open_at),
+      loaded_at: String(r.loaded_at || ""), loaded_at_jst: jstText(r.loaded_at),
+      put_at: String(r.put_at || ""),
+      off: Number(r.off) || 0,
+      at: String(r.at || ""), at_jst: jstText(r.at),
+    };
+  });
+}
+/* GET /one … 一覧（管理者だけ）。 */
+async function oneList(env, url) {
+  const res = { ok: false, rows: [], n: 0, table_ok: true };
+  if (!(await oneOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "one_item がありません（migrate-0059-one-item.sql）";
+    return res;
+  }
+  const p = (url && url.searchParams) ? url.searchParams : null;
+  const all = !!(p && p.get("all") === "1");
+  res.rows = await oneRows(env, { all: all });
+  res.n = res.rows.length;
+  /* 8.22 Shopify のタグに入れるグレード（先行のあいだは premium だけ）。 */
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  res.pre_grades = SUBPLAN.oneGrades(st, false);
+  res.open_grades = SUBPLAN.oneGrades(st, true);
+  res.hours = SUBPLAN.oneHours(st);
+  res.ok = true;
+  return res;
+}
+/* POST /one/mark … 印（Shopify に読み込みました・CSV に出した・取り下げ）。
+   { ids:[…], loaded:1|0, put:1|0, off:1|0 } */
+async function oneMark(env, body) {
+  const res = { ok: false, n: 0, table_ok: true };
+  if (!(await oneOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "one_item がありません（migrate-0059-one-item.sql）";
+    return res;
+  }
+  const o = body || {};
+  const ids = (Array.isArray(o.ids) ? o.ids : [])
+    .map((x) => Math.round(Number(x) || 0)).filter((x) => x > 0).slice(0, ONE_MAX);
+  if (!ids.length) { res.ok = true; return res; }
+  const run = newRun("one-mark");
+  const at = nowIso();
+  const sets = [], binds = [];
+  let n = 2;
+  if (o.loaded !== undefined) {
+    sets.push("loaded_at=?" + n);
+    binds.push(o.loaded ? at : null); n++;
+  }
+  if (o.put !== undefined) {
+    sets.push("put_at=?" + n);
+    binds.push(o.put ? at : null); n++;
+  }
+  if (o.off !== undefined) {
+    sets.push("off=?" + n);
+    binds.push(o.off ? 1 : 0); n++;
+  }
+  if (!sets.length) { res.ok = true; return res; }
+  const upAt = "?" + n;
+  const stmts = ids.map((id) => env.DB.prepare(
+    `UPDATE one_item SET ${sets.join(", ")}, updated_at=${upAt} WHERE id=?1`)
+    .bind(id, ...binds, at));
+  await runBatch(env, run, stmts);
+  res.n = ids.length;
+  run.notes.push("1点ものの印：" + ids.length + "件");
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* GET /one/amz?jan=&asin= … Amazon の販売価格・手数料・見込みの粗利。
+   まず mw_amz（取り込み済み）を見て、無ければ SP-API に聞く。
+   price は「その商品が Amazon でいくらで売れているか」。
+   粗利 ＝ Amazon の販売価格 − 手数料 − 仕入原価（cost を渡したとき）。 */
+async function oneAmz(env, url) {
+  const run = newRun("one-amz");
+  const p = (url && url.searchParams) ? url.searchParams : null;
+  const jan = String((p && p.get("jan")) || "").replace(/\D/g, "");
+  let asin = String((p && p.get("asin")) || "").trim().toUpperCase();
+  const cost = Math.max(0, Math.round(Number((p && p.get("cost")) || 0)));
+  const res = { ok: false, jan: jan, asin: "", price: 0, fee: 0, gross: null,
+                basis: "", at: "", src: "" };
+  if (!jan && !/^[0-9A-Z]{10}$/.test(asin)) {
+    res.error = "no_key";
+    res.detail = "JAN か ASIN が要ります";
+    return res;
+  }
+  /* ① 取り込み済み（mw_amz）があればそれを使う（API を使わない）。 */
+  if (jan) {
+    try {
+      const q = await env.DB.prepare(
+        `SELECT asin, price, fee_total, basis, price_at FROM mw_amz
+          WHERE jan=?1`).bind(jan).first();
+      if (q && Number(q.price) > 0) {
+        res.asin = String(q.asin || "");
+        res.price = Math.round(Number(q.price) || 0);
+        res.fee = Math.round(Number(q.fee_total) || 0);
+        res.basis = String(q.basis || "");
+        res.at = String(q.price_at || "");
+        res.src = "mw_amz";
+      }
+      if (!asin && q && q.asin) asin = String(q.asin).toUpperCase();
+    } catch (e) { /* 表が無くても止めない */ }
+  }
+  /* ② 無ければ JAN → ASIN（jan_map）→ SP-API。 */
+  if (!res.price && jan && !/^[0-9A-Z]{10}$/.test(asin)) {
+    try {
+      const q = await env.DB.prepare(
+        `SELECT asin FROM jan_map WHERE jan=?1`).bind(jan).first();
+      if (q && q.asin) asin = String(q.asin).toUpperCase();
+    } catch (e) { /* 無くてもよい */ }
+  }
+  if (!res.price && /^[0-9A-Z]{10}$/.test(asin)) {
+    res.asin = asin;
+    try {
+      const low = await amazonLowest(env, run, [{ asin: asin, cond: "new" }],
+                                     {}, 1);
+      const got = low[asin + "|new"];
+      if (got && Number(got.low) > 0) {
+        res.price = Math.round(Number(got.buy) > 0 ? got.buy : got.low);
+        res.basis = (Number(got.buy) > 0) ? "カート" : "最安";
+        res.at = nowIso();
+        res.src = "api";
+      }
+    } catch (e) { run.notes.push("one-amz(price): " + String(e && e.message)); }
+    if (res.price) {
+      try {
+        const r = await spCall(env, run, "/products/fees/v0/feesEstimate",
+          { method: "POST", body: JSON.stringify(
+              mwFeeBody1(asin, res.price, "mfn")),
+            label: "getMyFeesEstimates" });
+        const list = r.ok ? mwFeeList(r.data) : [];
+        const pick = list.length ? mwFeePick(list[0]) : null;
+        if (pick && pick.ok) res.fee = Math.round(Number(pick.total) || 0);
+      } catch (e) { run.notes.push("one-amz(fee): " + String(e && e.message)); }
+    }
+  }
+  if (!res.asin && /^[0-9A-Z]{10}$/.test(asin)) res.asin = asin;
+  if (res.price > 0)
+    res.gross = Math.round(res.price - res.fee - cost);
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* POST /one/amz … 取れた値を控える（画面が押したときに呼ぶ）。
+   { id, price, fee, basis, at, gross, asin } */
+async function oneAmzPut(env, body) {
+  const res = { ok: false, table_ok: true };
+  if (!(await oneOk(env))) {
+    res.table_ok = false; res.error = "no_table"; return res;
+  }
+  const o = body || {};
+  const id = Math.round(Number(o.id) || 0);
+  if (!id) { res.error = "no_id"; return res; }
+  const at = nowIso();
+  await env.DB.prepare(
+    `UPDATE one_item SET amz_price=?2, amz_fee=?3, amz_basis=?4, amz_at=?5,
+       gross=?6, asin=COALESCE(NULLIF(?7,''), asin), updated_at=?8
+      WHERE id=?1`)
+    .bind(id, Math.max(0, Math.round(Number(o.price) || 0)),
+          Math.max(0, Math.round(Number(o.fee) || 0)),
+          String(o.basis || "").slice(0, 20),
+          String(o.at || at).slice(0, 40),
+          (o.gross === null || o.gross === undefined)
+            ? null : Math.round(Number(o.gross) || 0),
+          String(o.asin || "").trim().toUpperCase().slice(0, 10), at).run();
+  res.ok = true;
+  return res;
+}
+/* 1点ものの1枚のカード。 */
+function oneCardOf(x, cfg, picUrl) {
+  /* カードに出す JAN は**本当の JAN**（配信のキー 'one-<連番>' は出さない）。
+     JAN が無い1点ものでは JAN の欄そのものを出さない（8.22）。 */
+  const y = Object.assign({}, x, { jan: String(x.real_jan || "") });
+  return SUBCARD.card(y, {
+    domain: (cfg || {}).domain,
+    /* 1点ものは数量そのものが上限なので「お一人◯点まで」は出さない。 */
+    maxQty: 0,
+    /* 送料はカジが選んだ区分の名前をそのまま出す。 */
+    shipText: SHOPCSV.oneShipName(x.ship_kind),
+    picUrl: picUrl || "",
+  });
+}
+/* Discord に送る（写真があれば添付として一緒に送る）。
+   msgId があれば書き換え（PATCH）。 */
+async function dcCard(env, run, ch, card, pic, msgId) {
+  if (!pic || !pic.b64) {
+    return msgId
+      ? await dcApi(env, run, "PATCH",
+          "/channels/" + ch + "/messages/" + msgId, { embeds: [card] })
+      : await dcApi(env, run, "POST",
+          "/channels/" + ch + "/messages", { embeds: [card] });
+  }
+  if (!env.DISCORD_BOT_TOKEN)
+    return { ok: false, status: 0, err: "no_token" };
+  const fd = new FormData();
+  /* 書き換えのときは、前の添付を**この1枚に置き換える**。 */
+  const payload = { embeds: [card] };
+  if (msgId) payload.attachments = [{ id: 0, filename: pic.name }];
+  fd.append("payload_json", JSON.stringify(payload));
+  fd.append("files[0]", new Blob([b64Bytes(pic.b64)],
+    { type: pic.type || "image/jpeg" }), pic.name);
+  const path = msgId ? ("/channels/" + ch + "/messages/" + msgId)
+                     : ("/channels/" + ch + "/messages");
+  const resp = await net(run, DC_API + path, {
+    method: msgId ? "PATCH" : "POST",
+    headers: { "authorization": "Bot " + env.DISCORD_BOT_TOKEN },
+    body: fd, write: true,
+  });
+  if (!resp.ok) {
+    if (run) { run.errors++; run.notes.push("discord(bot) -> " + resp.status); }
+    return { ok: false, status: resp.status };
+  }
+  let d = null;
+  try { d = await resp.json(); } catch (e) { d = null; }
+  return { ok: true, status: resp.status, data: d };
+}
+/* 配信の予定（1点もの）。member のプランと同じ形で返す。 */
+async function onePlanBuild(env, cfg, rows, sent) {
+  const now = nowIso();
+  const out = [];
+  for (const p of cfg.one) {
+    const posts = p.ch ? (sent[p.ch] || {}) : {};
+    const pick = [];
+    for (const r of rows) {
+      if (!p.ch) break;
+      if (SUBPLAN.oneWhy(p, r, now)) continue;
+      const old = posts[r.jan];
+      const x = Object.assign({}, r, {
+        sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
+      });
+      x.card = oneCardOf(x, cfg, x.pic ? ("attachment://" + onePicName(x)) : "");
+      x.card_h = subCardHash(x.card);
+      const h = old ? String(old.card_h || "") : "";
+      x.same = !!(old && (h ? (h === x.card_h)
+        : (Number(old.price) === r.price && Number(old.qty) === r.qty)));
+      pick.push(x);
+    }
+    out.push({
+      key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
+      /* pre … 先行（プレミアム）のほうか。送ったあとに
+         pre_at／open_at のどちらを控えるかを決める（8.22）。 */
+      one: true, pre: !!p.pre, hours: p.hours,
+      n: pick.length, q: 0, kinds: "one",
+      why: pick.length ? "" : SUBPLAN.oneWhyNone(p, rows, now),
+      items: pick.map((x) => ({
+        jan: x.jan, one_id: x.one_id, name: x.name, price: x.price,
+        qty: x.qty, left: x.left, gross: x.gross, sent: x.sent,
+        same: x.same })),
+      add: pick.filter((x) => !x.sent).length,
+      edit: pick.filter((x) => x.sent && !x.same).length,
+      keep: pick.filter((x) => x.same).length,
+      pick: pick,
+    });
+  }
+  return out;
 }
 /* 配信する。approve でないときは送らずに予定だけ返す。 */
 async function jobSubSend(env, opt) {
@@ -11099,6 +11548,67 @@ async function jobSubSend(env, opt) {
         }
       }
       res.plans.push(r);
+    }
+    /* ===== 8.22（【2】）1点もの =====
+       #目玉商品-先行（プレミアム）→ ⚙の時間のあと #目玉商品。
+       写真があれば**添付として一緒に送る**（カジが撮った写真だけ）。 */
+    try {
+      if (await oneOk(env)) {
+        const ones = await oneRows(env, {});
+        const sentOne = {};
+        for (const p of cfg.one)
+          if (p.ch && sentOne[p.ch] === undefined)
+            sentOne[p.ch] = await subPosts(env, p.ch);
+        const op = await onePlanBuild(env, cfg, ones, sentOne);
+        for (const g of op) {
+          if (only && g.key !== only) continue;
+          if (!g.on) continue;
+          const r = { key: g.key, name: g.name, add: 0, edit: 0, keep: 0,
+                      fail: 0, one: true };
+          for (const x of (g.pick || [])) {
+            if (x.same && !reform) { r.keep++; res.skipped++; continue; }
+            if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
+            const at = nowIso();
+            let pic = null;
+            if (x.pic) {
+              const b64 = await onePicGet(env, x.one_id);
+              if (b64) pic = { b64: b64, name: onePicName(x),
+                               type: x.pic_type || "image/jpeg" };
+            }
+            const card = x.card || oneCardOf(x, cfg,
+              pic ? ("attachment://" + onePicName(x)) : "");
+            const m = await dcCard(env, run, g.ch, card, pic,
+                                   x.sent ? x.msg_id : "");
+            if (!m.ok) { r.fail++; continue; }
+            const id = x.sent ? x.msg_id
+              : String(((m.data || {}).id) || "");
+            if (!id) { r.fail++; continue; }
+            await env.DB.prepare(
+              `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,
+                 at,created_at${hCol})
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9${hVal})
+               ON CONFLICT(jan,ch) DO UPDATE SET
+                 msg_id=excluded.msg_id, price=excluded.price,
+                 qty=excluded.qty, sold=excluded.sold,
+                 sold_out=excluded.sold_out,
+                 edited_at=excluded.at${hSet2}`)
+              .bind(...subPostIns(x, g, id, at, hasH)).run();
+            /* 先行に出した時刻・みんなに出した時刻を控える
+               （⚙の時間がたったかを見るのに使う）。 */
+            if (!x.sent) {
+              const col = g.pre ? "pre_at" : "open_at";
+              await env.DB.prepare(
+                `UPDATE one_item SET ${col}=COALESCE(${col},?2), updated_at=?2
+                  WHERE id=?1`).bind(x.one_id, at).run();
+            }
+            if (x.sent) { r.edit++; res.edited++; }
+            else { r.add++; res.sent++; }
+          }
+          res.plans.push(r);
+        }
+      }
+    } catch (e) {
+      run.notes.push("one-send: " + String((e && e.message) || e));
     }
     if (res.approve) {
       try { await stateSet(env, SUB_SEND_KEY, day).run(); } catch (e) {}
@@ -11532,9 +12042,21 @@ function osNumOrNull(v) {
    ・MW の在庫が足りない商品は「返金が必要」として社内用チャンネルに知らせる */
 const SUB_CSV_MAX = 20000;              // 1回に読む行の上限
 const SKU_RE = /^SUB-(\d{8,14})-(\d{8})$/i;
+/* 8.22（【2】）1点ものの SKU（ONE-<連番>-<YYYYMMDD>）。
+   注文の取り込みは**今の仕組みのまま**なので、ここで会員用として
+   見分けられるようにし、jan の欄に 'one-<連番>' を入れる
+   （sub_order・sub_post のキーはそのまま使う）。 */
+const ONE_SKU_RE = /^ONE-(\d{1,9})-(\d{8})$/i;
 function subSkuJan(sku) {
-  const m = SKU_RE.exec(String(sku || "").trim());
-  return m ? m[1] : "";
+  const t = String(sku || "").trim();
+  const m = SKU_RE.exec(t);
+  if (m) return m[1];
+  const o = ONE_SKU_RE.exec(t);
+  return o ? ("one-" + o[1]) : "";
+}
+function oneKeyId(key) {
+  const m = /^one-(\d{1,9})$/i.exec(String(key || "").trim());
+  return m ? Number(m[1]) : 0;
 }
 /* 注文CSV の1行から要るものだけ取り出す（ほかの列は読まない）。 */
 function subOrderRows(text) {
@@ -11660,6 +12182,12 @@ async function subEditLeft(env, run, jans) {
   const rows = await subRows(env);
   const byJan = {};
   for (const r of rows) byJan[r.jan] = r;
+  /* 8.22（【2】）1点もの（jan の欄が 'one-<連番>'）も同じ仕組みで
+     「完売」に書き換える（注文の取り込みは今の仕組みのまま）。 */
+  try {
+    if (await oneOk(env))
+      for (const r of await oneRows(env, { all: true })) byJan[r.jan] = r;
+  } catch (e) { /* 表が無くても止めない */ }
   const step = d1Step(1);
   const posts = [];
   for (let i = 0; i < list.length; i += step) {
@@ -11689,9 +12217,20 @@ async function subEditLeft(env, run, jans) {
        ここだけ素の SUBCARD.card を呼んでいたので、注文を取り込むたびに
        送料の文（⚙）やゲームソフトの重さが抜けたカードに戻っていた。 */
     const x = Object.assign({}, r, { qty: qty, sold: sold, left: left });
-    const card = subCardOf(x, p, cfg);
-    const e = await dcApi(env, run, "PATCH",
-      "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
+    /* 8.22（【2】）1点ものは専用のカード（状態・メモ・写真）。 */
+    let pic = null;
+    if (x.one_id && x.pic) {
+      const b64 = await onePicGet(env, x.one_id);
+      if (b64) pic = { b64: b64, name: onePicName(x),
+                       type: x.pic_type || "image/jpeg" };
+    }
+    const card = x.one_id
+      ? oneCardOf(x, cfg, pic ? ("attachment://" + onePicName(x)) : "")
+      : subCardOf(x, p, cfg);
+    const e = x.one_id
+      ? await dcCard(env, run, y.ch, card, pic, String(y.msg_id))
+      : await dcApi(env, run, "PATCH",
+          "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
     if (!e.ok) continue;
     out.edited++;
     if (!left) out.sold_out++;
@@ -15687,8 +16226,8 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "os_item",
-  "sub_draft",
+  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
+  "os_item", "sub_draft",
   "sub_post", "sub_order",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
@@ -15715,6 +16254,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["one_item", "migrate-0059-one-item.sql"],
+  ["pic_key", "migrate-0059-one-item.sql"],
   ["os_item", "migrate-0058-os-item.sql"],
   ["fix_why", "migrate-0058-os-item.sql"],
   ["card_h", "migrate-0057-sub-card.sql"],
@@ -16202,6 +16743,10 @@ export default {
         && (request.method === "POST" || url.pathname === "/sub/draft")
         && url.pathname.indexOf("/sub/") === 0)
       return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
+    /* 8.22（【2】）1点ものは管理者だけ（仕入原価・販売価格が出るため）。 */
+    if (role !== "admin"
+        && (url.pathname === "/one" || url.pathname.indexOf("/one/") === 0))
+      return forbidStaff("1点ものの窓口は管理者用のキーが必要です", [], origin);
     /* 6.193／7.143：海外向け Shopify（os-）の控えと直しは管理者だけ。
        値段・仕入原価・MW の卸値が出るため、見るのも管理者だけにする。 */
     if (role !== "admin" && url.pathname.indexOf("/os/") === 0)
@@ -16491,6 +17036,23 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/sub/draft")
         return json(await subDraftLog(env, url), 200, origin);
+      /* 8.22（【2】）1点もの（秋葉原などで仕入れた商品）。 */
+      if (request.method === "POST" && url.pathname === "/one") {
+        const b = await request.json().catch(() => ({}));
+        return json(await onePut(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/one")
+        return json(await oneList(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/one/mark") {
+        const b = await request.json().catch(() => ({}));
+        return json(await oneMark(env, b), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/one/amz")
+        return json(await oneAmz(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/one/amz") {
+        const b = await request.json().catch(() => ({}));
+        return json(await oneAmzPut(env, b), 200, origin);
+      }
       /* 6.193／7.143 海外向け Shopify（os-）の控えと直し。 */
       if (request.method === "POST" && url.pathname === "/os/put") {
         const b = await request.json().catch(() => ({}));
@@ -17000,6 +17562,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
+  onePut, oneList, oneMark, oneAmz, oneAmzPut, oneRows, oneOk, oneCardOf,
+  onePlanBuild, dcCard, onePicKey, onePicName, b64Bytes,
+  ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
   OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,
   subCardHash, subPostBind, subPostIns,

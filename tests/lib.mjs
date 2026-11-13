@@ -108,7 +108,9 @@ export function makeDB(){
 export function makeKV(){
   return { _m:new Map(),
     async get(k){ return this._m.get(k)||null; },
-    async put(k,v){ this._m.set(k,v); } };
+    async put(k,v){ this._m.set(k,v); },
+    /* 本物の KV にある delete（8.22：1点ものの写真を消すのに使う）。 */
+    async delete(k){ this._m.delete(k); } };
 }
 /* Worker に渡す env。鍵は 'k' 固定。
    Discord の宛先は本物の形にしておく（読み取り専用の見張りが宛先を見るため）。 */

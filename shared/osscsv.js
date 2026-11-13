@@ -68,6 +68,7 @@
 
   var HANDLE_PRE = "os-";          // 海外向け
   var SUB_PRE = "sub-";            // 会員向け（shared/shopcsv.js）。混ぜない
+  var ONE_PRE = "one-";            // 会員向けの1点もの（8.22）。混ぜない
   var SKU_PRE = "W-";              // eBay の CustomLabel と同じ
   var TAG_EXPORT = "export";
   /* 会員向けの印。ここでは**絶対に付けない**（【4】）。 */
@@ -89,6 +90,12 @@
   function skuOf(jan) { return SKU_PRE + digits(jan); }
   function isOs(h) { return s(h).toLowerCase().indexOf(HANDLE_PRE) === 0; }
   function isSub(h) { return s(h).toLowerCase().indexOf(SUB_PRE) === 0; }
+  /* 8.22：1点もの（one-）も会員向け。海外向けには混ぜない。 */
+  function isOne(h) { return s(h).toLowerCase().indexOf(ONE_PRE) === 0; }
+  function memberish(r) {
+    var x = r || {};
+    return !!(x.member || x.one || isSub(x.handle) || isOne(x.handle));
+  }
 
   /* ---- 日付とファイル名（【7】）----
      1回の書き出しで eBay 用と Shopify 用の2つを出す。名前に
@@ -261,7 +268,7 @@
     var r = it || {};
     if (!janOk(r.jan)) return "JAN がありません";
     /* 会員向けの行は海外向けに混ぜない（【4】）。 */
-    if (r.member || isSub(r.handle)) return "会員向けの行です";
+    if (memberish(r)) return "会員向けの行です";
     if (!titleOf(r)) return "英題がありません";
     if (!s(r.descHtml).trim()) return "英語の説明がありません";
     if (priceOf(r, opt) <= 0) return "値段が出せません（eBay の売値か為替が0）";
@@ -385,7 +392,7 @@
     for (var i = 0; i < (items || []).length; i++) {
       var r = items[i] || {};
       if (!janOk(r.jan)) continue;
-      if (r.member || isSub(r.handle)) continue;   // 会員向けは混ぜない（【4】）
+      if (memberish(r)) continue;                  // 会員向けは混ぜない（【4】）
       out.push(updRowOf(r, opt));
     }
     return out;
@@ -394,7 +401,8 @@
 
   var API = {
     COLS: COLS, UPD_COLS: UPD_COLS, OPT1: OPT1,
-    HANDLE_PRE: HANDLE_PRE, SUB_PRE: SUB_PRE, SKU_PRE: SKU_PRE,
+    HANDLE_PRE: HANDLE_PRE, SUB_PRE: SUB_PRE, ONE_PRE: ONE_PRE,
+    SKU_PRE: SKU_PRE, isOne: isOne, memberish: memberish,
     TAG_EXPORT: TAG_EXPORT, TAG_NG: TAG_NG, PCT_DEF: PCT_DEF,
     IMG_MAX: IMG_MAX, IMG_NG: IMG_NG,
     handleOf: handleOf, skuOf: skuOf, isOs: isOs, isSub: isSub, janOk: janOk,

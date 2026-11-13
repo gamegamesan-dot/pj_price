@@ -1109,6 +1109,45 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="mwSubTrBtn" onclick="mwSubTransGo()">英題を入れる</button>
       </div>
       <div id="mwSubTrNote" class="note2" style="margin-top:2px"></div>
+
+      <!-- ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）===== -->
+      <div data-toc="1点ものを登録する"></div>
+      <details class="exp" data-exp="oneBox"><summary>説明</summary>
+        <div class="note2">
+          秋葉原などで<b>現物を仕入れた1点もの</b>を、会員向けに出します。
+          MW の無在庫とは別の商品です（Handle は <code>one-&lt;連番&gt;</code>）。<br>
+          JAN か ASIN を入れると、<b>Amazon の販売価格・手数料・見込みの粗利</b>を
+          自動で出します（無くても登録できます）。<br>
+          <b>写真はカジが撮った写真だけ</b>を入れてください
+          （Amazon・MW の画像は使いません）。写真は会員のカードに出ます。
+          Shopify の商品ページの写真は、読み込んだあとに Shopify で入れてください。<br>
+          配信は <b>#目玉商品-先行（プレミアム）</b>に先に出し、
+          ⚙の時間（既定 24時間）のあと <b>#目玉商品（スタンダード以上）</b>に出します。
+        </div>
+      </details>
+      <div class="row cfgprice" style="margin-top:6px"><label for="oneName">商品名</label><input type="text" id="oneName" value="" style="flex:1" placeholder="例：ガンダム RG νガンダム"></div>
+      <div class="row cfgprice"><label for="oneJan">JAN（無くてよい）</label><input type="text" id="oneJan" value="" inputmode="numeric" style="flex:1"></div>
+      <div class="row cfgprice"><label for="oneAsin">ASIN（無くてよい）</label><input type="text" id="oneAsin" value="" style="flex:1" placeholder="B0…"></div>
+      <div class="row cfgprice"><label for="oneCond">状態</label><select id="oneCond"><option value="新品">新品</option><option value="中古" selected>中古</option><option value="未開封">未開封</option><option value="ジャンク">ジャンク</option></select></div>
+      <div class="row cfgprice"><label for="oneCondNote">状態のメモ</label><input type="text" id="oneCondNote" value="" style="flex:1" placeholder="例：箱にスレ・動作確認済み"></div>
+      <div class="row cfgprice"><label for="oneCost">仕入原価</label><input type="number" id="oneCost" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row cfgprice"><label for="onePrice">販売価格（税込）</label><input type="number" id="onePrice" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row cfgprice"><label for="oneQty">数量</label><input type="number" id="oneQty" value="1" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
+      <div class="row cfgprice"><label for="oneShip">送料の区分</label><select id="oneShip"><option value="small">クリックポスト</option><option value="letter">レターパックプラス</option><option value="box" selected>宅配便</option></select></div>
+      <div class="row cfgprice"><label for="oneNote">メモ（カードに出る）</label><input type="text" id="oneNote" value="" style="flex:1" placeholder="例：開封済み・説明書あり"></div>
+      <div class="stackrow cfgprice" style="margin-top:6px">
+        <input type="file" id="onePicFile" accept="image/*">
+        <button class="btn" id="oneAmzBtn" onclick="oneAmzGo();return false">Amazon の値段を取る</button>
+      </div>
+      <div class="note2" style="margin-top:0" id="oneAmzNote"></div>
+      <button class="btn primary cfgprice" id="oneSaveBtn" style="width:100%;margin-top:6px" onclick="oneSaveGo();return false">この1点ものを登録する</button>
+      <button class="btn cfgprice" id="oneClearBtn" style="width:100%;margin-top:4px" onclick="oneFormClear();return false">欄を空にする（新しく登録する）</button>
+      <div class="note2" id="oneNote2" style="margin-top:2px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="oneListBtn" style="flex:1" onclick="oneListGo();return false">1点ものの一覧</button>
+        <button class="btn cfgprice" id="oneCsvBtn" style="flex:1" onclick="oneCsvGo();return false">Shopify 用 CSV</button>
+      </div>
+      <div id="oneList"></div>
       <!-- 8.18 今日の配信の案（候補をプランごとに自動で振り分ける） -->
       <div data-toc="今日の配信の案"></div>
       <details class="exp" data-exp="subDraft"><summary>説明</summary>
@@ -2052,7 +2091,15 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="chk cfgprice"><input type="checkbox" id="subPickSkipBuy" checked><label for="subPickSkipBuy" style="flex:1">「仕入れる」の印を付けた商品は案から外す（自分で刈り取る分）</label></div>
         <div class="row cfgprice"><label for="subStockPct">MW在庫の何%まで出すか</label><input type="number" id="subStockPct" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="subWantQty">会員の想定購入数（1商品）</label><input type="number" id="subWantQty" value="5" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
+        <!-- 8.22（【2】）1点ものの配信先と先行の時間 -->
+        <div class="row cfgprice"><label for="subChPre">#目玉商品-先行：チャンネルID</label><input type="text" id="subChPre" value="" inputmode="numeric" style="flex:1" placeholder="プレミアムだけに先に出す"></div>
+        <div class="row cfgprice"><label for="subChHot">#目玉商品：チャンネルID</label><input type="text" id="subChHot" value="" inputmode="numeric" style="flex:1" placeholder="スタンダード以上"></div>
+        <div class="row cfgprice"><label for="subPreHours">先行だけに出す時間</label><input type="number" id="subPreHours" value="24" step="1" min="1" max="720" inputmode="numeric"><span class="unit">時間</span></div>
+        <div class="rowv cfgprice"><label for="subOneOpenGrades">先行のあとで出すプラン</label><input type="text" id="subOneOpenGrades" value="" placeholder="standard,premium"><div class="note2" style="margin-top:2px">Shopify のタグ（<code>grade-*</code>）に入れるプランです。空なら <code>standard,premium</code>。先行のあいだは <code>grade-premium</code> だけが付きます。</div></div>
         <div class="row cfgprice"><label for="subQtyDays">MW が先に売る日数を引く</label><input type="number" id="subQtyDays" value="2" step="1" min="0" max="60" inputmode="numeric"><span class="unit">日</span></div>
+        <!-- 8.21（【1】）モニターは「ゲームソフト通常版のみ」。
+             通常版でないことを示す言葉を足せる（表は shared/subplan.js）。 -->
+        <div class="rowv cfgprice"><label for="subNormalNg">通常版でない言葉（足す分）</label><input type="text" id="subNormalNg" value="" placeholder="例：アルティメット、スペシャルパック"><div class="note2" style="margin-top:2px">モニター（ゲームソフト<b>通常版のみ</b>）から外す言葉です。読点・カンマ・空白で区切ります。<br>はじめから入っている言葉：限定版・特装版・初回限定・初回生産・完全生産限定・数量限定・豪華版・コレクターズ・同梱・セット・BOX・ボックス・DXパック・デラックスエディション・プレミアムエディション・アニバーサリーエディション・特別版・ツインパック・ダブルパック・トリプルパック<br>「薔薇と椿 〜お豪華絢爛版〜」のように<b>作品名に「版」が入るもの</b>は通常版として残し、案に「<b>通常版か要確認</b>」の印を出します。</div></div>
         <div class="note2" style="margin:0 0 6px">販売数の上限は <b>（MW在庫 − 売れる速さ×日数）× ◯%</b> と <b>会員の想定購入数</b>の<b>小さいほう</b>です（1点も出せない商品は案に出しません）。<br>1回の件数はプランごとの「1回の件数／1商品の数」で決まります。</div>
         <!-- 8.11（【Y】）会員向け Discord の配信。いまはモニターだけ動かす。 -->
         <div class="note2" style="margin:10px 0 2px"><b>会員向け Discord の配信</b></div>
@@ -3326,8 +3373,11 @@ var ADV_SUB=['subHour','subDomain',
              'subChPremium','subNPremium','subQPremium',
              /* 8.17 カードの「送料」の文（プランごと・Worker が読む）。 */
              'subShipMonitor','subShipLight','subShipStandard','subShipPremium',
-             /* 8.18 今日の配信の案（振り分けの決まり）。 */
-             'subStockPct','subWantQty','subQtyDays',
+             /* 8.18 今日の配信の案（振り分けの決まり）。
+                8.21 通常版でない言葉（足す分）。pj-sync も同じ判定を使う。 */
+             'subStockPct','subWantQty','subQtyDays','subNormalNg',
+             /* 8.22 1点ものの配信先と先行の時間。 */
+             'subChPre','subChHot','subPreHours','subOneOpenGrades',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -6134,8 +6184,11 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.17 カードの「送料」の文（プランごと）。 */
                  'subShipMonitor','subShipLight','subShipStandard',
                  'subShipPremium',
-                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
-                 'subStockPct','subWantQty','subQtyDays',
+                 /* 8.18 今日の配信の案（振り分けの決まり）。
+                    8.21 通常版でない言葉（足す分）。 */
+                 'subStockPct','subWantQty','subQtyDays','subNormalNg',
+                 /* 8.22 1点ものの配信先と先行の時間。 */
+                 'subChPre','subChHot','subPreHours','subOneOpenGrades',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -15983,7 +16036,9 @@ function subPickCfg(){
   var c=function(id){ var el=$(id); return el?!!el.checked:undefined; };
   return { subPickNoAmz:c('subPickNoAmz'), subPickSkipBuy:c('subPickSkipBuy'),
            subStockPct:v('subStockPct'), subWantQty:v('subWantQty'),
-           subQtyDays:v('subQtyDays') };
+           subQtyDays:v('subQtyDays'),
+           /* 8.21（【1】）通常版でない言葉（足す分）。 */
+           subNormalNg:v('subNormalNg') };
 }
 /* プランの⚙（この端末の欄）をまとめて渡す形にする。
    読み方は shared/subplan.js の list（pj-sync も同じものを読む）。 */
@@ -16037,10 +16092,18 @@ function subDraftGo(){
                  rows:rows.length };
   var on=d.plans.filter(function(p){ return p.on; });
   var n=on.reduce(function(a,p){ return a+p.items.length; },0);
+  /* 8.21（【1】）要確認・速さ0 の件数もまとめに出す。 */
+  var mb=0, sl=0;
+  on.forEach(function(p){ (p.items||[]).forEach(function(x){
+    if(x.maybe)mb++; if(x.slow)sl++; }); });
   subDraftNote('<b>今日の配信の案</b>（まだ何も変えていません）<br>'
     +'候補 '+mwN(rows.length)+'件 → <b>'+mwN(n)+'件</b>を選びました'
     +'（'+on.map(function(p){ return esc(p.name)+' '+mwN(p.items.length)+'件'
       +(p.over?('／あと '+mwN(p.over)+'件'):''); }).join('　')+'）'
+    +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
+      +'件</span>（作品名に「版」が入っているだけかもしれません。'
+      +'限定版なら印を外してください）'):'')
+    +(sl?('<br>売れる速さ 0点の行 '+mwN(sl)+'件は<b>後ろに回しました</b>'):'')
     +'<br><span class="note2">MW在庫の '+(+d.opt.stockPct||0)+'%（'
     +(+d.opt.qtyDays||0)+'日ぶん先に売れる分を引く）と、想定購入数 '
     +mwN(+d.opt.wantQty||0)+'点の小さいほうを上限にしています。</span>');
@@ -16070,6 +16133,9 @@ function subDraftHtml(plans){
         +'<b>'+esc(PJ_SHOPCSV.titleOf(String(x.name||x.jan)).slice(0,38)
                   ||esc(String(x.jan)))+'</b>'
         +(x.sale?'<span class="badge" style="background:#b07000">在庫処分</span>':'')
+        /* 8.21（【1】）通常版か要確認・売れる速さ 0点の印。 */
+        +(x.maybe?'<span class="badge" style="background:#b00020">通常版か要確認</span>':'')
+        +(x.slow?'<span class="badge" style="background:#8a8a8a">売れる速さ 0</span>':'')
         +'<br>'+yen(x.price)+'・'+mwN(x.qty)+'点まで'
         +(x.gross===null||x.gross===undefined?''
           :('・粗利 '+yen(x.gross)
@@ -16745,6 +16811,274 @@ function mwSubItems(noRoll){
     });
     return { rows:rows, table_ok:true, reroll:reroll, hand:hand };
   });
+}
+/* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
+   カジが手で登録した現物を、会員向けに出す。MW の無在庫とは別の商品。
+   ・Handle は one-<連番>／SKU は ONE-<連番>-<日付>
+   ・写真は**カジが撮った写真だけ**（Amazon・MW の画像は使わない）
+   ・#目玉商品-先行（プレミアム）→ ⚙の時間のあと #目玉商品
+   CSV の作り方は shared/shopcsv.js の1か所だけ（oneBuild）。 */
+var oneEditId=0;          // 直している1点ものの番号（0＝新しく登録）
+var oneRowsData=[];       // いちばん最後に読んだ一覧
+var onePicB64='', onePicType='', onePicName2='';
+function oneNote(html,bad){
+  var el=$('oneNote2'); if(!el)return;
+  el.innerHTML=html||'';
+  el.style.color=bad?'var(--bad)':'';
+}
+function oneForm(){
+  var v=function(id){ var el=$(id); return el?String(el.value||'').trim():''; };
+  return { id:oneEditId||0, name:v('oneName'), jan:v('oneJan'),
+    asin:v('oneAsin'), cond:v('oneCond'), cond_note:v('oneCondNote'),
+    cost:+v('oneCost')||0, price:+v('onePrice')||0,
+    qty:Math.max(0,Math.round(+v('oneQty')||1)),
+    ship_kind:v('oneShip'), note:v('oneNote') };
+}
+function oneFormClear(){
+  oneEditId=0;
+  ['oneName','oneJan','oneAsin','oneCondNote','oneCost','onePrice','oneNote']
+    .forEach(function(id){ var el=$(id); if(el)el.value=''; });
+  if($('oneQty'))$('oneQty').value='1';
+  if($('oneCond'))$('oneCond').value='中古';
+  if($('oneShip'))$('oneShip').value='box';
+  if($('onePicFile'))$('onePicFile').value='';
+  onePicB64=''; onePicType=''; onePicName2='';
+  $('oneAmzNote').textContent='';
+  oneNote('新しく登録します。');
+  $('oneSaveBtn').textContent='この1点ものを登録する';
+}
+/* 選んだ写真を読む（カジが撮った写真だけ）。 */
+function onePicRead(){
+  var f=($('onePicFile')||{}).files;
+  if(!f||!f.length)return Promise.resolve(null);
+  var file=f[0];
+  if(file.size>1800000)
+    return Promise.reject(new Error('写真が大きすぎます（2MB まで）。'
+      +'小さくしてから選び直してください。'));
+  return new Promise(function(ok,ng){
+    var rd=new FileReader();
+    rd.onload=function(){
+      var t=String(rd.result||'');
+      onePicB64=t.replace(/^data:[^;]*;base64,/,'');
+      onePicType=(/^data:([^;]+);/.exec(t)||[])[1]||file.type||'image/jpeg';
+      onePicName2=String(file.name||'pic.jpg').slice(0,100);
+      ok({ b64:onePicB64, type:onePicType, name:onePicName2 });
+    };
+    rd.onerror=function(){ ng(new Error('写真を読めませんでした。')); };
+    rd.readAsDataURL(file);
+  });
+}
+/* 登録する（新しく／直す）。 */
+function oneSaveGo(){
+  if(roleDenyPrice('oneNote2'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    oneNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return;
+  }
+  var f=oneForm();
+  if(!f.name){ oneNote('商品名を入れてください。',1); return; }
+  if(!(f.price>0)){ oneNote('販売価格を入れてください。',1); return; }
+  oneNote('登録しています…');
+  return onePicRead().then(function(pic){
+    var body=Object.assign({},f);
+    if(pic){ body.pic=pic.b64; body.pic_type=pic.type; body.pic_name=pic.name; }
+    return mwPost('/one',body);
+  }).then(function(r){
+    if(!r||r.ok!==true){
+      oneNote('⚠ 登録できませんでした：'
+        +esc(String((r&&(r.detail||r.error))||'')),1);
+      return;
+    }
+    /* 欄を空にしてから結果を出す（空にすると文が消えるため）。 */
+    oneFormClear();
+    oneNote('<div class="okbox">✓ <b>'+esc(String(r.handle||''))
+      +'</b> を登録しました。<br>このあと「<b>Shopify 用 CSV</b>」を書き出して'
+      +' Shopify に読み込み、一覧で「<b>読み込みました</b>」を押してください。'
+      +'</div>');
+    return oneListGo();
+  })['catch'](function(e){
+    oneNote('⚠ 登録できませんでした：'+esc(e.message),1);
+  });
+}
+/* Amazon の販売価格・手数料・見込みの粗利を取る。 */
+function oneAmzGo(){
+  if(roleDenyPrice('oneAmzNote'))return;
+  csvSecretFill();
+  var n=$('oneAmzNote');
+  var f=oneForm();
+  if(!f.jan&&!f.asin){
+    n.innerHTML='<span style="color:var(--bad)">JAN か ASIN を入れてください。'
+      +'</span>'; return;
+  }
+  n.textContent='Amazon を見ています…';
+  return mwGet('/one/amz?jan='+encodeURIComponent(f.jan)
+    +'&asin='+encodeURIComponent(f.asin)+'&cost='+(f.cost||0))
+    .then(function(d){
+      if(!d||d.ok!==true){
+        n.innerHTML='<span style="color:var(--bad)">⚠ 取れませんでした：'
+          +esc(String((d&&(d.detail||d.error))||''))+'</span>'; return;
+      }
+      if(!(d.price>0)){
+        n.innerHTML='<span style="color:var(--bad)">Amazon の値段が'
+          +'取れませんでした。</span>手で入れてください。'; return;
+      }
+      oneAmzLast=d;
+      if(d.asin&&$('oneAsin')&&!$('oneAsin').value)$('oneAsin').value=d.asin;
+      n.innerHTML='Amazon の販売価格 <b>'+yen(d.price)+'</b>'
+        +(d.basis?('（'+esc(String(d.basis))+'）'):'')
+        +'・手数料 '+yen(d.fee)
+        +(d.gross===null||d.gross===undefined?''
+          :('・<b>見込みの粗利 '+yen(d.gross)+'</b>'))
+        +'<span class="note2"> '+(d.src==='mw_amz'?'（取り込み済みの値）'
+                                                  :'（Amazon に聞きました）')
+        +'</span>';
+    })['catch'](function(e){
+      n.innerHTML='<span style="color:var(--bad)">⚠ 取れませんでした：'
+        +esc(e.message)+'</span>';
+    });
+}
+var oneAmzLast=null;
+/* 一覧。 */
+function oneListGo(){
+  if(roleDenyPrice('oneNote2'))return;
+  csvSecretFill();
+  var box=$('oneList'); if(!box)return;
+  box.innerHTML='<div class="note2">読んでいます…</div>';
+  return mwGet('/one?all=1').then(function(d){
+    if(!d||d.ok!==true){
+      box.innerHTML='<div class="note2" style="color:var(--bad)">'
+        +'⚠ 読めませんでした：'
+        +esc(String((d&&(d.detail||d.error))||''))
+        +(d&&d.table_ok===false?'（pj-sync のデプロイと D1 の作業'
+          +'（migrate-0059）が要ります）':'')+'</div>';
+      return;
+    }
+    oneRowsData=d.rows||[];
+    oneGrades={ pre:String(d.pre_grades||'premium'),
+                open:String(d.open_grades||'standard,premium'),
+                hours:+d.hours||24 };
+    if(!oneRowsData.length){
+      box.innerHTML='<div class="note2">まだ1点ものがありません。</div>';
+      return;
+    }
+    box.innerHTML='<div class="note2" style="margin:6px 0 2px"><b>1点もの '
+      +mwN(oneRowsData.length)+'件</b>（先行は '+oneGrades.hours+'時間）</div>'
+      +oneRowsData.map(oneRowHtml).join('');
+  })['catch'](function(e){
+    box.innerHTML='<div class="note2" style="color:var(--bad)">'
+      +'⚠ 読めませんでした：'+esc(e.message)+'</div>';
+  });
+}
+var oneGrades={ pre:'premium', open:'standard,premium', hours:24 };
+function oneRowHtml(x){
+  var left=Math.max(0,(+x.qty||0)-(+x.sold||0));
+  return '<div class="note2" style="margin:4px 0 0;padding:6px;'
+    +'border:1px solid var(--line);border-radius:4px'
+    +(x.off?';opacity:.55':'')+'">'
+    +'<b>'+esc(PJ_SHOPCSV.titleOf(x.name).slice(0,40)||String(x.handle))+'</b>'
+    +(x.pic?'<span class="badge" style="background:#1c6fb4">写真</span>':'')
+    +(x.off?'<span class="badge" style="background:#8a8a8a">取り下げ</span>':'')
+    +(x.loaded_at?'<span class="badge" style="background:#1f7a4d">読み込み済み</span>'
+                 :'<span class="badge" style="background:#b00020">未読み込み</span>')
+    +'<br>'+esc(String(x.handle))+'　'+yen(x.price)
+    +'　残り '+left+'／'+(+x.qty||0)+'点'
+    +(x.cond?('　'+esc(String(x.cond))):'')
+    +(x.gross!==null&&x.gross!==undefined?('　粗利の目安 '+yen(x.gross)):'')
+    +(x.pre_at?('<br>先行 '+esc(String(x.pre_at_jst||''))):'')
+    +(x.open_at?('　みんな '+esc(String(x.open_at_jst||''))):'')
+    +'<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">'
+    +'<button class="btn" style="padding:4px 8px;font-size:12px" '
+    +'onclick="oneEdit('+(+x.one_id||0)+');return false">直す</button>'
+    +'<button class="btn" style="padding:4px 8px;font-size:12px" '
+    +'onclick="oneMarkGo('+(+x.one_id||0)+',\'loaded\','
+    +(x.loaded_at?'0':'1')+');return false">'
+    +(x.loaded_at?'読み込みの印を外す':'Shopify に読み込みました')+'</button>'
+    +'<button class="btn" style="padding:4px 8px;font-size:12px" '
+    +'onclick="oneMarkGo('+(+x.one_id||0)+',\'off\','+(x.off?'0':'1')
+    +');return false">'+(x.off?'戻す':'取り下げる')+'</button>'
+    +'</div></div>';
+}
+function oneEdit(id){
+  var x=oneRowsData.filter(function(y){ return (+y.one_id||0)===(+id||0); })[0];
+  if(!x)return;
+  oneEditId=+id||0;
+  $('oneName').value=x.name||'';
+  $('oneJan').value=x.real_jan||'';
+  $('oneAsin').value=x.asin||'';
+  $('oneCond').value=x.cond||'中古';
+  $('oneCondNote').value=x.cond_note||'';
+  $('oneCost').value=x.cost||'';
+  $('onePrice').value=x.price||'';
+  $('oneQty').value=x.qty||1;
+  $('oneShip').value=x.ship_kind||'box';
+  $('oneNote').value=x.note||'';
+  if($('onePicFile'))$('onePicFile').value='';
+  onePicB64=''; onePicType=''; onePicName2='';
+  $('oneSaveBtn').textContent='one-'+oneEditId+' を直す';
+  oneNote('<b>one-'+oneEditId+'</b> を直しています。'
+    +'写真を選ばなければ、いまの写真はそのままです。');
+  try{ $('oneName').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+}
+function oneMarkGo(id,kind,on){
+  if(roleDenyPrice('oneNote2'))return;
+  var body={ ids:[+id||0] };
+  body[kind]=on?1:0;
+  oneNote('印を付けています…');
+  return mwPost('/one/mark',body).then(function(r){
+    if(!r||r.ok!==true){
+      oneNote('⚠ 印を付けられませんでした：'
+        +esc(String((r&&(r.detail||r.error))||'')),1); return;
+    }
+    oneNote('✓ 印を変えました。');
+    return oneListGo();
+  })['catch'](function(e){ oneNote('⚠ 印を付けられませんでした：'
+    +esc(e.message),1); });
+}
+/* 1点ものの Shopify 用 CSV。
+   先行のあいだは grade-premium だけ、先行があいた商品は ⚙ のプランも足す。 */
+function oneCsvGo(){
+  if(roleDenyPrice('oneNote2'))return;
+  csvSecretFill();
+  oneNote('作っています…');
+  return mwGet('/one?all=1').then(function(d){
+    if(!d||d.ok!==true){
+      oneNote('⚠ 読めませんでした：'
+        +esc(String((d&&(d.detail||d.error))||'')),1); return;
+    }
+    oneRowsData=d.rows||[];
+    var hours=+d.hours||24;
+    var now=Date.now();
+    var items=oneRowsData.filter(function(x){ return !x.off; })
+      .map(function(x){
+        /* 先行から⚙の時間がたっていれば、ほかのプランにも見せる。 */
+        var t=Date.parse(String(x.pre_at||''));
+        var open=isFinite(t)&&((now-t)/3600000>=hours);
+        return Object.assign({},x,{ id:x.one_id,
+          grades:open?String(d.open_grades||'standard,premium')
+                     :String(d.pre_grades||'premium') });
+      });
+    var sp=PJ_SHOPCSV.oneSplit(items,{});
+    if(!sp.go.length){
+      oneNote('出せる1点ものがありません。'+mwSubWhyHtml(sp.no),1); return;
+    }
+    var o=mwSubOpt();
+    var text=PJ_SHOPCSV.oneBuild(items,o);
+    dl('shopify-one-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
+    var openN=sp.go.filter(function(x){ return /standard/.test(x.grades); }).length;
+    oneNote('<div class="okbox"><b>書き出した '+mwN(sp.go.length)+'件'
+      +'・外した '+mwN(sp.no.length)+'件</b></div>'
+      +mwSubWhyHtml(sp.no)
+      +'<br>Shopify の <b>商品 → インポート</b>で読み込み、'
+      +'<b>「Overwrite products with matching handles」にチェック</b>'
+      +'してください。<br>写真は読み込んだあとに <b>Shopify の商品ページ</b>で'
+      +'入れてください（CSV には入れていません）。'
+      +(openN?('<br>先行があいた '+mwN(openN)+'件は、'
+        +'<b>'+esc(oneGrades.open)+'</b> にも見えるタグで出しました。'):'')
+      +'<br>読み込んだら、一覧で「<b>Shopify に読み込みました</b>」を'
+      +'押してください。');
+    return oneListGo();
+  })['catch'](function(e){ oneNote('⚠ 書き出せませんでした：'
+    +esc(e.message),1); });
 }
 /* ===== 6.194（【5】）「Shopify に読み込みました」の対象を選べるようにする =====
    これまでは「会員に出す」印の付いた行**ぜんぶ**に印を付けていたので、
@@ -24998,7 +25332,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v279';   // sw.js の const V と必ず同じ値にする
+var APP_V='v281';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
