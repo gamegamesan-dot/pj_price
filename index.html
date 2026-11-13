@@ -1977,7 +1977,10 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 4px">毎時07分の回で見るので、8時の設定なら <b>8:07 ごろ</b>に出ます。土日は送りません。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subPre" checked><label for="subPre" style="flex:1">前日に「明日 ○時に配信します」の予告を出す</label></div>
         <div class="row cfgprice"><label for="subDomain">Shopify のドメイン</label><input type="text" id="subDomain" value="" placeholder="omakase-ship.myshopify.com" style="flex:1"></div>
-        <div class="note2" style="margin:0 0 6px">購入リンクは <code>https://&lt;ここ&gt;/products/sub-&lt;JAN&gt;</code> になります。独自ドメインにしたらここを書き換えてください。<b>鍵（SHOPLOCK）がかかっているので、ログインしていない人はログイン画面に飛びます</b>（そのままでよいです）。</div>
+        <div class="note2" style="margin:0 0 6px">購入リンクは <code>https://&lt;ここ&gt;/products/sub-&lt;JAN&gt;</code> になります。独自ドメインにしたらここを書き換えてください。<b>鍵（SHOPLOCK）がかかっているので、ログインしていない人はログイン画面に飛びます</b>（そのままでよいです）。<br><code>https://</code> や末尾の <code>/</code> が付いていても受け付けます（入れたあとに整えます）。</div>
+        <!-- 8.16（【1】）入れたらすぐ保存し、できたか・できなかったかを
+             この欄のそばに出す（黙って失敗しない）。 -->
+        <div class="note2" id="subCfgNote" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
@@ -1991,6 +1994,7 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（いまは止めています・1点ものの先行）</label></div>
+        <div class="note2" id="subCfgNote2" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
         <!-- 6.183（v263）ゲームソフトは一律の重さ。Shopify の送料は本数ではなく
@@ -2848,6 +2852,25 @@ var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'mwFbaShipS','mwFbaStoreS','mwFbaShipM','mwFbaStoreM',
                  'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
                  'mwProfitMode'];
+/* 8.16（【1】）会員向け Discord の配信と、会員価格の⚙。
+   **Worker がこの設定を読んで動く**のに、v265〜v268 では ADV のどの
+   まとまりにも入っておらず、**端末の localStorage にしか無かった**。
+   そのため pj-sync 側はずっと空で、仕入れタブに
+   「⚙の Shopify のドメインが空です」「チャンネルID なし」と出たままだった。
+   （チェック欄は ADV_SUBCHK。真偽値なので別に持つ） */
+var ADV_SUB=['subHour','subDomain',
+             'subChMonitor','subNMonitor','subQMonitor',
+             'subChLight','subNLight','subQLight',
+             'subChStandard','subNStandard','subQStandard',
+             'subChPremium','subNPremium','subQPremium',
+             /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
+                （mwSubShip）。どの端末でも同じ値段になるように送る。 */
+             'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
+             'mwSubGrossMin','mwSubRateMin','mwSubGrossFloor',
+             /* 会員向け（Shopify）の重さ（6.173／6.183）。 */
+             'mwSubGameG','mwSubAddG'];
+var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
+                'subOnStandard','subOnPremium'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -2878,7 +2901,11 @@ var ADV_CHECK=['dutyShip','taxRefund','stampDisc','syncSkipAcc','csvReviewZero',
                /* 6.175（v257）無在庫も追従する（Worker の rkSettings が読む）。 */
                'autoRkDrop'];
 /* 真偽値で送るチェック欄の全部（6.142）。 */
-function advChecks(){ return ADV_CHECK.concat(ADV_AMZCHK); }
+function advChecks(){
+  return ADV_CHECK.concat(ADV_AMZCHK).concat(ADV_SUBCHK);
+}
+/* 端末にも真偽値で控えるチェック欄（8.16：配信のぶんを足した）。 */
+function csvCfgChecks(){ return ADV_AMZCHK.concat(ADV_SUBCHK); }
 var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
                'syncWeight','syncWeightGame','csvShipLoose','csvLooseAmz',
                'syncTol','syncSoldCut','csvMarkStep','csvMarkTimes',
@@ -2889,7 +2916,7 @@ var ADV_PRICE=['csvPackGame','csvPackFig','csvWeightCart','csvWeightLoose',
 function advCsvCfg(){
   return ADV_SHIP.concat(ADV_AMZ).concat(ADV_MD).concat(ADV_RV).concat(ADV_PB)
     .concat(ADV_PRICE).concat(ADV_AMZRANK).concat(ADV_AMZFILT)
-    .concat(ADV_AMZCALC).concat(ADV_AMZCOND);
+    .concat(ADV_AMZCALC).concat(ADV_AMZCOND).concat(ADV_SUB);
 }
 function advDefaults(){
   return { targetMode:TARGET_MODE_DEFAULT, baseProfit:String(BASE_PROFIT_DEFAULT),
@@ -2987,7 +3014,16 @@ function advTouch(){ advAt=new Date().toISOString(); save(); advPushLater(); }
 /* 待たずにいま送る。自動値下げ・自動反映の「設定を送る」から呼ぶ
    （Worker はこの設定でしか動かないので、目標と一緒にそろえる）。 */
 function advSyncNow(){ advAt=new Date().toISOString(); save(); advPush(); }
-function advNote(t){ var el=$('advSyncNote'); if(el)el.textContent=t||''; }
+/* 8.16（【1】）設定の保存の知らせ。⚙の下のほう（advSyncNote）だけでなく、
+   **会員向け配信の欄のそば**にも同じものを出す（黙って失敗しないように）。
+   bad を渡すと赤で出す。 */
+function advNote(t,bad){
+  ['advSyncNote','subCfgNote','subCfgNote2'].forEach(function(id){
+    var el=$(id); if(!el)return;
+    el.textContent=t||'';
+    el.style.color=bad?'var(--bad)':'';
+  });
+}
 var advPushT=0;
 function advPushLater(){
   if(advPushT)clearTimeout(advPushT);
@@ -3024,7 +3060,8 @@ function advPush(){
           advSent=(d&&d.ok===true&&d.settings)?d.settings:{};
           advPushDiff();
         })['catch'](function(){
-          advNote('この端末だけに保存しました（pj-sync に届きません）');
+          advNote('⚠ pj-sync に届きませんでした（この端末だけに保存しました）。'
+            +'通信を確かめて、もう一度欄を確定してください。',1);
         });
     }catch(e){ advSent={}; advPushDiff(); }   // 読めなくても送れるようにする
     return;
@@ -3039,7 +3076,10 @@ function advPushDiff(){
     body:JSON.stringify({ at:advAt, settings:df.settings })})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(!d||d.ok!==true){ advNote('この端末だけに保存しました'); return; }
+      if(!d||d.ok!==true){
+        advNote('⚠ pj-sync が受け取りませんでした（この端末だけに保存しました）。'
+          +'⚙のキーが管理者用かどうかを確かめてください。',1);
+        return; }
       /* 書き込みが退けられたのは、D1 にもっと新しい設定があるとき。
          別の端末であとから変えた値を上書きしないよう、そちらに合わせる。 */
       if(d.stored===false&&d.at&&d.at>advAt){ advAdopt(d); return; }
@@ -3047,7 +3087,8 @@ function advPushDiff(){
       advNote('pj-sync にも保存しました（変えた '+df.n
         +'項目だけ送りました。ほかの項目はそのままです）');
     })['catch'](function(){
-      advNote('この端末だけに保存しました（pj-sync に届きません）');
+      advNote('⚠ pj-sync に届きませんでした（この端末だけに保存しました）。'
+        +'通信を確かめて、もう一度欄を確定してください。',1);
     });
 }
 /* 開いたときに D1 と突き合わせる。新しいほうを採り、端末のほうが新しければ送る。 */
@@ -5608,12 +5649,16 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                     会員向きの判定（利益率）。 */
                  'mwSubShip','mwSubRateMin','mwSubGrossFloor',
                  'mwSubLoc','mwSubAddG',
-                 /* 8.11（【Y】）会員向け Discord の配信。 */
-                 'subOn','subHour','subPre','subDomain',
-                 'subOnMonitor','subNMonitor','subQMonitor','subChMonitor',
-                 'subOnLight','subNLight','subQLight','subChLight',
-                 'subOnStandard','subNStandard','subQStandard','subChStandard',
-                 'subOnPremium','subNPremium','subQPremium','subChPremium',
+                 /* 8.11（【Y】）会員向け Discord の配信。
+                    8.16（【1】）チェック欄（subOn・subPre・subOn*）は
+                    **ここには入れない**。この一覧は `.value` で控えるので、
+                    チェック欄を入れると 'on' という文字が入るだけで、
+                    開き直したときに入／切が戻らなかった（ADV_SUBCHK で持つ）。 */
+                 'subHour','subDomain',
+                 'subNMonitor','subQMonitor','subChMonitor',
+                 'subNLight','subQLight','subChLight',
+                 'subNStandard','subQStandard','subChStandard',
+                 'subNPremium','subQPremium','subChPremium',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -5647,8 +5692,11 @@ function csvLoad(){
   try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){
          if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
-       ADV_AMZCHK.forEach(function(id){
-         if(typeof o[id]==='boolean')$(id).checked=o[id]; });
+       csvCfgChecks().forEach(function(id){
+         var el=$(id);
+         if(el&&typeof o[id]==='boolean')el.checked=o[id]; });
+       if(typeof o.csvRevisePrice==='boolean')
+         $('csvRevisePrice').checked=o.csvRevisePrice;
        if(typeof o.csvAutoParse==='boolean')$('csvAutoParse').checked=o.csvAutoParse;
        if(typeof o.csvShowNew==='boolean')$('csvShowNew').checked=o.csvShowNew;
        if(typeof o.mwNewOnly==='boolean')$('mwNewOnly').checked=o.mwNewOnly;
@@ -5826,7 +5874,12 @@ function csvSecretFill(){
   });
   return n;
 }
+/* 8.16（【1】）端末に保存できなかったことを**黙って捨てない**。
+   iPhone の Safari は保存の空きが足りないと setItem で落ちるので、
+   そのときは欄のそばに出す（これまでは try/catch で消えていた）。 */
+var csvCfgErr='';
 function csvSaveCfg(){
+  csvCfgErr='';
   try{
     /* 丸ごと置き換えずに、保存済みの内容へ上書きする。
        何かの理由で欄が読めなくても、ほかの設定を落とさないため。 */
@@ -5842,8 +5895,13 @@ function csvSaveCfg(){
       }
       o[id]=v; csvSecretKeep(id,v);
     });
-    /* Amazon刈取の絞り込み（6.142）。管理者の端末では次に開いても同じ形。 */
-    ADV_AMZCHK.forEach(function(id){ o[id]=$(id).checked; });
+    /* Amazon刈取の絞り込み（6.142）と会員向け配信の入／切（8.16）。
+       管理者の端末では次に開いても同じ形。 */
+    csvCfgChecks().forEach(function(id){
+      var el=$(id); if(el)o[id]=!!el.checked; });
+    /* 8.16（【1】）数量更新CSVに売値も含めるか（⚙のチェック欄）。
+       これまで控えていなかったので、開き直すと切に戻っていた。 */
+    o.csvRevisePrice=$('csvRevisePrice').checked;
     o.csvAutoParse=$('csvAutoParse').checked;
     o.csvShowNew=$('csvShowNew').checked;
     o.mwNewOnly=$('mwNewOnly').checked;        // MW：新品だけ（6.85）
@@ -5856,14 +5914,32 @@ function csvSaveCfg(){
     o.uiHideShopee=$('uiHideShopee').checked;
     o.uiHideEbay=$('uiHideEbay').checked;
     localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o));
-  }catch(e){}
+    return true;
+  }catch(e){
+    csvCfgErr=String((e&&e.message)||e);
+    return false;
+  }
+}
+/* 設定を端末に保存し、**できたか・できなかったか**を知らせに出す（8.16）。
+   できたら pj-sync にも送る（少し待ってから・advPushLater）。 */
+function cfgSaveNote(){
+  if(csvSaveCfg()){ advTouch(); return true; }
+  advNote('⚠ この端末に保存できませんでした（'+csvCfgErr
+    +'）。Safari の保存の空きが足りないときは、'
+    +'出品リストの古い行やゴミ箱を減らすと入ります。',1);
+  return false;
 }
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(e){
   /* キーの欄を空にできるのは、その欄を触っている本人だけ。
      画面に戻った直後にブラウザが空にしたときは消さない。 */
   if(CSV_CFG_SECRET.indexOf(id)>=0&&e&&e.isTrusted&&document.activeElement===this)
     csvSecretKeep(id,String(this.value||'').trim());
-  csvSaveCfg(); csvRender(); cfgLineRender(); }); });
+  /* 8.16（【1】）端末に保存できなかったら黙って捨てずに出す。 */
+  if(!csvSaveCfg())
+    advNote('⚠ この端末に保存できませんでした（'+csvCfgErr+'）。'
+      +'Safari の保存の空きが足りないときは、出品リストの古い行や'
+      +'ゴミ箱を減らすと入ります。',1);
+  csvRender(); cfgLineRender(); }); });
 /* キーを入れ替えたら、どちらのキーかを聞き直す（6.52）。 */
 ['syncKey','csvTitleKey','syncApi'].forEach(function(id){
   $(id).addEventListener('change',function(){ roleCheck(); });
@@ -5890,6 +5966,42 @@ advCsvCfg().forEach(function(id){
       csvShipMwNote(); try{ csvRender(); }catch(e){}
     });
   });
+/* 8.16（【1】）会員向け配信の入／切。入れたらすぐ端末と pj-sync に保存し、
+   できたか・できなかったかを欄のそばに出す。 */
+ADV_SUBCHK.forEach(function(id){
+  var el=$(id); if(!el)return;
+  el.addEventListener('change',function(){
+    if(cfgSaveNote())advNote('保存しています…（pj-sync にも送ります）');
+    try{ subBarRender(); }catch(e){}
+  });
+});
+/* 値の欄（ドメイン・チャンネルID・件数・時刻）も、入れたらすぐ保存する。
+   advCsvCfg() の input で pj-sync に送るので、ここでは端末の保存の
+   できた・できないだけを見る。 */
+ADV_SUB.forEach(function(id){
+  var el=$(id); if(!el)return;
+  el.addEventListener('input',function(){
+    if(!csvSaveCfg()){
+      advNote('⚠ この端末に保存できませんでした（'+csvCfgErr+'）。',1);
+      return;
+    }
+    advNote('保存しています…（pj-sync にも送ります）');
+  });
+});
+/* 8.16（【1】）Shopify のドメインは https:// や末尾の / が付いていても
+   受け付ける（入れ終わったときに整える）。整え方は
+   shared/subcard.js の domainOf の1か所だけ（pj-sync も同じものを使う）。 */
+$('subDomain').addEventListener('change',function(){
+  var v=String(this.value||'');
+  var fix=(typeof SUBCARD!=='undefined'&&SUBCARD.domainOf)
+    ?SUBCARD.domainOf(v):v.trim();
+  if(fix!==v){ this.value=fix; }
+  cfgSaveNote();
+  try{ subBarRender(); }catch(e){}
+});
+/* 8.16（【4】）数量更新CSVに売値も含めるか。控えていなかったので、
+   開き直すと切に戻っていた（端末だけに控える・pj-sync には送らない）。 */
+$('csvRevisePrice').addEventListener('change',csvSaveCfg);
 $('csvBoCols').addEventListener('change',csvSaveCfg);
 $('syncOnHand').addEventListener('change',csvSaveCfg);
 /* 使わないタブを隠す。切り替えたらすぐ反映する（中身は消さない）。 */
@@ -15021,6 +15133,13 @@ function mwSubOpt(){
    ・同じ商品を同じチャンネルに二重に送らず、変わったら書き換える
    式と表は shared/subplan.js・shared/subcard.js の1か所だけ。 */
 var subPlanData=null;
+/* 8.16（【2】）その⚙の欄に、この端末では値が入っているか。
+   「pj-sync に届いていないだけ」と「まだ入れていない」を出し分ける。 */
+function subCfgLocal(id){
+  if(!id)return false;
+  var el=$(id);
+  return !!(el&&String(el.value||'').trim());
+}
 function subNote(msg,bad){
   var n=$('subNote'); if(!n)return;
   n.innerHTML=msg||'';
@@ -15059,13 +15178,24 @@ function subBarRender(){
     +(d.skip?'　<b style="color:var(--bad)">今日は送らない印が付いています</b>':'')
     +(d.token?'':'　<b style="color:var(--bad)">ボットのトークンが'
       +'pj-sync に登録されていません</b>')
-    +(d.domain?'':'　<b style="color:var(--bad)">⚙の Shopify のドメインが'
-      +'空です（購入リンクが出ません）</b>')
+    /* 8.16（【2】）⚙に入れた値が pj-sync に届いていないときは、
+       「空です」ではなく**何をすればよいか**を出す（v268 までは、
+       配信の⚙を pj-sync に送っていなかったのでずっと「空です」だった）。 */
+    +(d.domain?''
+      :('　<b style="color:var(--bad)">'
+        +(subCfgLocal('subDomain')
+          ?'⚙の Shopify のドメインが pj-sync に届いていません'
+           +'（⚙を開いて、ドメインの欄をもう一度確定してください）'
+          :'⚙の Shopify のドメインが空です（購入リンクが出ません）')
+        +'</b>'))
     +'</div>'
     +'<div class="note2" style="margin:2px 0 0">'
     +d.plans.map(function(p){
       return esc(p.name)+' '+(p.on?(p.ch?('<b>'+mwN(p.items.length)+'件</b>')
-        :'<span style="color:var(--bad)">チャンネルID なし</span>'):'止めています');
+        :('<span style="color:var(--bad)">'
+          +(subCfgLocal(SUBPLAN.keyUp?('subCh'+SUBPLAN.keyUp(p.key)):'')
+            ?'チャンネルID が pj-sync に届いていません'
+            :'チャンネルID なし')+'</span>')):'止めています');
     }).join('　／　')+'</div>';
 }
 /* 今日の配信の予定を見る。 */
@@ -23428,7 +23558,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v268';   // sw.js の const V と必ず同じ値にする
+var APP_V='v269';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

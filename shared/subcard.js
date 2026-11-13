@@ -73,8 +73,19 @@
     return m[shipTier(r)] || m.unknown;
   }
   /* 購入リンク（Shopify の商品ページ）。ドメインが無ければ空。 */
+  /* Shopify のドメインを整える（8.16・【3】）。
+     ⚙に `https://omakase-ship.myshopify.com/` と入れられても受け付ける。
+     入り口が画面・pj-sync・テストと3つあるので、整え方はここの1か所だけ。
+       ・前後の空白と途中の空白を取る
+       ・`https://`（どの scheme でも）を外す
+       ・`/` から後ろ（末尾の / や path）を落とす
+       ・小文字にそろえる（ホスト名は大小を区別しない） */
+  function domainOf(v) {
+    return s(v).replace(/\s+/g, "").replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "")
+      .replace(/\/.*$/, "").toLowerCase();
+  }
   function buyUrl(domain, jan) {
-    var d = s(domain).trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    var d = domainOf(domain);
     var j = s(jan).replace(/\D/g, "");
     if (!d || j.length < 8) return "";
     return "https://" + d + "/products/sub-" + j;
@@ -147,7 +158,7 @@
     });
   }
   var API = { card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
-              buyUrl: buyUrl, amzUrl: amzUrl, shipTier: shipTier,
+              buyUrl: buyUrl, domainOf: domainOf, amzUrl: amzUrl, shipTier: shipTier,
               shipJa: shipJa, leftText: leftText, yen: yen,
               EMB_MAX: EMB_MAX, EMB_CHARS: EMB_CHARS, COLOR: COLOR,
               SOLD_COLOR: SOLD_COLOR, MEMBER_NG: MEMBER_NG, SHIP_JA: SHIP_JA };

@@ -711,3 +711,71 @@ Shopify の「注文 → エクスポート」の CSV を画面から読み込�
 「Nintendo Switch」になること。
 `tests/discordtest.mjs`（106）… テスト配信のカードで NS・NS2・PS5 が
 正式名になり、`NS2H` は記号のまま出ること。
+
+## 8.16 配信の⚙が保存されない（v269・【1】〜【4】）
+
+### 不具合
+
+カジ（iPhone の Safari／ホーム画面の pj・管理者の端末・2026-11-13）
+
+> ⚙「3. 仕入れ」→「会員向け Discord の配信」の「Shopify のドメイン」と
+> 「モニター：チャンネルID」に値を入れても、⚙ を閉じて開き直すと空に戻ります。
+> 仕入れタブの「会員に配信する」の欄も「⚙の Shopify のドメインが空です」
+> 「モニター チャンネルID なし」のままです。
+
+### 原因
+
+1. **配信の⚙を pj-sync に1つも送っていなかった**（v265〜v268）。
+   `subDomain`・`subCh*`・`subN*`・`subQ*`・`subHour`・`subPre`・`subOn*` は
+   `CSV_CFG_IDS`（端末の localStorage）にしか入れておらず、
+   **`ADV_*` のどのまとまりにも入っていなかった**。
+   Worker（`subSettings`）はこの設定を読んで動くので、pj-sync 側はずっと空。
+   だから仕入れタブの表示も直らず、配信も動かない。
+   ⚙「会員価格に含める MW 送料」（`mwSubShip`・§6.187）も同じ穴に落ちていた
+   （v267 の報告で「⚙を一度保存してください」と書いたが、**送る口が無かった**）。
+2. **チェック欄を `CSV_CFG_IDS` に入れていた。** この一覧は `.value` で控えるので、
+   チェック欄は `'on'` という文字が入るだけ。開き直すと
+   「配信を使う」「予告」「プランの入／切」が**HTML の既定に戻っていた**。
+3. **端末に保存できなかったことを黙って捨てていた。**
+   `csvSaveCfg` は丸ごと `try{…}catch(e){}` で、iPhone の保存の空きが
+   足りずに `localStorage.setItem` が落ちても何も出なかった。
+
+### 直し
+
+| したこと | 中身 |
+|---|---|
+| `ADV_SUB`（値の欄）を作った | `subHour`・`subDomain`・4プランの `subCh*`／`subN*`／`subQ*`、会員価格の `mwSubShip`・`mwSubCardFee`・`mwSubPack`・`mwSubAddMin`・`mwSubAddMax`・`mwSubGrossMin`・`mwSubRateMin`・`mwSubGrossFloor`、重さの `mwSubGameG`・`mwSubAddG`。`advCsvCfg()` に足したので、**入れた瞬間に pj-sync へ差分で送る**（`advTouch`→`advPushLater`） |
+| `ADV_SUBCHK`（チェック欄）を作った | `subOn`・`subPre`・`subOnMonitor`／`Light`／`Standard`／`Premium`。`advChecks()` に入るので**真偽値**で送り、`advApply` で戻る。端末の控えも `csvCfgChecks()` で真偽値にした |
+| `CSV_CFG_IDS` からチェック欄を外した | `.value` で控える一覧なので入れてはいけない（原因②） |
+| 保存の知らせを欄のそばに出した | ⚙の配信の欄に `subCfgNote`／`subCfgNote2` を置き、`advNote()` が `advSyncNote` と一緒に書く。**失敗は赤**（`advNote(t,1)`） |
+| `csvSaveCfg` が成否を返すようにした | 落ちたら `csvCfgErr` に理由を控え、「⚠ この端末に保存できませんでした（…）。Safari の保存の空きが足りないときは、出品リストの古い行やゴミ箱を減らすと入ります。」と出す |
+| ドメインを整えるようにした（【3】） | `shared/subcard.js` の `domainOf()`（新しく作った・1か所だけ）。`https://`（どの scheme でも）・末尾の `/`・`/` から後ろ・空白・大文字を落とす。`buyUrl` と Worker の `subSettings` が同じこれを使う。欄は入れ終わったときに整った値に書き直す |
+| 仕入れタブの出し分け（【2】） | ⚙に値が入っているのに pj-sync に無いときは「**⚙の Shopify のドメインが pj-sync に届いていません（⚙を開いて、ドメインの欄をもう一度確定してください）**」。まだ入れていないときは今までどおり「空です」「チャンネルID なし」 |
+| `csvRevisePrice`（【4】） | ⚙「数量更新CSVに売値も含める」も控えていなかったので足した（端末だけ・pj-sync には送らない） |
+
+### ⚙の欄を全部見た（【4】）
+
+⚙の中の `input`／`select`／`textarea`（178個）を機械的に当たって、
+どこにも控えていない欄が無いことをテストで見張るようにした
+（`tests/subcfgui.js` の⑨）。控えないままにしたのは**その回だけの道具の欄**で、
+`mwFeeTestAsin`・`mwFeeTestPrice`・`mwFeeNgN`・`mwFeeWhyN`・`mwNtFind`・
+`mwMoveJan`・`mwFixSku`・`mwFixPrice`（調べる口に入れる値）と、
+Shopee タブの `spFx` ほか（`pj:shopee:v1` に別に控えている）だけ。
+
+### カジがやること
+
+1. 画面を **v269** にする（⚙の「新しい版にする」）
+2. **pj-sync をデプロイ**する（ドメインの整えと、設定を読む側のぶん）
+3. ⚙「3. 仕入れ」→「会員向け Discord の配信」で
+   **ドメインとチャンネルID をもう一度入れ直す**
+   （欄のそばに「pj-sync にも保存しました」と出れば入っている）
+4. 仕入れタブの「会員に配信する」で「今日の配信の予定を見る」を押す
+
+### テスト
+
+`tests/subcfgui.js`（27）… 配信の⚙が `advCsvCfg()`／`advChecks()` に入ること・
+入れた瞬間に pj-sync へ送ること・チェック欄が真偽値で入ること・
+**開き直しても残ること**（ドメイン・チャンネルID・時刻・配信を使う・予告）・
+pj-sync に届かなかったら赤で出すこと・端末に保存できなくても黙らないこと・
+ドメインを整えること・仕入れタブの出し分け・⚙に控えていない欄が無いこと。
+`tests/subsend.mjs`（60）… pj-sync 側も `https://` つきのドメインを受け付けること。

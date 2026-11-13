@@ -94,6 +94,19 @@ console.log('=== ① プランの表（モニターだけ動かす）===');
      '★★1点ものはプレミアム（one）だけ');
 }
 
+console.log('\n=== ①の2 ⚙のドメインが https:// つきでも購入リンクが出る（8.16）===');
+{
+  const env=env0();
+  await setCfg(env,{ subDomain:'https://omakase-ship.myshopify.com/' });
+  await stock(env,JAN); await amz(env,JAN); await sub(env,JAN);
+  const d=await api(env,'/sub/plan');
+  console.log('   domain '+JSON.stringify(d.domain));
+  ok(d.domain==='omakase-ship.myshopify.com',
+     '★★★pj-sync も https:// と末尾の / を外して持つ');
+  const it=((d.plans||[]).filter((p)=>p.key==='monitor')[0]||{}).items||[];
+  ok(it.length===1,'★配信できる商品がある');
+}
+
 console.log('\n=== ② Shopify に読み込んだ印が付いた商品だけ配信する ===');
 {
   const env=env0();
@@ -135,6 +148,15 @@ console.log('\n=== ③ 送る・二重に送らない・書き換える ===');
      '★★★購入リンクは Shopify の商品ページ');
   /* 8.15（【返事】）機種は記号（NS）ではなく正式な呼び名で出す。
      表は shared/mwfee.js の1か所だけ（Shopify の説明文と同じもの）。 */
+  /* 8.16（【3】）⚙のドメインに https:// や末尾の / が付いていても
+     購入リンクが作れること（整え方は shared/subcard.js の1か所だけ）。 */
+  ok(SUBCARD.domainOf(' https://Omakase-Ship.myshopify.com/ ')
+     ==='omakase-ship.myshopify.com',
+     '★★★https:// と末尾の / と空白と大文字を整える');
+  ok(SUBCARD.domainOf('omakase-ship.myshopify.com/admin')
+     ==='omakase-ship.myshopify.com','★★/ から後ろは落とす');
+  ok(SUBCARD.domainOf('')===''&&SUBCARD.buyUrl('','4902370550467')==='',
+     '★空なら購入リンクを出さない');
   const kf=(card.fields||[]).filter((f)=>f.name==='機種')[0]||{};
   console.log('   機種 '+JSON.stringify(kf.value));
   ok(kf.value==='Nintendo Switch',

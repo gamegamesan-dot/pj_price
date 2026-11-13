@@ -10426,7 +10426,9 @@ async function subSettings(env) {
     on: !!st.subOn,
     hour: (h >= 0 && h <= 23) ? h : SUB_HOUR_DEFAULT,
     pre: st.subPre === undefined ? true : !!st.subPre,
-    domain: String(st.subDomain || "").trim(),
+    /* 8.16（【3】）https:// や末尾の / が付いていても受け付ける。
+       整え方は shared/subcard.js の domainOf の1か所だけ（画面も同じ）。 */
+    domain: SUBCARD.domainOf(st.subDomain || ""),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
   };
