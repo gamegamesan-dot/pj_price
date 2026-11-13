@@ -276,7 +276,72 @@ ok(A.rowsOf([{ jan:'4902370550467', price:0, max_qty:1 }]).length===0,
    '★★★販売価格が無い行は出さない');
 ok(A.rowsOf([{ jan:'4902370550467', price:100, max_qty:0 }]).length===0,
    '★★★販売数の上限が0の行は出さない');
-ok(A.rowsOf([IT,IT]).length===2,'★ちゃんと出る行は出る');
+ok(A.rowsOf([IT]).length===1,'★ちゃんと出る行は出る');
+/* 6.194（【2】）同じ JAN が2行あると Shopify は**同じ Handle の別バリアント**
+   として読み、その商品がまるごと入らないことがある。1行にまとめる。 */
+ok(A.rowsOf([IT,IT]).length===1,
+   '★★★同じ JAN が2行あっても CSV には1行だけ出す（Handle の重複を作らない）');
+{
+  const sp=A.split([IT,IT,{ jan:'4902370550467', name:'名前', price:0, max_qty:1 },
+                    { jan:'123', name:'名前', price:100, max_qty:1 },
+                    { jan:'4902370550999', name:'名前', price:100, max_qty:0 },
+                    { jan:'4902370550888', name:'', price:100, max_qty:1 }],{});
+  console.log('   外した理由：'+sp.no.map((x)=>x.why).join('／'));
+  ok(sp.go.length===1,'★★出す行は1件');
+  ok(sp.no.length===5,'★★★外した行は5件（黙って外さない）');
+  ok(sp.no.filter((x)=>/同じ JAN が2行/.test(x.why)).length===1,
+     '★★★理由：同じ JAN が2行あります');
+  ok(sp.no.filter((x)=>/販売価格/.test(x.why)).length===1,'★★理由：販売価格');
+  ok(sp.no.filter((x)=>/JAN がありません/.test(x.why)).length===1,'★理由：JAN');
+  ok(sp.no.filter((x)=>/上限/.test(x.why)).length===1,'★★理由：販売数の上限');
+  ok(sp.no.filter((x)=>/商品名/.test(x.why)).length===1,'★★理由：商品名');
+  ok(A.whyNot(IT,{})==='','★出せる行は理由なし');
+}
+
+console.log('\n=== 6.194（【3】）商品名の掃除と「特典：…」===');
+{
+  const t=(n)=>A.titleOf(n);
+  ok(t('薔薇と椿 〜お豪華絢爛版〜 -Switch【特典】お表裏ジャケット、お取扱')
+     ==='薔薇と椿 〜お豪華絢爛版〜',
+     '★★★【特典】より後ろと機種の付け足しを外す');
+  ok(A.tokuOf({ name:'薔薇と椿 〜お豪華絢爛版〜 -Switch【特典】お表裏ジャケット、お取扱' })
+     ==='お表裏ジャケット、お取扱','★★★特典の中身は取り出す');
+  ok(t('スーパーマリオパーティ【メーカー特典あり】')==='スーパーマリオパーティ',
+     '★★【メーカー特典あり】を外す');
+  ok(A.tokuOf({ name:'スーパーマリオパーティ【メーカー特典あり】' })==='メーカー特典あり',
+     '★★中身が無いときは印をそのまま特典にする');
+  ok(t('メルルのアトリエ DX (パッケージ版特典(ゲーム内アイテム) 同梱)')
+     ==='メルルのアトリエ DX','★★★(パッケージ版特典(…) 同梱) を外す');
+  ok(A.tokuOf({ name:'メルルのアトリエ DX (パッケージ版特典(ゲーム内アイテム) 同梱)' })
+     ==='パッケージ版特典(ゲーム内アイテム) 同梱','★★中身を取り出す');
+  ok(t('RPG MAKER WITH SW版')==='RPG MAKER WITH','★★★SW版 を外す');
+  ok(t('[Switch] メルルのアトリエ DX')==='メルルのアトリエ DX','★★[Switch] を外す');
+  ok(t('あの、素晴らしい をもう一度 再装版HD 通常版')
+     ==='あの、素晴らしい をもう一度 再装版HD 通常版',
+     '★★★ふつうの名前は変えない（「通常版」は残す）');
+  ok(t('翠狂 KOKUGA 初回生産 3DS')==='翠狂 KOKUGA 初回生産 3DS',
+     '★区切りの無い機種名は残す（名前の一部のことがある）');
+  const b=A.bodyOf({ jan:'4570101051127',
+    name:'薔薇と椿 〜お豪華絢爛版〜 -Switch【特典】お表裏ジャケット、お取扱',
+    kishu:'NS' },{});
+  ok(/特典：お表裏ジャケット、お取扱/.test(b),
+     '★★★特典の中身は説明文に「特典：…」として出す');
+  ok(A.tidy('あ\u0001い\nう')==='あ い う','★改行・制御文字は CSV を壊すので落とす');
+}
+
+console.log('\n=== 6.194（【4】）在庫は「上限 − 取り込んだ注文の点数」===');
+{
+  const it={ ...IT, max_qty:5, sold:1 };
+  ok(A.leftOf(it)===4,'★★★上限5・注文1点 → 残り4');
+  ok(A.maxOf(it)===5,'★上限はそのまま');
+  ok(cell(A.build([it],{}),1,'Variant Inventory Qty')==='4',
+     '★★★CSV の在庫は残り（pj の残りと Shopify を合わせる）');
+  ok(A.leftOf({ ...IT, max_qty:5, sold:9 })===0,'★★注文が上限を超えても0止まり');
+  ok(A.leftOf({ ...IT, max_qty:5 })===5,'★注文が無ければ上限のまま');
+  const inv=A.invCsv([it],{ location:'文京区' });
+  ok(cells(inv)[1][cells(inv)[0].indexOf('On hand (new)')]==='4',
+     '★★在庫CSV も残りで出す');
+}
 
 console.log('\n=== CSV の形 ===');
 ok(/\n$/.test(t1)&&!/\r/.test(t1),'★★★UTF-8・LF で終わる（公式どおり）');

@@ -207,21 +207,43 @@ console.log('\n=== ④ 今日は送らない ===');
   ok(/今日は送らない印/.test(bar),'★★★帯にも印が出る');
 }
 
-console.log('\n=== ⑤ Shopify に読み込みました ===');
+console.log('\n=== ⑤ Shopify に読み込みました（6.194・【5】で対象を選ぶ形に）===');
 {
   await setup({ plan:PLAN });
+  /* 6.194（【5】）押すと**対象の一覧**が出る。まだ何も送らない。 */
   const d=await p.evaluate(async()=>{
     window.__q=[]; window.__ask=0;
+    subLastCsvSave([{ jan:'4902370550467', name:'商品A' }]);
     await subLoadedGo();
     await new Promise((x)=>setTimeout(x,300));
-    return { q:window.__q, ask:window.__ask,
-             note:($('subNote').textContent||'') };
+    return { q:window.__q.map((x)=>x.u),
+             n:document.querySelectorAll('#subLoadedBox [data-slchk]').length,
+             on:Array.prototype.filter.call(
+               document.querySelectorAll('#subLoadedBox [data-slchk]'),
+               (el)=>el.checked).map((el)=>el.getAttribute('data-slchk')),
+             txt:($('subLoadedBox').textContent||'').replace(/\s+/g,' ') };
   });
-  console.log('   '+JSON.stringify(d.q.map((x)=>x.u))+' / '+d.note);
-  ok(d.ask===1,'★★確認を出す');
-  const lo=d.q.filter((x)=>x.u==='loaded')[0];
-  ok(!!lo&&(lo.b.jans||[]).length===2,'★★★印の付いた行をぜんぶ送る');
-  ok(/2件に印を付けました/.test(d.note),'★★結果を出す');
+  console.log('   '+JSON.stringify(d.q)+' / '+d.txt.slice(0,120));
+  ok(d.q.indexOf('loaded')<0,
+     '★★★押しただけでは印を付けない（対象を選んでもらう）');
+  ok(d.n===2,'★★対象の商品を一覧で出す');
+  ok(d.on.length===1&&d.on[0]==='4902370550467',
+     '★★★既定は直前に書き出した CSV の商品だけ');
+  ok(/以前から印が付いている商品 1件/.test(d.txt),
+     '★★前からの印は別に分けて出す');
+  /* ぜんぶチェックして押すと、その2件に印が付く。 */
+  const e=await p.evaluate(async()=>{
+    window.__q=[];
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#subLoadedBox [data-slchk]'),
+      (el)=>{ el.checked=true; });
+    await subLoadedPut();
+    await new Promise((x)=>setTimeout(x,300));
+    return { q:window.__q, note:($('subNote').textContent||'') };
+  });
+  const lo=e.q.filter((x)=>x.u==='loaded')[0];
+  ok(!!lo&&(lo.b.jans||[]).length===2,'★★★チェックした行を送る');
+  ok(/2件/.test(e.note)&&/印を付けました/.test(e.note),'★★結果を出す');
 }
 
 console.log('\n=== ⑥ 注文CSV を取り込む ===');

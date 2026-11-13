@@ -20,7 +20,7 @@
   "use strict";
   /* カードの**形の版**（8.17）。ここを上げると、すでに送ったカードも
      次の配信で**新しい形に書き換わる**（pj-sync が見ている）。 */
-  var CARD_V = "8.17";
+  var CARD_V = "6.194";   /* 6.194（【3】）商品名の掃除。次の配信で古いカードも書き換える */
   var EMB_MAX = 10;                // 1通に入れられる箱の数
   var EMB_CHARS = 5600;            // 1通の字数（6,000 の手前）
   var COLOR = 0x1f8a3d;            // 会員用のカードの色（緑）
@@ -51,6 +51,15 @@
       try { return require("./shopcsv.js"); } catch (e) { return null; }
     }
     return null;
+  }
+  /* 6.194（【3】）商品名から MW・Amazon の付け足し（【特典】…・SW版・
+     [Switch] など）を外す。掃除の決まりは shared/shopcsv.js の1か所だけ
+     （Shopify の Title と**同じ名前**がカードに出るようにする）。
+     読めないときは元の名前をそのまま出す（名前が消えないように）。 */
+  function nameJa(v) {
+    var S = shopMod();
+    var t = (S && typeof S.titleOf === "function") ? S.titleOf(v, 200) : s(v);
+    return t || s(v);
   }
   function kishuJa(v) {
     var g = (typeof globalThis !== "undefined") ? globalThis : root;
@@ -195,7 +204,7 @@
              inline: false });
     var mark = s(opt.mark);
     return {
-      title: ((mark ? (mark + "｜") : "") + s(x.name || jan)).slice(0, 200),
+      title: ((mark ? (mark + "｜") : "") + nameJa(x.name) || jan).slice(0, 200),
       url: amzUrl(jan, x.asin),
       color: left ? (num(opt.color) || COLOR) : SOLD_COLOR,
       fields: f.slice(0, 25),
@@ -224,7 +233,8 @@
       return { content: i === 0 ? s(head) : "", embeds: es };
     });
   }
-  var API = { card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
+  var API = {
+    nameJa: nameJa, card: card, cardLen: cardLen, split: split, kishuJa: kishuJa,
               buyUrl: buyUrl, domainOf: domainOf, shipText: shipText,
               amzWhen: amzWhen, jstShort: jstShort, CARD_V: CARD_V, amzUrl: amzUrl, shipTier: shipTier,
               shipJa: shipJa, leftText: leftText, yen: yen,

@@ -199,10 +199,47 @@
     /\s*※[^\n]*$/,                         // 末尾の但し書き
     /\s*\((?:新品|中古|未開封|即日|予約)\)\s*/g
   ];
-  function titleOf(name, max) {
+  /* ---- 機種の付け足し（6.194・【3】）----
+     MW・Amazon の名前には「SW版」「[Switch]」「-Switch」のような
+     機種の付け足しが入っている。機種は別の欄（Tags・説明）に出すので、
+     商品名からは外す。 */
+  var PLAT_NG = [
+    /(?:^|[\s　])(?:SW|NS2?|PS[45]|PSV|PSVita|3DS|XB|Switch|スイッチ)版(?=[\s　]|$)/g,
+    /[\s　]*[-ー−—]\s*(?:Nintendo\s*Switch\s*2?|Switch|PS[45]|PSVita|3DS|Xbox[^\s　]*)[\s　]*$/i
+  ];
+  /* ---- 特典の付け足し（6.194・【3】）----
+     「【特典】お表裏ジャケット…」「【メーカー特典あり】」
+     「(パッケージ版特典(ゲーム内アイテム) 同梱)」のような書き足しは、
+     **商品名から外して説明文の「特典：…」に移す**。
+     いちばん最初の特典の印より後ろは、ぜんぶ特典の中身として扱う。 */
+  var TOKU_RE = /(?:【[^】]*特典[^】]*】|\[[^\]]*特典[^\]]*\]|[（(][^）)]*特典[^）)]*[）)](?:[\s　]*同梱[）)]?)?)/;
+  function splitToku(name) {
     var t = s(name);
+    var m = TOKU_RE.exec(t);
+    if (!m) return { name: t, toku: "" };
+    var head = t.slice(0, m.index);
+    var mark = m[0].replace(/^[【\[（(]/, "").replace(/[】\]）)]$/, "").trim();
+    var rest = t.slice(m.index + m[0].length).trim();
+    /* 「【特典】ジャケット」のように中身が後ろに続くときは、そちらが中身。 */
+    var toku = rest ? (/^特典/.test(mark) ? rest : (mark + "：" + rest)) : mark;
+    return { name: head.trim(), toku: tidy(toku) };
+  }
+  /* 特典の中身（説明文の「特典：…」に出す）。無ければ空。 */
+  function tokuOf(it) {
+    var r = it || {};
+    if (s(r.toku).trim()) return tidy(r.toku);
+    return splitToku(r.name).toku;
+  }
+  /* 制御文字・改行は CSV を壊す（Shopify が読めない形になる）ので落とす。 */
+  function tidy(v) {
+    return s(v).replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/[　]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function titleOf(name, max) {
+    var t = splitToku(name).name;
     for (var i = 0; i < NAME_NG.length; i++) t = t.replace(NAME_NG[i], " ");
-    t = t.replace(/[　]/g, " ").replace(/\s+/g, " ").trim();
+    for (var j = 0; j < PLAT_NG.length; j++) t = t.replace(PLAT_NG[j], " ");
+    t = tidy(t);
     var n = num(max) || 180;
     return t.length > n ? t.slice(0, n).trim() : t;
   }
@@ -236,6 +273,10 @@
     if (kishu) h.push("<li>機種：" + esc(kishu) + "</li>");
     h.push('<li><a href="' + esc(amzUrl(jan, it.asin)) + '"'
       + ' target="_blank" rel="noopener">Amazon の商品ページ</a></li>');
+    /* 6.194（【3】）商品名から外した特典の中身は、ここに移す。
+       「何が付くか」はお客さまに要る話なので、消さずに説明文へ。 */
+    var toku = tokuOf(it);
+    if (toku) h.push("<li>特典：" + esc(toku) + "</li>");
     h.push("</ul>");
     h.push("<p>" + esc(o.note || NOTE_JA) + "</p>");
     return h.join("");
@@ -332,6 +373,51 @@
     return t;
   }
 
+  /* ---- 残り数（6.194・【4】）----
+     すでに注文がある商品を出し直すときは、CSV の在庫を
+     **上限 − 取り込んだ注文の点数**にする（pj の残りと Shopify を合わせる）。
+     注文の点数（sold）は pj-sync が返す。無ければ上限のまま。 */
+  function maxOf(it) {
+    return Math.max(0, Math.round(num((it || {}).max_qty)));
+  }
+  function leftOf(it) {
+    var r = it || {};
+    var sold = Math.max(0, Math.round(num(r.sold)));
+    return Math.max(0, maxOf(r) - sold);
+  }
+
+  /* ---- 出せない行の理由（6.194・【1】【2】）----
+     '' を返したら出せる。**黙って外さない**ために、画面がこの文を出す。
+     Shopify が読み込めない形（名前が空・値段0・同じ Handle）もここで止める。 */
+  function whyNot(it, opt) {
+    var r = it || {};
+    if (!/^\d{8,14}$/.test(digits(r.jan))) return "JAN がありません";
+    if (!titleOf(r.name)) return "商品名がありません";
+    if (Math.round(num(r.price)) <= 0) return "販売価格が入っていません";
+    if (maxOf(r) <= 0) return "販売数の上限が入っていません";
+    return "";
+  }
+  /* 出す行・外す行に分ける（画面のまとめに使う）。
+     同じ JAN が2行あると Shopify は**同じ Handle の別バリアント**として
+     読んでしまい、その商品がまるごと入らないことがある（6.194・【2】）。
+     ここで1行にまとめ、外したほうを理由つきで返す。 */
+  function split(items, opt) {
+    var go = [], no = [], seen = {};
+    for (var i = 0; i < (items || []).length; i++) {
+      var r = items[i] || {};
+      var why = whyNot(r, opt);
+      if (why) { no.push({ it: r, why: why }); continue; }
+      var h = handleOf(r.jan);
+      if (seen[h]) {
+        no.push({ it: r, why: "同じ JAN が2行あります（" + h + "）" });
+        continue;
+      }
+      seen[h] = 1;
+      go.push(r);
+    }
+    return { go: go, no: no };
+  }
+
   /* ---- 1行 ---- */
   function rowOf(it, opt) {
     var o = opt || {};
@@ -355,7 +441,8 @@
     row["Price"] = String(Math.round(num(r.price)));
     row["Charge tax"] = "true";
     row["Inventory tracker"] = "shopify";
-    row["Inventory quantity"] = String(Math.max(0, Math.round(num(r.max_qty))));
+    /* 6.194（【4】）在庫は **上限 − 取り込んだ注文の点数**。 */
+    row["Inventory quantity"] = String(leftOf(r));
     row["Continue selling when out of stock"] = "deny";
     row["Weight value (grams)"] = String(weightOf(r, o));
     row["Weight unit for display"] = "g";
@@ -377,14 +464,8 @@
     return c > 0 ? String(c) : "";
   }
   function rowsOf(items, opt) {
-    var out = [];
-    for (var i = 0; i < (items || []).length; i++) {
-      var r = items[i] || {};
-      if (!/^\d{8,14}$/.test(digits(r.jan))) continue;
-      if (Math.round(num(r.price)) <= 0) continue;
-      if (Math.round(num(r.max_qty)) <= 0) continue;
-      out.push(rowOf(r, opt));
-    }
+    var go = split(items, opt).go, out = [];
+    for (var i = 0; i < go.length; i++) out.push(rowOf(go[i], opt));
     return out;
   }
 
@@ -433,14 +514,15 @@
       var r = items[i] || {};
       var jan = digits(r.jan);
       if (!/^\d{8,14}$/.test(jan)) continue;
-      if (Math.round(num(r.max_qty)) <= 0) continue;
+      if (maxOf(r) <= 0) continue;
       rows.push({
         "Handle": handleOf(jan), "Title": titleOf(r.name),
         "Option 1 Name": s(o1.name), "Option 1 Value": s(o1.value),
         "SKU": skuOf(jan, o.date), "Location": loc,
         /* 置いていない場所に新しく置くときは Not stocked（公式の例）。 */
         "On hand (current)": o.first ? "Not stocked" : "",
-        "On hand (new)": String(Math.max(0, Math.round(num(r.max_qty))))
+        /* 6.194（【4】）在庫は上限 − 取り込んだ注文の点数。 */
+        "On hand (new)": String(leftOf(r))
       });
     }
     return toCsv(INV_COLS, rows);
@@ -534,9 +616,12 @@
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,
     SHIP_TIERS: SHIP_TIERS, tierOf: tierOf, shipSteps: shipSteps,
     CP: CP, NOTE_JA: NOTE_JA, kishuJa: kishuJa,
+    NAME_NG: NAME_NG, PLAT_NG: PLAT_NG, TOKU_RE: TOKU_RE,
+    splitToku: splitToku, tokuOf: tokuOf, tidy: tidy,
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
+    maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
     invCsv: invCsv, splitCsv: splitCsv, transFill: transFill,
     weightOf: weightOf,
     TR_DEF: TR_DEF, TR_OUT: TR_OUT

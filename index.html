@@ -1084,6 +1084,9 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="mwSubCsv" style="flex:1" onclick="mwSubCsvGo()">Shopify 用 CSV を書き出す</button>
         <button class="btn cfgprice" id="mwSubInvCsv" style="flex:0 0 auto" onclick="mwSubInvGo()">在庫CSV</button>
       </div>
+      <!-- 6.194（【5】）印のある行だけ見る・印をまとめて外す -->
+      <div class="chk cfgprice" style="margin-top:6px"><input type="checkbox" id="mwSubOnly"><label for="mwSubOnly" style="flex:1">「会員に出す」印のある行だけ表示</label></div>
+      <button class="btn cfgprice" id="mwSubOffAll" style="width:100%;margin-top:4px" onclick="mwSubOffAllGo();return false">「会員に出す」印をまとめて外す</button>
       <div class="note2" id="mwSubNote" style="margin-top:2px"></div>
       <!-- 6.176：列名の形。ストアの「商品のエクスポート」に合わせるのが既定。 -->
       <div class="rowv"><label for="mwSubCols">列名の形</label><select id="mwSubCols"><option value="old" selected>ストアの書き出しに合わせる（Handle／Body (HTML)／Variant Price …）</option><option value="new">Shopify の今の名前（URL handle／Description／Price …）</option></select><div class="note2" style="margin-top:2px">Shopify は列名を新しい名前に変えましたが、<b>ストアの「商品のエクスポート」が返す形は古い名前のまま</b>のことがあります（omakase-ship で確認済み）。<b>上書き（Overwrite products with matching handles）で列名の違いでずれない</b>ように、既定は<b>書き出しに合わせる</b>です。どちらの名前でも Shopify は読み込めます（公式が後方互換を明記）。<b>どちらかの形でしか入らない項目はありません。</b><br>確かめ方：Shopify の <b>商品 → エクスポート</b>で1件だけ書き出し、1行目の列名を見てください。</div></div>
@@ -1149,6 +1152,15 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn cfgprice" id="subLoaded" style="flex:1" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
         <button class="btn cfgprice" id="subPlanBtn" style="flex:1" onclick="subPlanGo();return false">今日の配信の予定を見る</button>
       </div>
+      <!-- 6.194（【5】）押す前に、対象の商品を一覧で見て外せるようにする -->
+      <div id="subLoadedBox"></div>
+      <!-- 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる -->
+      <div class="stackrow cfgprice" style="margin-top:6px">
+        <input type="file" id="subShopFile" accept=".csv,text/csv">
+        <button class="btn" id="subShopBtn" onclick="subShopCsvGo();return false">Shopify の商品CSV と突き合わせる</button>
+      </div>
+      <div class="note2" style="margin-top:0">Shopify の <b>商品 → エクスポート</b>で出した CSV を選ぶと、<b>Shopify に実際にある商品（Handle が <code>sub-</code>）だけ</b>に「読み込みました」の印を付けます。</div>
+      <div class="note2" id="subShopNote" style="margin-top:2px"></div>
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
         <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
@@ -6449,6 +6461,10 @@ ADV_SUBCHK.forEach(function(id){
 /* 値の欄（ドメイン・チャンネルID・件数・時刻）も、入れたらすぐ保存する。
    advCsvCfg() の input で pj-sync に送るので、ここでは端末の保存の
    できた・できないだけを見る。 */
+/* 6.194（【5】）印のある行だけ表示の切り替え。 */
+if($('mwSubOnly'))$('mwSubOnly').addEventListener('change',function(){
+  try{ mwAmzRender(); }catch(e){}
+});
 ADV_SUB.forEach(function(id){
   var el=$(id); if(!el)return;
   el.addEventListener('input',function(){
@@ -14138,6 +14154,8 @@ function mwAmzFilters(){
            caps:mwRankCaps(),
            capAny:mwRankCapAny(),
            noRank:!!$('csvMwAmzNoRank').checked,
+           /* 6.194（【5】）「会員に出す」印のある行だけ表示。 */
+           subOn:!!(($('mwSubOnly')||{}).checked),
            minM:(function(){ var n=+$('csvMwAmzMinM').value; return isFinite(n)?n:0; })() };
 }
 /* 並べ替えの名前（一覧の見出しと同じ言い方にする・6.126）。 */
@@ -14177,6 +14195,8 @@ function mwAmzKeep(x,f,quiet){
       if(!x.c)return mwJanDup(x.r);
       /* 6.146：ジャンルの絞り込み。 */
       if(f.genre&&(mwAmzGenre(x.r)||'（その他）')!==f.genre)return false;
+      /* 6.194（【5】）印のある行だけ見る（印の付け外しの確かめに使う）。 */
+      if(f.subOn&&!mwSubOn(x.r.jan))return false;
       if(f.win&&x.c.profit<=0)return false;
       if(f.multi&&(+x.r.new_n||0)<2)return false;
       if(f.noAmz&&(+x.r.amz))return false;
@@ -16100,8 +16120,21 @@ function subDraftApply(){
   });
   var chunks=[];
   for(var i=0;i<items.length;i+=100)chunks.push(items.slice(i,i+100));
+  /* 6.194（【1】）pj-sync が印を付けられなかった行（上限や価格が無い行）は
+     これまで**黙って落ちていた**。理由を集めて画面に出す。 */
+  var ngPut=[];
   var step=chunks.reduce(function(pr,c){
-    return pr.then(function(){ return mwPost('/mw/sub',{ items:c }); });
+    return pr.then(function(){ return mwPost('/mw/sub',{ items:c }); })
+      .then(function(r){
+        ((r&&r.rows)||[]).forEach(function(x){
+          if(!x||!x.error)return;
+          var p2=pick.filter(function(y){ return String(y.jan)===String(x.jan); })[0];
+          ngPut.push({ it:{ jan:x.jan, name:(p2&&p2.name)||'' },
+            why:(x.error==='need_qty_price')
+              ?'販売数の上限か販売価格が入っていません':String(x.error) });
+        });
+        return r;
+      });
   },Promise.resolve());
   return step.then(function(){
     /* 案の中身を控える（あとで「どの案から何が売れたか」を見る）。 */
@@ -16114,8 +16147,10 @@ function subDraftApply(){
     if(r&&r.ok===false&&r.error==='no_table')
       subDraftNote('✓ 印を付けました（案の記録は pj-sync の'
         +' migrate-0056-sub-draft.sql を流すと残せます）。');
-    else subDraftNote('✓ '+mwN(pick.length)+'件に印を付けました。'
-      +'Shopify 用 CSV を書き出します…');
+    else subDraftNote('✓ '+mwN(pick.length-ngPut.length)+'件に印を付けました'
+      +(ngPut.length?('（'+mwN(ngPut.length)+'件は付けられませんでした）'):'')
+      +'。Shopify 用 CSV を書き出します…');
+    if(ngPut.length)$('subDraftNote').innerHTML+=mwSubWhyHtml(ngPut);
     return mwSubLoad(true);
   }).then(function(){
     try{ mwAmzRender(); }catch(e){}
@@ -16324,29 +16359,214 @@ function subSkipGo(){
     return subPlanGo(true);
   })['catch'](function(e){ subNote('⚠ 印を変えられませんでした：'+e.message,1); });
 }
-/* 「Shopify に読み込みました」の印（CSV を読み込んだあとに押す）。 */
+/* 「Shopify に読み込みました」の印（CSV を読み込んだあとに押す）。
+   6.194（【5】）押す前に**対象の一覧**を出す。行ごとに外せる。 */
 function subLoadedGo(){
   if(roleDenyPrice('subNote'))return;
   if(!subReady())return;
-  subNote('印を付けています…');
+  subNote('対象を調べています…');
   /* 6.185（【1】）印を付けるだけなので、上乗せは引き直さない。 */
   return mwSubItems(true).then(function(d){
     if(!d.table_ok){ subNote('⚠ pj-sync 側の D1 に mw_sub がありません。',1); return; }
-    var jans=(d.rows||[]).map(function(x){ return x.jan; });
-    if(!jans.length){ subNote('会員に出す印の付いた行がありません。',1); return; }
-    if(!confirm('いま「会員に出す」の印が付いている '+jans.length+'件に、'
-      +'「Shopify に読み込みました」の印を付けます。\n'
-      +'この印が付いた商品だけが会員向けの配信に載ります。\n\nよろしいですか？'))
+    var rows=(d.rows||[]);
+    if(!rows.length){ subNote('会員に出す印の付いた行がありません。',1); return; }
+    subNote('');
+    subLoadedBox(rows);
+  })['catch'](function(e){ subNote('⚠ 対象を調べられませんでした：'+e.message,1); });
+}
+/* 対象の一覧（直前の CSV に入っていた商品／以前から印がある商品）。 */
+function subLoadedBox(rows){
+  var box=$('subLoadedBox'); if(!box)return;
+  var last=subLastCsv(), inLast={};
+  last.jans.forEach(function(j){ inLast[String(j)]=1; });
+  var now=[], old=[];
+  rows.forEach(function(x){
+    (inLast[String(x.jan)]?now:old).push(x);
+  });
+  var line=function(x,on){
+    return '<div class="note2" style="margin:2px 0 0;display:flex;gap:6px;'
+      +'align-items:flex-start">'
+      +'<input type="checkbox" data-slchk="'+esc(String(x.jan))+'"'
+      +(on?' checked':'')+' style="flex:0 0 auto;margin-top:2px">'
+      +'<span style="flex:1 1 0;min-width:0">'
+      +esc(PJ_SHOPCSV.titleOf(x.name).slice(0,40)||String(x.jan))
+      +'<span class="note2" style="margin:0"> （'+esc(String(x.jan))+'・'
+      +'¥'+mwN(+x.price||0)+'・上限 '+(+x.max_qty||0)+'点'
+      +((+x.sold||0)?('・注文 '+(+x.sold||0)+'点'):'')+'）</span></span></div>';
+  };
+  box.innerHTML='<div class="okbox" style="margin-top:6px">'
+    +'<b>「Shopify に読み込みました」の印を付ける商品を選んでください</b>'
+    +'<div class="note2" style="margin:2px 0 0">この印が付いた商品だけが'
+    +'<b>会員向けの配信に載ります</b>。Shopify に入っていない商品の印は'
+    +'外してください。</div></div>'
+    +'<div class="note2" style="margin:6px 0 0"><b>直前に書き出した CSV の商品 '
+    +mwN(now.length)+'件</b>'
+    +(last.at?('（'+esc(subWhenJa(last.at))+' に書き出し）'):'')+'</div>'
+    +(now.length?now.map(function(x){ return line(x,true); }).join('')
+                :'<div class="note2" style="margin:2px 0 0">ありません'
+                 +'（先に「Shopify 用 CSV を書き出す」を押してください）。</div>')
+    +(old.length?('<div class="note2" style="margin:8px 0 0;color:var(--bad)">'
+      +'<b>以前から印が付いている商品 '+mwN(old.length)+'件</b>'
+      +'（この CSV には入っていません。Shopify にあるものだけチェックしてください）'
+      +'</div>'+old.map(function(x){ return line(x,false); }).join('')):'')
+    +'<div style="display:flex;gap:6px;margin-top:8px;flex-direction:column">'
+    +'<button class="btn primary" onclick="subLoadedPut();return false">'
+    +'チェックした商品に「読み込みました」の印を付ける</button>'
+    +'<button class="btn" onclick="subLoadedClose();return false">やめる</button>'
+    +'</div>'
+    +'<div class="note2" id="subLoadedNote" style="margin-top:2px"></div>';
+}
+function subLoadedClose(){
+  var box=$('subLoadedBox'); if(box)box.innerHTML='';
+}
+function subLoadedPicked(){
+  var out=[];
+  Array.prototype.forEach.call(
+    document.querySelectorAll('#subLoadedBox [data-slchk]'),function(el){
+      if(el.checked)out.push(String(el.getAttribute('data-slchk')));
+    });
+  return out;
+}
+function subLoadedPut(){
+  var jans=subLoadedPicked();
+  var n=$('subLoadedNote');
+  if(!jans.length){
+    if(n)n.innerHTML='<span style="color:var(--bad)">'
+      +'1つもチェックされていません。</span>';
+    return;
+  }
+  if(n)n.textContent='印を付けています…';
+  return mwPost('/sub/loaded',{ jans:jans }).then(function(r){
+    if(r&&r.error){
+      if(n)n.innerHTML='<span style="color:var(--bad)">⚠ 印を付けられません'
+        +'でした：'+esc(String(r.detail||r.error))+'</span>';
       return;
-    return mwPost('/sub/loaded',{ jans:jans }).then(function(r){
-      if(r&&r.error){
-        subNote('⚠ 印を付けられませんでした：'+esc(String(r.detail||r.error)),1);
+    }
+    subLoadedClose();
+    /* 予定の出し直しで文が上書きされないよう、知らせは**最後に**出す。 */
+    var msg='✓ '+mwN(+r.n||0)
+      +'件に「Shopify に読み込みました」の印を付けました。';
+    return Promise.resolve(subPlanGo(true))['catch'](function(){ })
+      .then(function(){ subNote(msg); });
+  })['catch'](function(e){
+    if(n)n.innerHTML='<span style="color:var(--bad)">⚠ 印を付けられませんでした：'
+      +esc(e.message)+'</span>';
+  });
+}
+/* 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる。
+   Handle が sub-<JAN> の商品だけを「Shopify に実際にある」とみなし、
+   その商品にだけ「読み込みました」の印を付ける。 */
+function subShopHandles(text){
+  var rows=PJ_SHOPCSV.splitCsv(String(text||''));
+  if(!rows.length)return { ok:false, jans:[], col:'' };
+  var head=(rows[0]||[]).map(function(x){ return String(x||'').trim(); });
+  var i=head.indexOf('Handle');
+  if(i<0)i=head.indexOf('URL handle');
+  if(i<0)return { ok:false, jans:[], col:'' };
+  var seen={}, out=[];
+  for(var k=1;k<rows.length;k++){
+    var h=String((rows[k]||[])[i]||'').trim().toLowerCase();
+    if(h.indexOf('sub-')!==0)continue;
+    var j=h.slice(4).replace(/\D/g,'');
+    if(!/^\d{8,14}$/.test(j)||seen[j])continue;
+    seen[j]=1; out.push(j);
+  }
+  return { ok:true, jans:out, col:head[i] };
+}
+function subShopCsvGo(){
+  if(roleDenyPrice('subShopNote'))return;
+  csvSecretFill();
+  var n=$('subShopNote');
+  var f=($('subShopFile')||{}).files;
+  if(!f||!f.length){
+    n.innerHTML='<span style="color:var(--bad)">Shopify の商品CSV を'
+      +'選んでください。</span>'; return;
+  }
+  n.textContent='読んでいます…';
+  var rd=new FileReader();
+  rd.onerror=function(){
+    n.innerHTML='<span style="color:var(--bad)">⚠ ファイルを読めませんでした。'
+      +'</span>'; };
+  rd.onload=function(){
+    var g=subShopHandles(String(rd.result||''));
+    if(!g.ok){
+      n.innerHTML='<span style="color:var(--bad)">⚠ Handle の列が'
+        +'見つかりませんでした。</span>Shopify の <b>商品 → エクスポート</b>'
+        +'で出した CSV を選んでください。';
+      return;
+    }
+    if(!g.jans.length){
+      n.innerHTML='<span style="color:var(--bad)">この CSV に '
+        +'<code>sub-</code> の商品がありません。</span>'
+        +'（会員向けの商品が Shopify に1つも入っていないか、別のファイルです）';
+      return;
+    }
+    mwSubItems(true).then(function(d){
+      var mine=(d.rows||[]);
+      var has={}; g.jans.forEach(function(j){ has[j]=1; });
+      var go=mine.filter(function(x){ return has[String(x.jan)]; });
+      var no=mine.filter(function(x){ return !has[String(x.jan)]; });
+      if(!go.length){
+        n.innerHTML='<span style="color:var(--bad)">印の付いた商品が'
+          +'Shopify にありませんでした。</span>（CSV の <code>sub-</code> '
+          +mwN(g.jans.length)+'件と、pj の印 '+mwN(mine.length)+'件が'
+          +'合いません）';
         return;
       }
-      subNote('✓ '+mwN(+r.n||0)+'件に印を付けました。');
-      return subPlanGo(true);
+      return mwPost('/sub/loaded',{ jans:go.map(function(x){ return x.jan; }) })
+        .then(function(r){
+          if(r&&r.error){
+            n.innerHTML='<span style="color:var(--bad)">⚠ 印を付けられません'
+              +'でした：'+esc(String(r.detail||r.error))+'</span>';
+            return;
+          }
+          n.innerHTML='<div class="okbox ok"><b>✓ Shopify にあった '
+            +mwN(go.length)+'件に印を付けました</b>'
+            +'（CSV の <code>sub-</code> の商品 '+mwN(g.jans.length)+'件）</div>'
+            +(no.length?('<div class="note2" style="margin-top:4px;'
+              +'color:var(--bad)"><b>Shopify に無かった '+mwN(no.length)
+              +'件</b>（印は付けていません。読み込み直すか、'
+              +'「印をまとめて外す」で外してください）<br>'
+              +no.slice(0,10).map(function(x){
+                return '・'+esc(PJ_SHOPCSV.titleOf(x.name).slice(0,28)
+                  ||String(x.jan))+'（'+esc(String(x.jan))+'）'; }).join('<br>')
+              +(no.length>10?('<br>…ほか '+mwN(no.length-10)+'件'):'')
+              +'</div>'):'');
+          subLoadedClose();
+          return subPlanGo(true);
+        });
+    })['catch'](function(e){
+      n.innerHTML='<span style="color:var(--bad)">⚠ 突き合わせられません'
+        +'でした：'+esc(e.message)+'</span>';
     });
-  })['catch'](function(e){ subNote('⚠ 印を付けられませんでした：'+e.message,1); });
+  };
+  rd.readAsText(f[0]);
+}
+/* 6.194（【5】）「会員に出す」印をまとめて外す。 */
+function mwSubOffAllGo(){
+  if(roleDenyPrice('mwSubNote'))return;
+  var n=$('mwSubNote');
+  return mwSubItems(true).then(function(d){
+    var rows=(d.rows||[]);
+    if(!rows.length){ n.textContent='印の付いた行がありません。'; return; }
+    if(!confirm('「会員に出す」の印を '+rows.length+'件ぜんぶ外します。\n'
+      +'・上限と販売価格は消しません（印だけ外します）\n'
+      +'・外した商品は次の配信に載りません\n\nよろしいですか？'))return;
+    n.textContent='外しています…';
+    var items=rows.map(function(x){ return { jan:x.jan, on:0 }; });
+    var ch=[];
+    for(var i=0;i<items.length;i+=100)ch.push(items.slice(i,i+100));
+    return ch.reduce(function(pr,c){
+      return pr.then(function(){ return mwPost('/mw/sub',{ items:c }); });
+    },Promise.resolve()).then(function(){
+      return mwSubLoad(true);
+    }).then(function(){
+      try{ mwAmzRender(); }catch(e){}
+      try{ subBarRender(); }catch(e){}
+      n.innerHTML='<div class="okbox">✓ <b>'+mwN(rows.length)
+        +'件</b>の「会員に出す」印を外しました。</div>';
+    });
+  })['catch'](function(e){ n.textContent='⚠ 外せませんでした：'+e.message; });
 }
 /* 注文CSV を読み込む（8.13）。 */
 /* 6.192 取り込みの結果は**ボタンのすぐ下に目立つように**出す（.okbox）。 */
@@ -16449,7 +16669,10 @@ function mwSubItems(noRoll){
               size_tier:String(x.size_tier||''), size_g:+x.size_g||0,
               size_long:+x.size_long||0,
               /* 6.185（【1】）手入れの印。 */
-              px_hand:+x.px_hand||0 };
+              px_hand:+x.px_hand||0,
+              /* 6.194（【4】）取り込んだ注文の点数。CSV の在庫は
+                 「上限 − 注文の点数」にする（pj の残りと Shopify を合わせる）。 */
+              sold:+x.sold||0 };
       if(r.px_hand&&r.price>0)hand++;
       /* 6.178（【2】）**上乗せは出し直すたびに決め直す**。
          6.185（【1】）ただし**手で直した値（px_hand）は引き直さない**。
@@ -16467,6 +16690,54 @@ function mwSubItems(noRoll){
     return { rows:rows, table_ok:true, reroll:reroll, hand:hand };
   });
 }
+/* ===== 6.194（【5】）「Shopify に読み込みました」の対象を選べるようにする =====
+   これまでは「会員に出す」印の付いた行**ぜんぶ**に印を付けていたので、
+   Shopify に入っていない商品まで読み込み済みになり、配信に載っていた
+   （2026-11-13・カジの報告「13件が対象になり、入ったのは7件」）。
+   ・既定の対象は**直前に書き出した CSV に入っていた商品**だけ
+   ・前から印が残っている商品は**別に分けて**出す（既定は外す）
+   ・行ごとにチェックを外せる */
+var SUB_LASTCSV_KEY='pj:sub:lastcsv:v1';
+/* 控えた日時を日本時間の短い形で出す（読めないときは空）。 */
+function subWhenJa(iso){
+  try{
+    var d=new Date(String(iso||''));
+    if(isNaN(d.getTime()))return '';
+    return d.toLocaleString('ja-JP',{ timeZone:'Asia/Tokyo',
+      month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  }catch(e){ return ''; }
+}
+function subLastCsv(){
+  try{
+    var o=JSON.parse(lsGet(SUB_LASTCSV_KEY)||'{}')||{};
+    return { at:String(o.at||''), jans:Array.isArray(o.jans)?o.jans:[],
+             names:(o.names&&typeof o.names==='object')?o.names:{} };
+  }catch(e){ return { at:'', jans:[], names:{} }; }
+}
+function subLastCsvSave(rows){
+  var o={ at:new Date().toISOString(), jans:[], names:{} };
+  (rows||[]).forEach(function(x){
+    var j=String(x.jan||''); if(!j)return;
+    o.jans.push(j);
+    o.names[j]=PJ_SHOPCSV.titleOf(x.name).slice(0,60);
+  });
+  try{ lsSet(SUB_LASTCSV_KEY,JSON.stringify(o)); }catch(e){}
+  return o;
+}
+/* 6.194（【1】）外した行を「商品名：理由」で出す。**黙って外さない**。
+   多いときは10件までにして、残りは件数で出す。 */
+function mwSubWhyHtml(no){
+  if(!no||!no.length)return '';
+  var h='<div class="note2" style="margin-top:4px;color:var(--bad)">'
+    +'<b>外した行 '+mwN(no.length)+'件</b>（Shopify に出しません）<br>';
+  h+=no.slice(0,10).map(function(x){
+    var nm=PJ_SHOPCSV.titleOf((x.it||{}).name)||String((x.it||{}).jan||'');
+    return '・'+esc(nm.slice(0,28))+'（'+esc(String((x.it||{}).jan||''))+'）：'
+      +esc(x.why);
+  }).join('<br>');
+  if(no.length>10)h+='<br>…ほか '+mwN(no.length-10)+'件';
+  return h+'</div>';
+}
 function mwSubCsvGo(){
   var n=$('mwSubNote');
   if(roleDenyPrice('mwSubNote'))return;
@@ -16482,18 +16753,35 @@ function mwSubCsvGo(){
       return;
     }
     var o=mwSubOpt();
+    /* 6.194（【1】）**黙って外さない**。出す行と外す行に分けて、
+       外した行は商品名と理由をそのまま画面に出す。 */
+    var sp=PJ_SHOPCSV.split(d.rows,o);
     var rows=PJ_SHOPCSV.rowsOf(d.rows,o);
     if(!rows.length){
-      n.textContent='会員に出す印の付いた行がありません'
-        +'（印と、販売数の上限・販売価格を入れてください）。';
+      n.innerHTML='会員に出す印の付いた行がありません'
+        +'（印と、販売数の上限・販売価格を入れてください）。'
+        +mwSubWhyHtml(sp.no);
       return;
     }
     var text=PJ_SHOPCSV.build(d.rows,o);
+    /* 6.194（【5】）この CSV に入った商品を控える。
+       「Shopify に読み込みました」の既定の対象はこれだけにする。 */
+    subLastCsvSave(sp.go);
     dl('shopify-products-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
     /* 6.171：重さの無い行は送料の段がずれるので、件数を出して知らせる。 */
     var noG=d.rows.filter(mwSubNoG).length;
-    n.innerHTML='✓ '+mwN(rows.length)+'件を書き出しました'
-      +'（列名は'+(o.style==='new'?'<b>Shopify の今の名前</b>'
+    /* 6.194（【4】）注文のぶんだけ在庫を減らした件数。 */
+    var cut=sp.go.filter(function(x){ return (+x.sold||0)>0; });
+    n.innerHTML='<div class="okbox"><b>書き出した '+mwN(rows.length)+'件'
+      +'・外した '+mwN(sp.no.length)+'件</b></div>'
+      +mwSubWhyHtml(sp.no)
+      +(cut.length?('<br>注文のぶんを引いた行 <b>'+mwN(cut.length)+'件</b>：'
+        +cut.slice(0,5).map(function(x){
+          return esc(PJ_SHOPCSV.titleOf(x.name).slice(0,24))
+            +'（上限 '+PJ_SHOPCSV.maxOf(x)+' − 注文 '+(+x.sold||0)
+            +' ＝ <b>'+PJ_SHOPCSV.leftOf(x)+'点</b>）'; }).join('　/　')
+        +(cut.length>5?('　ほか '+(cut.length-5)+'件'):'')):'')
+      +'<br>（列名は'+(o.style==='new'?'<b>Shopify の今の名前</b>'
                                   :'<b>ストアの書き出しに合わせた形</b>')+'）。'
       +'Shopify の <b>商品 → インポート</b>で読み込み、'
       +'<b>「Overwrite products with matching handles」にチェック</b>'
@@ -24654,7 +24942,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v277';   // sw.js の const V と必ず同じ値にする
+var APP_V='v278';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -10563,6 +10563,21 @@ async function mwSubPut(env, body, role) {
 /* GET /mw/sub … 印が付いている行を、CSV に要る中身つきで返す。
    会員に見せない項目（卸値・社・MW在庫・備考・MW の商品番号）は**返さない**。
    ?all=1 で印の無い行（上限と価格だけ控えた行）も返す。 */
+/* ---- mw_stock は 1つの JAN に**複数行**（社ごと・migrate-0024 の
+   UNIQUE(jan,sha,idx)）ある。`ON s.jan = b.jan` で素直につなぐと、
+   2社が扱う商品は**同じ JAN が2行**返り、Shopify 用 CSV に
+   **同じ Handle の行が2つ**出る。Shopify はそれを同じ商品の
+   別バリアントとして読むので、`Option1 Value` がどちらも
+   `Default Title` になり、**その商品がまるごと入らない**
+   （6.194・2026-11-13 にカジの報告「9件のうち7件しか入らなかった」）。
+   代表（pick=1・生きている行）を1つだけ選んでつなぐ。
+   代表が無い（欠品した）商品でも、名前と機種が消えないように
+   生きていない行から1つ拾う。 */
+const MW_ONE_JOIN = `LEFT JOIN mw_stock s ON s.id = (
+              SELECT t.id FROM mw_stock t WHERE t.jan = b.jan
+               ORDER BY CASE WHEN t.pick=1 AND t.gone_at IS NULL THEN 0
+                             WHEN t.gone_at IS NULL THEN 1 ELSE 2 END,
+                        t.id ASC LIMIT 1)`;
 async function mwSubList(env, url) {
   if (!(await mwSubOk(env)))
     return { ok: true, table_ok: false, n: 0, rows: [],
@@ -10586,6 +10601,10 @@ async function mwSubList(env, url) {
     ? ", COALESCE(b.px_hand,0) AS px_hand" : "";
   const lCol = (await colOk(env, "mw_sub", "loaded_at"))
     ? ", b.loaded_at AS loaded_at" : "";
+  /* 6.194（【4】）sub_order が無い D1（migrate-0053 の前）でも落とさない。 */
+  const soldSel = (await colOk(env, "sub_order", "order_no"))
+    ? "(SELECT COALESCE(SUM(o.qty),0) FROM sub_order o WHERE o.jan = b.jan)"
+    : "0";
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.on_sale AS on_sale, b.max_qty AS max_qty,
             b.price AS price, COALESCE(b.grades,'') AS grades,
@@ -10597,9 +10616,15 @@ async function mwSubList(env, url) {
             s.wholesale AS wholesale,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
-            a.size_g AS size_g, a.size_long AS size_long${hCol}${lCol}
+            a.size_g AS size_g, a.size_long AS size_long${hCol}${lCol},
+            /* 6.194：MW の CSV から消えた行（欠品）は、在庫を0として返す
+               （7.141「MW在庫は今の数を」と同じ扱い。古い数を出さない）。 */
+            s.gone_at AS gone_at,
+            /* 6.194（【4】）取り込んだ注文の点数。CSV の在庫を
+               「上限 − 取り込んだ注文の点数」にするのに使う。 */
+            ${soldSel} AS sold
        FROM mw_sub b
-            LEFT JOIN mw_stock s ON s.jan = b.jan
+            ${MW_ONE_JOIN}
             LEFT JOIN mw_amz a ON a.jan = b.jan
       WHERE ${all ? "1=1" : "COALESCE(b.on_sale,0)=1"}
       ORDER BY b.at DESC, b.jan ASC LIMIT ${limit}`).all();
@@ -10626,10 +10651,14 @@ async function mwSubList(env, url) {
     fee_total: Number(r.fee_total) || 0,
     /* 在庫は「いま何点まで出せるか」の目安として返す（MW在庫そのもの）。
        会員に見せるのは max_qty のほうで、これは画面の注意書き用。 */
-    stock: Number(r.stock) || 0,
+    stock: String(r.gone_at || "") ? 0 : (Number(r.stock) || 0),
+    gone: String(r.gone_at || "") ? 1 : 0,
     size_tier: String(r.size_tier || ""),
     size_g: Number(r.size_g) || 0,
     size_long: Number(r.size_long) || 0,
+    /* 6.194（【4】）取り込んだ注文の点数と残り数（上限 − 注文）。 */
+    sold: Number(r.sold) || 0,
+    left: Math.max(0, (Number(r.max_qty) || 0) - (Number(r.sold) || 0)),
   }));
   return { ok: true, table_ok: true, n: rows.length, rows: rows, limit: limit };
 }
@@ -10826,7 +10855,7 @@ async function subRows(env) {
             (SELECT COALESCE(SUM(o.qty),0) FROM sub_order o
               WHERE o.jan = b.jan) AS sold
        FROM mw_sub b
-            LEFT JOIN mw_stock s ON s.jan = b.jan
+            ${MW_ONE_JOIN}
             LEFT JOIN mw_amz a ON a.jan = b.jan
       WHERE COALESCE(b.on_sale,0)=1
         AND COALESCE(b.loaded_at,'') <> ''

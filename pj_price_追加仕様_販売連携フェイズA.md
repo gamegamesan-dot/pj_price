@@ -9463,3 +9463,43 @@ Shopify の値段は「eBay の売値 × ⚙の割合」なので、**式を2か
 
 `tests/osfix.mjs`（48）… 控える・品切れ・値段・⚙の割合・一覧・読み込み済み・
 会員向けと混ざらないこと・作業者のキーでは触れないこと・表が無くても落ちないこと。
+
+## 7.144 同じ JAN が2行返る（v278・カジの報告の原因）
+
+`mw_stock` は 1つの JAN に**社ごとに複数行**ある（`UNIQUE(jan, sha, idx)`）。
+`GET /mw/sub`（会員に出す行）と配信の行（`subRows`）は
+
+```sql
+LEFT JOIN mw_stock s ON s.jan = b.jan
+```
+
+と素直につないでいたので、**2社が扱う商品は同じ JAN が何行も返っていた**。
+Shopify 用 CSV では `Handle` が重なり、**その商品がまるごと入らない**
+（6.194）。配信では**同じカードを二重に送る**おそれがあった。
+
+代表の行を1つだけ選んでつなぐ（`MW_ONE_JOIN`）。
+
+```sql
+LEFT JOIN mw_stock s ON s.id = (
+  SELECT t.id FROM mw_stock t WHERE t.jan = b.jan
+   ORDER BY CASE WHEN t.pick=1 AND t.gone_at IS NULL THEN 0
+                 WHEN t.gone_at IS NULL THEN 1 ELSE 2 END,
+            t.id ASC LIMIT 1)
+```
+
+- 代表（`pick=1`・生きている行）がいちばん先
+- 無ければ生きている行、それも無ければ欠品した行から1つ
+  （**名前と機種が消えないように**。在庫は0で返す）
+
+あわせて `GET /mw/sub` が
+
+- `sold` … 取り込んだ注文の点数（`sub_order` の合計）
+- `left` … 残り数（上限 − 注文。0 止まり）
+- `gone` … MW の CSV から消えた行か（在庫は0で返す）
+
+を返すようにした。CSV の在庫を「上限 − 取り込んだ注文の点数」にするため
+（6.194・【4】）。`sub_order` が無い D1（migrate-0053 の前）でも落ちない。
+
+### テスト
+
+`tests/subdup.mjs`（17）
