@@ -14789,7 +14789,9 @@ function mwSubVal(r){
   var cur=mwSubOf(j)||{};
   return { on:!!cur.on,
            qty:(+cur.max_qty||0)||mwSubQtySuggest(r),
-           px:(+cur.price||0)||mwSubSuggest(r) };
+           px:(+cur.price||0)||mwSubSuggest(r),
+           /* 6.185（【1】）手で直した値かどうか。 */
+           hand:!!(+cur.hand||0) };
 }
 /* pj-sync から控えを読む。表が無い（migrate-0051 の前）ときは印を出さない。 */
 var mwSubTableOk=true;
@@ -14803,7 +14805,10 @@ function mwSubLoad(quiet){
       ((d&&d.rows)||[]).forEach(function(x){
         mwSubMap[String(x.jan)]={ on:+x.on||0, max_qty:+x.max_qty||0,
           price:+x.price||0, grades:String(x.grades||''),
-          put_at:String(x.put_at||'') };
+          put_at:String(x.put_at||''),
+          /* 6.185（【1】）1＝価格を手で直した行（書き出しで引き直さない）。 */
+          hand:+x.px_hand||0,
+          loaded_at:String(x.loaded_at||'') };
       });
       mwSubBarRender();
     })
@@ -14812,7 +14817,9 @@ function mwSubLoad(quiet){
     });
 }
 /* 行の印を保存する。 */
-function mwSubSet(jan,on,qty,px){
+/* hand … 1＝価格の欄を手で直した／0＝おすすめ値に戻す／
+   省略＝今の印のまま（点数だけ直したときなど・6.185） */
+function mwSubSet(jan,on,qty,px,hand){
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     $('mwSubNote').textContent='pj-sync のURLとキーを⚙設定に入れてください。';
@@ -14832,10 +14839,12 @@ function mwSubSet(jan,on,qty,px){
     var box=$('mwSubChk_'+j); if(box)box.checked=false;
     return Promise.resolve();
   }
-  mwSubMap[j]=Object.assign(mwSubMap[j]||{},
-    { on:on?1:0, max_qty:q, price:p });
+  var body={ jan:j, on:on?1:0, max_qty:q, price:p };
+  var mine={ on:on?1:0, max_qty:q, price:p };
+  if(hand===1||hand===0){ body.hand=hand; mine.hand=hand; }
+  mwSubMap[j]=Object.assign(mwSubMap[j]||{},mine);
   mwSubBarRender();
-  return mwPost('/mw/sub',{ jan:j, on:on?1:0, max_qty:q, price:p })
+  return mwPost('/mw/sub',body)
     .then(function(d){
       if(d&&d.table_ok===false){
         mwSubTableOk=false;
@@ -14857,6 +14866,34 @@ function mwSubChange(jan){
   if(!$('mwSubChk_'+jan).checked)return;   // 印が無いときは保存しない
   mwSubSet(jan,true,+$('mwSubQty_'+jan).value||0,+$('mwSubPx_'+jan).value||0);
 }
+/* 6.185（【1】）**価格の欄を手で直したとき**。
+   その値を「手入れ」として控え、Shopify 用 CSV を書き出すたびの
+   上乗せの引き直しをしないようにする（カジが決めた値を優先する）。
+   印が付いていない行でも控える（あとで印を付けたときのため）。 */
+function mwSubPxChange(jan){
+  var on=!!($('mwSubChk_'+jan)||{}).checked;
+  var p=+$('mwSubPx_'+jan).value||0;
+  var q=+$('mwSubQty_'+jan).value||0;
+  return mwSubSet(jan,on,q,p,1).then(function(){
+    var j=String(jan);
+    if((mwSubMap[j]||{}).hand)mwSubPxNote(j,1);
+  });
+}
+/* 「おすすめに戻す」（手入れの印を外す）。次の書き出しで引き直される。 */
+function mwSubPxFree(jan){
+  var j=String(jan);
+  var cur=mwSubOf(j)||{};
+  return mwSubSet(j,!!cur.on,+cur.max_qty||0,
+                  +$('mwSubPx_'+j).value||+cur.price||0,0)
+    .then(function(){ mwSubPxNote(j,0); });
+}
+/* 手入れの印の出し入れ（行を作り直さずに書き換える）。 */
+function mwSubPxNote(jan,on){
+  var el=$('mwSubHand_'+jan); if(!el)return;
+  el.innerHTML=on?('<b>手入れ</b>（書き出しで引き直しません）'
+    +'　<a href="#" onclick="mwSubPxFree(\''+esc(String(jan))
+    +'\');return false">おすすめに戻す</a>'):'';
+}
 /* 行に出す欄（刈取の一覧の中）。 */
 function mwSubLine(r){
   if(!mwSubTableOk)return '';
@@ -14877,7 +14914,12 @@ function mwSubLine(r){
     +'<input type="number" id="mwSubPx_'+esc(jan)+'" value="'+v.px+'"'
     /* 6.178：10円単位の切り上げをやめたので、刻みも1円にする。 */
     +' min="0" step="1" inputmode="numeric" style="flex:0 0 88px"'
-    +' onchange="mwSubChange(\''+esc(jan)+'\')"><span class="unit">円（税込）</span>'
+    /* 6.185（【1】）価格の欄だけは「手入れ」の印を立てる。 */
+    +' onchange="mwSubPxChange(\''+esc(jan)+'\')"><span class="unit">円（税込）</span>'
+    +'<span class="note2" id="mwSubHand_'+esc(jan)+'" style="margin:0">'
+    +(v.hand?('<b>手入れ</b>（書き出しで引き直しません）'
+      +'　<a href="#" onclick="mwSubPxFree(\''+esc(jan)
+      +'\');return false">おすすめに戻す</a>'):'')+'</span>'
     +(g===null?'':('<span class="note2" style="margin:0">会員の粗利の目安 '
       +yen(g)+'</span>'))
     /* 6.178（【2】）粗利の目安が⚙の下限を下回る商品は会員向きではない。 */
@@ -15070,7 +15112,8 @@ function subLoadedGo(){
   if(roleDenyPrice('subNote'))return;
   if(!subReady())return;
   subNote('印を付けています…');
-  return mwSubItems().then(function(d){
+  /* 6.185（【1】）印を付けるだけなので、上乗せは引き直さない。 */
+  return mwSubItems(true).then(function(d){
     if(!d.table_ok){ subNote('⚠ pj-sync 側の D1 に mw_sub がありません。',1); return; }
     var jans=(d.rows||[]).map(function(x){ return x.jan; });
     if(!jans.length){ subNote('会員に出す印の付いた行がありません。',1); return; }
@@ -15160,11 +15203,12 @@ function mwSubGameG(){
 }
 /* CSV に出す品物。pj-sync の控え（/mw/sub）を正とし、
    名前・ASIN・機種・重さもそちらの値を使う（画面を開いていなくても同じ）。 */
-function mwSubItems(){
+/* noRoll を渡すと上乗せを引き直さない（印を付けるだけのときに使う）。 */
+function mwSubItems(noRoll){
   var o=mwSubPxOpt();
   return mwGet('/mw/sub?limit=2000').then(function(d){
     if(d&&d.table_ok===false)return { rows:[], table_ok:false };
-    var reroll=0;
+    var reroll=0, hand=0;
     var rows=((d&&d.rows)||[]).map(function(x){
       var r={ jan:String(x.jan||''), name:String(x.name||''),
               asin:String(x.asin||''), kishu:String(x.kishu||''),
@@ -15173,10 +15217,16 @@ function mwSubItems(){
               /* 6.178：pj-sync は**卸値を返さず仕入原価だけ**を返す。 */
               cost:+x.cost||0,
               size_tier:String(x.size_tier||''), size_g:+x.size_g||0,
-              size_long:+x.size_long||0 };
+              size_long:+x.size_long||0,
+              /* 6.185（【1】）手入れの印。 */
+              px_hand:+x.px_hand||0 };
+      if(r.px_hand&&r.price>0)hand++;
       /* 6.178（【2】）**上乗せは出し直すたびに決め直す**。
-         おすすめ値の範囲の中の値（＝人が直していない値）だけ振り直し、
-         範囲の外の値（人が決めた値）はそのまま使う。 */
+         6.185（【1】）ただし**手で直した値（px_hand）は引き直さない**。
+         印が無い古い行は、おすすめ値の範囲の中かどうかで見る
+         （範囲の外の値は人が決めた値とみなしてそのまま使う）。 */
+      if(noRoll)return r;
+      if(r.px_hand&&r.price>0)return r;
       var p=SUBPX.priceOf(r,o);
       if(p.price>0&&(r.price<=0||SUBPX.inBand(r.price,r,o))){
         if(r.price!==p.price)reroll++;
@@ -15184,7 +15234,7 @@ function mwSubItems(){
       }
       return r;
     });
-    return { rows:rows, table_ok:true, reroll:reroll };
+    return { rows:rows, table_ok:true, reroll:reroll, hand:hand };
   });
 }
 function mwSubCsvGo(){
@@ -15225,16 +15275,44 @@ function mwSubCsvGo(){
       +(d.reroll?('<br>販売価格の<b>上乗せを '+mwN(d.reroll)
         +'件ぶん決め直しました</b>（出し直すたびに変わります。'
         +'人が直した値はそのままです）。'):'')
+      /* 6.185（【1】）手入れの行はそのまま出す。 */
+      +(d.hand?('<br>手で直した販売価格の '+mwN(d.hand)
+        +'件は<b>そのまま出しました</b>（引き直していません）。'):'')
       /* 8.11（【Y】）Shopify に読み込んだら印を付けてもらう。 */
       +'<br><b>Shopify に読み込んだら、下の「Shopify に読み込みました」を'
       +'押してください</b>（印が付いた商品だけが会員向けの配信に載ります）。';
-    /* 出した印（SKU の日付に使う）と、決め直した販売価格。
-       失敗しても CSV は出せている。 */
+    /* 6.185（【1】）出した印（SKU の日付に使う）と、決め直した販売価格を
+       **必ず pj に控え、画面の欄も書き直す**。ここを控え損なうと
+       「CSV の値段」と「pj の欄・会員のカードの値段」が食い違うので、
+       失敗したらはっきり知らせる（CSV は出せているが、出し直しが要る）。 */
     var px={};
     d.rows.forEach(function(x){ px[x.jan]=x.price; });
-    mwPost('/mw/sub/put',{ jans:d.rows.map(function(x){ return x.jan; }),
-                           prices:px })
-      ['catch'](function(){});
+    return mwPost('/mw/sub/put',{ jans:d.rows.map(function(x){ return x.jan; }),
+                                  prices:px })
+      .then(function(r){
+        /* pj が控えた値と、CSV に出した値がずれていないか確かめる。 */
+        var rp=(r&&r.prices)||{};
+        var bad=d.rows.filter(function(x){
+          return rp[x.jan]!==undefined&&(+rp[x.jan]||0)!==(+x.price||0); }).length;
+        /* 画面の欄を、いま Shopify に出した値に合わせる。 */
+        return mwSubLoad(true).then(function(){
+          try{ mwAmzRender(); }catch(e2){}
+          if(r&&r.unloaded)n.innerHTML+='<br><b style="color:var(--bad)">'
+            +'価格が変わりました。Shopify に読み込み直すまで配信に載せません</b>'
+            +'（'+mwN(+r.unloaded)+'件の「Shopify に読み込みました」の印を'
+            +'外しました。読み込んだら、もう一度押してください）。';
+          if(bad)n.innerHTML+='<br><span style="color:var(--bad)">'
+            +'⚠ '+mwN(bad)+'件で pj の控えと CSV の値段がずれました</span>'
+            +'（もう一度書き出してください）。';
+        });
+      })
+      ['catch'](function(e2){
+        n.innerHTML+='<br><span style="color:var(--bad)">'
+          +'⚠ 販売価格を pj に控えられませんでした：'+esc(e2.message)+'</span>'
+          +'（この CSV は<b>読み込まないで</b>ください。pj の欄・会員のカードと'
+          +'値段が食い違います。もう一度「Shopify 用 CSV を書き出す」を'
+          +'押してください）。';
+      });
   })['catch'](function(e){
     n.textContent='⚠ 書き出せませんでした：'+e.message;
   });
@@ -15248,7 +15326,8 @@ function mwSubInvGo(){
       +'（Shopify の設定→ロケーション の名前をそのまま入れてください）。';
     return;
   }
-  mwSubItems().then(function(d){
+  /* 6.185：在庫CSV は値段を使わないので、上乗せは引き直さない。 */
+  mwSubItems(true).then(function(d){
     if(!d.table_ok){
       n.textContent='⚠ pj-sync 側の D1 に mw_sub がありません'
         +'（migrate-0051-mw-sub.sql を流してください）。';
@@ -15275,7 +15354,8 @@ function mwSubTransGo(){
   var rd=new FileReader();
   rd.onload=function(){
     var text=String(rd.result||'');
-    mwSubItems().then(function(d){
+    /* 6.185：英題を入れるだけなので、上乗せは引き直さない。 */
+    mwSubItems(true).then(function(d){
       if(!d.rows.length){
         n.textContent='会員に出す印の付いた行がありません。'; return;
       }
@@ -23320,7 +23400,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v265';   // sw.js の const V と必ず同じ値にする
+var APP_V='v266';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

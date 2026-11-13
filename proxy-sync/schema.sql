@@ -828,6 +828,7 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   by_role    TEXT,
   put_at     TEXT,                         -- 最後に CSV に出した日時
   loaded_at  TEXT,                         -- Shopify に読み込んだ印（8.11）
+  px_hand    INTEGER NOT NULL DEFAULT 0,   -- 1＝価格を手で直した（7.139）
   at         TEXT,
   created_at TEXT
 );

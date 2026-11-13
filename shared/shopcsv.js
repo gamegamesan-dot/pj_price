@@ -164,9 +164,14 @@
 
   /* ---- 説明（Body (HTML) → Description）----
      JAN・機種・Amazon の商品ページへのリンク・上限と返金の文。
-     卸値・社・MW在庫・備考・MW の商品番号は入れない。 */
+     卸値・社・MW在庫・備考・MW の商品番号は入れない。
+
+     6.186（【2】）お客さまに見せる文なので
+     ・「仕入れ先の都合で」とは書かない（**仕入れ先のことは出さない**）
+     ・機種は記号（NS）ではなく正式な呼び名（Nintendo Switch）で出す
+       （呼び名の表は shared/mwfee.js の1か所だけ） */
   var NOTE_JA = "販売数に上限があります。"
-    + "仕入れ先の都合で用意できない場合は、全額返金します。";
+    + "在庫の都合で用意できない場合は、全額返金します。";
   function amzUrl(jan, asin) {
     return /^B[0-9A-Z]{9}$/.test(s(asin).toUpperCase())
       ? ("https://www.amazon.co.jp/dp/" + s(asin).toUpperCase())
@@ -182,7 +187,8 @@
     var h = [];
     h.push("<ul>");
     h.push("<li>JAN：" + esc(jan) + "</li>");
-    if (s(it.kishu)) h.push("<li>機種：" + esc(it.kishu) + "</li>");
+    var kishu = kishuJa(it.kishu);
+    if (kishu) h.push("<li>機種：" + esc(kishu) + "</li>");
     h.push('<li><a href="' + esc(amzUrl(jan, it.asin)) + '"'
       + ' target="_blank" rel="noopener">Amazon の商品ページ</a></li>');
     h.push("</ul>");
@@ -209,6 +215,13 @@
       try { return require("./mwfee.js"); } catch (e) { /* 無くても止めない */ }
     }
     return null;
+  }
+  /* 機種の正式な呼び名（6.186・【2】）。表は shared/mwfee.js の1か所だけ。
+     mwfee.js を読めないときは記号のまま出す（文が消えないように）。 */
+  function kishuJa(v) {
+    var F = feeMod();
+    if (F && typeof F.kishuJa === "function") return F.kishuJa(v);
+    return s(v).trim();
   }
   /* ゲームソフトかどうか（機種で見る）。限定版・通常版の区別は pj に
      データが無いので、**機種がゲームなら一律**として扱う。 */
@@ -474,7 +487,7 @@
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,
-    CP: CP, NOTE_JA: NOTE_JA,
+    CP: CP, NOTE_JA: NOTE_JA, kishuJa: kishuJa,
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,

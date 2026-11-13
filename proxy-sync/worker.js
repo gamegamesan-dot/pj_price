@@ -10163,8 +10163,13 @@ function mwSubGrades(v) {
   return out.length === Object.keys(SUB_GRADES).length ? "" : out.join(",");
 }
 /* POST /mw/sub … 印・上限・価格を控える（管理者だけ。売値が入るため）。
-   { jan, on, max_qty, price, grades } か { items:[…] }。
-   on=0 で印を外す（行は残し、上限と価格は控えたまま）。 */
+   { jan, on, max_qty, price, grades, hand } か { items:[…] }。
+   on=0 で印を外す（行は残し、上限と価格は控えたまま）。
+
+   7.139（【1】）hand … 1＝**価格の欄を手で直した**（px_hand=1 を立てる）。
+   手入れの行は、Shopify 用 CSV を書き出すたびの「上乗せの引き直し」を
+   しない（カジが決めた値を優先する）。0＝おすすめ値に戻す。
+   hand を入れないときは今の印をそのままにする（点数だけ直したときなど）。 */
 async function mwSubPut(env, body, role) {
   const run = newRun("mw-sub");
   const res = { ok: false, n: 0, rows: [], table_ok: true };
@@ -10178,6 +10183,14 @@ async function mwSubPut(env, body, role) {
     const o = body || {};
     const list = Array.isArray(o.items) ? o.items : [o];
     const at = nowIso();
+    /* 7.139 px_hand（migrate-0054）が無い D1 でも落とさない。 */
+    const handOk = await colOk(env, "mw_sub", "px_hand");
+    const hCol = handOk ? ",px_hand" : "";
+    const hVal = handOk ? ",MAX(?8,0)" : "";
+    const hSet = handOk
+      ? "\n           px_hand=CASE WHEN ?8 < 0"
+        + " THEN COALESCE(mw_sub.px_hand,0) ELSE ?8 END,"
+      : "";
     const stmts = [];
     for (const x of list.slice(0, 200)) {
       const jan = String((x && x.jan) || "").replace(/\D/g, "");
@@ -10188,23 +10201,29 @@ async function mwSubPut(env, body, role) {
       const px = Math.max(0, Math.min(SUB_PRICE_MAX,
         Math.round(Number(x.price) || 0)));
       const gr = mwSubGrades(x.grades);
+      /* 7.139（【1】）手入れの印。入っていないときは -1（今の印のまま）。 */
+      const hand = (x.hand === undefined || x.hand === null || x.hand === "")
+        ? -1 : (((x.hand === 1 || x.hand === true || x.hand === "1") ? 1 : 0));
       /* 印を付けるときは上限と価格が要る（0 のままでは CSV に出せない）。 */
       if (on && (!qty || !px)) {
         res.rows.push({ jan: jan, error: "need_qty_price" });
         continue;
       }
+      const args = [jan, on, qty, px, gr, String(role || "admin"), at];
+      if (handOk) args.push(hand);
       stmts.push(env.DB.prepare(
-        `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?7)
+        `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,created_at${hCol})
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?7${hVal})
          ON CONFLICT(jan) DO UPDATE SET
            on_sale=excluded.on_sale,
            max_qty=COALESCE(NULLIF(excluded.max_qty,0), mw_sub.max_qty),
-           price=COALESCE(NULLIF(excluded.price,0), mw_sub.price),
+           price=COALESCE(NULLIF(excluded.price,0), mw_sub.price),${hSet}
            grades=excluded.grades,
            by_role=excluded.by_role, at=excluded.at`)
-        .bind(jan, on, qty, px, gr, String(role || "admin"), at));
+        .bind(...args));
       res.n++;
-      res.rows.push({ jan: jan, on: on, max_qty: qty, price: px, grades: gr });
+      res.rows.push({ jan: jan, on: on, max_qty: qty, price: px, grades: gr,
+                      hand: hand });
     }
     await runBatch(env, run, stmts);
     run.notes.push("会員に出す印：" + res.n + "件");
@@ -10231,6 +10250,12 @@ async function mwSubList(env, url) {
     const st = (await settingsGet(env)).settings || {};
     subShip = Math.max(0, Math.round(Number(st.mwShipFee) || 0));
   } catch (e) { subShip = 0; }
+  /* 7.139（【1】）手入れの印と「Shopify に読み込みました」の印。
+     migrate を流す前の D1 でも落とさないように、列があるときだけ出す。 */
+  const hCol = (await colOk(env, "mw_sub", "px_hand"))
+    ? ", COALESCE(b.px_hand,0) AS px_hand" : "";
+  const lCol = (await colOk(env, "mw_sub", "loaded_at"))
+    ? ", b.loaded_at AS loaded_at" : "";
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.on_sale AS on_sale, b.max_qty AS max_qty,
             b.price AS price, COALESCE(b.grades,'') AS grades,
@@ -10242,7 +10267,7 @@ async function mwSubList(env, url) {
             s.wholesale AS wholesale,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
-            a.size_g AS size_g, a.size_long AS size_long
+            a.size_g AS size_g, a.size_long AS size_long${hCol}${lCol}
        FROM mw_sub b
             LEFT JOIN mw_stock s ON s.jan = b.jan
             LEFT JOIN mw_amz a ON a.jan = b.jan
@@ -10256,6 +10281,9 @@ async function mwSubList(env, url) {
     grades: String(r.grades || ""),
     at: String(r.at || ""), at_jst: jstText(r.at),
     put_at: String(r.put_at || ""), put_at_jst: jstText(r.put_at),
+    /* 7.139（【1】）1＝価格を手で直した行（書き出しで引き直さない）。 */
+    px_hand: Number(r.px_hand) || 0,
+    loaded_at: String(r.loaded_at || ""), loaded_at_jst: jstText(r.loaded_at),
     /* 会員に見せる名前は Amazon の名前を優先（MW の名前の癖を避ける）。 */
     name: String(r.amz_name || r.mw_name || ""),
     kishu: String(r.kishu || ""),
@@ -10275,34 +10303,83 @@ async function mwSubList(env, url) {
   }));
   return { ok: true, table_ok: true, n: rows.length, rows: rows, limit: limit };
 }
-/* POST /mw/sub/put … 「Shopify 用 CSV に出した」印（SKU の日付に使う）。 */
+/* いまの控え（価格・手入れの印・読み込み済みの印）を JAN で引く。
+   7.139（【1】）書き出しのときに「値段が変わったか」を見るのに使う。
+   D1 の bind は1文 100個までなので 90件ずつに割る。 */
+async function mwSubRowsByJan(env, jans) {
+  const out = {};
+  const hCol = (await colOk(env, "mw_sub", "px_hand"))
+    ? ", COALESCE(px_hand,0) AS px_hand" : "";
+  const lCol = (await colOk(env, "mw_sub", "loaded_at"))
+    ? ", COALESCE(loaded_at,'') AS loaded_at" : "";
+  for (let i = 0; i < jans.length; i += 90) {
+    const part = jans.slice(i, i + 90);
+    const ph = part.map((x, k) => "?" + (k + 1)).join(",");
+    const q = await env.DB.prepare(
+      `SELECT jan, COALESCE(price,0) AS price${hCol}${lCol}
+         FROM mw_sub WHERE jan IN (${ph})`).bind(...part).all();
+    for (const r of ((q && q.results) || [])) out[String(r.jan)] = r;
+  }
+  return out;
+}
+/* POST /mw/sub/put … 「Shopify 用 CSV に出した」印（SKU の日付に使う）。
+
+   7.139（【1】）ここが「pj の値段」と「Shopify の値段」を合わせる場所。
+   ・書き出しで決め直した販売価格を mw_sub.price に控える（画面の欄もこれを出す）
+   ・**手入れの行（px_hand=1）は引き直さない**。送られてきた値は捨て、
+     控えてある値をそのまま「出した値段」として返す
+   ・値段が変わった行は「Shopify に読み込みました」の印（loaded_at）を外す
+     （読み込み直すまで配信に載せない。Shopify と違う値段を会員に出さない）
+   返す prices は {JAN: 控えた値段} で、画面はこれで欄を書き直す。 */
 async function mwSubPutAt(env, body) {
   if (!(await mwSubOk(env))) return { ok: false, table_ok: false, n: 0 };
   const o = body || {};
   const jans = (Array.isArray(o.jans) ? o.jans : [])
     .map((x) => String(x || "").replace(/\D/g, "")).filter(janOk).slice(0, 2000);
-  if (!jans.length) return { ok: true, n: 0 };
+  if (!jans.length) return { ok: true, n: 0, prices: {} };
   const run = newRun("mw-sub-put");
   const at = nowIso();
   /* 6.178（【2】）上乗せは出し直すたびに決め直すので、そのとき使った
      販売価格も一緒に控える（画面に「Shopify に出した値段」が残るように）。 */
   const px = (o.prices && typeof o.prices === "object") ? o.prices : {};
-  let npx = 0;
-  const stmts = jans.map((j) => {
-    const p = Math.round(Number(px[j]) || 0);
-    if (p > 0 && p <= SUB_PRICE_MAX) {
-      npx++;
-      return env.DB.prepare(
-        `UPDATE mw_sub SET put_at=?2, price=?3 WHERE jan=?1`).bind(j, at, p);
+  const cur = await mwSubRowsByJan(env, jans);
+  const out = {};
+  let npx = 0, nhand = 0, nunload = 0;
+  const stmts = [];
+  for (const j of jans) {
+    const c = cur[j] || {};
+    const was = Math.round(Number(c.price) || 0);
+    const hand = Number(c.px_hand) || 0;
+    let p = Math.round(Number(px[j]) || 0);
+    /* 手入れの行は引き直さない（カジが決めた値を優先する）。 */
+    if (hand && was > 0) { if (p !== was) nhand++; p = was; }
+    const chg = (p > 0 && p <= SUB_PRICE_MAX && p !== was);
+    out[j] = chg ? p : was;
+    /* 値段が変わったら、読み込み済みの印を外す。 */
+    const unload = chg && String(c.loaded_at || "") !== "";
+    if (chg) npx++;
+    if (unload) {
+      nunload++;
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_sub SET put_at=?2, price=?3, loaded_at=NULL
+          WHERE jan=?1`).bind(j, at, p));
+    } else if (chg) {
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_sub SET put_at=?2, price=?3 WHERE jan=?1`).bind(j, at, p));
+    } else {
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_sub SET put_at=?2 WHERE jan=?1`).bind(j, at));
     }
-    return env.DB.prepare(
-      `UPDATE mw_sub SET put_at=?2 WHERE jan=?1`).bind(j, at);
-  });
+  }
   await runBatch(env, run, stmts);
   run.notes.push("Shopify に出した印：" + jans.length + "件"
-    + (npx ? ("／販売価格を控え直した " + npx + "件") : ""));
+    + (npx ? ("／販売価格を控え直した " + npx + "件") : "")
+    + (nhand ? ("／手入れの行はそのまま " + nhand + "件") : "")
+    + (nunload ? ("／値段が変わったので読み込み済みの印を外した "
+                  + nunload + "件") : ""));
   return Object.assign(await saveRun(env, run),
-    { ok: true, n: jans.length, at: at, prices: npx });
+    { ok: true, n: jans.length, at: at, prices: out,
+      changed: npx, hand: nhand, unloaded: nunload });
 }
 /* ===== 8.11（【Y】）会員向け Discord の配信 =====
    モニター5人に、平日の朝に商品リストを Discord で配信する。
@@ -14789,6 +14866,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["px_hand", "migrate-0054-sub-hand.sql"],
   ["sub_post", "migrate-0053-sub-post.sql"],
   ["sub_order", "migrate-0053-sub-post.sql"],
   ["loaded_at", "migrate-0053-sub-post.sql"],
@@ -15999,7 +16077,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwScanFeeWhy, mwFeeAsk, mwFeeKindOk, MW_WHY_MAX, MW_WHY_TTL_D,
   MW_WHY_PRICE,
   /* 7.130（【U の改】の1）会員に出す商品。 */
-  mwSubPut, mwSubList, mwSubPutAt, mwSubOk, mwSubGrades,
+  mwSubPut, mwSubList, mwSubPutAt, mwSubOk, mwSubGrades, mwSubRowsByJan,
   SUB_MAX_QTY, SUB_PRICE_MAX, SUB_GRADES,
   /* 7.126（【T】）在庫の動きの記録と目安。 */
   mwMvOf, mwMvStmts, mwStatSql, mwMoveOk, mwMoveList, mwWeekData, jobMwWeek,

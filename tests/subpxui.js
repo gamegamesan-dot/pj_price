@@ -88,7 +88,23 @@ await setup({ rows:[SUB({})] });
   const px=+col('Variant Price');
   ok(px>=Math.round(3516/(1-0.0355))&&px<=Math.round(3656/(1-0.0355))+4,
      '★★★Price は仕入原価＋梱包材＋上乗せ（¥10〜150）を割り戻した額');
-  ok(px%10!==0||px%100!==0,'★★10円・100円単位に切り上げない');
+  /* 10円・100円単位に切り上げていないこと。
+     1件だけ見ると「たまたま 100 の倍数」で落ちることがある（乱数なので
+     100回に1回ほど）。何回か書き出して、**1円単位の値が出る**ことで見る。 */
+  const many=await p.evaluate(async()=>{
+    const got=[];
+    for(let i=0;i<12;i++){
+      window.__dl=[];
+      await mwSubCsvGo();
+      await new Promise((x)=>setTimeout(x,80));
+      const rows=PJ_SHOPCSV.splitCsv((window.__dl[0]||{}).text||'');
+      const k=rows[0].indexOf('Variant Price');
+      if(rows[1])got.push(+rows[1][k]);
+    }
+    return got;
+  });
+  console.log('   '+JSON.stringify(many));
+  ok(many.some((x)=>x%10!==0),'★★10円・100円単位に切り上げない');
   /* 決め直した販売価格を pj-sync に控え直す（6.178）。 */
   const put=(d.q.filter((x)=>x.u==='subput')[0]||{}).b||{};
   console.log('   '+JSON.stringify(put));

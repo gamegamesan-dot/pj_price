@@ -23,6 +23,42 @@
   var GAME = { NS: 1, NS2: 1, NS2H: 1, P5: 1, P4: 1, "3DS": 1, PS5: 1, PS4: 1,
                SW: 1, PP: 1, PV: 1, XB: 1, XBX: 1, WIN: 1, PCC: 1, "68": 1 };
   var HOBBY = { b2cchara_figure: 1, figure: 1, FIG: 1, GF: 1, plasticmodel: 1 };
+  /* 機種の記号 → 正式な呼び名（6.186・【2】）。
+     Shopify の商品ページ（説明文）に「機種：NS」と出ていたのを
+     「機種：Nintendo Switch」にする。**お客さまに見せる文字**なので、
+     はっきり分かっている記号だけ直し、分からない記号はそのまま出す
+     （当てずっぽうの名前を会員に見せない）。
+     ここに無い記号が出てきたら、呼び名を教えてもらって足す。 */
+  var KISHU_JA = {
+    NS: "Nintendo Switch",
+    NS2: "Nintendo Switch 2",
+    SW: "Nintendo Switch",
+    "3DS": "ニンテンドー3DS",
+    PS5: "PlayStation 5",
+    P5: "PlayStation 5",
+    PS4: "PlayStation 4",
+    P4: "PlayStation 4",
+    PV: "PlayStation Vita",
+    XBX: "Xbox Series X|S",
+    XB: "Xbox",
+    WIN: "Windows（PC）",
+    PCC: "PC",
+    figure: "フィギュア",
+    FIG: "フィギュア",
+    b2cchara_figure: "フィギュア",
+    plasticmodel: "プラモデル"
+  };
+  /* 正式な呼び名（分からない記号はそのまま返す）。 */
+  function kishuJa(v) {
+    var k = (v === null || v === undefined) ? "" : String(v).trim();
+    if (!k) return "";
+    if (KISHU_JA[k]) return KISHU_JA[k];
+    /* 大文字小文字の違いだけなら合わせる（MW の CSV は ns / NS が混ざる）。 */
+    for (var n in KISHU_JA)
+      if (Object.prototype.hasOwnProperty.call(KISHU_JA, n)
+          && n.toLowerCase() === k.toLowerCase()) return KISHU_JA[n];
+    return k;
+  }
   /* 既定（⚙が空のときの値）。画面の入力欄の初期値と同じにしておく。 */
   var D = { feeGame: 15, feeHobby: 10, feeOther: 15,
             shipS: 288, storeS: 1, shipM: 425, storeM: 16,
@@ -99,6 +135,7 @@
   }
   var API = { guess: guess, fbaGuess: fbaGuess, rateOf: rateOf,
               genreOf: genreOf, sizeOf: sizeOf, sizeFrom: sizeFrom,
+              kishuJa: kishuJa, KISHU_JA: KISHU_JA,
               TAX_PCT: TAX_PCT, SIZE: SIZE, GAME: GAME, HOBBY: HOBBY, D: D };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_MWFEE = API;

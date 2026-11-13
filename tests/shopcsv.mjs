@@ -147,9 +147,40 @@ ok(/amazon\.co\.jp\/dp\/B0D1GSZJ8T/.test(body),
    '★★★Amazon の商品ページへのリンク');
 ok(/販売数に上限があります/.test(body)&&/全額返金/.test(body),
    '★★★上限と返金の文を入れる');
-ok(!/卸値|いろは|在庫|備考/.test(body),'★★★会員に見せない項目は入れない');
+/* 6.186：返金の文に「在庫の都合で」と入るので、文のぶんは外して見る
+   （ここで見たいのは **MW の在庫数**などが漏れていないこと）。 */
+ok(!/卸値|いろは|在庫|備考/.test(body.replace(A.NOTE_JA,'')),
+   '★★★会員に見せない項目は入れない');
 ok(/amazon\.co\.jp\/s\?k=/.test(A.bodyOf({ jan:'4902370550467' },{})),
    '★ASIN が無ければ JAN の検索にする');
+
+/* 6.186（【2】）お客さまに見せる文の直し。 */
+console.log('\n=== 説明の文（6.186・【2】）===');
+console.log('   '+A.NOTE_JA);
+ok(/在庫の都合で用意できない場合は、全額返金します/.test(A.NOTE_JA),
+   '★★★「在庫の都合で…全額返金します」にする');
+ok(!/仕入れ先|仕入先/.test(A.NOTE_JA),
+   '★★★「仕入れ先」という言葉は出さない（MW のことは会員に伏せている）');
+ok(/販売数に上限があります/.test(A.NOTE_JA),'★★「販売数に上限があります」はそのまま');
+ok(!/仕入れ先|仕入先/.test(A.build([IT],{})),
+   '★★★CSV ぜんぶを見ても「仕入れ先」は出てこない');
+
+console.log('\n=== 機種は正式な呼び名で出す（6.186・【2】）===');
+const kb=(k)=>A.bodyOf({ jan:'4902370550467', kishu:k },{});
+console.log('   '+[['NS','NS2','3DS','PS5','PV'].map((k)=>k+'→'+A.kishuJa(k))]);
+ok(/機種：Nintendo Switch</.test(kb('NS')),'★★★NS → Nintendo Switch');
+ok(/機種：Nintendo Switch 2</.test(kb('NS2')),'★★★NS2 → Nintendo Switch 2');
+ok(/機種：ニンテンドー3DS</.test(kb('3DS')),'★★★3DS → ニンテンドー3DS');
+ok(A.kishuJa('PS5')==='PlayStation 5'&&A.kishuJa('P5')==='PlayStation 5',
+   '★★PS5・P5 → PlayStation 5');
+ok(A.kishuJa('PV')==='PlayStation Vita','★PV → PlayStation Vita');
+ok(A.kishuJa('figure')==='フィギュア'&&A.kishuJa('plasticmodel')==='プラモデル',
+   '★フィギュア・プラモデル');
+ok(A.kishuJa('ns')==='Nintendo Switch','★★大文字小文字が違っても合わせる');
+ok(A.kishuJa('NS2H')==='NS2H',
+   '★★★呼び名が分からない記号はそのまま出す（当てずっぽうの名前を会員に見せない）');
+ok(A.kishuJa('')===''&&A.kishuJa(null)==='','★空のときは出さない');
+ok(!/機種/.test(A.bodyOf({ jan:'4902370550467' },{})),'★機種が無い行は項目を出さない');
 
 console.log('\n=== タグ ===');
 let tg=A.tagsOf(IT,{});
