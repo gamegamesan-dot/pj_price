@@ -59,7 +59,7 @@ ok((await trash()).join()==='b@1','★ゴミ箱に入る（元の位置も覚え
 const sum=await p.textContent('#csvTrashSum');
 console.log('   '+sum);
 ok(/ゴミ箱（1件）/.test(sum),'★一覧の上部に「ゴミ箱（n件）」と出る');
-const saved=await p.evaluate(()=>JSON.parse(localStorage.getItem('pj:csvtrash:v1')||'[]'));
+const saved=await p.evaluate(()=>JSON.parse(lsGet('pj:csvtrash:v1')||'[]'));
 ok(saved.length===1&&saved[0].r.id==='b','★端末にも保存する（開き直しても残る）');
 const del=await p.evaluate(()=>window.__del);
 console.log('   R2への削除: '+JSON.stringify(del));

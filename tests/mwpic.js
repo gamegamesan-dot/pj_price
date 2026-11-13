@@ -438,7 +438,7 @@ await p.evaluate(()=>{ $('mwPicTake').click(); });   // 2回目の押下＝止�
 await p.waitForTimeout(900);
 let qst=await p.evaluate(()=>({
   note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
-  q:(function(){ try{ return JSON.parse(localStorage.getItem('pj:mwpicq:v1')||'[]'); }
+  q:(function(){ try{ return JSON.parse(lsGet('pj:mwpicq:v1')||'[]'); }
                  catch(e){ return []; } })(),
   qn:($('mwPicQNote').innerText||'').replace(/\s+/g,' '),
   shown:$('mwPicQNote').style.display!=='none',
@@ -454,7 +454,7 @@ await p.evaluate(()=>{ window.__slow=0; $('mwPicGoOn').click(); });
 await p.waitForTimeout(1500);
 let fin=await p.evaluate(()=>({
   note:($('mwPicInNote').innerText||'').replace(/\s+/g,' '),
-  q:localStorage.getItem('pj:mwpicq:v1'),
+  q:lsGet('pj:mwpicq:v1'),
   posts:window.__img.filter((b)=>!b.saved).map((b)=>b.jan) }));
 console.log('   '+JSON.stringify(fin).slice(0,300));
 ok(/取り込みました/.test(fin.note),'★★★続きから最後まで取り込める');

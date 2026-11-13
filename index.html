@@ -2268,6 +2268,17 @@ body.staff #syncOnHandFix{display:none !important}
         外すと今までどおり Shopee タブが出ます（中身は残してあります）。</div>
       <div class="chk"><input type="checkbox" id="uiHideEbay"><label for="uiHideEbay" style="flex:1">eBay タブ（値付け・出品文）を隠す</label></div>
       <div class="note2" style="margin-top:0">出品CSVと販売連携は隠せません（毎日使うため）。隠したタブの設定も、この画面から消えます。</div>
+      <!-- 6.191（【1】〜【4】）この端末の保存。iPhone の Safari は
+           1つのサイトに 5MB ほどしか置けないので、何がどれだけ入っているかを
+           見られるようにする。大きいものは IndexedDB に置く。 -->
+      <div class="note2" style="margin:10px 0 2px"><b>この端末の保存</b></div>
+      <div id="pjStoreBox"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn" id="pjStoreBtn" onclick="pjStoreRender(1)" style="flex:1">中身を見る</button>
+        <button class="btn" id="pjStoreSweepBtn" onclick="pjStoreSweepGo()" style="flex:0 0 auto">古いものを消す</button>
+      </div>
+      <div class="note2" id="pjStoreNote" style="margin:4px 0 0"></div>
+      <div class="note2" style="margin:4px 0 6px">iPhone の Safari は1つのサイトに <b>5MB ほど</b>しか置けません。いっぱいになると「<b>⚠ この端末に保存できませんでした（The quota has been exceeded.）</b>」と出ます。<br><b>大きいもの</b>（出品リスト・ゴミ箱・書き出し済みのログ・販売連携の控え）は <b>IndexedDB</b>（容量がずっと大きい）に移してあります。localStorage には<b>設定など小さいものだけ</b>を置きます。<br>いっぱいで保存できないときに困るのは、<b>⚙の設定</b>・<b>開いていたタブや開閉の覚え</b>・<b>キーの控え</b>です（画面を開き直すと戻ります）。<b>出品リストと pj-sync のデータは無事</b>です（大きい保存と D1 にあります）。</div>
       </div>
     </details>
   </section>
@@ -2509,6 +2520,332 @@ if(typeof PJ_SUBPLAN==='undefined')
 if(typeof PJ_SUBCARD==='undefined')
   throw new Error('shared/subcard.js が読み込めていません（会員用のカード）');
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD;
+/* ===== 6.191（【1】〜【4】）端末の保存（localStorage が足りない）=====
+   iPhone の Safari は1つのサイトに 5MB ほどしか置けない。pj は出品リストや
+   ゴミ箱まで localStorage に入れていたので、いっぱいになって
+   「⚠ この端末に保存できませんでした（The quota has been exceeded.）」と
+   出ていた（⚙の欄が保存できない・8.16 で知らせるようにしたぶん）。
+
+   直し
+     ・**大きいもの**（出品リスト・ゴミ箱・書き出しログ・販売連携の控えなど）は
+       **IndexedDB**（容量がずっと大きい）に置く。localStorage には
+       設定など小さいものだけ
+     ・引っ越しは **書けたことを確かめてから** localStorage を消す
+       （中身を失わないため）
+     ・読み書きの入り口は lsGet／lsSet／lsDel の3つだけにして、
+       大きいものは IndexedDB、小さいものは localStorage に振り分ける
+     ・IndexedDB が使えない端末では**今までどおり** localStorage に置く
+
+   大きいものは「いまの中身」を文字のまま pjBigMem に持つ（読みは同期のまま）。
+   画面が立ち上がったあと pjStoreInit() が IndexedDB を読んで当て直す。 */
+var PJ_BIG_KEYS={
+  'pj:csvlist:v1':'出品リスト（いちばん大きい）',
+  'pj:csvtrash:v1':'出品リストのゴミ箱（30日で消える）',
+  'pj:csvlog:v1':'書き出し済みのログ',
+  'pj:sync:v1':'販売連携の一覧の控え',
+  'pj:csvnew:v1':'新着の控え',
+  'pj:csvcart:v1':'カートの控え',
+  'pj:mwpicq:v1':'MW の写真の順番待ち',
+  'pj:syncsent:v1':'送った印の控え',
+  'pj:syncsold:v1':'売れた行の控え',
+  'pj:undo:v1':'元に戻すの記録',
+  'pj:picserr:v1':'写真の失敗の記録'
+};
+/* 小さいもの（設定・開閉・タブなど）は localStorage のまま。
+   どれが何かは⚙の「この端末の保存」に出す（6.191・【4】）。 */
+var PJ_KEY_JA={
+  'pj:csvcfg:v1':'⚙の設定（出品CSV・販売連携・刈取）',
+  'pj:pricing:v1':'値付けの設定',
+  'pj:listing:v1':'出品文の下書き',
+  'pj:ui:v1':'画面の設定','pj:tab:v1':'最後に開いたタブ',
+  'pj:shopee:v1':'Shopee の設定','pj:sku:v1':'SKU の控え',
+  'pj:listn:v1':'一覧の件数','pj:cfggrp:v1':'⚙の開閉',
+  'pj:buysrc:v1':'仕入れ先の選び','pj:exp:v1':'説明の開閉',
+  'pj_mw_open':'刈取の行の開閉','pj:det:v1':'詳しい欄の開閉',
+  'pj:boxopen:v1':'箱の開閉','pj:syncmore:v1':'もっと見るの開閉',
+  'pj:role:v1':'キーの種類','pj:staffhide:v1':'作業者の端末の既定',
+  'pj:rkseen:v1':'再調達の知らせの既読','pj:picsok:v1':'写真の確認済み',
+  'pj:tipdone':'ホーム画面の案内'
+};
+var PJ_DB='pj-store', PJ_DB_ST='kv';
+var pjBigMem={};          // 大きいものの「いまの中身」（文字のまま）
+var pjBigDirty={};        // 画面から書き替えたもの（引っ越しで上書きしない）
+var pjIdb=null;           // IndexedDB の口（開けなければ null）
+var pjIdbErr='';
+var pjStoreReady=false;
+function pjIsBig(k){
+  return Object.prototype.hasOwnProperty.call(PJ_BIG_KEYS,String(k));
+}
+/* ---- 読み書きの入り口（ここだけが localStorage を触る）---- */
+function lsGet(k){
+  var key=String(k);
+  if(pjIsBig(key)){
+    if(pjBigMem[key]!==undefined)return pjBigMem[key];
+    /* まだ引っ越していない（または IndexedDB が無い）ときは今までどおり。 */
+    try{ return localStorage.getItem(key); }catch(e){ return null; }
+  }
+  try{ return localStorage.getItem(key); }catch(e){ return null; }
+}
+function lsSet(k,v){
+  var key=String(k), val=String(v);
+  if(pjIsBig(key)){
+    pjBigMem[key]=val;
+    pjBigDirty[key]=1;
+    if(pjIdb){ pjIdbPut(key,val); return true; }
+    /* IndexedDB が使えない端末は今までどおり localStorage に置く。 */
+  }
+  try{ localStorage.setItem(key,val); return true; }
+  catch(e){
+    pjStoreErr(key,e);
+    throw e;                       // 呼び出し側の try/catch は今までどおり動く
+  }
+}
+function lsDel(k){
+  var key=String(k);
+  if(pjIsBig(key)){
+    delete pjBigMem[key];
+    pjBigDirty[key]=1;
+    if(pjIdb)pjIdbDel(key);
+  }
+  try{ localStorage.removeItem(key); }catch(e){}
+}
+/* 保存できなかったことを控える（⚙の「この端末の保存」に出す）。 */
+var pjStoreErrs=[];
+function pjStoreErr(key,e){
+  var m=String((e&&e.message)||e||'');
+  pjStoreErrs.push({ key:key, msg:m, at:Date.now() });
+  if(pjStoreErrs.length>20)pjStoreErrs.shift();
+}
+/* ---- IndexedDB（小さな入れ物をひとつだけ）---- */
+function pjIdbOpen(){
+  return new Promise(function(done,fail){
+    var idb=null;
+    try{ idb=window.indexedDB; }catch(e){ idb=null; }
+    if(!idb){ fail(new Error('IndexedDB がありません')); return; }
+    var req;
+    try{ req=idb.open(PJ_DB,1); }catch(e){ fail(e); return; }
+    req.onupgradeneeded=function(){
+      try{ req.result.createObjectStore(PJ_DB_ST); }catch(e){}
+    };
+    req.onsuccess=function(){ done(req.result); };
+    req.onerror=function(){ fail(req.error||new Error('IndexedDB を開けません')); };
+    req.onblocked=function(){ fail(new Error('IndexedDB が使用中です')); };
+  });
+}
+function pjIdbRun(mode,fn){
+  return new Promise(function(done,fail){
+    if(!pjIdb){ fail(new Error('IndexedDB がありません')); return; }
+    var tx, st;
+    try{ tx=pjIdb.transaction(PJ_DB_ST,mode); st=tx.objectStore(PJ_DB_ST); }
+    catch(e){ fail(e); return; }
+    var out;
+    try{ out=fn(st); }catch(e){ fail(e); return; }
+    tx.oncomplete=function(){ done(out&&out.result!==undefined?out.result:null); };
+    tx.onerror=function(){ fail(tx.error||new Error('IndexedDB に書けません')); };
+    tx.onabort=function(){ fail(tx.error||new Error('IndexedDB が止まりました')); };
+  });
+}
+function pjIdbGet(k){ return pjIdbRun('readonly',function(st){ return st.get(k); }); }
+function pjIdbPut(k,v){
+  return pjIdbRun('readwrite',function(st){ return st.put(v,k); })
+    ['catch'](function(e){ pjStoreErr(k,e); });
+}
+function pjIdbDel(k){
+  return pjIdbRun('readwrite',function(st){ return st['delete'](k); })
+    ['catch'](function(e){ pjStoreErr(k,e); });
+}
+/* ---- 引っ越し（localStorage → IndexedDB）----
+   **書けたことを確かめてから**消す。確かめられなければ消さない。 */
+function pjMoveOne(key){
+  var old=null;
+  try{ old=localStorage.getItem(key); }catch(e){ old=null; }
+  return pjIdbGet(key).then(function(got){
+    /* すでに IndexedDB にあるなら、それを正とする（画面で書き替えた分は守る）。 */
+    if(got!==undefined&&got!==null){
+      if(!pjBigDirty[key])pjBigMem[key]=String(got);
+      if(old!==null){ try{ localStorage.removeItem(key); }catch(e){} }
+      return { key:key, moved:0, kept:1 };
+    }
+    if(old===null)return { key:key, moved:0, kept:0 };
+    return pjIdbRun('readwrite',function(st){ return st.put(old,key); })
+      .then(function(){ return pjIdbGet(key); })
+      .then(function(back){
+        /* **中身がそろったときだけ**消す（失うより残すほうがよい）。 */
+        if(String(back)!==String(old))
+          return { key:key, moved:0, kept:0, err:'ちがう中身になりました' };
+        if(!pjBigDirty[key])pjBigMem[key]=String(old);
+        try{ localStorage.removeItem(key); }catch(e){}
+        return { key:key, moved:String(old).length, kept:0 };
+      });
+  })['catch'](function(e){
+    pjStoreErr(key,e);
+    return { key:key, moved:0, kept:0, err:String((e&&e.message)||e) };
+  });
+}
+var pjStoreMoved=null;
+/* 画面が立ち上がったあとに呼ぶ。IndexedDB を開いて引っ越し、中身を当て直す。 */
+function pjStoreInit(){
+  return pjIdbOpen().then(function(db){
+    pjIdb=db;
+    var ks=Object.keys(PJ_BIG_KEYS);
+    return ks.reduce(function(p,k){
+      return p.then(function(a){
+        return pjMoveOne(k).then(function(r){ a.push(r); return a; });
+      });
+    },Promise.resolve([]));
+  }).then(function(list){
+    pjStoreMoved=list;
+    pjStoreReady=true;
+    return list;
+  })['catch'](function(e){
+    pjIdbErr=String((e&&e.message)||e);
+    pjIdb=null;
+    pjStoreReady=true;      // 使えないときは今までどおり localStorage
+    return [];
+  });
+}
+/* ---- 古いものを自動で消す（6.191・【3】）----
+   期限切れのキャッシュや、もう要らない控えを立ち上がりに落とす。
+   **消すのは「作り直せるもの」だけ**（出品リスト・ゴミ箱は触らない）。
+     ・販売連携の一覧の控え（pj:sync:v1）… 30日より古ければ捨てる
+       （次に「取り込む」を押せば作り直せる）
+     ・書き出し済みのログ（pj:csvlog:v1）… 新しい 2,000件まで
+     ・写真の失敗の記録（pj:picserr:v1）… 1,000件まで
+     ・元に戻すの記録（pj:undo:v1）… もともと 50件まで（ここでも念のため）
+   消したものは⚙の「この端末の保存」に出す。 */
+var PJ_SWEEP_DAYS=30;         // 一覧の控えを捨てるまでの日数
+var PJ_LOG_MAX=2000;          // 書き出し済みログの上限
+var PJ_PICSERR_MAX=1000;      // 写真の失敗の記録の上限
+var pjSweptAt=0, pjSwept=[];
+function pjStoreSweep(){
+  var out=[];
+  /* ① 古い一覧の控え。 */
+  try{
+    var o=JSON.parse(lsGet(SYNC_KEY)||'null');
+    var at=o&&o.at?Date.parse(o.at):0;
+    if(o&&at&&(Date.now()-at)>PJ_SWEEP_DAYS*86400000){
+      lsDel(SYNC_KEY);
+      if(typeof syncData!=='undefined')syncData=null;
+      out.push('販売連携の一覧の控え（'+PJ_SWEEP_DAYS+'日より古い）');
+    }
+  }catch(e){}
+  /* ② 書き出し済みログ。 */
+  try{
+    if(typeof csvLog!=='undefined'&&csvLog.length>PJ_LOG_MAX){
+      var n=csvLog.length-PJ_LOG_MAX;
+      csvLog=csvLog.slice(-PJ_LOG_MAX);
+      if(typeof csvSaveLog==='function')csvSaveLog();
+      out.push('書き出し済みのログ '+n+'件（新しい '+PJ_LOG_MAX+'件を残す）');
+    }
+  }catch(e){}
+  /* ③ 写真の失敗の記録。 */
+  try{
+    var ks=Object.keys(syncPicsErrs||{});
+    if(ks.length>PJ_PICSERR_MAX){
+      var keep={};
+      ks.slice(-PJ_PICSERR_MAX).forEach(function(k){ keep[k]=syncPicsErrs[k]; });
+      syncPicsErrs=keep;
+      syncPicsErrSave();
+      out.push('写真の失敗の記録 '+(ks.length-PJ_PICSERR_MAX)+'件');
+    }
+  }catch(e){}
+  /* ④ 元に戻すの記録。 */
+  try{
+    if(syncUndoList.length>SYNC_UNDO_MAX){
+      var m=syncUndoList.length-SYNC_UNDO_MAX;
+      syncUndoList=syncUndoList.slice(0,SYNC_UNDO_MAX);
+      syncUndoSave();
+      out.push('元に戻すの記録 '+m+'件');
+    }
+  }catch(e){}
+  pjSwept=out;
+  pjSweptAt=Date.now();
+  return out;
+}
+/* ---- いま何がどれだけ入っているか（⚙に出す・6.191・【1】）---- */
+function pjBytes(t){
+  var s=String(t||'');
+  try{ return new Blob([s]).size; }catch(e){ return s.length*2; }
+}
+/* ⚙に出す（6.191・【1】【4】）。force を渡すと開いていなくても作る。 */
+function pjKb(n){
+  var k=Number(n)||0;
+  if(k<1024)return k+' B';
+  if(k<1024*1024)return (Math.round(k/102.4)/10)+' KB';
+  return (Math.round(k/104857.6)/10)+' MB';
+}
+function pjStoreRender(force){
+  var box=$('pjStoreBox'); if(!box)return;
+  if(!force&&!box.innerHTML)return;      // まだ見ていないときは作らない
+  var list=pjStoreList();
+  var ls=list.filter(function(x){ return x.where.indexOf('localStorage')>=0; });
+  var big=list.filter(function(x){ return x.where.indexOf('IndexedDB')>=0; });
+  var sum=function(a){ return a.reduce(function(t,x){ return t+x.n; },0); };
+  var line=function(x){
+    return '<div class="note2" style="margin:1px 0 0;display:flex;gap:6px">'
+      +'<span style="flex:1 1 auto;min-width:0;overflow:hidden;'
+      +'text-overflow:ellipsis;white-space:nowrap">'
+      +esc(x.ja||x.key)+'<span style="opacity:.55"> '+esc(x.key)+'</span></span>'
+      +'<b style="flex:0 0 auto">'+pjKb(x.n)+'</b></div>';
+  };
+  box.innerHTML=
+    '<div class="note2" style="margin:2px 0 0"><b>端末の設定（localStorage）</b>　'
+    +'合計 <b>'+pjKb(sum(ls))+'</b>　'+mwN(ls.length)+'件'
+    +'<span style="opacity:.6">（iPhone の目安 5MB）</span></div>'
+    +ls.slice(0,30).map(line).join('')
+    +'<div class="note2" style="margin:6px 0 0"><b>大きい保存（IndexedDB）</b>　'
+    +'合計 <b>'+pjKb(sum(big))+'</b>　'+mwN(big.length)+'件'
+    +(pjIdb?'':'<span style="color:var(--bad)">（この端末では使えません：'
+      +esc(pjIdbErr||'—')+'）</span>')+'</div>'
+    +(big.length?big.map(line).join('')
+      :'<div class="note2" style="margin:1px 0 0;opacity:.7">まだありません</div>')
+    +(pjStoreMoved&&pjStoreMoved.some(function(x){ return x.moved>0; })
+      ?('<div class="note2" style="margin:6px 0 0;color:var(--good)">'
+        +'✓ 大きいものを IndexedDB に移しました（'
+        +pjStoreMoved.filter(function(x){ return x.moved>0; })
+          .map(function(x){ return esc(PJ_BIG_KEYS[x.key]||x.key)
+            +' '+pjKb(x.moved); }).join('／')+'）</div>'):'')
+    +(pjStoreMoved&&pjStoreMoved.some(function(x){ return x.err; })
+      ?('<div class="note2" style="margin:2px 0 0;color:var(--bad)">'
+        +'⚠ 移せなかったもの：'
+        +pjStoreMoved.filter(function(x){ return x.err; })
+          .map(function(x){ return esc(PJ_BIG_KEYS[x.key]||x.key)
+            +'（'+esc(x.err)+'）'; }).join('／')
+        +'　<b>中身は端末に残してあります</b></div>'):'')
+    +(pjSwept&&pjSwept.length
+      ?('<div class="note2" style="margin:2px 0 0">自動で消したもの：'
+        +pjSwept.map(esc).join('／')+'</div>'):'')
+    +(pjStoreErrs.length
+      ?('<div class="note2" style="margin:2px 0 0;color:var(--bad)">'
+        +'⚠ 保存できなかった：'+pjStoreErrs.slice(-3).map(function(x){
+          return esc(x.key)+'（'+esc(x.msg)+'）'; }).join('／')+'</div>'):'');
+}
+/* 「古いものを消す」を押したとき（6.191・【3】）。 */
+function pjStoreSweepGo(){
+  var n=$('pjStoreNote');
+  var out=[];
+  try{ out=pjStoreSweep()||[]; }catch(e){ out=[]; }
+  if(n)n.textContent=out.length
+    ?('✓ 消しました：'+out.join('／'))
+    :'消せる古いものはありませんでした（出品リストとゴミ箱は消しません）。';
+  pjStoreRender(1);
+}
+function pjStoreList(){
+  var out=[], k, i;
+  try{
+    for(i=0;i<localStorage.length;i++){
+      k=localStorage.key(i);
+      out.push({ key:k, where:'端末の設定（localStorage）',
+                 n:pjBytes(localStorage.getItem(k)),
+                 ja:PJ_KEY_JA[k]||PJ_BIG_KEYS[k]||'' });
+    }
+  }catch(e){}
+  for(k in pjBigMem)if(Object.prototype.hasOwnProperty.call(pjBigMem,k))
+    out.push({ key:k, where:'大きい保存（IndexedDB）', n:pjBytes(pjBigMem[k]),
+               ja:PJ_BIG_KEYS[k]||'' });
+  out.sort(function(a,b){ return b.n-a.n; });
+  return out;
+}
 var PJP=PJ_PRICING, PJC=PJ_PRICING.C;
 const AIR=PJC.AIR, EMS=PJC.EMS, EMS_W=PJC.EMS_W;
 // eBayの配送ポリシーは W1000 の1本で運用する。2kg超はエアパケット不可でEMSになる。
@@ -3719,10 +4056,10 @@ function pageNums(cur,max){
 var LIST_STEP=10;
 var LIST_N_KEY='pj:listn:v1';
 var listN={};
-try{ var l0=JSON.parse(localStorage.getItem(LIST_N_KEY)||'{}');
+try{ var l0=JSON.parse(lsGet(LIST_N_KEY)||'{}');
      listN=(l0&&typeof l0==='object')?l0:{}; }catch(e){ listN={}; }
 function listSave(){
-  try{ localStorage.setItem(LIST_N_KEY,JSON.stringify(listN)); }catch(e){}
+  try{ lsSet(LIST_N_KEY,JSON.stringify(listN)); }catch(e){}
 }
 /* いま出す件数（既定10件）。 */
 function listShow(key){
@@ -3803,12 +4140,12 @@ function uiSaveBoxes(){
   try{
     var o={};
     UI_BOXES.forEach(function(x){ var el=$(x[1]); if(el)o[x[0]]=!!el.open; });
-    localStorage.setItem(UI_KEY,JSON.stringify(o));
+    lsSet(UI_KEY,JSON.stringify(o));
   }catch(e){}
 }
 (function(){
   var o={};
-  try{ o=JSON.parse(localStorage.getItem(UI_KEY)||'{}')||{}; }catch(e){ o={}; }
+  try{ o=JSON.parse(lsGet(UI_KEY)||'{}')||{}; }catch(e){ o={}; }
   UI_BOXES.forEach(function(x){
     var el=$(x[1]); if(!el)return;
     if(typeof o[x[0]]==='boolean')el.open=o[x[0]];
@@ -3833,12 +4170,12 @@ function save(){
     /* 7.109：いま D1 に入っているはずの値。次に送る差分の基準。 */
     o.advSent=advSent;
     o.fxEdited=fxEdited;   // 手入力の為替を自動取得で上書きしないため
-    localStorage.setItem(KEY,JSON.stringify(o));
+    lsSet(KEY,JSON.stringify(o));
   }catch(e){}
 }
 function load(){
   try{
-    var s=localStorage.getItem(KEY);
+    var s=lsGet(KEY);
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(typeof o[k]==='boolean'){el.checked=o[k];return;}
@@ -3969,7 +4306,7 @@ var CFG_GRP_KEY='pj:cfggrp:v1';
 var CFG_GRP_DEF={ goal:1, md:1, rv:1, sold:1 };     // 初期から開くグループ
 var cfgGrp={};
 function cfgGrpLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(CFG_GRP_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(CFG_GRP_KEY)||'{}');
        if(o&&typeof o==='object')cfgGrp=o; }catch(e){ cfgGrp={}; }
   Array.prototype.forEach.call(document.querySelectorAll('#tabCfg details[data-cfgg]'),
     function(d){
@@ -3978,7 +4315,7 @@ function cfgGrpLoad(){
     });
 }
 function cfgGrpSave(){
-  try{ localStorage.setItem(CFG_GRP_KEY,JSON.stringify(cfgGrp)); }catch(e){}
+  try{ lsSet(CFG_GRP_KEY,JSON.stringify(cfgGrp)); }catch(e){}
 }
 document.addEventListener('toggle',function(e){
   var t=e.target, k=(t&&t.getAttribute)?t.getAttribute('data-cfgg'):'';
@@ -4185,11 +4522,11 @@ function switchTab(t){
 var TAB_KEY='pj:tab:v1';
 var TAB_OK={ D:1, E:1, A:1, B:1, C:1, F:1, M:1 };
 function tabSave(t){
-  try{ localStorage.setItem(TAB_KEY,String(t)); }catch(e){}
+  try{ lsSet(TAB_KEY,String(t)); }catch(e){}
 }
 function tabLoad(){
   try{
-    var v=String(localStorage.getItem(TAB_KEY)||'');
+    var v=String(lsGet(TAB_KEY)||'');
     return TAB_OK[v]?v:'D';
   }catch(e){ return 'D'; }
 }
@@ -4639,11 +4976,11 @@ function makeSku(){
   return ymd+'-'+code+hm+tail;
 }
 function skuHist(){
-  try{ var a=JSON.parse(localStorage.getItem(SKU_KEY)||'[]'); return Array.isArray(a)?a:[]; }
+  try{ var a=JSON.parse(lsGet(SKU_KEY)||'[]'); return Array.isArray(a)?a:[]; }
   catch(e){ return []; }
 }
 function pushSku(v){
-  try{ var a=skuHist(); a.unshift(v); localStorage.setItem(SKU_KEY,JSON.stringify(a.slice(0,5))); }
+  try{ var a=skuHist(); a.unshift(v); lsSet(SKU_KEY,JSON.stringify(a.slice(0,5))); }
   catch(e){}
 }
 function renderSkuHist(){
@@ -4789,12 +5126,12 @@ function lsave(){
     LCHECKS.forEach(function(id){o[id]=$(id).checked;});
     // 商品ごとに変わる値は保存しない。ブランドは初期値を消したので保存対象から外す。
     ['cat','origin','aOrigin'].forEach(function(id){o[id]=$(id).value;});
-    localStorage.setItem(LKEY,JSON.stringify(o));
+    lsSet(LKEY,JSON.stringify(o));
   }catch(e){}
 }
 function lload(){
   try{
-    var s=localStorage.getItem(LKEY);
+    var s=lsGet(LKEY);
     if(s){var o=JSON.parse(s);
       Object.keys(o).forEach(function(k){var el=$(k);if(!el)return;
         if(k==='brand')return;                 // 旧バージョンが保存した 'Banpresto' を引き継がない
@@ -4919,7 +5256,7 @@ function setSpFxNote(t){ $('spFxNote').textContent=t; }
 function spFxFor(mk){
   if(mk===$('spMarket').value) return +$('spFx').value||0;
   if(spFxCache&&isFinite(spFxCache.rate[mk])) return spFxCache.rate[mk];
-  try{ var o=JSON.parse(localStorage.getItem(SP_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(SP_KEY)||'{}');
        if(o._fx&&o._fx[mk]) return +o._fx[mk]; }catch(e){}
   return SP_DEFAULT_FX[mk];
 }
@@ -5030,7 +5367,7 @@ spFeeIds().forEach(function(id){
 $('spResetFee').onclick=function(){ spApplyMarket(true); buildShopee(); spsave(); };
 $('spMarket').addEventListener('change',function(){
   var mk=$('spMarket').value;
-  try{ var o=JSON.parse(localStorage.getItem(SP_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(SP_KEY)||'{}');
        $('spFx').value=(o._fx&&o._fx[mk])?o._fx[mk]:SP_DEFAULT_FX[mk]; }catch(e){}
   // 上書きしていた市場に戻ったらその値を復元し、初めての市場は既定値を入れる。
   spApplyMarket(!spFeeEdited[mk]);
@@ -5161,18 +5498,18 @@ function spsave(){
     var o={};
     ['spMarket','spShipDom'].forEach(function(id){o[id]=$(id).value;});
     ['spTech','spRebate','spNewSeller'].forEach(function(id){o[id]=$(id).checked;});
-    var s=localStorage.getItem(SP_KEY); var prev=s?JSON.parse(s):{};
+    var s=lsGet(SP_KEY); var prev=s?JSON.parse(s):{};
     var fx={}; fx[$('spMarket').value]=$('spFx').value;
     o._fx=Object.assign({},prev._fx||{},fx);
     o._fxEdited=spFxEdited;
     // 手数料は市場ごとに上書きした分だけ持ち越す（既定値は表から毎回入れ直す）。
     o._fee=spFeeStore; o._feeEdited=spFeeEdited;
-    localStorage.setItem(SP_KEY,JSON.stringify(o));
+    lsSet(SP_KEY,JSON.stringify(o));
   }catch(e){}
 }
 function spload(){
   try{
-    var s=localStorage.getItem(SP_KEY);
+    var s=lsGet(SP_KEY);
     if(s){
       var o=JSON.parse(s);
       if(o.spMarket&&SP_FEE[o.spMarket])$('spMarket').value=o.spMarket;
@@ -5688,7 +6025,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
 
 var csvList=[], csvLog=[];
 function csvLoad(){
-  try{ var a=JSON.parse(localStorage.getItem(CSV_LIST_KEY)||'[]'); csvList=Array.isArray(a)?a:[]; }catch(e){ csvList=[]; }
+  try{ var a=JSON.parse(lsGet(CSV_LIST_KEY)||'[]'); csvList=Array.isArray(a)?a:[]; }catch(e){ csvList=[]; }
   // 後から足した項目は、既存の保存データにも既定値を入れておく。
   csvList.forEach(function(r){
     if(r.forceEbay===undefined)r.forceEbay=false;
@@ -5708,8 +6045,8 @@ function csvLoad(){
   var gfix=csvList.filter(csvGameFix).length;
   if(gfix)csvSaveList();
   csvTrashLoad();   // ゴミ箱（30日で自動的に消える）
-  try{ var b=JSON.parse(localStorage.getItem(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
-  try{ var o=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
+  try{ var b=JSON.parse(lsGet(CSV_LOG_KEY)||'[]');  csvLog =Array.isArray(b)?b:[];  }catch(e){ csvLog=[]; }
+  try{ var o=JSON.parse(lsGet(CSV_CFG_KEY)||'{}');
        CSV_CFG_IDS.forEach(function(id){
          if(o[id]!==undefined&&o[id]!==''){ $(id).value=o[id]; csvSecretKeep(id,o[id]); } });
        csvCfgChecks().forEach(function(id){
@@ -5730,7 +6067,7 @@ function csvLoad(){
        if(typeof o.uiHideShopee==='boolean')$('uiHideShopee').checked=o.uiHideShopee;
        if(typeof o.uiHideEbay==='boolean')$('uiHideEbay').checked=o.uiHideEbay; }catch(e){}
 }
-function csvSaveList(){ try{ localStorage.setItem(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
+function csvSaveList(){ try{ lsSet(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 /* ---- ゴミ箱 ----
    行の「削除」と「リストを空にする」で消した行は、すぐには捨てずにここへ移す。
    写真・英題・出品文・カテゴリ・仕入値の直し・ItemID など、行の中身はそのまま残す。
@@ -5745,13 +6082,13 @@ var CSV_TRASH_DAYS=30;      // ここを過ぎた行は自動で消す
 var CSV_TRASH_MAX=300;      // 多くなりすぎたら古いものから消す
 var csvTrash=[];
 function csvTrashLoad(){
-  try{ var a=JSON.parse(localStorage.getItem(CSV_TRASH_KEY)||'[]');
+  try{ var a=JSON.parse(lsGet(CSV_TRASH_KEY)||'[]');
        csvTrash=Array.isArray(a)?a.filter(function(x){ return x&&x.r&&x.r.id; }):[]; }
   catch(e){ csvTrash=[]; }
   csvTrashPrune();
 }
 function csvTrashSave(){
-  try{ localStorage.setItem(CSV_TRASH_KEY,JSON.stringify(csvTrash)); }catch(e){}
+  try{ lsSet(CSV_TRASH_KEY,JSON.stringify(csvTrash)); }catch(e){}
 }
 /* 30日を過ぎたものと、上限を超えたぶん（古いものから）を落とす。落とした件数を返す。 */
 function csvTrashPrune(){
@@ -5871,7 +6208,7 @@ function csvDeleteRows(rows,label,force){
     +(held?('　ItemID 待ちの '+held+'件は残しました'):''));
   return ids.length;
 }
-function csvSaveLog(){  try{ localStorage.setItem(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
+function csvSaveLog(){  try{ lsSet(CSV_LOG_KEY,JSON.stringify(csvLog)); }catch(e){} }
 // 前後の空白を落として保存する欄（貼り付けで混ざりやすいURL・トークン類）
 var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken','syncApi','syncKey'];
 /* ---- キー・トークンの欄の保護 ----
@@ -5904,7 +6241,7 @@ function csvSaveCfg(){
     /* 丸ごと置き換えずに、保存済みの内容へ上書きする。
        何かの理由で欄が読めなくても、ほかの設定を落とさないため。 */
     var o={};
-    try{ var old=JSON.parse(localStorage.getItem(CSV_CFG_KEY)||'{}');
+    try{ var old=JSON.parse(lsGet(CSV_CFG_KEY)||'{}');
          if(old&&typeof old==='object')o=old; }catch(e){}
     CSV_CFG_IDS.forEach(function(id){
       var v=$(id).value;
@@ -5933,7 +6270,7 @@ function csvSaveCfg(){
     o.csvBoCols=$('csvBoCols').checked;
     o.uiHideShopee=$('uiHideShopee').checked;
     o.uiHideEbay=$('uiHideEbay').checked;
-    localStorage.setItem(CSV_CFG_KEY,JSON.stringify(o));
+    lsSet(CSV_CFG_KEY,JSON.stringify(o));
     return true;
   }catch(e){
     csvCfgErr=String((e&&e.message)||e);
@@ -8930,11 +9267,11 @@ function csvCartRefresh(r){
 var CSV_CART_KEY='pj:csvcart:v1';
 var csvCart={};            // { ASIN: {itemId, qty, price, cond, at} }
 function csvCartLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(CSV_CART_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(CSV_CART_KEY)||'{}');
     if(o&&typeof o==='object')csvCart=o; }catch(e){ csvCart={}; }
 }
 function csvCartSave(){
-  try{ localStorage.setItem(CSV_CART_KEY,JSON.stringify(csvCart)); }catch(e){}
+  try{ lsSet(CSV_CART_KEY,JSON.stringify(csvCart)); }catch(e){}
 }
 /* 行の状態区分。eBayの出品を突き合わせるときのキーの後半。
    新品 → 'new'／箱付き中古 → 'used'／カートリッジのみ → 'cart' */
@@ -9927,13 +10264,13 @@ $('csvShowNew').addEventListener('change',function(){
 var CSV_NEW_KEY='pj:csvnew:v1';
 var csvNew={ low:{}, cat:{}, pick:{} };
 function csvNewLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(CSV_NEW_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(CSV_NEW_KEY)||'{}');
     if(o&&typeof o==='object'){
       csvNew.low=o.low||{}; csvNew.cat=o.cat||{}; csvNew.pick=o.pick||{};
     } }catch(e){ csvNew={ low:{}, cat:{}, pick:{} }; }
 }
 function csvNewSave(){
-  try{ localStorage.setItem(CSV_NEW_KEY,JSON.stringify(csvNew)); }catch(e){}
+  try{ lsSet(CSV_NEW_KEY,JSON.stringify(csvNew)); }catch(e){}
 }
 /* 取り寄せた Amazon最安値（送料込み・円）。
    キーは 'ASIN|new' / 'ASIN|used'。'ASIN' だけの古い記録は新品として読む
@@ -10640,7 +10977,7 @@ var BUY_SRC=[{ id:'mw', name:'マッチングワールド（MW）', short:'MW',
 var BUY_SRC_KEY='pj:buysrc:v1';
 function buySrcId(){
   try{
-    var v=String(localStorage.getItem(BUY_SRC_KEY)||'');
+    var v=String(lsGet(BUY_SRC_KEY)||'');
     if(buySrcOf(v))return v;
   }catch(e){}
   return BUY_SRC[0].id;
@@ -10673,7 +11010,7 @@ function buySrcRender(){
   $(id).onclick=function(){ $(buySrcNow().file).click(); };
 });
 $('buySrcSel').addEventListener('change',function(){
-  try{ localStorage.setItem(BUY_SRC_KEY,String(this.value||'')); }catch(e){}
+  try{ lsSet(BUY_SRC_KEY,String(this.value||'')); }catch(e){}
   buySrcRender();
 });
 buySrcRender();
@@ -10703,10 +11040,10 @@ $('csvMwFile').addEventListener('change',function(){ mwFilePick(this); });
    知らせ（件数・進み具合・エラー）は畳まないので、ここには入れない。 */
 var EXP_KEY='pj:exp:v1';
 function expState(){
-  try{ var o=JSON.parse(localStorage.getItem(EXP_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(EXP_KEY)||'{}');
        return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; }
 }
-function expSave(o){ try{ localStorage.setItem(EXP_KEY,JSON.stringify(o||{})); }catch(e){} }
+function expSave(o){ try{ lsSet(EXP_KEY,JSON.stringify(o||{})); }catch(e){} }
 function expInit(){
   var st=expState();
   Array.prototype.forEach.call(document.querySelectorAll('details.exp[data-exp]'),
@@ -14696,7 +15033,7 @@ var MW_OPEN_MAX=400;             // 覚えておく行の数（これを超え�
 var mwOpenAll=0, mwOpenRow={};
 function mwOpenLoad(){
   try{
-    var o=JSON.parse(localStorage.getItem(MW_OPEN_KEY)||'{}')||{};
+    var o=JSON.parse(lsGet(MW_OPEN_KEY)||'{}')||{};
     mwOpenAll=o.all?1:0;
     mwOpenRow=(o.rows&&typeof o.rows==='object')?o.rows:{};
   }catch(e){ mwOpenAll=0; mwOpenRow={}; }
@@ -14704,7 +15041,7 @@ function mwOpenLoad(){
 function mwOpenSave(){
   try{
     if(Object.keys(mwOpenRow).length>MW_OPEN_MAX)mwOpenRow={};
-    localStorage.setItem(MW_OPEN_KEY,
+    lsSet(MW_OPEN_KEY,
       JSON.stringify({ all:mwOpenAll, rows:mwOpenRow }));
   }catch(e){}
 }
@@ -16283,14 +16620,14 @@ var MW_PIC_Q='pj:mwpicq:v1';
 var mwPicStop=false, mwPicRun=false;
 function mwPicQGet(){
   try{
-    var o=JSON.parse(localStorage.getItem(MW_PIC_Q)||'[]');
+    var o=JSON.parse(lsGet(MW_PIC_Q)||'[]');
     return (o&&o.length&&o[0]&&o[0].jan)?o:[];
   }catch(e){ return []; }
 }
 function mwPicQSet(list){
   try{
-    if(!list||!list.length)localStorage.removeItem(MW_PIC_Q);
-    else localStorage.setItem(MW_PIC_Q,JSON.stringify(list.slice(0,500)));
+    if(!list||!list.length)lsDel(MW_PIC_Q);
+    else lsSet(MW_PIC_Q,JSON.stringify(list.slice(0,500)));
   }catch(e){}
 }
 /* 残りがあることを知らせる（起動時と、取り込みが終わったとき）。 */
@@ -17427,11 +17764,11 @@ function csvDescFor(r){
 var SYNC_KEY='pj:sync:v1';
 var syncData=null, syncPick={};
 function syncLoadCache(){
-  try{ var o=JSON.parse(localStorage.getItem(SYNC_KEY)||'null');
+  try{ var o=JSON.parse(lsGet(SYNC_KEY)||'null');
        if(o&&o.items)syncData=o; }catch(e){}
 }
 function syncSaveCache(){
-  try{ localStorage.setItem(SYNC_KEY,JSON.stringify(syncData)); }catch(e){}
+  try{ lsSet(SYNC_KEY,JSON.stringify(syncData)); }catch(e){}
 }
 function syncUrl(){ return String($('syncApi').value||'').trim().replace(/\/+$/,''); }
 function syncApiKey(){
@@ -17714,11 +18051,11 @@ function syncQtyOf(r){
 var SYNC_SENT_KEY='pj:syncsent:v1';
 var syncSent={};
 function syncSentLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(SYNC_SENT_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(SYNC_SENT_KEY)||'{}');
        if(o&&typeof o==='object')syncSent=o; }catch(e){ syncSent={}; }
 }
 function syncSentSave(){
-  try{ localStorage.setItem(SYNC_SENT_KEY,JSON.stringify(syncSent)); }catch(e){}
+  try{ lsSet(SYNC_SENT_KEY,JSON.stringify(syncSent)); }catch(e){}
 }
 function syncRevSent(rows){
   var at=new Date().toISOString(), lim=Date.now()-30*86400000;
@@ -18627,10 +18964,10 @@ function syncPicsIdsSel(){
    880025406600 で「預け直さない」方式が空振りして写真が1枚落ちたため。 */
 var SYNC_PICS_OK='pj:picsok:v1';
 function syncPicsProven(){
-  try{ return localStorage.getItem(SYNC_PICS_OK)==='1'; }catch(e){ return false; }
+  try{ return lsGet(SYNC_PICS_OK)==='1'; }catch(e){ return false; }
 }
 function syncPicsProve(){
-  try{ localStorage.setItem(SYNC_PICS_OK,'1'); }catch(e){}
+  try{ lsSet(SYNC_PICS_OK,'1'); }catch(e){}
   syncPicsGate();
 }
 /* まとめての可否と、その理由を画面に出す。 */
@@ -18652,9 +18989,13 @@ function syncPicsGate(){
 var PICS_NEW_MS=24*60*60*1000;
 var PICS_ERR_KEY='pj:picserr:v1';
 var syncPicsErrs={};
-try{ syncPicsErrs=JSON.parse(localStorage.getItem(PICS_ERR_KEY)||'{}')||{}; }catch(e){}
+/* 6.191：大きい保存を読んだあとにも当て直すので、読み込みは関数にする。 */
+function syncPicsErrLoad(){
+  try{ syncPicsErrs=JSON.parse(lsGet(PICS_ERR_KEY)||'{}')||{}; }catch(e){}
+}
+syncPicsErrLoad();
 function syncPicsErrSave(){
-  try{ localStorage.setItem(PICS_ERR_KEY,JSON.stringify(syncPicsErrs)); }catch(e){}
+  try{ lsSet(PICS_ERR_KEY,JSON.stringify(syncPicsErrs)); }catch(e){}
 }
 function syncPicsKey(r){ return String((r||{}).asin||'')+'|'+String((r||{}).cond||''); }
 /* 切り替えに失敗した理由（「対応が必要」に出す）。切り替え済みの行には出さない。 */
@@ -19280,7 +19621,7 @@ var DET_MAX=300;                 // 覚えておく行数の上限（古いも�
 var detOpen={ csv:{}, sync:{} };
 function detLoad(){
   try{
-    var o=JSON.parse(localStorage.getItem(DET_KEY)||'{}');
+    var o=JSON.parse(lsGet(DET_KEY)||'{}');
     if(o&&typeof o==='object'){
       detOpen.csv=(o.csv&&typeof o.csv==='object')?o.csv:{};
       detOpen.sync=(o.sync&&typeof o.sync==='object')?o.sync:{};
@@ -19288,7 +19629,7 @@ function detLoad(){
   }catch(e){ detOpen={ csv:{}, sync:{} }; }
 }
 function detSave(){
-  try{ localStorage.setItem(DET_KEY,JSON.stringify(detOpen)); }catch(e){}
+  try{ lsSet(DET_KEY,JSON.stringify(detOpen)); }catch(e){}
 }
 function detIsOpen(tab,key){
   var m=detOpen[tab]; return !!(m&&m[String(key)]);
@@ -19339,10 +19680,10 @@ document.addEventListener('toggle',function(e){
    一度でも人が開閉したらその判断を優先する（下の syncMarkBarRender）。 */
 var BOX_KEY='pj:boxopen:v1';
 var boxOpen={};
-try{ var b0=JSON.parse(localStorage.getItem(BOX_KEY)||'{}');
+try{ var b0=JSON.parse(lsGet(BOX_KEY)||'{}');
      boxOpen=(b0&&typeof b0==='object')?b0:{}; }catch(e){ boxOpen={}; }
 function boxSave(){
-  try{ localStorage.setItem(BOX_KEY,JSON.stringify(boxOpen)); }catch(e){}
+  try{ lsSet(BOX_KEY,JSON.stringify(boxOpen)); }catch(e){}
 }
 // 人が一度でも開閉したか（していなければ既定のふるまいに任せる）
 function boxKnown(id){
@@ -19377,11 +19718,11 @@ var SYNC_MORE_KEY='pj:syncmore:v1';
 var SYNC_MORE_HEAD=3;
 var syncMoreOpen={};
 function syncMoreLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(SYNC_MORE_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(SYNC_MORE_KEY)||'{}');
     if(o&&typeof o==='object')syncMoreOpen=o; }catch(e){ syncMoreOpen={}; }
 }
 function syncMoreSave(){
-  try{ localStorage.setItem(SYNC_MORE_KEY,JSON.stringify(syncMoreOpen)); }catch(e){}
+  try{ lsSet(SYNC_MORE_KEY,JSON.stringify(syncMoreOpen)); }catch(e){}
 }
 /* lines … HTMLの配列。sep … つなぎ（既定は改行）。
    先頭 head 件（既定3件・一覧は10件）だけ出し、
@@ -19540,10 +19881,10 @@ var ROLE_KEY='pj:role:v1';
 var syncRole='admin';
 function isStaff(){ return syncRole==='staff'; }
 function roleLoad(){
-  try{ var v=localStorage.getItem(ROLE_KEY);
+  try{ var v=lsGet(ROLE_KEY);
        if(v==='staff'||v==='admin')syncRole=v; }catch(e){}
 }
-function roleSave(){ try{ localStorage.setItem(ROLE_KEY,syncRole); }catch(e){} }
+function roleSave(){ try{ lsSet(ROLE_KEY,syncRole); }catch(e){} }
 /* 画面の出し分け。body の印だけ付け替える（消す場所は CSS にまとめてある）。 */
 function roleApply(){
   try{ document.body.classList[isStaff()?'add':'remove']('staff'); }catch(e){}
@@ -19563,9 +19904,9 @@ var STAFF_HIDE_KEY='pj:staffhide:v1';
 function staffHideInit(){
   if(!isStaff())return;
   var done='';
-  try{ done=String(localStorage.getItem(STAFF_HIDE_KEY)||''); }catch(e){}
+  try{ done=String(lsGet(STAFF_HIDE_KEY)||''); }catch(e){}
   if(done)return;
-  try{ localStorage.setItem(STAFF_HIDE_KEY,'1'); }catch(e){}
+  try{ lsSet(STAFF_HIDE_KEY,'1'); }catch(e){}
   var el=$('uiHideEbay');
   if(el&&!el.checked){
     el.checked=true;
@@ -20540,9 +20881,9 @@ function syncRkSeen(){
   var n=Number(last.up||0)+Number(last.down||0)+Number(last.zeroed||0);
   if(!n)return;
   var seen='';
-  try{ seen=localStorage.getItem(RK_SEEN_KEY)||''; }catch(e){}
+  try{ seen=lsGet(RK_SEEN_KEY)||''; }catch(e){}
   if(seen===String(last.at))return;
-  try{ localStorage.setItem(RK_SEEN_KEY,String(last.at)); }catch(e){}
+  try{ lsSet(RK_SEEN_KEY,String(last.at)); }catch(e){}
   if(String(last.mode||'')==='approve')return;    // 押したときは別に残している
   syncUndoPush({ noundo:true,
     label:'再調達中の売値を自動で更新（上げた '+Number(last.up||0)+'件／下げた '
@@ -20754,11 +21095,11 @@ var SYNC_SOLD_KEY='pj:syncsold:v1';
 var SYNC_SOLD_OLD=30;                 // この日数を過ぎたら「相場が古い」
 var syncSold={};
 function syncSoldLoad(){
-  try{ var o=JSON.parse(localStorage.getItem(SYNC_SOLD_KEY)||'{}');
+  try{ var o=JSON.parse(lsGet(SYNC_SOLD_KEY)||'{}');
        if(o&&typeof o==='object')syncSold=o; }catch(e){ syncSold={}; }
 }
 function syncSoldSave(){
-  try{ localStorage.setItem(SYNC_SOLD_KEY,JSON.stringify(syncSold)); }catch(e){}
+  try{ lsSet(SYNC_SOLD_KEY,JSON.stringify(syncSold)); }catch(e){}
 }
 /* 一覧のキー（6.138）。**区分をそのまま**使う。
    以前は new 以外を全部 used にしていたので、カートリッジのみ（cart）と
@@ -22657,10 +22998,15 @@ var SYNC_UNDO_KEY='pj:undo:v1';
 var SYNC_UNDO_MAX=50;            // 残す件数
 var SYNC_UNDO_MS=9000;           // 帯を出しておく時間
 var syncUndoList=[];
-try{ var u0=JSON.parse(localStorage.getItem(SYNC_UNDO_KEY)||'[]');
-     syncUndoList=Array.isArray(u0)?u0:[]; }catch(e){ syncUndoList=[]; }
+/* 6.191：大きい保存（IndexedDB）を読み終えたあとにも当て直すので、
+   読み込みは関数にしてある。 */
+function syncUndoLoad(){
+  try{ var u0=JSON.parse(lsGet(SYNC_UNDO_KEY)||'[]');
+       syncUndoList=Array.isArray(u0)?u0:[]; }catch(e){ syncUndoList=[]; }
+}
+syncUndoLoad();
 function syncUndoSave(){
-  try{ localStorage.setItem(SYNC_UNDO_KEY,
+  try{ lsSet(SYNC_UNDO_KEY,
     JSON.stringify(syncUndoList.slice(0,SYNC_UNDO_MAX))); }catch(e){}
 }
 /* 印の名前と、値の読み書き。ここに無い項目は履歴に出さない。 */
@@ -23621,6 +23967,21 @@ $('addToCsv').onclick=function(){
 };
 
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+/* 6.191（【2】）大きいものは IndexedDB に置いてある。開くのを待てないので、
+   まず今までどおり立ち上げ、**読み終えてから当て直す**（数ミリ秒後）。
+   引っ越し（localStorage → IndexedDB）もここで走る。
+   使えない端末では今までどおり localStorage のまま動く。 */
+function pjStoreApply(){
+  try{ csvLoad(); csvNewLoad(); csvCartLoad(); }catch(e){}
+  try{ syncLoadCache(); syncSoldLoad(); syncSentLoad(); }catch(e){}
+  try{ syncUndoLoad(); syncPicsErrLoad(); }catch(e){}
+  try{ pjStoreSweep(); }catch(e){}
+  try{ csvRender(); }catch(e){}
+  try{ if(typeof syncRender==='function')syncRender(); }catch(e){}
+  try{ mwPicQNote(); }catch(e){}
+  try{ pjStoreRender(); }catch(e){}
+}
+try{ pjStoreInit().then(pjStoreApply)['catch'](function(){}); }catch(e){}
 roleLoad(); roleApply();          // 作業者用キーなら価格の欄を出さない（6.52）
 uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
 syncSentLoad(); syncMoreLoad(); detLoad(); boxApply();   // 折りたたみの開閉（6.80）
@@ -23685,7 +24046,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v271';   // sw.js の const V と必ず同じ値にする
+var APP_V='v272';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
@@ -23835,12 +24196,12 @@ document.addEventListener('visibilitychange',function(){
 (function(){
   var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
   var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent);
-  var done=false;try{done=!!localStorage.getItem('pj:tipdone');}catch(e){}
+  var done=false;try{done=!!lsGet('pj:tipdone');}catch(e){}
   if(isIOS&&!standalone&&!done){
     var t=$('tip');
     t.innerHTML='共有ボタン \u2192 <b>ホーム画面に追加</b> でアプリとして使えます。全画面になり、圏外でも動きます。<br><span style="opacity:.6;font-size:11.5px">（タップで消えます）</span>';
     t.style.display='block';
-    t.onclick=function(){t.style.display='none';try{localStorage.setItem('pj:tipdone','1');}catch(e){}};
+    t.onclick=function(){t.style.display='none';try{lsSet('pj:tipdone','1');}catch(e){}};
   }
 })();
 </script>

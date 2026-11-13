@@ -18,7 +18,7 @@ const setup=async(role)=>await p.evaluate((role)=>{
   $('saleRate').value='15'; $('usTaxRate').value='8';
   $('autoRvMode').value='off'; $('autoMdMode').value='off';
   window.__switch=[]; window.__fail={};
-  try{ localStorage.removeItem('pj:picserr:v1'); }catch(e){}
+  try{ lsDel('pj:picserr:v1'); }catch(e){}
   syncPicsErrs={};
   const hour=3600000;
   const it=(asin,x)=>Object.assign({asin:asin,cond:'used',scope:'ebay',prefix:'game',
@@ -135,7 +135,7 @@ const bad=await p.evaluate(()=>{
     card:d?d.innerText.replace(/\n/g,' | '):'',
     note:$('syncPicsNote').textContent,
     breakdown:$('syncWarnBreak').textContent,
-    saved:localStorage.getItem('pj:picserr:v1')||'' };
+    saved:lsGet('pj:picserr:v1')||'' };
 });
 console.log('   '+JSON.stringify({why:bad.why,eps:bad.eps,warn:bad.warn}));
 console.log('   '+bad.card.slice(0,220));

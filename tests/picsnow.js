@@ -24,7 +24,7 @@ const setup=async(o)=>await p.evaluate((o)=>{
   $('autoRvMode').value='off'; $('autoMdMode').value='off'; $('pbMode').value='off';
   $('autoRkMode').value='off';
   window.__switch=[]; window.__fail=o.fail||{}; window.__status=0;
-  try{ localStorage.removeItem('pj:picserr:v1'); }catch(e){}
+  try{ lsDel('pj:picserr:v1'); }catch(e){}
   syncPicsErrs={};
   const real=window.fetch;
   window.fetch=function(u,i){

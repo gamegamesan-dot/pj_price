@@ -235,11 +235,15 @@ await setup({});
 let n50=await p.evaluate(()=>{
   for(var i=0;i<60;i++)syncUndoPush({ field:'one_off',
     items:[{asin:'B0UND00001',cond:'used',title:'x'+i,from:0,to:1}] });
+  /* 6.191：元に戻すの記録は**大きい保存（IndexedDB）**に移した。
+     読み書きの入り口は lsGet／lsSet なので、そちらで確かめる。 */
   return [syncUndoList.length,syncUndoList[0].items[0].title,
-          JSON.parse(localStorage.getItem('pj:undo:v1')).length]; });
+          JSON.parse(lsGet('pj:undo:v1')).length,
+          localStorage.getItem('pj:undo:v1')]; });
 ok(n50[0]===50,'★★残すのは50件まで');
 ok(n50[1]==='x59','★★新しいものから残す');
-ok(n50[2]===50,'★この端末（localStorage）に残す');
+ok(n50[2]===50,'★この端末（大きい保存）に残す');
+ok(n50[3]===null,'★★localStorage は使わない（いっぱいにしない・6.191）');
 
 console.log('=== 出品CSVタブの行の印 ===');
 await setup({});

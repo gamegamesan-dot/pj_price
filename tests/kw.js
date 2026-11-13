@@ -117,7 +117,7 @@ const edit=await p.evaluate(()=>{
   el.dispatchEvent(new Event('change',{bubbles:true}));
   return { posts:window.__posts, kw:csvKwOf(csvRowById('K1')),
     manual:csvKwManual(csvRowById('K1')),
-    saved:(JSON.parse(localStorage.getItem('pj:csvlist:v1')||'[]')[0]||{}).mercKw };
+    saved:(JSON.parse(lsGet('pj:csvlist:v1')||'[]')[0]||{}).mercKw };
 });
 console.log('   送った内容: '+JSON.stringify(edit.posts));
 ok(edit.posts.length===1&&edit.posts[0][0].search_kw==='フィギュアーツ ナミ 冒険の夜明け'
