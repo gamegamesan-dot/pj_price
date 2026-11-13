@@ -2051,6 +2051,15 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
         <div class="note2" id="mwMoveNote" style="margin:4px 0 0"></div>
         <div id="mwMoveBox"></div>
+        <!-- 7.142／6.190 過去の記録の手当て（カジの依頼・2026-11-13）。
+             v270 より前に「売れた」と数えてしまった分を数え直す。
+             **押すと下見だけ**（何も書かない）。確かめてから実行する。 -->
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="mwRecountBtn" onclick="mwRecountPlanGo()" style="flex:1">過去の記録を数え直す（まず下見）</button>
+        </div>
+        <div class="note2" id="mwRecountNote" style="margin:4px 0 0"></div>
+        <div id="mwRecountBox"></div>
+        <div class="note2" style="margin:2px 0 6px">v270 より前は、<b>CSV から行がなくなった回</b>をまるごと「売れた」と数えていました（例：415点が「64.3点/日」）。ここを押すと、これまでの記録ぜんぶについて<b>一度に消えた回</b>と<b>CSV の抜けから同じ数で戻った回</b>を数え直します。<br><b>押しただけでは何も変わりません</b>（対象の件数と主な例を出すだけ）。中身を見てから「数え直す」を押してください。<br>※ 詳しい記録は<b>90日</b>で消えるので、それより古い分はもとから数え直せません（§7.134 と同じ）。</div>
         <!-- 6.151：Amazon 登録の上限と記録（作業者の端末からも登録できる）。 -->
         <div class="note2" style="margin:10px 0 2px"><b>Amazon への登録</b></div>
         <details class="exp" data-exp="mwPutDay"><summary>1日の上限と記録の説明</summary>
@@ -11153,6 +11162,102 @@ function mwMoveLine(x){
     +'　<span style="opacity:.7">'+esc(String(x.sha||''))+'</span></div>';
 }
 function mwMoveGo(){ mwMoveShow(($('mwMoveJan')||{}).value||''); }
+/* ===== 6.190（7.142）過去の記録を数え直す =====
+   v270 より前は「CSV から行がなくなった回」をまるごと「売れた」と数えていた。
+   ここで**これまでの記録ぜんぶ**を 7.141 の決まりで数え直す。
+   ・押すと**下見だけ**（pj-sync は何も書かない）。対象の件数と主な例を出す
+   ・中身を見てから「数え直す」を押すと実行する（確認もはさむ） */
+var mwRecountData=null;
+function mwRecountNote(t,bad){
+  var el=$('mwRecountNote'); if(!el)return;
+  el.innerHTML=t||'';
+  el.style.color=bad?'var(--bad)':'';
+}
+function mwRecountRows(d){
+  var rows=(d&&d.rows)||[];
+  if(!rows.length)return '';
+  return '<div class="note2" style="margin:4px 0 0"><b>主な例</b></div>'
+    +rows.map(function(x){
+      return '<div class="note2" style="margin:1px 0 0">'
+        +'<code>'+esc(String(x.jan||''))+'</code>　'
+        +esc(String(x.name||'').slice(0,40))
+        +'　<b>売れた数から外す '+mwN(+x.down_off||0)+'点</b>'
+        +(+x.wipe_n?('　一度に消えた '+mwN(+x.wipe_n)+'回・'
+          +mwN(+x.wipe_qty||0)+'点'):'')
+        +(+x.back_off?('　再入荷から外す '+mwN(+x.back_off)+'回'):'')
+        +'</div>';
+    }).join('');
+}
+function mwRecountPlanGo(){
+  var box=$('mwRecountBox');
+  if(roleDenyPrice('mwRecountNote'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    mwRecountNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return;
+  }
+  mwRecountNote('下見しています…（まだ何も変えません）');
+  if(box)box.innerHTML='';
+  return mwPost('/mw/move/recount',{ limit:10 }).then(function(d){
+    mwRecountData=d;
+    if(!d||d.ok!==true){
+      mwRecountNote('⚠ 下見できませんでした：'
+        +esc(String((d&&(d.detail||d.error))||'')),1);
+      return;
+    }
+    if(!d.n_jan){
+      mwRecountNote('✓ 数え直すものはありません（もう直っています）。');
+      return;
+    }
+    mwRecountNote('<b>下見</b>（まだ何も変えていません）<br>'
+      +'直す商品 <b>'+mwN(+d.n_jan||0)+'件</b>（社ごとの行 '
+      +mwN(+d.n_rows||0)+'行）<br>'
+      +'売れた数から外す <b>'+mwN(+d.down_off||0)+'点</b>'
+      +'／一度に消えた <b>'+mwN(+d.wipe_n||0)+'回・'
+      +mwN(+d.wipe_add||0)+'点</b><br>'
+      +(+d.back_off?('再入荷から外す <b>'+mwN(+d.back_off)+'回</b>'
+        +'／欠品から外す <b>'+mwN(+d.gone_off||0)+'回</b><br>'):'')
+      +'<span class="note2">しきい値：前の数の '+(+d.wipe_pct||0)+'% 以上・'
+      +mwN(+d.wipe_min||0)+'点以上が減って0になった回（⚙で変えられます）'
+      +'</span>');
+    if(box)box.innerHTML=mwRecountRows(d)
+      +'<div style="display:flex;gap:6px;margin-top:6px">'
+      +'<button class="btn primary cfgprice" onclick="mwRecountRun()"'
+      +' style="flex:1">この内容で数え直す</button></div>';
+  })['catch'](function(e){
+    mwRecountNote('⚠ 下見できませんでした：'+esc(e.message),1);
+  });
+}
+function mwRecountRun(){
+  var d=mwRecountData;
+  if(roleDenyPrice('mwRecountNote'))return;
+  if(!d||d.ok!==true){
+    mwRecountNote('先に「過去の記録を数え直す（まず下見）」を押してください。',1);
+    return;
+  }
+  if(!confirm('これまでの記録を数え直します。\n\n'
+    +'・直す商品：'+(+d.n_jan||0)+'件\n'
+    +'・売れた数から外す：'+(+d.down_off||0)+'点\n'
+    +'・一度に消えた：'+(+d.wipe_n||0)+'回・'+(+d.wipe_add||0)+'点\n'
+    +'・再入荷から外す：'+(+d.back_off||0)+'回\n\n'
+    +'※ 売れる速さ・欠品までの見込みが変わります。\n'
+    +'※ 詳しい記録（90日ぶん）から積み直します。\n\nよろしいですか？'))return;
+  mwRecountNote('数え直しています…');
+  return mwPost('/mw/move/recount',{ approve:true, limit:10 })
+    .then(function(r){
+      if(!r||r.applied!==true){
+        mwRecountNote('⚠ 数え直せませんでした：'
+          +esc(String((r&&(r.detail||r.error))||'')),1);
+        return;
+      }
+      mwRecountNote('✓ 数え直しました（売れた数から外した '
+        +mwN(+d.down_off||0)+'点・一度に消えた '+mwN(+d.wipe_n||0)+'回）。'
+        +'一覧と知らせの「売れる速さ」はこのあと新しい数になります。');
+      var box=$('mwRecountBox'); if(box)box.innerHTML='';
+      mwRecountData=null;
+    })['catch'](function(e){
+      mwRecountNote('⚠ 数え直せませんでした：'+esc(e.message),1);
+    });
+}
 /* 目安のまとめ（よく売れる／在庫処分で再入荷なし／再入荷が多い）。 */
 function mwWeekShow(){
   var note=$('mwWeekNote'), box=$('mwWeekBox');
@@ -23580,7 +23685,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v270';   // sw.js の const V と必ず同じ値にする
+var APP_V='v271';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

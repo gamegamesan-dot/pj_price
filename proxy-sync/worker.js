@@ -6677,7 +6677,75 @@ async function mwMoveSweep(env, run) {
    積み直しでは 0 に戻す（v248 の 'back' は全部が基準あつかいなので、
    取り除くのが正しい。これからの分は書くときに足される）。 */
 const MW_BASE_KEY = "mw.base.fix";        // 一度やったら控える（sync_state）
-async function mwBaseFix(env, run) {
+/* 7.142（過去の記録の手当て）mw_move から積み直すときの**区分の決め方**。
+   7.141（v270）の決まりを、**これまでの記録にもさかのぼって**当てる。
+
+   ・一度に消えた（売れた数に数えない）
+       kind が 'gone'（CSV から行がなくなった）か 'wipe'、または
+       kind='down' で **0 になり**、減った数が ⚙のしきい値以上
+   ・CSV の抜けから戻った（再入荷・欠品に数えない）
+       kind='back' で、**ひとつ前の記録が「消えた」で、その前の数と
+       戻った数が同じ**（＝抜けの穴埋め）。その「消えた」回も取り消す
+   ・欠品日数は、消えた回と戻った回の日時の差から出し直す
+     （書くときにしか計算していなかったので、v270 までの積み直しでは
+      0 に戻していた）
+
+   しきい値は数に直してから文字に埋める（§7.118：素の ? と ?N を混ぜない）。 */
+function mwRecountCte(opt) {
+  const o = opt || {};
+  const min = Math.max(0, Math.round(Number(o.min) || 0));
+  const pct = Math.max(0, Math.min(100, Number(o.pct) || 0));
+  const w = "(PARTITION BY jan, sha ORDER BY at, id)";
+  return `WITH m AS (
+            SELECT id, jan, sha, at, prev, cur, d, kind,
+                   LAG(kind)  OVER ${w} AS pkind,
+                   LAG(prev)  OVER ${w} AS pprev,
+                   LAG(at)    OVER ${w} AS pat,
+                   LEAD(kind) OVER ${w} AS nkind,
+                   LEAD(cur)  OVER ${w} AS ncur
+              FROM mw_move WHERE prev IS NOT NULL
+          ), c AS (
+            SELECT m.*,
+                   CASE WHEN kind='back' AND pkind IN ('gone','wipe')
+                             AND COALESCE(pprev,-1) = COALESCE(cur,-2)
+                        THEN 1 ELSE 0 END AS is_csvback,
+                   CASE WHEN kind IN ('gone','wipe') THEN 1
+                        WHEN kind='down' AND COALESCE(cur,0) = 0
+                             AND COALESCE(prev,0) >= ${min}
+                             AND (COALESCE(prev,0) - COALESCE(cur,0)) * 100.0
+                                 / COALESCE(prev,1) >= ${pct}
+                        THEN 1 ELSE 0 END AS is_wipe,
+                   CASE WHEN kind IN ('gone','wipe') AND nkind='back'
+                             AND COALESCE(ncur,-1) = COALESCE(prev,-2)
+                        THEN 1 ELSE 0 END AS is_cancel
+              FROM m
+          ), n AS (
+            SELECT jan, sha, MIN(at) AS first_at, MAX(at) AS last_at,
+                   SUM(CASE WHEN is_wipe=0 AND d<0 THEN 1 ELSE 0 END) AS down_n,
+                   SUM(CASE WHEN is_wipe=0 AND d<0 THEN -d ELSE 0 END)
+                     AS down_qty,
+                   SUM(CASE WHEN kind='up' THEN 1 ELSE 0 END) AS up_n,
+                   SUM(CASE WHEN kind='up' AND d>0 THEN d ELSE 0 END) AS up_qty,
+                   SUM(CASE WHEN kind='gone' AND is_cancel=0 THEN 1 ELSE 0 END)
+                     AS gone_n,
+                   SUM(CASE WHEN kind='back' AND is_csvback=0 THEN 1 ELSE 0 END)
+                     AS back_n,
+                   SUM(CASE WHEN kind='back' AND is_csvback=0
+                            THEN COALESCE(cur,0) ELSE 0 END) AS back_qty,
+                   SUM(CASE WHEN kind='back' AND is_csvback=0
+                                 AND pat IS NOT NULL
+                            THEN MAX(0, ROUND((julianday(at)
+                                               - julianday(pat)) * 100) / 100.0)
+                            ELSE 0 END) AS gone_days,
+                   SUM(CASE WHEN is_wipe=1 AND is_cancel=0 THEN 1 ELSE 0 END)
+                     AS wipe_n,
+                   SUM(CASE WHEN is_wipe=1 AND is_cancel=0
+                            THEN MAX(0, COALESCE(prev,0) - COALESCE(cur,0))
+                            ELSE 0 END) AS wipe_qty
+              FROM c GROUP BY jan, sha
+          )`;
+}
+async function mwBaseFix(env, run, opt) {
   const res = { ok: false, base: 0, stat: 0, moved: 0 };
   if (!(await mwMoveOk(env))) {
     res.error = "no_table";
@@ -6703,32 +6771,47 @@ async function mwBaseFix(env, run) {
                      THEN excluded.first_at ELSE mw_stat.first_at END,
        base_qty=COALESCE(mw_stat.base_qty, excluded.base_qty)`).run();
   res.base = Number((a && a.meta && a.meta.changes) || 0);
+  /* 7.142 しきい値は⚙から（渡されたらそれを使う）。 */
+  let wp = (opt && opt.wipe) ? opt.wipe : null;
+  if (!wp) {
+    try { wp = mwWipeOpt((await settingsGet(env)).settings || {}); }
+    catch (e) { wp = mwWipeOpt(null); }
+  }
+  res.wipe_pct = wp.pct;
+  res.wipe_min = wp.min;
+  /* 7.142 一度に消えた回の列（migrate-0055）。無い D1 でも積み直せる。 */
+  const hw = await colOk(env, "mw_stat", "wipe_n");
+  const wCol = hw ? ",wipe_n,wipe_qty" : "";
+  const wSel = hw ? ",\n            n.wipe_n, n.wipe_qty" : "";
+  const wSet = hw
+    ? ",\n       wipe_n=excluded.wipe_n, wipe_qty=excluded.wipe_qty"
+    : "";
   /* ② 合計を 0 に戻す（基準と日付は残す）。 */
   await env.DB.prepare(
     `UPDATE mw_stat SET down_n=0, down_qty=0, up_n=0, up_qty=0,
        gone_n=0, back_n=0, back_qty=0, gone_days=0`).run();
-  /* ③ mw_move から積み直す（前の数が無い記録は数えない）。 */
+  if (hw) await env.DB.prepare(
+    `UPDATE mw_stat SET wipe_n=0, wipe_qty=0`).run();
+  /* ③ mw_move から積み直す（前の数が無い記録は数えない）。
+     7.142：区分の決め方は mwRecountCte の1か所だけ（下見と同じもの）。 */
   const c = await env.DB.prepare(
-    `INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,up_qty,
-       gone_n,back_n,back_qty,gone_days,created_at)
-     SELECT jan, sha, MIN(at), MAX(at),
-            SUM(CASE WHEN d<0 THEN 1 ELSE 0 END),
-            SUM(CASE WHEN d<0 THEN -d ELSE 0 END),
-            SUM(CASE WHEN kind='up' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN kind='up' AND d>0 THEN d ELSE 0 END),
-            SUM(CASE WHEN kind='gone' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN kind='back' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN kind='back' THEN COALESCE(cur,0) ELSE 0 END),
-            0, MIN(at)
-       FROM mw_move WHERE prev IS NOT NULL
-      GROUP BY jan, sha
+    `${mwRecountCte(wp)}
+     INSERT INTO mw_stat (jan,sha,first_at,last_at,down_n,down_qty,up_n,up_qty,
+       gone_n,back_n,back_qty,gone_days${wCol},created_at)
+     SELECT n.jan, n.sha, n.first_at, n.last_at, n.down_n, n.down_qty,
+            n.up_n, n.up_qty, n.gone_n, n.back_n, n.back_qty,
+            n.gone_days${wSel}, n.first_at
+       FROM n
+      /* SQLite は SELECT のあとの ON CONFLICT を読み分けられないので、
+         あいだに WHERE を挟む（公式の決まり）。 */
+      WHERE 1
      ON CONFLICT(jan,sha) DO UPDATE SET
        last_at=CASE WHEN excluded.last_at > COALESCE(mw_stat.last_at,'')
                     THEN excluded.last_at ELSE mw_stat.last_at END,
        down_n=excluded.down_n, down_qty=excluded.down_qty,
        up_n=excluded.up_n, up_qty=excluded.up_qty,
        gone_n=excluded.gone_n, back_n=excluded.back_n,
-       back_qty=excluded.back_qty, gone_days=excluded.gone_days`).run();
+       back_qty=excluded.back_qty, gone_days=excluded.gone_days${wSet}`).run();
   res.stat = Number((c && c.meta && c.meta.changes) || 0);
   const n = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_move WHERE prev IS NULL`).first();
@@ -6740,6 +6823,100 @@ async function mwBaseFix(env, run) {
   return res;
 }
 /* 一度だけ自動でやる（日次の先頭）。落ちても日次処理は止めない。 */
+/* 7.142（過去の記録の手当て）**下見**（何も書かない）。
+   いまの mw_stat と、7.141 の決まりで積み直した数を見比べて
+   「どれだけ売れた数から外れるか」を返す。
+   カジが画面で確かめてから POST /mw/move/recount {approve:true} で実行する。 */
+async function mwRecountPlan(env, opt) {
+  const res = { ok: false, n_rows: 0, n_jan: 0, down_off: 0, wipe_add: 0,
+                wipe_n: 0, back_off: 0, gone_off: 0, rows: [] };
+  if (!(await mwMoveOk(env))) {
+    res.error = "no_table";
+    res.detail = "mw_move がありません（migrate-0049）";
+    return res;
+  }
+  let wp = (opt && opt.wipe) ? opt.wipe : null;
+  if (!wp) {
+    try { wp = mwWipeOpt((await settingsGet(env)).settings || {}); }
+    catch (e) { wp = mwWipeOpt(null); }
+  }
+  res.wipe_pct = wp.pct;
+  res.wipe_min = wp.min;
+  const hw = await colOk(env, "mw_stat", "wipe_n");
+  res.table_ok = hw;
+  if (!hw) {
+    res.error = "no_column";
+    res.detail = "mw_stat の wipe_n がありません（migrate-0055-mw-wipe.sql）";
+    return res;
+  }
+  const cte = mwRecountCte(wp);
+  /* 変わる行（社ごと）だけを拾う。 */
+  const d = `SELECT n.jan AS jan, n.sha AS sha,
+                    COALESCE(s.down_qty,0) - n.down_qty AS down_off,
+                    n.wipe_n AS wipe_n, n.wipe_qty AS wipe_qty,
+                    COALESCE(s.back_n,0) - n.back_n AS back_off,
+                    COALESCE(s.gone_n,0) - n.gone_n AS gone_off
+               FROM n LEFT JOIN mw_stat s
+                      ON s.jan = n.jan AND s.sha = n.sha
+              WHERE COALESCE(s.down_qty,0) <> n.down_qty
+                 OR COALESCE(s.wipe_n,0) <> n.wipe_n
+                 OR COALESCE(s.back_n,0) <> n.back_n
+                 OR COALESCE(s.gone_n,0) <> n.gone_n`;
+  const a = await env.DB.prepare(
+    `${cte}, d AS (${d})
+     SELECT COUNT(*) AS n_rows, COUNT(DISTINCT jan) AS n_jan,
+            SUM(MAX(0, down_off)) AS down_off,
+            SUM(wipe_qty) AS wipe_add, SUM(wipe_n) AS wipe_n,
+            SUM(MAX(0, back_off)) AS back_off,
+            SUM(MAX(0, gone_off)) AS gone_off
+       FROM d`).first();
+  res.n_rows = Number((a && a.n_rows) || 0);
+  res.n_jan = Number((a && a.n_jan) || 0);
+  res.down_off = Number((a && a.down_off) || 0);
+  res.wipe_add = Number((a && a.wipe_add) || 0);
+  res.wipe_n = Number((a && a.wipe_n) || 0);
+  res.back_off = Number((a && a.back_off) || 0);
+  res.gone_off = Number((a && a.gone_off) || 0);
+  /* 主な例（売れた数から外れる数の多い順）。商品名は在庫の表から。 */
+  const lim = Math.max(1, Math.min(50, Math.round(Number(
+    opt && opt.limit) || 10)));
+  const q = await env.DB.prepare(
+    `${cte}, d AS (${d})
+     SELECT d.jan AS jan, SUM(d.down_off) AS down_off,
+            SUM(d.wipe_n) AS wipe_n, SUM(d.wipe_qty) AS wipe_qty,
+            SUM(d.back_off) AS back_off, SUM(d.gone_off) AS gone_off,
+            (SELECT k.name FROM mw_stock k WHERE k.jan = d.jan
+              ORDER BY k.seen_at DESC LIMIT 1) AS name
+       FROM d GROUP BY d.jan
+      ORDER BY down_off DESC, wipe_qty DESC LIMIT ${lim}`).all();
+  res.rows = ((q && q.results) || []).map((r) => ({
+    jan: String(r.jan || ""),
+    name: String(r.name || "").slice(0, 60),
+    down_off: Number(r.down_off) || 0,
+    wipe_n: Number(r.wipe_n) || 0,
+    wipe_qty: Number(r.wipe_qty) || 0,
+    back_off: Number(r.back_off) || 0,
+    gone_off: Number(r.gone_off) || 0,
+  }));
+  res.ok = true;
+  return res;
+}
+/* 7.142 下見して実行する口。{approve:true} が無ければ**下見だけ**。 */
+async function mwRecountRun(env, body) {
+  const o = body || {};
+  const plan = await mwRecountPlan(env, { limit: o.limit });
+  if (!plan.ok) return Object.assign({ ok: false, applied: false }, plan);
+  if (!(o.approve === true || o.approve === 1 || o.approve === "1"))
+    return Object.assign({}, plan, { applied: false, dry_run: true });
+  const run = newRun("mw-recount");
+  const fix = await mwBaseFix(env, run, {});
+  run.notes.push("過去の記録を数え直しました（売れた数から外した "
+    + plan.down_off + "点・一度に消えた " + plan.wipe_n + "回 "
+    + plan.wipe_add + "点・再入荷から外した " + plan.back_off + "回）");
+  return Object.assign({}, plan, await saveRun(env, run),
+    { ok: fix.ok === true, applied: fix.ok === true, dry_run: false,
+      fix: fix });
+}
 async function mwBaseOnce(env, run) {
   try {
     const got = await stateGet(env, MW_BASE_KEY);
@@ -15480,8 +15657,10 @@ export default {
             || url.pathname === "/mw/jan-pick" || url.pathname === "/mw/auto"
             /* 【P】在庫CSVの自動取り込みを動かす・止めるのも管理者だけ。 */
             || url.pathname === "/mw/csv/run" || url.pathname === "/mw/csv/on"
-            /* 7.134：在庫の記録の作り直しも管理者だけ。 */
-            || url.pathname === "/mw/move/fix"))
+            /* 7.134：在庫の記録の作り直しも管理者だけ。
+               7.142：過去の記録の数え直し（下見も実行も）も管理者だけ。 */
+            || url.pathname === "/mw/move/fix"
+            || url.pathname === "/mw/move/recount"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
        値段が会員に出て、Discord にも流れるため。 */
@@ -15774,6 +15953,13 @@ export default {
          日次で一度だけ自動でも走る。手で押し直せるように口も置く。 */
       if (request.method === "POST" && url.pathname === "/mw/move/fix")
         return json(await mwBaseFix(env, null), 200, origin);
+      /* 7.142（過去の記録の手当て）下見して実行する。
+         approve が無ければ**何も書かない**（件数と主な例だけ返す）。 */
+      if (url.pathname === "/mw/move/recount") {
+        const b = (request.method === "POST")
+          ? await request.json().catch(() => ({})) : {};
+        return json(await mwRecountRun(env, b), 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/mw/week")
         return json(await mwWeekData(env,
           { top: url.searchParams.get("top") }), 200, origin);
@@ -16229,7 +16415,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwWipeOpt, mwWipeHit, MW_WIPE_PCT, MW_WIPE_MIN,
   mwMoveSweep,
   /* 7.134（【T】の直し）基準を控える・入ってしまった誤りを取り除く。 */
-  mwBaseFix, mwBaseOnce, MW_BASE_KEY,
+  mwBaseFix, mwBaseOnce, MW_BASE_KEY, mwRecountCte, mwRecountPlan,
+  mwRecountRun,
   /* 6.178（【2】）会員に出す販売価格。 */
   SUBPX,
   /* 7.137（v262）手数料の目安と、知らせの見込み粗利（3段）。 */
