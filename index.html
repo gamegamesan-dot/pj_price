@@ -2194,6 +2194,13 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv cfgprice"><label for="gdItemsStandard">　スタンダード</label><input type="text" id="gdItemsStandard" value="" placeholder="badge,sell,px,rival,floor" inputmode="text"></div>
         <div class="rowv cfgprice"><label for="gdItemsPremium">　プレミアム</label><input type="text" id="gdItemsPremium" value="" placeholder="badge,sell,px,rival,floor,limit" inputmode="text"></div>
         <div class="note2" style="margin:0 0 6px"><b>badge</b>＝総合の札／<b>sell</b>＝売れ行き／<b>px</b>＝値動き／<b>rival</b>＝ライバル／<b>floor</b>＝赤字にならない売値／<b>limit</b>＝出品できるかの注意。空なら上の既定（モニターは短く、プレミアムはぜんぶ）です。<br><b>取れていない項目は、その行ごと出しません</b>（当てずっぽうを書かないため）。</div>
+        <!-- 8.30（カジの依頼）固定メッセージは「共通1本＋チャンネルごとの
+             短い文」に分ける。共通の置き場と、注文の流れの曜日はここで決める。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>読み方の固定メッセージ</b></div>
+        <div class="rowv cfgprice"><label for="gdPinCh">共通の文を貼るチャンネル</label><input type="text" id="gdPinCh" value="" placeholder="はじめに" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px">名前（例 <code>はじめに</code>）でも<b>チャンネルID</b>でも入れられます。<b>ID を入れると <code>&lt;#ID&gt;</code> のリンク</b>になり、会員がタップで飛べます。空なら <code>#はじめに</code>。</div>
+        <div class="row cfgprice"><label for="gdCloseDay">締めの曜日／発送の曜日</label><select id="gdCloseDay"><option value="月" selected>月曜</option><option value="火">火曜</option><option value="水">水曜</option><option value="木">木曜</option><option value="金">金曜</option><option value="土">土曜</option><option value="日">日曜</option></select><select id="gdShipDay"><option value="月">月曜</option><option value="火" selected>火曜</option><option value="水">水曜</option><option value="木">木曜</option><option value="金">金曜</option><option value="土">土曜</option><option value="日">日曜</option></select></div>
+        <div class="note2" style="margin:0 0 6px">共通の文の「ご注文の流れ」に出します（<b>◯曜が締め・◯曜から順に発送</b>）。</div>
         <div style="display:flex;gap:6px;margin-top:6px">
           <button class="btn cfgprice" onclick="gdPinGo();return false" style="flex:1">読み方の固定メッセージの文を作る</button>
         </div>
@@ -3457,6 +3464,8 @@ var ADV_SUB=['subHour','subDomain',
              'gdMode','gdOldDays','gdRankA','gdRankB','gdSellA','gdSellB',
              'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
              'gdItemsMonitor','gdItemsLight','gdItemsStandard','gdItemsPremium',
+             /* 8.30 固定メッセージ（共通の置き場・締めと発送の曜日）。 */
+             'gdPinCh','gdCloseDay','gdShipDay',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              'osPricePct','osFixPct','osVendor','osType'];
@@ -6270,7 +6279,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'gdMode','gdOldDays','gdRankA','gdRankB','gdSellA','gdSellB',
                  'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
                  'gdItemsMonitor','gdItemsLight','gdItemsStandard',
-                 'gdItemsPremium',
+                 'gdItemsPremium','gdPinCh','gdCloseDay','gdShipDay',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
@@ -16825,7 +16834,10 @@ function gdCfg(){
            gdPxPct:v('gdPxPct'),
            gdItemsMonitor:v('gdItemsMonitor'), gdItemsLight:v('gdItemsLight'),
            gdItemsStandard:v('gdItemsStandard'),
-           gdItemsPremium:v('gdItemsPremium') };
+           gdItemsPremium:v('gdItemsPremium'),
+           /* 8.30 固定メッセージ（共通の置き場・注文の流れの曜日）。 */
+           gdPinCh:v('gdPinCh'), gdCloseDay:v('gdCloseDay'),
+           gdShipDay:v('gdShipDay') };
 }
 /* 刈取の行（mwAmzRows）から、目安に渡す形を作る。
    ・price    … **会員が買う値段**（会員価格）
@@ -16868,55 +16880,93 @@ function gdBadgeHtml(b){
 }
 /* 読み方の固定メッセージの文（チャンネルごと）。
    カジが Discord の固定メッセージに貼る。**カードと同じ言葉**にする。 */
-function gdPinText(key){
+/* ===== 8.30（カジの依頼）読み方の固定メッセージ =====
+   v287 はチャンネルごとに同じ説明を並べていたので、長くて読みにくく、
+   直すたびに全チャンネルを貼り直すことになっていた。
+     ・**共通の文（#はじめに 用・1本）** … 札の意味・項目の読み方・
+       目安であること・出品できるかの注意・注文の流れ・送料の考え方
+     ・**チャンネルごとの短い文（2〜3行）** … そのプランの項目と点数、
+       「読み方は #はじめに をご覧ください」
+   文の中身は shared/subguide.js の1か所だけ（ここは出し方と控えだけ）。
+   ⚙を変えて文が変わったら、**どれを貼り直せばよいか**を出す。 */
+var GD_PIN_KEY='pj:gdpin:v1';          // 貼った文の指紋（この端末に覚える）
+function gdPinSeen(){
+  try{ return JSON.parse(localStorage.getItem(GD_PIN_KEY)||'{}')||{}; }
+  catch(e){ return {}; }
+}
+function gdPinSeenSet(id,hash){
+  try{
+    var m=gdPinSeen(); m[String(id)]=String(hash);
+    localStorage.setItem(GD_PIN_KEY,JSON.stringify(m));
+  }catch(e){}
+}
+/* 出す文の一覧（共通＋チャンネルごと）。 */
+function gdPinList(){
   var G=PJ_SUBGUIDE, o=gdCfg();
-  var want=G.itemsOf(key,o);
-  var ja={ badge:'**総合の札** … ◎ ねらい目／○ ふつう／△ 慎重に。'
-             +'売れ行き・ライバル・利益率の3つから付けています',
-           sell:'**売れ行き** … どれくらい売れているかの目安です'
-             +'（Amazon のランキングから出しています）',
-           px:'**値動き** … これまでの最安値と平均、いまがそれより高いか'
-             +'安いかです',
-           rival:'**ライバル** … 新品の出品者の数と、Amazon 本体が'
-             +'売っているかです。本体がいるときは札を下げています',
-           floor:'**赤字にならない売値** … この値段以上で売れれば'
-             +'赤字になりません（Amazon の手数料を引いたあと・**送料は別**）',
-           limit:'**出品できるか** … '+G.LIMIT_JA };
-  var L=['**このチャンネルの読み方**','',
-    'カードの数字は**すべて目安**です。'
-      +'**利益を保証するものではありません。**',''];
-  want.forEach(function(k){ if(ja[k])L.push('・'+ja[k]); });
-  if(want.indexOf('limit')<0)L.push('・'+G.LIMIT_JA);
-  L.push('');
-  L.push('・**仕入れ価格**は当社から買う値段（税込・送料別）です。'
-    +'送料はお会計で表示されます');
-  L.push('・**残り**は、ほかの会員が買うと減ります。'
-    +'売り切れたらカードが「完売しました」に変わります');
-  L.push('・迷ったときは、**Amazon の商品ページ（カードの見出しをタップ）**'
-    +'で今の値段と出品者を見てから決めてください');
-  return L.join('\n');
+  var plans=SUBPLAN.list(subCfgAll());
+  var ones=SUBPLAN.oneList(subCfgAll());
+  var of=function(k){
+    return plans.filter(function(p){ return p.key===k; })[0]
+      ||ones.filter(function(p){ return p.key===k; })[0]||{};
+  };
+  var out=[{ id:'common', label:'共通（'+G.pinRef(o)+' に貼る）',
+             text:G.pinCommon(o,plans), common:true }];
+  [['monitor','#リスト-モニター'],['light','#リスト-ライト'],
+   ['standard','#リスト-スタンダード'],['premium','#リスト-プレミアム'],
+   ['one_pre','#目玉商品-先行'],['one_open','#目玉商品']]
+    .forEach(function(k){
+      var p=of(k[0]);
+      out.push({ id:k[0], label:k[1], text:G.pinPlan(k[0],o,p),
+                 on:(p.on===undefined)?true:!!p.on });
+    });
+  return out;
 }
 function gdPinGo(){
   var box=$('gdPinBox'); if(!box)return;
-  var keys=[['monitor','#リスト-モニター'],['light','#リスト-ライト'],
-            ['standard','#リスト-スタンダード'],
-            ['premium','#リスト-プレミアム'],
-            ['one_pre','#目玉商品-先行'],['one_open','#目玉商品']];
-  box.innerHTML=keys.map(function(k,i){
-    var txt=gdPinText(k[0]);
-    return '<div class="note2" style="margin:8px 0 2px"><b>'+esc(k[1])
-      +'</b>　<a href="#" onclick="gdPinCopy('+i+');return false"'
-      +' style="text-decoration:underline dotted">コピー</a></div>'
-      +'<textarea id="gdPinTxt'+i+'" rows="7" readonly'
-      +' style="width:100%;font-size:12px">'+esc(txt)+'</textarea>';
+  var G=PJ_SUBGUIDE;
+  var list=gdPinList(), seen=gdPinSeen();
+  window.__gdPin=list;
+  var need=[];
+  box.innerHTML=list.map(function(x,i){
+    var h=G.hashOf(x.text);
+    var was=String(seen[x.id]||'');
+    var st=!was?'<b style="color:var(--good)">まだ貼っていません</b>'
+      :(was===h?'<span style="opacity:.6">貼ってあるものと同じ</span>'
+               :'<b style="color:var(--bad)">変わりました（貼り直してください）</b>');
+    if(!was||was!==h)need.push(x.label);
+    var parts=G.pinSplit(x.text);
+    return '<div class="note2" style="margin:10px 0 2px"><b>'+esc(x.label)
+      +'</b>'+(x.on===false?'<span style="opacity:.6">（いまは止めている'
+        +'プランです）</span>':'')
+      +'　'+st
+      +(parts.length>1?('<br><b>'+parts.length+'通に分けて</b>'
+        +'貼ってください（Discord は1通 2,000字まで）'):'')
+      +'</div>'
+      +parts.map(function(tx,j){
+        return '<div class="note2" style="margin:2px 0 0">'
+          +(parts.length>1?('（'+(j+1)+'/'+parts.length+'）　'):'')
+          +'<a href="#" onclick="gdPinCopy('+i+','+j+');return false"'
+          +' style="text-decoration:underline dotted">コピー</a></div>'
+          +'<textarea id="gdPinTxt'+i+'_'+j+'" rows="'
+          +(x.common?12:4)+'" readonly'
+          +' style="width:100%;font-size:12px">'+esc(tx)+'</textarea>';
+      }).join('');
   }).join('');
-  $('gdPinNote').innerHTML='チャンネルごとの文を作りました。'
-    +'<b>コピー</b>して Discord の固定メッセージに貼ってください'
-    +'（⚙の「出す項目」を変えたら、この文も作り直してください）。';
+  $('gdPinNote').innerHTML=(need.length
+    ?('<b style="color:var(--bad)">貼り直しが要るもの：'
+      +esc(need.join('・'))+'</b><br>')
+    :'<b>ぜんぶ貼ってあるものと同じです。</b><br>')
+    +'<b>共通の文</b>は '+esc(G.pinRef(gdCfg()))+' に1本だけ貼り、'
+    +'チャンネルごとの文は<b>2〜3行</b>です（読み方は共通の文に任せます）。'
+    +'<br><b>コピー</b>を押すと「貼った」として覚えるので、'
+    +'次からは変わったものだけが分かります。';
 }
-function gdPinCopy(i){
-  var el=$('gdPinTxt'+i); if(!el)return;
+/* コピー（押した文を「貼った」として覚える）。 */
+function gdPinCopy(i,j){
+  var el=$('gdPinTxt'+i+'_'+(j||0)); if(!el)return;
   mwCopy(el.value);
+  var x=(window.__gdPin||[])[i];
+  if(x){ gdPinSeenSet(x.id,PJ_SUBGUIDE.hashOf(x.text)); gdPinGo(); }
 }
 /* ===== 8.28（カジの依頼1）全プランにまとめて配る =====
    いままでプランごとに「◯◯だけ送る」を押していたので、手数が多かった。
@@ -26031,7 +26081,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v287';   // sw.js の const V と必ず同じ値にする
+var APP_V='v288';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -281,6 +281,159 @@
     add("limit", LIMIT_JA);
     return out;
   }
+  /* ===== 8.30（カジの依頼）読み方の固定メッセージ =====
+     v287 は**チャンネルごとに同じ説明**を並べていたので、
+     ・固定メッセージが長くて読みにくい
+     ・直すたびに全チャンネルを貼り直す
+     ことになっていた。**共通（#はじめに）1本＋チャンネルごとの短い文**に分ける。
+
+     ・共通 … 札の意味・項目の読み方・目安であること・出品できるかの注意・
+       注文の流れ（締めと出荷の曜日は⚙）・送料の考え方
+     ・短い文 … そのプランのカードに出る項目・1人あたりの点数・
+       「読み方は #はじめに をご覧ください」
+     **出していない項目は書かない**（Keepa のように持っていないデータの
+     説明も書かない）。仕入れ先の名前は書かない。 */
+  var PIN_MAX = 1900;            // Discord の1通（2,000字）の手前で分ける
+  var DAYS = ["日", "月", "火", "水", "木", "金", "土"];
+  var PLAN_ORDER = ["monitor", "light", "standard", "premium"];
+  var PLAN_JA = { monitor: "モニター", light: "ライト",
+                  standard: "スタンダード", premium: "プレミアム" };
+  /* ⚙の曜日（0〜6 か「月」「月曜」）→「月曜」。読めなければ既定。 */
+  function dayJa(v, def) {
+    var x = s(v).trim();
+    if (!x) return def;
+    var n = Number(x);
+    if (isFinite(n) && n >= 0 && n <= 6) return DAYS[Math.round(n)] + "曜";
+    for (var i = 0; i < DAYS.length; i++)
+      if (x.indexOf(DAYS[i]) === 0) return DAYS[i] + "曜";
+    return def;
+  }
+  /* その項目を出す**いちばん下のプラン**（出しているプランが無ければ ""）。
+     ⚙の「プランごとに出す項目」から自動で出す。 */
+  function planFirst(item, opt) {
+    for (var i = 0; i < PLAN_ORDER.length; i++)
+      if (itemsOf(PLAN_ORDER[i], opt).indexOf(item) >= 0) return PLAN_ORDER[i];
+    return "";
+  }
+  /* 「（スタンダードプラン以上）」。いちばん下のプランなら付けない。 */
+  function planNote(item, opt) {
+    var k = planFirst(item, opt);
+    if (!k || k === PLAN_ORDER[0]) return "";
+    return "（" + PLAN_JA[k] + "プラン以上）";
+  }
+  /* #はじめに の指し方。⚙にチャンネルID（数字）が入っていれば
+     <#ID> でリンクにする。名前なら #名前 のまま。 */
+  function pinRef(opt) {
+    var v = s((opt || {}).gdPinCh).trim() || "はじめに";
+    var d = v.replace(/\D/g, "");
+    if (d && d.length >= 5 && d === v.replace(/[^0-9]/g, "") && /^\d+$/.test(v))
+      return "<#" + d + ">";
+    return "#" + v.replace(/^#/, "");
+  }
+  /* ---- 共通の文（#はじめに 用・1本）---- */
+  /* opt … ⚙／plans … SUBPLAN.list の結果（1人あたりの点数に使う） */
+  function pinCommon(opt, plans) {
+    var o = opt || {};
+    var L = [];
+    var has = function (k) { return !!planFirst(k, o); };
+    L.push("**はじめに（商品リストの読み方）**");
+    L.push("");
+    L.push("商品リストのカードには、**買うかどうかを決めるための目安**を"
+      + "のせています。");
+    L.push("**" + NOTE_JA + "。** 最後はご自身で確かめてからお求めください。");
+    if (has("badge")) {
+      L.push("");
+      L.push("**総合の札**" + planNote("badge", o));
+      L.push("・**" + MARKS.a.mark + " " + MARKS.a.name
+        + "** … 売れ行き・ライバル・利益率のバランスが良い商品です");
+      L.push("・**" + MARKS.b.mark + " " + MARKS.b.name
+        + "** … ふつうです。値段と残り数を見て決めてください");
+      L.push("・**" + MARKS.c.mark + " " + MARKS.c.name
+        + "** … ライバルが多い、売れ行きが遅いなど、気をつける点があります");
+      L.push("・**" + MARKS.x.mark + " " + MARKS.x.name
+        + "** … 元のデータが古い商品です。札は出しません");
+    }
+    var it = [];
+    if (has("sell")) it.push("・**" + ITEM_JA.sell + "**" + planNote("sell", o)
+      + " … どれくらい売れているかの目安です"
+      + "（Amazon のランキングから出しています）");
+    if (has("px")) it.push("・**" + ITEM_JA.px + "**" + planNote("px", o)
+      + " … これまでの最安値と平均、いまがそれより高いか安いかです");
+    if (has("rival")) it.push("・**" + ITEM_JA.rival + "**"
+      + planNote("rival", o)
+      + " … 新品の出品者の数と、Amazon 本体が売っているかです。"
+      + "本体が売っているときは札を下げています");
+    if (has("floor")) it.push("・**" + ITEM_JA.floor + "**"
+      + planNote("floor", o)
+      + " … この値段以上で売れれば赤字になりません"
+      + "（Amazon の手数料を引いたあと・**送料は別**）");
+    if (it.length) {
+      L.push("");
+      L.push("**カードの項目**");
+      L = L.concat(it);
+      L.push("・取れていない項目は、その行ごと出しません"
+        + "（当てずっぽうの数字は出しません）");
+    }
+    /* 出品できるかの注意は**必ず**入れる。 */
+    L.push("");
+    L.push("**出品できるか**");
+    L.push("・" + LIMIT_JA);
+    L.push("");
+    L.push("**ご注文の流れ**");
+    L.push("・購入リンクからストアでお買い求めください"
+      + "（カードの**残り**は、ほかの会員が買うと減ります）");
+    L.push("・**" + dayJa(o.gdCloseDay, "月曜") + "**がそのリストの締めです。"
+      + "**" + dayJa(o.gdShipDay, "火曜") + "**から順に発送します");
+    L.push("・売り切れたカードは「**完売しました**」に変わります");
+    L.push("");
+    L.push("**送料**");
+    L.push("・送り方（クリックポスト・レターパックプラス・宅急便コンパクト・"
+      + "宅配便）は**商品ごと**に変わります。カードの「送料」に出しています");
+    L.push("・**金額はお会計で確定します**（まとめて買うと安くなります）");
+    L.push("・大きさが分からない商品は「送料はお会計で表示」と出します");
+    return L.join("\n");
+  }
+  /* ---- チャンネルごとの短い文（2〜3行）---- */
+  /* plan … { key, name, n, q }（SUBPLAN.list の1つ） */
+  function pinPlan(key, opt, plan) {
+    var o = opt || {}, p = plan || {};
+    var k = s(key);
+    var want = itemsOf(k, o);
+    var ja = want.filter(function (x) { return x !== "limit"; })
+      .map(function (x) { return (x === "badge") ? "総合の札" : ITEM_JA[x]; });
+    var L = [];
+    L.push("**" + (s(p.name) || PLAN_JA[k] || k) + "の商品リスト**");
+    var r2 = [];
+    if (ja.length) r2.push("カードには **" + ja.join("・") + "** を出します");
+    if (num(p.q) > 0) r2.push("**お一人 " + Math.round(num(p.q)) + "点まで**");
+    if (num(p.n) > 0) r2.push("1回 " + Math.round(num(p.n)) + "件まで");
+    if (r2.length) L.push(r2.join("／") + "。");
+    L.push("読み方は " + pinRef(o) + " をご覧ください。"
+      + "**" + NOTE_JA + "。**");
+    return L.join("\n");
+  }
+  /* Discord の1通（2,000字）に入るように、行の切れ目で分ける。 */
+  function pinSplit(text) {
+    var lines = s(text).split("\n");
+    var out = [], cur = "";
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i];
+      if (cur && (cur.length + 1 + ln.length) > PIN_MAX) { out.push(cur);
+        cur = ln; continue; }
+      cur = cur ? (cur + "\n" + ln) : ln;
+    }
+    if (cur) out.push(cur);
+    return out.length ? out : [""];
+  }
+  /* 文が変わったかを見る指紋（貼り直しが要るかの印・FNV-1a）。 */
+  function hashOf(text) {
+    var t = s(text), h = 0x811c9dc5;
+    for (var i = 0; i < t.length; i++) {
+      h ^= t.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return ("0000000" + h.toString(16)).slice(-8);
+  }
   /* 札の1行（カードの見出しの下・案・確認の画面で同じ形にする）。 */
   function badgeText(b) {
     var x = b || {};
@@ -292,7 +445,12 @@
               ITEM_DEF: ITEM_DEF, LIMIT_JA: LIMIT_JA, NOTE_JA: NOTE_JA,
               modeOf: modeOf, itemsOf: itemsOf, ageDays: ageDays,
               sellOf: sellOf, pxOf: pxOf, rivalOf: rivalOf, floorOf: floorOf,
-              badgeOf: badgeOf, cardOf: cardOf, badgeText: badgeText };
+              badgeOf: badgeOf, cardOf: cardOf, badgeText: badgeText,
+              /* 8.30 固定メッセージ（共通＋チャンネルごと）。 */
+              PIN_MAX: PIN_MAX, DAYS: DAYS, PLAN_ORDER: PLAN_ORDER,
+              PLAN_JA: PLAN_JA, dayJa: dayJa, planFirst: planFirst,
+              planNote: planNote, pinRef: pinRef, pinCommon: pinCommon,
+              pinPlan: pinPlan, pinSplit: pinSplit, hashOf: hashOf };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_SUBGUIDE = API;
 })(typeof globalThis !== "undefined" ? globalThis : this);

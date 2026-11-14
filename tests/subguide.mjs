@@ -258,4 +258,98 @@ console.log('=== ⑨ 決まりが1か所にあるか ===');
      '★★★sw.js にも入れた（画面と一緒に新しくなる）');
 }
 
+console.log('=== ⑩ 読み方の固定メッセージ（8.30）===');
+{
+  const PLANS=[{ key:'monitor', name:'モニター', n:10, q:1, on:true },
+               { key:'premium', name:'プレミアム', n:100, q:5, on:false }];
+  const c=G.pinCommon({},PLANS);
+  console.log('   共通 '+c.length+'字');
+  ok(/はじめに/.test(c)&&/読み方/.test(c),'★★★共通の文は「はじめに」用');
+  ok(/◎ ねらい目/.test(c)&&/○ ふつう/.test(c)&&/△ 慎重に/.test(c)
+     &&/— データ確認中/.test(c),'★★★札の意味をぜんぶ書く');
+  ok(/目安です/.test(c)&&/保証するものではありません/.test(c),
+     '★★★「目安です。利益を保証するものではありません」を書く');
+  ok(/アカウントごとに違います/.test(c),
+     '★★★出品できるかの注意は必ず入れる');
+  ok(/月曜/.test(c)&&/火曜/.test(c),'★★★締めと発送の曜日を書く（既定）');
+  const c2=G.pinCommon({ gdCloseDay:'金', gdShipDay:'土' },PLANS);
+  ok(/金曜/.test(c2)&&/土曜/.test(c2)&&!/月曜/.test(c2),
+     '★★★曜日は⚙の値から出す');
+  ok(/商品ごと/.test(c)&&/お会計で確定/.test(c),
+     '★★★送料の考え方（区分は商品ごと・金額はお会計）を書く');
+  /* プランで出ない項目には「（◯◯プラン以上）」を付ける。 */
+  ok(/\*\*値動き\*\*（スタンダードプラン以上）/.test(c),
+     '★★★出ないプランがある項目に「（◯◯プラン以上）」を付ける');
+  ok(/\*\*ライバル\*\*（ライトプラン以上）/.test(c),'★★ライバルも同じ');
+  ok(/\*\*売れ行き\*\*\s*…/.test(c),
+     '★★★いちばん下のプランにも出る項目には付けない');
+  ok(G.planFirst('px',{})==='standard'&&G.planFirst('sell',{})==='monitor',
+     '★★項目を出すいちばん下のプランを⚙から出す');
+  /* どのプランにも出していない項目は**書かない**。 */
+  const none=G.pinCommon({ gdItemsMonitor:'badge', gdItemsLight:'badge',
+    gdItemsStandard:'badge', gdItemsPremium:'badge' },PLANS);
+  /* 札の説明には「売れ行き・ライバル・利益率から付けています」と出る
+     （札の作り方そのもの）。**項目の行**が出ないことを見る。 */
+  ok(!/\*\*値動き\*\*/.test(none)&&!/\*\*ライバル\*\*/.test(none)
+     &&!/\*\*赤字にならない売値\*\*/.test(none)
+     &&!/カードの項目/.test(none),
+     '★★★出していない項目は共通の文にも書かない');
+  ok(/アカウントごとに違います/.test(none),
+     '★★★それでも出品できるかの注意は入れる');
+  ok(/◎ ねらい目/.test(none),'★札だけでも説明は出る');
+  /* 持っていないデータ・仕入れ先のことは書かない。 */
+  for(const ng of ['Keepa','keepa','卸値','仕入原価','MW','matchingworld',
+                   'いろは'])
+    ok(c.indexOf(ng)<0,'★★★共通の文に「'+ng+'」を書かない');
+  ok(!/月間の販売数|月 およそ/.test(c),
+     '★★★持っていないデータ（月間の販売数）の説明は書かない');
+}
+{
+  /* チャンネルごとの短い文（2〜3行）。 */
+  const m=G.pinPlan('monitor',{},{ name:'モニター', n:10, q:1 });
+  console.log('   '+m.replace(/\n/g,' / '));
+  const lines=m.split('\n');
+  ok(lines.length<=3,'★★★チャンネルごとの文は3行まで');
+  ok(/モニターの商品リスト/.test(m),'★★どのプランの部屋か分かる');
+  ok(/総合の札・売れ行き/.test(m),
+     '★★★そのプランのカードに出る項目を書く');
+  ok(/お一人 1点まで/.test(m)&&/1回 10件まで/.test(m),
+     '★★★プランごとの決まり（1人あたりの点数・1回の件数）を書く');
+  ok(/読み方は #はじめに をご覧ください/.test(m),
+     '★★★「読み方は #はじめに をご覧ください」を書く');
+  ok(/目安です/.test(m),'★★短い文にも「目安です」を入れる');
+  ok(!/値動き|赤字にならない売値/.test(m),
+     '★★★そのプランに出ない項目は書かない');
+  const p=G.pinPlan('premium',{},{ name:'プレミアム', n:100, q:5 });
+  ok(/値動き/.test(p)&&/赤字にならない売値/.test(p),
+     '★★プレミアムの文には出る項目がぜんぶ入る');
+  /* #はじめに の指し方（名前／チャンネルID）。 */
+  ok(G.pinRef({})==='#はじめに','★★既定は #はじめに');
+  ok(G.pinRef({ gdPinCh:'案内' })==='#案内',
+     '★★★⚙でチャンネル名を変えられる');
+  ok(G.pinRef({ gdPinCh:'#案内' })==='#案内','★# を付けて入れてもよい');
+  ok(G.pinRef({ gdPinCh:'123456789012345' })==='<#123456789012345>',
+     '★★★チャンネルID を入れたら <#ID> のリンクにする');
+  ok(/<#123456789012345>/.test(
+    G.pinPlan('monitor',{ gdPinCh:'123456789012345' },{ q:1 })),
+     '★★★短い文の中もリンクになる');
+}
+{
+  /* Discord の1通（2,000字）で分ける。 */
+  const long=Array.from({ length:200 },(x,i)=>'・'+i+'行目の説明です').join('\n');
+  const parts=G.pinSplit(long);
+  console.log('   '+long.length+'字 → '+parts.length+'通');
+  ok(parts.length>1,'★★★2,000字を超えたら分ける');
+  ok(parts.every((x)=>x.length<=G.PIN_MAX),'★★★どの通も 1,900字以内');
+  ok(parts.join('\n')===long,'★★★分けても中身は変わらない');
+  ok(parts.every((x)=>!/^\s|\s$/.test(x)),'★行の切れ目で分ける');
+  ok(G.pinSplit(G.pinCommon({},[])).length===1,
+     '★共通の文はいまのところ1通に収まる');
+  /* 指紋（貼り直しが要るか）。 */
+  const h1=G.hashOf(G.pinCommon({},[]));
+  const h2=G.hashOf(G.pinCommon({ gdCloseDay:'金' },[]));
+  ok(h1!==h2,'★★★⚙を変えると指紋が変わる（貼り直しが分かる）');
+  ok(h1===G.hashOf(G.pinCommon({},[])),'★同じ文なら同じ指紋');
+}
+
 T.done();

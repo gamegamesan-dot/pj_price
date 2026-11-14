@@ -114,31 +114,107 @@ console.log('=== ③ 確認の画面と予定にも札 ===');
   ok(/◎ ねらい目/.test(t.plan),'★★★「予定」にも札が出る');
 }
 
-console.log('=== ④ 読み方の固定メッセージ ===');
+console.log('=== ④ 読み方の固定メッセージ（共通＋チャンネルごと・8.30）===');
 {
   const t=await p.evaluate(()=>{
+    $('gdPinCh').value=''; $('gdCloseDay').value='月'; $('gdShipDay').value='火';
+    try{ localStorage.removeItem('pj:gdpin:v1'); }catch(e){}
     gdPinGo();
     return { html:$('gdPinBox').innerHTML,
-             mon:$('gdPinTxt0').value, pre:$('gdPinTxt3').value,
-             note:($('gdPinNote').textContent||'') };
+             note:($('gdPinNote').textContent||'').replace(/\s+/g,' '),
+             common:$('gdPinTxt0_0').value,
+             mon:$('gdPinTxt1_0').value,
+             n:(window.__gdPin||[]).length };
   });
-  console.log('   '+t.mon.replace(/\n/g,' / ').slice(0,200));
-  ok(/#リスト-モニター/.test(t.html)&&/#リスト-プレミアム/.test(t.html)
-     &&/#目玉商品-先行/.test(t.html),
-     '★★★チャンネルごとに文を作る');
-  ok(/コピー/.test(t.html),'★★コピーできる');
-  ok(/目安/.test(t.mon)&&/保証するものではありません/.test(t.mon),
-     '★★★「目安であって利益の保証ではない」と書く');
-  ok(/総合の札/.test(t.mon)&&/売れ行き/.test(t.mon),
-     '★★★モニターの文には札と売れ行きの読み方が入る');
-  ok(!/値動き/.test(t.mon),'★★モニターに出さない項目は書かない');
-  ok(/値動き/.test(t.pre)&&/赤字にならない売値/.test(t.pre)
-     &&/アカウントごとに違います/.test(t.pre),
-     '★★★プレミアムの文にはぜんぶ入る');
-  ok(/アカウントごとに違います/.test(t.mon),
-     '★★★出品制限の注意は、項目に無いプランでも必ず書く');
-  ok(!/卸値|仕入原価|MW|matchingworld/.test(t.pre),
-     '★★★仕入れ先・卸値のことは書かない');
+  console.log('   '+t.note.slice(0,150));
+  console.log('   短い文：'+t.mon.replace(/\n/g,' / '));
+  ok(t.n===7,'★★★共通1本＋チャンネル6つを作る');
+  ok(/共通（#はじめに に貼る）/.test(t.html),
+     '★★★共通の文をどこに貼るか出す');
+  ok(/#リスト-モニター/.test(t.html)&&/#目玉商品-先行/.test(t.html),
+     '★★チャンネルごとの文も出る');
+  ok(/◎ ねらい目/.test(t.common)&&/アカウントごとに違います/.test(t.common)
+     &&/月曜/.test(t.common)&&/火曜/.test(t.common),
+     '★★★共通の文に札・出品制限・曜日が入る');
+  ok(t.mon.split('\n').length<=3&&/読み方は #はじめに/.test(t.mon),
+     '★★★チャンネルごとの文は短く、共通の文を指す');
+  ok(!/◎ ねらい目/.test(t.mon),
+     '★★★チャンネルごとの文に札の説明を並べない（共通に任せる）');
+  ok(/まだ貼っていません/.test(t.html),'★★はじめは「まだ貼っていません」');
+  ok(/貼り直しが要るもの/.test(t.note),'★★★どれを貼ればよいか出す');
+}
+{
+  /* コピーすると「貼った」として覚える。 */
+  const t=await p.evaluate(()=>{
+    gdPinCopy(0,0);
+    return { html:$('gdPinBox').innerHTML,
+             note:($('gdPinNote').textContent||'').replace(/\s+/g,' ') };
+  });
+  ok(/貼ってあるものと同じ/.test(t.html),
+     '★★★コピーしたものは「貼ってあるものと同じ」になる');
+  ok(/貼り直しが要るもの：#リスト-モニター/.test(t.note),
+     '★★★残りだけが「貼り直しが要るもの」に出る');
+  /* ⚙を変えると「変わりました（貼り直してください）」になる。 */
+  const t2=await p.evaluate(()=>{
+    $('gdCloseDay').value='金';
+    gdPinGo();
+    return { html:$('gdPinBox').innerHTML,
+             note:($('gdPinNote').textContent||'').replace(/\s+/g,' '),
+             common:$('gdPinTxt0_0').value };
+  });
+  ok(/変わりました（貼り直してください）/.test(t2.html),
+     '★★★⚙を変えたら「貼り直してください」と出す');
+  ok(/貼り直しが要るもの：共通/.test(t2.note),
+     '★★★どれを貼り直せばよいか（共通）が分かる');
+  ok(/金曜/.test(t2.common),'★★文も⚙のとおりに変わる');
+  /* 項目を変えたときは、そのチャンネルの文だけが変わる。
+     いちど**ぜんぶ貼った**ことにしてから、モニターの項目だけ変える。 */
+  const t3=await p.evaluate(()=>{
+    for(let i=0;i<(window.__gdPin||[]).length;i++)gdPinCopy(i,0);
+    const before=($('gdPinNote').textContent||'').replace(/\s+/g,' ');
+    /* 1回の件数は**そのチャンネルの文にしか出ない**。 */
+    $('subNMonitor').value='3';
+    gdPinGo();
+    const one=($('gdPinNote').textContent||'').replace(/\s+/g,' ');
+    $('subNMonitor').value='10';
+    /* 出す項目を変えると、共通の文の「（◯◯プラン以上）」も変わる。 */
+    $('gdItemsMonitor').value='badge,sell,rival';
+    gdPinGo();
+    return { before:before, one:one,
+             both:($('gdPinNote').textContent||'').replace(/\s+/g,' ') };
+  });
+  console.log('   ぜんぶ貼ったあと：'+t3.before.slice(0,40));
+  ok(/ぜんぶ貼ってあるものと同じ/.test(t3.before),
+     '★★★ぜんぶコピーすると「貼ってあるものと同じ」になる');
+  const line=(x)=>(x.split('貼り直しが要るもの：')[1]||'').split('共通の文')[0];
+  console.log('   件数を変えたあと：'+line(t3.one).slice(0,40));
+  ok(/#リスト-モニター/.test(line(t3.one))&&!/共通/.test(line(t3.one)),
+     '★★★そのプランだけの決まり（件数）を変えたら、そのチャンネルだけ貼り直し');
+  console.log('   項目を変えたあと：'+line(t3.both).slice(0,40));
+  ok(/共通/.test(line(t3.both))&&/#リスト-モニター/.test(line(t3.both)),
+     '★★★出す項目を変えたら共通も変わる（「◯◯プラン以上」が動くため）');
+  await p.evaluate(()=>{
+    $('gdItemsMonitor').value=''; $('gdCloseDay').value='月';
+    try{ localStorage.removeItem('pj:gdpin:v1'); }catch(e){}
+  });
+}
+{
+  /* チャンネルID を入れるとリンクになる。 */
+  const t=await p.evaluate(()=>{
+    $('gdPinCh').value='123456789012345';
+    gdPinGo();
+    const r={ common:$('gdPinTxt0_0').value, mon:$('gdPinTxt1_0').value,
+              html:$('gdPinBox').innerHTML,
+              txt:($('gdPinBox').textContent||'') };
+    $('gdPinCh').value='';
+    return r;
+  });
+  ok(/<#123456789012345>/.test(t.mon),
+     '★★★チャンネルID を入れると <#ID> のリンクになる');
+  ok(/<#123456789012345> に貼る/.test(t.txt),
+     '★★貼る先の見出しもリンクの形で出る');
+  ok(!/卸値|仕入原価|MW|matchingworld|Keepa/.test(t.common+t.mon),
+     '★★★仕入れ先・持っていないデータのことは書かない');
 }
 
 await T.done();
