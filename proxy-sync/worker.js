@@ -253,6 +253,13 @@ const ALLOWED = [
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages$/ },
   { m: "PATCH", write: true,
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages\/\d+$/ },
+  /* 8.28（カジの依頼1）**チャンネルの名前だけ**を読む。
+     「全プランに配る」の確認の画面に「→ #リスト-プレミアム」と出して、
+     ⚙に入れたチャンネルID が思っている先かどうかを配る前に確かめる。
+     許すのは**このチャンネル自身の中身**（名前）だけで、
+     メッセージ（/messages）・メンバー・ほかのチャンネルは読まない。 */
+  { m: "GET",
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+$/ },
   /* MW（マッチングワールド）の商品画像（6.1）。**読み取りの1本だけ**。
      画像URLはログインなしで見られる。会員サイト（/buy/?q=）は見に行かない。
      MW が利用を許諾した画像だけを使い、Amazon の画像は使わない。 */
@@ -10837,6 +10844,13 @@ function subBoxMin(st) {
    版が上がったら、すでに送ったカードも次の配信で書き換える。 */
 const SUB_CARDV_KEY = "sub.card.v";             // 配信時刻（JST の時）
 const SUB_ROWS_MAX = 200;               // 1回に見る商品の数の上限
+/* 8.28（カジの依頼1）Discord の送信制限に当たらないよう、カード1枚ごとに
+   これだけ待つ。Discord の「同じチャンネルに 5通／5秒」より遅くしてある
+   （429 が返ったときは dcApi が Retry-After を見て待ち直す）。 */
+const SUB_GAP_MS = 1100;
+/* 1回の呼び出しで使う持ち時間。これを超えたらそこで止めて、残りの件数を
+   返す（画面が続きを頼む）。Worker の締め切り（60秒）の手前で切る。 */
+const SUB_SEND_BUDGET_MS = 45000;
 const DC_API = "https://discord.com/api/v10";
 /* 表があるか（migrate-0053 を流す前は配信を動かさない）。 */
 async function subPostOk(env) {
@@ -10939,6 +10953,9 @@ async function subRows(env) {
             COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
             b.put_at AS put_at,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+            /* 8.28（カジの依頼1）配る前の見落としを拾うため、
+               MW の欠品（CSV から消えた行）も返す。 */
+            s.gone_at AS gone_at,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
             a.size_g AS size_g,
@@ -10968,6 +10985,11 @@ async function subRows(env) {
     qty: Number(r.max_qty) || 0,
     grades: String(r.grades || ""),
     loaded_at: String(r.loaded_at || ""),
+    /* 8.28（カジの依頼1）「CSV に出したのに Shopify へ読み込み直していない」
+       を見つけるのに使う（送っても Shopify に無い＝買えないカードになる）。 */
+    put_at: String(r.put_at || ""),
+    stock: String(r.gone_at || "") ? 0 : (Number(r.stock) || 0),
+    gone: String(r.gone_at || "") ? 1 : 0,
     /* 会員の粗利の目安（Amazon の実売 − 手数料 − 販売価格）。
        手数料が取れていない行は null（当てずっぽうは出さない）。 */
     gross: SUBPX.grossOf(Number(r.amz_price) || 0, Number(r.fee_total) || 0,
@@ -11034,11 +11056,15 @@ function subPostIns(x, p, id, at, hasH) {
   if (hasH) a.push(String(x.card_h || ""));
   return a;
 }
-function subPick(rows, plan, sent, reform, cfg) {
+function subPick(rows, plan, sent, reform, cfg, skip) {
   const out = [];
   for (const r of (rows || [])) {
     if (out.length >= plan.n) break;
     if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
+    /* 8.28（カジの依頼1）確認の画面でチェックを外した行は出さない。
+       件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
+       別の行が繰り上がることはない（カジが見た一覧のまま出す）。 */
+    if (skip && skip[String(r.jan)]) continue;
     const old = (sent || {})[r.jan];
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
@@ -11078,6 +11104,9 @@ async function subPlanBuild(env) {
                 table_ok: await subPostOk(env), plans: [] };
   /* 8.19 予定でも**カードの中身で**「そのまま」かどうかを見るので、
      ⚙（送料の文・ドメイン・ゲームソフトの重さ）を渡す。 */
+  /* 8.28（カジの依頼1）チャンネル名は1回ずつしか聞かない。 */
+  const chCache = {};
+  const planRun = newRun("sub-plan");
   for (const p of cfg.plans) {
     const sent = p.ch ? await subPosts(env, p.ch) : {};
     const pick = p.ch ? subPick(rows, p, sent, false, cfg) : [];
@@ -11089,6 +11118,8 @@ async function subPlanBuild(env) {
       : SUBPLAN.whyNone(p, rows, (r) => MWFEE.genreOf(r) === "ゲーム");
     out.plans.push({
       key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
+      /* 8.28（カジの依頼1）確認の画面に「どのチャンネルに出すか」を出す。 */
+      ch_name: (p.on && p.ch) ? await dcChName(env, planRun, p.ch, chCache) : "",
       n: p.n, q: p.q, kinds: p.kinds, why: why,
       items: pick.map((x) => {
         /* 8.27（カジの依頼3）配る前に送料の区分が見えるように返す。 */
@@ -11097,7 +11128,12 @@ async function subPlanBuild(env) {
           jan: x.jan, name: x.name, price: x.price, qty: x.qty,
           left: x.left, gross: x.gross, sent: x.sent, same: x.same,
           ship: sh.name, ship_text: sh.text, ship_sure: sh.sure,
-          ship_why: sh.why, ship_g: sh.grams, ship_warn: sh.warn };
+          ship_why: sh.why, ship_g: sh.grams, ship_warn: sh.warn,
+          /* 8.28 Shopify の商品ページ（handle）。会員が買う先。 */
+          handle: SHOPCSV.handleOf(x.jan),
+          stock: x.stock, gone: x.gone,
+          /* 8.28 配る前の警告（まとめて配る画面で既定で外す行）。 */
+          warns: subWarnsOf(x, sh) };
       }),
       /* 送る（新しい）／書き換える（値段や数が変わった）／そのまま */
       add: pick.filter((x) => !x.sent).length,
@@ -11136,6 +11172,42 @@ function subCardOf(x, p, cfg, note) {
                            shipText: p.ship, gameG: cfg.gameG,
                            addG: cfg.addG, thinKishu: cfg.thinKishu,
                            tiers: cfg.tiers });
+}
+/* 8.28（カジの依頼1）配る前の警告。**出す前にカジが気づけるように**、
+   予定の行ごとにまとめて返す（画面はこの文をそのまま出す）。
+     ・送料の区分が決まっていない（採寸がない）
+     ・会員便の段が箱ものに足りない
+     ・CSV に出したあと Shopify に読み込み直していない（買えないカードになる）
+     ・残り0（完売）／MW が欠品
+   **警告のある行は、まとめて配る画面で既定で外す。** */
+function subWarnsOf(x, sh) {
+  const w = [];
+  const r = x || {};
+  if (sh && !sh.sure) w.push("送料の区分が要確認（採寸がありません）");
+  if (sh && sh.warn) w.push(sh.warn);
+  const put = String(r.put_at || ""), load = String(r.loaded_at || "");
+  if (!load) w.push("Shopify に読み込んだ印がありません");
+  else if (put && put > load)
+    w.push("CSV を出したあと Shopify に読み込み直していません");
+  if (Math.max(0, Number(r.left) || 0) <= 0) w.push("残り0（完売）");
+  if (Number(r.gone)) w.push("MW が欠品しています");
+  else if (!Number(r.stock)) w.push("MW在庫が0です");
+  return w;
+}
+/* 8.28 Discord のチャンネル名（確認の画面に出す）。
+   取れないときは空（画面はチャンネルID を出す）。 */
+async function dcChName(env, run, ch, cache) {
+  const id = String(ch || "").trim();
+  if (!id) return "";
+  const c = cache || {};
+  if (c[id] !== undefined) return c[id];
+  let name = "";
+  try {
+    const r = await dcApi(env, run, "GET", "/channels/" + id);
+    if (r.ok) name = String(((r.data || {}).name) || "");
+  } catch (e) { name = ""; }
+  c[id] = name;
+  return name;
 }
 /* 8.27（カジの依頼3）画面の「案」と「予定」に出す送料の区分。
    配る前にカジが気づけるように、区分・決め方・足りない段を返す。 */
@@ -11548,6 +11620,9 @@ async function dcCard(env, run, ch, card, pic, msgId) {
 async function onePlanBuild(env, cfg, rows, sent) {
   const now = nowIso();
   const out = [];
+  /* 8.28（カジの依頼1）チャンネル名（確認の画面に出す）。 */
+  const chCache = {};
+  const planRun = newRun("one-plan");
   for (const p of cfg.one) {
     const posts = p.ch ? (sent[p.ch] || {}) : {};
     const pick = [];
@@ -11570,6 +11645,7 @@ async function onePlanBuild(env, cfg, rows, sent) {
       /* pre … 先行（プレミアム）のほうか。送ったあとに
          pre_at／open_at のどちらを控えるかを決める（8.22）。 */
       one: true, pre: !!p.pre, hours: p.hours,
+      ch_name: (p.on && p.ch) ? await dcChName(env, planRun, p.ch, chCache) : "",
       n: pick.length, q: 0, kinds: "one",
       why: pick.length ? "" : SUBPLAN.oneWhyNone(p, rows, now),
       items: pick.map((x) => ({
@@ -11580,7 +11656,12 @@ async function onePlanBuild(env, cfg, rows, sent) {
         ship: SHOPCSV.oneShipName(x.ship_kind),
         ship_text: SHOPCSV.oneShipName(x.ship_kind),
         ship_sure: !!String(x.ship_kind || "").trim(),
-        ship_why: "登録のときに選んだ区分", ship_warn: "" })),
+        ship_why: "登録のときに選んだ区分", ship_warn: "",
+        handle: SHOPCSV.oneHandleOf(x.one_id),
+        /* 8.28（カジの依頼1）1点ものの警告（残り0・区分が未選択）。 */
+        warns: [].concat(
+          Math.max(0, Number(x.left) || 0) <= 0 ? ["残り0（完売）"] : [],
+          String(x.ship_kind || "").trim() ? [] : ["送料の区分が未選択"]) })),
       add: pick.filter((x) => !x.sent).length,
       edit: pick.filter((x) => x.sent && !x.same).length,
       keep: pick.filter((x) => x.same).length,
@@ -11639,13 +11720,36 @@ async function jobSubSend(env, opt) {
     const hSet = hasH ? ", card_h=?8" : "";
     const hSet2 = hasH ? ", card_h=excluded.card_h" : "";
     const only = String(o.plan || "").trim();
+    /* 8.28（カジの依頼1）確認の画面でチェックを外した行（JAN と
+       1点ものの 'one-<連番>'）。送らないだけで、控えも触らない。 */
+    const skip = {};
+    for (const j of (Array.isArray(o.skip) ? o.skip : []))
+      skip[String(j)] = 1;
+    res.skip_n = Object.keys(skip).length;
+    /* 8.28 持ち時間。超えたらそこで止めて、残りを返す（続きは次の回）。 */
+    const dl = Date.now() + SUB_SEND_BUDGET_MS;
+    res.left = 0;
+    res.fail = 0;
+    /* 8.28（カジの依頼1）**途中で失敗したらそこで止める**。
+       どこまで出たかを返すので、画面は「もう一度押すと続きから」と出せる
+       （指紋と msg_id で見ているので、二重には出ない）。 */
+    let stop = false;
     for (const p of cfg.active) {
+      if (stop) break;
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent, reform, cfg);
-      const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0 };
+      const pick = subPick(rows, p, sent, reform, cfg, skip);
+      const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
+                  left: 0 };
+      let gap = false;
       for (const x of pick) {
         if (x.same) { r.keep++; res.skipped++; continue; }
+        /* 8.28 時間が無くなったら、残りの件数を返してここで止める。 */
+        if (res.approve && Date.now() > dl) {
+          r.left++; res.left++; res.stopped = "time"; continue;
+        }
+        /* 8.28 Discord の送信制限に当たらないよう、2枚目から間隔をあける。 */
+        if (res.approve && gap) await sleep(SUB_GAP_MS);
         /* 8.19 指紋を取ったときのカードをそのまま送る（作り直さない）。 */
         const card = x.card || subCardOf(x, p, cfg);
         if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
@@ -11653,17 +11757,25 @@ async function jobSubSend(env, opt) {
         if (x.sent && x.msg_id) {
           const e = await dcApi(env, run, "PATCH",
             "/channels/" + p.ch + "/messages/" + x.msg_id, { embeds: [card] });
-          if (!e.ok) { r.fail++; continue; }
+          if (!e.ok) {
+            r.fail++; res.fail++; res.stopped = "fail";
+            res.stop_plan = p.name; res.stop_status = e.status || 0;
+            stop = true; break;
+          }
           await env.DB.prepare(
             `UPDATE sub_post SET price=?3, qty=?4, sold=?5, sold_out=?6,
                edited_at=?7${hSet} WHERE jan=?1 AND ch=?2`)
             .bind(...subPostBind(x, p, at, hasH)).run();
-          r.edit++; res.edited++;
+          r.edit++; res.edited++; gap = true;
         } else {
           const m = await dcApi(env, run, "POST",
             "/channels/" + p.ch + "/messages", { embeds: [card] });
           const id = String(((m.data || {}).id) || "");
-          if (!m.ok || !id) { r.fail++; continue; }
+          if (!m.ok || !id) {
+            r.fail++; res.fail++; res.stopped = "fail";
+            res.stop_plan = p.name; res.stop_status = m.status || 0;
+            stop = true; break;
+          }
           await env.DB.prepare(
             `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,
                at,created_at${hCol})
@@ -11673,7 +11785,7 @@ async function jobSubSend(env, opt) {
                qty=excluded.qty, sold=excluded.sold, sold_out=excluded.sold_out,
                edited_at=excluded.at${hSet2}`)
             .bind(...subPostIns(x, p, id, at, hasH)).run();
-          r.add++; res.sent++;
+          r.add++; res.sent++; gap = true;
         }
       }
       res.plans.push(r);
@@ -11690,12 +11802,20 @@ async function jobSubSend(env, opt) {
             sentOne[p.ch] = await subPosts(env, p.ch);
         const op = await onePlanBuild(env, cfg, ones, sentOne);
         for (const g of op) {
+          if (stop) break;
           if (only && g.key !== only) continue;
           if (!g.on) continue;
           const r = { key: g.key, name: g.name, add: 0, edit: 0, keep: 0,
-                      fail: 0, one: true };
+                      fail: 0, left: 0, one: true };
+          let gap1 = false;
           for (const x of (g.pick || [])) {
             if (x.same && !reform) { r.keep++; res.skipped++; continue; }
+            /* 8.28 チェックを外した行は出さない（キーは 'one-<連番>'）。 */
+            if (skip[String(x.jan)]) { r.keep++; res.skipped++; continue; }
+            if (res.approve && Date.now() > dl) {
+              r.left++; res.left++; res.stopped = "time"; continue;
+            }
+            if (res.approve && gap1) await sleep(SUB_GAP_MS);
             if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
             const at = nowIso();
             let pic = null;
@@ -11708,10 +11828,13 @@ async function jobSubSend(env, opt) {
               pic ? ("attachment://" + onePicName(x)) : "");
             const m = await dcCard(env, run, g.ch, card, pic,
                                    x.sent ? x.msg_id : "");
-            if (!m.ok) { r.fail++; continue; }
-            const id = x.sent ? x.msg_id
-              : String(((m.data || {}).id) || "");
-            if (!id) { r.fail++; continue; }
+            const id = m.ok
+              ? (x.sent ? x.msg_id : String(((m.data || {}).id) || "")) : "";
+            if (!m.ok || !id) {
+              r.fail++; res.fail++; res.stopped = "fail";
+              res.stop_plan = g.name; res.stop_status = m.status || 0;
+              stop = true; break;
+            }
             await env.DB.prepare(
               `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,
                  at,created_at${hCol})
@@ -11730,6 +11853,7 @@ async function jobSubSend(env, opt) {
                 `UPDATE one_item SET ${col}=COALESCE(${col},?2), updated_at=?2
                   WHERE id=?1`).bind(x.one_id, at).run();
             }
+            gap1 = true;
             if (x.sent) { r.edit++; res.edited++; }
             else { r.add++; res.sent++; }
           }
@@ -11744,7 +11868,8 @@ async function jobSubSend(env, opt) {
       /* 8.17 形をそろえ終えたら版を控える（次からはふつうに飛ばす）。
          失敗した行が無いときだけ（残っていれば次の回でもう一度そろえる）。 */
       const fail = res.plans.reduce((a, x) => a + (Number(x.fail) || 0), 0);
-      if (reform && !fail) {
+      /* 8.28 途中で止まった回（残りがある）は、まだそろえ終えていない。 */
+      if (reform && !fail && !res.left) {
         try { await stateSet(env, SUB_CARDV_KEY, SUBCARD.CARD_V).run(); }
         catch (e) {}
       }
@@ -17253,7 +17378,9 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubSend(env, { approve: b && b.approve === true,
           /* 8.19 送ったカードをすべて今の形で書き直す。 */
-          redo: !!(b && b.redo), plan: b && b.plan }), 200, origin);
+          redo: !!(b && b.redo), plan: b && b.plan,
+          /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
+          skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/sub/pre") {
         const b = await request.json().catch(() => ({}));
@@ -17807,6 +17934,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
   OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,
   subCardHash, subPostBind, subPostIns,
+  /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
+  subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,

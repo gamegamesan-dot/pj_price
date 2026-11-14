@@ -1183,6 +1183,14 @@ body.staff #syncOnHandFix{display:none !important}
       </div>
       <div class="note2" id="subDraftNote" style="margin-top:2px"></div>
       <div id="subDraftBox"></div>
+      <!-- 8.28（カジの依頼1）全プランにまとめて配る。
+           押すと先に確認の画面を出す（ここでは何も送らない）。 -->
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn primary cfgprice" id="subAllBtn" style="flex:1" onclick="subAllOpen();return false">全プランに配る（確認してから送ります）</button>
+      </div>
+      <div class="note2" style="margin:2px 0 0">モニター→ライト→スタンダード→プレミアム→目玉商品の順に、<b>1プランずつ</b>送ります。押すと先に<b>確認の画面</b>（チャンネル・件数・警告）が出ます。</div>
+      <div class="note2" id="subAllNote" style="margin-top:2px"></div>
+      <div id="subAllBox"></div>
       <!-- 8.11（【Y】）会員向け Discord の配信と、Shopify の注文の取り込み -->
       <div data-toc="会員に配信する"></div>
       <details class="exp" data-exp="subSend"><summary>説明</summary>
@@ -1216,6 +1224,10 @@ body.staff #syncOnHandFix{display:none !important}
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
         <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
+      </div>
+      <!-- 8.28（カジの依頼1）確認してから全プランにまとめて配る -->
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="subAllBtn2" style="flex:1" onclick="subAllOpen();return false">全プランに配る（確認してから送ります）</button>
       </div>
       <!-- 8.19（不具合2）送ったカードを今の形に書き直す（送り直しではない） -->
       <div style="display:flex;gap:6px;margin-top:6px">
@@ -16750,6 +16762,234 @@ function subSendGo(plan){
     return subPlanGo(true);
   })['catch'](function(e){ subNote('⚠ 送れませんでした：'+e.message,1); });
 }
+/* ===== 8.28（カジの依頼1）全プランにまとめて配る =====
+   いままでプランごとに「◯◯だけ送る」を押していたので、手数が多かった。
+   ・押すと**先に確認の画面**を出す（ここでは何も送らない）
+     プランごとに チャンネル名／新しく出す／書き換える／そのまま と、
+     行ごとの警告（送料が要確認・段が足りない・Shopify に読み込み直して
+     いない・残り0・MW欠品）を出す
+   ・**警告のある行は既定で外す**（チェックを入れれば出せる）
+   ・「送る」で**プランの順に1本ずつ**送る（pj-sync が1枚ずつ間隔をあける）
+   ・途中で失敗したらそこで止めて、どこまで出たかを出す。
+     もう一度押せば続きから（指紋と msg_id で見ているので二重には出ない）
+   ・1点もの（#目玉商品-先行／#目玉商品）も同じ画面にまとまる */
+var SUB_ALL_ROUNDS=20;           // 続きを頼む回数の上限（念のため）
+var SUB_ALL_GAP=800;             // プランのあいだの待ち（ミリ秒）
+/* 手で入れ直したチェック（'プラン_JAN' → true/false）。
+   送ったあとに予定を読み直して画面を作り直しても、カジが入れ直した
+   チェックが消えないように覚えておく。 */
+var subAllOn={};
+function subAllTick(el,key,jan){
+  subAllOn[String(key)+'_'+String(jan)]=!!(el&&el.checked);
+  subAllSum();
+}
+function subAllNote(msg,bad){
+  var n=$('subAllNote'); if(!n)return;
+  n.innerHTML=msg||'';
+  n.style.color=bad?'var(--bad)':'';
+}
+function subWait(ms){
+  return new Promise(function(r){ setTimeout(r,Math.max(0,+ms||0)); });
+}
+/* 確認の画面を出す（まだ送らない）。予定は押すたびに読み直す。 */
+function subAllOpen(){
+  if(roleDenyPrice('subAllNote'))return;
+  if(!subReady())return;
+  subAllNote('調べています…');
+  subAllOn={};                        // 開き直したら既定（警告は外す）に戻す
+  return Promise.resolve(subPlanGo(true)).then(function(){
+    var d=subPlanData;
+    var box=$('subAllBox');
+    if(!d){ subAllNote('⚠ 予定を出せませんでした。',1); return; }
+    if(box)box.innerHTML=subAllHtml(d);
+    subAllSum();
+    subAllNote('この画面では<b>まだ何も送っていません</b>。'
+      +'中身を見て、下の「送る」を押してください。');
+  })['catch'](function(e){
+    subAllNote('⚠ 予定を出せませんでした：'+esc(e.message),1);
+  });
+}
+function subAllClose(){
+  var box=$('subAllBox'); if(box)box.innerHTML='';
+  subAllNote('');
+}
+/* 送る対象（チェックが入っている行だけ）をプランごとにまとめる。 */
+function subAllJobs(){
+  var d=subPlanData, out=[];
+  ((d||{}).plans||[]).forEach(function(p){
+    if(!p.on||!p.ch)return;
+    var skip=[], add=0, ed=0, off=0;
+    (p.items||[]).forEach(function(x){
+      var el=$('subAllChk_'+p.key+'_'+x.jan);
+      if(el&&!el.checked){ skip.push(String(x.jan)); off++; return; }
+      if(x.same)return;
+      if(x.sent)ed++; else add++;
+    });
+    out.push({ key:p.key, name:p.name, ch:p.ch, ch_name:String(p.ch_name||''),
+               skip:skip, add:add, edit:ed, off:off,
+               keep:(p.items||[]).filter(function(x){ return x.same; }).length });
+  });
+  return out;
+}
+/* まとめの1行（チェックを変えるたびに出し直す）。 */
+function subAllSum(){
+  var el=$('subAllSumBox'); if(!el)return;
+  var jobs=subAllJobs();
+  var go=jobs.filter(function(j){ return (j.add+j.edit)>0; });
+  var add=go.reduce(function(a,j){ return a+j.add; },0);
+  var ed=go.reduce(function(a,j){ return a+j.edit; },0);
+  var off=jobs.reduce(function(a,j){ return a+j.off; },0);
+  el.innerHTML='<b>'+mwN(go.length)+'プラン</b>に出します'
+    +'（新しく <b>'+mwN(add)+'件</b>・書き換え <b>'+mwN(ed)+'件</b>'
+    +(off?('・外した '+mwN(off)+'件'):'')+'）'
+    +(go.length?('<br><span class="note2" style="margin:0">'
+      +go.map(function(j){ return esc(j.name)+' '+mwN(j.add+j.edit); }).join('　')
+      +'</span>'):'');
+  var btn=$('subAllSendBtn');
+  if(btn)btn.disabled=!(add+ed);
+}
+function subAllHtml(d){
+  var out=[];
+  if(d.table_ok===false)
+    return '<div class="note2" style="color:var(--bad)">⚠ pj-sync の D1 に '
+      +'sub_post がありません（migrate-0053-sub-post.sql）。</div>';
+  if(!d.token)
+    out.push('<div class="note2" style="color:var(--bad)">⚠ ボットの'
+      +'トークン（DISCORD_BOT_TOKEN）が pj-sync に入っていません。'
+      +'送れません。</div>');
+  var jobs=subAllJobs();
+  ((d.plans||[])).forEach(function(p){
+    /* 0件のプラン・止めているプランは「飛ばします」と出すだけ。 */
+    var j=jobs.filter(function(z){ return z.key===p.key; })[0];
+    if(!p.on||!p.ch||!j||(j.add+j.edit+j.off)===0){
+      out.push('<div class="note2" style="margin:6px 0 0;opacity:.6">'
+        +'<b>'+esc(p.name)+'</b>　<b>飛ばします</b>（'
+        +esc(!p.on?String(p.why||'⚙で止めています')
+          :(!p.ch?'チャンネルID がありません'
+            :String(p.why||'出すものがありません')))+'）</div>');
+      return;
+    }
+    out.push('<div class="note2" style="margin:8px 0 2px">'
+      +'<b>'+esc(p.name)+'</b>　→ '
+      +(p.ch_name?('<b>#'+esc(p.ch_name)+'</b>')
+                 :('チャンネル '+esc(String(p.ch))))
+      +'　新しく <b>'+mwN(j.add)+'</b>・書き換え <b>'+mwN(j.edit)+'</b>'
+      +'・そのまま '+mwN(j.keep)+'</div>');
+    (p.items||[]).forEach(function(x){
+      if(x.same)return;                   // そのままの行は出さない（送らない）
+      var w=(x.warns||[]);
+      var id='subAllChk_'+p.key+'_'+x.jan;
+      /* 警告のある行は**既定で外す**。カジが入れ直したらそれを使う。 */
+      var ov=subAllOn[p.key+'_'+x.jan];
+      var on=(ov===undefined)?!w.length:!!ov;
+      out.push('<label class="note2" style="margin:2px 0 0;display:flex;'
+        +'gap:6px;align-items:flex-start">'
+        +'<input type="checkbox" id="'+esc(id)+'"'+(on?' checked':'')
+        +' onchange="subAllTick(this,\''+esc(p.key)+'\',\''+esc(String(x.jan))
+        +'\')" style="margin-top:2px">'
+        +'<span style="flex:1 1 auto;min-width:0">'
+        +(x.sent?'<b>書き換え</b>':'<b style="color:var(--good)">新しく</b>')
+        +'　'+esc(PJ_SHOPCSV.titleOf(String(x.name||x.jan)).slice(0,34)
+                 ||String(x.jan))
+        +'　'+yen(+x.price||0)+'　残り '+(+x.left||0)+'点'
+        +'　'+mwShipBadge({ name:x.ship, sure:x.ship_sure })
+        +(w.length?('<br><span style="color:var(--bad)">⚠ '
+          +w.map(function(s){ return esc(String(s)); }).join('／')
+          +'</span>（外しています。出すときはチェックを入れてください）'):'')
+        +'</span></label>');
+    });
+  });
+  return out.join('')
+    +'<div class="note2" id="subAllSumBox" style="margin:8px 0 2px"></div>'
+    +'<div style="display:flex;gap:6px;margin-top:4px">'
+    +'<button class="btn primary cfgprice" id="subAllSendBtn" style="flex:1"'
+    +' onclick="subAllSend();return false">送る</button>'
+    +'<button class="btn cfgprice" style="flex:0 0 auto"'
+    +' onclick="subAllClose();return false">やめる</button>'
+    +'</div>';
+}
+/* 送る（プランの順に1本ずつ）。途中で失敗したらそこで止める。 */
+function subAllSend(){
+  if(roleDenyPrice('subAllNote'))return;
+  if(!subReady())return;
+  var jobs=subAllJobs().filter(function(j){ return (j.add+j.edit)>0; });
+  if(!jobs.length){ subAllNote('送るものがありません。',1); return; }
+  var add=jobs.reduce(function(a,j){ return a+j.add; },0);
+  var ed=jobs.reduce(function(a,j){ return a+j.edit; },0);
+  var off=subAllJobs().reduce(function(a,j){ return a+j.off; },0);
+  if(!confirm('会員向けの Discord に、プランの順で送ります。\n\n'
+    +jobs.map(function(j){ return '・'+j.name+'（'
+      +(j.ch_name?('#'+j.ch_name):('チャンネル '+j.ch))+'）：新しく '
+      +j.add+'件・書き換え '+j.edit+'件'; }).join('\n')
+    +'\n\n合計：新しく '+add+'件・書き換え '+ed+'件'
+    +(off?('\n外した行：'+off+'件（警告のある行です）'):'')
+    +'\n\n※ 同じ商品は二重に送らず、変わったぶんは前のカードを'
+    +'書き換えます。\n※ 途中で失敗したらそこで止めます'
+    +'（もう一度押せば続きから）。\n\nよろしいですか？'))return;
+  var got={ sent:0, edited:0, skipped:0, fail:0 };
+  var done=[], stop='', rounds=0;
+  var btn=$('subAllSendBtn'); if(btn)btn.disabled=true;
+  var line=function(i,extra){
+    subAllNote('送っています… <b>'+(i+1)+'／'+jobs.length+'</b>（'
+      +esc(jobs[i].name)+'）'+(extra||''));
+  };
+  var step=function(i){
+    if(i>=jobs.length||stop)return fin();
+    var j=jobs[i];
+    line(i);
+    return mwPost('/sub/send',{ approve:true, plan:j.key, skip:j.skip })
+      .then(function(r){
+        if(r&&r.error){
+          stop='⚠ '+esc(j.name)+'で止まりました：'
+            +esc(String(r.detail||r.error));
+          return fin();
+        }
+        got.sent+=(+(r||{}).sent||0);
+        got.edited+=(+(r||{}).edited||0);
+        got.skipped+=(+(r||{}).skipped||0);
+        got.fail+=(+(r||{}).fail||0);
+        done.push(j.name+'（新しく '+(+(r||{}).sent||0)+'・書き換え '
+          +(+(r||{}).edited||0)+'）');
+        if((+(r||{}).fail||0)){
+          stop='⚠ '+esc(String((r||{}).stop_plan||j.name))
+            +'で送れないカードがあって止まりました'
+            +((r||{}).stop_status?('（Discord の返事 '
+              +esc(String(r.stop_status))+'）'):'');
+          return fin();
+        }
+        /* 持ち時間で途中まで送った回は、同じプランの続きを頼む。 */
+        if((+(r||{}).left||0)>0&&(++rounds)<SUB_ALL_ROUNDS){
+          line(i,'（続き '+mwN(+r.left)+'件）');
+          return subWait(SUB_ALL_GAP).then(function(){ return step(i); });
+        }
+        return subWait(SUB_ALL_GAP).then(function(){ return step(i+1); });
+      })['catch'](function(e){
+        stop='⚠ '+esc(j.name)+'で止まりました：'+esc(e.message);
+        return fin();
+      });
+  };
+  var fin=function(){
+    if(btn)btn.disabled=false;
+    var sum='新しく <b>'+mwN(got.sent)+'件</b>・書き換え <b>'+mwN(got.edited)
+      +'件</b>・そのまま '+mwN(got.skipped)+'件';
+    var list=done.length?('<br><span class="note2" style="margin:0">'
+      +done.map(function(s){ return esc(s); }).join('　')+'</span>'):'';
+    subAllNote(stop
+      ? (stop+'<br><b>ここまで出ました</b>：'+sum+list
+         +'<br>直してから、もう一度「送る」を押してください'
+         +'（出したぶんは二重に出ません）。')
+      : ('✓ <b>ぜんぶ送りました</b>（'+sum+'）'+list),!!stop);
+    /* 予定を読み直して、確認の画面も今の状態にそろえる
+       （続きを押すときに、送り終えた行が「そのまま」になる）。 */
+    return Promise.resolve(subPlanGo(true)).then(function(){
+      var box=$('subAllBox');
+      if(box&&box.innerHTML&&subPlanData){
+        box.innerHTML=subAllHtml(subPlanData); subAllSum();
+      }
+    })['catch'](function(){});
+  };
+  return step(0);
+}
 /* 8.19（不具合2）送ったカードをすべて今の形で書き直す。
    送り直しではなく**書き換え**（PATCH）。⚙を変えたときに押す。 */
 function subRedoGo(){
@@ -25633,7 +25873,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v285';   // sw.js の const V と必ず同じ値にする
+var APP_V='v286';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
