@@ -11148,7 +11148,7 @@ async function subPlanBuild(env) {
       const sent = {};
       for (const p of cfg.one)
         if (p.ch && sent[p.ch] === undefined) sent[p.ch] = await subPosts(env, p.ch);
-      const op = await onePlanBuild(env, cfg, ones, sent);
+      const op = await onePlanBuild(env, cfg, ones, sent, true);
       for (const x of op) {
         delete x.pick;                       // 画面に返すのは中身だけ
         out.plans.push(x);
@@ -11617,7 +11617,10 @@ async function dcCard(env, run, ch, card, pic, msgId) {
   return { ok: true, status: resp.status, data: d };
 }
 /* 配信の予定（1点もの）。member のプランと同じ形で返す。 */
-async function onePlanBuild(env, cfg, rows, sent) {
+/* names … true のときだけ Discord にチャンネル名を聞く（8.28）。
+   画面に出す「予定」のときだけ要るので、**送るときは聞かない**
+   （むだな呼び出しをしない）。 */
+async function onePlanBuild(env, cfg, rows, sent, names) {
   const now = nowIso();
   const out = [];
   /* 8.28（カジの依頼1）チャンネル名（確認の画面に出す）。 */
@@ -11645,7 +11648,8 @@ async function onePlanBuild(env, cfg, rows, sent) {
       /* pre … 先行（プレミアム）のほうか。送ったあとに
          pre_at／open_at のどちらを控えるかを決める（8.22）。 */
       one: true, pre: !!p.pre, hours: p.hours,
-      ch_name: (p.on && p.ch) ? await dcChName(env, planRun, p.ch, chCache) : "",
+      ch_name: (names && p.on && p.ch)
+        ? await dcChName(env, planRun, p.ch, chCache) : "",
       n: pick.length, q: 0, kinds: "one",
       why: pick.length ? "" : SUBPLAN.oneWhyNone(p, rows, now),
       items: pick.map((x) => ({
