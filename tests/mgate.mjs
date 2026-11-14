@@ -72,6 +72,20 @@ console.log('=== 飛ばす先 ===');
   ok(a.to.indexOf('/account/login')===0,'★★/account/login に飛ばす');
   ok(/return_to=%2Fproducts%2Fsub-4902370550467/.test(a.to),
      '★★★ログインのあと元の商品ページに戻れるようにする');
+  /* 8.26（カジの確認）新しい顧客アカウントのログイン URL は
+     最初から ? が付いて返る。そこに ? を足すと戻れなかった。 */
+  const nca=M.gateOf('member-list',NOLOGIN,
+    { url:'/products/sub-1',
+      login:'/customer_authentication/redirect?locale=ja&region_country=JP' });
+  console.log('   新しい顧客アカウント：'+nca.to);
+  ok(/region_country=JP&return_to=%2Fproducts%2Fsub-1$/.test(nca.to),
+     '★★★すでに ? が付いた URL は & でつなぐ');
+  ok((nca.to.match(/\?/g)||[]).length===1,'★★★? は1つだけ');
+  ok(/^\/account\/login\?return_to=/.test(M.gateOf('member-list',NOLOGIN,
+     { url:'/products/sub-1', login:'/account/login' }).to),
+     '★★? が無い URL は今までどおり ? でつなぐ');
+  ok(M.gateOf('member-list',NOLOGIN,{}).to==='/account/login',
+     '★戻り先が無いときは URL だけ');
   const b=M.gateOf('member-list',PLAIN,{});
   ok(b.why==='not-member'&&b.to==='/pages/members-only',
      '★★★会員でない人は /pages/members-only');
@@ -188,6 +202,13 @@ console.log('=== Liquid に同じ決まりが入っているか ===');
      '★★★member-list と member-staff を見ている');
   ok(/routes\.account_login_url/.test(g)&&/return_to/.test(g),
      '★★★ログインへ飛ばす（戻り先つき）');
+  /* 8.26：? があれば & でつなぐ／旧のログイン画面に切り替えられる。 */
+  ok(/lurl contains '\?'/.test(g)&&/assign sep = '&'/.test(g),
+     '★★★Liquid も「? があれば & でつなぐ」になっている');
+  ok(/member_login_mode/.test(g)&&/'classic'/.test(g)&&/'page'/.test(g),
+     '★★★行き先を切り替える1行がある（routes／classic／page）');
+  ok(/'\/pages\/members-only\?why=login'/.test(g),
+     '★★ログインに飛ばさず案内のページに出す形も持っている');
   ok(/\/pages\/members-only/.test(g)&&/why=plan/.test(g),
      '★★★会員でない人とプラン違いの行き先');
   ok(/slice: 0, 6/.test(g)&&/'grade-'/.test(g),

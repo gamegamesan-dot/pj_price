@@ -63,7 +63,8 @@
      pTags … 商品のタグ（配列かカンマ区切り）
      cTags … 顧客のタグ。**null／undefined は「ログインしていない」**
              （ログイン済みでタグが無い人は [] を渡す）
-     opt   … { url:'/products/one-3'（戻り先）, login:'/account/login',
+     opt   … { url:'/products/one-3'（戻り先）,
+               login:'/account/login'（テーマの routes の値。? 付きでもよい）,
                page:'/pages/members-only' }
      返すもの … { ok, why, to }
        why … ''（見られる）／'login'／'not-member'／'plan'
@@ -74,11 +75,18 @@
     var login = s(o.login) || LOGIN;
     /* ① 会員用でない商品は、だれでも見られる。 */
     if (!isMemberItem(pTags)) return { ok: true, why: "", to: "" };
-    /* ② ログインしていない。 */
+    /* ② ログインしていない。
+       8.26（カジの確認）このストアは**新しい顧客アカウント**なので、
+       テーマの routes.account_login_url が
+         /customer_authentication/redirect?locale=ja&region_country=JP
+       のように**最初から ? が付いて**返る。そこに '?return_to=' を
+       つなぐと戻れないので、**? があれば & でつなぐ**。 */
     if (cTags === null || cTags === undefined) {
       var back = s(o.url);
-      return { ok: false, why: "login",
-               to: login + (back ? ("?return_to=" + encodeURIComponent(back)) : "") };
+      var to = login;
+      if (back) to += (login.indexOf("?") >= 0 ? "&" : "?")
+        + "return_to=" + encodeURIComponent(back);
+      return { ok: false, why: "login", to: to };
     }
     /* ③ 社内の確認用。 */
     if (has(cTags, TAG_STAFF)) return { ok: true, why: "", to: "" };

@@ -1,5 +1,5 @@
 {%- comment -%}
-  会員用商品の鍵（pj_price 8.24）
+  会員用商品の鍵（pj_price 8.24／8.26）
   Shopify ストア：Omakase Ship ／ テーマ：Rise
 
   これは「商品ページを見せてよいか」を決めるだけの部品です。
@@ -12,20 +12,54 @@
 
   決まり（上から順に見る。pj の shared/mgate.js と同じ順）
     ① 商品に member-list が無い → だれでも見られる
-    ② ログインしていない       → /account/login（戻り先つき）
+    ② ログインしていない       → ログインへ（戻り先つき）
     ③ 顧客に member-staff      → ぜんぶ見られる（社内の確認用）
     ④ 顧客に member-list が無い → /pages/members-only
     ⑤ 商品の grade-◯◯ と顧客の grade-◯◯ が1つも合わない
        → /pages/members-only?why=plan
        商品に grade-◯◯ が1つも無いときは、会員ならだれでも見られる
+
+  ▼ ログインの行き先（8.26・カジの確認）
+    このストアは**新しい顧客アカウント**なので、routes.account_login_url が
+      /customer_authentication/redirect?locale=ja&region_country=JP
+    のように**最初から ? が付いて**返ってきます。
+    そこに '?return_to=' をつなぐと
+      …region_country=JP?return_to=/products/…
+    になって戻れませんでした（ログイン後に「注文」の画面に着地）。
+    → **? があれば & でつなぐ**ようにしました。
+
+    それでも戻らないときは、下の member_login_mode を 'classic' に変えて
+    /account/login?return_to=… に送る形も試せます（手順書 §7-3 参照）。
 {%- endcomment -%}
 {%- liquid
+  # ログインしていない人の行き先。ここの1行だけで切り替えられる。
+  # 'routes'  … テーマの決まりのログイン URL（既定）
+  # 'classic' … /account/login?return_to=… に送る（旧のログイン画面）
+  # 'page'    … ログインに飛ばさず /pages/members-only に案内する
+  #             （新しい顧客アカウントで「ログインしたのにまた鍵に当たる」
+  #               ようになるときは、これがいちばん安全）
+  assign member_login_mode = 'routes'
+
   assign gate = ''
   assign p = product
   if p != blank and p.tags contains 'member-list'
     if customer == blank
-      assign back = p.url | default: request.path | url_encode
-      assign gate = routes.account_login_url | append: '?return_to=' | append: back
+      if member_login_mode == 'page'
+        assign gate = '/pages/members-only?why=login'
+      else
+        assign back = p.url | default: request.path | url_encode
+        if member_login_mode == 'classic'
+          assign lurl = '/account/login'
+        else
+          assign lurl = routes.account_login_url | default: '/account/login'
+        endif
+        # すでに ? が付いている URL（新しい顧客アカウント）は & でつなぐ。
+        assign sep = '?'
+        if lurl contains '?'
+          assign sep = '&'
+        endif
+        assign gate = lurl | append: sep | append: 'return_to=' | append: back
+      endif
     elsif customer.tags contains 'member-staff'
       assign gate = ''
     elsif customer.tags contains 'member-list'

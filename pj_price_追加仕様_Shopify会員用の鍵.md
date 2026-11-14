@@ -134,34 +134,77 @@ Rise は `<head>` の中で、ページごとの `<title>` や SNS 用の
 これで、見せない人の HTML には**商品名・価格・説明・カートのボタンが
 1つも出ません**（JavaScript で隠すのではなく、**出力しない**）。
 
-### 3-2. 一覧（コレクション・検索）
+### 3-2. 一覧・検索・おすすめから外す（8.26）
 
-**検索する文字：`{% for product in collection.products %}`**
-（Rise では `sections/main-collection-product-grid.liquid`。
-見つからないときは `collection.products` や `search.results` で検索し、
-商品カードを出している `{% for %}` を探す）
+一覧は **`card-product` を出す行を囲む**のがいちばん確かです
+（`{% for %}` の形はセクションによって違いますが、カードを出す行は同じ）。
+
+**探し方：コードエディタの検索で `card-product` と打つ**。
+出てきたファイルの**ぜんぶ**を直します。Rise では次の3つです
+（ほかに出てきたら、それも同じように直す）。
+
+| ファイル | どこの一覧か |
+| --- | --- |
+| `sections/main-collection-product-grid.liquid` | コレクションの一覧（会員用コレクションもここ） |
+| `sections/main-search.liquid` | ストアの検索の結果 |
+| `sections/related-products.liquid` | おすすめ商品 |
+
+#### 差し込む形（3つとも同じ）
+
+もとの `card-product` を出している行を、**上下 2行**で囲むだけです。
 
 ```liquid
-{%- for product in collection.products -%}
-  {%- comment -%} ここから足す（pj 8.24） {%- endcomment -%}
-  {%- capture can_see -%}{%- render 'member-can-see', product: product -%}{%- endcapture -%}
-  {%- if can_see | strip == 'yes' -%}
-  {%- comment -%} ここまで足す {%- endcomment -%}
+      {%- comment -%} ここから足す（pj 8.26 会員用の鍵） {%- endcomment -%}
+      {%- capture can_see -%}
+        {%- render 'member-can-see', product: card_product -%}
+      {%- endcapture -%}
+      {%- if can_see | strip == 'yes' -%}
 
-    … もとからあるカードを出す行（そのまま） …
+        {%- render 'card-product', card_product: card_product, … -%}
+        {%- comment -%} ↑ もとからある行。1文字も変えない {%- endcomment -%}
 
-  {%- endif -%}   {%- comment -%} これも足す（if を閉じる） {%- endcomment -%}
-{%- endfor -%}
+      {%- endif -%}
+      {%- comment -%} ここまで足す {%- endcomment -%}
 ```
 
-- 検索の一覧（`sections/main-search.liquid` の `{% for item in search.results %}`）も
-  同じように囲む。`product:` に渡すのは `item`
-  （`{%- render 'member-can-see', product: item -%}`）
-- **おすすめ商品**（`sections/related-products.liquid` などの
-  `{% for product in recommendations.products %}`）も同じ
+#### 渡す商品の名前（ここだけ気をつける）
+
+`member-can-see` に渡すのは、**もとの行に書いてある商品の変数と同じもの**です。
+`render 'card-product'` の行の `card_product:` の**右側**をそのまま使います。
+
+| もとの行（例） | 渡すもの |
+| --- | --- |
+| `{%- render 'card-product', card_product: card_product, … -%}` | `product: card_product` |
+| `{%- render 'card-product', card_product: product, … -%}` | `product: product` |
+| `{%- render 'card-product', card_product: item, … -%}` | `product: item` |
+| `{%- render 'card-product', card_product: recommendation, … -%}` | `product: recommendation` |
+
+> 間違えると**何も出なくなる**（`member-can-see` が商品を受け取れず
+> `yes` を返すだけ）か、**ぜんぶ出る**ので、入れたあとに
+> 会員用コレクションを見て確かめてください（§7）。
+
+#### `{% for %}` の中にあるか確かめる
+
+囲む行は**くり返しの中**（`{% for %}` 〜 `{% endfor %}` の間）にあります。
+`{% for %}` の外にある `card-product`（下書きや1件だけの表示）は囲みません。
+`{% paginate %}` の中でも同じです。
+
+#### 既知の制限（カジの指摘どおり）
+
+| こと | どうなるか |
+| --- | --- |
+| **件数** | 「◯◯件」の数は Shopify が数えた**ぜんぶの数**です。外した分が引かれません（例：10件と出るのに8件しか並ばない） |
+| **ページ送り** | 1ページの件数（例 24件）も**外す前**で数えます。外した分だけページが短くなり、空のページが出ることもあります |
+| **絞り込み（フィルター）の件数** | 同じく外す前の数です |
+
+これは Liquid で**出す側を止めている**ための限界です（Shopify が先に
+「何件」を決めてから、テーマが並べるため）。直すには、会員用の商品を
+**会員向けのコレクションにだけ入れて、ふつうの一覧には入れない**運用に
+するのが確実です（`seo.hidden` を入れておけば検索にも出ません）。
 
 > 会員用コレクション（ハンドル `members`）の一覧は、これで
-> **見られない商品が並ばなくなる**（カジの決まり6）。
+> **見られない商品が並ばなくなります**（カジの決まり6）。
+> 件数の数字だけは合いません（上の表）。
 
 {% endraw %}
 
@@ -273,6 +316,12 @@ Rise は `<head>` の中で、ページごとの `<title>` や SNS 用の
 | 4 | **`member-list`＋`grade-premium`** | 1点ものの `/products/one-…` を開く | 見られる |
 | 5 | **`member-staff`** | どれでも開く | ぜんぶ見られる |
 
+> **確かめた結果（2026-11-14・カジ）**
+> 複製テーマ「Rise のコピー」（id 168765456547）に v283 のスニペットを入れて
+> 保存（未公開）。**5通りすべて期待どおり**。見られない人のページのソースに
+> 商品名・値段は無し。会員用でない商品はふつうに表示。
+> 戻り先（`return_to`）だけ直した（§7-3・v284）。
+
 - 顧客タグは Shopify の **顧客** → その人 → 右の「タグ」で付け外しします
 - ⚠ **タグは小文字で**付けてください（`grade-premium`。`Grade-Premium` だと
   Liquid の見比べに当たりません）。pj が CSV で付ける商品のタグは
@@ -286,13 +335,68 @@ Rise は `<head>` の中で、ページごとの `<title>` や SNS 用の
     {% raw %}`{%- if member_gate == blank -%}`{% endraw %} で囲む
   - ストアの検索で会員用商品が**出ない**こと（`seo.hidden` を入れたあと）
 
-### 7-3. ログイン後に戻らないとき
+### 7-3. ログインの行き先（8.26・新しい顧客アカウント）
 
-`return_to` が効くのは**旧（クラシック）の顧客アカウント**です。
-**設定 → 顧客アカウント**が「新しい顧客アカウント」になっていると、
-Shopify 側の決まりで元のページには戻れません（公式に未対応・
-2026-11-14 に確認）。その場合は #1 の試験は「ログイン画面に飛ぶこと」
-だけを見てください（ログイン後はアカウントの画面に出ます）。
+このストアは **新しい顧客アカウント**（設定 → 顧客アカウント）です。
+テーマの決まりのログイン URL は
+
+```
+/customer_authentication/redirect?locale=ja&region_country=JP
+```
+
+のように**最初から `?` が付いて**返ってきます。
+v283 はそこに `?return_to=` をそのままつないでいたので
+`…region_country=JP?return_to=/products/…` になり、
+ログインしても「注文」の画面に着地していました（カジの確認・2026-11-14）。
+
+**v284 で直したこと**：URL に `?` が入っていれば **`&` でつなぐ**。
+
+```
+/customer_authentication/redirect?locale=ja&region_country=JP&return_to=%2Fproducts%2Fsub-…
+```
+
+#### ⚠ 新しい顧客アカウントの注意
+
+**ログインしても、お客さまがストアへ戻ってくるまで、ストア側は
+「ログインしていない人」のままです。**
+新しい顧客アカウントのログインは Shopify 側の別の画面
+（`shopify.com/…/account`）で行われるため、
+
+- ログインの直後に商品ページへ戻れないと、**また鍵に当たって
+  ログインへ飛ばされる**ことがあります（行き止まりに見える）
+- `customer` が入るのは、ストアのページに戻ってきてからです
+
+そのため、**戻り先（`return_to`）が効くかどうかが要**になります。
+
+#### 2つの行き先を比べる（カジが複製テーマで試す）
+
+スニペット `snippets/member-gate.liquid` のはじめのほうに、
+切り替える1行があります。
+
+| 試す順 | 直すところ | 行き先 |
+| --- | --- | --- |
+| ① 既定 | `member_login_mode = 'routes'`（そのまま） | テーマの決まりの URL（`/customer_authentication/redirect?…&return_to=…`） |
+| ② 試す | `member_login_mode = 'classic'` に書き替える | `/account/login?return_to=…`（旧のログイン画面） |
+| ③ 安全策 | `member_login_mode = 'page'` に書き替える | ログインに飛ばさず `/pages/members-only`（ページの中の「ログイン」を押してもらう） |
+
+**比べ方**（①で戻らなかったら②を試す）
+
+1. ログアウトしてから、会員用商品の `/products/sub-…` を開く
+2. ログイン画面に飛ぶ → ログインする
+3. **元の商品ページに戻るか**を見る
+   - 戻った → その行き先でよい
+   - 戻らない（注文やアカウントの画面に着地する）→ もう一方を試す
+4. どちらでも戻らないときは **③（`'page'`）**にしてください。
+   ログインに飛ばさず「会員向けのご案内」のページに出します。
+   お客さまは「**ご案内 → ログイン**」の2手になりますが、
+   **「ログインしたのにまた鍵に当たる」行き止まりが起きません**
+   （新しい顧客アカウントでは、ログインしてもストアに戻るまで
+   ストア側は「ログインしていない人」のままなので・上の注意）
+
+> ②（`/account/login`）は、新しい顧客アカウントのストアでも
+> Shopify が新しいログイン画面へ振り直すことがあります。
+> そのときに `return_to` が残るかはストアの設定で変わるので、
+> **複製テーマで実際に見るのがいちばん確実**です。
 
 ## 8. 公開と、SHOPLOCK を外す順
 
@@ -336,7 +440,8 @@ Shopify 側の決まりで元のページには戻れません（公式に未対
 | `seo.hidden` に 1 で検索・サイトマップから外れる | Shopify のヘルプ・公式ブログで確認（2026-11-14） |
 | `seo.hidden` を**商品CSV で**付けられるか | メタフィールドの列は CSV で入るが、**列名の書き方が資料で違う**。ストアの書き出しの列名を使うのが確実（⚙で入れてもらう形にした） |
 | Shopify Flow が Basic で使えるか | 新しい資料では「Basic でも無料」。古い資料には「Basic 不可」とあるので、**入れるときに確かめてください** |
-| ログイン後に元のページへ戻る（`return_to`） | 旧（クラシック）顧客アカウントなら効く。**新しい顧客アカウントでは Shopify が未対応** |
+| ログイン後に元のページへ戻る（`return_to`） | **このストアは新しい顧客アカウント**。ログイン URL に最初から `?` が付くので **`&` でつなぐ**ようにした（v284）。実際に戻るかは §7-3 の手順でカジが複製テーマで確かめる |
+| 新しい顧客アカウントのログイン中の扱い | **ログインしても、ストアへ戻ってくるまでストア側は「ログインしていない人」のまま**（§7-3） |
 | `/products/<ハンドル>.js`・`.json` を止められるか | **止められません**（Shopify 本体の口・テーマを通らない）。鍵は「ページを見せない・一覧に出さない・検索に出さない」までです |
 | Liquid が本当に動くか | **この場所から Shopify を触れないので、動かして確かめていません。** §7 の5通りを、必ず複製テーマのプレビューで試してください |
 
