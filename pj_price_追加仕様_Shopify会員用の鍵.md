@@ -5,6 +5,17 @@ pj_price 8.24 ／ 2026-11-14 ／ ストア：Omakase Ship ／ テーマ：**Rise
 > カジの依頼「SHOPLOCK に頼らずテーマの Liquid で鍵を作りたい。
 > プランの区別（grade-◯◯）も効くようにしてほしい。」
 
+> **この .md の中の Liquid について**
+> GitHub Pages（Jekyll）は `.md` の中の Liquid のしるし（波かっこと
+> パーセント）を**自分の Liquid として読んでしまう**ので、Shopify の
+> Liquid をそのまま書くと公開のビルドが失敗します
+> （2026-11-14・pages build and deployment #313 `Unknown tag 'render'`）。
+> 直し：リポジトリ直下の **`.nojekyll`** で Jekyll を止め、さらに
+> この中の Liquid は **raw タグ**（`raw` 〜 `endraw`）で囲んであります
+> （`.nojekyll` が外れても壊れないように）。
+> **Liquid を書き足すときは、必ず raw タグの中に書いてください。**
+> `tests/pages.mjs` が機械で見張っています。
+
 ## 0. なぜ作り直すか
 
 | 今の困りごと（SHOPLOCK） | この鍵では |
@@ -50,6 +61,8 @@ pj_price 8.24 ／ 2026-11-14 ／ ストア：Omakase Ship ／ テーマ：**Rise
 （`.liquid` は自動で付く）。
 
 ## 3. Rise への差し込み
+<!-- GitHub Pages（Jekyll）が Shopify の Liquid を自分のものとして読まないように囲む。直下の .nojekyll で Jekyll は止めてあるが、それが外れても壊れないように二重にしておく。 -->
+{% raw %}
 
 > ⚠ 行番号はテーマの版で変わる。**検索する文字**で場所を見つけてください
 > （コードを編集の画面で `Ctrl`＋`F`／iPhone なら長押し → 検索）。
@@ -149,6 +162,8 @@ Rise は `<head>` の中で、ページごとの `<title>` や SNS 用の
 
 > 会員用コレクション（ハンドル `members`）の一覧は、これで
 > **見られない商品が並ばなくなる**（カジの決まり6）。
+
+{% endraw %}
 
 ## 4. `/pages/members-only` を作る
 
@@ -268,7 +283,7 @@ Rise は `<head>` の中で、ページごとの `<title>` や SNS 用の
   - ページの**ソースを表示**して（iPhone は難しいので PC で）、
     `Ctrl`＋`F` で**商品名**と**値段の数字**を探し、**1つも出ない**こと。
     出てしまったら、その行を §3-1（c）と同じように
-    `{%- if member_gate == blank -%}` で囲む
+    {% raw %}`{%- if member_gate == blank -%}`{% endraw %} で囲む
   - ストアの検索で会員用商品が**出ない**こと（`seo.hidden` を入れたあと）
 
 ### 7-3. ログイン後に戻らないとき
@@ -293,7 +308,7 @@ Shopify 側の決まりで元のページには戻れません（公式に未対
 | 戻したいもの | やること |
 | --- | --- |
 | 公開したあとで戻す | **オンラインストア → テーマ**で、前のテーマ（複製する前のもの）を**公開**に戻す。コードは触らない |
-| スニペットだけ消す | `snippets/member-gate.liquid`・`member-can-see.liquid` を削除し、`layout/theme.liquid` の足した行を消す（`{{ content_for_header }}`・`{{ content_for_layout }}` を**囲む前の形**に戻す） |
+| スニペットだけ消す | `snippets/member-gate.liquid`・`member-can-see.liquid` を削除し、`layout/theme.liquid` の足した行を消す（{% raw %}`{{ content_for_header }}`・`{{ content_for_layout }}`{% endraw %} を**囲む前の形**に戻す） |
 | 一覧の囲みだけ消す | §3-2 で足した3行（`capture`／`if`／`endif`）を消す |
 | pj の seo.hidden をやめる | ⚙「検索から隠す列」を**空**にして、CSV を出し直す（Shopify 側は商品のメタフィールドを消す） |
 

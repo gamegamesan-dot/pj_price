@@ -1327,3 +1327,46 @@ Basic では「タグが合わないとチェックアウトできない」を�
 先行があいたら `standard` も・海外向けには会員の印が付かない）／
 `seo.hidden` の列／**Liquid に同じ決まりが入っているか**（文字で確かめる）／
 プラン外の購入の知らせ（氏名・住所・メールを出さないことも）
+
+## 8.25 公開（GitHub Pages）が Liquid で落ちた（v283 のあと・カジの報告）
+
+> カジの報告（2026-11-14）
+> 「GitHub Pages のビルドが失敗しています（pages build and deployment #313）。
+> `Rendering Liquid: pj_price_追加仕様_Shopify会員用の鍵.md`
+> `Error: Liquid syntax error (line 63): Unknown tag 'render'`」
+
+### 原因
+
+GitHub Pages は既定で **Jekyll** を通す。Jekyll は `.md` の中の
+Liquid のしるし（波かっことパーセント）を**自分の Liquid として実行**するので、
+8.24 の手順書に書いた Shopify の Liquid（`render` など Jekyll の知らないタグ）で
+ビルドが落ちた。pj の中身（HTML・JS）は無事で、**公開中のアプリは
+前のままだった**（新しい push が反映されない状態）。
+
+### 直したこと
+
+1. リポジトリ直下に**空の `.nojekyll`** を置いた（Jekyll を通さない）。
+   pj は素の HTML なので Jekyll は要らない
+   （`_config.yml`・`_layouts`・`Gemfile` も無い）
+2. 手順書の中の Liquid を **raw タグ**（`raw` 〜 `endraw`）で囲んだ
+   （`.nojekyll` が外れても落ちないように）。
+   §3「Rise への差し込み」をまとめて1組で囲み、外に残った2か所は行ごとに囲んだ
+3. `tests/pages.mjs` で**見張る**ようにした
+   （`.nojekyll` がある・`.md` の Liquid が raw の外に出ていない・
+   raw と endraw の数が合っている・公開に要るファイルがある・
+   `shopify/` にトークンや Webhook の URL が入っていない）
+
+### Jekyll を止めるとどうなるか
+
+リポジトリのファイルが**そのまま**公開される（`tests/`・`proxy-sync/worker.js`・
+`shopify/*.liquid`・`.md` など）。もともと Public のリポジトリなので
+新しく見えるものはない。`node_modules/` は `.gitignore` なので公開されない。
+**鍵・トークン・Webhook の URL をファイルに書かない**決まりは今までどおり
+（`wrangler secret put` に入れる）。
+
+`shopify/` の Liquid が読めても鍵は弱くならない（タグの名前が分かっても、
+顧客タグは Shopify の管理画面でしか付けられない）。
+
+### テスト
+
+`tests/pages.mjs`（22）
