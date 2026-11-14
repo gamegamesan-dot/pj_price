@@ -10893,6 +10893,13 @@ function gdOf(st) {
 /* 8.17 カードの形が変わったことを控える（sync_state）。
    版が上がったら、すでに送ったカードも次の配信で書き換える。 */
 const SUB_CARDV_KEY = "sub.card.v";             // 配信時刻（JST の時）
+/* 8.33（カジの報告）「送ったカードをすべて今の形で書き直す」が
+   51件で 1分を超えて通信が切れた（iPhone の Safari で Load failed）。
+   1回 45秒で区切って残りを返すのは 8.28 で入っているが、**書き直しは
+   毎回ぜんぶ書き換える**ので、続きを頼んでも同じカードからやり直していた。
+   この印に「書き直しを始めた時刻」を控え、**その時刻より後に書き換えた
+   カードは飛ばす**（続きからになる）。ぜんぶ終わったら消す。 */
+const SUB_REDO_KEY = "sub.redo";
 const SUB_ROWS_MAX = 200;               // 1回に見る商品の数の上限
 /* 8.28（カジの依頼1）Discord の送信制限に当たらないよう、カード1枚ごとに
    これだけ待つ。Discord の「同じチャンネルに 5通／5秒」より遅くしてある
@@ -11160,7 +11167,9 @@ function subPostIns(x, p, id, at, hasH) {
   if (hasH) a.push(String(x.card_h || ""));
   return a;
 }
-function subPick(rows, plan, sent, reform, cfg, skip) {
+/* redoAt … 書き直しを始めた時刻（8.33）。これより後に書き換えたカードは
+   「もう今の形」なので飛ばす（続きからやるため）。 */
+function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   const out = [];
   for (const r of (rows || [])) {
     if (out.length >= plan.n) break;
@@ -11187,9 +11196,11 @@ function subPick(rows, plan, sent, reform, cfg, skip) {
        指紋の控えが無い（migrate-0057 の前に送ったぶん）ときは、
        今までどおり値段と数で見る。 */
     const h = old ? String(old.card_h || "") : "";
-    const same = !reform && old
+    /* 8.33 書き直しの続き：この回でもう書き換えたカードは飛ばす。 */
+    const redone = !!(redoAt && old && String(old.edited_at || "") >= redoAt);
+    const same = redone || (!reform && old
       && (h ? (h === x.card_h)
-            : (Number(old.price) === r.price && Number(old.qty) === r.qty));
+            : (Number(old.price) === r.price && Number(old.qty) === r.qty)));
     x.same = !!same;
     out.push(x);
   }
@@ -11856,6 +11867,19 @@ async function jobSubSend(env, opt) {
        中身が同じでも**ぜんぶ書き換える**（redo）。 */
     const redo = (o.redo === true || o.redo === 1 || o.redo === "1");
     const reform = redo || (cardV !== SUBCARD.CARD_V);
+    /* 8.33 書き直しは1回で終わらないことがある（45秒で区切る）。
+       「始めた時刻」を控えて、続きを頼まれたら**その後に書き換えた
+       カードは飛ばす**。ぜんぶ終わったら消す。 */
+    let redoAt = "";
+    if (redo) {
+      try { redoAt = String(await stateGet(env, SUB_REDO_KEY) || ""); }
+      catch (e) { redoAt = ""; }
+      if (!redoAt) {
+        redoAt = nowIso();
+        try { await stateSet(env, SUB_REDO_KEY, redoAt).run(); } catch (e) {}
+      }
+      res.redo_at = redoAt;
+    }
     res.reform = reform;
     res.redo = redo;
     res.card_v = SUBCARD.CARD_V;
@@ -11887,7 +11911,7 @@ async function jobSubSend(env, opt) {
       if (stop) break;
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent, reform, cfg, skip);
+      const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
                   left: 0 };
       let gap = false;
@@ -11958,6 +11982,11 @@ async function jobSubSend(env, opt) {
                       fail: 0, left: 0, one: true };
           let gap1 = false;
           for (const x of (g.pick || [])) {
+            /* 8.33 書き直しの続き：この回でもう書き換えたカードは飛ばす。 */
+            const was1 = (sentOne[g.ch] || {})[x.jan] || {};
+            if (redoAt && String(was1.edited_at || "") >= redoAt) {
+              r.keep++; res.skipped++; continue;
+            }
             if (x.same && !reform) { r.keep++; res.skipped++; continue; }
             /* 8.28 チェックを外した行は出さない（キーは 'one-<連番>'）。 */
             if (skip[String(x.jan)]) { r.keep++; res.skipped++; continue; }
@@ -12034,6 +12063,11 @@ async function jobSubSend(env, opt) {
       if (reform && !fail && !res.left) {
         try { await stateSet(env, SUB_CARDV_KEY, SUBCARD.CARD_V).run(); }
         catch (e) {}
+      }
+      /* 8.33 書き直しがぜんぶ終わったら「どこまで」の印を消す
+         （次に押したときは、また頭から書き直せるように）。 */
+      if (redo && !fail && !res.left) {
+        try { await stateSet(env, SUB_REDO_KEY, "").run(); } catch (e) {}
       }
       run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
         + res.edited + "件・そのまま " + res.skipped + "件"
@@ -18275,7 +18309,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   /* 8.31（カジの依頼）受付終了・今週のねらい目。 */
   subRetire, subOffCard, jobSubHot, dcChInfo, SUB_OFF_MAX,
-  SUB_HOT_KEY, SUB_HOT_LAST,
+  SUB_HOT_KEY, SUB_HOT_LAST, SUB_REDO_KEY,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
   subOffPlan,

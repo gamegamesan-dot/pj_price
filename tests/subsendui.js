@@ -171,7 +171,10 @@ console.log('\n=== ③の2 送ったカードをすべて今の形で書き直�
   const send=d.q.filter((x)=>x.u==='send')[0];
   ok(!!send&&send.b.redo===true&&send.b.approve===true,
      '★★★redo を付けて送る（送り直しではなく書き換え）');
-  ok(/2件を今の形に書き直しました/.test(d.note),'★★★結果を出す');
+  /* 8.33：結果は「書き換え◯件・残り◯件・失敗◯件」で出す。 */
+  ok(/書き換え 2件/.test(d.note)&&/残り 0件/.test(d.note)
+     &&/失敗 0件/.test(d.note)&&/書き直しました/.test(d.note),
+     '★★★結果を出す（書き換え◯件・残り◯件・失敗◯件）');
   /* 「いいえ」では書き直さない。 */
   await setup({ plan:PLAN, yes:false });
   await p.evaluate(async()=>{ await subPlanGo(); });

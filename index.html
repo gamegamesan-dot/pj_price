@@ -13793,9 +13793,15 @@ function mwAmzAuto(){
   if(!need){ mwAmzAtRender(); return; }
   mwAmzLoad(true);                          // 裏で取り直す
 }
-/* quiet … true のときは裏で取り直す（出ている一覧を消さない・8.32）。 */
+/* quiet … true のときは裏で取り直す（出ている一覧を消さない・8.32）。
+   8.32：**二重に取りに行かない**（自動で取りに行っている最中にボタンを
+   押しても、同じ取り込みを待つ）。押した回は終わったら候補の一覧に戻す。 */
+var mwAmzLoadP=null;             // いま走っている取り込み
+var mwAmzWantList=false;         // 手で押した（終わったら候補の一覧へ）
 function mwAmzLoad(quiet){
   var note=$('csvMwAmzListNote');
+  if(!quiet)mwAmzWantList=true;
+  if(mwAmzLoadP)return mwAmzLoadP;
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
@@ -13825,11 +13831,14 @@ function mwAmzLoad(quiet){
     mwAmzCut=Math.max(0,(+first.priced||0)-rows.length);
     return Object.assign({},first,{ rows:rows });
   };
-  return get1(0).then(step)
+  mwAmzLoadP=get1(0).then(step)
     .then(function(d){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
-      /* 8.32 裏で取り直したときは、開いている側（仕入れる一覧）を変えない。 */
-      if(!quiet)mwAmzView='list';       // 候補の一覧を出す（6.125）
+      /* 8.32 裏で取り直したときは、開いている側（仕入れる一覧）を変えない。
+         ただし待っているあいだにボタンを押されていたら候補の一覧に戻す。 */
+      if(!quiet||mwAmzWantList)mwAmzView='list';   // 候補の一覧（6.125）
+      mwAmzWantList=false;
+      mwAmzLoadP=null;
       mwAmzAt=new Date().toISOString();
       mwAmzAtMw=String(mwStaleAt||'');
       $('csvMwAmzMax').textContent=String(d.per_run||120);
@@ -13863,6 +13872,8 @@ function mwAmzLoad(quiet){
     })
     ['catch'](function(e){
       mwAmzBusy=false;
+      mwAmzWantList=false;
+      mwAmzLoadP=null;
       /* 裏で取り直して失敗したときは、出ている一覧を消さずに1行で知らせる。 */
       if(quiet){
         var el=$('mwAmzAtNote');
@@ -13877,6 +13888,7 @@ function mwAmzLoad(quiet){
       }
       note.textContent='⚠ 取り込めませんでした：'+e.message;
     });
+  return mwAmzLoadP;
 }
 /* ---- 出品の可否（6.101）----
    Worker の /mw/restrict が控えた結果（mw_restrict）を /mw/amz が一緒に返す。
@@ -17043,15 +17055,39 @@ function subSendGo(plan){
     +'\n\nよろしいですか？';
   if(!confirm(t))return;
   subNote('送っています…');
-  return mwPost('/sub/send',only?{ approve:true, plan:only }
-                                :{ approve:true }).then(function(r){
-    if(r&&r.error){
-      subNote('⚠ 送れませんでした：'+esc(String(r.detail||r.error)),1); return;
+  /* 8.33 件数が多いと pj-sync が 45秒で区切るので、残りがあれば続きを頼む
+     （書き直しと同じしかけ）。通信が切れたときの言い方もそろえる。 */
+  return subSendLoop(only?{ approve:true, plan:only }:{ approve:true },
+                     subNote,'送っています').then(function(g){
+    var sum='新しく <b>'+mwN(g.sent)+'件</b>・書き換え <b>'+mwN(g.edited)
+      +'件</b>・そのまま '+mwN(g.skipped)+'件'
+      +(g.left?('・残り <b>'+mwN(g.left)+'件</b>'):'')
+      +(g.fail?('・失敗 <b>'+mwN(g.fail)+'件</b>'):'');
+    if(g.netErr){
+      subNote('⚠ 通信が切れました（'+esc(String(g.error))+'）。'
+        +'<b>pj-sync 側では続いているかもしれません。'
+        +'少し待ってからもう一度押してください</b>'
+        +'（送ったぶんは二重に出ません）。<br>ここまで：'+sum,1);
+      return subPlanGo(true);
     }
-    subNote('✓ 新しく '+mwN(+r.sent||0)+'件・書き換え '+mwN(+r.edited||0)
-      +'件・そのまま '+mwN(+r.skipped||0)+'件');
+    if(g.error){
+      subNote('⚠ 送れませんでした：'+esc(String(g.error))
+        +'<br>ここまで：'+sum,1);
+      return subPlanGo(true);
+    }
+    if(g.fail){
+      subNote('⚠ '+esc(String(g.stop||''))+'で止まりました。'
+        +'もう一度押すと続きからやります。<br>'+sum,1);
+      return subPlanGo(true);
+    }
+    if(g.left){
+      subNote('⚠ 途中で区切りました（'+sum+'）。'
+        +'もう一度押すと続きからやります。',1);
+      return subPlanGo(true);
+    }
+    subNote('✓ '+sum);
     return subPlanGo(true);
-  })['catch'](function(e){ subNote('⚠ 送れませんでした：'+e.message,1); });
+  });
 }
 /* ===== 8.29（カジの依頼）買うかどうかの目安 =====
    せどりが初めての会員でも、カードだけで決められるようにする案内。
@@ -17433,26 +17469,108 @@ function subAllSend(){
   };
   return step(0);
 }
+/* ===== 8.33（カジの報告）1回で終わらない回は、続きを頼む =====
+   「送ったカードをすべて今の形で書き直す」を押したら
+   「送れませんでした：通信できませんでした（Load failed）」と出た
+   （書き換え 51件・iPhone の Safari 系）。
+   **原因**：pj-sync は1枚ごとに間隔をあける（8.28）ので、51件だと
+   1分を超える。「全プランに配る」には「1回 45秒・残りは画面が続きを
+   頼む」が入っていたが、**このボタンには入っていなかった**ので、
+   1回の通信で51件ぜんぶ送ろうとして端末側で切れた。
+   ここで「残り（left）があれば続きを頼む」を**1か所にまとめ**、
+   書き直しと「今すぐ送る」の両方で使う。 */
+var SUB_LOOP_ROUNDS=40;          // 続きを頼む回数の上限（念のため）
+var SUB_LOOP_GAP=600;            // 続きを頼むまでの待ち（ミリ秒）
+/* 通信そのものが切れたか（pj-sync 側では続いているかもしれない）。 */
+function subNetErr(e){
+  var m=String((e&&e.message)||e||'');
+  return /Load failed|Failed to fetch|NetworkError|network|timed? ?out|通信できませんでした/i
+    .test(m);
+}
+/* body を送り、残りがあるあいだ続きを頼む。
+   say(文, わるいか) で途中の様子を出す。返りは合計。 */
+function subSendLoop(body,say,name){
+  var got={ sent:0, edited:0, skipped:0, fail:0, left:0, rounds:0 };
+  var nm=String(name||'');
+  var step=function(){
+    got.rounds++;
+    return mwPost('/sub/send',body).then(function(r){
+      if(r&&r.error){
+        got.error=String(r.detail||r.error);
+        return got;
+      }
+      got.sent+=(+(r||{}).sent||0);
+      got.edited+=(+(r||{}).edited||0);
+      got.skipped+=(+(r||{}).skipped||0);
+      got.fail+=(+(r||{}).fail||0);
+      got.left=(+(r||{}).left||0);
+      if((+(r||{}).fail||0)){
+        got.stop=String((r||{}).stop_plan||'')
+          +((r||{}).stop_status?('（Discord の返事 '+r.stop_status+'）'):'');
+        return got;
+      }
+      if(got.left>0&&got.rounds<SUB_LOOP_ROUNDS){
+        if(say)say(nm+'…　'+(got.edited?('書き換え '+mwN(got.edited)+'件'):'')
+          +(got.sent?('・新しく '+mwN(got.sent)+'件'):'')
+          +'　<b>残り '+mwN(got.left)+'件</b>（続きを頼んでいます）');
+        return subWait(SUB_LOOP_GAP).then(step);
+      }
+      return got;
+    })['catch'](function(e){
+      got.netErr=subNetErr(e);
+      got.error=String((e&&e.message)||e);
+      return got;
+    });
+  };
+  return step();
+}
 /* 8.19（不具合2）送ったカードをすべて今の形で書き直す。
-   送り直しではなく**書き換え**（PATCH）。⚙を変えたときに押す。 */
+   送り直しではなく**書き換え**（PATCH）。⚙を変えたときに押す。
+   8.33：45秒で区切られるので、残りがあれば続きを頼む。
+   もう一度押したときも、**書き換え済みのカードは飛ばして続きから**
+   （pj-sync が「書き直しを始めた時刻」を控えている）。 */
 function subRedoGo(){
   if(roleDenyPrice('subNote'))return;
   if(!subReady())return;
   if(!confirm('送ったカードを、すべて今の形に書き直します。\n\n'
     +'※ 新しく送り直すのではなく、前のカードを書き換えます。\n'
-    +'※ 中身が同じカードも書き直します。\n\nよろしいですか？'))return;
+    +'※ 中身が同じカードも書き直します。\n'
+    +'※ 件数が多いと何回かに分けて頼みます（そのまま待ってください）。\n'
+    +'\nよろしいですか？'))return;
   subNote('書き直しています…');
-  return mwPost('/sub/send',{ approve:true, redo:true }).then(function(r){
-    if(r&&r.error){
-      subNote('⚠ 書き直せませんでした：'+esc(String(r.detail||r.error)),1);
-      return;
-    }
-    subNote('✓ '+mwN(+r.edited||0)+'件を今の形に書き直しました'
-      +((+r.sent)?('・新しく '+mwN(+r.sent)+'件'):'')+'。');
-    return subPlanGo(true);
-  })['catch'](function(e){
-    subNote('⚠ 書き直せませんでした：'+e.message,1);
-  });
+  var btn=$('subRedoBtn'); if(btn)btn.disabled=true;
+  return subSendLoop({ approve:true, redo:true },subNote,'書き直しています')
+    .then(function(g){
+      if(btn)btn.disabled=false;
+      var sum='書き換え <b>'+mwN(g.edited)+'件</b>'
+        +(g.sent?('・新しく '+mwN(g.sent)+'件'):'')
+        +'・残り <b>'+mwN(g.left)+'件</b>・失敗 <b>'+mwN(g.fail)+'件</b>';
+      if(g.netErr){
+        subNote('⚠ 通信が切れました（'+esc(String(g.error))+'）。'
+          +'<b>pj-sync 側では続いているかもしれません。'
+          +'少し待ってからもう一度押してください</b>'
+          +'（書き換え済みのカードは飛ばして続きからやります）。<br>'
+          +'ここまで：'+sum,1);
+        return subPlanGo(true);
+      }
+      if(g.error){
+        subNote('⚠ 書き直せませんでした：'+esc(String(g.error))
+          +'<br>ここまで：'+sum,1);
+        return subPlanGo(true);
+      }
+      if(g.fail){
+        subNote('⚠ '+esc(String(g.stop||''))+'で止まりました。'
+          +'もう一度押すと続きからやります。<br>'+sum,1);
+        return subPlanGo(true);
+      }
+      if(g.left){
+        subNote('⚠ 途中で区切りました（'+sum+'）。'
+          +'もう一度押すと続きからやります。',1);
+        return subPlanGo(true);
+      }
+      subNote('✓ 今の形に書き直しました（'+sum+'）。');
+      return subPlanGo(true);
+    });
 }
 /* 今日は送らない（印の付け外し）。 */
 function subSkipGo(){
@@ -26316,7 +26434,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v290';   // sw.js の const V と必ず同じ値にする
+var APP_V='v291';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
