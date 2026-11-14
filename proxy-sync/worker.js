@@ -8282,6 +8282,13 @@ function mwFeePick(d) {
    寸法が取れていない行は '' を返す（画面は⚙の既定を使う）。 */
 const MW_SIZE_S = { len: 25, wid: 18, hei: 2, g: 250 };
 const MW_SIZE_M = { len: 45, wid: 35, hei: 20, g: 9000 };
+/* 8.27（カジの依頼1）長い順に並べた採寸の i 番目（cm・小数1桁）。
+   3つそろっていないときは 0（＝分からない）。 */
+function mwDim2(cm, i) {
+  const a = (cm || []).map((x) => Number(x) || 0).filter((x) => x > 0)
+    .sort((x, y) => y - x);
+  return (a.length >= 3) ? Math.round(a[i] * 10) / 10 : 0;
+}
 function mwSizeTier(cm, g) {
   const a = (cm || []).map((x) => Number(x) || 0).filter((x) => x > 0)
     .sort((x, y) => y - x);
@@ -8662,6 +8669,10 @@ async function mwAsinFind(env, run, jans, dl, keep) {
           cm3: dm.cm.length >= 3
             ? Math.round(dm.cm[0] * dm.cm[1] * dm.cm[2]) : 0,
           long_cm: dm.cm.length ? Math.round(Math.max.apply(null, dm.cm) * 10) / 10 : 0,
+          /* 8.27（カジの依頼1）**短辺と厚さ**も控える（migrate-0060）。
+             送り方（クリックポストに入るか）は厚さで決まるので、
+             長辺と容積だけでは決められなかった。 */
+          wid_cm: mwDim2(dm.cm, 1), hei_cm: mwDim2(dm.cm, 2),
           gram: dm.g || 0, gram_src: dm.src || "",
           size_tier: mwSizeTier(dm.cm, dm.g) }, rk);
       for (const j of jset) if (part.indexOf(j) >= 0) {
@@ -8707,6 +8718,7 @@ async function mwAsinFind(env, run, jans, dl, keep) {
           ? Math.round(dm1.cm[0] * dm1.cm[1] * dm1.cm[2]) : 0,
         long_cm: dm1.cm.length
           ? Math.round(Math.max.apply(null, dm1.cm) * 10) / 10 : 0,
+        wid_cm: mwDim2(dm1.cm, 1), hei_cm: mwDim2(dm1.cm, 2),
         gram: dm1.g || 0, gram_src: dm1.src || "",
         size_tier: mwSizeTier(dm1.cm, dm1.g) },
       rankPick(it));
@@ -8963,6 +8975,14 @@ async function mwScanAsin(env, run, o, dl) {
   st.asked = all.length;
   if (!all.length) return st;
   if (Date.now() > dl) { st.stopped = "time"; st.left = st.asked; return st; }
+  /* 8.27 採寸の短辺・厚さ（migrate-0060）。無い D1 では書かない。 */
+  const hasDim = (await colOk(env, "mw_amz", "size_wid"))
+    && (await colOk(env, "mw_amz", "size_hei"));
+  const dimCol = hasDim ? ",size_wid,size_hei" : "";
+  const dimVal = hasDim ? ",?14,?15" : "";
+  const dimSet = hasDim
+    ? ", size_wid=COALESCE(NULLIF(excluded.size_wid,0), mw_amz.size_wid)"
+      + ", size_hei=COALESCE(NULLIF(excluded.size_hei,0), mw_amz.size_hei)" : "";
   const todo = all.slice(0, limit);
   /* 持ち時間を渡す。足りなければ引き直しを打ち切って残りを次回に回す（7.82）。 */
   const found = await mwAsinFind(env, run, todo, dl, keep);
@@ -9000,11 +9020,12 @@ async function mwScanAsin(env, run, o, dl) {
     st.ok_n++;
     /* 値段の列には触らない（③が入れる）。 */
     stmts.push(env.DB.prepare(
-      /* 7.108：寸法・重さ・サイズ区分も控える（在庫管理手数料の目安に使う）。 */
+      /* 7.108：寸法・重さ・サイズ区分も控える（在庫管理手数料の目安に使う）。
+         8.27：短辺・厚さ（migrate-0060）。列が無い D1 では書かない。 */
       `INSERT INTO mw_amz (jan,asin,name,rank,rank_cat,rank_sub,rank_sub_cat,
          err,checked_at,asin_at,created_at,size_tier,size_cm3,size_long,size_g,
-         size_src)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8,?9,?10,?11,?12,?13)
+         size_src${dimCol})
+         VALUES (?1,?2,?3,?4,?5,?6,?7,'',?8,?8,?8,?9,?10,?11,?12,?13${dimVal})
        ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
          name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
          rank=COALESCE(excluded.rank, mw_amz.rank),
@@ -9015,13 +9036,14 @@ async function mwScanAsin(env, run, o, dl) {
          size_cm3=COALESCE(NULLIF(excluded.size_cm3,0), mw_amz.size_cm3),
          size_long=COALESCE(NULLIF(excluded.size_long,0), mw_amz.size_long),
          size_g=COALESCE(NULLIF(excluded.size_g,0), mw_amz.size_g),
-         size_src=COALESCE(NULLIF(excluded.size_src,''), mw_amz.size_src),
+         size_src=COALESCE(NULLIF(excluded.size_src,''), mw_amz.size_src)${dimSet},
          err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
-      .bind(j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
+      .bind(...[j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
             f.rank_sub || null, f.rank_sub_cat || "", at,
             String(f.size_tier || ""), Number(f.cm3 || 0),
             Number(f.long_cm || 0), Number(f.gram || 0),
-            String(f.gram_src || "")));
+            String(f.gram_src || "")].concat(
+              hasDim ? [Number(f.wid_cm || 0), Number(f.hei_cm || 0)] : [])));
   }
   await runBatch(env, run, stmts);
   st.left = Math.max(0, st.asked - st.done);
@@ -10518,6 +10540,18 @@ async function mwSubPut(env, body, role) {
       ? "\n           px_hand=CASE WHEN ?8 < 0"
         + " THEN COALESCE(mw_sub.px_hand,0) ELSE ?8 END,"
       : "";
+    /* 8.27（カジの依頼2）送り方の手の上書き（migrate-0060）。
+       '' は「自動で決める」に戻す。'-' を入れた回は今の値をそのままにする
+       （点数や値段だけ直したときに消さないため）。 */
+    const wayOk = await colOk(env, "mw_sub", "ship_way");
+    /* ?N は 1 から**抜けなく**詰める（px_hand が無い D1 では ?8 になる）。 */
+    const wN = "?" + (handOk ? 9 : 8);
+    const wCol = wayOk ? ",ship_way" : "";
+    const wVal = wayOk ? (",NULLIF(" + wN + ",'-')") : "";
+    const wSet = wayOk
+      ? "\n           ship_way=CASE WHEN " + wN + " = '-' THEN mw_sub.ship_way"
+        + " ELSE NULLIF(" + wN + ",'') END,"
+      : "";
     const stmts = [];
     for (const x of list.slice(0, 200)) {
       const jan = String((x && x.jan) || "").replace(/\D/g, "");
@@ -10536,21 +10570,27 @@ async function mwSubPut(env, body, role) {
         res.rows.push({ jan: jan, error: "need_qty_price" });
         continue;
       }
+      /* 8.27 送り方（空＝自動／未指定＝今のまま）。表にある言い方だけ通す。 */
+      const way = (x.ship_way === undefined || x.ship_way === null) ? "-"
+        : (String(x.ship_way).trim()
+            ? (SHOPCSV.wayOf(x.ship_way) ? SHOPCSV.wayOf(x.ship_way).key : "-")
+            : "");
       const args = [jan, on, qty, px, gr, String(role || "admin"), at];
       if (handOk) args.push(hand);
+      if (wayOk) args.push(way);
       stmts.push(env.DB.prepare(
-        `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,created_at${hCol})
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?7${hVal})
+        `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,created_at${hCol}${wCol})
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?7${hVal}${wVal})
          ON CONFLICT(jan) DO UPDATE SET
            on_sale=excluded.on_sale,
            max_qty=COALESCE(NULLIF(excluded.max_qty,0), mw_sub.max_qty),
-           price=COALESCE(NULLIF(excluded.price,0), mw_sub.price),${hSet}
+           price=COALESCE(NULLIF(excluded.price,0), mw_sub.price),${hSet}${wSet}
            grades=excluded.grades,
            by_role=excluded.by_role, at=excluded.at`)
         .bind(...args));
       res.n++;
       res.rows.push({ jan: jan, on: on, max_qty: qty, price: px, grades: gr,
-                      hand: hand });
+                      hand: hand, ship_way: way });
     }
     await runBatch(env, run, stmts);
     run.notes.push("会員に出す印：" + res.n + "件");
@@ -10602,6 +10642,13 @@ async function mwSubList(env, url) {
     ? ", COALESCE(b.px_hand,0) AS px_hand" : "";
   const lCol = (await colOk(env, "mw_sub", "loaded_at"))
     ? ", b.loaded_at AS loaded_at" : "";
+  /* 8.27（カジの依頼2）送り方の手の上書きと、採寸の短辺・厚さ（migrate-0060）。
+     列が無い D1 でも落とさない。 */
+  const wCol = (await colOk(env, "mw_sub", "ship_way"))
+    ? ", COALESCE(b.ship_way,'') AS ship_way" : "";
+  const dCol = ((await colOk(env, "mw_amz", "size_wid"))
+    && (await colOk(env, "mw_amz", "size_hei")))
+    ? ", a.size_wid AS size_wid, a.size_hei AS size_hei" : "";
   /* 6.194（【4】）sub_order が無い D1（migrate-0053 の前）でも落とさない。 */
   const soldSel = (await colOk(env, "sub_order", "order_no"))
     ? "(SELECT COALESCE(SUM(o.qty),0) FROM sub_order o WHERE o.jan = b.jan)"
@@ -10617,7 +10664,8 @@ async function mwSubList(env, url) {
             s.wholesale AS wholesale,
             a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
             a.fee_total AS fee_total, a.size_tier AS size_tier,
-            a.size_g AS size_g, a.size_long AS size_long${hCol}${lCol},
+            a.size_g AS size_g, a.size_long AS size_long,
+            a.size_cm3 AS size_cm3${hCol}${lCol}${wCol}${dCol},
             /* 6.194：MW の CSV から消えた行（欠品）は、在庫を0として返す
                （7.141「MW在庫は今の数を」と同じ扱い。古い数を出さない）。 */
             s.gone_at AS gone_at,
@@ -10657,6 +10705,11 @@ async function mwSubList(env, url) {
     size_tier: String(r.size_tier || ""),
     size_g: Number(r.size_g) || 0,
     size_long: Number(r.size_long) || 0,
+    /* 8.27（カジの依頼1・3）送り方を画面で出すための採寸と手の上書き。 */
+    size_wid: Number(r.size_wid) || 0,
+    size_hei: Number(r.size_hei) || 0,
+    size_cm3: Number(r.size_cm3) || 0,
+    ship_way: String(r.ship_way || ""),
     /* 6.194（【4】）取り込んだ注文の点数と残り数（上限 − 注文）。 */
     sold: Number(r.sold) || 0,
     left: Math.max(0, (Number(r.max_qty) || 0) - (Number(r.sold) || 0)),
@@ -10765,6 +10818,21 @@ function subGameG(st) {
   const n = Number(v);
   return (isFinite(n) && n >= 0) ? Math.round(n) : SUB_GAME_G;
 }
+/* 8.27（カジの依頼）Shopify に出す重さの足し分（⚙ mwSubAddG・6.173）と、
+   送り方の判定の⚙。カードの送料は CSV と**同じ重さ**で出す。 */
+function subAddG(st) {
+  const n = Number((st || {}).mwSubAddG);
+  return (isFinite(n) && n > 0) ? Math.round(n) : 0;
+}
+/* 8.27 箱もの（クリックポスト以外）のときに「会員便の段が足りない」と
+   知らせる下限（⚙ mwSubBoxMin・既定 600円＝レターパックプラスの実費）。 */
+const SUB_BOX_MIN = 600;
+function subBoxMin(st) {
+  const v = (st || {}).mwSubBoxMin;
+  if (v === undefined || v === null || v === "") return SUB_BOX_MIN;
+  const n = Number(v);
+  return (isFinite(n) && n >= 0) ? Math.round(n) : SUB_BOX_MIN;
+}
 /* 8.17 カードの形が変わったことを控える（sync_state）。
    版が上がったら、すでに送ったカードも次の配信で書き換える。 */
 const SUB_CARDV_KEY = "sub.card.v";             // 配信時刻（JST の時）
@@ -10801,6 +10869,16 @@ async function subSettings(env) {
     /* ⚙に 0 と入れたら「一律の重さをやめる」（6.183 と同じ読み方）。
        そのときは採寸（size_g）から出す。空なら既定の 100g。 */
     gameG: subGameG(st),
+    /* 8.27（カジの依頼）送り方（送料の区分）の⚙。
+       ・addG      … Shopify に出す重さの足し分（CSV と同じ重さにする）
+       ・thinKishu … 薄物とみなす機種（空なら機種の表＝ゲームが薄物）
+       ・tiers     … 会員便の段（金額はここから取る）
+       ・boxMin    … 箱もので段が足りないときに知らせる下限 */
+    addG: subAddG(st),
+    thinKishu: String(st.mwSubThinKishu || ""),
+    tiersText: String(st.mwSubTiers || ""),
+    tiers: SHOPCSV.tiersOf(st.mwSubTiers || ""),
+    boxMin: subBoxMin(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
     /* 8.22（【2】）1点ものの配信先（#目玉商品-先行／#目玉商品）。 */
@@ -10843,8 +10921,21 @@ async function dcApi(env, run, method, path, body) {
 /* 配信できる商品。印あり＋Shopify に読み込み済み＋値段と数がある行だけ。 */
 async function subRows(env) {
   if (!(await subPostOk(env))) return [];
+  /* 8.27（カジの依頼2）送り方の手の上書き（migrate-0060）。
+     列が無い D1 でも落とさない。 */
+  const wayCol = (await colOk(env, "mw_sub", "ship_way"))
+    ? "COALESCE(b.ship_way,'')" : "''";
+  /* 8.27（カジの依頼1）採寸（3辺）。migrate-0060 で短辺・厚さを足した。
+     古い D1 では長辺と容積だけで「目安」になる。 */
+  const widCol = (await colOk(env, "mw_amz", "size_wid"))
+    ? "a.size_wid" : "0";
+  const heiCol = (await colOk(env, "mw_amz", "size_hei"))
+    ? "a.size_hei" : "0";
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.max_qty AS max_qty, b.price AS price,
+            ${wayCol} AS ship_way,
+            a.size_cm3 AS size_cm3, a.size_long AS size_long,
+            ${widCol} AS size_wid, ${heiCol} AS size_hei,
             COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
             b.put_at AS put_at,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
@@ -10883,6 +10974,12 @@ async function subRows(env) {
                          Number(r.price) || 0),
     size_tier: String(r.size_tier || ""),
     size_g: Number(r.size_g) || 0,
+    /* 8.27（カジの依頼1）送り方は**採寸**で決める（カードの送料の文）。 */
+    size_cm3: Number(r.size_cm3) || 0,
+    size_long: Number(r.size_long) || 0,
+    size_wid: Number(r.size_wid) || 0,
+    size_hei: Number(r.size_hei) || 0,
+    ship_way: String(r.ship_way || ""),
     /* 8.17 カードに出す Amazon の販売価格（カート価格・無ければ最安値）。 */
     amz_price: Number(r.amz_price) || Number(r.amz_low) || 0,
     amz_basis: String(r.basis || ""),
@@ -10993,9 +11090,15 @@ async function subPlanBuild(env) {
     out.plans.push({
       key: p.key, name: p.name, note: p.note, on: p.on, ch: p.ch,
       n: p.n, q: p.q, kinds: p.kinds, why: why,
-      items: pick.map((x) => ({
-        jan: x.jan, name: x.name, price: x.price, qty: x.qty,
-        left: x.left, gross: x.gross, sent: x.sent, same: x.same })),
+      items: pick.map((x) => {
+        /* 8.27（カジの依頼3）配る前に送料の区分が見えるように返す。 */
+        const sh = subShipInfo(x, cfg);
+        return {
+          jan: x.jan, name: x.name, price: x.price, qty: x.qty,
+          left: x.left, gross: x.gross, sent: x.sent, same: x.same,
+          ship: sh.name, ship_text: sh.text, ship_sure: sh.sure,
+          ship_why: sh.why, ship_g: sh.grams, ship_warn: sh.warn };
+      }),
       /* 送る（新しい）／書き換える（値段や数が変わった）／そのまま */
       add: pick.filter((x) => !x.sent).length,
       edit: pick.filter((x) => x.sent && !x.same).length,
@@ -11021,16 +11124,36 @@ async function subPlanBuild(env) {
 }
 /* 1件ぶんのカード（shared/subcard.js）。 */
 function subCardOf(x, p, cfg, note) {
-  /* 8.17 送料は「本数ごとの額」で出す。
-     ・ゲームソフト通常版は Shopify に出す重さ（⚙ mwSubGameG・既定100g）と
-       同じ決まりで出す（段の表は shared/shopcsv.js の1か所だけ）
-     ・プランごとに文を差し替えられる（⚙ subShip<Key>。
-       モニターは「4本以上 送料無料」など）
-     ・ゲーム以外は今までどおり採寸から出す（取れていなければ区分の名前） */
-  const game = MWFEE.genreOf(x) === "ゲーム";
-  const oneG = game ? (Number(cfg.gameG) || 0) : (Number(x.size_g) || 0);
+  /* 8.27（カジの依頼1）送料は**商品ごと**に出す。
+     ・送り方（クリックポスト／レターパックプラス／宅急便コンパクト／
+       宅配便）は採寸・機種・手の上書きで決める
+     ・金額は Shopify の会員便の段（⚙ mwSubTiers）から取る
+     ・重さは Shopify 用 CSV と**同じ決まり**（shopcsv.weightOf）で出す
+     ・大きさが分からない行は区分を名乗らず「お会計で表示」と出す
+     ・プランごとの⚙（subShip<Key>）は**薄物だけ**に使う
+     決まりは shared/shopcsv.js の1か所だけ（CSV のタグも同じ）。 */
   return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note,
-                           shipText: p.ship, oneG: oneG });
+                           shipText: p.ship, gameG: cfg.gameG,
+                           addG: cfg.addG, thinKishu: cfg.thinKishu,
+                           tiers: cfg.tiers });
+}
+/* 8.27（カジの依頼3）画面の「案」と「予定」に出す送料の区分。
+   配る前にカジが気づけるように、区分・決め方・足りない段を返す。 */
+function subShipInfo(x, cfg) {
+  const o = { gameG: cfg.gameG, addG: cfg.addG, thinKishu: cfg.thinKishu,
+              tiers: cfg.tiers };
+  const w = SHOPCSV.shipWay(x, o);
+  const g = Math.round(SHOPCSV.weightOf(x, o));
+  const st = g > 0 ? SHOPCSV.shipSteps(g, { tiers: cfg.tiers,
+                                            unit: SHOPCSV.shipUnit(x, o) })
+                   : null;
+  const yen1 = st ? Number(st.yen1) || 0 : 0;
+  /* 箱ものなのに段が安いと、送るたびに足が出る（⚙ mwSubBoxMin）。 */
+  const warn = (w.sure && w.name && !w.thin && yen1 && yen1 < cfg.boxMin)
+    ? ("会員便の段が ¥" + yen1 + "（" + w.name + "には足りません）") : "";
+  return { key: w.key, name: w.name, sure: !!w.sure, why: w.why,
+           grams: g, yen1: yen1, warn: warn,
+           text: SHOPCSV.shipLine(x, o) };
 }
 /* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
    カジが手で登録した商品を、会員向けに配信する。MW の無在庫とは別の表。
@@ -11452,7 +11575,12 @@ async function onePlanBuild(env, cfg, rows, sent) {
       items: pick.map((x) => ({
         jan: x.jan, one_id: x.one_id, name: x.name, price: x.price,
         qty: x.qty, left: x.left, gross: x.gross, sent: x.sent,
-        same: x.same })),
+        same: x.same,
+        /* 8.27（カジの依頼3）1点ものは**カジが選んだ区分**をそのまま出す。 */
+        ship: SHOPCSV.oneShipName(x.ship_kind),
+        ship_text: SHOPCSV.oneShipName(x.ship_kind),
+        ship_sure: !!String(x.ship_kind || "").trim(),
+        ship_why: "登録のときに選んだ区分", ship_warn: "" })),
       add: pick.filter((x) => !x.sent).length,
       edit: pick.filter((x) => x.sent && !x.same).length,
       keep: pick.filter((x) => x.same).length,
@@ -14280,6 +14408,12 @@ async function mwAmzList(env, url) {
   const kindCols = kindOk
     ? `\n            a.fee_kind AS fee_kind, a.fee_kind_at AS fee_kind_at,
             COALESCE(a.fee_mfn,0) AS fee_mfn,` : "";
+  /* 8.27（カジの依頼1・3）採寸の短辺・厚さ（migrate-0060）。
+     画面が送り方（送料の区分）を出すのに使う。列が無い D1 でも落とさない。 */
+  const dimOk = (await colOk(env, "mw_amz", "size_wid"))
+    && (await colOk(env, "mw_amz", "size_hei"));
+  const dimCols = dimOk
+    ? `\n            a.size_wid AS size_wid, a.size_hei AS size_hei,` : "";
   /* 7.130（【U の改】の1）会員に出す印・上限・販売価格（migrate-0051）。
      表が無い D1 でも落とさないよう、あるときだけ足す。 */
   const subOk = await mwSubOk(env);
@@ -14310,9 +14444,10 @@ async function mwAmzList(env, url) {
             a.fee_at AS fee_at, a.fee_err AS fee_err,${kindCols}
             /* FBA の内訳（7.106）。配送代行と在庫管理を分けて出す。 */
             a.fee_fba_ship AS fee_fba_ship, a.fee_fba_store AS fee_fba_store,
-            /* サイズ区分（7.108）。在庫管理手数料の目安に使う。 */
+            /* サイズ区分（7.108）。在庫管理手数料の目安に使う。
+               8.27：短辺・厚さは送り方（送料の区分）に使う。 */
             a.size_tier AS size_tier, a.size_cm3 AS size_cm3,
-            a.size_long AS size_long, a.size_g AS size_g,
+            a.size_long AS size_long, a.size_g AS size_g,${dimCols}
             /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
             COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
             i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,
@@ -16354,6 +16489,9 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["ship_way", "migrate-0060-ship-way.sql"],
+  ["size_wid", "migrate-0060-ship-way.sql"],
+  ["size_hei", "migrate-0060-ship-way.sql"],
   ["one_item", "migrate-0059-one-item.sql"],
   ["pic_key", "migrate-0059-one-item.sql"],
   ["os_item", "migrate-0058-os-item.sql"],

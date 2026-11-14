@@ -147,15 +147,20 @@ export const SAMPLE = [
   { jan: "4970381800123", name: "Nintendo Switch 有機EL 保護フィルム 2枚組",
     asin: "B09V3HN1YT", kishu: "周辺機器", sell: 1300, gross: 410, stock: 12,
     size_tier: "s", size_g: 60 },
+  /* 8.27：送料の区分は**採寸**で決まるので、見本にも採寸を入れておく
+     （入れないと、本番と同じく「送料はお会計で表示」になる）。 */
   { jan: "4535506307842", name: "ねんどろいど 初音ミク 2.0",
     asin: "B0BQ3Y6S9F", kishu: "フィギュア", sell: 7400, gross: 1830, stock: 2,
-    size_tier: "m", size_g: 520 },
+    size_tier: "m", size_g: 520,
+    size_long: 16, size_wid: 12, size_hei: 10 },
   { jan: "4902370552683", name: "ゼルダの伝説 知恵のかりもの（Switch）",
-    asin: "B0D7X5JTNP", kishu: "Switch", sell: 5600, gross: 1270, stock: 5,
-    size_tier: "s", size_g: 110 },
+    asin: "B0D7X5JTNP", kishu: "NS", sell: 5600, gross: 1270, stock: 5,
+    size_tier: "s", size_g: 110,
+    size_long: 17, size_wid: 10.5, size_hei: 1.5 },
   { jan: "4573102636072", name: "ポケモンカードゲーム 強化拡張パック",
     asin: "B0DH2K9SQY", kishu: "TCG", sell: 2100, gross: 630, stock: 8,
-    size_tier: "s", size_g: 90 },
+    size_tier: "s", size_g: 90,
+    size_long: 13, size_wid: 9, size_hei: 2 },
 ];
 
 /* ---- 1商品＝1つの箱（embed）---- */
@@ -171,6 +176,8 @@ export function testEmbed(it, opt) {
     price: x.sell, gross: x.gross,
     qty: Number(x.stock) || 0, left: Number(x.stock) || 0,
     size_tier: x.size_tier, size_g: x.size_g,
+    /* 8.27 送料の区分は採寸から決まる（本番と同じ shared/shopcsv.js）。 */
+    size_long: x.size_long, size_wid: x.size_wid, size_hei: x.size_hei,
   }, { maxQty: o.maxQty, shipJa: o.shipJa, color: Number(o.color) || TEST_COLOR,
        mark: TEST_MARK,
        note: TEST_MARK + "・販売価格と残り数は仮の値です" });

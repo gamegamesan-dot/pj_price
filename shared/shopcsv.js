@@ -138,13 +138,36 @@
                     { g: 0, yen: 600, name: "宅配便" }];
   var SHIP_MAX_N = 12;             // 何本ぶんまで見るか
   /* 1本 oneG の商品を n 本買ったときの段。 */
-  function tierOf(grams) {
+  function tierOf(grams, tiers) {
     var g = num(grams);
-    for (var i = 0; i < SHIP_TIERS.length; i++) {
-      var t = SHIP_TIERS[i];
+    var a = (tiers && tiers.length) ? tiers : SHIP_TIERS;
+    for (var i = 0; i < a.length; i++) {
+      var t = a[i];
       if (!t.g || g <= t.g) return t;
     }
-    return SHIP_TIERS[SHIP_TIERS.length - 1];
+    return a[a.length - 1];
+  }
+  /* 8.27 ⚙の「会員便の段」（例 `250:200／350:300／0:600`）を表にする。
+     読めない・空のときは既定（SHIP_TIERS）をそのまま返す。
+     **金額を増やすのはここだけ**（カードも CSV のメモも同じ表を読む）。 */
+  function tiersOf(text) {
+    var a = s(text).replace(/[\uff0f,]/g, "/").split("/");
+    var out = [], i, m;
+    for (i = 0; i < a.length; i++) {
+      m = /^\s*(\d+)\s*[:\uff1a]\s*(\d+)\s*$/.exec(a[i]);
+      if (!m) continue;
+      out.push({ g: Math.round(Number(m[1])), yen: Math.round(Number(m[2])),
+                 name: "" });
+    }
+    if (!out.length) return SHIP_TIERS;
+    /* 「この重さまで」の小さい順。最後の 0（上限なし）はいちばん後ろ。 */
+    out.sort(function (x, y) {
+      return (x.g || Infinity) - (y.g || Infinity); });
+    if (out[out.length - 1].g) out.push({ g: 0, yen: out[out.length - 1].yen,
+                                          name: "" });
+    for (i = 0; i < out.length; i++)
+      if (!out[i].name) out[i].name = SHIP_TIERS[Math.min(i, SHIP_TIERS.length - 1)].name;
+    return out;
   }
   /* 本数ごとの送料を「1〜2本 ¥200／3本 ¥300／4本以上 ¥600」の形にする。
      opt.free … この本数以上は送料無料（プランごとに変えられる・8.17）
@@ -155,10 +178,14 @@
     if (!(g > 0)) return null;
     var free = Math.round(num(o.free));
     var max = Math.round(num(o.max)) || SHIP_MAX_N;
+    /* 8.27 単位。ゲームソフトは「本」、それ以外は「点」（カジの依頼1）。 */
+    var u = s(o.unit) || "本";
+    /* 8.27 段の表は⚙で直せる（Shopify の会員便の段と合わせるため）。 */
+    var tiers = (o.tiers && o.tiers.length) ? o.tiers : SHIP_TIERS;
     var steps = [], cur = null, i, t, yen;
     for (i = 1; i <= max; i++) {
       if (free > 0 && i >= free) { yen = 0; t = { name: "送料無料" }; }
-      else { t = tierOf(g * i); yen = t.yen; }
+      else { t = tierOf(g * i, tiers); yen = t.yen; }
       if (cur && cur.yen === yen) { cur.to = i; continue; }
       cur = { from: i, to: i, yen: yen, name: t.name };
       steps.push(cur);
@@ -166,16 +193,171 @@
     /* いちばん上の段は「◯本以上」にする。 */
     if (steps.length) steps[steps.length - 1].to = 0;
     var txt = steps.map(function (x) {
-      var n = (x.to === 0) ? (x.from + "本以上")
-        : ((x.from === x.to) ? (x.from + "本") : (x.from + "〜" + x.to + "本"));
-      return n + " " + (x.yen ? ("¥" + x.yen) : "送料無料");
+      var n = (x.to === 0) ? (x.from + u + "以上")
+        : ((x.from === x.to) ? (x.from + u) : (x.from + "〜" + x.to + u));
+      return n + " " + (x.yen ? ("\u00a5" + x.yen) : "送料無料");
     }).join("／");
-    return { steps: steps, text: txt, name: steps[0].name, oneG: g };
+    return { steps: steps, text: txt, name: steps[0].name, oneG: g,
+             unit: u, yen1: steps[0].yen };
   }
 
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function s(v) { return (v === null || v === undefined) ? "" : String(v); }
   function digits(v) { return s(v).replace(/\D/g, ""); }
+
+  /* ===== 8.27（カジの依頼）送り方（送料の区分）=====
+     8.17 までは、会員カードの送料を**重さの段だけ**で出していた。
+     段の名前が「クリックポスト」だったので、S.H.Figuarts のような
+     **箱もの**にも「クリックポスト（1点 \u00a5200…）」と出てしまった。
+     クリックポストは **34\u00d725cm・厚さ3cm・1kg まで**なので箱は送れない。
+
+     直し方
+       ・**送り方（区分）は商品の形で決める**（この表）
+       ・**金額は Shopify の会員便の段から取る**（SHIP_TIERS・⚙で直せる）
+       ・大きさが分からない行は、送り方を**名乗らない**
+         （カードは「送料はお会計で表示（会員便・重さで計算）」）
+     表はこの1か所だけ（カード・CSV のタグ・画面の案がぜんぶここを読む）。
+
+     列の意味（0 は「制限なし」）
+       len/wid/hei … 長辺・短辺・厚さ（cm）
+       sum         … 三辺の合計（cm。宅配便のサイズ）
+       g           … 重さ（g）
+       thin        … 1（薄物）＝ CSV のタグが ship-small になる */
+  var SHIP_WAYS = [
+    { key: "cp", name: "クリックポスト", thin: 1,
+      len: 34, wid: 25, hei: 3, sum: 0, g: 1000 },
+    /* レターパックプラス（\u00a5600・4kg まで）。A4 の封筒に入る大きさなら
+       箱より安い。厚さは公称「制限なし」だが、封筒が閉まる厚さまでなので
+       **目安 7cm** で切る（ここを変えるときは README の送料の表も直す）。 */
+    { key: "letter", name: "レターパックプラス", thin: 0,
+      len: 34, wid: 24.8, hei: 7, sum: 0, g: 4000 },
+    /* 宅急便コンパクト（専用箱 25\u00d720\u00d75cm）。重さの制限は無い。 */
+    { key: "compact", name: "宅急便コンパクト", thin: 0,
+      len: 25, wid: 20, hei: 5, sum: 0, g: 0 },
+    { key: "box60", name: "宅配便（60サイズ）", thin: 0,
+      len: 0, wid: 0, hei: 0, sum: 60, g: 2000 },
+    { key: "box80", name: "宅配便（80サイズ）", thin: 0,
+      len: 0, wid: 0, hei: 0, sum: 80, g: 5000 },
+    { key: "box", name: "宅配便（100サイズ以上）", thin: 0,
+      len: 0, wid: 0, hei: 0, sum: 0, g: 0 }
+  ];
+  /* 1点ものの区分（ONE_SHIP）の言い方も受け取れるようにする。 */
+  var WAY_ALIAS = { small: "cp", box: "box60", "宅配便": "box60" };
+  /* 大きさが分からないときの文（カジの依頼1）。 */
+  var SHIP_UNSURE = "送料はお会計で表示（会員便・重さで計算）";
+  function wayOf(key) {
+    var k = s(key).trim();
+    if (!k) return null;
+    if (WAY_ALIAS[k]) k = WAY_ALIAS[k];
+    for (var i = 0; i < SHIP_WAYS.length; i++)
+      if (SHIP_WAYS[i].key === k || SHIP_WAYS[i].name === k) return SHIP_WAYS[i];
+    return null;
+  }
+  /* 採寸（3辺・cm）。長い順。3つそろっていないときは空。 */
+  function dimsOf(it) {
+    var r = it || {};
+    var a = [num(r.size_long), num(r.size_wid), num(r.size_hei)]
+      .filter(function (x) { return x > 0; })
+      .sort(function (x, y) { return y - x; });
+    return (a.length >= 3) ? a.slice(0, 3) : [];
+  }
+  /* その送り方に入るか。0 の欄は見ない（制限なし）。 */
+  function wayFits(w, cm, g) {
+    if (w.g && g && g > w.g) return false;
+    if (w.sum) {
+      if (!cm.length) return false;
+      return (cm[0] + cm[1] + cm[2]) <= w.sum;
+    }
+    if (!cm.length) return false;
+    if (w.len && cm[0] > w.len) return false;
+    if (w.wid && cm[1] > w.wid) return false;
+    if (w.hei && cm[2] > w.hei) return false;
+    return true;
+  }
+  /* 採寸から、入るいちばん小さい送り方。 */
+  function fitWay(cm, g) {
+    for (var i = 0; i < SHIP_WAYS.length; i++)
+      if (wayFits(SHIP_WAYS[i], cm, g)) return SHIP_WAYS[i];
+    return SHIP_WAYS[SHIP_WAYS.length - 1];
+  }
+  /* ⚙「薄物とみなす機種」（カンマ区切り）。空なら機種の表（mwfee.js）で見る。 */
+  function thinKishu(opt) {
+    return s((opt || {}).thinKishu).split(/[,\s\u3001\uff0c\uff0f\/]+/)
+      .map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+  }
+  /* 薄物（ゲームソフトのパッケージ版など）か。
+     ⚙の機種に入っていれば薄物。入っていなければ機種の表（ゲーム＝薄物）。 */
+  function isThinKind(it, opt) {
+    var r = it || {};
+    var k = s(r.kishu).trim().toLowerCase();
+    var list = thinKishu(opt);
+    if (k && list.length && list.indexOf(k) >= 0) return true;
+    if (k && list.length && list.indexOf("-" + k) >= 0) return false;
+    return isGame(r);
+  }
+  /* その行の送り方。
+       sure … true＝名乗ってよい（カードに区分の名前を出す）
+       why  … どこで決めたか（画面に出す）
+     ① 手で上書き（mw_sub.ship_way・1点ものの ship_kind）
+     ② 採寸（3辺）があれば、入るいちばん小さい送り方
+     ③ ゲームソフト（薄物）… 機種で見る（⚙で足せる）
+     ④ 容積（cm3）しか無いときは**目安**（sure は false）
+     ⑤ 何も無ければ名乗らない */
+  function shipWay(it, opt) {
+    var r = it || {}, o = opt || {};
+    var g = Math.round(num(r.size_g) || num(o.grams) || 0);
+    var hand = wayOf(r.ship_way || r.ship_kind);
+    if (hand) return { key: hand.key, name: hand.name, thin: !!hand.thin,
+                       sure: true, why: "手で選びました", way: hand };
+    /* 採寸があればそれがいちばん強い。**機種がゲームでも、限定版の箱は
+       クリックポストに入らない**ので、ここで箱と決まる（カジの依頼1）。 */
+    var cm = dimsOf(r);
+    if (cm.length) {
+      var w = fitWay(cm, g);
+      return { key: w.key, name: w.name, thin: !!w.thin, sure: true,
+               why: "採寸から（" + cm.join("\u00d7") + "cm"
+                 + (g ? ("・" + g + "g") : "") + "）", way: w };
+    }
+    if (isThinKind(r, o)) {
+      var cp = SHIP_WAYS[0];
+      return { key: cp.key, name: cp.name, thin: true, sure: true,
+               why: "ゲームソフト（薄物）", way: cp };
+    }
+    /* 容積だけのとき。厚さが分からないのでクリックポストは名乗らない。 */
+    var cm3 = num(r.size_cm3);
+    if (cm3 > 0) {
+      var e = cm3 <= 2500 ? SHIP_WAYS[2]
+        : (cm3 <= 8000 ? SHIP_WAYS[3]
+          : (cm3 <= 19000 ? SHIP_WAYS[4] : SHIP_WAYS[5]));
+      if (e.g && g && g > e.g) e = fitWay([], g) || e;
+      return { key: e.key, name: e.name, thin: false, sure: false,
+               why: "容積の目安（" + Math.round(cm3) + "cm3・厚さが分かりません）",
+               way: e };
+    }
+    /* 何も分からない。タグだけは今までどおり重さで分ける。 */
+    return { key: "", name: "", thin: !!(g && g <= 250), sure: false,
+             why: g ? ("重さ " + g + "g だけ（採寸がありません）")
+                    : "大きさも重さも分かりません", way: null };
+  }
+  /* 単位。ゲームソフトは「本」、それ以外は「点」（カジの依頼1）。 */
+  function shipUnit(it, opt) {
+    return isThinKind(it, opt) ? "本" : "点";
+  }
+  /* カードに出す送料の文。
+       opt.grams … 1点の重さ（無ければ weightOf で出す＝CSV と同じ重さ）
+       opt.free  … この点数以上は送料無料（プランごと）
+       opt.tiers … 会員便の段（⚙）
+     大きさが分からない行は区分を名乗らず、「お会計で表示」と出す。 */
+  function shipLine(it, opt) {
+    var r = it || {}, o = opt || {};
+    var w = shipWay(r, o);
+    var g = Math.round(num(o.grams) || weightOf(r, o));
+    if (!w.sure || !w.name || !(g > 0)) return SHIP_UNSURE;
+    var st = shipSteps(g, { free: o.free, tiers: o.tiers,
+                            unit: shipUnit(r, o) });
+    if (!st) return SHIP_UNSURE;
+    return w.name + "（" + st.text + "）";
+  }
 
   /* ---- Handle と SKU ---- */
   /* 同じ商品を出し直すときは**同じ Handle**で上書きする。 */
@@ -323,7 +505,10 @@
        合わなかった。ゲームソフト以外は今までどおり
        「Amazon の梱包重量（なければ商品の重量）＋足し分」。 */
     var gg = Math.round(num(o.gameG));
-    if (gg > 0 && isGame(r)) return gg;
+    /* 8.27（カジの依頼1）**採寸で箱と分かった行は一律にしない**。
+       限定版の大きな箱まで 100g で出していたので、Shopify の送料の段が
+       実際の送り方（宅配便）と合わなかった。 */
+    if (gg > 0 && isGame(r) && shipTag(r, o) === SHIP_SMALL) return gg;
     var g = Math.round(num((r || {}).size_g) || num(o.grams) || 0);
     if (g <= 0) return 0;              // 取れていない行は 0（画面が注意を出す）
     /* 足し分は0以上だけ（負の値で軽くはしない）。 */
@@ -336,16 +521,19 @@
   function shipTag(it, opt) {
     var o = opt || {};
     var r = it || {};
-    var cm = [num(r.size_long), num(r.size_wid), num(r.size_hei)]
-      .filter(function (x) { return x > 0; }).sort(function (a, b) { return b - a; });
+    /* 8.27 送り方（shipWay）から出す。カードの文と**同じ1か所**で決める
+       ので、「カードはクリックポスト／タグは ship-box」のような
+       食い違いが起きない（tests/ship.mjs が見張る）。
+       機種で薄物と決まる行（ゲームソフト）より**採寸のほうが強い**
+       （限定版の箱は ship-box）。 */
+    var cm = dimsOf(r);
     var g = num(r.size_g) || num(o.grams) || 0;
-    if (cm.length >= 3) {
-      return (cm[0] <= CP.len && cm[1] <= CP.wid && cm[2] <= CP.hei
-              && (!g || g <= CP.g)) ? SHIP_SMALL : SHIP_BOX;
-    }
+    if (cm.length) return fitWay(cm, g).thin ? SHIP_SMALL : SHIP_BOX;
     var t = s(r.size_tier).toLowerCase();
     if (t === "s") return SHIP_SMALL;
     if (t === "m" || t === "l") return SHIP_BOX;
+    var w = shipWay(r, o);
+    if (w.sure) return w.thin ? SHIP_SMALL : SHIP_BOX;
     /* 採寸も区分も無いときは重さで見る（ゲームソフトは 250g 以内）。 */
     if (g) return g <= 250 ? SHIP_SMALL : SHIP_BOX;
     return SHIP_SMALL;
@@ -766,6 +954,10 @@
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,
     SHIP_TIERS: SHIP_TIERS, tierOf: tierOf, shipSteps: shipSteps,
+    tiersOf: tiersOf, SHIP_WAYS: SHIP_WAYS, SHIP_UNSURE: SHIP_UNSURE,
+    wayOf: wayOf, dimsOf: dimsOf, wayFits: wayFits, fitWay: fitWay,
+    thinKishu: thinKishu, isThinKind: isThinKind, shipWay: shipWay,
+    shipUnit: shipUnit, shipLine: shipLine,
     CP: CP, NOTE_JA: NOTE_JA, kishuJa: kishuJa,
     NAME_NG: NAME_NG, PLAT_NG: PLAT_NG, TOKU_RE: TOKU_RE,
     splitToku: splitToku, tokuOf: tokuOf, tidy: tidy,

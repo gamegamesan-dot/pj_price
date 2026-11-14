@@ -20,7 +20,9 @@
   "use strict";
   /* カードの**形の版**（8.17）。ここを上げると、すでに送ったカードも
      次の配信で**新しい形に書き換わる**（pj-sync が見ている）。 */
-  var CARD_V = "6.194";   /* 6.194（【3】）商品名の掃除。次の配信で古いカードも書き換える */
+  /* 6.195（8.27）送料の文を商品ごとに出す。ここを上げたので、すでに送った
+     カードも次の配信で**新しい文に書き換わる**（二重には出ない）。 */
+  var CARD_V = "6.195";
   var EMB_MAX = 10;                // 1通に入れられる箱の数
   var EMB_CHARS = 5600;            // 1通の字数（6,000 の手前）
   var COLOR = 0x1f8a3d;            // 会員用のカードの色（緑）
@@ -112,19 +114,44 @@
     return (d.getUTCMonth() + 1) + "月" + d.getUTCDate() + "日 "
       + d.getUTCHours() + "時";
   }
-  /* 8.17 送料。ゲームソフト通常版は Shopify の重さ（1本 100g）と同じ決まりで
-     本数ごとの額を出す（「クリックポスト（1〜2本 ¥200／3本 ¥300／
-     4本以上 ¥600）」）。
-       opt.shipText … プランごとの⚙（入っていればそのまま出す）
-       opt.oneG     … 1本の重さ（ゲームソフトは⚙ mwSubGameG）
-       opt.free     … この本数以上は送料無料（プランごと）
-     重さが分からない行は今までどおり区分の名前（「—（まだ採寸していません）」）。 */
+  /* 8.27（カジの依頼1）送料は**商品ごと**に出す。
+     送り方（区分）と金額の決まりは shared/shopcsv.js の1か所だけ
+     （8.17 では重さの段の名前をそのまま出していたので、フィギュアの箱にも
+      「クリックポスト」と出てしまった）。
+       opt.shipText  … プランごとの⚙（**薄物だけ**に使う）か、
+                       1点ものでカジが選んだ区分の名前
+       opt.gameG     … ゲームソフト1本の重さ（⚙ mwSubGameG）
+       opt.addG      … Shopify に出す重さの足し分（⚙ mwSubAddG）
+       opt.thinKishu … 薄物とみなす機種（⚙ mwSubThinKishu）
+       opt.tiers     … 会員便の段（⚙ mwSubTiers。金額はここから取る）
+       opt.free      … この点数以上は送料無料（プランごと）
+       opt.grams     … 1点の重さを直に渡すとき（既定は CSV と同じ決まり）
+     大きさが分からない行は区分を名乗らず、
+     「送料はお会計で表示（会員便・重さで計算）」と出す。 */
   function shipText(x, o) {
     var opt = o || {};
-    var t = s(opt.shipText).trim();
-    if (t) return t.slice(0, 300);
-    var g = Math.round(num(opt.oneG)) || Math.round(num((x || {}).size_g));
     var S = shopMod();
+    var t = s(opt.shipText).trim();
+    /* 8.27（カジの依頼1）⚙の文は**薄物（クリックポストに入る商品）だけ**に
+       使う。プランの⚙に「クリックポスト（…）」と入れてあると、
+       フィギュアの箱にもその文が出てしまっていたため。
+       1点もの（カジが区分を選んだ行）は、その区分の名前をそのまま出す。 */
+    if (t) {
+      var ok = !(S && typeof S.shipWay === "function");
+      if (!ok) {
+        var w0 = S.shipWay(x || {}, opt);
+        ok = (w0.thin && w0.sure) || !!s((x || {}).ship_kind).trim();
+      }
+      if (ok) return t.slice(0, 300);
+    }
+    /* 送り方（区分）と金額は shared/shopcsv.js の1か所だけで決める。
+       金額は Shopify の会員便の段（⚙ opt.tiers）から取る。 */
+    if (S && typeof S.shipLine === "function") {
+      var line = S.shipLine(x || {}, opt);
+      if (line) return line;
+    }
+    var g = Math.round(num(opt.grams) || num(opt.oneG)
+                       || num((x || {}).size_g));
     if (g > 0 && S && typeof S.shipSteps === "function") {
       var st = S.shipSteps(g, { free: opt.free });
       if (st) return st.name + "（" + st.text + "）";

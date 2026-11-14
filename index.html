@@ -2130,19 +2130,20 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ・<span id="subOnTxtMonitor">配信中</span>）</label></div>
-        <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNLight">　1回の件数／1商品の数</label><input type="number" id="subNLight" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（<span id="subOnTxtLight">いまは止めています</span>）</label></div>
-        <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNStandard">　1回の件数／1商品の数</label><input type="number" id="subNStandard" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（<span id="subOnTxtStandard">いまは止めています</span>）</label></div>
-        <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（<span id="subOnTxtPremium">いまは止めています</span>・1点ものの先行）</label></div>
-        <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px">8.27：プランごとの「送料の文」は<b>薄物（クリックポストに入る商品）だけ</b>に使います。フィギュアや限定版の箱には、下の<b>送り方（送料の区分）</b>から出した文を出します（箱に「クリックポスト」と出ないように）。</div>
         <div class="note2" id="subCfgNote2" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
@@ -2152,6 +2153,15 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="mwSubGameG">ゲームソフト1本の重さ（Shopify 用）</label><input type="number" id="mwSubGameG" value="100" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
         <div class="note2" style="margin:0 0 6px"><b>機種がゲームの行</b>（NS／NS2／PS5 など）の <code>Variant Grams</code> は、Amazon の梱包重量ではなく<b>この値</b>にします。Shopify の送料は<b>本数ではなく合計の重さ</b>で段が変わるので、1本ごとにばらつく梱包重量のままだと本数と段が合いません（例：2本で段が上がってしまう）。<br><b>0 にすると今までどおり</b>（Amazon の梱包重量＋下の足し分）になります。ゲームソフト以外は下の足し分のままです。<br>送料の段は <b>0〜250g ¥200／251〜350g ¥300／351g〜 ¥600</b> の予定なので、100g なら 1〜2本 ¥200・3本 ¥300・4本以上 ¥600 になります（4本以上を無料にするなら、Shopify 側で「¥○○以上は送料無料」を足してください）。<br><b>限定版など重いものは機種がゲームでも 100g で出ます</b>。重さで分けたい商品は、この欄を 0 にするか、Shopify 側で個別に直してください。</div>
         <div class="row cfgprice"><label for="mwSubAddG">Shopify に出す重さの足し分</label><input type="number" id="mwSubAddG" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">g</span></div>
+        <!-- 8.27（カジの依頼）送り方（送料の区分）の決まり。
+             カードの送料の文・CSV のタグ・案の印が、ぜんぶここを読む。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>送り方（送料の区分）</b></div>
+        <div class="rowv cfgprice"><label for="mwSubTiers">会員便の段（Shopify と同じに）</label><input type="text" id="mwSubTiers" value="" placeholder="250:200／350:300／0:600" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px"><b>重さ:金額</b> を <b>／</b> で区切って、軽い順に書きます（<code>0</code> は「それより上はぜんぶ」）。空なら <b>250:200／350:300／0:600</b>。<br><b>カードに出す送料の金額はここから取ります。</b>Shopify の「マーケット → 日本 → 配送」の段と<b>同じ数字</b>にしてください（食い違うと、会員が見た額とお会計の額が変わります）。</div>
+        <div class="rowv cfgprice"><label for="mwSubThinKishu">薄物とみなす機種（足す分）</label><input type="text" id="mwSubThinKishu" value="" placeholder="NS,NS2,PS5" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px">クリックポスト（34×25cm・厚さ3cm・1kg まで）に入る商品の<b>機種</b>をカンマ区切りで足せます。空なら<b>機種の表のとおり</b>（ゲーム機の記号は薄物、フィギュア・プラモデルは箱）。<br>機種の前に <code>-</code> を付けると薄物から外します（例 <code>-NS2</code>）。<br><b>採寸（3辺）が取れている行は採寸が優先です</b>（機種がゲームでも、限定版の大きな箱は宅配便になります）。</div>
+        <div class="row cfgprice"><label for="mwSubBoxMin">箱ものの送料の下限</label><input type="number" id="mwSubBoxMin" value="600" step="50" min="0" max="5000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px">クリックポスト<b>以外</b>の送り方なのに、会員便の段がこの額より安いとき、案と一覧に <b style="color:var(--bad)">⚠ 送料が足りません</b> と出します（レターパックプラスは ¥600・宅急便コンパクトと宅配便はそれ以上かかります）。0 にすると知らせません。</div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
           <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
           Shopify は<b>重さの段</b>で送料を決めるので、ここを増やすと段が上に動きます。
@@ -3397,6 +3407,8 @@ var ADV_SUB=['subHour','subDomain',
              'mwSubGrossMin','mwSubRateMin','mwSubGrossFloor',
              /* 会員向け（Shopify）の重さ（6.173／6.183）。 */
              'mwSubGameG','mwSubAddG',
+             /* 8.27 送り方（送料の区分）の決まり。pj-sync がカードに使う。 */
+             'mwSubTiers','mwSubThinKishu','mwSubBoxMin',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              'osPricePct','osFixPct','osVendor','osType'];
@@ -6204,6 +6216,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subChPre','subChHot','subPreHours','subOneOpenGrades',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
+                 /* 8.27 送り方（送料の区分）の決まり。 */
+                 'mwSubTiers','mwSubThinKishu','mwSubBoxMin',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
@@ -15866,7 +15880,7 @@ function mwSubLoad(quiet){
 /* 行の印を保存する。 */
 /* hand … 1＝価格の欄を手で直した／0＝おすすめ値に戻す／
    省略＝今の印のまま（点数だけ直したときなど・6.185） */
-function mwSubSet(jan,on,qty,px,hand){
+function mwSubSet(jan,on,qty,px,hand,way){
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     $('mwSubNote').textContent='pj-sync のURLとキーを⚙設定に入れてください。';
@@ -15889,6 +15903,11 @@ function mwSubSet(jan,on,qty,px,hand){
   var body={ jan:j, on:on?1:0, max_qty:q, price:p };
   var mine={ on:on?1:0, max_qty:q, price:p };
   if(hand===1||hand===0){ body.hand=hand; mine.hand=hand; }
+  /* 8.27（カジの依頼2）送り方の手の上書き（''＝自動に戻す）。
+     渡さなかった回は pj-sync 側で今の値のままになる。 */
+  if(way!==undefined&&way!==null){
+    body.ship_way=String(way); mine.ship_way=String(way);
+  }
   mwSubMap[j]=Object.assign(mwSubMap[j]||{},mine);
   mwSubBarRender();
   return mwPost('/mw/sub',body)
@@ -15982,7 +16001,102 @@ function mwSubLine(r){
        （ぜんぶ 0g 扱いでいちばん安い段に入ってしまう）。 */
     +(mwSubNoG(r)?('<span class="note2" style="margin:0;color:var(--bad)">'
       +'⚠ 重さ未取得（送料の段がずれます）</span>'):'')
+    +'</div>'
+    /* 8.27（カジの依頼2・3）送り方（送料の区分）。配る前に見えるように
+       一覧にも出し、合っていなければここで直せる。 */
+    +mwSubWayLine(r);
+}
+/* 8.27 行の送り方の欄（区分・決め方・手の上書き）。 */
+function mwSubWayLine(r){
+  var jan=String((r||{}).jan||'');
+  var cur=mwSubOf(jan)||{};
+  return '<div style="display:flex;gap:6px;align-items:center;margin-top:2px;'
+    +'flex-wrap:wrap">'
+    +'<span class="note2" style="margin:0">送り方</span>'
+    +'<span id="mwSubWayBox_'+esc(jan)+'" style="display:flex;gap:6px;'
+    +'align-items:center;flex-wrap:wrap">'+mwSubWayHtml(r)+'</span>'
+    +'<select id="mwSubWay_'+esc(jan)+'"'
+    +' style="max-width:180px;padding:2px 4px;font-size:12px"'
+    +' onchange="mwSubWayChange(\''+esc(jan)+'\')">'
+    +'<option value="">自動（採寸・機種から）</option>'
+    +PJ_SHOPCSV.SHIP_WAYS.map(function(w){
+      return '<option value="'+esc(w.key)+'"'
+        +(String(cur.ship_way||'')===w.key?' selected':'')+'>'
+        +esc(w.name)+'</option>'; }).join('')
+    +'</select>'
     +'</div>';
+}
+/* 区分・決め方・送料の文・注意（行を作り直さずに書き換えられる形）。 */
+function mwSubWayHtml(r){
+  var jan=String((r||{}).jan||'');
+  var cur=mwSubOf(jan)||{};
+  var row=Object.assign({},r||{},{ ship_way:String(cur.ship_way||'') });
+  var sh=mwShipInfo(row);
+  return mwShipBadge(sh)
+    +'<span class="note2" style="margin:0;opacity:.8">'+esc(sh.why)+'</span>'
+    +'<span class="note2" style="margin:0">'+esc(sh.text)+'</span>'
+    +(sh.warn?('<span class="note2" style="margin:0;color:var(--bad)">⚠ '
+      +esc(sh.warn)+'</span>'):'');
+}
+/* 8.27 送り方を手で選び直したとき（''＝自動に戻す）。
+   行は作り直さず、その行の札と文だけ書き換える。 */
+function mwSubWayChange(jan){
+  var j=String(jan);
+  var cur=mwSubOf(j)||{};
+  var el=$('mwSubWay_'+j);
+  var way=el?String(el.value||''):'';
+  var done=function(){
+    var box=$('mwSubWayBox_'+j);
+    var row=(mwAmzRows||[]).filter(function(x){
+      return String((x||{}).jan||'')===j; })[0]||{ jan:j };
+    if(box)box.innerHTML=mwSubWayHtml(row);
+  };
+  return Promise.resolve(mwSubSet(j,!!cur.on,+cur.max_qty||0,+cur.price||0,
+                                  undefined,way))
+    .then(done)['catch'](done);
+}
+/* ===== 8.27（カジの依頼）送り方（送料の区分）=====
+   フィギュアの箱にも「クリックポスト」と出ていたので、送り方は
+   **商品の形**（採寸・機種・手の上書き）で決める。
+   決まりと表は shared/shopcsv.js の1か所だけ（カード・CSV のタグ・
+   pj-sync の予定が、ぜんぶ同じものを読む）。ここは**出し方だけ**。 */
+function mwShipOpt(){
+  var v=function(id){ var el=$(id); return el?el.value:''; };
+  return { gameG:mwSubGameG(), addG:mwSubAddG(),
+           thinKishu:v('mwSubThinKishu'),
+           tiers:PJ_SHOPCSV.tiersOf(v('mwSubTiers')) };
+}
+/* 箱ものの送料の下限（⚙・既定 600円）。0 なら知らせない。 */
+function mwShipBoxMin(){
+  var el=$('mwSubBoxMin');
+  if(!el||el.value==='')return 600;
+  var n=+el.value; return (isFinite(n)&&n>=0)?Math.round(n):600;
+}
+/* その行の送り方・重さ・金額・注意。案と一覧の両方で使う。 */
+function mwShipInfo(r){
+  var o=mwShipOpt();
+  var row=r||{};
+  var w=PJ_SHOPCSV.shipWay(row,o);
+  var g=Math.round(PJ_SHOPCSV.weightOf(row,o));
+  var st=(g>0)?PJ_SHOPCSV.shipSteps(g,{ tiers:o.tiers,
+                                        unit:PJ_SHOPCSV.shipUnit(row,o) }):null;
+  var yen1=st?(+st.yen1||0):0;
+  var min=mwShipBoxMin();
+  var warn=(w.sure&&w.name&&!w.thin&&yen1&&min&&yen1<min)
+    ?('送料が足りません（会員便の段 '+yen(yen1)+'／'+w.name+'）'):'';
+  if(!g)warn=warn||'重さ未取得（送料の段がずれます）';
+  return { key:w.key, name:w.name, sure:!!w.sure, why:w.why, grams:g,
+           yen1:yen1, warn:warn, text:PJ_SHOPCSV.shipLine(row,o) };
+}
+/* 区分の札（案・一覧で同じ見た目にする）。
+   はっきりしない行（採寸が無い行）は灰色で「要確認」と出す。 */
+function mwShipBadge(sh){
+  var s=sh||{};
+  if(!s.name)return '<span class="badge" style="background:#8a8a8a">'
+    +'送り方 未確認</span>';
+  return '<span class="badge" style="background:'
+    +(s.sure?'#2a6f9e':'#8a8a8a')+'">'
+    +esc(s.name)+(s.sure?'':'（要確認）')+'</span>';
 }
 /* 6.171：重さが取れていない行。Shopify の送料は「重さの段」で出すので、
    0g のままだと何本買っても いちばん安い段（1〜2本ぶん）になってしまう。
@@ -16032,6 +16146,9 @@ function mwSubOpt(){
            addG:mwSubAddG(),
            /* 6.183：ゲームソフト1本の重さ（0 なら今までどおり）。 */
            gameG:mwSubGameG(),
+           /* 8.27：薄物とみなす機種（⚙）。送料の区分のタグと、
+              「採寸で箱と分かった行は一律にしない」の判定に使う。 */
+           thinKishu:String(($('mwSubThinKishu')||{}).value||''),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
            /* 8.24：検索・サイトマップから隠す（seo.hidden）の列名。
@@ -16099,6 +16216,12 @@ function subDraftRows(){
       grades:String(cur.grades||''), is_game:(MWFEE.genreOf(r)==='ゲーム'),
       on:!!cur.on, sale:!!(st&&st.sale) };
     row.qty=SUBPLAN.qtyOf(row,null,o);
+    /* 8.27（カジの依頼3）配る前に送料の区分が見えるように、案にも付ける。
+       判定は shared/shopcsv.js の1か所だけ（pj-sync の予定も同じもの）。 */
+    var sh=mwShipInfo(Object.assign({},r,
+      { ship_way:String(cur.ship_way||'') }));
+    row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
+    row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
     return row;
   });
 }
@@ -16246,6 +16369,10 @@ function subDraftHtml(plans){
         /* 8.21（【1】）通常版か要確認・売れる速さ 0点の印。 */
         +(x.maybe?'<span class="badge" style="background:#b00020">通常版か要確認</span>':'')
         +(x.slow?'<span class="badge" style="background:#8a8a8a">売れる速さ 0</span>':'')
+        /* 8.27（カジの依頼3）送料の区分（配る前に気づけるように）。 */
+        +mwShipBadge({ name:x.ship, sure:x.ship_sure })
+        +(x.ship_warn?('<span class="badge" style="background:var(--bad)">⚠ '
+          +esc(String(x.ship_warn))+'</span>'):'')
         +'<br>'+yen(x.price)+'・'+mwN(x.qty)+'点まで'
         +(x.gross===null||x.gross===undefined?''
           :('・粗利 '+yen(x.gross)
@@ -16253,6 +16380,9 @@ function subDraftHtml(plans){
         +'・1日 '+(Math.round((+x.speed||0)*10)/10)+'点'
         +'・MW在庫 '+mwN(x.stock)+'点'
         +'<span style="opacity:.6"> '+esc(x.jan)+'</span>'
+        /* 8.27 カードに出る送料の文（そのまま出す）。 */
+        +'<br><span class="note2" style="margin:0">送料 '+esc(String(x.ship_text||''))
+        +'</span>'
         /* 8.20（【6】）出すプランを行ごとに変えられる。
            「ぜんぶのプラン」は grades を空にする（どのプランにも出る）。
            ライト・スタンダード・プレミアムを試すときに、
@@ -16553,6 +16683,13 @@ function subPlanRender(){
           +'　'+yen(+x.price||0)
           +'　残り '+(+x.left||0)+'点'
           +(x.gross!==null&&x.gross!==undefined?('　粗利の目安 '+yen(+x.gross)):'')
+          /* 8.27（カジの依頼3）送料の区分と、カードに出る文。
+             pj-sync が同じ判定（shared/shopcsv.js）で返したもの。 */
+          +'　'+mwShipBadge({ name:x.ship, sure:x.ship_sure })
+          +(x.ship_warn?('<span class="badge" style="background:var(--bad)">⚠ '
+            +esc(String(x.ship_warn))+'</span>'):'')
+          +'<br><span style="opacity:.8">送料 '
+          +esc(String(x.ship_text||''))+'</span>'
           +'</div>');
       });
       /* そのプランだけ送る（1つずつ試せるように）。 */
@@ -25496,7 +25633,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v284';   // sw.js の const V と必ず同じ値にする
+var APP_V='v285';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

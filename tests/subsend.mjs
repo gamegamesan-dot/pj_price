@@ -263,8 +263,10 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
   console.log('   '+JSON.stringify(f.value));
   ok(/4本以上 送料無料/.test(String(f.value||'')),
      '★★★⚙に入れた文をそのまま出す（モニターは4本以上 送料無料）');
-  /* ⚙の「ゲームソフト1本の重さ」を 0 にして、採寸も無い行は
-     今までどおり区分の名前（6.183 と同じ読み方）。 */
+  /* 8.27：⚙の「ゲームソフト1本の重さ」を 0 にして、採寸も無い行は
+     **送り方を名乗らない**（「送料はお会計で表示」）。
+     v284 までは「—（まだ採寸していません）」と出していたが、
+     会員が読む文なので「お会計で表示」に変えた。 */
   const e2=env0();
   await setCfg(e2,{ mwSubGameG:0 });
   await stock(e2,JAN2); await amz(e2,JAN2,{ tier:'' }); await sub(e2,JAN2);
@@ -275,8 +277,30 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
   const f2=(((dc[0]||{}).body||{ embeds:[{ fields:[] }] })
     .embeds[0].fields||[]).filter((x)=>x.name==='送料')[0]||{};
   console.log('   '+JSON.stringify(f2.value));
-  ok(/まだ採寸していません/.test(String(f2.value||'')),
-     '★★重さも区分も分からない行は今までどおり');
+  ok(/お会計で表示/.test(String(f2.value||'')),
+     '★★重さも大きさも分からない行は「送料はお会計で表示」（8.27）');
+  ok(!/クリックポスト/.test(String(f2.value||'')),
+     '★★★分からない行に送り方を名乗らない（8.27）');
+  /* 8.27：フィギュア（採寸あり）の箱に「クリックポスト」と出さない。 */
+  const e3=env0();
+  /* フィギュアはモニター（ゲームソフトだけ）に出ないので、
+     プレミアム（ぜんぶ）を動かして試す。 */
+  await setCfg(e3,{ subOnPremium:true, subChPremium:'2222222222' });
+  await stock(e3,JAN2,{ kishu:'figure' });
+  await amz(e3,JAN2); await sub(e3,JAN2,{ grades:'premium' });
+  await e3.DB.prepare(
+    `UPDATE mw_amz SET size_g=350, size_tier='m', size_long=18,
+       size_wid=11, size_hei=7 WHERE jan=?1`).bind(JAN2).run();
+  dc=[];
+  await api(e3,'/sub/send',{ approve:true });
+  const f3=(((dc[0]||{}).body||{ embeds:[{ fields:[] }] })
+    .embeds[0].fields||[]).filter((x)=>x.name==='送料')[0]||{};
+  console.log('   '+JSON.stringify(f3.value));
+  ok(/レターパックプラス/.test(String(f3.value||''))
+     &&!/クリックポスト/.test(String(f3.value||'')),
+     '★★★フィギュアの箱は採寸から区分を出す（カジの報告・8.27）');
+  ok(/点/.test(String(f3.value||''))&&!/本/.test(String(f3.value||'')),
+     '★★★ゲームソフト以外は「点」（8.27）');
 }
 
 console.log('\n=== ③の4 残り数は「上限 − 取り込んだ注文の点数」（8.19・不具合1）===');

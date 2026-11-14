@@ -667,6 +667,10 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   size_tier TEXT,          -- 's'(小型) / 'm'(標準) / 'l'(大型)
   size_cm3  INTEGER,       -- 体積（cm3）
   size_long REAL,          -- 長辺（cm）
+  /* 8.27（migrate-0060）短辺と厚さ（cm）。送り方（クリックポストに入るか）は
+     厚さで決まるので、長辺と容積だけでは決められなかった。 */
+  size_wid  REAL,          -- 短辺（cm）
+  size_hei  REAL,          -- 厚さ（cm）
   size_g    INTEGER,       -- 重さ（g）
   /* その重さがどこから来たか（7.112・migrate-0043）。
      'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
@@ -833,6 +837,9 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   put_at     TEXT,                         -- 最後に CSV に出した日時
   loaded_at  TEXT,                         -- Shopify に読み込んだ印（8.11）
   px_hand    INTEGER NOT NULL DEFAULT 0,   -- 1＝価格を手で直した（7.139）
+  /* 8.27（migrate-0060）送り方の手の上書き（空＝自動で決める）。
+     'cp'/'letter'/'compact'/'box60'/'box80'/'box'。表は shared/shopcsv.js。 */
+  ship_way   TEXT,
   at         TEXT,
   created_at TEXT
 );
