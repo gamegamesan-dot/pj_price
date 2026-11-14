@@ -1071,9 +1071,13 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
       <div id="csvMwBuyBar" style="display:none;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fffdf5"></div>
       <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を出す</button>
+        <!-- 8.32（カジの依頼1）タブを開いたら自動で出すので、
+             ボタンは「取り直す」として残す。 -->
+        <button class="btn" id="csvMwAmzLoad" style="flex:1">一覧を取り直す</button>
         <button class="btn" id="csvMwBuyShow" style="flex:1">仕入れる一覧</button>
       </div>
+      <!-- 8.32（カジの依頼4）いつの一覧か（と、取り直し中かどうか） -->
+      <div class="note2" id="mwAmzAtNote" style="margin-top:4px"></div>
       <!-- 6.170（【U の改】）会員に出す商品と Shopify 用 CSV -->
       <div data-toc="会員に出す（Shopify）"></div>
       <details class="exp" data-exp="subShop"><summary>説明</summary>
@@ -1886,6 +1890,11 @@ body.staff #syncOnHandFix{display:none !important}
         <details class="exp" data-exp="cfgAmzAuto"><summary>自動の取り直しの件数の説明</summary>
         <div class="note2 cfgprice" style="margin-top:2px">毎時37分の自動の取り直しで、1時間に進める件数は、下の<b>「MW候補の Amazon 価格を自動で取り直す」</b>で選びます（<b>JAN→ASIN の引き当ても含みます</b>）。<b>SP-API の上限があるので、段ごとに進める上限が違います</b>：ASIN の引き当ては 20件/回・5回/秒で軽いのでこの件数まで、<b>価格は 20件/回・0.1回/秒（10.5秒/回）</b>なので1回の持ち時間（45秒）では<b>60〜80件が上限</b>です。実際に進める見込みは「候補の件数を数える」の「1周（自動）」に出します。</div>
         </details>
+        <!-- 8.32（カジの依頼）仕入れタブを開いたときの自動の一覧。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>タブを開いたときの一覧</b></div>
+        <div class="chk cfgprice"><input type="checkbox" id="mwAmzAuto" checked><label for="mwAmzAuto" style="flex:1">仕入れタブを開いたら<b>一覧を自動で出す</b></label></div>
+        <div class="row cfgprice"><label for="mwAmzAutoMin">取り直す間隔</label><input type="number" id="mwAmzAutoMin" value="30" step="5" min="0" max="1440" inputmode="numeric"><span class="unit">分</span></div>
+        <div class="note2" style="margin:0 0 6px">タブを開くと、<b>前に見た一覧をすぐ出し</b>（この端末に覚えています）、裏で取り直して届いたら差し替えます（絞り込み・並べ替え・開いている件数・チェックは消えません）。<br>取り直すのは<b>この分数がたったとき</b>か、<b>MW の在庫CSVの取り込みが前の一覧より新しいとき</b>だけです（通信を増やさないため）。<b>0 なら時間では取り直しません</b>（MW の取り込みが新しいときだけ）。<br>「<b>仕入れる一覧</b>」を開いていたときは、そのまま出します。</div>
         <div class="note2" style="margin:4px 0 2px">「Amazon刈取」タブで使う設定です。
           手数料は <b>Amazon から商品ごとに取れた値</b>を優先し、取れていない行だけ
           下の一律の値で計算します（画面に「仮の手数料」と出ます・7.85）。</div>
@@ -3492,6 +3501,8 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
                 'mwNtDrop','mwNtBuy','mwNtNew',
+                /* 8.32 仕入れタブを開いたら一覧を自動で出す（この端末だけ）。 */
+                'mwAmzAuto',
                 /* 無在庫の仕入れ値に Amazon も入れるか（6.152／7.112）。
                    **Worker が段取り D と知らせで読む**ので必ず送る。 */
                 'mwAmzCost',
@@ -4755,6 +4766,11 @@ function switchTab(t){
   /* 仕入れタブ（6.116／6.150）。一覧を描き直し、取り込みの古さも見に行く。 */
   if(bu){
     if(BUY_SUB==='F'&&typeof mwViewRender==='function')mwViewRender();
+    /* 8.32（カジの依頼1）開いたら一覧を自動で出す（⚙でオフにもできる）。
+       覚えてある一覧をすぐ出し、要るときだけ裏で取り直す。 */
+    if(BUY_SUB==='F'&&typeof mwAmzAuto==='function'){
+      try{ mwAmzAuto(); }catch(e){}
+    }
     /* 無在庫（eBay）の候補一覧は、持っている行から描き直す。 */
     if(BUY_SUB==='M'&&typeof mwListRender==='function'
        &&typeof mwRows!=='undefined'&&mwRows.length)mwListRender();
@@ -6290,6 +6306,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
+                 /* 8.32 仕入れタブを開いたときの一覧（この端末だけの設定）。 */
+                 'mwAmzAutoMin',
                  /* 8.27 送り方（送料の区分）の決まり。 */
                  'mwSubTiers','mwSubThinKishu','mwSubBoxMin',
                  /* 8.29 買うかどうかの目安。 */
@@ -11643,7 +11661,10 @@ document.addEventListener('click',function(e){
   var pe=$('mwFixPrice'); if(pe)pe.value='';
   mwFixGo(k,0);
 });
-$('csvMwAmzLoad').onclick=mwAmzLoad;
+/* 8.32 押したときは**見える形**で取り直す（引数に event が入らないように
+   包む。mwAmzLoad(quiet) の quiet に MouseEvent が入ると裏の取り直しの
+   扱いになってしまう）。 */
+$('csvMwAmzLoad').onclick=function(){ mwAmzLoad(); };
 $('csvMwAmzCsv').onclick=mwAmzCsvGo;
 $('csvMwBuyShow').onclick=mwBuyShow;
 /* 「元に戻す」の帯（6.125）。 */
@@ -12674,6 +12695,12 @@ function mwStaleLoad(){
       if(d)mwCsvState=d.csv||null;
       if(d&&d.stale_h)MW_STALE_H=+d.stale_h||24;
       mwStaleRender();
+      /* 8.32（カジの依頼3）MW の取り込みが前の一覧より新しいかは、
+         この時刻が分かってから判断できる。刈取タブを開いているときだけ
+         もう一度見る（取り直しが要ればここで始まる）。 */
+      if(CUR_TAB==='F'&&typeof mwAmzAuto==='function'){
+        try{ mwAmzAuto(); }catch(e){}
+      }
     })
     ['catch'](function(){});
 }
@@ -13660,13 +13687,121 @@ function mwAmzQuery(priced,offset,limit){
     +(priced?'&priced=1':'')
     +'&limit='+(limit||MW_AMZ_PAGE)+'&offset='+(offset||0);
 }
-function mwAmzLoad(){
+/* ===== 8.32（カジの依頼）仕入れタブを開いたら一覧を自動で出す =====
+   いままでは開くたびに「一覧を出す」を押さないと何も出なかった。
+   MW の在庫CSVは定期的に自動で取り込んでいるので、開いたらすぐ見えるようにする。
+     ・開いたら mwAmzLoad を自動で呼ぶ（ボタンは「一覧を取り直す」で残す）
+     ・**前の一覧をこの端末に覚えて**おき、開いた瞬間はそれを出す。
+       裏で取り直して、届いたら差し替える（絞り込み・並べ替え・開いている
+       件数・チェックは消えない。どれも DOM か控えから作り直すので）
+     ・取り直すのは「⚙の分数がたった」か「MW の取り込みが前の一覧より
+       新しい」ときだけ（通信を増やさない）
+     ・「仕入れる一覧」を開いていたときは、そのまま出す
+   **pj-sync のキーはこの覚え書きに入れない**（今までどおり⚙の控えだけ）。 */
+var MW_AMZ_CACHE_KEY='pj:mwamz:v1';
+/* localStorage は端末によって上限が違う（5MB ほど）。
+   これより大きい一覧は覚えない（覚えられなくても動く）。 */
+var MW_AMZ_CACHE_MAX=3500000;
+var mwAmzAt='';                  // いま出ている一覧をいつ取ったか（ISO）
+var mwAmzAtMw='';                // そのときの MW の取り込み時刻
+var mwAmzBusy=false;             // 裏で取り直している
+function mwAmzAutoOn(){
+  var el=$('mwAmzAuto'); return el?!!el.checked:true;
+}
+function mwAmzAutoMin(){
+  var el=$('mwAmzAutoMin');
+  if(!el||el.value==='')return 30;
+  var n=+el.value; return (isFinite(n)&&n>=0)?Math.round(n):30;
+}
+/* いまの一覧をこの端末に覚える（入らなければ覚えないだけ）。 */
+function mwCacheSave(){
+  try{
+    if(!mwAmzRows.length)return false;
+    var txt=JSON.stringify({ v:1, at:mwAmzAt, mw_at:mwAmzAtMw,
+      got:mwAmzGot, cut:mwAmzCut, meta:mwAmzMeta, rows:mwAmzRows });
+    if(txt.length>MW_AMZ_CACHE_MAX){
+      try{ localStorage.removeItem(MW_AMZ_CACHE_KEY); }catch(e){}
+      return false;
+    }
+    lsSet(MW_AMZ_CACHE_KEY,txt);
+    return true;
+  }catch(e){ return false; }
+}
+/* 覚えてある一覧を出す（無ければ false）。 */
+function mwCacheLoad(){
+  try{
+    var d=JSON.parse(lsGet(MW_AMZ_CACHE_KEY)||'null');
+    if(!d||!Array.isArray(d.rows)||!d.rows.length)return false;
+    mwAmzRows=d.rows;
+    mwAmzMeta=d.meta||{};
+    mwAmzGot=+d.got||d.rows.length;
+    mwAmzCut=+d.cut||0;
+    mwAmzAt=String(d.at||'');
+    mwAmzAtMw=String(d.mw_at||'');
+    /* 行に相乗りしている印を当てる（mwAmzLoad と同じ決まり）。
+       正は D1（mw_buy・mw_sub）なので、このあと取り直して上書きされる。 */
+    mwAmzRows.forEach(function(r){
+      if(+r.buy_qty>0)mwBuyMap[String(r.jan)]=+r.buy_qty;
+      if(r.sub_on!==undefined)mwSubMap[String(r.jan)]={ on:+r.sub_on||0,
+        max_qty:+r.sub_max||0, price:+r.sub_price||0,
+        grades:String(r.sub_grades||''), put_at:String(r.sub_put_at||'') };
+    });
+    if(mwAmzRows.some(function(r){ return r.sub_on!==undefined; }))
+      mwSubTableOk=true;
+    return true;
+  }catch(e){ return false; }
+}
+/* 8.32（カジの依頼4）いつの一覧か（取り直し中はそう出す）。 */
+function mwAmzAtRender(){
+  var el=$('mwAmzAtNote'); if(!el)return;
+  if(mwAmzBusy){
+    el.innerHTML='<b>新しい一覧を取っています…</b>'
+      +(mwAmzAt?('　（いまは '+esc(jstShort(mwAmzAt))+'の一覧）'):'');
+    el.style.color=''; return;
+  }
+  if(!mwAmzRows.length){ el.innerHTML=''; return; }
+  el.innerHTML=(mwAmzAt?('<b>'+esc(jstShort(mwAmzAt))+'の一覧</b>')
+                       :'<b>覚えてあった一覧</b>')
+    +(mwAmzAtMw?('　（MW の取り込み '+esc(jstShort(mwAmzAtMw))+'）')
+               :(mwStaleAt?('　（MW の取り込み '+esc(jstShort(mwStaleAt))+'）'):''))
+    +'　<a href="#" onclick="mwAmzLoad();return false"'
+    +' style="text-decoration:underline dotted">取り直す</a>';
+  el.style.color='';
+}
+/* タブを開いたときの自動の一覧。 */
+function mwAmzAuto(){
+  if(!mwAmzAutoOn())return;                 // ⚙でオフ
+  /* 「仕入れる一覧」を開いていたときは、そちらを出したまま（依頼5）。 */
+  if(mwAmzView==='buy'){ mwAmzAtRender(); return; }
+  if(mwAmzBusy)return;                      // すでに取り直している
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ mwAmzAtRender(); return; }
+  /* まだ何も出ていなければ、覚えてある一覧をすぐ出す。 */
+  if(!mwAmzRows.length&&mwCacheLoad()){
+    mwAmzRender();
+    mwAmzAtRender();
+  }
+  /* 取り直すかどうか（通信を増やさないため、どちらかのときだけ）。 */
+  var need=!mwAmzRows.length;
+  var min=mwAmzAutoMin();
+  if(!need&&min>0){
+    var ms=mwAmzAt?(Date.now()-Date.parse(mwAmzAt)):NaN;
+    if(!isFinite(ms)||ms>min*60000)need=true;
+  }
+  if(!need&&mwStaleAt&&mwAmzAt
+     &&Date.parse(mwStaleAt)>Date.parse(mwAmzAt))need=true;
+  if(!need){ mwAmzAtRender(); return; }
+  mwAmzLoad(true);                          // 裏で取り直す
+}
+/* quiet … true のときは裏で取り直す（出ている一覧を消さない・8.32）。 */
+function mwAmzLoad(quiet){
   var note=$('csvMwAmzListNote');
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return;
   }
-  note.textContent='一覧を取り込んでいます…';
+  if(quiet){ mwAmzBusy=true; mwAmzAtRender(); }
+  else note.textContent='一覧を取り込んでいます…';
   var rows=[], first=null, page=0;
   var get1=function(off){
     return fetch(syncUrl()+'/mw/amz'+mwAmzQuery(1,off),
@@ -13683,7 +13818,7 @@ function mwAmzLoad(){
     if(!first)first=d;
     rows=rows.concat(d.rows||[]);
     page++;
-    if(note)note.textContent='一覧を取り込んでいます… '+rows.length+'件';
+    if(note&&!quiet)note.textContent='一覧を取り込んでいます… '+rows.length+'件';
     if(d.more&&page<MW_AMZ_PAGES)return get1(rows.length).then(step);
     mwAmzGot=rows.length;
     /* 値段ありの全件（SQL で数えた数）に届かなければ、そのぶんが残り。 */
@@ -13693,7 +13828,10 @@ function mwAmzLoad(){
   return get1(0).then(step)
     .then(function(d){
       mwAmzRows=d.rows||[]; mwAmzMeta=d;
-      mwAmzView='list';                 // 候補の一覧を出す（6.125）
+      /* 8.32 裏で取り直したときは、開いている側（仕入れる一覧）を変えない。 */
+      if(!quiet)mwAmzView='list';       // 候補の一覧を出す（6.125）
+      mwAmzAt=new Date().toISOString();
+      mwAmzAtMw=String(mwStaleAt||'');
       $('csvMwAmzMax').textContent=String(d.per_run||120);
       /* 行に入っている仕入れの印（端末をまたいで見える）を先に当てる。
          6.144：**印の正は D1（mw_buy）**。この一覧に出ていない行の印まで
@@ -13712,13 +13850,33 @@ function mwAmzLoad(){
           max_qty:+r.sub_max||0, price:+r.sub_price||0,
           grades:String(r.sub_grades||''), put_at:String(r.sub_put_at||'') };
       });
-      mwAmzRender();
-      mwBuyLoad(true).then(function(){ mwAmzRender(); });
-      mwSubLoad(true).then(function(){ mwAmzRender(); });
+      /* 8.32 開いている側をそのまま出し直す（絞り込み・並べ替え・
+         開いている件数・チェックは DOM と控えから作り直すので消えない）。 */
+      mwAmzBusy=false;
+      mwViewRender();
+      mwAmzAtRender();
+      try{ mwCacheSave(); }catch(e){}
+      mwBuyLoad(true).then(function(){ mwViewRender(); });
+      mwSubLoad(true).then(function(){ mwViewRender(); });
       /* 8.11／8.13（【Y】）配信の帯と、取り込んだ注文のまとめも出す。 */
       try{ subBarRender(); subOrdList(); }catch(e){}
     })
-    ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
+    ['catch'](function(e){
+      mwAmzBusy=false;
+      /* 裏で取り直して失敗したときは、出ている一覧を消さずに1行で知らせる。 */
+      if(quiet){
+        var el=$('mwAmzAtNote');
+        if(el){
+          el.innerHTML='⚠ 新しい一覧を取れませんでした（'+esc(e.message)
+            +'）。'+(mwAmzRows.length?'いまは覚えてあった一覧を出しています。':'')
+            +'　<a href="#" onclick="mwAmzLoad();return false"'
+            +' style="text-decoration:underline dotted">取り直す</a>';
+          el.style.color='var(--bad)';
+        }
+        return;
+      }
+      note.textContent='⚠ 取り込めませんでした：'+e.message;
+    });
 }
 /* ---- 出品の可否（6.101）----
    Worker の /mw/restrict が控えた結果（mw_restrict）を /mw/amz が一緒に返す。
@@ -26158,7 +26316,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v289';   // sw.js の const V と必ず同じ値にする
+var APP_V='v290';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
