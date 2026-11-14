@@ -1103,6 +1103,10 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="row"><label>Vendor（空のままでよい）</label><input type="text" id="mwSubVendor" value="" style="flex:1"></div>
       <div class="row"><label>Collection（空なら列を出さない）</label><input type="text" id="mwSubCollection" value="" style="flex:1"></div>
       <div class="row"><label>ロケーション名（在庫CSV用）</label><input type="text" id="mwSubLoc" value="" style="flex:1"></div>
+      <!-- 8.24 会員用の商品を、ストアの検索・サイトマップ・検索エンジンから
+           隠す（商品のメタフィールド seo.hidden に 1 を入れる）。
+           **列の名前はストアの書き出しに合わせる**ので、ここに入れてもらう。 -->
+      <div class="rowv"><label for="mwSubSeoHidden">検索から隠す列（seo.hidden）</label><input type="text" id="mwSubSeoHidden" value="" placeholder="Metafield: seo.hidden [number_integer]"><div class="note2" style="margin-top:2px">会員用の商品を<b>ストアの検索・サイトマップ・検索エンジン</b>から外します（会員用コレクションには出ます）。<br><b>先に</b> Shopify の <b>設定 → カスタムデータ → 商品</b>で <code>seo.hidden</code>（整数）の定義を作り、<b>商品 → エクスポート</b>で1件書き出して<b>そのままの列名</b>をここに貼ってください。<br>空のあいだは列を出しません（今までどおり）。くわしくは <code>pj_price_追加仕様_Shopify会員用の鍵.md</code>。</div></div>
       <div class="chk"><input type="checkbox" id="mwSubInvFirst"><label for="mwSubInvFirst" style="flex:1">在庫CSV：初めて置く（<code>Not stocked</code> を入れる）</label></div>
       <!-- 英語版：Shopify から出した翻訳CSVに英題を書き込む（【U の改】の3） -->
       <div class="note2" style="margin-top:8px">
@@ -6202,6 +6206,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubGameG',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
+                 /* 8.24：検索から隠す列（seo.hidden）の列名。 */
+                 'mwSubSeoHidden',
                  /* 6.193 海外向け Shopify（os-）。 */
                  'osPricePct','osFixPct','osVendor','osType',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
@@ -16028,6 +16034,9 @@ function mwSubOpt(){
            gameG:mwSubGameG(),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
+           /* 8.24：検索・サイトマップから隠す（seo.hidden）の列名。
+              空なら列を出さない。 */
+           seoHidden:String(($('mwSubSeoHidden')||{}).value||'').trim(),
            /* 6.178（【2】）仕入原価（Cost per item）と販売価格の決め方。 */
            px:mwSubPxOpt(),
            date:new Date() };
@@ -25487,7 +25496,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v282';   // sw.js の const V と必ず同じ値にする
+var APP_V='v283';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

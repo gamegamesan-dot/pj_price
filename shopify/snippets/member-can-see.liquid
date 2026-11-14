@@ -1,0 +1,46 @@
+{%- comment -%}
+  会員用商品を「一覧に出してよいか」（pj_price 8.24）
+  Shopify ストア：Omakase Ship ／ テーマ：Rise
+
+  コレクション・検索・おすすめ商品の**くり返しの中**で使います。
+  出すのは `yes` か `no` の文字だけです。
+
+  使い方
+    {%- capture can_see -%}
+      {%- render 'member-can-see', product: product -%}
+    {%- endcapture -%}
+    {%- if can_see | strip == 'yes' -%}
+      … ここで商品のカードを出す …
+    {%- endif -%}
+
+  決まりは member-gate.liquid と同じ（ログインしていない人・会員でない人・
+  プランが合わない人には出さない）。
+{%- endcomment -%}
+{%- liquid
+  assign ok = 'yes'
+  assign p = product
+  if p != blank and p.tags contains 'member-list'
+    if customer == blank
+      assign ok = 'no'
+    elsif customer.tags contains 'member-staff'
+      assign ok = 'yes'
+    elsif customer.tags contains 'member-list'
+      assign need = false
+      assign hit = false
+      for t in p.tags
+        assign head = t | slice: 0, 6
+        if head == 'grade-'
+          assign need = true
+          if customer.tags contains t
+            assign hit = true
+          endif
+        endif
+      endfor
+      if need and hit == false
+        assign ok = 'no'
+      endif
+    else
+      assign ok = 'no'
+    endif
+  endif
+-%}{{ ok }}

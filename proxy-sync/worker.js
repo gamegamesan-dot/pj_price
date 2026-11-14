@@ -53,6 +53,7 @@ import SUBPLAN from "../shared/subplan.js";
 import SUBCARD from "../shared/subcard.js";
 import SHOPCSV from "../shared/shopcsv.js";
 import OSSCSV from "../shared/osscsv.js";
+import MGATE from "../shared/mgate.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -12075,6 +12076,12 @@ function subOrderRows(text) {
   const iQty = at(["Lineitem quantity", "Quantity", "数量"]);
   const iPx = at(["Lineitem price", "Price"]);
   const iAt = at(["Created at", "Processed at", "作成日"]);
+  /* 8.24（【穴】）注文のタグ。Shopify Flow で**買った人のプラン
+     （grade-◯◯）を注文のタグに写して**もらうと、ここに入ってくる。
+     氏名・住所・メールは読まない（§8.13 のまま）。
+     Shopify の注文CSV は、2行目以降（同じ注文の別の品）では
+     注文ごとの欄が空なので、注文番号ごとに**最後に見えた値**を使う。 */
+  const iTag = at(["Tags", "タグ"]);
   if (iNo < 0 || iSku < 0 || iQty < 0)
     return { ok: false, error: "no_column", rows: [],
              detail: "注文番号（Name）・SKU（Lineitem sku）・数量"
@@ -12092,9 +12099,15 @@ function subOrderRows(text) {
     if (q <= 0) { skipped++; continue; }
     out.push({ order_no: no, sku: sku, jan: jan, qty: q,
                price: (iPx >= 0) ? Math.round(Number(r[iPx]) || 0) : 0,
-               at: (iAt >= 0) ? String(r[iAt] || "").trim() : "" });
+               at: (iAt >= 0) ? String(r[iAt] || "").trim() : "",
+               tags: (iTag >= 0) ? String(r[iTag] || "").trim() : "" });
   }
+  /* 注文番号ごとのタグ（空でない行から拾って、ぜんぶの行に配る）。 */
+  const byNo = {};
+  for (const r of out) if (r.tags && !byNo[r.order_no]) byNo[r.order_no] = r.tags;
+  for (const r of out) if (!r.tags) r.tags = byNo[r.order_no] || "";
   return { ok: true, rows: out, skipped: skipped, other: nojan,
+           tags_seen: Object.keys(byNo).length,
            lines: Math.max(0, rows.length - 1) };
 }
 /* 注文を D1 に入れる。すでにある (order_no, sku) は数えない。 */
@@ -12155,6 +12168,27 @@ async function jobSubOrders(env, body) {
       await runBatch(env, run, up);
       const e = await subEditLeft(env, run, Object.keys(touched));
       res.edited = e.edited; res.sold_out = e.sold_out;
+      /* 8.24（【穴】）プラン外の購入（注文のタグから見る）。 */
+      try {
+        const off = await subOffPlan(env, p.rows);
+        res.off_plan = off.n;
+        res.off_plan_rows = off.rows;
+        res.off_plan_no_tag = off.no_tag;
+        if (off.n) {
+          const t = ["⚠️ **プラン外の購入** … " + off.n + "件",
+            "商品のプランと、買った人のプラン（注文のタグ）が合いません。"
+              + "商品ページの鍵をすり抜けて（カートに直接入れて）"
+              + "買われた可能性があります。"];
+          for (const x of off.rows.slice(0, 10))
+            t.push("・注文 " + x.order_no + "　" + x.sku
+              + "　商品：" + x.item + "　買った人：" + x.buyer);
+          if (off.n > 10) t.push("ほか " + (off.n - 10) + "件");
+          await notify(env, run, t.join("\n"));
+          run.notes.push("プラン外の購入 " + off.n + "件を知らせました");
+        }
+      } catch (e) {
+        run.notes.push("off-plan: " + String((e && e.message) || e));
+      }
       /* MW の在庫が足りない商品（返金が必要）。 */
       res.short = await subShort(env, Object.keys(touched));
       if (res.short.length)
@@ -12172,6 +12206,72 @@ async function jobSubOrders(env, body) {
     res.error = String((e && e.message) || e);
   }
   return Object.assign(await saveRun(env, run), res);
+}
+/* ===== 8.24（【穴】）プラン外の購入を見つける =====
+   商品ページには鍵（テーマの Liquid）が掛かるが、「/cart/add」で
+   バリアントIDを直接カートに入れる**道は塞げない
+   （自前の Shopify Functions は Plus 専用・2026-11-14 に確認）。
+   そこで、買われたあとに**プラン外の購入**を見つけて社内用の Discord に
+   知らせる（カジの指示の代わりの形）。
+
+   買った人のプランは、**Shopify Flow で注文のタグに写してもらう**
+   （顧客タグ grade-◯◯ → 注文タグ）。注文CSV の Tags の欄から読む。
+   ・氏名・住所・メールは読まない（§8.13 のまま）
+   ・注文のタグに grade-◯◯ が無ければ「分からない」として何も言わない
+     （Flow を入れていないあいだは静かにしておく） */
+async function subOffPlan(env, rows) {
+  const out = { n: 0, rows: [], seen: 0, no_tag: 0 };
+  const list = (rows || []).filter((r) => r && r.jan);
+  if (!list.length) return out;
+  /* 会員用（sub-）の商品のプラン。grades が空なら「ぜんぶのプラン」。 */
+  const want = {};
+  const jans = [];
+  for (const r of list) {
+    if (String(r.jan).indexOf("one-") === 0) continue;
+    if (jans.indexOf(r.jan) < 0) jans.push(r.jan);
+  }
+  if (jans.length && await mwSubOk(env)) {
+    const step = d1Step(1);
+    for (let i = 0; i < jans.length; i += step) {
+      const part = jans.slice(i, i + step);
+      const q = await env.DB.prepare(
+        `SELECT jan, COALESCE(grades,'') AS grades FROM mw_sub
+          WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+      for (const y of ((q && q.results) || []))
+        want[String(y.jan)] = SHOPCSV.gradeTags(String(y.grades || ""))
+          .join(",");
+    }
+  }
+  /* 1点もの（one-）。先行のあいだは premium だけ、あいたら ⚙ のプラン。 */
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const hours = SUBPLAN.oneHours(st);
+  if (await oneOk(env)) {
+    for (const r of await oneRows(env, { all: true })) {
+      const t0 = Date.parse(String(r.pre_at || ""));
+      const open = isFinite(t0) && ((Date.now() - t0) / 3600000 >= hours);
+      want[r.jan] = SHOPCSV.gradeTags(SUBPLAN.oneGrades(st, open)).join(",");
+    }
+  }
+  const said = {};
+  for (const r of list) {
+    const w = want[String(r.jan)];
+    if (w === undefined) continue;          // pj の知らない商品
+    out.seen++;
+    const mine = MGATE.gradesOf(r.tags);
+    if (!mine.length) { out.no_tag++; continue; }   // Flow がまだ
+    /* 商品に grade が無い（ぜんぶのプラン）なら、だれが買ってもよい。 */
+    if (!MGATE.gradesOf(w).length) continue;
+    if (MGATE.canSee("member-list," + w, ["member-list"].concat(mine))) continue;
+    const key = r.order_no + "|" + r.sku;
+    if (said[key]) continue;
+    said[key] = 1;
+    out.n++;
+    if (out.rows.length < 20)
+      out.rows.push({ order_no: r.order_no, sku: r.sku, jan: r.jan,
+                      qty: r.qty, item: w, buyer: mine.join(",") });
+  }
+  return out;
 }
 /* 残り数が変わったカードを書き換える（0 なら完売）。 */
 async function subEditLeft(env, run, jans) {
@@ -17562,6 +17662,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
+  subOffPlan,
   onePut, oneList, oneMark, oneAmz, oneAmzPut, oneRows, oneOk, oneCardOf,
   onePlanBuild, dcCard, onePicKey, onePicName, b64Bytes,
   ONE_MAX, ONE_PIC_MAX,

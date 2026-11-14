@@ -595,7 +595,9 @@
     if (!s(o.collection)) cols = cols.filter(function (c) {
       return c !== "Collection";
     });
-    return toCsv(cols, oneRowsOf(items, o), o.style);
+    var rows = oneRowsOf(items, o);
+    cols = seoAdd(cols, rows, o);
+    return toCsv(cols, rows, o.style);
   }
 
   /* ---- CSV の文字 ---- */
@@ -614,6 +616,24 @@
     /* 公式どおり UTF-8・LF で保存する（画面側で BOM は付けない）。 */
     return out.join("\n") + "\n";
   }
+  /* ---- 8.24 検索・サイトマップから隠す（seo.hidden）----
+     会員用の商品は、ストアの検索・サイトマップ・検索エンジンに出したくない。
+     Shopify は商品のメタフィールド `seo.hidden` に 1 を入れると外してくれる。
+     **列の名前はストアの書き出しに合わせる**ので ⚙ で入れてもらう
+     （空のときは列を出さない＝今までどおり）。
+     ⚠ メタフィールドの定義（設定→カスタムデータ→商品）を先に作ること。 */
+  function seoCol(opt) { return s((opt || {}).seoHidden).trim(); }
+  function seoAdd(cols, rows, opt) {
+    var c = seoCol(opt);
+    if (!c) return cols;
+    for (var i = 0; i < (rows || []).length; i++) {
+      /* 画像だけの行（Handle だけの行）には入れない。 */
+      if (rows[i] && (rows[i]["Title"] !== undefined
+                      || rows[i]["URL handle"] !== undefined
+                      || rows[i]["Handle"] !== undefined)) rows[i][c] = "1";
+    }
+    return cols.concat([c]);
+  }
   function build(items, opt) {
     var o = opt || {};
     var cols = COLS.slice();
@@ -621,7 +641,9 @@
     if (!s(o.collection)) cols = cols.filter(function (c) {
       return c !== "Collection";
     });
-    return toCsv(cols, rowsOf(items, o), o.style);
+    var rows = rowsOf(items, o);
+    cols = seoAdd(cols, rows, o);
+    return toCsv(cols, rows, o.style);
   }
 
   /* ---- 在庫CSV（ロケーションが2つ以上の店）----
@@ -751,6 +773,7 @@
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
     maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
+    seoCol: seoCol, seoAdd: seoAdd,
     ONE_SHIP: ONE_SHIP, ONE_NOTE_JA: ONE_NOTE_JA,
     oneHandleOf: oneHandleOf, oneSkuOf: oneSkuOf, isOne: isOne,
     oneShipOf: oneShipOf, oneShipName: oneShipName, oneGramsOf: oneGramsOf,

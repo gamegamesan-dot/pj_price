@@ -1,0 +1,33 @@
+<!-- 会員向けのご案内（Shopify の ページ → /pages/members-only に貼る）
+     pj_price 8.24。Shopify の管理画面 → オンラインストア → ページ →
+     「ページを追加」→ タイトル「会員向けのご案内」、
+     ハンドルを members-only にして、この中身を <> （HTML）で貼ってください。
+     JavaScript は**文だけ**を切り替えるために使っています
+     （商品の中身はテーマ側で最初から出していません）。 -->
+<div style="max-width:680px;margin:0 auto;line-height:1.8">
+  <h2 id="mo-h">会員向けの商品です</h2>
+  <p id="mo-p">
+    この商品は<strong>会員向け</strong>です。ご購入には会員のご登録が必要です。
+  </p>
+  <p>
+    すでに会員の方は、<a href="/account/login">ログイン</a>してからもう一度
+    お開きください。
+  </p>
+  <p id="mo-plan" style="display:none">
+    <strong>このプランではご覧いただけません。</strong><br>
+    上のプランにお切り替えいただくと、この商品もご覧いただけます。
+    くわしくは Discord の案内をご覧ください。
+  </p>
+  <p><a href="/">トップへ戻る</a></p>
+</div>
+<script>
+  /* ?why=plan のときだけ「このプランではご覧いただけません」を出す。 */
+  try {
+    if (location.search.indexOf('why=plan') >= 0) {
+      document.getElementById('mo-h').textContent = 'このプランではご覧いただけません';
+      document.getElementById('mo-p').innerHTML =
+        'この商品は<strong>別のプランの会員向け</strong>です。';
+      document.getElementById('mo-plan').style.display = '';
+    }
+  } catch (e) {}
+</script>

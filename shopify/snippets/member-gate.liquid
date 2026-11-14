@@ -1,0 +1,50 @@
+{%- comment -%}
+  会員用商品の鍵（pj_price 8.24）
+  Shopify ストア：Omakase Ship ／ テーマ：Rise
+
+  これは「商品ページを見せてよいか」を決めるだけの部品です。
+  **飛ばす先の URL を出すだけ**で、商品の中身は何も出しません。
+
+  使い方（layout/theme.liquid）
+    {%- capture member_gate -%}{%- render 'member-gate' -%}{%- endcapture -%}
+    {%- assign member_gate = member_gate | strip -%}
+    … member_gate が空なら見せてよい。空でなければその URL へ飛ばす。
+
+  決まり（上から順に見る。pj の shared/mgate.js と同じ順）
+    ① 商品に member-list が無い → だれでも見られる
+    ② ログインしていない       → /account/login（戻り先つき）
+    ③ 顧客に member-staff      → ぜんぶ見られる（社内の確認用）
+    ④ 顧客に member-list が無い → /pages/members-only
+    ⑤ 商品の grade-◯◯ と顧客の grade-◯◯ が1つも合わない
+       → /pages/members-only?why=plan
+       商品に grade-◯◯ が1つも無いときは、会員ならだれでも見られる
+{%- endcomment -%}
+{%- liquid
+  assign gate = ''
+  assign p = product
+  if p != blank and p.tags contains 'member-list'
+    if customer == blank
+      assign back = p.url | default: request.path | url_encode
+      assign gate = routes.account_login_url | append: '?return_to=' | append: back
+    elsif customer.tags contains 'member-staff'
+      assign gate = ''
+    elsif customer.tags contains 'member-list'
+      assign need = false
+      assign hit = false
+      for t in p.tags
+        assign head = t | slice: 0, 6
+        if head == 'grade-'
+          assign need = true
+          if customer.tags contains t
+            assign hit = true
+          endif
+        endif
+      endfor
+      if need and hit == false
+        assign gate = '/pages/members-only?why=plan'
+      endif
+    else
+      assign gate = '/pages/members-only'
+    endif
+  endif
+-%}{{ gate }}
