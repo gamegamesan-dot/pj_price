@@ -116,6 +116,15 @@ select,input,button,textarea{max-width:100%}
 .stackrow input[type=file]{width:100%;font-size:13px}
 .stackrow .btn{width:100%}
 /* 取り込みの結果（件数・残り数）は、ボタンのすぐ下に目立つように出す。 */
+/* 8.23 プランのタブ（案と予定）。375px で1行に収まらないときは
+   **この帯だけ**横にスクロールする（ページは横に動かない）。 */
+.tabrow{display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;max-width:100%;
+  -webkit-overflow-scrolling:touch;padding:2px 0;margin:6px 0 2px}
+.tabbtn{flex:0 0 auto;white-space:nowrap;padding:6px 10px;font-size:12.5px;
+  border:1px solid var(--line);border-radius:14px;background:#fff;
+  color:#1c1c1c;cursor:pointer}
+.tabbtn.on{background:#1c1c1c;color:#fff;border-color:#1c1c1c;font-weight:bold}
+.tabbtn.off{opacity:.5}
 .okbox{margin-top:6px;padding:8px 10px;border-radius:4px;font-size:12.5px;
        line-height:1.6;border:1px solid var(--line);background:#f7fbff}
 .okbox.ok{border-color:var(--good);background:#f2fbf4}
@@ -2116,19 +2125,19 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
-        <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ・<span id="subOnTxtMonitor">配信中</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNLight">　1回の件数／1商品の数</label><input type="number" id="subNLight" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
-        <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（いまは止めています）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（<span id="subOnTxtLight">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNStandard">　1回の件数／1商品の数</label><input type="number" id="subNStandard" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
-        <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（いまは止めています）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（<span id="subOnTxtStandard">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
         <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
-        <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（いまは止めています・1点ものの先行）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（<span id="subOnTxtPremium">いまは止めています</span>・1点ものの先行）</label></div>
         <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="note2" id="subCfgNote2" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
@@ -6245,6 +6254,8 @@ function csvLoad(){
        if(typeof o.csvBoCols==='boolean')$('csvBoCols').checked=o.csvBoCols;
        if(typeof o.uiHideShopee==='boolean')$('uiHideShopee').checked=o.uiHideShopee;
        if(typeof o.uiHideEbay==='boolean')$('uiHideEbay').checked=o.uiHideEbay; }catch(e){}
+  /* 8.23（【5】）⚙の「◯◯に配信する」の文を、いまの印にそろえる。 */
+  try{ subOnTxt(); }catch(e){}
 }
 function csvSaveList(){ try{ lsSet(CSV_LIST_KEY,JSON.stringify(csvList)); }catch(e){} }
 /* ---- ゴミ箱 ----
@@ -6509,8 +6520,12 @@ ADV_SUBCHK.forEach(function(id){
   el.addEventListener('change',function(){
     if(cfgSaveNote())advNote('保存しています…（pj-sync にも送ります）');
     try{ subBarRender(); }catch(e){}
+    /* 8.23（【5】）「いまは止めています」→「配信中」に変える。 */
+    try{ subOnTxt(); }catch(e){}
   });
 });
+/* 8.23（【5】）開いたときの文もそろえる（⚙を読み込んだあと）。 */
+try{ subOnTxt(); }catch(e){}
 /* 値の欄（ドメイン・チャンネルID・件数・時刻）も、入れたらすぐ保存する。
    advCsvCfg() の input で pj-sync に送るので、ここでは端末の保存の
    できた・できないだけを見る。 */
@@ -16109,10 +16124,96 @@ function subDraftGo(){
     +mwN(+d.opt.wantQty||0)+'点の小さいほうを上限にしています。</span>');
   if(box)box.innerHTML=subDraftHtml(d.plans);
 }
+/* ===== 8.23（カジの依頼）プランのタブ =====
+   案と予定にプランが縦に全部並んでスマホで見にくかったので、
+   ［すべて］［モニター］［ライト］［スタンダード］［プレミアム］［目玉商品］
+   のタブで分ける。開いていたタブはこの端末に覚える（既定はモニター）。 */
+var SUB_TAB_KEY='pj:sub:tab:v1';
+function subTabs(){
+  var out=[{ key:'all', name:'すべて' }];
+  SUBPLAN.list({}).forEach(function(p){
+    out.push({ key:p.key, name:p.name });
+  });
+  out.push({ key:'one', name:'目玉商品' });
+  return out;
+}
+function subTab(){
+  var v='';
+  try{ v=String(lsGet(SUB_TAB_KEY)||''); }catch(e){ v=''; }
+  var ok=subTabs().filter(function(t){ return t.key===v; }).length>0;
+  return ok?v:'monitor';
+}
+function subTabSet(k){
+  try{ lsSet(SUB_TAB_KEY,String(k||'')); }catch(e){}
+}
+/* そのプランがいまのタブに入るか。'one' は1点もの（one_pre／one_open）。 */
+function subTabHit(planKey,tab){
+  var t=String(tab||subTab()), k=String(planKey||'');
+  if(t==='all')return true;
+  if(t==='one')return k.indexOf('one_')===0;
+  return k===t;
+}
+function subTabName(tab){
+  var t=String(tab||subTab());
+  var f=subTabs().filter(function(x){ return x.key===t; })[0];
+  return f?f.name:t;
+}
+/* タブの帯。cells は [{key,name,n,off}]。 */
+function subTabBar(kind,cells){
+  var now=subTab();
+  return '<div class="tabrow" data-tabrow="'+esc(kind)+'">'
+    +(cells||[]).map(function(c){
+      return '<button type="button" class="tabbtn'+(c.key===now?' on':'')
+        +(c.off?' off':'')+'" data-tab="'+esc(c.key)+'"'
+        +' onclick="subTabPick(\''+esc(c.key)+'\');return false">'
+        +esc(c.name)+' '+(c.off?'止めています':mwN(+c.n||0))+'</button>';
+    }).join('')+'</div>';
+}
+/* タブの件数（案・予定の両方で使う）。 */
+function subTabCells(plans){
+  var list=plans||[];
+  var n=function(f){
+    return list.filter(f).reduce(function(a,p){
+      return a+(((p.items)||[]).length); },0);
+  };
+  return subTabs().map(function(t){
+    if(t.key==='all')
+      return { key:'all', name:t.name, n:n(function(){ return true; }) };
+    var mine=list.filter(function(p){ return subTabHit(p.key,t.key); });
+    /* 止めている（印がオフ・チャンネルIDが無い）ときは薄く出す。 */
+    var on=mine.length?mine.some(function(p){ return !!p.on; }):false;
+    return { key:t.key, name:t.name,
+             n:n(function(p){ return subTabHit(p.key,t.key); }),
+             off:(mine.length>0&&!on) };
+  });
+}
+/* タブを選ぶ（覚えて、出ているものを出し直す）。 */
+function subTabPick(k){
+  subTabSet(k);
+  try{ if(subPlanData)subPlanRender(); }catch(e){}
+  try{
+    if(subDraftData&&$('subDraftBox')&&$('subDraftBox').innerHTML)
+      $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
+  }catch(e){}
+}
+/* ⚙の「◯◯に配信する（…）」の文（配信中／いまは止めています）。 */
+function subOnTxt(){
+  ['Monitor','Light','Standard','Premium'].forEach(function(U){
+    var c=$('subOn'+U), t=$('subOnTxt'+U);
+    if(!c||!t)return;
+    t.textContent=c.checked?'配信中':'いまは止めています';
+    t.style.color=c.checked?'var(--good)':'';
+  });
+}
 function subDraftHtml(plans){
   var out=[];
+  /* 8.23 プランのタブ。選んだタブのプランだけ出す。 */
+  var tab=subTab();
+  var bar=subTabBar('draft',subTabCells((plans||[]).filter(function(p){
+    return p.on; })));
   (plans||[]).forEach(function(p){
     if(!p.on)return;
+    if(!subTabHit(p.key,tab))return;
     out.push('<div class="note2" style="margin:6px 0 2px"><b>'+esc(p.name)
       +'</b>　'+mwN(p.items.length)+'件'
       +(p.over?('<span style="opacity:.7">（あと '+mwN(p.over)
@@ -16158,18 +16259,41 @@ function subDraftHtml(plans){
         +'</span></label>');
     });
   });
-  if(!out.length)return '<div class="note2">動かしているプランがありません'
+  var on=(plans||[]).filter(function(p){ return p.on; });
+  if(!on.length)return bar+'<div class="note2">動かしているプランがありません'
     +'（⚙で「配信する」を入れてください）。</div>';
-  return out.join('')
+  var n=subDraftPicked(tab).length;
+  if(!out.length){
+    /* 8.23 そのタブに出すものが無いときは、理由を出す。 */
+    var why=(tab==='one')
+      ? '1点ものは案に出ません（「<b>1点ものを登録する</b>」で登録して'
+        +'ください）。'
+      : (on.filter(function(p){ return subTabHit(p.key,tab); }).length
+          ? 'このプランに選べる商品がありません。'
+          : '<b>'+esc(subTabName(tab))+'</b> は止めています'
+            +'（⚙で「配信する」とチャンネルIDを入れてください）。');
+    return bar+'<div class="note2" style="margin-top:4px">'+why+'</div>';
+  }
+  return bar+out.join('')
     +'<div style="display:flex;gap:6px;margin-top:8px">'
     +'<button class="btn primary cfgprice" onclick="subDraftApply();return false"'
-    +' style="flex:1">この案で出す</button></div>';
+    +' style="flex:1">この案で出す（'
+    +(tab==='all'?'すべてのプラン':esc(subTabName(tab)))+'の '+mwN(n)
+    +'件）</button></div>'
+    +(tab==='all'?''
+      :('<div class="note2" style="margin-top:2px">いまは <b>'
+        +esc(subTabName(tab))+'</b> のタブです。押すと<b>このプランの '
+        +mwN(n)+'件だけ</b>を出します（ほかのプランは出しません）。'
+        +'ぜんぶ出すときは［すべて］のタブで押してください。</div>'));
 }
-/* 案のうち、チェックが入っている行だけ。 */
-function subDraftPicked(){
+/* 案のうち、チェックが入っている行だけ。
+   8.23 タブを渡すと、そのタブのプランだけを返す（既定はいまのタブ）。 */
+function subDraftPicked(tab){
+  var t=(tab===undefined||tab===null)?subTab():String(tab);
   var out=[];
   ((subDraftData||{}).plans||[]).forEach(function(p){
     if(!p.on)return;
+    if(!subTabHit(p.key,t))return;
     p.items.forEach(function(x){
       var el=$('subDraftChk_'+p.key+'_'+x.jan);
       if(el&&!el.checked)return;
@@ -16186,12 +16310,22 @@ function subDraftPicked(){
 function subDraftApply(){
   if(roleDenyPrice('subDraftNote'))return;
   if(!subDraftData){ subDraftNote('先に案を作ってください。',1); return; }
-  var pick=subDraftPicked();
-  if(!pick.length){ subDraftNote('出す行がありません（ぜんぶ外れています）。',1);
+  /* 8.23 いまのタブのぶんだけ出す（［すべて］ならぜんぶ）。 */
+  var tab=subTab();
+  var pick=subDraftPicked(tab);
+  if(!pick.length){
+    subDraftNote((tab==='all')
+      ?'出す行がありません（ぜんぶ外れています）。'
+      :('<b>'+esc(subTabName(tab))+'</b> に出す行がありません'
+        +'（［すべて］のタブなら出せる行があるかもしれません）。'),1);
     return; }
   var sum=pick.reduce(function(a,x){ return a+(+x.qty||0); },0);
   var allN=pick.filter(function(x){ return x.planKey==='all'; }).length;
   if(!confirm('この案で出します。\n\n'
+    +((tab==='all')
+      ? '【すべてのプラン】の行を出します。\n'
+      : ('【'+subTabName(tab)+'】のタブで押しました。\n'
+         +'このプランの行だけを出します（ほかのプランは出しません）。\n'))
     +'・商品：'+pick.length+'件（のべ '+sum+'点）\n'
     +(allN?('・そのうち '+allN+'件は「ぜんぶのプラン」に出します\n'):'')
     +'・「会員に出す」の印・販売数の上限・販売価格をまとめて付けます\n'
@@ -16366,11 +16500,24 @@ function subPlanGo(quiet){
   if(!quiet)subNote('調べています…');
   return mwGet('/sub/plan').then(function(d){
     subPlanData=d; subBarRender();
+    subPlanRender();
+    if(!quiet)subNote('✓ 予定を出しました。');
+  })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
+}
+/* 予定の中身を出す（8.23 タブを選び直したときにも、ここだけ出し直す）。 */
+function subPlanRender(){
+  var d=subPlanData; if(!d)return;
+  if(!$('subPlanList'))return;
+  {
     /* 8.20（【6】）**プランごとに見出し**を出す（ライト・スタンダード・
        プレミアムまで試すとき、どのプランのぶんか分かるように）。
-       0件のプランは**なぜ0件か**を出し、プランごとに送れるようにする。 */
+       0件のプランは**なぜ0件か**を出し、プランごとに送れるようにする。
+       8.23 タブで選んだプランだけ出す。 */
+    var tab=subTab();
+    var bar=subTabBar('plan',subTabCells(d.plans||[]));
     var rows=[];
     (d.plans||[]).forEach(function(p){
+      if(!subTabHit(p.key,tab))return;
       var items=p.items||[];
       /* 止めているプランは、理由だけ小さく出す（画面を長くしない）。 */
       if(!p.on&&!items.length){
@@ -16406,11 +16553,14 @@ function subPlanGo(quiet){
           +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
           +mwN(+p.edit||0)+'）</button>');
     });
-    $('subPlanList').innerHTML=rows.length?rows.join('')
-      :'<div class="note2">送る商品がありません（「Shopify に読み込みました」の'
-       +'印が付いた商品だけが載ります）。</div>';
-    if(!quiet)subNote('✓ 予定を出しました。');
-  })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
+    $('subPlanList').innerHTML=bar+(rows.length?rows.join('')
+      :('<div class="note2" style="margin-top:4px">'
+        +((tab==='all')
+          ? '送る商品がありません（「Shopify に読み込みました」の印が'
+            +'付いた商品だけが載ります）。'
+          : ('<b>'+esc(subTabName(tab))+'</b> のぶんはありません'
+             +'（［すべて］のタブで見てください）。'))+'</div>'));
+  }
 }
 /* 今すぐ送る（確認してから）。 */
 /* 8.20（【6】）plan を渡すと**そのプランだけ**送る
@@ -16431,7 +16581,12 @@ function subSendGo(plan){
   var ed=on.reduce(function(a,p){ return a+(+p.edit||0); },0);
   if(!add&&!ed){ subNote('送るものがありません（ぜんぶ送り済みです）。'); return; }
   var t=(only?('【'+on[0].name+'】だけに送ります。\n\n')
-             :'会員向けの Discord に送ります。\n\n')
+             :('会員向けの Discord に送ります。\n'
+               +((subTab()==='all')?'\n'
+                 :('※ タブ（'+subTabName(subTab())+'）に関わらず、'
+                   +'動いているプランぜんぶに送ります。\n'
+                   +'　1つだけ送るときは、予定の「◯◯だけ送る」を'
+                   +'押してください。\n\n'))))
     +on.map(function(p){ return '・'+p.name+'：新しく '+p.add+'件・書き換え '
       +p.edit+'件'; }).join('\n')
     +'\n\n※ 販売価格は Shopify に入っている値をそのまま出します。'
@@ -25332,7 +25487,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v281';   // sw.js の const V と必ず同じ値にする
+var APP_V='v282';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

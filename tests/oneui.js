@@ -213,12 +213,14 @@ await setup({ rows:[], plan:{ ok:true, table_ok:true, token:true,
     { key:'one_open', name:'目玉商品（スタンダード以上）', on:true, ch:'888',
       one:true, add:0, edit:0, keep:0, items:[],
       why:'先行のあと 20時間待ちです 1件' }] } });
-await p.evaluate(()=>subPlanGo());
+/* 8.23：予定はプランのタブで分かれたので、［目玉商品］のタブで見る。 */
+await p.evaluate(()=>{ subTabSet('one'); return subPlanGo(); });
 await p.waitForTimeout(400);
 {
   const t=await p.evaluate(()=>({
     txt:($('subPlanList').textContent||'').replace(/\s+/g,' '),
-    btn:Array.prototype.map.call(document.querySelectorAll('#subPlanList button'),
+    btn:Array.prototype.map.call(
+      document.querySelectorAll('#subPlanList button:not(.tabbtn)'),
       (b)=>b.textContent.replace(/\s+/g,' ')) }));
   console.log('   '+t.txt.slice(0,200));
   ok(/目玉商品-先行（プレミアム） 1件/.test(t.txt),

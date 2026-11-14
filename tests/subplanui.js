@@ -63,13 +63,14 @@ const setup=async(o)=>await p.evaluate((o)=>{
 console.log('=== ①② プランごとの見出しと「なぜ0件か」===');
 await setup({ plan:PLAN({}) });
 await openCsvBoxes(p);
-await p.evaluate(()=>subPlanGo());
+/* 8.23：予定はプランのタブで分かれた。ここは全プランを見るので［すべて］。 */
+await p.evaluate(()=>{ subTabSet('all'); return subPlanGo(); });
 await p.waitForTimeout(400);
 {
   const t=await p.evaluate(()=>({
     txt:($('subPlanList').textContent||'').replace(/\s+/g,' '),
     btn:Array.prototype.map.call(
-      document.querySelectorAll('#subPlanList button'),
+      document.querySelectorAll('#subPlanList button:not(.tabbtn)'),
       (b)=>b.textContent.replace(/\s+/g,' ')) }));
   console.log('   '+t.txt.slice(0,230));
   ok(/モニター 1件/.test(t.txt),'★★★モニターの見出しと件数');
@@ -132,6 +133,8 @@ await p.evaluate(()=>{
     { key:'light', name:'ライト', on:true, ch:'222', over:0, items:[
       { jan:'4902370550002', name:'商品B', price:4200, qty:2, gross:900,
         rate:25, speed:2, stock:12, sale:false }] }] };
+  /* 8.23：プランのタブで分かれたので、ここは［すべて］で見る。 */
+  subTabSet('all');
   $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
 });
 {
@@ -186,6 +189,8 @@ console.log('=== 8.21（【1】）通常版の印と速さ0の印 ===');
         { jan:'4902370550002', name:'ふつうのゲーム', price:3000, qty:1,
           gross:900, rate:30, speed:0, stock:9, sale:false,
           maybe:false, slow:true }] }] };
+    /* 8.23：プランのタブで分かれたので、ここは［すべて］で見る。 */
+    subTabSet('all');
     $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
     return { html:$('subDraftBox').innerHTML,
              cfg:subPickCfg().subNormalNg,

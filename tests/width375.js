@@ -162,5 +162,87 @@ console.log('\n=== ⑤ ⚙の長い選択肢（select）も収まる ===');
   ok(t.out.every((x)=>x.right<=t.W+0.6),
      '★★★いちばん長い選択肢でも右にはみ出さない');
 }
+console.log('\n=== ⑥ 8.23 プランのタブ（1行に収まらないときは帯だけ横に動く）===');
+{
+  const t=await p.evaluate(()=>{
+    switchTab('F');
+    document.querySelectorAll('details').forEach((d)=>{ d.open=true; });
+    /* 予定の中身を、タブが6つ出る形で作る。 */
+    const item=(jan)=>({ jan:jan, name:'商品'+jan, price:3000, qty:1,
+      left:1, gross:800, sent:false, same:false });
+    subPlanData={ ok:true, table_ok:true, token:true, day:'2026-11-14',
+      on:false, hour:8, pre:true, domain:'x.myshopify.com', rows:2, plans:[
+      { key:'monitor', name:'モニター', on:true, ch:'111', add:1, edit:0,
+        keep:0, why:'', items:[item('4902370550001')] },
+      { key:'light', name:'ライト', on:true, ch:'222', add:1, edit:0, keep:0,
+        why:'', items:[item('4902370550002')] },
+      { key:'standard', name:'スタンダード', on:true, ch:'', add:0, edit:0,
+        keep:0, items:[], why:'⚙にチャンネルID が入っていません' },
+      { key:'premium', name:'プレミアム', on:false, ch:'', add:0, edit:0,
+        keep:0, items:[], why:'⚙で「配信する」が入っていません' },
+      { key:'one_pre', name:'目玉商品-先行（プレミアム）', on:true, ch:'777',
+        one:true, add:0, edit:0, keep:0, items:[], why:'1点ものがありません' },
+      { key:'one_open', name:'目玉商品（スタンダード以上）', on:true,
+        ch:'888', one:true, add:0, edit:0, keep:0, items:[],
+        why:'まだ先行に出していません' }] };
+    subTabSet('all');
+    subPlanRender();
+    const row=document.querySelector('#subPlanList .tabrow');
+    const btns=Array.prototype.map.call(
+      document.querySelectorAll('#subPlanList .tabbtn'),(b)=>{
+        const r=b.getBoundingClientRect();
+        return { txt:b.textContent.replace(/\s+/g,' '),
+                 right:Math.round(r.right), left:Math.round(r.left) };
+      });
+    const rr=row.getBoundingClientRect();
+    const st=window.getComputedStyle(row);
+    return { n:btns.length, btns:btns,
+      rowRight:Math.round(rr.right), rowLeft:Math.round(rr.left),
+      overX:st.overflowX, wrap:window.getComputedStyle(
+        document.querySelector('#subPlanList .tabbtn')).whiteSpace,
+      scrollW:row.scrollWidth, clientW:row.clientWidth,
+      W:document.documentElement.clientWidth,
+      docW:document.documentElement.scrollWidth };
+  });
+  console.log('   '+JSON.stringify({ n:t.n, overX:t.overX, wrap:t.wrap,
+    scrollW:t.scrollW, clientW:t.clientW, W:t.W, docW:t.docW }));
+  ok(t.n===6,'★タブが6つ出ている');
+  ok(t.overX==='auto'||t.overX==='scroll',
+     '★★★1行に収まらないときは帯だけ横に動く');
+  ok(t.wrap==='nowrap','★★タブの文字は折り返さない');
+  ok(t.rowRight<=t.W+0.6&&t.rowLeft>=-0.6,
+     '★★★タブの帯そのものは画面に収まる');
+  ok(t.docW<=t.W+0.6,'★★★ページ全体は横に動かない');
+  /* 帯の中は、はみ出していてもよい（横に動かして見る）。 */
+  ok(t.scrollW>=t.clientW,'★タブは帯の中で並ぶ');
+}
+{
+  /* 案の側も同じ（タブの帯が収まり、ページは動かない）。 */
+  const t=await p.evaluate(()=>{
+    subDraftData={ at:'2026-11-14T00:00:00Z', rows:1,
+      opt:{ stockPct:30, qtyDays:2, wantQty:5 }, plans:[
+      { key:'monitor', name:'モニター', on:true, ch:'111', over:0, items:[
+        { jan:'4902370550001', name:'ゲームA', price:3000, qty:1, gross:800,
+          rate:30, speed:1, stock:9, sale:false, maybe:true, slow:true }] },
+      { key:'light', name:'ライト', on:true, ch:'222', over:0, items:[] }] };
+    subTabSet('monitor');
+    $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
+    const row=document.querySelector('#subDraftBox .tabrow');
+    const rr=row.getBoundingClientRect();
+    const all=Array.prototype.map.call(
+      /* タブの帯の中は横に動かして見るので、タブそのものは除く。 */
+      document.querySelectorAll('#subDraftBox button:not(.tabbtn),'
+        +' #subDraftBox select'),
+      (el)=>{ const r=el.getBoundingClientRect();
+              return Math.round(r.right); });
+    return { rowRight:Math.round(rr.right), max:Math.max.apply(null,all),
+      W:document.documentElement.clientWidth,
+      docW:document.documentElement.scrollWidth };
+  });
+  console.log('   '+JSON.stringify(t));
+  ok(t.rowRight<=t.W+0.6,'★★★案のタブの帯も収まる');
+  ok(t.max<=t.W+0.6,'★★★案のボタン・選択の欄も右にはみ出さない');
+  ok(t.docW<=t.W+0.6,'★★★ページ全体は横に動かない（案）');
+}
 await T.done();
 })();
