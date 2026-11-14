@@ -2158,6 +2158,17 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 6px">8.27：プランごとの「送料の文」は<b>薄物（クリックポストに入る商品）だけ</b>に使います。フィギュアや限定版の箱には、下の<b>送り方（送料の区分）</b>から出した文を出します（箱に「クリックポスト」と出ないように）。</div>
         <div class="note2" id="subCfgNote2" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
+        <!-- 8.31（カジの依頼3・4）受付終了の扱いと「今週のねらい目」 -->
+        <div class="note2" style="margin:10px 0 2px"><b>リストから外れた商品と、今週のねらい目</b></div>
+        <div class="row cfgprice"><label for="subOffDays">受付終了から消すまで</label><input type="number" id="subOffDays" value="0" step="1" min="0" max="180" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="note2" style="margin:0 0 6px">MW が欠品した・販売終了した・上限を0にした商品の<b>前に出したカード</b>は、配信のたびに「<b>この商品の受付は終わりました</b>」に<b>書き換え</b>ます（消しません）。<br><b>0 なら消しません（既定）。</b>日数を入れると、受付終了からその日数がたったカードを<b>消します</b>。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subHotOn"><label for="subHotOn" style="flex:1">週1回「今週のねらい目」を出す（<span id="subHotTxt">いまは止めています</span>）</label></div>
+        <div class="row cfgprice"><label for="subHotDow">　曜日／件数</label><select id="subHotDow"><option value="0" selected>日曜</option><option value="1">月曜</option><option value="2">火曜</option><option value="3">水曜</option><option value="4">木曜</option><option value="5">金曜</option><option value="6">土曜</option></select><input type="number" id="subHotN" value="3" step="1" min="1" max="10" inputmode="numeric"><span class="unit">件まで</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>◎（ねらい目）</b>の商品から選び、<b>すでに出したカードへのリンク</b>を1通にまとめて出します（新しいカードは作りません）。<b>先週選んだ商品は後ろに回します。</b><br>配信の時刻（上の「配信する時刻」）と同じ時刻に出ます。<b>@everyone・@here は使いません。</b></div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" onclick="subHotGo();return false" style="flex:1">今週のねらい目を今すぐ出す（お試し）</button>
+        </div>
+        <div class="note2" id="subHotNote" style="margin-top:2px"></div>
         <div class="note2" style="margin:10px 0 2px"><b>会員向け（Shopify）の重さ</b></div>
         <!-- 6.183（v263）ゲームソフトは一律の重さ。Shopify の送料は本数ではなく
              合計の重さで段が変わるので、1本ごとにばらつく Amazon の梱包重量だと
@@ -3451,6 +3462,8 @@ var ADV_SUB=['subHour','subDomain',
              'subStockPct','subWantQty','subQtyDays','subNormalNg',
              /* 8.22 1点ものの配信先と先行の時間。 */
              'subChPre','subChHot','subPreHours','subOneOpenGrades',
+             /* 8.31 受付終了の扱いと「今週のねらい目」。 */
+             'subOffDays','subHotDow','subHotN',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -3472,7 +3485,9 @@ var ADV_SUB=['subHour','subDomain',
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
-                'subPickNoAmz','subPickSkipBuy'];
+                'subPickNoAmz','subPickSkipBuy',
+                /* 8.31 今週のねらい目（既定オフ）。 */
+                'subHotOn'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6271,6 +6286,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subStockPct','subWantQty','subQtyDays','subNormalNg',
                  /* 8.22 1点ものの配信先と先行の時間。 */
                  'subChPre','subChHot','subPreHours','subOneOpenGrades',
+                 /* 8.31 受付終了の扱いと「今週のねらい目」。 */
+                 'subOffDays','subHotDow','subHotN',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 8.27 送り方（送料の区分）の決まり。 */
@@ -16322,6 +16339,9 @@ function subDraftGo(){
     +(+d.opt.qtyDays||0)+'日ぶん先に売れる分を引く）と、想定購入数 '
     +mwN(+d.opt.wantQty||0)+'点の小さいほうを上限にしています。</span>');
   if(box)box.innerHTML=subDraftHtml(d.plans);
+  /* 8.31（カジの依頼5）自動の回で何が起きるか（予定を読んでいれば出す）。 */
+  var au=subAutoHtml();
+  if(au)$('subDraftNote').innerHTML+=au;
 }
 /* ===== 8.23（カジの依頼）プランのタブ =====
    案と予定にプランが縦に全部並んでスマホで見にくかったので、
@@ -16403,6 +16423,61 @@ function subOnTxt(){
     t.textContent=c.checked?'配信中':'いまは止めています';
     t.style.color=c.checked?'var(--good)':'';
   });
+  /* 8.31 今週のねらい目（既定オフ）。 */
+  var h=$('subHotOn'), ht=$('subHotTxt');
+  if(h&&ht){
+    ht.textContent=h.checked?'出します':'いまは止めています';
+    ht.style.color=h.checked?'var(--good)':'';
+  }
+}
+/* 8.31（カジの依頼4）今週のねらい目を今すぐ出す（お試し）。
+   ⚙がオフでも force で出せる（カジが形を確かめるため）。 */
+function subHotGo(){
+  if(roleDenyPrice('subHotNote'))return;
+  if(!subReady())return;
+  var n=$('subHotNote');
+  var say=function(msg,bad){ if(!n)return;
+    n.innerHTML=msg||''; n.style.color=bad?'var(--bad)':''; };
+  if(!confirm('「今週のねらい目」を**いま**出します。\n\n'
+    +'※ ◎（ねらい目）の商品から最大 '+(+($('subHotN')||{}).value||3)
+    +'件を選び、すでに出したカードへのリンクを1通にまとめて出します。\n'
+    +'※ 新しいカードは作りません。@everyone は使いません。\n\n'
+    +'よろしいですか？'))return;
+  say('出しています…');
+  return mwPost('/sub/hot',{ force:true }).then(function(r){
+    if(r&&r.error){
+      say('⚠ 出せませんでした：'+esc(String(r.detail||r.error)),1); return;
+    }
+    if(!(+r.sent||0)){ say('出しませんでした：'+esc(String(r.why||'')),1); return; }
+    say('✓ '+mwN(+r.sent||0)+'通 出しました'
+      +((r.plans||[]).length?('（'+(r.plans||[]).map(function(p){
+        return esc(p.name)+' '+mwN(+p.n||0)+'件'; }).join('　')+'）'):''));
+  })['catch'](function(e){ say('⚠ 出せませんでした：'+esc(e.message),1); });
+}
+/* 8.31（カジの依頼5）自動の回で何が起きるか（1行）。
+   予定（/sub/plan）が返す auto をそのまま出す。 */
+function subAutoHtml(){
+  var a=((subPlanData||{}).auto)||null;
+  if(!a)return '';
+  var hh=(+a.hour<10?'0':'')+(+a.hour||0);
+  return '<div class="note2" style="margin:4px 0 0;padding:6px;'
+    +'border:1px solid var(--line);border-radius:6px;background:#fbfbff">'
+    +'<b>自動の回（平日 '+esc(hh)+':00）</b>　'
+    +(a.on?('新しく <b>'+mwN(+a.add||0)+'件</b>・書き換え <b>'
+      +mwN(+a.edit||0)+'件</b>')
+          :'<b style="color:var(--bad)">⚙で自動配信を止めています</b>')
+    +'<br>予告：'
+    +(!a.pre_on?'⚙で止めています'
+      :(a.pre?('<b>出します</b>（'+mwN(+a.pre_n||0)+'件'
+        +((a.pre_plans||[]).length?('・'+esc((a.pre_plans||[]).join('・'))):'')
+        +'）')
+             :'<b>出しません</b>（翌朝に新しく出るカードがありません）'))
+    +'　／　今週のねらい目：'
+    +(a.hot_on?('<b>出します</b>（'+esc(['日','月','火','水','木','金','土'][
+      +a.hot_dow||0])+'曜・最大 '+mwN(+a.hot_n||3)+'件）'):'止めています')
+    +(a.off_days?('　／　受付終了のカードは '+mwN(+a.off_days)
+      +'日で消します'):'　／　受付終了のカードは残します')
+    +'</div>';
 }
 function subDraftHtml(plans){
   var out=[];
@@ -16769,7 +16844,7 @@ function subPlanRender(){
           +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
           +mwN(+p.edit||0)+'）</button>');
     });
-    $('subPlanList').innerHTML=bar+(rows.length?rows.join('')
+    $('subPlanList').innerHTML=subAutoHtml()+bar+(rows.length?rows.join('')
       :('<div class="note2" style="margin-top:4px">'
         +((tab==='all')
           ? '送る商品がありません（「Shopify に読み込みました」の印が'
@@ -17063,6 +17138,8 @@ function subAllHtml(d){
     out.push('<div class="note2" style="color:var(--bad)">⚠ ボットの'
       +'トークン（DISCORD_BOT_TOKEN）が pj-sync に入っていません。'
       +'送れません。</div>');
+  /* 8.31（カジの依頼5）自動の回で何が起きるかも出す（手で送る前に見える）。 */
+  out.push(subAutoHtml());
   var jobs=subAllJobs();
   ((d.plans||[])).forEach(function(p){
     /* 0件のプラン・止めているプランは「飛ばします」と出すだけ。 */
@@ -26081,7 +26158,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v288';   // sw.js の const V と必ず同じ値にする
+var APP_V='v289';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

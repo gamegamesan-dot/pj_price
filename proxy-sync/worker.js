@@ -256,6 +256,11 @@ const ALLOWED = [
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages$/ },
   { m: "PATCH", write: true,
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages\/\d+$/ },
+  /* 8.31（カジの依頼3）受付が終わったカードを**消す**。
+     既定では消さない。⚙「受付終了から◯日で消す」に日数を入れた
+     ときだけ使う（自分が出したカードだけ・msg_id は sub_post の控え）。 */
+  { m: "DELETE", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages\/\d+$/ },
   /* 8.28（カジの依頼1）**チャンネルの名前だけ**を読む。
      「全プランに配る」の確認の画面に「→ #リスト-プレミアム」と出して、
      ⚙に入れたチャンネルID が思っている先かどうかを配る前に確かめる。
@@ -10915,10 +10920,15 @@ function subJst(v) {
 async function subSettings(env) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
-  const h = Math.round(Number(st.subHour) || 0);
+  /* 8.31（見つけた不具合）⚙の時刻を**一度も触っていない**と、
+     `Number(undefined) || 0` で **0時**になっていた（既定は8時のつもり）。
+     空・未設定は既定（8時）として読む。0 と入れたときは 0時のまま。 */
+  const hv = st.subHour;
+  const h = (hv === undefined || hv === null || hv === "")
+    ? SUB_HOUR_DEFAULT : Math.round(Number(hv));
   return {
     on: !!st.subOn,
-    hour: (h >= 0 && h <= 23) ? h : SUB_HOUR_DEFAULT,
+    hour: (isFinite(h) && h >= 0 && h <= 23) ? h : SUB_HOUR_DEFAULT,
     pre: st.subPre === undefined ? true : !!st.subPre,
     /* 8.16（【3】）https:// や末尾の / が付いていても受け付ける。
        整え方は shared/subcard.js の domainOf の1か所だけ（画面も同じ）。 */
@@ -10943,6 +10953,19 @@ async function subSettings(env) {
     guide: gdOf(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
+    /* 8.31（カジの依頼3）受付が終わったカードを消すまでの日数
+       （0＝消さない。既定は消さない）。 */
+    offDays: Math.max(0, Math.round(Number(st.subOffDays) || 0)),
+    /* 8.31（カジの依頼4）週1回の「今週のねらい目」（既定オフ）。 */
+    hotOn: !!st.subHotOn,
+    hotDow: (() => {
+      const n = Number(st.subHotDow);
+      return (isFinite(n) && n >= 0 && n <= 6) ? Math.round(n) : 0;
+    })(),
+    hotN: (() => {
+      const n = Number(st.subHotN);
+      return (isFinite(n) && n >= 1 && n <= 10) ? Math.round(n) : 3;
+    })(),
     /* 8.22（【2】）1点ものの配信先（#目玉商品-先行／#目玉商品）。 */
     one: SUBPLAN.oneList(st),
     one_hours: SUBPLAN.oneHours(st),
@@ -11227,6 +11250,26 @@ async function subPlanBuild(env) {
       keep: pick.filter((x) => x.same).length,
     });
   }
+  /* 8.31（カジの依頼5）**自動の回で何が起きるか**を返す（画面に出す）。
+     ・新しく出る／書き換えるカードの数
+     ・予告を出すか（**新しく出るカードがある日だけ**出す）
+     ・自動配信の曜日と時刻 */
+  {
+    const add = out.plans.reduce((a, x) => a + (Number(x.add) || 0), 0);
+    const edit = out.plans.reduce((a, x) => a + (Number(x.edit) || 0), 0);
+    const pre = out.plans.filter((x) => x.on && x.ch
+      && (Number(x.add) || 0) > 0);
+    out.auto = {
+      on: cfg.on, hour: cfg.hour, pre_on: cfg.pre,
+      add: add, edit: edit,
+      /* 予告は「明日 新しく出るカードがある」プランにだけ出す。 */
+      pre: cfg.pre && cfg.on && pre.length > 0,
+      pre_n: pre.reduce((a, x) => a + (Number(x.add) || 0), 0),
+      pre_plans: pre.map((x) => x.name),
+      hot_on: cfg.hotOn, hot_dow: cfg.hotDow, hot_n: cfg.hotN,
+      off_days: cfg.offDays,
+    };
+  }
   /* 8.22（【2】）1点もの（#目玉商品-先行／#目玉商品）も同じ形で足す。 */
   try {
     if (await oneOk(env)) {
@@ -11286,17 +11329,25 @@ function subWarnsOf(x, sh) {
 /* 8.28 Discord のチャンネル名（確認の画面に出す）。
    取れないときは空（画面はチャンネルID を出す）。 */
 async function dcChName(env, run, ch, cache) {
+  return (await dcChInfo(env, run, ch, cache)).name;
+}
+/* 8.31（カジの依頼4）チャンネルの名前と**サーバーID**（guild_id）。
+   メッセージへのリンク（https://discord.com/channels/サーバー/部屋/メッセージ）
+   を作るのに要る。読むのはこのチャンネル自身の中身だけ。 */
+const DC_CH_CACHE = {};
+async function dcChInfo(env, run, ch, cache) {
   const id = String(ch || "").trim();
-  if (!id) return "";
-  const c = cache || {};
+  if (!id) return { name: "", guild: "" };
+  const c = cache || DC_CH_CACHE;
   if (c[id] !== undefined) return c[id];
-  let name = "";
+  let out = { name: "", guild: "" };
   try {
     const r = await dcApi(env, run, "GET", "/channels/" + id);
-    if (r.ok) name = String(((r.data || {}).name) || "");
-  } catch (e) { name = ""; }
-  c[id] = name;
-  return name;
+    if (r.ok) out = { name: String(((r.data || {}).name) || ""),
+                      guild: String(((r.data || {}).guild_id) || "") };
+  } catch (e) { out = { name: "", guild: "" }; }
+  c[id] = out;
+  return out;
 }
 /* 8.27（カジの依頼3）画面の「案」と「予定」に出す送料の区分。
    配る前にカジが気づけるように、区分・決め方・足りない段を返す。 */
@@ -11961,6 +12012,19 @@ async function jobSubSend(env, opt) {
     } catch (e) {
       run.notes.push("one-send: " + String((e && e.message) || e));
     }
+    /* 8.31（カジの依頼3）リストから外れた商品のカードを「受付終了」に。
+       送り終えたあとに回す（送るほうを先に終わらせる）。 */
+    if (res.approve && !stop) {
+      try {
+        const rt = await subRetire(env, run, cfg, rows, dl);
+        res.retire = rt;
+        if (rt.off || rt.del)
+          run.notes.push("受付終了：書き換え " + rt.off + "件・消した "
+            + rt.del + "件");
+      } catch (e) {
+        run.notes.push("sub-retire: " + String((e && e.message) || e));
+      }
+    }
     if (res.approve) {
       try { await stateSet(env, SUB_SEND_KEY, day).run(); } catch (e) {}
       /* 8.17 形をそろえ終えたら版を控える（次からはふつうに飛ばす）。
@@ -11982,6 +12046,166 @@ async function jobSubSend(env, opt) {
   }
   return Object.assign(await saveRun(env, run), res);
 }
+/* ===== 8.31（カジの依頼3）リストから外れた商品のカード =====
+   MW が欠品した・販売終了した・上限を0にした商品は配信の対象から外れるが、
+   **前に出したカードは Discord に残ったまま**で、会員が買えない商品を
+   見てしまっていた。そのカードを
+   「この商品の受付は終わりました」に**書き換える**（消さない）。
+   ・1点もの（jan が 'one-…'）は別の仕組みなので触らない
+   ・一度書き換えた行は off_at が入るので二度書き換えない
+   ・⚙「受付終了から◯日で消す」に日数を入れたときだけ消す（既定 0＝消さない） */
+const SUB_OFF_MAX = 200;                // 1回に見るカードの数
+function subOffCard(name, jan) {
+  return {
+    title: ("受付終了｜" + (SUBCARD.nameJa(name) || String(jan || ""))).slice(0, 200),
+    description: "**この商品の受付は終わりました。**\n"
+      + "次の入荷をお待ちください（新しいリストは次の配信でお知らせします）。",
+    color: 0x8a8a8a,
+  };
+}
+async function subRetire(env, run, cfg, rows, dl) {
+  const res = { off: 0, del: 0, fail: 0, skip: "" };
+  if (!(await colOk(env, "sub_post", "off_at"))) {
+    res.skip = "no_column"; return res;
+  }
+  const live = {};
+  for (const r of (rows || [])) live[String(r.jan)] = 1;
+  const q = await env.DB.prepare(
+    `SELECT p.jan AS jan, p.ch AS ch, p.msg_id AS msg_id, p.off_at AS off_at,
+            COALESCE(a.name, s.name, '') AS name
+       FROM sub_post p
+            LEFT JOIN mw_amz a ON a.jan = p.jan
+            LEFT JOIN mw_stock s ON s.id = (
+              SELECT t.id FROM mw_stock t WHERE t.jan = p.jan
+               ORDER BY t.id ASC LIMIT 1)
+      ORDER BY p.at ASC LIMIT ${SUB_OFF_MAX}`).all();
+  const now = Date.now();
+  for (const r of ((q && q.results) || [])) {
+    const jan = String(r.jan || "");
+    if (!/^[0-9]{8,}$/.test(jan)) continue;      // 1点ものは触らない
+    const msg = String(r.msg_id || "");
+    const off = String(r.off_at || "");
+    if (!msg) continue;
+    if (live[jan]) continue;                     // まだリストにある
+    if (dl && Date.now() > dl) break;
+    if (!off) {
+      const e = await dcApi(env, run, "PATCH",
+        "/channels/" + r.ch + "/messages/" + msg,
+        { embeds: [subOffCard(r.name, jan)] });
+      if (!e.ok) { res.fail++; continue; }
+      await env.DB.prepare(
+        `UPDATE sub_post SET off_at=?3, edited_at=?3 WHERE jan=?1 AND ch=?2`)
+        .bind(jan, String(r.ch), nowIso()).run();
+      res.off++;
+      await sleep(SUB_GAP_MS);
+      continue;
+    }
+    /* ⚙で日数を入れていれば、そのあいだを置いてから消す。 */
+    if (!cfg.offDays) continue;
+    const t0 = Date.parse(off);
+    if (!isFinite(t0) || (now - t0) < cfg.offDays * 86400000) continue;
+    const d = await dcApi(env, run, "DELETE",
+      "/channels/" + r.ch + "/messages/" + msg);
+    /* すでに消えている（404）ときも控えは片づける。 */
+    if (!d.ok && d.status !== 404) { res.fail++; continue; }
+    await env.DB.prepare(`DELETE FROM sub_post WHERE jan=?1 AND ch=?2`)
+      .bind(jan, String(r.ch)).run();
+    res.del++;
+    await sleep(SUB_GAP_MS);
+  }
+  return res;
+}
+/* ===== 8.31（カジの依頼4）今週のねらい目（⚙・既定オフ）=====
+   ◎（ねらい目）の商品から最大◯件を選び、**すでに出したカードへの
+   リンク**を1通にまとめて出す（新しいカードは作らない）。
+   ・先週選んだ商品は後ろに回す（2週続けて選ばれにくく）
+   ・@everyone・@here は使わない（allowed_mentions で誰にも触れない）
+   ・リンクはサーバーID が分かるときだけ（分からなければ名前だけ） */
+const SUB_HOT_KEY = "sub.hot";          // その週に出した日（JST）
+const SUB_HOT_LAST = "sub.hot.last";    // 先週選んだ JAN
+async function jobSubHot(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-hot");
+  const res = { ok: false, sent: 0, picked: [], plans: [] };
+  try {
+    const cfg = await subSettings(env);
+    if (!cfg.hotOn && !o.force) {
+      res.why = "⚙で「今週の" + SUBGUIDE.MARKS.a.name
+        + "」をオフにしています";
+      res.ok = true; return Object.assign(await saveRun(env, run), res);
+    }
+    if (!env.DISCORD_BOT_TOKEN) {
+      res.error = "no_token";
+      res.detail = "DISCORD_BOT_TOKEN が登録されていません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const day = subJst().day;
+    let done = "";
+    try { done = String(await stateGet(env, SUB_HOT_KEY) || ""); } catch (e) {}
+    if (done === day && !o.force) {
+      res.why = "今日はもう出しています";
+      res.ok = true; return Object.assign(await saveRun(env, run), res);
+    }
+    let last = [];
+    try { last = JSON.parse(String(await stateGet(env, SUB_HOT_LAST) || "[]")); }
+    catch (e) { last = []; }
+    if (!Array.isArray(last)) last = [];
+    const rows = await subRows(env);
+    const got = [];
+    for (const p of cfg.active) {
+      const sent = await subPosts(env, p.ch);
+      const info = await dcChInfo(env, run, p.ch);
+      const pick = [];
+      for (const r of rows) {
+        if (!SUBPLAN.fits(p, r, MWFEE.genreOf(r) === "ゲーム")) continue;
+        const old = sent[r.jan];
+        if (!old || !String(old.msg_id || "")) continue;   // 既存カードだけ
+        if (Number(old.sold_out)) continue;                // 完売は出さない
+        if (Math.max(0, Number(r.qty) - Number(r.sold)) <= 0) continue;
+        const b = SUBGUIDE.badgeOf(r, cfg.guide || {});
+        if (b.mark !== SUBGUIDE.MARKS.a.mark) continue;    // ◎ だけ
+        pick.push({ jan: r.jan, name: r.name, msg: String(old.msg_id),
+                    fresh: last.indexOf(String(r.jan)) < 0 ? 1 : 0 });
+      }
+      /* 先週選んでいないものを先に（2週続けて選ばれにくく）。 */
+      pick.sort((a, b2) => b2.fresh - a.fresh);
+      const take = pick.slice(0, cfg.hotN);
+      res.plans.push({ key: p.key, name: p.name, n: take.length,
+                       all: pick.length });
+      if (!take.length) continue;
+      const line = (x) => info.guild
+        ? ("・[" + SUBCARD.nameJa(x.name) + "](https://discord.com/channels/"
+           + info.guild + "/" + p.ch + "/" + x.msg + ")")
+        : ("・" + SUBCARD.nameJa(x.name));
+      /* 見出しの「ねらい目」は札の名前（shared/subguide.js）から取る
+         （言い方を変えたらここも自動で変わる）。 */
+      const text = "\u2728 **今週の" + SUBGUIDE.MARKS.a.name + "**（"
+        + take.length + "件）\n"
+        + take.map(line).join("\n")
+        + "\n\u203b " + SUBGUIDE.NOTE_JA + "。"
+        + "くわしくはそれぞれのカードをご覧ください。";
+      const m = await dcApi(env, run, "POST",
+        "/channels/" + p.ch + "/messages",
+        { content: text.slice(0, 1900), allowed_mentions: { parse: [] } });
+      if (!m.ok) continue;
+      res.sent++;
+      for (const x of take) got.push(String(x.jan));
+      await sleep(SUB_GAP_MS);
+    }
+    res.picked = got;
+    if (res.sent) {
+      try { await stateSet(env, SUB_HOT_KEY, day).run(); } catch (e) {}
+      try { await stateSet(env, SUB_HOT_LAST, JSON.stringify(got)).run(); }
+      catch (e) {}
+    } else if (!res.why) res.why = SUBGUIDE.MARKS.a.mark
+      + " の商品がありません（今週は出しません）";
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-hot: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
 /* 前日の予告（オン／オフ）。同じ日に2回出さない。 */
 async function jobSubPre(env, opt) {
   const o = opt || {};
@@ -11998,9 +12222,18 @@ async function jobSubPre(env, opt) {
                                     return Object.assign(await saveRun(env, run), res); }
     const plan = await subPlanBuild(env);
     const hh = (cfg.hour < 10 ? "0" : "") + cfg.hour;
+    res.plans = [];
     for (const p of cfg.active) {
       const pp = plan.plans.filter((z) => z.key === p.key)[0] || { items: [] };
-      const n = pp.items.length;
+      /* 8.31（カジの依頼1）**翌朝に「新しく出る」カードの数**で見る。
+         8.29 までは items.length（前に送って何も変わっていないカードまで）
+         を数えていたので、リストが変わらない日も毎日予告が出て、
+         翌朝は新しいカードが1枚も出ないことがあった。
+         書き換えだけの日・そのままの日は予告しない（書き換えは通知が
+         鳴らないので、知らせることが無い）。 */
+      const n = Math.round(Number(pp.add) || 0);
+      res.plans.push({ key: p.key, name: p.name, add: n,
+                       edit: Math.round(Number(pp.edit) || 0) });
       if (!n) continue;
       const text = "🗓️ **明日 " + hh + ":00 に商品リストを配信します**（"
         + n + "件の予定）。\nお買い逃しのないよう、朝にこのチャンネルをご覧ください。";
@@ -12008,6 +12241,8 @@ async function jobSubPre(env, opt) {
         { content: text });
       if (m.ok) res.sent++;
     }
+    if (!res.sent && !res.why)
+      res.why = "明日に新しく出るカードがありません（予告は出しません）";
     if (res.sent) { try { await stateSet(env, SUB_PRE_KEY, day).run(); } catch (e) {} }
     res.ok = true;
   } catch (e) {
@@ -16717,6 +16952,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["off_at", "migrate-0062-sub-off.sql"],
   ["px_from", "migrate-0061-amz-px.sql"],
   ["px_min", "migrate-0061-amz-px.sql"],
   ["ship_way", "migrate-0060-ship-way.sql"],
@@ -17487,6 +17723,11 @@ export default {
           /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
           skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
       }
+      if (request.method === "POST" && url.pathname === "/sub/hot") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubHot(env, { force: !!(b && b.force) }),
+                    200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/sub/pre") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubPre(env, { force: !!(b && b.force) }), 200, origin);
@@ -17882,6 +18123,8 @@ export default {
           /* 予告は「明日が平日」の日に出す（金曜の夜は出さない）。 */
           const tomo = (jt.dow + 1) % 7;
           if (sc.pre && tomo >= 1 && tomo <= 5) await jobSubPre(env, {});
+          /* 8.31（カジの依頼4）週1回の「今週のねらい目」（既定オフ）。 */
+          if (sc.hotOn && jt.dow === sc.hotDow) await jobSubHot(env, {});
         }
       } catch (e) { /* 配信で落ちても本体は止めない */ }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
@@ -18030,6 +18273,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   SUBPLAN, SUBCARD, SHOPCSV,
   subSettings, subRows, subPosts, subPick, subPlanBuild, subJst,
   jobSubSend, jobSubPre, subSkipSet, subLoadedSet, subPostOk,
+  /* 8.31（カジの依頼）受付終了・今週のねらい目。 */
+  subRetire, subOffCard, jobSubHot, dcChInfo, SUB_OFF_MAX,
+  SUB_HOT_KEY, SUB_HOT_LAST,
   subOrderRows, subSkuJan, jobSubOrders, subEditLeft, subShort,
   subDraftPut, subDraftLog, subDraftOk, SUB_DRAFT_MAX,
   subOffPlan,

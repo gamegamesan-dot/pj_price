@@ -868,6 +868,9 @@ CREATE TABLE IF NOT EXISTS sub_post (
   at         TEXT NOT NULL,
   edited_at  TEXT,
   card_h     TEXT,                           -- カードの中身の指紋（8.19）
+  /* 8.31（migrate-0062）リストから外れた商品のカードを「受付終了」に
+     書き換えた日時。⚙で日数を入れていれば、ここから数えて消す。 */
+  off_at     TEXT,
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_post_one ON sub_post(jan, ch);
