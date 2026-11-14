@@ -2174,6 +2174,31 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 6px">クリックポスト（34×25cm・厚さ3cm・1kg まで）に入る商品の<b>機種</b>をカンマ区切りで足せます。空なら<b>機種の表のとおり</b>（ゲーム機の記号は薄物、フィギュア・プラモデルは箱）。<br>機種の前に <code>-</code> を付けると薄物から外します（例 <code>-NS2</code>）。<br><b>採寸（3辺）が取れている行は採寸が優先です</b>（機種がゲームでも、限定版の大きな箱は宅配便になります）。</div>
         <div class="row cfgprice"><label for="mwSubBoxMin">箱ものの送料の下限</label><input type="number" id="mwSubBoxMin" value="600" step="50" min="0" max="5000" inputmode="numeric"><span class="unit">円</span></div>
         <div class="note2" style="margin:0 0 6px">クリックポスト<b>以外</b>の送り方なのに、会員便の段がこの額より安いとき、案と一覧に <b style="color:var(--bad)">⚠ 送料が足りません</b> と出します（レターパックプラスは ¥600・宅急便コンパクトと宅配便はそれ以上かかります）。0 にすると知らせません。</div>
+        <!-- 8.29（カジの依頼）買うかどうかの目安。しきい値はここで直せる。
+             決まりは shared/subguide.js の1か所だけ。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>買うかどうかの目安（会員カード）</b></div>
+        <div class="note2" style="margin:0 0 6px">せどりが初めての会員でも、カードだけで決められるようにする案内です。<b>総合の札（◎ねらい目／○ふつう／△慎重に）</b>と、売れ行き・値動き・ライバル・赤字にならない売値・出品制限を<b>1項目1行</b>で出します。<br><b>カードには必ず「目安です。利益を保証するものではありません」と出ます。</b></div>
+        <div class="row cfgprice"><label for="gdMode">出し方</label><select id="gdMode"><option value="word" selected>加工した表現だけ（よく売れています）</option><option value="num">数字も出す（ランキング・平均・出品者数）</option></select></div>
+        <div class="note2" style="margin:0 0 6px">既定は<b>加工した表現だけ</b>です（外から買ったデータをそのまま会員に配ってよいかが未確認のため。規約を確かめてから「数字も出す」に変えてください）。</div>
+        <div class="row cfgprice"><label for="gdOldDays">データが古いとみなす日数</label><input type="number" id="gdOldDays" value="14" step="1" min="0" max="180" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="note2" style="margin:0 0 6px">Amazon の値段をこれより前に取った行は、<b>札を出さず「— データ確認中」</b>にします（古い数字で決めさせないため）。0 にすると古さを見ません。</div>
+        <div class="row cfgprice"><label for="gdRankA">よく売れている／ふつう（ランキング）</label><input type="number" id="gdRankA" value="30000" step="1000" min="0" inputmode="numeric"><input type="number" id="gdRankB" value="120000" step="1000" min="0" inputmode="numeric"><span class="unit">位以内</span></div>
+        <div class="row cfgprice"><label for="gdSellA">よく売れている／ふつう（月の販売数）</label><input type="number" id="gdSellA" value="30" step="1" min="0" inputmode="numeric"><input type="number" id="gdSellB" value="8" step="1" min="0" inputmode="numeric"><span class="unit">個以上</span></div>
+        <div class="note2" style="margin:0 0 6px">月の販売数は <b>Keepa につないだときだけ</b>使います（いまは pj が持っている<b>ランキング</b>で見ています）。</div>
+        <div class="row cfgprice"><label for="gdRivalA">ライバルが少ない／ふつう（出品者）</label><input type="number" id="gdRivalA" value="5" step="1" min="0" inputmode="numeric"><input type="number" id="gdRivalB" value="15" step="1" min="0" inputmode="numeric"><span class="unit">人以内</span></div>
+        <div class="row cfgprice"><label for="gdRateA">利益率が高め／ふつう</label><input type="number" id="gdRateA" value="25" step="1" min="0" max="100" inputmode="numeric"><input type="number" id="gdRateB" value="12" step="1" min="0" max="100" inputmode="numeric"><span class="unit">%以上</span></div>
+        <div class="row cfgprice"><label for="gdPxPct">平均より高い／安いと言う幅</label><input type="number" id="gdPxPct" value="5" step="1" min="0" max="50" inputmode="numeric"><span class="unit">%</span></div>
+        <div class="note2" style="margin:10px 0 2px"><b>プランごとに出す項目</b>（<code>badge,sell,px,rival,floor,limit</code> から選ぶ）</div>
+        <div class="rowv cfgprice"><label for="gdItemsMonitor">　モニター</label><input type="text" id="gdItemsMonitor" value="" placeholder="badge,sell" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="gdItemsLight">　ライト</label><input type="text" id="gdItemsLight" value="" placeholder="badge,sell,rival" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="gdItemsStandard">　スタンダード</label><input type="text" id="gdItemsStandard" value="" placeholder="badge,sell,px,rival,floor" inputmode="text"></div>
+        <div class="rowv cfgprice"><label for="gdItemsPremium">　プレミアム</label><input type="text" id="gdItemsPremium" value="" placeholder="badge,sell,px,rival,floor,limit" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px"><b>badge</b>＝総合の札／<b>sell</b>＝売れ行き／<b>px</b>＝値動き／<b>rival</b>＝ライバル／<b>floor</b>＝赤字にならない売値／<b>limit</b>＝出品できるかの注意。空なら上の既定（モニターは短く、プレミアムはぜんぶ）です。<br><b>取れていない項目は、その行ごと出しません</b>（当てずっぽうを書かないため）。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" onclick="gdPinGo();return false" style="flex:1">読み方の固定メッセージの文を作る</button>
+        </div>
+        <div class="note2" id="gdPinNote" style="margin-top:2px"></div>
+        <div id="gdPinBox"></div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
           <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
           Shopify は<b>重さの段</b>で送料を決めるので、ここを増やすと段が上に動きます。
@@ -2660,6 +2685,9 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwsite.js"></script>
 <!-- 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。 -->
 <script src="./shared/subplan.js"></script>
+<!-- 8.29 買うかどうかの目安（札・売れ行き・値動き・ライバル・最低価格）。
+     subcard.js より**先**に読む（カードがこれを使う）。 -->
+<script src="./shared/subguide.js"></script>
 <script src="./shared/subcard.js"></script>
 <!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
 <script src="./shared/osscsv.js"></script>
@@ -2702,7 +2730,10 @@ if(typeof PJ_SUBPLAN==='undefined')
   throw new Error('shared/subplan.js が読み込めていません（プランの表）');
 if(typeof PJ_SUBCARD==='undefined')
   throw new Error('shared/subcard.js が読み込めていません（会員用のカード）');
-var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD;
+/* 8.29 買うかどうかの目安（しきい値と言い方）。pj-sync も同じこれを読む。 */
+if(typeof PJ_SUBGUIDE==='undefined')
+  throw new Error('shared/subguide.js が読み込めていません（買うかどうかの目安）');
+var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
 if(typeof PJ_OSSCSV==='undefined')
@@ -3421,6 +3452,11 @@ var ADV_SUB=['subHour','subDomain',
              'mwSubGameG','mwSubAddG',
              /* 8.27 送り方（送料の区分）の決まり。pj-sync がカードに使う。 */
              'mwSubTiers','mwSubThinKishu','mwSubBoxMin',
+             /* 8.29 買うかどうかの目安（しきい値・出し方・項目）。
+                pj-sync がカードを作るときに読む。 */
+             'gdMode','gdOldDays','gdRankA','gdRankB','gdSellA','gdSellB',
+             'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
+             'gdItemsMonitor','gdItemsLight','gdItemsStandard','gdItemsPremium',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              'osPricePct','osFixPct','osVendor','osType'];
@@ -6230,6 +6266,11 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubGameG',
                  /* 8.27 送り方（送料の区分）の決まり。 */
                  'mwSubTiers','mwSubThinKishu','mwSubBoxMin',
+                 /* 8.29 買うかどうかの目安。 */
+                 'gdMode','gdOldDays','gdRankA','gdRankB','gdSellA','gdSellB',
+                 'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
+                 'gdItemsMonitor','gdItemsLight','gdItemsStandard',
+                 'gdItemsPremium',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
@@ -16234,6 +16275,11 @@ function subDraftRows(){
       { ship_way:String(cur.ship_way||'') }));
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
+    /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
+       決まりは shared/subguide.js の1か所だけ（pj-sync も同じもの）。 */
+    var gb=SUBGUIDE.badgeOf(gdRowOf(r,px,fit),gdCfg());
+    row.badge=gb.mark; row.badge_name=gb.name; row.badge_why=gb.why;
+    row.badge_ok=!!gb.ok;
     return row;
   });
 }
@@ -16381,6 +16427,8 @@ function subDraftHtml(plans){
         /* 8.21（【1】）通常版か要確認・売れる速さ 0点の印。 */
         +(x.maybe?'<span class="badge" style="background:#b00020">通常版か要確認</span>':'')
         +(x.slow?'<span class="badge" style="background:#8a8a8a">売れる速さ 0</span>':'')
+        /* 8.29（カジの依頼）総合の札（◎ねらい目／○ふつう／△慎重に）。 */
+        +gdBadgeHtml(x)
         /* 8.27（カジの依頼3）送料の区分（配る前に気づけるように）。 */
         +mwShipBadge({ name:x.ship, sure:x.ship_sure })
         +(x.ship_warn?('<span class="badge" style="background:var(--bad)">⚠ '
@@ -16697,6 +16745,7 @@ function subPlanRender(){
           +(x.gross!==null&&x.gross!==undefined?('　粗利の目安 '+yen(+x.gross)):'')
           /* 8.27（カジの依頼3）送料の区分と、カードに出る文。
              pj-sync が同じ判定（shared/shopcsv.js）で返したもの。 */
+          +'　'+gdBadgeHtml(x)
           +'　'+mwShipBadge({ name:x.ship, sure:x.ship_sure })
           +(x.ship_warn?('<span class="badge" style="background:var(--bad)">⚠ '
             +esc(String(x.ship_warn))+'</span>'):'')
@@ -16761,6 +16810,113 @@ function subSendGo(plan){
       +'件・そのまま '+mwN(+r.skipped||0)+'件');
     return subPlanGo(true);
   })['catch'](function(e){ subNote('⚠ 送れませんでした：'+e.message,1); });
+}
+/* ===== 8.29（カジの依頼）買うかどうかの目安 =====
+   せどりが初めての会員でも、カードだけで決められるようにする案内。
+   **しきい値と言い方は shared/subguide.js の1か所だけ**（pj-sync も同じ
+   ものを読む）。ここは⚙を読んで渡すのと、画面に出すのだけ。 */
+function gdCfg(){
+  var v=function(id){ var el=$(id); return el?el.value:''; };
+  return { gdMode:v('gdMode'), gdOldDays:v('gdOldDays'),
+           gdRankA:v('gdRankA'), gdRankB:v('gdRankB'),
+           gdSellA:v('gdSellA'), gdSellB:v('gdSellB'),
+           gdRivalA:v('gdRivalA'), gdRivalB:v('gdRivalB'),
+           gdRateA:v('gdRateA'), gdRateB:v('gdRateB'),
+           gdPxPct:v('gdPxPct'),
+           gdItemsMonitor:v('gdItemsMonitor'), gdItemsLight:v('gdItemsLight'),
+           gdItemsStandard:v('gdItemsStandard'),
+           gdItemsPremium:v('gdItemsPremium') };
+}
+/* 刈取の行（mwAmzRows）から、目安に渡す形を作る。
+   ・price    … **会員が買う値段**（会員価格）
+   ・amz_price… Amazon の売値
+   一覧の行は price が「Amazon の売値」なので、混ざらないように詰め替える。 */
+function gdRowOf(r,px,fit){
+  var row=r||{};
+  var f=mwFeeOf(row)||{};
+  var ref=(+row.fee_ref||0)+(+row.fee_tax||0);
+  var ap=+row.price||0;
+  var n=+row.px_n||0;
+  return { rank:+row.rank||0, rank_cat:String(row.rank_cat||''),
+           new_n:+row.new_n||0, amz:+row.amz||0, fba_n:+row.fba_n||0,
+           price:Math.round(+px||0), amz_price:ap,
+           fee_total:Math.round(+f.fee||+row.fee_total||0),
+           fee_rate:(ap>0&&ref>0)?(ref/ap):0,
+           gross:(fit&&fit.gross!==undefined)?fit.gross:null,
+           rate:(fit&&fit.pct!==undefined&&fit.pct!==null)?fit.pct:0,
+           px_min:+row.px_min||0,
+           px_avg:(n>0)?Math.round((+row.px_sum||0)/n):0,
+           px_days:String(row.px_from||'')
+             ? Math.max(1,Math.round((Date.now()
+                 -Date.parse(String(row.px_from)))/86400000)) : 0,
+           amz_at:String(row.amz_at||row.price_at||'') };
+}
+/* 総合の札（案・一覧・確認の画面で同じ見た目にする）。 */
+function gdBadgeHtml(b){
+  var x=b||{};
+  var mk=String(x.mark||x.badge||'');
+  if(!mk)return '';
+  var col=(mk==='◎')?'#1f8a3d':((mk==='○')?'#2a6f9e':((mk==='△')?'#b07000'
+    :'#8a8a8a'));
+  /* 行（商品）の name／why と混ざらないように、**札の欄を先に見る**
+     （x.name は商品名なので、ここで使うと「◎ 商品A」になってしまう）。 */
+  var nm=String((x.badge_name!==undefined)?x.badge_name:(x.name||''));
+  var why=String((x.badge_why!==undefined)?x.badge_why:(x.why||''));
+  return '<span class="badge" style="background:'+col+'">'+esc(mk+' '+nm)
+    +'</span>'+(why?('<span class="note2" style="margin:0;opacity:.85"> '
+      +esc(why)+'</span>'):'');
+}
+/* 読み方の固定メッセージの文（チャンネルごと）。
+   カジが Discord の固定メッセージに貼る。**カードと同じ言葉**にする。 */
+function gdPinText(key){
+  var G=PJ_SUBGUIDE, o=gdCfg();
+  var want=G.itemsOf(key,o);
+  var ja={ badge:'**総合の札** … ◎ ねらい目／○ ふつう／△ 慎重に。'
+             +'売れ行き・ライバル・利益率の3つから付けています',
+           sell:'**売れ行き** … どれくらい売れているかの目安です'
+             +'（Amazon のランキングから出しています）',
+           px:'**値動き** … これまでの最安値と平均、いまがそれより高いか'
+             +'安いかです',
+           rival:'**ライバル** … 新品の出品者の数と、Amazon 本体が'
+             +'売っているかです。本体がいるときは札を下げています',
+           floor:'**赤字にならない売値** … この値段以上で売れれば'
+             +'赤字になりません（Amazon の手数料を引いたあと・**送料は別**）',
+           limit:'**出品できるか** … '+G.LIMIT_JA };
+  var L=['**このチャンネルの読み方**','',
+    'カードの数字は**すべて目安**です。'
+      +'**利益を保証するものではありません。**',''];
+  want.forEach(function(k){ if(ja[k])L.push('・'+ja[k]); });
+  if(want.indexOf('limit')<0)L.push('・'+G.LIMIT_JA);
+  L.push('');
+  L.push('・**仕入れ価格**は当社から買う値段（税込・送料別）です。'
+    +'送料はお会計で表示されます');
+  L.push('・**残り**は、ほかの会員が買うと減ります。'
+    +'売り切れたらカードが「完売しました」に変わります');
+  L.push('・迷ったときは、**Amazon の商品ページ（カードの見出しをタップ）**'
+    +'で今の値段と出品者を見てから決めてください');
+  return L.join('\n');
+}
+function gdPinGo(){
+  var box=$('gdPinBox'); if(!box)return;
+  var keys=[['monitor','#リスト-モニター'],['light','#リスト-ライト'],
+            ['standard','#リスト-スタンダード'],
+            ['premium','#リスト-プレミアム'],
+            ['one_pre','#目玉商品-先行'],['one_open','#目玉商品']];
+  box.innerHTML=keys.map(function(k,i){
+    var txt=gdPinText(k[0]);
+    return '<div class="note2" style="margin:8px 0 2px"><b>'+esc(k[1])
+      +'</b>　<a href="#" onclick="gdPinCopy('+i+');return false"'
+      +' style="text-decoration:underline dotted">コピー</a></div>'
+      +'<textarea id="gdPinTxt'+i+'" rows="7" readonly'
+      +' style="width:100%;font-size:12px">'+esc(txt)+'</textarea>';
+  }).join('');
+  $('gdPinNote').innerHTML='チャンネルごとの文を作りました。'
+    +'<b>コピー</b>して Discord の固定メッセージに貼ってください'
+    +'（⚙の「出す項目」を変えたら、この文も作り直してください）。';
+}
+function gdPinCopy(i){
+  var el=$('gdPinTxt'+i); if(!el)return;
+  mwCopy(el.value);
 }
 /* ===== 8.28（カジの依頼1）全プランにまとめて配る =====
    いままでプランごとに「◯◯だけ送る」を押していたので、手数が多かった。
@@ -16892,6 +17048,8 @@ function subAllHtml(d){
         +'　'+esc(PJ_SHOPCSV.titleOf(String(x.name||x.jan)).slice(0,34)
                  ||String(x.jan))
         +'　'+yen(+x.price||0)+'　残り '+(+x.left||0)+'点'
+        /* 8.29 総合の札（pj-sync が同じ判定で返したもの）。 */
+        +'　'+gdBadgeHtml(x)
         +'　'+mwShipBadge({ name:x.ship, sure:x.ship_sure })
         +(w.length?('<br><span style="color:var(--bad)">⚠ '
           +w.map(function(s){ return esc(String(s)); }).join('／')
@@ -25873,7 +26031,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v286';   // sw.js の const V と必ず同じ値にする
+var APP_V='v287';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -20,9 +20,10 @@
   "use strict";
   /* カードの**形の版**（8.17）。ここを上げると、すでに送ったカードも
      次の配信で**新しい形に書き換わる**（pj-sync が見ている）。 */
-  /* 6.195（8.27）送料の文を商品ごとに出す。ここを上げたので、すでに送った
-     カードも次の配信で**新しい文に書き換わる**（二重には出ない）。 */
-  var CARD_V = "6.195";
+  /* 6.196（8.29）買うかどうかの目安（総合の札・売れ行き・値動き・ライバル・
+     赤字にならない売値・出品制限）を足した。ここを上げたので、すでに送った
+     カードも次の配信で**新しい形に書き換わる**（二重には出ない）。 */
+  var CARD_V = "6.196";
   var EMB_MAX = 10;                // 1通に入れられる箱の数
   var EMB_CHARS = 5600;            // 1通の字数（6,000 の手前）
   var COLOR = 0x1f8a3d;            // 会員用のカードの色（緑）
@@ -46,6 +47,17 @@
      Node     … require で読む */
   /* 送料の段の表（8.17）。shared/shopcsv.js の1か所だけに置いてある。
      読めないときは今までどおり「区分の名前」で出す。 */
+  /* 8.29（カジの依頼）買うかどうかの目安。決まりは shared/subguide.js の
+     1か所だけ（pj-sync・画面・テストが同じものを読む）。
+     読めないときは目安を出さない（カードはいままでの形になる）。 */
+  function guideMod() {
+    var g = (typeof globalThis !== "undefined") ? globalThis : root;
+    if (g && g.PJ_SUBGUIDE) return g.PJ_SUBGUIDE;
+    if (typeof require === "function") {
+      try { return require("./subguide.js"); } catch (e) { return null; }
+    }
+    return null;
+  }
   function shopMod() {
     var g = (typeof globalThis !== "undefined") ? globalThis : root;
     if (g && g.PJ_SHOPCSV) return g.PJ_SHOPCSV;
@@ -235,6 +247,15 @@
                  + "\n（Amazon の手数料を引いたあと・送料は別）",
                inline: true });
     }
+    /* 8.29（カジの依頼）買うかどうかの目安（1項目1行）。
+       プランごとに出す項目を⚙で選べる。取れていない項目は出さない。
+       決まりは shared/subguide.js の1か所だけ。 */
+    var G = guideMod();
+    var gd = (G && typeof G.cardOf === "function")
+      ? G.cardOf(x, opt.guide || {}, s(opt.planKey), opt.now) : null;
+    if (gd) for (var gi = 0; gi < gd.lines.length; gi++)
+      f.push({ name: gd.lines[gi].name,
+               value: s(gd.lines[gi].value).slice(0, 300), inline: false });
     f.push({ name: "購入できる数",
              value: leftText(left, x.qty, opt.maxQty), inline: true });
     f.push({ name: "送料", value: shipText(x, opt), inline: true });
@@ -250,8 +271,13 @@
                : "**完売しました**（次の配信をお待ちください）",
              inline: false });
     var mark = s(opt.mark);
+    /* 8.29 総合の札は**見出しのすぐ下に1行**で出す（いちばん目につく所）。
+       「データ確認中」の行も出す（なぜ札が無いかが分かるように）。 */
+    var bt = (gd && gd.badge && G && typeof G.badgeText === "function")
+      ? G.badgeText(gd.badge) : "";
     var e = {
       title: ((mark ? (mark + "｜") : "") + nameJa(x.name) || jan).slice(0, 200),
+      description: bt ? bt.slice(0, 400) : undefined,
       url: (jan || x.asin) ? amzUrl(jan, x.asin) : undefined,
       color: left ? (num(opt.color) || COLOR) : SOLD_COLOR,
       fields: f.slice(0, 25),

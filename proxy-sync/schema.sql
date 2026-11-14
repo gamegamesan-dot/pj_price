@@ -672,6 +672,13 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   size_wid  REAL,          -- 短辺（cm）
   size_hei  REAL,          -- 厚さ（cm）
   size_g    INTEGER,       -- 重さ（g）
+  /* 8.29（migrate-0061）値段の記録（値動きの目安）。行は増やさず列だけ。
+     px_sum / px_n が平均、px_from から「この◯日の記録」を出す。 */
+  px_min    INTEGER,
+  px_max    INTEGER,
+  px_sum    INTEGER,
+  px_n      INTEGER,
+  px_from   TEXT,
   /* その重さがどこから来たか（7.112・migrate-0043）。
      'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
      MW 無在庫（W-）の送料の計算に使うので、画面にも出す。 */

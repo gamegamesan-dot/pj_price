@@ -54,6 +54,9 @@ import SUBCARD from "../shared/subcard.js";
 import SHOPCSV from "../shared/shopcsv.js";
 import OSSCSV from "../shared/osscsv.js";
 import MGATE from "../shared/mgate.js";
+/* 8.29（カジの依頼）買うかどうかの目安（札・売れ行き・値動き・ライバル・
+   赤字にならない売値）。しきい値と言い方はこの1か所だけ。 */
+import SUBGUIDE from "../shared/subguide.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -8287,6 +8290,34 @@ function mwFeePick(d) {
      標準 … 45×35×20cm 以内かつ 9kg 以内
      大型 … それより大きい
    寸法が取れていない行は '' を返す（画面は⚙の既定を使う）。 */
+/* ===== 8.29（カジの依頼）値段の記録（値動きの目安）=====
+   会員カードに「これまでの最安値・平均と、いまの位置」を出すため、
+   値段を取るたびに **mw_amz の列だけ**を書き足す（行は増やさない）。
+     px_min … いちばん安かった値段
+     px_max … いちばん高かった値段
+     px_sum / px_n … 平均を出すため（合計と回数）
+     px_from … 記録を始めた日時（「この◯日の記録」と出すため）
+   Keepa につないだときは180日ぶんの統計に置き換わる（shared/subguide.js）。
+   migrate-0061 を流す前の D1 では書かない（PX_OK が false のまま）。 */
+let PX_OK = null;                       // 列があるか（1回だけ調べる）
+async function pxOk(env) {
+  if (PX_OK === null) PX_OK = await colOk(env, "mw_amz", "px_from");
+  return PX_OK;
+}
+/* 値段 p（プレースホルダの文字）と時刻 a を使って、記録を足す欄を作る。
+   **新しい値は渡さない**（すでに文にある ?N をそのまま使う）。 */
+function pxSet(p, a) {
+  if (!PX_OK) return "";
+  return ", px_min=CASE WHEN " + p + " > 0 THEN MIN(COALESCE(px_min," + p + "),"
+    + p + ") ELSE px_min END"
+    + ", px_max=CASE WHEN " + p + " > 0 THEN MAX(COALESCE(px_max," + p + "),"
+    + p + ") ELSE px_max END"
+    + ", px_sum=CASE WHEN " + p + " > 0 THEN COALESCE(px_sum,0)+" + p
+    + " ELSE px_sum END"
+    + ", px_n=CASE WHEN " + p + " > 0 THEN COALESCE(px_n,0)+1 ELSE px_n END"
+    + ", px_from=CASE WHEN " + p + " > 0 THEN COALESCE(px_from," + a
+    + ") ELSE px_from END";
+}
 const MW_SIZE_S = { len: 25, wid: 18, hei: 2, g: 250 };
 const MW_SIZE_M = { len: 45, wid: 35, hei: 20, g: 9000 };
 /* 8.27（カジの依頼1）長い順に並べた採寸の i 番目（cm・小数1桁）。
@@ -9125,6 +9156,8 @@ async function mwScanPrice(env, run, o, dl) {
   if (!all.length) return st;
   const todo = all.slice(0, limit);
   const at = nowIso();
+  /* 8.29 値段の記録（px_*）を書けるか（migrate-0061）。1回だけ調べる。 */
+  await pxOk(env);
   const stmts = [];
   const low = {};
   const fees = [];                 // 手数料を取る行（値段が取れた行だけ）
@@ -9150,7 +9183,8 @@ async function mwScanPrice(env, run, o, dl) {
       const basis = buy > 0 ? "カート" : (lw > 0 ? "最安" : "");
       stmts.push(env.DB.prepare(
         `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
-           low_n=?7, amz=?8, fba_n=?9, err=?10, checked_at=?11, price_at=?11
+           low_n=?7, amz=?8, fba_n=?9, err=?10, checked_at=?11, price_at=?11${pxSet(
+             "?2", "?11")}
          WHERE jan=?1`)
         .bind(x.jan, price || null, basis, lw || null, buy || null,
               z ? (z.newN || z.total || 0) : 0, z ? (z.lowN || 0) : 0,
@@ -10403,6 +10437,7 @@ async function mwBuyRefresh(env, body) {
       `SELECT jan, asin FROM mw_buy WHERE jan=?1`).bind(jan).first();
     if (!b) { res.why = "仕入れる印がありません";
       return Object.assign(await saveRun(env, run), res); }
+    await pxOk(env);               // 8.29 値段の記録（px_*）を書けるか
     let asin = String(b.asin || "");
     if (!/^B[0-9A-Z]{9}$/.test(asin)) {
       const a0 = await env.DB.prepare(
@@ -10435,7 +10470,8 @@ async function mwBuyRefresh(env, body) {
     if (res.price > 0)
       stmts.push(env.DB.prepare(
         `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
-           low_n=?7, amz=?8, fba_n=?9, err='', checked_at=?10, price_at=?10
+           low_n=?7, amz=?8, fba_n=?9, err='', checked_at=?10, price_at=?10${pxSet(
+             "?2", "?10")}
          WHERE jan=?1`)
         .bind(jan, res.price, res.basis, lw || null, buy || null,
               z ? (z.newN || z.total || 0) : 0, z ? (z.lowN || 0) : 0,
@@ -10840,6 +10876,15 @@ function subBoxMin(st) {
   const n = Number(v);
   return (isFinite(n) && n >= 0) ? Math.round(n) : SUB_BOX_MIN;
 }
+/* 8.29（カジの依頼）目安の⚙。`gd` で始まる欄だけを渡す
+   （しきい値・出し方 gdMode・プランごとの項目 gdItems*）。
+   ここで中身は見ない（決まりは shared/subguide.js の1か所だけ）。 */
+function gdOf(st) {
+  const o = {};
+  for (const k of Object.keys(st || {}))
+    if (/^gd[A-Z_]/.test(k)) o[k] = st[k];
+  return o;
+}
 /* 8.17 カードの形が変わったことを控える（sync_state）。
    版が上がったら、すでに送ったカードも次の配信で書き換える。 */
 const SUB_CARDV_KEY = "sub.card.v";             // 配信時刻（JST の時）
@@ -10893,6 +10938,9 @@ async function subSettings(env) {
     tiersText: String(st.mwSubTiers || ""),
     tiers: SHOPCSV.tiersOf(st.mwSubTiers || ""),
     boxMin: subBoxMin(st),
+    /* 8.29（カジの依頼）買うかどうかの目安の⚙（しきい値・出し方・項目）。
+       名前が gd… の欄をそのまま渡す（読み方は shared/subguide.js）。 */
+    guide: gdOf(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
     /* 8.22（【2】）1点ものの配信先（#目玉商品-先行／#目玉商品）。 */
@@ -10945,6 +10993,11 @@ async function subRows(env) {
     ? "a.size_wid" : "0";
   const heiCol = (await colOk(env, "mw_amz", "size_hei"))
     ? "a.size_hei" : "0";
+  /* 8.29 値段の記録（migrate-0061）。無い D1 では 0 を返す（値動きを出さない）。 */
+  const pxCol = (await pxOk(env))
+    ? `a.px_min AS px_min, a.px_sum AS px_sum, a.px_n AS px_n,
+            a.px_from AS px_from,`
+    : "0 AS px_min, 0 AS px_sum, 0 AS px_n, '' AS px_from,";
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.max_qty AS max_qty, b.price AS price,
             ${wayCol} AS ship_way,
@@ -10962,6 +11015,14 @@ async function subRows(env) {
             /* 8.17（会員の目線）カードに「Amazon の販売価格（カート／最安・
                ◯月◯日 ◯時 時点）」を出すので、基準と取った日時も引く。 */
             a.basis AS basis, a.price_at AS price_at, a.low AS amz_low,
+            /* 8.29（カジの依頼）買うかどうかの目安に使う。
+               売れ行き＝ランキング／ライバル＝出品者数と Amazon 本体／
+               赤字にならない売値＝手数料の内訳（率と固定に分ける）／
+               値動き＝pj が控えている値段の記録（migrate-0061）。 */
+            a.rank AS rank, a.rank_cat AS rank_cat,
+            a.new_n AS new_n, a.amz AS amz, a.fba_n AS fba_n,
+            a.fee_ref AS fee_ref, a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
+            ${pxCol}
             /* 8.19（不具合1）**取り込んだ注文の点数**（カジの言葉どおり
                「上限 − 取り込んだ注文の点数」で残り数を出す）。
                sub_order に入るのは会員用の SKU（SUB-…）の行だけなので、
@@ -11010,6 +11071,26 @@ async function subRows(env) {
        （送ったカードの控え sub_post.sold は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった）。 */
     sold: Number(r.sold) || 0,
+    /* 8.29（カジの依頼）買うかどうかの目安のためのデータ。
+       決まり（しきい値・言い方）は shared/subguide.js の1か所だけ。 */
+    rank: Number(r.rank) || 0,
+    rank_cat: String(r.rank_cat || ""),
+    new_n: Number(r.new_n) || 0,
+    amz: Number(r.amz) || 0,
+    fba_n: Number(r.fba_n) || 0,
+    /* 手数料の「率」（販売手数料＋その消費税 ÷ そのときの売値）。
+       取れていれば、赤字にならない売値を**固定と率に分けて**出せる。 */
+    fee_rate: (Number(r.amz_price) > 0
+               && (Number(r.fee_ref) || 0) + (Number(r.fee_tax) || 0) > 0)
+      ? ((Number(r.fee_ref) || 0) + (Number(r.fee_tax) || 0))
+          / Number(r.amz_price)
+      : 0,
+    px_min: Number(r.px_min) || 0,
+    px_avg: (Number(r.px_n) > 0)
+      ? Math.round(Number(r.px_sum) / Number(r.px_n)) : 0,
+    px_days: String(r.px_from || "")
+      ? Math.max(1, Math.round(
+          (Date.now() - Date.parse(String(r.px_from))) / 86400000)) : 0,
   }));
 }
 /* 送ったカードの控え（JAN → 行）。 */
@@ -11124,11 +11205,16 @@ async function subPlanBuild(env) {
       items: pick.map((x) => {
         /* 8.27（カジの依頼3）配る前に送料の区分が見えるように返す。 */
         const sh = subShipInfo(x, cfg);
+        /* 8.29 総合の札（決まりは shared/subguide.js の1か所だけ）。 */
+        const gb = SUBGUIDE.badgeOf(x, cfg.guide || {});
         return {
           jan: x.jan, name: x.name, price: x.price, qty: x.qty,
           left: x.left, gross: x.gross, sent: x.sent, same: x.same,
           ship: sh.name, ship_text: sh.text, ship_sure: sh.sure,
           ship_why: sh.why, ship_g: sh.grams, ship_warn: sh.warn,
+          /* 8.29（カジの依頼）総合の札（案と確認の画面でも見えるように）。 */
+          badge: gb.mark, badge_name: gb.name, badge_why: gb.why,
+          badge_ok: !!gb.ok,
           /* 8.28 Shopify の商品ページ（handle）。会員が買う先。 */
           handle: SHOPCSV.handleOf(x.jan),
           stock: x.stock, gone: x.gone,
@@ -11171,7 +11257,10 @@ function subCardOf(x, p, cfg, note) {
   return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note,
                            shipText: p.ship, gameG: cfg.gameG,
                            addG: cfg.addG, thinKishu: cfg.thinKishu,
-                           tiers: cfg.tiers });
+                           tiers: cfg.tiers,
+                           /* 8.29（カジの依頼）買うかどうかの目安。
+                              プランごとに出す項目が変わる。 */
+                           guide: cfg.guide, planKey: p.key });
 }
 /* 8.28（カジの依頼1）配る前の警告。**出す前にカジが気づけるように**、
    予定の行ごとにまとめて返す（画面はこの文をそのまま出す）。
@@ -11569,7 +11658,8 @@ async function oneAmzPut(env, body) {
   return res;
 }
 /* 1点ものの1枚のカード。 */
-function oneCardOf(x, cfg, picUrl) {
+/* planKey … どのプランに出すカードか（8.29 の「出す項目」に使う）。 */
+function oneCardOf(x, cfg, picUrl, planKey) {
   /* カードに出す JAN は**本当の JAN**（配信のキー 'one-<連番>' は出さない）。
      JAN が無い1点ものでは JAN の欄そのものを出さない（8.22）。 */
   const y = Object.assign({}, x, { jan: String(x.real_jan || "") });
@@ -11579,6 +11669,9 @@ function oneCardOf(x, cfg, picUrl) {
     maxQty: 0,
     /* 送料はカジが選んだ区分の名前をそのまま出す。 */
     shipText: SHOPCSV.oneShipName(x.ship_kind),
+    /* 8.29（カジの依頼）目安も同じ決まりで出す（1点ものは中古が多いので、
+       ランキングや出品者数が取れていれば出る。取れていない項目は出ない）。 */
+    guide: (cfg || {}).guide, planKey: planKey || "one_pre",
     picUrl: picUrl || "",
   });
 }
@@ -11636,7 +11729,8 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
       const x = Object.assign({}, r, {
         sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
       });
-      x.card = oneCardOf(x, cfg, x.pic ? ("attachment://" + onePicName(x)) : "");
+      x.card = oneCardOf(x, cfg, x.pic ? ("attachment://" + onePicName(x)) : "",
+                         p.key);
       x.card_h = subCardHash(x.card);
       const h = old ? String(old.card_h || "") : "";
       x.same = !!(old && (h ? (h === x.card_h)
@@ -11829,7 +11923,7 @@ async function jobSubSend(env, opt) {
                                type: x.pic_type || "image/jpeg" };
             }
             const card = x.card || oneCardOf(x, cfg,
-              pic ? ("attachment://" + onePicName(x)) : "");
+              pic ? ("attachment://" + onePicName(x)) : "", g.key);
             const m = await dcCard(env, run, g.ch, card, pic,
                                    x.sent ? x.msg_id : "");
             const id = m.ok
@@ -14543,6 +14637,11 @@ async function mwAmzList(env, url) {
     && (await colOk(env, "mw_amz", "size_hei"));
   const dimCols = dimOk
     ? `\n            a.size_wid AS size_wid, a.size_hei AS size_hei,` : "";
+  /* 8.29（カジの依頼）値段の記録（migrate-0061）。画面が「案」で
+     総合の札と値動きを出すのに使う。無い D1 では出さない。 */
+  const pxCols = (await pxOk(env))
+    ? `\n            a.px_min AS px_min, a.px_max AS px_max,
+            a.px_sum AS px_sum, a.px_n AS px_n, a.px_from AS px_from,` : "";
   /* 7.130（【U の改】の1）会員に出す印・上限・販売価格（migrate-0051）。
      表が無い D1 でも落とさないよう、あるときだけ足す。 */
   const subOk = await mwSubOk(env);
@@ -14576,7 +14675,7 @@ async function mwAmzList(env, url) {
             /* サイズ区分（7.108）。在庫管理手数料の目安に使う。
                8.27：短辺・厚さは送り方（送料の区分）に使う。 */
             a.size_tier AS size_tier, a.size_cm3 AS size_cm3,
-            a.size_long AS size_long, a.size_g AS size_g,${dimCols}
+            a.size_long AS size_long, a.size_g AS size_g,${dimCols}${pxCols}
             /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
             COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
             i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,
@@ -16618,6 +16717,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["px_from", "migrate-0061-amz-px.sql"],
+  ["px_min", "migrate-0061-amz-px.sql"],
   ["ship_way", "migrate-0060-ship-way.sql"],
   ["size_wid", "migrate-0060-ship-way.sql"],
   ["size_hei", "migrate-0060-ship-way.sql"],
@@ -17940,6 +18041,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subCardHash, subPostBind, subPostIns,
   /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
+  /* 8.29（カジの依頼）買うかどうかの目安。 */
+  SUBGUIDE, gdOf, pxSet, pxOk,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,
