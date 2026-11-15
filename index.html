@@ -180,6 +180,19 @@ details.exp>summary::-webkit-details-marker{display:none}
 details.exp>summary::after{content:' ▸'}
 details.exp[open]>summary::after{content:' ▾'}
 details.exp>summary:active{opacity:.6}
+/* ===== 8.36（v294）「会員に配信」を作業の順に4段で並べる =====
+   段ごとに枠と番号を付け、済んだ段には「✓ 済（11/15 10:42）」を出す。
+   毎回は使わないボタンは details.exp.grp（そのほかの操作）に畳む。 */
+.substep{margin:8px 0 0;padding:8px 9px;border:1px solid var(--line);
+        border-radius:7px;background:var(--card)}
+.substep>.stephd{display:flex;gap:5px;align-items:baseline;
+        font-size:14px;line-height:1.3;margin:0 0 3px}
+.stepno{font-weight:800;color:var(--good);flex:0 0 auto}
+.stepok{flex:1 1 auto;text-align:right;font-size:11.5px;
+        font-weight:700;color:var(--good);white-space:nowrap}
+details.exp.grp{margin:8px 0 0;padding:6px 9px;border:1px solid var(--line);
+        border-radius:7px;background:var(--card)}
+details.exp.grp>summary{font-size:13.5px;font-weight:700;color:var(--ink)}
 /* ===== 6.182（v263）刈取・仕入れの一覧は 1商品＝1行 =====
    畳んだ状態（既定）は 商品名の1行＋数字の1行だけ。押すと今までの中身が
    そのまま開く（消した項目はない）。
@@ -1078,174 +1091,198 @@ body.staff #syncOnHandFix{display:none !important}
       </div>
       <!-- 8.32（カジの依頼4）いつの一覧か（と、取り直し中かどうか） -->
       <div class="note2" id="mwAmzAtNote" style="margin-top:4px"></div>
-      <!-- 6.170（【U の改】）会員に出す商品と Shopify 用 CSV -->
-      <div data-toc="会員に出す（Shopify）"></div>
-      <details class="exp" data-exp="subShop"><summary>説明</summary>
-        <div class="note2">
-          刈取の行の「<b>会員に出す</b>」に印を付け、<b>販売数の上限</b>と
-          <b>販売価格（税込）</b>を決めると、Shopify の商品CSV を書き出せます。
-          pj のおすすめ値が先に入っているので、直したいところだけ直してください。<br>
-          Handle は <code>sub-&lt;JAN&gt;</code> なので、<b>同じ商品を出し直すときは
-          同じ行を上書き</b>します（Shopify の読み込みで「Overwrite products with
-          matching handles」にチェック）。<br>
-          <b>画像は入れません</b>（MW・Amazon の画像は使いません）。
-          卸値・社・MW在庫・備考・MW の商品番号も出しません。
-        </div>
-      </details>
-      <div id="mwSubBar" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff"></div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="mwSubCsv" style="flex:1" onclick="mwSubCsvGo()">Shopify 用 CSV を書き出す</button>
-        <button class="btn cfgprice" id="mwSubInvCsv" style="flex:0 0 auto" onclick="mwSubInvGo()">在庫CSV</button>
-      </div>
-      <!-- 6.194（【5】）印のある行だけ見る・印をまとめて外す -->
-      <div class="chk cfgprice" style="margin-top:6px"><input type="checkbox" id="mwSubOnly"><label for="mwSubOnly" style="flex:1">「会員に出す」印のある行だけ表示</label></div>
-      <button class="btn cfgprice" id="mwSubOffAll" style="width:100%;margin-top:4px" onclick="mwSubOffAllGo();return false">「会員に出す」印をまとめて外す</button>
-      <div class="note2" id="mwSubNote" style="margin-top:2px"></div>
-      <!-- 6.176：列名の形。ストアの「商品のエクスポート」に合わせるのが既定。 -->
-      <div class="rowv"><label for="mwSubCols">列名の形</label><select id="mwSubCols"><option value="old" selected>ストアの書き出しに合わせる（Handle／Body (HTML)／Variant Price …）</option><option value="new">Shopify の今の名前（URL handle／Description／Price …）</option></select><div class="note2" style="margin-top:2px">Shopify は列名を新しい名前に変えましたが、<b>ストアの「商品のエクスポート」が返す形は古い名前のまま</b>のことがあります（omakase-ship で確認済み）。<b>上書き（Overwrite products with matching handles）で列名の違いでずれない</b>ように、既定は<b>書き出しに合わせる</b>です。どちらの名前でも Shopify は読み込めます（公式が後方互換を明記）。<b>どちらかの形でしか入らない項目はありません。</b><br>確かめ方：Shopify の <b>商品 → エクスポート</b>で1件だけ書き出し、1行目の列名を見てください。</div></div>
-      <div class="row" style="margin-top:6px"><label>Type（商品の種類）</label><input type="text" id="mwSubType" value="ゲームソフト" style="flex:1"></div>
-      <div class="row"><label>Vendor（空のままでよい）</label><input type="text" id="mwSubVendor" value="" style="flex:1"></div>
-      <div class="row"><label>Collection（空なら列を出さない）</label><input type="text" id="mwSubCollection" value="" style="flex:1"></div>
-      <div class="row"><label>ロケーション名（在庫CSV用）</label><input type="text" id="mwSubLoc" value="" style="flex:1"></div>
-      <!-- 8.24 会員用の商品を、ストアの検索・サイトマップ・検索エンジンから
-           隠す（商品のメタフィールド seo.hidden に 1 を入れる）。
-           **列の名前はストアの書き出しに合わせる**ので、ここに入れてもらう。 -->
-      <div class="rowv"><label for="mwSubSeoHidden">検索から隠す列（seo.hidden）</label><input type="text" id="mwSubSeoHidden" value="" placeholder="Metafield: seo.hidden [number_integer]"><div class="note2" style="margin-top:2px">会員用の商品を<b>ストアの検索・サイトマップ・検索エンジン</b>から外します（会員用コレクションには出ます）。<br><b>先に</b> Shopify の <b>設定 → カスタムデータ → 商品</b>で <code>seo.hidden</code>（整数）の定義を作り、<b>商品 → エクスポート</b>で1件書き出して<b>そのままの列名</b>をここに貼ってください。<br>空のあいだは列を出しません（今までどおり）。くわしくは <code>pj_price_追加仕様_Shopify会員用の鍵.md</code>。</div></div>
-      <div class="chk"><input type="checkbox" id="mwSubInvFirst"><label for="mwSubInvFirst" style="flex:1">在庫CSV：初めて置く（<code>Not stocked</code> を入れる）</label></div>
-      <!-- 英語版：Shopify から出した翻訳CSVに英題を書き込む（【U の改】の3） -->
-      <div class="note2" style="margin-top:8px">
-        <b>英語版</b>：Shopify の <b>設定→言語</b>で英語を足し、
-        <b>翻訳CSVをエクスポート</b>してから、そのファイルをここで選んでください。
-        日本語の商品名で突き合わせて、英題（pj-title）を
-        <code>Translated content</code> に書き込んで返します。
-      </div>
-      <!-- 6.192 スマホ（375px）では横に並べると「英題を入れる」が
-           右にはみ出していた。ファイルの行の下にボタンを全幅で置く。 -->
-      <div class="stackrow">
-        <input type="file" id="mwSubTrFile" accept=".csv,text/csv">
-        <button class="btn cfgprice" id="mwSubTrBtn" onclick="mwSubTransGo()">英題を入れる</button>
-      </div>
-      <div id="mwSubTrNote" class="note2" style="margin-top:2px"></div>
-
-      <!-- ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）===== -->
-      <div data-toc="1点ものを登録する"></div>
-      <details class="exp" data-exp="oneBox"><summary>説明</summary>
-        <div class="note2">
-          秋葉原などで<b>現物を仕入れた1点もの</b>を、会員向けに出します。
-          MW の無在庫とは別の商品です（Handle は <code>one-&lt;連番&gt;</code>）。<br>
-          JAN か ASIN を入れると、<b>Amazon の販売価格・手数料・見込みの粗利</b>を
-          自動で出します（無くても登録できます）。<br>
-          <b>写真はカジが撮った写真だけ</b>を入れてください
-          （Amazon・MW の画像は使いません）。写真は会員のカードに出ます。
-          Shopify の商品ページの写真は、読み込んだあとに Shopify で入れてください。<br>
-          配信は <b>#目玉商品-先行（プレミアム）</b>に先に出し、
-          ⚙の時間（既定 24時間）のあと <b>#目玉商品（スタンダード以上）</b>に出します。
-        </div>
-      </details>
-      <div class="row cfgprice" style="margin-top:6px"><label for="oneName">商品名</label><input type="text" id="oneName" value="" style="flex:1" placeholder="例：ガンダム RG νガンダム"></div>
-      <div class="row cfgprice"><label for="oneJan">JAN（無くてよい）</label><input type="text" id="oneJan" value="" inputmode="numeric" style="flex:1"></div>
-      <div class="row cfgprice"><label for="oneAsin">ASIN（無くてよい）</label><input type="text" id="oneAsin" value="" style="flex:1" placeholder="B0…"></div>
-      <div class="row cfgprice"><label for="oneCond">状態</label><select id="oneCond"><option value="新品">新品</option><option value="中古" selected>中古</option><option value="未開封">未開封</option><option value="ジャンク">ジャンク</option></select></div>
-      <div class="row cfgprice"><label for="oneCondNote">状態のメモ</label><input type="text" id="oneCondNote" value="" style="flex:1" placeholder="例：箱にスレ・動作確認済み"></div>
-      <div class="row cfgprice"><label for="oneCost">仕入原価</label><input type="number" id="oneCost" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="row cfgprice"><label for="onePrice">販売価格（税込）</label><input type="number" id="onePrice" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
-      <div class="row cfgprice"><label for="oneQty">数量</label><input type="number" id="oneQty" value="1" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
-      <div class="row cfgprice"><label for="oneShip">送料の区分</label><select id="oneShip"><option value="small">クリックポスト</option><option value="letter">レターパックプラス</option><option value="box" selected>宅配便</option></select></div>
-      <div class="row cfgprice"><label for="oneNote">メモ（カードに出る）</label><input type="text" id="oneNote" value="" style="flex:1" placeholder="例：開封済み・説明書あり"></div>
-      <div class="stackrow cfgprice" style="margin-top:6px">
-        <input type="file" id="onePicFile" accept="image/*">
-        <button class="btn" id="oneAmzBtn" onclick="oneAmzGo();return false">Amazon の値段を取る</button>
-      </div>
-      <div class="note2" style="margin-top:0" id="oneAmzNote"></div>
-      <button class="btn primary cfgprice" id="oneSaveBtn" style="width:100%;margin-top:6px" onclick="oneSaveGo();return false">この1点ものを登録する</button>
-      <button class="btn cfgprice" id="oneClearBtn" style="width:100%;margin-top:4px" onclick="oneFormClear();return false">欄を空にする（新しく登録する）</button>
-      <div class="note2" id="oneNote2" style="margin-top:2px"></div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="oneListBtn" style="flex:1" onclick="oneListGo();return false">1点ものの一覧</button>
-        <button class="btn cfgprice" id="oneCsvBtn" style="flex:1" onclick="oneCsvGo();return false">Shopify 用 CSV</button>
-      </div>
-      <div id="oneList"></div>
-      <!-- 8.18 今日の配信の案（候補をプランごとに自動で振り分ける） -->
-      <div data-toc="今日の配信の案"></div>
-      <details class="exp" data-exp="subDraft"><summary>説明</summary>
-        <div class="note2">
-          いま一覧に出ている<b>候補</b>を、会員のプランに<b>自動で振り分け</b>て
-          「今日の配信の案」を作ります。<b>押しただけでは何も変わりません</b>
-          （案を見てから「この案で出す」を押します）。<br>
-          選び方：<b>会員向き</b>（粗利の下限、または利益率の下限と最低額）で、
-          <b>出品できて</b>、<b>Amazon 本体なし</b>（⚙で切り替え）、
-          <b>「仕入れる」の印が無い</b>（⚙で切り替え）もの。
-          <b>在庫処分・再入荷なしは優先</b>します。<br>
-          並び順は<b>会員の粗利 × 売れる速さ</b>の大きい順。
-          販売数の上限は <b>MW在庫から「MW 自身がこれから売る分」を引いた
-          ◯%</b>と<b>会員の想定購入数</b>の小さいほう（⚙で変えられます）。
-        </div>
-      </details>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="subDraftBtn" onclick="subDraftGo();return false" style="flex:1">今日の配信の案を作る</button>
-        <button class="btn cfgprice" id="subDraftLogBtn" onclick="subDraftLogGo();return false" style="flex:0 0 auto">案の記録</button>
-      </div>
-      <div class="note2" id="subDraftNote" style="margin-top:2px"></div>
-      <div id="subDraftBox"></div>
-      <!-- 8.28（カジの依頼1）全プランにまとめて配る。
-           押すと先に確認の画面を出す（ここでは何も送らない）。 -->
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn primary cfgprice" id="subAllBtn" style="flex:1" onclick="subAllOpen();return false">全プランに配る（確認してから送ります）</button>
-      </div>
-      <div class="note2" style="margin:2px 0 0">モニター→ライト→スタンダード→プレミアム→目玉商品の順に、<b>1プランずつ</b>送ります。押すと先に<b>確認の画面</b>（チャンネル・件数・警告）が出ます。</div>
-      <div class="note2" id="subAllNote" style="margin-top:2px"></div>
-      <div id="subAllBox"></div>
-      <!-- 8.11（【Y】）会員向け Discord の配信と、Shopify の注文の取り込み -->
+      <!-- ===== 8.36（v294・カジの依頼）「会員に配信」を作業の順に並べる =====
+           ① 案を作る → ② Shopify に入れる → ③ 確認して配る → ④ 結果。
+           ボタンの働きは変えない（並び・見せ方・進み具合の出し方だけ）。
+           ・「全プランに配る」は**③に1つだけ**（確認の画面もそのすぐ下）
+           ・毎回は使わないものは「そのほかの操作」に畳む（端末に覚える）
+           ・1点ものの登録は別のまとまりにして、既定で畳む -->
       <div data-toc="会員に配信する"></div>
-      <details class="exp" data-exp="subSend"><summary>説明</summary>
-        <div class="note2">
-          Shopify 用 CSV を書き出して <b>Shopify に読み込んだら</b>、
-          下の「<b>Shopify に読み込みました</b>」を押してください。
-          <b>印を付けた商品だけ</b>が会員向けの配信に載ります
-          （CSV を出しただけでは、Shopify に入ったか pj には分かりません）。<br>
-          カードに出る販売価格は、<b>CSV を書き出したときに決めて控えた値</b>です
-          （配信のときに引き直さないので、Shopify と必ず同じになります）。<br>
-          配信は<b>平日の朝</b>（⚙で時刻を決める）に自動で出ますが、
-          <b>「今すぐ送る」を押す運用でも始められます</b>。
-          同じ商品を同じチャンネルに二重には送らず、値段や残り数が変われば
-          <b>前のカードを書き換え</b>ます。
+      <div class="note2" style="margin:10px 0 0"><b>会員に配信する</b>　上から順に ①→②→③ と進みます（④に結果が出ます）。</div>
+      <div class="substep" id="subStep1">
+        <div class="stephd"><span class="stepno">①</span><b>今日の配信の案を作る</b><span class="stepok" id="subStepOk1"></span></div>
+        <div class="note2" style="margin:0">一覧の候補を会員のプランに振り分けます（押しただけでは何も送りません）。</div>
+        <div data-toc="今日の配信の案"></div>
+        <details class="exp" data-exp="subDraft"><summary>説明</summary>
+          <div class="note2">
+            いま一覧に出ている<b>候補</b>を、会員のプランに<b>自動で振り分け</b>て
+            「今日の配信の案」を作ります。<b>押しただけでは何も変わりません</b>
+            （案を見てから「この案で出す」を押します）。<br>
+            選び方：<b>会員向き</b>（粗利の下限、または利益率の下限と最低額）で、
+            <b>出品できて</b>、<b>Amazon 本体なし</b>（⚙で切り替え）、
+            <b>「仕入れる」の印が無い</b>（⚙で切り替え）もの。
+            <b>在庫処分・再入荷なしは優先</b>します。<br>
+            並び順は<b>会員の粗利 × 売れる速さ</b>の大きい順。
+            販売数の上限は <b>MW在庫から「MW 自身がこれから売る分」を引いた
+            ◯%</b>と<b>会員の想定購入数</b>の小さいほう（⚙で変えられます）。
+          </div>
+        </details>
+        <button class="btn cfgprice" id="subDraftBtn" onclick="subDraftGo();return false" style="width:100%;margin-top:6px">今日の配信の案を作る</button>
+        <div class="note2" id="subDraftNote" style="margin-top:2px"></div>
+        <div id="subDraftBox"></div>
+      </div>
+      <div class="substep" id="subStep2">
+        <div class="stephd"><span class="stepno">②</span><b>Shopify に入れる</b><span class="stepok" id="subStepOk2"></span></div>
+        <div class="note2" style="margin:0">CSV を書き出して Shopify に読み込み、「Shopify に読み込みました」を押します。</div>
+        <div data-toc="会員に出す（Shopify）"></div>
+        <details class="exp" data-exp="subShop"><summary>説明</summary>
+          <div class="note2">
+            刈取の行の「<b>会員に出す</b>」に印を付け、<b>販売数の上限</b>と
+            <b>販売価格（税込）</b>を決めると、Shopify の商品CSV を書き出せます。
+            pj のおすすめ値が先に入っているので、直したいところだけ直してください。<br>
+            Handle は <code>sub-&lt;JAN&gt;</code> なので、<b>同じ商品を出し直すときは
+            同じ行を上書き</b>します（Shopify の読み込みで「Overwrite products with
+            matching handles」にチェック）。<br>
+            <b>画像は入れません</b>（MW・Amazon の画像は使いません）。
+            卸値・社・MW在庫・備考・MW の商品番号も出しません。
+          </div>
+        </details>
+        <div id="mwSubBar" style="display:none;margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff"></div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="mwSubCsv" style="flex:1" onclick="mwSubCsvGo()">Shopify 用 CSV を書き出す</button>
+          <button class="btn cfgprice" id="mwSubInvCsv" style="flex:0 0 auto" onclick="mwSubInvGo()">在庫CSV</button>
         </div>
+        <div class="note2" id="mwSubNote" style="margin-top:2px"></div>
+        <!-- 8.36 Shopify でどう取り込むかを1行だけ出す（手順書を見に行かなくて済むように）。 -->
+        <div class="note2" style="margin:4px 0 0"><b>Shopify</b> → <b>商品 → インポート</b>でこの CSV を選び、<b>「Overwrite products with matching handles」にチェック</b>して読み込みます。</div>
+        <button class="btn cfgprice" id="subLoaded" style="width:100%;margin-top:6px" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
+        <div id="subLoadedBox"></div>
+        <!-- 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる -->
+        <div class="stackrow cfgprice" style="margin-top:6px">
+          <input type="file" id="subShopFile" accept=".csv,text/csv">
+          <button class="btn" id="subShopBtn" onclick="subShopCsvGo();return false">Shopify の商品CSV と突き合わせる</button>
+        </div>
+        <div class="note2" style="margin-top:0">Shopify の <b>商品 → エクスポート</b>で出した CSV を選ぶと、<b>Shopify に実際にある商品（Handle が <code>sub-</code>）だけ</b>に「読み込みました」の印を付けます。</div>
+        <div class="note2" id="subShopNote" style="margin-top:2px"></div>
+        <!-- 8.36 毎回は直さない CSV の設定は畳む（開いた状態は端末に覚える）。 -->
+        <details class="exp grp" data-exp="subCsvOpt"><summary>CSV の細かい設定（列名・Type・ロケーション・英語版）</summary>
+        <!-- 6.194（【5】）印のある行だけ見る・印をまとめて外す -->
+        <div class="chk cfgprice" style="margin-top:6px"><input type="checkbox" id="mwSubOnly"><label for="mwSubOnly" style="flex:1">「会員に出す」印のある行だけ表示</label></div>
+        <button class="btn cfgprice" id="mwSubOffAll" style="width:100%;margin-top:4px" onclick="mwSubOffAllGo();return false">「会員に出す」印をまとめて外す</button>
+        <!-- 6.176：列名の形。ストアの「商品のエクスポート」に合わせるのが既定。 -->
+        <div class="rowv"><label for="mwSubCols">列名の形</label><select id="mwSubCols"><option value="old" selected>ストアの書き出しに合わせる（Handle／Body (HTML)／Variant Price …）</option><option value="new">Shopify の今の名前（URL handle／Description／Price …）</option></select><div class="note2" style="margin-top:2px">Shopify は列名を新しい名前に変えましたが、<b>ストアの「商品のエクスポート」が返す形は古い名前のまま</b>のことがあります（omakase-ship で確認済み）。<b>上書き（Overwrite products with matching handles）で列名の違いでずれない</b>ように、既定は<b>書き出しに合わせる</b>です。どちらの名前でも Shopify は読み込めます（公式が後方互換を明記）。<b>どちらかの形でしか入らない項目はありません。</b><br>確かめ方：Shopify の <b>商品 → エクスポート</b>で1件だけ書き出し、1行目の列名を見てください。</div></div>
+        <div class="row" style="margin-top:6px"><label>Type（商品の種類）</label><input type="text" id="mwSubType" value="ゲームソフト" style="flex:1"></div>
+        <div class="row"><label>Vendor（空のままでよい）</label><input type="text" id="mwSubVendor" value="" style="flex:1"></div>
+        <div class="row"><label>Collection（空なら列を出さない）</label><input type="text" id="mwSubCollection" value="" style="flex:1"></div>
+        <div class="row"><label>ロケーション名（在庫CSV用）</label><input type="text" id="mwSubLoc" value="" style="flex:1"></div>
+        <!-- 8.24 会員用の商品を、ストアの検索・サイトマップ・検索エンジンから
+             隠す（商品のメタフィールド seo.hidden に 1 を入れる）。
+             **列の名前はストアの書き出しに合わせる**ので、ここに入れてもらう。 -->
+        <div class="rowv"><label for="mwSubSeoHidden">検索から隠す列（seo.hidden）</label><input type="text" id="mwSubSeoHidden" value="" placeholder="Metafield: seo.hidden [number_integer]"><div class="note2" style="margin-top:2px">会員用の商品を<b>ストアの検索・サイトマップ・検索エンジン</b>から外します（会員用コレクションには出ます）。<br><b>先に</b> Shopify の <b>設定 → カスタムデータ → 商品</b>で <code>seo.hidden</code>（整数）の定義を作り、<b>商品 → エクスポート</b>で1件書き出して<b>そのままの列名</b>をここに貼ってください。<br>空のあいだは列を出しません（今までどおり）。くわしくは <code>pj_price_追加仕様_Shopify会員用の鍵.md</code>。</div></div>
+        <div class="chk"><input type="checkbox" id="mwSubInvFirst"><label for="mwSubInvFirst" style="flex:1">在庫CSV：初めて置く（<code>Not stocked</code> を入れる）</label></div>
+        <!-- 英語版：Shopify から出した翻訳CSVに英題を書き込む（【U の改】の3） -->
+        <div class="note2" style="margin-top:8px">
+          <b>英語版</b>：Shopify の <b>設定→言語</b>で英語を足し、
+          <b>翻訳CSVをエクスポート</b>してから、そのファイルをここで選んでください。
+          日本語の商品名で突き合わせて、英題（pj-title）を
+          <code>Translated content</code> に書き込んで返します。
+        </div>
+        <!-- 6.192 スマホ（375px）では横に並べると「英題を入れる」が
+             右にはみ出していた。ファイルの行の下にボタンを全幅で置く。 -->
+        <div class="stackrow">
+          <input type="file" id="mwSubTrFile" accept=".csv,text/csv">
+          <button class="btn cfgprice" id="mwSubTrBtn" onclick="mwSubTransGo()">英題を入れる</button>
+        </div>
+        <div id="mwSubTrNote" class="note2" style="margin-top:2px"></div>
+        </details>
+      </div>
+      <div class="substep" id="subStep3">
+        <div class="stephd"><span class="stepno">③</span><b>確認して配る</b><span class="stepok" id="subStepOk3"></span></div>
+        <div class="note2" style="margin:0">押すと<b>確認の画面</b>がこのすぐ下に出ます（そこの「送る」で確定です）。</div>
+        <details class="exp" data-exp="subSend"><summary>説明</summary>
+          <div class="note2">
+            Shopify 用 CSV を書き出して <b>Shopify に読み込んだら</b>、
+            下の「<b>Shopify に読み込みました</b>」を押してください。
+            <b>印を付けた商品だけ</b>が会員向けの配信に載ります
+            （CSV を出しただけでは、Shopify に入ったか pj には分かりません）。<br>
+            カードに出る販売価格は、<b>CSV を書き出したときに決めて控えた値</b>です
+            （配信のときに引き直さないので、Shopify と必ず同じになります）。<br>
+            配信は<b>平日の朝</b>（⚙で時刻を決める）に自動で出ますが、
+            <b>「今すぐ送る」を押す運用でも始められます</b>。
+            同じ商品を同じチャンネルに二重には送らず、値段や残り数が変われば
+            <b>前のカードを書き換え</b>ます。
+          </div>
+        </details>
+        <div id="subBar" style="margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff"></div>
+        <button class="btn primary cfgprice" id="subAllBtn" style="width:100%;margin-top:6px" onclick="subAllOpen();return false">全プランに配る</button>
+        <div class="note2" style="margin:2px 0 0">モニター→ライト→スタンダード→プレミアム→目玉商品の順に、<b>1プランずつ</b>送ります。</div>
+        <div class="note2" id="subAllNote" style="margin-top:2px"></div>
+        <div id="subAllBox"></div>
+      </div>
+      <div class="substep" id="subStep4">
+        <div class="stephd"><span class="stepno">④</span><b>結果</b></div>
+        <div class="note2" style="margin:0">送った件数と、送ったチャンネルごとの件数が出ます。</div>
+        <div class="note2" id="subResBox" style="margin:4px 0 0">まだ送っていません。</div>
+        <div id="subAutoLine"></div>
+      </div>
+      <!-- 8.36 毎回は使わない操作（開いた状態はこの端末に覚える）。 -->
+      <details class="exp grp" data-exp="subMore"><summary>そのほかの操作</summary>
+        <div class="note2" style="margin:6px 0 0"><b>今すぐ送る</b>　自動の回を待たずに、いま送るとき（確認の画面は出ません）。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
+          <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
+        </div>
+        <div class="note2" style="margin:6px 0 0"><b>送ったカードを書き直す</b>　⚙（送料の文など）を変えたとき。</div>
+        <!-- 8.19（不具合2）送ったカードを今の形に書き直す（送り直しではない） -->
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="subRedoBtn" style="flex:1" onclick="subRedoGo();return false">送ったカードをすべて今の形で書き直す</button>
+        </div>
+        <div class="note2" style="margin:2px 0 0">⚙（送料の文など）を変えたときに押してください。<b>新しく送り直すのではなく、前のカードを書き換えます</b>。</div>
+        <div class="note2" style="margin:6px 0 0"><b>出すプランを積み上げ型に直す</b>　下のプランの商品を上のプランにも出したいとき（1回だけ）。</div>
+        <!-- 8.35（カジの依頼5）いま印が付いている商品の「出すプラン」を
+             積み上げ型（下のプランの商品は上のプランにも出す）に直す。 -->
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="subStackBtn" style="flex:1" onclick="subStackGo();return false">出すプランを積み上げ型に直す</button>
+        </div>
+        <div class="note2" id="subStackNote" style="margin:2px 0 0">1つのプランだけに振り分けてある商品を、<b>そのプランから上のプランにも出す</b>形に直します（例 <code>monitor</code> → <code>monitor,light,standard,premium</code>）。<b>「◯◯だけ」にしたい行は直しません</b>（この画面では直せる行だけを数えて出します）。</div>
+        <div class="note2" style="margin:6px 0 0"><b>案の記録／今日の配信の予定</b>　あとから見直すとき・何が送られるか確かめたいとき。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="subDraftLogBtn" onclick="subDraftLogGo();return false" style="flex:1">案の記録</button>
+          <button class="btn cfgprice" id="subPlanBtn" style="flex:1" onclick="subPlanGo();return false">今日の配信の予定を見る</button>
+        </div>
+        <div class="note2" id="subNote" style="margin-top:2px"></div>
+        <div id="subPlanList" style="margin-top:4px"></div>
       </details>
-      <div id="subBar" style="margin-top:6px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#f7fbff"></div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="subLoaded" style="flex:1" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
-        <button class="btn cfgprice" id="subPlanBtn" style="flex:1" onclick="subPlanGo();return false">今日の配信の予定を見る</button>
-      </div>
-      <!-- 6.194（【5】）押す前に、対象の商品を一覧で見て外せるようにする -->
-      <div id="subLoadedBox"></div>
-      <!-- 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる -->
-      <div class="stackrow cfgprice" style="margin-top:6px">
-        <input type="file" id="subShopFile" accept=".csv,text/csv">
-        <button class="btn" id="subShopBtn" onclick="subShopCsvGo();return false">Shopify の商品CSV と突き合わせる</button>
-      </div>
-      <div class="note2" style="margin-top:0">Shopify の <b>商品 → エクスポート</b>で出した CSV を選ぶと、<b>Shopify に実際にある商品（Handle が <code>sub-</code>）だけ</b>に「読み込みました」の印を付けます。</div>
-      <div class="note2" id="subShopNote" style="margin-top:2px"></div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn primary cfgprice" id="subSendBtn" style="flex:1" onclick="subSendGo();return false">今すぐ送る</button>
-        <button class="btn cfgprice" id="subSkipBtn" style="flex:0 0 auto" onclick="subSkipGo();return false">今日は送らない</button>
-      </div>
-      <!-- 8.28（カジの依頼1）確認してから全プランにまとめて配る -->
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="subAllBtn2" style="flex:1" onclick="subAllOpen();return false">全プランに配る（確認してから送ります）</button>
-      </div>
-      <!-- 8.19（不具合2）送ったカードを今の形に書き直す（送り直しではない） -->
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="subRedoBtn" style="flex:1" onclick="subRedoGo();return false">送ったカードをすべて今の形で書き直す</button>
-      </div>
-      <!-- 8.35（カジの依頼5）いま印が付いている商品の「出すプラン」を
-           積み上げ型（下のプランの商品は上のプランにも出す）に直す。 -->
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn cfgprice" id="subStackBtn" style="flex:1" onclick="subStackGo();return false">出すプランを積み上げ型に直す</button>
-      </div>
-      <div class="note2" id="subStackNote" style="margin:2px 0 0">1つのプランだけに振り分けてある商品を、<b>そのプランから上のプランにも出す</b>形に直します（例 <code>monitor</code> → <code>monitor,light,standard,premium</code>）。<b>「◯◯だけ」にしたい行は直しません</b>（この画面では直せる行だけを数えて出します）。</div>
-      <div class="note2" style="margin:2px 0 0">⚙（送料の文など）を変えたときに押してください。<b>新しく送り直すのではなく、前のカードを書き換えます</b>。</div>
-      <div class="note2" id="subNote" style="margin-top:2px"></div>
-      <div id="subPlanList" style="margin-top:4px"></div>
+      <!-- ===== 8.22（【2】）1点もの。8.36：配信の段とは別のまとまりにして畳む ===== -->
+      <details class="exp grp" data-exp="oneGrp"><summary>1点ものを登録する（秋葉原などで仕入れた現物）</summary>
+        <div data-toc="1点ものを登録する"></div>
+        <details class="exp" data-exp="oneBox"><summary>説明</summary>
+          <div class="note2">
+            秋葉原などで<b>現物を仕入れた1点もの</b>を、会員向けに出します。
+            MW の無在庫とは別の商品です（Handle は <code>one-&lt;連番&gt;</code>）。<br>
+            JAN か ASIN を入れると、<b>Amazon の販売価格・手数料・見込みの粗利</b>を
+            自動で出します（無くても登録できます）。<br>
+            <b>写真はカジが撮った写真だけ</b>を入れてください
+            （Amazon・MW の画像は使いません）。写真は会員のカードに出ます。
+            Shopify の商品ページの写真は、読み込んだあとに Shopify で入れてください。<br>
+            配信は <b>#目玉商品-先行（プレミアム）</b>に先に出し、
+            ⚙の時間（既定 24時間）のあと <b>#目玉商品（スタンダード以上）</b>に出します。
+          </div>
+        </details>
+        <div class="row cfgprice" style="margin-top:6px"><label for="oneName">商品名</label><input type="text" id="oneName" value="" style="flex:1" placeholder="例：ガンダム RG νガンダム"></div>
+        <div class="row cfgprice"><label for="oneJan">JAN（無くてよい）</label><input type="text" id="oneJan" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="oneAsin">ASIN（無くてよい）</label><input type="text" id="oneAsin" value="" style="flex:1" placeholder="B0…"></div>
+        <div class="row cfgprice"><label for="oneCond">状態</label><select id="oneCond"><option value="新品">新品</option><option value="中古" selected>中古</option><option value="未開封">未開封</option><option value="ジャンク">ジャンク</option></select></div>
+        <div class="row cfgprice"><label for="oneCondNote">状態のメモ</label><input type="text" id="oneCondNote" value="" style="flex:1" placeholder="例：箱にスレ・動作確認済み"></div>
+        <div class="row cfgprice"><label for="oneCost">仕入原価</label><input type="number" id="oneCost" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="onePrice">販売価格（税込）</label><input type="number" id="onePrice" value="" step="100" min="0" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="oneQty">数量</label><input type="number" id="oneQty" value="1" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
+        <div class="row cfgprice"><label for="oneShip">送料の区分</label><select id="oneShip"><option value="small">クリックポスト</option><option value="letter">レターパックプラス</option><option value="box" selected>宅配便</option></select></div>
+        <div class="row cfgprice"><label for="oneNote">メモ（カードに出る）</label><input type="text" id="oneNote" value="" style="flex:1" placeholder="例：開封済み・説明書あり"></div>
+        <div class="stackrow cfgprice" style="margin-top:6px">
+          <input type="file" id="onePicFile" accept="image/*">
+          <button class="btn" id="oneAmzBtn" onclick="oneAmzGo();return false">Amazon の値段を取る</button>
+        </div>
+        <div class="note2" style="margin-top:0" id="oneAmzNote"></div>
+        <button class="btn primary cfgprice" id="oneSaveBtn" style="width:100%;margin-top:6px" onclick="oneSaveGo();return false">この1点ものを登録する</button>
+        <button class="btn cfgprice" id="oneClearBtn" style="width:100%;margin-top:4px" onclick="oneFormClear();return false">欄を空にする（新しく登録する）</button>
+        <div class="note2" id="oneNote2" style="margin-top:2px"></div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="oneListBtn" style="flex:1" onclick="oneListGo();return false">1点ものの一覧</button>
+          <button class="btn cfgprice" id="oneCsvBtn" style="flex:1" onclick="oneCsvGo();return false">Shopify 用 CSV</button>
+        </div>
+        <div id="oneList"></div>
+      </details>
       <!-- 注文CSV の取り込み（8.13） -->
       <div class="note2" style="margin-top:8px"><b>Shopify の注文を取り込む</b>　
         Shopify の <b>注文 → エクスポート</b>（CSV）を選んでください。
@@ -11617,6 +11654,8 @@ function expInit(){
     });
 }
 expInit();
+/* 8.36（v294）段ごとの「✓ 済」を、覚えてあるぶんだけ出す。 */
+try{ subStepRender(); }catch(e){}
 /* ---- 商品を探す（6.92）の結び付け ---- */
 (function(){
   var deb={};
@@ -16518,6 +16557,7 @@ function subDraftGo(){
   /* 8.31（カジの依頼5）自動の回で何が起きるか（予定を読んでいれば出す）。 */
   var au=subAutoHtml();
   if(au)$('subDraftNote').innerHTML+=au;
+  subStepDone('draft');            // 8.36 ①の段に「✓ 済」を出す
 }
 /* ===== 8.23（カジの依頼）プランのタブ =====
    案と予定にプランが縦に全部並んでスマホで見にくかったので、
@@ -16984,6 +17024,7 @@ function subPlanGo(quiet){
   return mwGet('/sub/plan').then(function(d){
     subPlanData=d; subBarRender();
     subPlanRender();
+    subResRender();                // 8.36 ④の「自動の回」の1行を出し直す
     if(!quiet)subNote('✓ 予定を出しました。');
   })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
 }
@@ -17267,6 +17308,52 @@ function gdPinCopy(i,j){
   var x=(window.__gdPin||[])[i];
   if(x){ gdPinSeenSet(x.id,PJ_SUBGUIDE.hashOf(x.text)); gdPinGo(); }
 }
+/* ===== 8.36（v294・カジの依頼1）段ごとの「✓ 済」 =====
+   「会員に配信」を ①案 → ②Shopify に入れる → ③確認して配る → ④結果 の
+   4段に分けたので、**どの段まで済んだか**を段の見出しに出す。
+   覚えるのは**この端末**（localStorage）だけ。pj-sync には送らない。 */
+var SUB_STEP_KEY='pj:substep:v1';
+function subStepState(){
+  try{ var o=JSON.parse(lsGet(SUB_STEP_KEY)||'{}');
+       return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; }
+}
+function subStepDone(k){
+  var o=subStepState(); o[String(k)]=Date.now();
+  try{ lsSet(SUB_STEP_KEY,JSON.stringify(o)); }catch(e){}
+  subStepRender();
+}
+function subStepWhen(ms){
+  var d=new Date(+ms||0);
+  if(!(+ms>0)||isNaN(d.getTime()))return '';
+  return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+':'
+    +('0'+d.getMinutes()).slice(-2);
+}
+function subStepRender(){
+  var o=subStepState();
+  [['subStepOk1','draft'],['subStepOk2','loaded'],['subStepOk3','sent']]
+    .forEach(function(x){
+      var el=$(x[0]); if(!el)return;
+      var w=subStepWhen(o[x[1]]);
+      el.innerHTML=w?('✓ 済（'+esc(w)+'）'):'';
+    });
+}
+/* 8.36 確認の画面や結果が出たら、そこまで自動でスクロールする
+   （スマホで上下に探さなくて済むように）。 */
+function subScroll(id,how){
+  var el=$(id); if(!el)return false;
+  try{ el.scrollIntoView({ block:String(how||'center') }); }
+  catch(e){ try{ el.scrollIntoView(); }catch(e2){} }
+  return true;
+}
+/* 8.36 ④ 結果の段（送った件数・チャンネルごとの件数・自動の回の1行）。 */
+function subResRender(msg,bad){
+  var el=$('subResBox');
+  if(el&&msg!==undefined){
+    el.innerHTML=msg||'まだ送っていません。';
+    el.style.color=bad?'var(--bad)':'';
+  }
+  var a=$('subAutoLine'); if(a)a.innerHTML=subAutoHtml();
+}
 /* ===== 8.28（カジの依頼1）全プランにまとめて配る =====
    いままでプランごとに「◯◯だけ送る」を押していたので、手数が多かった。
    ・押すと**先に確認の画面**を出す（ここでは何も送らない）
@@ -17288,10 +17375,14 @@ function subAllTick(el,key,jan){
   subAllOn[String(key)+'_'+String(jan)]=!!(el&&el.checked);
   subAllSum();
 }
+/* 8.36 知らせは「全プランに配る」の下と、**確認の画面の「送る」のすぐ上**
+   の両方に出す（スマホで結果を見に行かなくて済むように）。 */
 function subAllNote(msg,bad){
-  var n=$('subAllNote'); if(!n)return;
-  n.innerHTML=msg||'';
-  n.style.color=bad?'var(--bad)':'';
+  ['subAllNote','subAllNote2'].forEach(function(id){
+    var n=$(id); if(!n)return;
+    n.innerHTML=msg||'';
+    n.style.color=bad?'var(--bad)':'';
+  });
 }
 function subWait(ms){
   return new Promise(function(r){ setTimeout(r,Math.max(0,+ms||0)); });
@@ -17310,6 +17401,8 @@ function subAllOpen(){
     subAllSum();
     subAllNote('この画面では<b>まだ何も送っていません</b>。'
       +'中身を見て、下の「送る」を押してください。');
+    /* 8.36 押したボタンのすぐ下に出すので、そこまでスクロールする。 */
+    subScroll('subAllBtn','start');
   })['catch'](function(e){
     subAllNote('⚠ 予定を出せませんでした：'+esc(e.message),1);
   });
@@ -17416,45 +17509,54 @@ function subAllHtml(d){
     +'会員に通知が鳴ります</b>（書き換えは鳴りません）。'
     +'積み上げ型に直したあとは、<b>上のプランのチャンネルに同じ商品の'
     +'カードが新しく出ます</b>。</div>'
+    /* 8.36 知らせ（送っています…／結果）は**ボタンのすぐ上**、
+       進み具合は**ボタンのすぐ下**に出す。 */
+    +'<div class="note2" id="subAllNote2" style="margin:2px 0 0"></div>'
     +'<div style="display:flex;gap:6px;margin-top:4px">'
     +'<button class="btn primary cfgprice" id="subAllSendBtn" style="flex:1"'
-    +' onclick="subAllSend();return false">送る</button>'
+    +' onclick="subAllSend();return false">送る（これで確定）</button>'
     +'<button class="btn cfgprice" style="flex:0 0 auto"'
     +' onclick="subAllClose();return false">やめる</button>'
-    +'</div>';
+    +'</div>'
+    +'<div class="note2" id="subAllProg" style="margin:2px 0 0"></div>';
 }
-/* 送る（プランの順に1本ずつ）。途中で失敗したらそこで止める。 */
+/* 送る（プランの順に1本ずつ）。途中で失敗したらそこで止める。
+   8.36（カジの依頼2）：
+   ・ブラウザの「OK／キャンセル」（confirm）は**出さない**
+     （中身はもう確認の画面で見ているので、ここの「送る」が確定）
+   ・押したボタンを「送っています…」にして**押せなくする**（二度押し防止）
+   ・ボタンの下に進み具合（プランごと／全体）を出す
+   ・終わったら「✓ 送りました：…」と、送ったチャンネルごとの件数を出す */
 function subAllSend(){
   if(roleDenyPrice('subAllNote'))return;
   if(!subReady())return;
   var jobs=subAllJobs().filter(function(j){ return (j.add+j.edit)>0; });
   if(!jobs.length){ subAllNote('送るものがありません。',1); return; }
-  var add=jobs.reduce(function(a,j){ return a+j.add; },0);
-  var ed=jobs.reduce(function(a,j){ return a+j.edit; },0);
-  var off=subAllJobs().reduce(function(a,j){ return a+j.off; },0);
-  if(!confirm('会員向けの Discord に、プランの順で送ります。\n\n'
-    +jobs.map(function(j){ return '・'+j.name+'（'
-      +(j.ch_name?('#'+j.ch_name):('チャンネル '+j.ch))+'）：新しく '
-      +j.add+'件・書き換え '+j.edit+'件'; }).join('\n')
-    +'\n\n合計：新しく '+add+'件・書き換え '+ed+'件'
-    +(off?('\n外した行：'+off+'件（警告のある行です）'):'')
-    +'\n\n※ 同じ商品は二重に送らず、変わったぶんは前のカードを'
-    +'書き換えます。\n'
-    +(add?'※ 新しく出す '+add+'件は、会員に通知が鳴ります（書き換えは'
-         +'鳴りません）。\n':'')
-    +'※ 途中で失敗したらそこで止めます'
-    +'（もう一度押せば続きから）。\n\nよろしいですか？'))return;
+  var total=jobs.reduce(function(a,j){ return a+j.add+j.edit; },0);
   var got={ sent:0, edited:0, skipped:0, fail:0 };
-  var done=[], stop='', rounds=0;
-  var btn=$('subAllSendBtn'); if(btn)btn.disabled=true;
-  var line=function(i,extra){
-    subAllNote('送っています… <b>'+(i+1)+'／'+jobs.length+'</b>（'
-      +esc(jobs[i].name)+'）'+(extra||''));
+  var done=[], stop='', rounds=0, leftN=0;
+  var btn=$('subAllSendBtn'), big=$('subAllBtn');
+  var was=btn?btn.innerHTML:'';
+  if(btn){ btn.disabled=true; btn.innerHTML='送っています…'; }
+  if(big)big.disabled=true;
+  /* 進み具合（「ライトに送っています 5／9件（全体 14／72件）」）。 */
+  var prog=function(i,base){
+    var el=$('subAllProg'); if(!el)return;
+    var j=jobs[i], n=j.add+j.edit;
+    var inp=Math.max(0,Math.min(n,(got.sent+got.edited)-base));
+    el.innerHTML='<b>'+esc(j.name)+'に送っています '+mwN(inp)+'／'+mwN(n)
+      +'件</b>（全体 '+mwN(got.sent+got.edited)+'／'+mwN(total)+'件）';
   };
-  var step=function(i){
+  var push=function(j,ps,pe){
+    done.push({ name:j.name, ch:String(j.ch_name||''), sent:ps, edit:pe });
+  };
+  var step=function(i,base,ps,pe){
     if(i>=jobs.length||stop)return fin();
     var j=jobs[i];
-    line(i);
+    if(base===undefined){ base=got.sent+got.edited; ps=0; pe=0; }
+    prog(i,base);
+    subAllNote('送っています… <b>'+(i+1)+'／'+jobs.length+'</b>（'
+      +esc(j.name)+'）');
     return mwPost('/sub/send',{ approve:true, plan:j.key, skip:j.skip })
       .then(function(r){
         if(r&&r.error){
@@ -17462,47 +17564,70 @@ function subAllSend(){
             +esc(String(r.detail||r.error));
           return fin();
         }
-        got.sent+=(+(r||{}).sent||0);
-        got.edited+=(+(r||{}).edited||0);
+        var sn=(+(r||{}).sent||0), en=(+(r||{}).edited||0);
+        got.sent+=sn; got.edited+=en;
         got.skipped+=(+(r||{}).skipped||0);
         got.fail+=(+(r||{}).fail||0);
-        done.push(j.name+'（新しく '+(+(r||{}).sent||0)+'・書き換え '
-          +(+(r||{}).edited||0)+'）');
+        ps+=sn; pe+=en;
+        prog(i,base);
         if((+(r||{}).fail||0)){
           stop='⚠ '+esc(String((r||{}).stop_plan||j.name))
             +'で送れないカードがあって止まりました'
             +((r||{}).stop_status?('（Discord の返事 '
               +esc(String(r.stop_status))+'）'):'');
+          push(j,ps,pe);
           return fin();
         }
         /* 持ち時間で途中まで送った回は、同じプランの続きを頼む。 */
-        if((+(r||{}).left||0)>0&&(++rounds)<SUB_ALL_ROUNDS){
-          line(i,'（続き '+mwN(+r.left)+'件）');
-          return subWait(SUB_ALL_GAP).then(function(){ return step(i); });
+        var lf=(+(r||{}).left||0);
+        if(lf>0){
+          if((++rounds)<SUB_ALL_ROUNDS)
+            return subWait(SUB_ALL_GAP)
+              .then(function(){ return step(i,base,ps,pe); });
+          leftN+=lf;       // 続きを頼む回数の上限に当たった（残り）
         }
+        push(j,ps,pe);
         return subWait(SUB_ALL_GAP).then(function(){ return step(i+1); });
       })['catch'](function(e){
         stop='⚠ '+esc(j.name)+'で止まりました：'+esc(e.message);
+        push(j,ps,pe);
         return fin();
       });
   };
   var fin=function(){
-    if(btn)btn.disabled=false;
+    if(btn){ btn.disabled=false; btn.innerHTML=was||'送る（これで確定）'; }
+    if(big)big.disabled=false;
+    var pel=$('subAllProg'); if(pel)pel.innerHTML='';
     var sum='新しく <b>'+mwN(got.sent)+'件</b>・書き換え <b>'+mwN(got.edited)
-      +'件</b>・そのまま '+mwN(got.skipped)+'件';
+      +'件</b>・失敗 <b>'+mwN(got.fail)+'件</b>'
+      +(leftN?('・残り <b>'+mwN(leftN)+'件</b>'):'')
+      +(got.skipped?('・そのまま '+mwN(got.skipped)+'件'):'');
     var list=done.length?('<br><span class="note2" style="margin:0">'
-      +done.map(function(s){ return esc(s); }).join('　')+'</span>'):'';
-    subAllNote(stop
+      +done.map(function(x){
+        return esc(x.name)+(x.ch?('（#'+esc(x.ch)+'）'):'')
+          +' 新しく '+mwN(x.sent)+'・書き換え '+mwN(x.edit); }).join('<br>')
+      +'</span>'):'';
+    var msg=stop
       ? (stop+'<br><b>ここまで出ました</b>：'+sum+list
          +'<br>直してから、もう一度「送る」を押してください'
          +'（出したぶんは二重に出ません）。')
-      : ('✓ <b>ぜんぶ送りました</b>（'+sum+'）'+list),!!stop);
+      : ('✓ <b>送りました</b>：'+sum+list
+         +(leftN?('<br>残りがあります。'
+           +'もう一度「送る」を押すと続きからやります。'):''));
+    subAllNote(msg,!!stop);
+    subResRender(msg,!!stop);
+    if(!stop)subStepDone('sent');
+    /* 8.36 結果が出たら、そこまで自動でスクロールする。 */
+    if(!subScroll('subAllNote2'))subScroll('subAllNote');
     /* 予定を読み直して、確認の画面も今の状態にそろえる
        （続きを押すときに、送り終えた行が「そのまま」になる）。 */
     return Promise.resolve(subPlanGo(true)).then(function(){
       var box=$('subAllBox');
       if(box&&box.innerHTML&&subPlanData){
         box.innerHTML=subAllHtml(subPlanData); subAllSum();
+        /* 作り直した画面にも、同じ結果をそのまま出す。 */
+        subAllNote(msg,!!stop);
+        subScroll('subAllNote2');
       }
     })['catch'](function(){});
   };
@@ -17793,6 +17918,7 @@ function subLoadedPut(){
     /* 予定の出し直しで文が上書きされないよう、知らせは**最後に**出す。 */
     var msg='✓ '+mwN(+r.n||0)
       +'件に「Shopify に読み込みました」の印を付けました。';
+    subStepDone('loaded');         // 8.36 ②の段に「✓ 済」を出す
     return Promise.resolve(subPlanGo(true))['catch'](function(){ })
       .then(function(){ subNote(msg); });
   })['catch'](function(e){
@@ -17880,6 +18006,7 @@ function subShopCsvGo(){
               +(no.length>10?('<br>…ほか '+mwN(no.length-10)+'件'):'')
               +'</div>'):'');
           subLoadedClose();
+          subStepDone('loaded');   // 8.36 ②の段に「✓ 済」を出す
           return subPlanGo(true);
         });
     })['catch'](function(e){
@@ -26557,7 +26684,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v293';   // sw.js の const V と必ず同じ値にする
+var APP_V='v294';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

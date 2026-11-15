@@ -137,7 +137,8 @@ console.log('=== ④ プランの順に1本ずつ送る ===');
   await p.waitForTimeout(3500);
   const t=await p.evaluate(()=>({
     q:window.__q.filter((x)=>x.u==='send').map((x)=>x.b),
-    note:($('subAllNote').textContent||'').replace(/\s+/g,' ') }));
+    note:($('subAllNote').textContent||'').replace(/\s+/g,' '),
+    res:($('subResBox').textContent||'').replace(/\s+/g,' ') }));
   console.log('   '+JSON.stringify(t.q));
   ok(t.q.length===3,'★★★出すプランの数だけ送る（0件は飛ばす）');
   ok(t.q.map((x)=>x.plan).join(',')==='monitor,premium,one_pre',
@@ -146,11 +147,15 @@ console.log('=== ④ プランの順に1本ずつ送る ===');
   ok((t.q[1].skip||[]).join(',')==='4535506307843',
      '★★★外した行だけ skip で渡す（入れ直した行は送る）');
   ok((t.q[0].skip||[]).length===0,'★外していないプランの skip は空');
-  ok(dlg.some((m)=>/プランの順で送ります/.test(m))
-     &&dlg.some((m)=>/#リスト-モニター/.test(m)),
-     '★★確認の文にチャンネル名と件数を出す');
-  ok(/ぜんぶ送りました/.test(t.note)&&/新しく 4件/.test(t.note),
+  /* 8.36（v294）中身はもう確認の画面で見ているので、ブラウザの
+     「OK／キャンセル」（confirm）は出さない。 */
+  ok(dlg.length===0,'★★★ブラウザの確認（confirm）を出さずに送る');
+  ok(/送りました/.test(t.note)&&/新しく 4件/.test(t.note)
+     &&/失敗 0件/.test(t.note),
      '★★★結果（どれだけ出たか）を出す');
+  ok(/#リスト-モニター/.test(t.note)&&/#目玉商品-先行/.test(t.note),
+     '★★★送ったチャンネルごとの件数も出す（8.36）');
+  ok(/送りました/.test(t.res),'★★★④「結果」の段にも同じ結果を出す（8.36）');
 }
 
 console.log('=== ⑤ 途中で失敗したら止める ===');

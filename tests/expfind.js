@@ -66,6 +66,7 @@ await openCsvBoxes(p);
 const exp=await p.evaluate(()=>{
   const all=Array.prototype.map.call(document.querySelectorAll('details.exp'),(d)=>({
     key:d.getAttribute('data-exp'), open:d.open,
+    grp:d.classList.contains('grp'),
     sum:(d.querySelector('summary').textContent||'').trim(),
     len:(d.textContent||'').replace(/\s+/g,'').length,
     tab:['tabCsv','tabSync','tabPricing','tabListing','tabAmz']
@@ -75,8 +76,14 @@ const exp=await p.evaluate(()=>{
 console.log('   '+exp.n+'件: '+JSON.stringify(exp.all.map((x)=>x.key)));
 ok(exp.n>=12,'★★長い説明文が畳める形になっている');
 ok(exp.all.every((x)=>x.open===false),'★★★既定は畳んだ状態');
-/* 6.150：⚙では何の説明か分かるように「○○の説明」と書く（1行は同じ）。 */
-ok(exp.all.every((x)=>/説明$/.test(x.sum)),'★★★「説明」の1行で畳む');
+/* 6.150：⚙では何の説明か分かるように「○○の説明」と書く（1行は同じ）。
+   8.36（v294）：ボタンのまとまり（details.exp.grp・そのほかの操作など）は
+   説明文ではないので、見出しは「説明」で終わらない。 */
+ok(exp.all.filter((x)=>!x.grp).every((x)=>/説明$/.test(x.sum)),
+   '★★★「説明」の1行で畳む');
+ok(exp.all.filter((x)=>x.grp).length>=2
+   &&exp.all.filter((x)=>x.grp).every((x)=>x.open===false&&!!x.key),
+   '★★★ボタンのまとまりも既定は畳み、開いた状態を覚える印（data-exp）が付く');
 const tabs=exp.all.map((x)=>x.tab);
 console.log('   タブ: '+JSON.stringify(Array.from(new Set(tabs))));
 ['tabAmz','tabCsv','tabSync'].forEach(function(t){
