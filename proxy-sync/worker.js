@@ -57,6 +57,9 @@ import MGATE from "../shared/mgate.js";
 /* 8.29（カジの依頼）買うかどうかの目安（札・売れ行き・値動き・ライバル・
    赤字にならない売値）。しきい値と言い方はこの1か所だけ。 */
 import SUBGUIDE from "../shared/subguide.js";
+/* 8.37（v296・カジの依頼）売り方ごとの「赤字にならない売値」。
+   率・送料・梱包材は⚙。式と表はこの1か所だけ。 */
+import SELLWAY from "../shared/sellway.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -11115,6 +11118,13 @@ async function subRows(env) {
       ? ((Number(r.fee_ref) || 0) + (Number(r.fee_tax) || 0))
           / Number(r.amz_price)
       : 0,
+    /* 8.37（v296）手数料の**実額**。v287 からカードに渡していなかったので、
+       「赤字にならない売値」の行が**1枚も出ていなかった**（floorOf は
+       手数料が取れていない行を出さないため）。
+       ・fee_total … 販売手数料＋FBA＋消費税（FBA の見積もり）
+       ・fee_fba   … FBA の配送代行手数料（FBA の売値を出すのに使う） */
+    fee_total: Number(r.fee_total) || 0,
+    fee_fba: Number(r.fee_fba) || 0,
     px_min: Number(r.px_min) || 0,
     px_avg: (Number(r.px_n) > 0)
       ? Math.round(Number(r.px_sum) / Number(r.px_n)) : 0,
@@ -18323,6 +18333,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
+  /* 8.37（v296）売り方ごとの「赤字にならない売値」。 */
+  SELLWAY,
   subOrderQty, subOrderList, dcApi,
   SUB_SKIP_KEY, SUB_PRE_KEY, SUB_SEND_KEY, SUB_HOUR_DEFAULT, SUB_CSV_MAX,
   MW_NT_ROWS_MAX, MW_HOPE_YEN,

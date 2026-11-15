@@ -2267,6 +2267,25 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="gdRivalA">ライバルが少ない／ふつう（出品者）</label><input type="number" id="gdRivalA" value="5" step="1" min="0" inputmode="numeric"><input type="number" id="gdRivalB" value="15" step="1" min="0" inputmode="numeric"><span class="unit">人以内</span></div>
         <div class="row cfgprice"><label for="gdRateA">利益率が高め／ふつう</label><input type="number" id="gdRateA" value="25" step="1" min="0" max="100" inputmode="numeric"><input type="number" id="gdRateB" value="12" step="1" min="0" max="100" inputmode="numeric"><span class="unit">%以上</span></div>
         <div class="row cfgprice"><label for="gdPxPct">平均より高い／安いと言う幅</label><input type="number" id="gdPxPct" value="5" step="1" min="0" max="50" inputmode="numeric"><span class="unit">%</span></div>
+        <!-- 8.37（v296・カジの依頼）「赤字にならない売値」を売り方ごとに出す。
+             率・送料・梱包材はここで直す（コードに数字を書かない）。
+             決まりは shared/sellway.js の1か所だけ。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>赤字にならない売値（売り方ごと）</b></div>
+        <div class="note2" style="margin:0 0 6px">ゲーム数本だと FBA は<b>倉庫までの送料</b>で利益が消えるので、会員の多くは <b>Amazon 自己配送・メルカリ・ヤフオク</b>で売ります。カードには<b>売り方ごとに</b>「この値段以上で売れれば赤字になりません」を出します。<b>メルカリ・ヤフオクの相場は取りに行きません</b>（規約で機械的な読み取りが禁止されているため）。</div>
+        <div class="rowv cfgprice"><label for="gdWays">カードに出す売り方</label><input type="text" id="gdWays" value="" placeholder="amz_self,mercari,yahoo" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px"><code>amz_self</code>＝Amazon 自己配送／<code>amz_fba</code>＝Amazon FBA／<code>mercari</code>＝メルカリ／<code>yahoo</code>＝ヤフオク。カンマで区切ります（<b>空なら amz_self,mercari,yahoo</b>）。</div>
+        <div class="row cfgprice"><label for="gdFeeMercari">メルカリ／ヤフオクの手数料</label><input type="number" id="gdFeeMercari" value="10" step="0.5" min="0" max="50" inputmode="decimal"><input type="number" id="gdFeeYahoo" value="10" step="0.5" min="0" max="50" inputmode="decimal"><span class="unit">%</span></div>
+        <div class="note2" style="margin:0 0 6px">左が<b>メルカリの販売手数料</b>、右が<b>ヤフオクの落札システム利用料</b>です。</div>
+        <div class="row cfgprice"><label for="gdAmzClose">Amazon の成約料（1点ごと）</label><input type="number" id="gdAmzClose" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px">本・CD・DVD などで<b>1点ごとにかかる成約料</b>があるときに入れてください（ゲームは 0 のままで大丈夫です）。<b>販売手数料（カテゴリー別）は、その商品で実際に取れている額</b>を使うので⚙には置いていません。</div>
+        <div class="row cfgprice"><label for="gdPack">梱包材（自己配送）／FBA 倉庫までの送料</label><input type="number" id="gdPack" value="20" step="10" min="0" max="2000" inputmode="numeric"><input type="number" id="gdFbaIn" value="50" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px">左が<b>自己配送の梱包材</b>（1点あたり）、右が <b>FBA の倉庫までの送料</b>（1点あたり）です。</div>
+        <div class="note2" style="margin:6px 0 2px"><b>送料（送り方の区分ごと・1点あたり）</b></div>
+        <div class="row cfgprice"><label for="gdShipCp">クリックポスト（薄物）</label><input type="number" id="gdShipCp" value="185" step="10" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="gdShipLetter">レターパックプラス</label><input type="number" id="gdShipLetter" value="600" step="10" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="gdShipCompact">宅急便コンパクト</label><input type="number" id="gdShipCompact" value="520" step="10" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="row cfgprice"><label for="gdShipBox60">宅配便（60／80／100以上）</label><input type="number" id="gdShipBox60" value="800" step="50" min="0" max="20000" inputmode="numeric"><input type="number" id="gdShipBox80" value="1000" step="50" min="0" max="20000" inputmode="numeric"><input type="number" id="gdShipBox" value="1200" step="50" min="0" max="20000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px">送り方の区分は<b>商品の大きさ</b>から決めます（決まりは「会員に出す（Shopify）」の送料と同じ）。<b>ネコポス</b>のように同じ大きさの送り方を使うときは、<b>クリックポストの欄にその金額</b>を入れてください。<b>区分が分からない商品は送料を足さず、カードに「送料は別」と書きます。</b></div>
         <div class="note2" style="margin:10px 0 2px"><b>プランごとに出す項目</b>（<code>badge,sell,px,rival,floor,limit</code> から選ぶ）</div>
         <div class="rowv cfgprice"><label for="gdItemsMonitor">　モニター</label><input type="text" id="gdItemsMonitor" value="" placeholder="badge,sell" inputmode="text"></div>
         <div class="rowv cfgprice"><label for="gdItemsLight">　ライト</label><input type="text" id="gdItemsLight" value="" placeholder="badge,sell,rival" inputmode="text"></div>
@@ -2771,6 +2790,9 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwsite.js"></script>
 <!-- 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。 -->
 <script src="./shared/subplan.js"></script>
+<!-- 8.37 売り方ごとの「赤字にならない売値」（Amazon 自己配送・FBA・
+     メルカリ・ヤフオク）。subguide.js より**先**に読む。 -->
+<script src="./shared/sellway.js"></script>
 <!-- 8.29 買うかどうかの目安（札・売れ行き・値動き・ライバル・最低価格）。
      subcard.js より**先**に読む（カードがこれを使う）。 -->
 <script src="./shared/subguide.js"></script>
@@ -2819,6 +2841,10 @@ if(typeof PJ_SUBCARD==='undefined')
 /* 8.29 買うかどうかの目安（しきい値と言い方）。pj-sync も同じこれを読む。 */
 if(typeof PJ_SUBGUIDE==='undefined')
   throw new Error('shared/subguide.js が読み込めていません（買うかどうかの目安）');
+/* 8.37 売り方ごとの「赤字にならない売値」。pj-sync も同じこれを読む。 */
+if(typeof PJ_SELLWAY==='undefined')
+  throw new Error('shared/sellway.js が読み込めていません（売り方ごとの売値）');
+var SELLWAY=PJ_SELLWAY;
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
@@ -3545,6 +3571,11 @@ var ADV_SUB=['subHour','subDomain',
              'gdMode','gdOldDays','gdRankA','gdRankB','gdSellA','gdSellB',
              'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
              'gdItemsMonitor','gdItemsLight','gdItemsStandard','gdItemsPremium',
+             /* 8.37 売り方ごとの「赤字にならない売値」（率・送料・梱包材）。
+                pj-sync がカードを作るときに読む。 */
+             'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
+             'gdFbaIn','gdShipCp','gdShipLetter','gdShipCompact',
+             'gdShipBox60','gdShipBox80','gdShipBox',
              /* 8.30 固定メッセージ（共通の置き場・締めと発送の曜日）。 */
              'gdPinCh','gdCloseDay','gdShipDay',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
@@ -6376,6 +6407,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
                  'gdItemsMonitor','gdItemsLight','gdItemsStandard',
                  'gdItemsPremium','gdPinCh','gdCloseDay','gdShipDay',
+                 /* 8.37 売り方ごとの「赤字にならない売値」。 */
+                 'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
+                 'gdFbaIn','gdShipCp','gdShipLetter','gdShipCompact',
+                 'gdShipBox60','gdShipBox80','gdShipBox',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
                  'mwSubCols',
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
@@ -17241,7 +17276,14 @@ function gdCfg(){
            gdItemsPremium:v('gdItemsPremium'),
            /* 8.30 固定メッセージ（共通の置き場・注文の流れの曜日）。 */
            gdPinCh:v('gdPinCh'), gdCloseDay:v('gdCloseDay'),
-           gdShipDay:v('gdShipDay') };
+           gdShipDay:v('gdShipDay'),
+           /* 8.37 売り方ごとの「赤字にならない売値」（率・送料・梱包材）。 */
+           gdWays:v('gdWays'), gdFeeMercari:v('gdFeeMercari'),
+           gdFeeYahoo:v('gdFeeYahoo'), gdAmzClose:v('gdAmzClose'),
+           gdPack:v('gdPack'), gdFbaIn:v('gdFbaIn'),
+           gdShipCp:v('gdShipCp'), gdShipLetter:v('gdShipLetter'),
+           gdShipCompact:v('gdShipCompact'), gdShipBox60:v('gdShipBox60'),
+           gdShipBox80:v('gdShipBox80'), gdShipBox:v('gdShipBox') };
 }
 /* 刈取の行（mwAmzRows）から、目安に渡す形を作る。
    ・price    … **会員が買う値段**（会員価格）
@@ -26748,7 +26790,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v295';   // sw.js の const V と必ず同じ値にする
+var APP_V='v296';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

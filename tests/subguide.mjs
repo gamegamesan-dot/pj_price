@@ -128,29 +128,53 @@ console.log('=== ④ プランごとに出す項目 ===');
      '★★★⚙でプランごとに変えられる');
   ok(G.cardOf(GOOD,{ gdItemsMonitor:'sell' },'monitor',NOW).badge===null,
      '★★★札そのものを外すこともできる');
-  /* 1行の長さ（カードが長くなりすぎないように）。 */
+  /* 1行の長さ（カードが長くなりすぎないように）。
+     8.37（v296）「赤字にならない売値」だけは**売り方ごとに1行**なので
+     改行が入る（ほかの項目は今までどおり1項目1行）。 */
   const L=G.cardOf(GOOD,{ gdMode:'num' },'premium',NOW).lines;
-  ok(L.every((x)=>String(x.value).indexOf('\n')<0),
+  ok(L.filter((x)=>x.name!=='赤字にならない売値')
+      .every((x)=>String(x.value).indexOf('\n')<0),
      '★★★1項目1行（改行を入れない）');
+  ok(L.filter((x)=>x.name==='赤字にならない売値')
+      .every((x)=>String(x.value).split('\n').length<=5),
+     '★★売り方ごとの売値も5行まで（カードが長くなりすぎない）');
 }
 
-console.log('=== ⑤ 赤字にならない売値 ===');
+console.log('=== ⑤ 赤字にならない売値（売り方ごと・8.37）===');
 {
-  /* 会員価格 3,645／いまの売値 5,800／手数料 900（率 15%＝870・固定 30）
-     → (3645+30) / (1-0.15) = 4,323.5 → 10円単位で 4,330 */
+  /* 会員価格 3,645／率 15%。送り方が分からないので送料は足さない。
+     Amazon 自己配送 … (3645 + 梱包材20) / (1-0.15) = 4,311.8 → 4,320
+     メルカリ・ヤフオク … 3645 / (1-0.10) = 4,050 → 4,050 */
   const f=G.floorOf(GOOD);
-  console.log('   '+f.text);
-  ok(f.ok&&f.yen===4330,'★★★会員価格と手数料から、赤字にならない売値を出す');
-  ok(/送料は別/.test(f.text),'★★★送料は別と書く');
+  console.log('   '+String(f.text).replace(/\n/g,' ／ '));
+  ok(f.ok&&f.yen===4320,'★★★会員価格と手数料から、赤字にならない売値を出す');
+  ok(/Amazon 自己配送/.test(f.text)&&/メルカリ/.test(f.text)
+     &&/ヤフオク/.test(f.text),
+     '★★★売り方ごとに出す（既定は Amazon 自己配送・メルカリ・ヤフオク）');
+  ok(/送料は別/.test(f.text),
+     '★★★送り方が分からない行は送料を足さず「送料は別」と書く');
   ok(f.yen>Math.round(GOOD.price),'★会員価格より高い（当然）');
-  /* 率が取れていない行は、手数料ぜんぶを比例とみなす（安全側に高く出る）。 */
+  /* 送り方が分かる行は、⚙の送料を引いたあとの値段になる。 */
+  const f3=G.floorOf(GOOD,{ shipKey:'cp', shipSure:true,
+                            shipName:'クリックポスト' });
+  console.log('   送り方が分かるとき：'
+    +String(f3.text).replace(/\n/g,' ／ '));
+  ok(f3.ok&&f3.yen>f.yen,'★★★送料のぶん高くなる');
+  ok(/送料 ¥185/.test(f3.text)&&/クリックポスト/.test(f3.text),
+     '★★★引いた送料と送り方を書く');
+  /* 率が取れていない行は、**Amazon の売り方を出さない**
+     （当てずっぽうの額は出さない）。メルカリ・ヤフオクは⚙の率で出せる。 */
   const f2=G.floorOf({ ...GOOD, fee_rate:0 });
-  console.log('   率が分からないとき：'+f2.text);
-  ok(f2.ok&&f2.yen>f.yen&&f2.yen===4550,
-     '★★★率が分からない行は「手数料は安くならない」とみなす（安全側）');
-  ok(!G.floorOf({ ...GOOD, fee_total:0 }).ok,
-     '★★★手数料が取れていない行は出さない');
+  console.log('   率が分からないとき：'
+    +String(f2.text).replace(/\n/g,' ／ '));
+  ok(f2.ok&&!/Amazon/.test(f2.text)&&/メルカリ/.test(f2.text),
+     '★★★Amazon の手数料が取れていない行は、Amazon の売り方を出さない');
   ok(!G.floorOf({ ...GOOD, price:0 }).ok,'★会員価格が無い行は出さない');
+  /* ⚙で売り方を選べる。 */
+  const f4=G.floorOf(GOOD,{ gdWays:'amz_fba' });
+  console.log('   FBA だけ：'+String(f4.text).replace(/\n/g,' ／ '));
+  ok(f4.ok&&/Amazon FBA/.test(f4.text)&&!/メルカリ/.test(f4.text),
+     '★★★⚙でどの売り方を出すか選べる');
 }
 
 console.log('=== ⑥ 売れ行きと値動きの出どころ ===');

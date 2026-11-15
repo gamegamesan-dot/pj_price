@@ -90,6 +90,17 @@
   function yen(n) {
     return "¥" + Math.round(num(n)).toLocaleString("en-US");
   }
+  /* 8.37（v296・カジの依頼）売り方ごとの「赤字にならない売値」。
+     率・送料・梱包材の決まりは shared/sellway.js の1か所だけ。
+     読めないときは、その行を出さない（当てずっぽうの額は出さない）。 */
+  function sellMod() {
+    var g = (typeof globalThis !== "undefined") ? globalThis : root;
+    if (g && g.PJ_SELLWAY) return g.PJ_SELLWAY;
+    if (typeof require === "function") {
+      try { return require("./sellway.js"); } catch (e) { return null; }
+    }
+    return null;
+  }
   /* 出し方（'word'＝言葉だけ／'num'＝数字も）。既定は word。 */
   function modeOf(opt) {
     return (s((opt || {}).gdMode).toLowerCase() === "num") ? "num" : "word";
@@ -191,37 +202,21 @@
                   + (amz ? "・Amazon 本体あり" : "") + "）")
                : (w + ((amz && n > 0) ? "（出品者も多めです）" : "")) };
   }
-  /* ---- 5 赤字にならない売値 ----
-     会員が買う値段（会員価格）＋ Amazon の手数料を引いても残る売値。
-       売値 P のときの手数料 ≒ P × 率 ＋ 固定（FBA）
-       P − 手数料 = 会員価格  →  P = (会員価格 + 固定) / (1 − 率)
-     率と固定は、**その行で取れている手数料**（Amazon が返した実額）から出す。
-     送料（会員のところへ届ける送料）は**別**なので、そう書く。 */
+  /* ---- 5 赤字にならない売値（8.37・v296）----
+     **売り方ごと**に「この値段以上で売れれば赤字にならない」を出す。
+     ゲーム数本だと FBA は倉庫までの送料で利益が消えるので、
+     会員の多くは Amazon 自己配送・メルカリ・ヤフオクで売るため。
+     ・どの売り方を出すか、率・送料・梱包材は**ぜんぶ⚙**
+     ・送料はその商品の**送り方の区分**から引く（opt.shipKey）。
+       区分が分からない行は送料を足さず「送料は別」と書く
+     ・式と表は shared/sellway.js の1か所だけ（画面・pj-sync が同じものを読む） */
   function floorOf(r, opt) {
-    var x = r || {};
-    var cost = Math.round(num(x.price));          // 会員が買う値段（税込）
-    var p0 = Math.round(num(x.amz_price));        // いまの Amazon の売値
-    var fee = Math.round(num(x.fee_total));       // その売値のときの手数料
-    if (!(cost > 0 && p0 > 0 && fee > 0)) return { ok: false, text: "" };
-    /* 率と固定に分ける。率は「売値に比例するぶん」（販売手数料＋その消費税）、
-       固定は残り（FBA の配送代行・在庫管理）。
-       率が取れないときは、ぜんぶ比例とみなす（安全側に高めに出る）。 */
-    var rate = num(x.fee_rate);
-    var fix = 0;
-    if (rate > 0 && rate < 1) {
-      fix = Math.max(0, fee - p0 * rate);
-    } else {
-      /* 率が分からない行は、**手数料は安くならない**とみなす
-         （そのぶん売値は高めに出る＝安全側）。 */
-      rate = 0; fix = fee;
-    }
-    if (!(rate >= 0 && rate < 0.9)) return { ok: false, text: "" };
-    var p = (cost + fix) / (1 - rate);
-    if (!isFinite(p) || p <= 0) return { ok: false, text: "" };
-    p = Math.ceil(p / 10) * 10;
-    return { ok: true, yen: p,
-             text: yen(p) + " 以上で売れれば赤字になりません"
-               + "（Amazon の手数料を引いたあと・**送料は別**）" };
+    var W = sellMod();
+    if (!W || typeof W.linesOf !== "function") return { ok: false, text: "" };
+    var g = W.linesOf(r || {}, opt || {});
+    if (!g.ok) return { ok: false, text: "" };
+    return { ok: true, text: g.text, items: g.items,
+             yen: g.items.length ? g.items[0].yen : 0 };
   }
   /* ---- 1 総合の札 ---- */
   /* 売れ行き・ライバル・利益率の3つで決める。
@@ -366,10 +361,15 @@
       + planNote("rival", o)
       + " … 新品の出品者の数と、Amazon 本体が売っているかです。"
       + "本体が売っているときは札を下げています");
-    if (has("floor")) it.push("・**" + ITEM_JA.floor + "**"
-      + planNote("floor", o)
-      + " … この値段以上で売れれば赤字になりません"
-      + "（Amazon の手数料を引いたあと・**送料は別**）");
+    /* 8.37（v296）売り方ごとに出すので、説明も売り方に合わせる。
+       文は shared/sellway.js の1か所だけ（⚙で売り方を変えると文も変わる）。 */
+    if (has("floor")) {
+      var SW = sellMod();
+      it.push("・**" + ITEM_JA.floor + "**" + planNote("floor", o)
+        + " … " + ((SW && typeof SW.pinJa === "function")
+          ? SW.pinJa(o)
+          : "この値段以上で売れれば赤字になりません（**送料は別**）"));
+    }
     if (it.length) {
       L.push("");
       L.push("**カードの項目**");

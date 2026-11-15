@@ -23,7 +23,10 @@
   /* 6.197（8.34）カードから「出品できるか」の行を外した
      （同じ注意は #はじめに の共通の文に入る）。ここを上げたので、
      すでに送ったカードも次の配信・書き直しで**その行が消える**。 */
-  var CARD_V = "6.197";
+  /* 8.37（v296）「赤字にならない売値」を**売り方ごと**に出し、
+     「見込みの粗利」にどの売り方の計算かを書いた。ここを上げたので、
+     すでに送ったカードも次の配信・書き直しで**新しい形に書き換わる**。 */
+  var CARD_V = "6.198";
   var EMB_MAX = 10;                // 1通に入れられる箱の数
   var EMB_CHARS = 5600;            // 1通の字数（6,000 の手前）
   var COLOR = 0x1f8a3d;            // 会員用のカードの色（緑）
@@ -243,16 +246,32 @@
                value: yen(x.gross)
                  + ((pct === null) ? "" : ("（利益率 " + pct + "%）"))
                  /* 小さく添える（Discord の「小さい文字」(-#) は
-                    この環境から確かめられないので、ふつうの括弧で出す）。 */
-                 + "\n（Amazon の手数料を引いたあと・送料は別）",
+                    この環境から確かめられないので、ふつうの括弧で出す）。
+                    8.37（v296・カジの依頼3）**どの売り方の計算か**を書く。
+                    Amazon が返す手数料は FBA の見積もり（IsAmazonFulfilled）
+                    なので、FBA で売った場合の粗利になる。 */
+                 + "\n（**Amazon FBA で売った場合**・Amazon の手数料を"
+                 + "引いたあと・送料と倉庫までの送料は別）",
                inline: true });
     }
     /* 8.29（カジの依頼）買うかどうかの目安（1項目1行）。
        プランごとに出す項目を⚙で選べる。取れていない項目は出さない。
        決まりは shared/subguide.js の1か所だけ。 */
     var G = guideMod();
+    /* 8.37（v296）「赤字にならない売値」は**送料**も引くので、
+       その商品の送り方の区分を目安に渡す（決めるのは shopcsv.js）。 */
+    var gopt = opt.guide || {};
+    var S2 = shopMod();
+    if (S2 && typeof S2.shipWay === "function") {
+      var w2 = S2.shipWay(x, opt);
+      var g2 = {};
+      for (var gk in gopt) if (Object.prototype.hasOwnProperty.call(gopt, gk))
+        g2[gk] = gopt[gk];
+      g2.shipKey = w2.key; g2.shipName = w2.name; g2.shipSure = !!w2.sure;
+      gopt = g2;
+    }
     var gd = (G && typeof G.cardOf === "function")
-      ? G.cardOf(x, opt.guide || {}, s(opt.planKey), opt.now) : null;
+      ? G.cardOf(x, gopt, s(opt.planKey), opt.now) : null;
     if (gd) for (var gi = 0; gi < gd.lines.length; gi++)
       f.push({ name: gd.lines[gi].name,
                value: s(gd.lines[gi].value).slice(0, 300), inline: false });
