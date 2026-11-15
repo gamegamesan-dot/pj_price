@@ -94,20 +94,28 @@ console.log('=== ④ 売れる速さ 0点の行は後ろに回す ===');
   const r=(jan,o)=>Object.assign({ jan:jan, name:'ふつうのゲーム'+jan,
     fit:true, rst:'ok', amz:0, buy_qty:0, price:3000, qty:1, gross:800,
     speed:1, stock:9, is_game:true, grades:'', no_back:false },o||{});
+  /* 8.43（v302）モニターは「速く売れる品だけ」になったので、
+     速さ0の行の並びは**ライト**（ゲームソフト全件）で見る。
+     モニターの並びは tests/submon.mjs。 */
   const d=P.draft([r('1',{ speed:0, gross:9000 }), r('2',{ speed:1 }),
-                   r('3',{ speed:3 })],[mon()],{});
+                   r('3',{ speed:3 })],[lig()],{});
   const got=d.plans[0].items.map((x)=>x.jan);
   console.log('   並び：'+got.join(','));
   ok(got[got.length-1]==='1',
      '★★★速さ 0点の行は、粗利が大きくてもいちばん後ろ');
   ok(d.plans[0].items.filter((x)=>x.slow).length===1,'★★★速さ0の印が付く');
   ok(got[0]==='3','★ほかは今までどおり粗利×速さの順');
-  const d2=P.draft([r('4',{ name:'薔薇と椿 〜お豪華絢爛版〜' }),
-                    r('5',{ name:'◯◯ 限定版' })],[mon()],{});
+  const d0=P.draft([r('9',{ qty:0 })],[lig()],{});
+  ok(d0.plans[0].items.length===0&&d0.plans[0].skip===1,
+     '★外した件数も数える');
+  /* 限定版を外すのはモニターだけの決まり（速さは下限を通る 3点/日）。 */
+  const d2=P.draft([r('4',{ name:'薔薇と椿 〜お豪華絢爛版〜', speed:3 }),
+                    r('5',{ name:'◯◯ 限定版', speed:3 })],[mon()],{});
   ok(d2.plans[0].items.length===1&&d2.plans[0].items[0].jan==='4',
      '★★★限定版は案に入らない');
   ok(d2.plans[0].items[0].maybe===true,'★★★要確認の印が付く');
-  ok(d2.plans[0].skip===1,'★外した件数も数える');
+  ok(d2.plans[0].mon.okN===1,
+     '★モニターの候補の数も返す（外した分は数に入らない）');
 }
 
 T.done();
