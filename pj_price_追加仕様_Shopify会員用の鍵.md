@@ -451,3 +451,257 @@ v283 はそこに `?return_to=` をそのままつないでいたので
 - https://help.shopify.com/en/manual/promoting-marketing/seo/hide-a-page-from-search-engines （`seo.hidden`）
 - https://www.shopify.com/blog/noindex-shopify-page （`seo.hidden` の効き方）
 - https://shopify.dev/docs/storefronts/themes/sign-in （ログインと `return_to`）
+
+## 12. 複製テーマ「Rise のコピー」に貼る手順（v284・作業の順）
+
+対象：複製テーマ **「Rise のコピー」（id 168765456547）**／**公開しません**。
+すでに入れてあるもの（カジ・2026-11-14）：
+`snippets/member-gate.liquid`・`member-can-see.liquid`（**v283 の版**）、
+`layout/theme.liquid` の3か所（`head` の判定・`content_for_header`・`content_for_layout`）。
+
+> **v284 で変わったのは `member-gate.liquid` の1ファイルだけ**です
+> （戻り先の `?`／`&`）。`member-can-see.liquid` は v283 のままで直しは
+> ありません。あとは**まだテーマに入れていない差し込み**（一覧・検索・
+> おすすめ）を足します。
+
+### 手順 0. 触る前に（1分）
+
+1. **オンラインストア → テーマ** → 「Rise のコピー」の「…」→
+   **ZIP をダウンロード**（いつでもこの状態に戻せます）
+2. 直すのは**複製のほう**だけ。公開中のテーマは触りません
+3. 「…」→ **コードを編集**を開く
+
+### 手順 1. `snippets/member-gate.liquid` を貼り替える（v284）
+
+左の一覧から `snippets/member-gate.liquid` を開き、**中身をぜんぶ消して**
+下を貼り、**保存**します。
+
+> 見分け方：いまの中身の2行目が `会員用商品の鍵（pj_price 8.24）` だけなら
+> **v283**です（v284 は `8.24／8.26`）。
+
+<!-- Liquid は raw の中に置く（GitHub Pages が自分のものとして読まないように） -->
+{% raw %}
+
+```liquid
+{%- comment -%}
+  会員用商品の鍵（pj_price 8.24／8.26）
+  Shopify ストア：Omakase Ship ／ テーマ：Rise
+
+  これは「商品ページを見せてよいか」を決めるだけの部品です。
+  **飛ばす先の URL を出すだけ**で、商品の中身は何も出しません。
+
+  決まり（上から順に見る。pj の shared/mgate.js と同じ順）
+    ① 商品に member-list が無い → だれでも見られる
+    ② ログインしていない       → ログインへ（戻り先つき）
+    ③ 顧客に member-staff      → ぜんぶ見られる（社内の確認用）
+    ④ 顧客に member-list が無い → /pages/members-only
+    ⑤ 商品の grade-◯◯ と顧客の grade-◯◯ が1つも合わない
+       → /pages/members-only?why=plan
+       商品に grade-◯◯ が1つも無いときは、会員ならだれでも見られる
+
+  ▼ ログインの行き先（8.26）
+    このストアは新しい顧客アカウントなので、routes.account_login_url が
+      /customer_authentication/redirect?locale=ja&region_country=JP
+    のように**最初から ? が付いて**返ってきます。
+    そこに '?return_to=' をつなぐと戻れないので、
+    **? があれば & でつなぐ**ようにしました。
+{%- endcomment -%}
+{%- liquid
+  # ログインしていない人の行き先。ここの1行だけで切り替えられる。
+  # 'routes'  … テーマの決まりのログイン URL（既定）
+  # 'classic' … /account/login?return_to=… に送る（旧のログイン画面）
+  # 'page'    … ログインに飛ばさず /pages/members-only に案内する
+  assign member_login_mode = 'routes'
+
+  assign gate = ''
+  assign p = product
+  if p != blank and p.tags contains 'member-list'
+    if customer == blank
+      if member_login_mode == 'page'
+        assign gate = '/pages/members-only?why=login'
+      else
+        assign back = p.url | default: request.path | url_encode
+        if member_login_mode == 'classic'
+          assign lurl = '/account/login'
+        else
+          assign lurl = routes.account_login_url | default: '/account/login'
+        endif
+        # すでに ? が付いている URL（新しい顧客アカウント）は & でつなぐ。
+        assign sep = '?'
+        if lurl contains '?'
+          assign sep = '&'
+        endif
+        assign gate = lurl | append: sep | append: 'return_to=' | append: back
+      endif
+    elsif customer.tags contains 'member-staff'
+      assign gate = ''
+    elsif customer.tags contains 'member-list'
+      assign need = false
+      assign hit = false
+      for t in p.tags
+        assign head = t | slice: 0, 6
+        if head == 'grade-'
+          assign need = true
+          if customer.tags contains t
+            assign hit = true
+          endif
+        endif
+      endfor
+      if need and hit == false
+        assign gate = '/pages/members-only?why=plan'
+      endif
+    else
+      assign gate = '/pages/members-only'
+    endif
+  endif
+-%}{{ gate }}
+```
+
+{% endraw %}
+
+### 手順 2. `snippets/member-can-see.liquid` は**そのまま**
+
+v284 で直していません。開いて、**最後の行が `{% raw %}{{ ok }}{% endraw %}`**
+になっていれば入っています（何もしなくてよい）。
+
+### 手順 3. `layout/theme.liquid`（4か所目・まだなら）
+
+すでに3か所（`head` の判定・`content_for_header`・`content_for_layout`）は
+入っています。**4か所目**として、`<head>` の中で**商品名と値段を出している行**
+（`<title>` と `og:` のところ）も囲みます。
+囲まなくても商品ページは見せませんが、**ページのソースに商品名が残る**ので、
+カジの決まり5（商品名・価格を HTML に出さない）のために囲みます。
+
+検索する文字：`og:` ／ `meta-tags` ／ `<title>`
+
+{% raw %}
+
+```liquid
+  {%- if member_gate == blank -%}
+    {%- comment -%} ↓ もとからある行（テーマの版で名前が違います） {%- endcomment -%}
+    <title>{{ page_title }}</title>
+    {%- render 'meta-tags' -%}
+  {%- else -%}
+    <title>会員向けの商品です</title>
+  {%- endif -%}
+```
+
+{% endraw %}
+
+> **入れたかどうかは §12 手順 6 の「ソースに商品名が出ない」で分かります。**
+> 出なければ、この手順は飛ばして構いません。
+
+### 手順 4. 一覧・検索・おすすめから外す（**今回の本体**）
+
+コードエディタの検索で **`card-product`** と打ち、出てきたファイルを
+**ぜんぶ**直します。Rise では次の3つです。
+
+| # | ファイル | どこの一覧か |
+| --- | --- | --- |
+| 4-1 | `sections/main-collection-product-grid.liquid` | コレクションの一覧（`/collections/all`・会員用コレクション） |
+| 4-2 | `sections/main-search.liquid` | 検索の結果 |
+| 4-3 | `sections/related-products.liquid` | 商品ページの下の「関連商品」 |
+
+**どこに入れるか**：`card-product` を**出している行**（`render 'card-product'`
+と書いてある1行）を見つけて、その**すぐ上に4行**・**すぐ下に2行**を足します。
+行番号ではなく、この「もとからある行」を目印にしてください。
+
+{% raw %}
+
+```liquid
+      {%- comment -%} ここから足す（pj 8.26 会員用の鍵） {%- endcomment -%}
+      {%- capture can_see -%}
+        {%- render 'member-can-see', product: card_product -%}
+      {%- endcapture -%}
+      {%- if can_see | strip == 'yes' -%}
+
+        {%- render 'card-product', card_product: card_product, … -%}
+        {%- comment -%} ↑ もとからある行。1文字も変えない {%- endcomment -%}
+
+      {%- endif -%}
+      {%- comment -%} ここまで足す {%- endcomment -%}
+```
+
+{% endraw %}
+
+**`product:` の右に書くもの**は、**もとの行の `card_product:` の右側と同じ**です。
+
+| もとの行がこうなら | `member-can-see` に渡すのは |
+| --- | --- |
+| `card_product: card_product` | `product: card_product` |
+| `card_product: product` | `product: product` |
+| `card_product: item` | `product: item` |
+| `card_product: recommendation` | `product: recommendation` |
+
+- 囲む行は必ず**くり返しの中**（`for` 〜 `endfor` の間）にあります。
+  外にある `card-product` は囲みません
+- 1ファイル直すごとに**保存**し、手順 6 の確かめを1つずつ進めると安心です
+
+**4-4. 検索の候補（打っている途中に出る小さな一覧）**
+
+検索で `predictive-search` と打ちます。出たファイルの中に
+`card-product` か、商品名を出している `for` のくり返しがあれば、
+同じように囲みます（Rise の版によって無いこともあります）。
+**`seo.hidden` に 1 を入れてあれば、候補にも出ません**ので、
+手順 6 の検索の確かめで出なければ、ここは触らなくて構いません。
+
+### 手順 5. ページの確認
+
+`/pages/members-only`（タイトル「会員向けのご案内」）があるか見ます。
+無ければ §4 のとおり作ります。
+
+### 手順 6. 確かめる（複製テーマの**プレビュー**で）
+
+テーマの「…」→ **プレビュー**。お客さまには見えません。
+
+**（A）5通り（§7-2）**
+
+| # | 誰で | 開くもの | 出てほしいもの |
+| --- | --- | --- | --- |
+| 1 | ログインなし | 会員用商品 `/products/sub-…` | ログイン画面へ飛ぶ |
+| 2 | タグなしの顧客 | 同じ商品 | 「会員向けの商品です」（`/pages/members-only`） |
+| 3 | `member-list`＋`grade-monitor` | モニター商品／プレミアム商品 | モニターは見られる／プレミアムは「このプランではご覧いただけません」 |
+| 4 | `member-list`＋`grade-premium` | 1点もの `/products/one-…` | 見られる |
+| 5 | `member-staff` | どれでも | ぜんぶ見られる |
+
+**（B）一覧に出ないこと（今回足したぶん）**
+
+| 見るところ | ログインなし／タグなしのとき | `grade-monitor` のとき |
+| --- | --- | --- |
+| `/collections/all` | 会員用商品（`sub-…`・`one-…`）が**1つも並ばない** | モニターの商品だけ並ぶ（プレミアムの1点ものは並ばない） |
+| 検索「**FINAL FANTASY**」 | 会員用商品が**出ない**（候補の小窓にも出ない） | 同上 |
+| 商品ページの下の「**関連商品**」 | 会員用商品が**出ない** | 同上 |
+| 会員用コレクション `/collections/members` | 何も並ばない | モニターの商品だけ並ぶ |
+
+> 件数の数字（「◯◯件」）とページ送りは**外す前の数**のままです（§3-2 の
+> 既知の制限）。並びに出ていなければ合格です。
+
+**（C）ログインしたあと元の商品ページに戻ること**
+
+1. ログアウトしてから `/products/sub-…`（会員用商品）を開く
+2. ログイン画面に飛ぶ → ログインする
+3. **元の商品ページに戻る**か見る
+   - 戻った → そのまま（`member_login_mode = 'routes'`）
+   - 戻らない → `'classic'` に書き替えて同じ手順
+   - どちらも戻らない → **`'page'`** にする（ログインに飛ばさず
+     「会員向けのご案内」に出す。2手になりますが行き止まりになりません）
+
+**（D）ソースに商品名・値段が出ないこと**（PC で）
+
+見られない人で会員用商品を開き、**ページのソースを表示**して
+`Ctrl`＋`F` で**商品名**と**値段の数字**を探す → **1つも出ない**こと。
+出たら、その行を手順 3 と同じように囲みます。
+
+### 手順 7. 公開の前に確かめること（公開はカジが決めます）
+
+| # | 確かめること | なぜ |
+| --- | --- | --- |
+| 1 | 手順 6 の（A）〜（D）が**ぜんぶ通っている** | 公開するとお客さまに見えます |
+| 2 | **SHOPLOCK のアプリ埋め込みが、複製テーマにも入っている**（テーマ → カスタマイズ → 左下の**アプリ埋め込み**） | 公開した瞬間に SHOPLOCK が外れると、鍵が二重になっていない状態で表に出ます。§8 のとおり **SHOPLOCK は公開後 1〜2週間そのまま**にします |
+| 3 | **「関連商品」の欄の出し入れが、公開中のテーマと同じ**（公開中は **11/15 に非表示**にしてあります） | 公開した瞬間に見え方が変わらないように。手順 4-3 を入れたので会員用商品は出ませんが、**出す／出さないはカジが決める**ことなので、まずは**公開中と同じ「非表示」**にそろえます |
+| 4 | 複製テーマの **ZIP を保存**してある（手順 0） | 戻すときのため |
+| 5 | 公開中のテーマの **ZIP も保存**してある | 公開を戻すのは「前のテーマを公開」で足りますが、保険です |
+| 6 | `seo.hidden` の列を pj の⚙に入れてあるか（§5） | 検索エンジン・サイトマップから外すのは**テーマではなくメタフィールド**です |
+
+ここまで通ったら、**公開するかどうかはカジが決めてください**。
+公開後の順番（SHOPLOCK を外すまで）は §8 に書いてあります。
