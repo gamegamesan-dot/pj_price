@@ -38,7 +38,15 @@
     "Type",
     "Tags",
     "Published on online store",
-    "Status",
+    /* 8.41（カジの依頼）**Status の列は出しません**。
+       会員用の商品は Shopify で「**非公開（Unlisted）**」にします
+       （一覧・検索・サイトマップ・/products.json に出ないが、
+       カードのリンク /products/sub-… からは開けて買える）。
+       商品CSV の Status に入れられるのは **active／draft／archived の3つだけ**
+       で、unlisted は入れられません（Shopify のヘルプ・2026-11-15 に確認）。
+       列を出して active と書くと、**上書き取り込みのたびに非公開が
+       解けてしまう**ので、この列ごと出しません。
+       新しく作った商品の非公開は、Shopify の管理画面で付けます（手順書 §13）。 */
     "Option1 name",
     "Option1 value",
     "SKU",                   // 旧 Variant SKU
@@ -621,7 +629,7 @@
     row["Tags"] = tagsOf(r, o).join(", ");
     /* 販売チャネルはオンラインストアだけ。CSV でほかのチャネルは触れない。 */
     row["Published on online store"] = "true";
-    row["Status"] = "active";
+    /* 8.41 Status は出さない（上の COLS のところに理由）。 */
     row["Option1 name"] = s(o1.name);
     row["Option1 value"] = s(o1.value);
     row["SKU"] = skuOf(jan, o.date);
@@ -737,7 +745,7 @@
     /* タグ。grades は「先行のあいだは premium だけ」を入れて渡す。 */
     row["Tags"] = [TAG_MEMBER].concat(gradeTags(r.grades)).join(", ");
     row["Published on online store"] = "true";
-    row["Status"] = "active";
+    /* 8.41 Status は出さない（1点ものも同じ・上の COLS のところに理由）。 */
     row["Option1 name"] = s(o1.name);
     row["Option1 value"] = s(o1.value);
     row["SKU"] = oneSkuOf(r.id, o.date);

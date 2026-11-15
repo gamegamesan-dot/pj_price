@@ -40,9 +40,12 @@ ok(A.COLS.indexOf('Charge tax')>=0&&A.COLS.indexOf('Variant Taxable')<0,
    '★★旧 Variant Taxable ではなく Charge tax');
 ok(A.COLS.indexOf('Continue selling when out of stock')>=0,
    '★★★在庫切れの扱いは Continue selling when out of stock');
+/* 8.41（カジの依頼）会員用の商品は Shopify で「非公開（Unlisted）」にする。
+   商品CSV の Status に unlisted は入れられない（active／draft／archived だけ）
+   ので、**Status の列ごと出さない**（出すと上書きのたびに非公開が解ける）。 */
 ok(A.COLS.indexOf('Published on online store')>=0
-   &&A.COLS.indexOf('Status')>=0,
-   '★★★公開は Published on online store と Status の2本');
+   &&A.COLS.indexOf('Status')<0,
+   '★★★公開は Published on online store だけ（Status は出さない・8.41）');
 ok(A.COLS.indexOf('Option1 name')>=0&&A.COLS.indexOf('Option1 value')>=0,
    '★★★Option1 name と value を必ず出す（入れないとバリアントが消える）');
 ok(A.COLS.indexOf('Barcodes')>=0&&A.COLS.indexOf('Barcode')<0,
@@ -234,8 +237,9 @@ ok(cell(t1,1,'Variant Grams')==='110'
 ok(cell(t1,1,'Option1 Name')==='Title'
    &&cell(t1,1,'Option1 Value')==='Default Title',
    '★★★Option1 は Title / Default Title');
-ok(cell(t1,1,'Published')==='true'
-   &&cell(t1,1,'Status')==='active','★★公開・active');
+ok(cell(t1,1,'Published')==='true','★★オンラインストアに公開する');
+ok(cell(t1,1,'Status')===undefined||cell(t1,1,'Status')==='',
+   '★★★Status の欄を出さない（非公開のままにするため・8.41）');
 ok(cell(t1,1,'Type')==='ゲームソフト','★★Type は設定から');
 ok(cell(t1,1,'Vendor')==='','★★★Vendor は既定で空（保留）');
 ok(cell(t1,1,'Gift Card')==='false','★ギフトカードではない');
