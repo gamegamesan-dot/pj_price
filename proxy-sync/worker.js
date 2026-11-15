@@ -10984,6 +10984,35 @@ async function subSettings(env) {
   };
 }
 /* Discord のボットの口。トークンが無ければ何もしない（false を返す）。 */
+/* ===== 8.38（カジの報告）Discord から消えたカードで止まらない =====
+   「送ったカードをすべて今の形で書き直す」で
+   「⚠ スタンダード（Discord の返事 404）で止まりました」。
+   前のテストで #リスト-スタンダード のカードを手で消していたので、
+   pj に残っている msg_id のメッセージがもう無く、PATCH が 404 になった。
+   そこで止まるので、後ろのプレミアムも書き直せていなかった。
+
+   Discord の番号（本文は読まない。トークンや個人の情報を出さないため）
+     10008 Unknown Message … **そのカードだけ**が消えている（手で削除など）
+     10003 Unknown Channel … **チャンネルそのもの**が無い／見られない
+   ・10008 … 止めずに**控え（msg_id）を消して次へ進む**。
+     新しくは出さない（書き直しで出すと通知が鳴るので、出すのは
+     確認の画面から）。次の配信の確認の画面に
+     「新しく出す（前のカードが消えていたため）」と出る
+   ・10003／403 … 今までどおり**そのプランで止めて**理由を出す
+   **メッセージやチャンネルを消す処理は足さない**（カジの守ること）。 */
+const DC_GONE_MSG = 10008;              // Unknown Message
+const DC_GONE_CH = 10003;               // Unknown Channel
+async function dcErrCode(resp) {
+  try {
+    const d = await resp.json();
+    return Number((d || {}).code) || 0;
+  } catch (e) { return 0; }
+}
+/* そのカードだけが消えているか（チャンネルは生きている）。
+   番号が読めないときは false（＝今までどおり止める。安全側）。 */
+function dcMsgGone(e) {
+  return !!(e && Number(e.status) === 404 && Number(e.code) === DC_GONE_MSG);
+}
 async function dcApi(env, run, method, path, body) {
   if (!env.DISCORD_BOT_TOKEN)
     return { ok: false, status: 0, err: "no_token" };
@@ -11007,11 +11036,17 @@ async function dcApi(env, run, method, path, body) {
       await sleep(Math.min(5, Math.max(0.2, wait)) * 1000);
       continue;
     }
-    /* 本文は出さない（トークンや個人の情報が混ざらないように番号だけ）。 */
-    if (run) { run.errors++; run.notes.push("discord(bot) -> " + resp.status); }
-    return { ok: false, status: resp.status };
+    /* 本文は出さない（トークンや個人の情報が混ざらないように番号だけ）。
+       8.38 Discord の番号（10008＝カードが消えている）だけは見る。 */
+    const code = await dcErrCode(resp);
+    if (run) {
+      run.errors++;
+      run.notes.push("discord(bot) -> " + resp.status
+        + (code ? ("/" + code) : ""));
+    }
+    return { ok: false, status: resp.status, code: code };
   }
-  return { ok: false, status: 0 };
+  return { ok: false, status: 0, code: 0 };
 }
 /* 配信できる商品。印あり＋Shopify に読み込み済み＋値段と数がある行だけ。 */
 async function subRows(env) {
@@ -11188,14 +11223,21 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
        件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
        別の行が繰り上がることはない（カジが見た一覧のまま出す）。 */
     if (skip && skip[String(r.jan)]) continue;
-    const old = (sent || {})[r.jan];
+    /* 8.38 前のカードが Discord から消えていた控え（msg_id を空にしてある）。
+       **まだ出していない**扱いにして、確認の画面に理由を出す。 */
+    const was = (sent || {})[r.jan];
+    const mid = was ? String(was.msg_id || "") : "";
+    const old = (was && mid) ? was : null;
+    const goneCard = !!(was && !mid);
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった。 */
     const sold = Math.max(0, Number(r.sold) || 0);
     const left = Math.max(0, (Number(r.qty) || 0) - sold);
     const x = Object.assign({}, r, {
-      sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
+      sent: !!old, msg_id: mid,
+      /* 8.38 前のカードが消えていたので出し直す行（画面に理由を出す）。 */
+      gone_card: goneCard,
       sold: sold, left: left,
     });
     /* カードを先に作って指紋を取る（送るときもこれをそのまま使う）。 */
@@ -11254,6 +11296,8 @@ async function subPlanBuild(env) {
         return {
           jan: x.jan, name: x.name, price: x.price, qty: x.qty,
           left: x.left, gross: x.gross, sent: x.sent, same: x.same,
+          /* 8.38 前のカードが Discord から消えていたので出し直す行。 */
+          gone_card: !!x.gone_card,
           ship: sh.name, ship_text: sh.text, ship_sure: sh.sure,
           ship_why: sh.why, ship_g: sh.grams, ship_warn: sh.warn,
           /* 8.29（カジの依頼）総合の札（案と確認の画面でも見えるように）。 */
@@ -11774,8 +11818,14 @@ async function dcCard(env, run, ch, card, pic, msgId) {
     body: fd, write: true,
   });
   if (!resp.ok) {
-    if (run) { run.errors++; run.notes.push("discord(bot) -> " + resp.status); }
-    return { ok: false, status: resp.status };
+    /* 8.38 写真つきのカードでも、消えているカードを見分けられるように。 */
+    const code = await dcErrCode(resp);
+    if (run) {
+      run.errors++;
+      run.notes.push("discord(bot) -> " + resp.status
+        + (code ? ("/" + code) : ""));
+    }
+    return { ok: false, status: resp.status, code: code };
   }
   let d = null;
   try { d = await resp.json(); } catch (e) { d = null; }
@@ -11797,9 +11847,12 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
     for (const r of rows) {
       if (!p.ch) break;
       if (SUBPLAN.oneWhy(p, r, now)) continue;
-      const old = posts[r.jan];
+      /* 8.38 前のカードが消えていた控え（msg_id が空）は「まだ出していない」。 */
+      const was1 = posts[r.jan];
+      const mid1 = was1 ? String(was1.msg_id || "") : "";
+      const old = (was1 && mid1) ? was1 : null;
       const x = Object.assign({}, r, {
-        sent: !!old, msg_id: old ? String(old.msg_id || "") : "",
+        sent: !!old, msg_id: mid1, gone_card: !!(was1 && !mid1),
       });
       x.card = oneCardOf(x, cfg, x.pic ? ("attachment://" + onePicName(x)) : "",
                          p.key);
@@ -11821,7 +11874,7 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
       items: pick.map((x) => ({
         jan: x.jan, one_id: x.one_id, name: x.name, price: x.price,
         qty: x.qty, left: x.left, gross: x.gross, sent: x.sent,
-        same: x.same,
+        same: x.same, gone_card: !!x.gone_card,
         /* 8.27（カジの依頼3）1点ものは**カジが選んだ区分**をそのまま出す。 */
         ship: SHOPCSV.oneShipName(x.ship_kind),
         ship_text: SHOPCSV.oneShipName(x.ship_kind),
@@ -11845,6 +11898,9 @@ async function jobSubSend(env, opt) {
   const o = opt || {};
   const run = newRun("sub-send");
   const res = { ok: false, sent: 0, edited: 0, skipped: 0, plans: [],
+                /* 8.38 Discord から消えていたカード（控えを片づけた数）。
+                   次の配信の確認の画面から出し直せる。 */
+                gone: 0,
                 approve: o.approve === true };
   try {
     if (!(await subPostOk(env))) {
@@ -11923,7 +11979,8 @@ async function jobSubSend(env, opt) {
       const sent = await subPosts(env, p.ch);
       const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
-                  left: 0 };
+                  /* 8.38 Discord から消えていたカード（控えを片づけた数）。 */
+                  gone: 0, left: 0 };
       let gap = false;
       for (const x of pick) {
         if (x.same) { r.keep++; res.skipped++; continue; }
@@ -11940,6 +11997,18 @@ async function jobSubSend(env, opt) {
         if (x.sent && x.msg_id) {
           const e = await dcApi(env, run, "PATCH",
             "/channels/" + p.ch + "/messages/" + x.msg_id, { embeds: [card] });
+          /* 8.38（カジの報告）そのカードだけが Discord から消えていたとき
+             （手で削除など）は**止めない**。控え（msg_id）を消して次へ進む。
+             新しくは出さない（書き直しで出すと通知が鳴るため）。次の配信の
+             確認の画面に「新しく出す（前のカードが消えていたため）」と出る。 */
+          if (!e.ok && dcMsgGone(e)) {
+            await env.DB.prepare(
+              `UPDATE sub_post SET msg_id='', edited_at=?3
+                WHERE jan=?1 AND ch=?2`)
+              .bind(String(x.jan), String(p.ch), at).run();
+            r.gone++; res.gone++; gap = true;
+            continue;
+          }
           if (!e.ok) {
             r.fail++; res.fail++; res.stopped = "fail";
             res.stop_plan = p.name; res.stop_status = e.status || 0;
@@ -11989,7 +12058,7 @@ async function jobSubSend(env, opt) {
           if (only && g.key !== only) continue;
           if (!g.on) continue;
           const r = { key: g.key, name: g.name, add: 0, edit: 0, keep: 0,
-                      fail: 0, left: 0, one: true };
+                      fail: 0, gone: 0, left: 0, one: true };
           let gap1 = false;
           for (const x of (g.pick || [])) {
             /* 8.33 書き直しの続き：この回でもう書き換えたカードは飛ばす。 */
@@ -12016,6 +12085,15 @@ async function jobSubSend(env, opt) {
               pic ? ("attachment://" + onePicName(x)) : "", g.key);
             const m = await dcCard(env, run, g.ch, card, pic,
                                    x.sent ? x.msg_id : "");
+            /* 8.38 そのカードだけが消えていたら、控えを消して次へ。 */
+            if (!m.ok && x.sent && x.msg_id && dcMsgGone(m)) {
+              await env.DB.prepare(
+                `UPDATE sub_post SET msg_id='', edited_at=?3
+                  WHERE jan=?1 AND ch=?2`)
+                .bind(String(x.jan), String(g.ch), at).run();
+              r.gone++; res.gone++; gap1 = true;
+              continue;
+            }
             const id = m.ok
               ? (x.sent ? x.msg_id : String(((m.data || {}).id) || "")) : "";
             if (!m.ok || !id) {
@@ -12081,6 +12159,8 @@ async function jobSubSend(env, opt) {
       }
       run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
         + res.edited + "件・そのまま " + res.skipped + "件"
+        /* 8.38 Discord から消えていたカード（次の配信で出し直せる）。 */
+        + (res.gone ? ("・消えていたカード " + res.gone + "件") : "")
         + (reform ? "（カードの形を新しくしました）" : ""));
     }
     res.ok = true;
@@ -12136,6 +12216,15 @@ async function subRetire(env, run, cfg, rows, dl) {
       const e = await dcApi(env, run, "PATCH",
         "/channels/" + r.ch + "/messages/" + msg,
         { embeds: [subOffCard(r.name, jan)] });
+      /* 8.38 そのカードが消えていたら、控え（msg_id）を片づけて次へ。
+         **メッセージを消す処理は足さない**（もう無いので片づけるだけ）。 */
+      if (!e.ok && dcMsgGone(e)) {
+        await env.DB.prepare(
+          `UPDATE sub_post SET msg_id='', edited_at=?3 WHERE jan=?1 AND ch=?2`)
+          .bind(jan, String(r.ch), nowIso()).run();
+        res.gone = (res.gone || 0) + 1;
+        continue;
+      }
       if (!e.ok) { res.fail++; continue; }
       await env.DB.prepare(
         `UPDATE sub_post SET off_at=?3, edited_at=?3 WHERE jan=?1 AND ch=?2`)
@@ -12961,6 +13050,14 @@ async function subEditLeft(env, run, jans) {
       ? await dcCard(env, run, y.ch, card, pic, String(y.msg_id))
       : await dcApi(env, run, "PATCH",
           "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
+    /* 8.38 そのカードが消えていたら、控え（msg_id）を片づけて次へ。 */
+    if (!e.ok && dcMsgGone(e)) {
+      await env.DB.prepare(
+        `UPDATE sub_post SET msg_id='', edited_at=?3 WHERE jan=?1 AND ch=?2`)
+        .bind(String(y.jan), String(y.ch), nowIso()).run();
+      out.gone = (out.gone || 0) + 1;
+      continue;
+    }
     if (!e.ok) continue;
     out.edited++;
     if (!left) out.sold_out++;
