@@ -2189,6 +2189,17 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:10px 0 2px"><b>今日の配信の案（自動の振り分け）</b></div>
         <div class="chk cfgprice"><input type="checkbox" id="subPickNoAmz" checked><label for="subPickNoAmz" style="flex:1">Amazon 本体ありは案に入れない</label></div>
         <div class="chk cfgprice"><input type="checkbox" id="subPickSkipBuy" checked><label for="subPickSkipBuy" style="flex:1">「仕入れる」の印を付けた商品は案から外す（自分で刈り取る分）</label></div>
+        <!-- 8.43（カジの依頼1）モニターは「3週間・週1回・毎回新しい5件」。
+             決まりは shared/subplan.js の1か所だけ。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>モニター（お試しの3週間）</b></div>
+        <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>通常版のゲーム</b>で<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
+        <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="5" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
+        <div class="row cfgprice"><label for="subMonDays">何日ぶんで見るか／購入期限</label><input type="number" id="subMonDays" value="2" step="1" min="1" max="30" inputmode="numeric"><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>速さの下限 ＝ 人数 ÷ 日数</b>（5人・2日なら <b>1日 2.5点以上</b>）。<b>モニター全員ぶん（1人1点）が1〜2日で売れる速さ</b>の品だけを候補にします。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。ほかのプランでは売り続けます。</div>
+        <div class="row cfgprice"><label for="subMonSpeedMin">速さの下限（空なら自動）／足りないとき下げる</label><input type="number" id="subMonSpeedMin" value="" step="0.1" min="0" max="999" inputmode="decimal"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">点/日・%</span></div>
+        <div class="note2" style="margin:0 0 6px">候補が件数に足りない週は、<b>速さの下限をこの%だけ下げて埋めます</b>（下げて入れた品には案に印が出ます）。それでも足りなければ<b>そのまま少なく出します</b>。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subMonNote" checked><label for="subMonNote" style="flex:1"><b>モニターに「今週の配信」を1通出す</b>（上のプランの件数だけ・商品名や価格は出さない）</label></div>
+        <div class="note2" style="margin:10px 0 2px"><b>案の振り分け（ライト以上）</b></div>
         <div class="row cfgprice"><label for="subStockPct">MW在庫の何%まで出すか</label><input type="number" id="subStockPct" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="subWantQty">会員の想定購入数（1商品）</label><input type="number" id="subWantQty" value="5" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
         <!-- 8.22（【2】）1点ものの配信先と先行の時間 -->
@@ -3565,6 +3576,9 @@ var ADV_SUB=['subHour','subDomain',
              'subChPre','subChHot','subPreHours','subOneOpenGrades',
              /* 8.31 受付終了の扱いと「今週のねらい目」。 */
              'subOffDays','subHotDow','subHotN',
+             /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
+             'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
+             'subMonSpeedMin','subMonShort',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -3593,7 +3607,9 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
                 'subPickNoAmz','subPickSkipBuy',
                 /* 8.31 今週のねらい目（既定オフ）。 */
-                'subHotOn'];
+                'subHotOn',
+                /* 8.43 モニターへの「今週の配信」（既定オン）。 */
+                'subMonNote'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6403,6 +6419,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subChPre','subChHot','subPreHours','subOneOpenGrades',
                  /* 8.31 受付終了の扱いと「今週のねらい目」。 */
                  'subOffDays','subHotDow','subHotN',
+                 /* 8.43 モニターの3週間（この端末にも覚える）。 */
+                 'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
+                 'subMonSpeedMin','subMonShort',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 8.32 仕入れタブを開いたときの一覧（この端末だけの設定）。 */
@@ -16580,6 +16599,10 @@ function subPickCfg(){
   return { subPickNoAmz:c('subPickNoAmz'), subPickSkipBuy:c('subPickSkipBuy'),
            subStockPct:v('subStockPct'), subWantQty:v('subWantQty'),
            subQtyDays:v('subQtyDays'),
+           /* 8.43 モニターの3週間（決まりは shared/subplan.js）。 */
+           subMonNew:v('subMonNew'), subMonPeople:v('subMonPeople'),
+           subMonDays:v('subMonDays'), subMonLimitDays:v('subMonLimitDays'),
+           subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
            /* 8.21（【1】）通常版でない言葉（足す分）。 */
            subNormalNg:v('subNormalNg') };
 }
@@ -16635,6 +16658,46 @@ function subDraftRows(){
 /* 8.42（カジの報告）案の候補は**いま一覧に出ている行**から数える。
    絞り込みや検索が効いていると候補が減る（カジの回：136件 → 51件）。
    何が効いているかを案のまとめに1行で出す。 */
+/* 8.43（カジの依頼1）モニターの様子（案のまとめに出す）。 */
+function subMonHtml(d){
+  var p=((d||{}).plans||[]).filter(function(x){ return x.key==='monitor'; })[0];
+  if(!p||!p.on)return '';
+  var m=p.mon||{};
+  var r1=Math.round((+m.min||0)*100)/100, r2=Math.round((+m.min2||0)*100)/100;
+  return '<br><span class="note2" style="margin:0">'
+    +'<b>モニター</b>（'+(m.first?'<b>1週目：速い順</b>'
+      :'2週目から：候補からランダム')+'）　'
+    +'新しく <b>'+mwN(+m.n||0)+'件</b>／候補 '+mwN(+m.okN||0)+'件'
+    +'（速さ '+r1+'点/日 以上）'
+    +((+m.low>0)?('　<b style="color:var(--bad)">下限を '+r2
+      +'点/日 まで下げて '+mwN(+m.low)+'件を埋めました</b>'):'')
+    +((+m.short>0)?('　<b style="color:var(--bad)">'+mwN(+m.short)
+      +'件たりません（そのまま少なく出します）</b>'):'')
+    +(subMonSent===null
+      ?'　<b style="color:var(--bad)">※ 前の週に出した品の控えが読めませんでした'
+       +'（同じ品が選ばれるかもしれません）</b>'
+      :('　前の週までに出した '+mwN((subMonSent||[]).length)+'件は選びません'))
+    +'</span>';
+}
+/* 8.43（カジの依頼）線引きを決めるための分布（下位25%／中央／上位25%）。 */
+function subStatHtml(rows){
+  var st=null;
+  try{ st=SUBPLAN.statsOf(rows,SUBPLAN.pickOpt(subPickCfg())); }catch(e){ st=null; }
+  if(!st||!st.n)return '';
+  var q=function(x,f){
+    return (f?f(x.q1):x.q1)+'／'+(f?f(x.med):x.med)+'／'+(f?f(x.q3):x.q3); };
+  var one=function(v){ return Math.round(v*100)/100; };
+  return '<br><span class="note2" style="margin:0">'
+    +'<b>いまの候補 '+mwN(st.n)+'件の分布</b>（下位25%／中央／上位25%）<br>'
+    +'粗利 '+q(st.gross,yen)+'　／　売れる速さ '
+    +q({ q1:one(st.speed.q1), med:one(st.speed.med), q3:one(st.speed.q3) })
+    +' 点/日　／　<b>粗利×速さ</b> '
+    +q({ q1:Math.round(st.gxs.q1), med:Math.round(st.gxs.med),
+         q3:Math.round(st.gxs.q3) })+' 円/日'
+    +'<br>モニターの条件に合う品：<b>'+mwN(st.monOk)+'件</b>'
+    +'（下限を下げれば '+mwN(st.monOk+st.monLow)+'件）'
+    +'</span>';
+}
 function subDraftFiltHtml(){
   var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
   var q=''; try{ q=String((findState('amz')||{}).q||'').trim(); }catch(e){ q=''; }
@@ -16679,16 +16742,32 @@ function subDraftLastRender(){
       :('<b style="color:var(--bad)">'+esc(String(o.why||'出していません'))
         +'</b>'));
 }
+/* 8.43 モニターに出したことのある商品（pj-sync の控え）。
+   同じ品を2回選ばないために使う。取れないときは空（印を付けるだけなので
+   案は作れる。そのときは画面に断りを出す）。 */
+var subMonSent=null, subMonInfo=null;
+function subMonLoad(){
+  return mwGet('/sub/mon').then(function(r){
+    subMonSent=((r||{}).sent||[]).map(String);
+    subMonInfo=r||null;
+    return subMonSent;
+  })['catch'](function(){ subMonSent=null; subMonInfo=null; return null; });
+}
 function subDraftGo(){
   if(roleDenyPrice('subDraftNote'))return;
-  var box=$('subDraftBox');
   if(!mwAmzRows.length){
     subDraftNote('先に一覧を取り込んでください（「取り込む」→「Amazonで調べる」）。',1);
     return;
   }
+  subDraftNote('モニターの控えを読んでいます…');
+  /* 8.43 先にモニターの控えを取ってから案を作る（前の週の品を外すため）。 */
+  return Promise.resolve(subMonLoad()).then(subDraftMake);
+}
+function subDraftMake(){
+  var box=$('subDraftBox');
   var rows=subDraftRows();
   var plans=SUBPLAN.list(subCfgAll());
-  var d=SUBPLAN.draft(rows,plans,subPickCfg());
+  var d=SUBPLAN.draft(rows,plans,subPickCfg(),subMonSent||[],Date.now());
   subDraftData={ at:new Date().toISOString(), plans:d.plans, opt:d.opt,
                  rows:rows.length };
   var on=d.plans.filter(function(p){ return p.on; });
@@ -16710,6 +16789,10 @@ function subDraftGo(){
     /* 8.42 候補は**いま一覧に出ている行**から数えるので、
        絞り込みが効いていると候補が減る（カジの報告の「136→51」）。 */
     +subDraftFiltHtml()
+    /* 8.43（カジの依頼）モニターの様子（1週目か・下限・足りない週）。 */
+    +subMonHtml(d)
+    /* 8.43（カジの依頼）線引きを決めるための分布。 */
+    +subStatHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
       +'件</span>（作品名に「版」が入っているだけかもしれません。'
       +'限定版なら印を外してください）'):'')
@@ -16891,6 +16974,8 @@ function subDraftHtml(plans){
         /* 8.21（【1】）通常版か要確認・売れる速さ 0点の印。 */
         +(x.maybe?'<span class="badge" style="background:#b00020">通常版か要確認</span>':'')
         +(x.slow?'<span class="badge" style="background:#8a8a8a">売れる速さ 0</span>':'')
+        /* 8.43 モニターで、速さの下限を下げて入れた品。 */
+        +(x.mon_low?'<span class="badge" style="background:#b07000">下限を下げて入れました</span>':'')
         /* 8.29（カジの依頼）総合の札（◎ねらい目／○ふつう／△慎重に）。 */
         +gdBadgeHtml(x)
         /* 8.27（カジの依頼3）送料の区分（配る前に気づけるように）。 */
@@ -17504,6 +17589,12 @@ function gdPinList(){
    ['one_pre','#目玉商品-先行'],['one_open','#目玉商品']]
     .forEach(function(k){
       var p=of(k[0]);
+      /* 8.43 モニターの短い文には「毎週 新しく◯件・◯日で締め切り」を出す
+         （数は⚙。決まりは shared/subplan.js の1か所）。 */
+      if(k[0]==='monitor'){
+        var mo=SUBPLAN.pickOpt(subPickCfg());
+        p=Object.assign({},p,{ mon:{ n:mo.monNew, days:mo.monLimitDays } });
+      }
       out.push({ id:k[0], label:k[1], text:G.pinPlan(k[0],o,p),
                  on:(p.on===undefined)?true:!!p.on });
     });
@@ -26983,7 +27074,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v301';   // sw.js の const V と必ず同じ値にする
+var APP_V='v302';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

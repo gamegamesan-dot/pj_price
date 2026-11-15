@@ -136,8 +136,12 @@ console.log('=== ④ 読み方の固定メッセージ（共通＋チャンネ�
   ok(/◎ ねらい目/.test(t.common)&&/アカウントごとに違います/.test(t.common)
      &&/月曜/.test(t.common)&&/火曜/.test(t.common),
      '★★★共通の文に札・出品制限・曜日が入る');
-  ok(t.mon.split('\n').length<=3&&/#はじめに をご覧ください/.test(t.mon),
+  /* 8.43（v302）モニターだけは「お試しの3週間」の1行が増えて4行。 */
+  ok(t.mon.split('\n').length<=4&&/#はじめに をご覧ください/.test(t.mon),
      '★★★チャンネルごとの文は短く、共通の文を指す');
+  ok(/お試しの3週間/.test(t.mon)&&/毎週 \*\*新しく 5件\*\*/.test(t.mon)
+     &&/出してから 7日/.test(t.mon),
+     '★★★モニターの文に「毎週 新しく◯件・◯日で締め切り」を出す（8.43）');
   ok(/出品できるかの注意\*\*は #はじめに をご覧ください/.test(t.mon),
      '★★★短い文から「出品できるかの注意」も #はじめに を指す（8.34）');
   ok(!/◎ ねらい目/.test(t.mon),
@@ -174,11 +178,12 @@ console.log('=== ④ 読み方の固定メッセージ（共通＋チャンネ�
   const t3=await p.evaluate(()=>{
     for(let i=0;i<(window.__gdPin||[]).length;i++)gdPinCopy(i,0);
     const before=($('gdPinNote').textContent||'').replace(/\s+/g,' ');
-    /* 1回の件数は**そのチャンネルの文にしか出ない**。 */
-    $('subNMonitor').value='3';
+    /* 8.43 モニターの件数（1回に新しく出す数）は
+       **そのチャンネルの文にしか出ない**。 */
+    $('subMonNew').value='3';
     gdPinGo();
     const one=($('gdPinNote').textContent||'').replace(/\s+/g,' ');
-    $('subNMonitor').value='10';
+    $('subMonNew').value='5';
     /* 出す項目を変えると、共通の文の「（◯◯プラン以上）」も変わる。 */
     $('gdItemsMonitor').value='badge,sell,rival';
     gdPinGo();

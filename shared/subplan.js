@@ -370,6 +370,29 @@
     qtyDays: 2,         // ⚙ subQtyDays     … MW 自身がこれから売る日数
     saleBoost: 1.5      // 在庫処分・再入荷なしの点数の倍率（優先）
   };
+  /* ===== 8.43（カジの依頼1）モニターは「3週間・週1回・毎回新しい5件」=====
+     モニターは**お試し**の枠なので、ほかのプランとは選び方を分ける。
+       ・1回に**新しく**出すのは monNew 件（前から出している品は数えない）
+       ・購入期限は monLimitDays 日。次の回で前の週のカードを
+         「受付終了」に**書き換える**（消さない＝履歴に残る）
+       ・候補は**通常版のゲーム**で、**速く売れる品**だけ
+         速さの下限 ＝ ⚙（monSpeedMin）／空なら **人数 ÷ 日数**
+         （5人・2日なら 1日 2.5点以上＝全員ぶんが1〜2日で売れる速さ）
+       ・**前の週までにモニターへ出した品は選ばない**
+       ・**1週目は速い順**（いちばん速く売れる品を先に届ける）、
+         2週目からは候補から**ランダム**
+       ・ランダムは「週＋JAN」から決まる数なので、**押し直しても同じ5件**
+       ・候補が足りない週は、**下限を一段下げて埋める**（⚙ monShort・
+         既定 50%）。下げて入れた品には印（low）を付ける。
+         それでも足りなければ**そのまま少なく出す** */
+  var MON = {
+    monNew: 5,          // ⚙ subMonNew       … 1回に新しく出す件数
+    monPeople: 5,       // ⚙ subMonPeople    … モニターの人数
+    monDays: 2,         // ⚙ subMonDays      … 何日ぶんで見るか
+    monLimitDays: 7,    // ⚙ subMonLimitDays … 購入期限（日）
+    monSpeedMin: 0,     // ⚙ subMonSpeedMin  … 0（空）なら 人数 ÷ 日数
+    monShort: 50        // ⚙ subMonShort     … 足りないとき下限を下げる%
+  };
   function bool(v, dflt) {
     if (v === undefined || v === null || v === "") return dflt;
     return !!(v === true || v === 1 || v === "1" || v === "true");
@@ -387,8 +410,119 @@
       stockPct: n("subStockPct", PICK.stockPct, 0, 100),
       wantQty: Math.round(n("subWantQty", PICK.wantQty, 0, 999)),
       qtyDays: n("subQtyDays", PICK.qtyDays, 0, 60),
-      saleBoost: PICK.saleBoost
+      saleBoost: PICK.saleBoost,
+      /* 8.43 モニターの決まり（⚙）。 */
+      monNew: Math.round(n("subMonNew", MON.monNew, 1, 50)),
+      monPeople: Math.round(n("subMonPeople", MON.monPeople, 1, 999)),
+      monDays: n("subMonDays", MON.monDays, 1, 30),
+      monLimitDays: Math.round(n("subMonLimitDays", MON.monLimitDays, 1, 90)),
+      monSpeedMin: n("subMonSpeedMin", MON.monSpeedMin, 0, 999),
+      monShort: n("subMonShort", MON.monShort, 0, 90)
     };
+  }
+  /* 8.43 モニターの速さの下限。⚙が空なら **人数 ÷ 日数**。 */
+  function monSpeed(opt, lowered) {
+    var o = opt || pickOpt(null);
+    var v = num(o.monSpeedMin);
+    if (!(v > 0)) v = num(o.monPeople) / Math.max(1, num(o.monDays));
+    if (lowered) v = v * (1 - Math.max(0, Math.min(90, num(o.monShort))) / 100);
+    return Math.max(0, v);
+  }
+  /* 8.43 「週」。JST の日曜はじまりで数える（押し直しても同じ数になる）。 */
+  function monWeek(now) {
+    var t = (now === undefined || now === null) ? Date.now()
+      : (typeof now === "number" ? now : Date.parse(String(now)));
+    if (!isFinite(t)) t = Date.now();
+    return Math.floor((t + 9 * 3600000) / 604800000);
+  }
+  /* 8.43 「週＋JAN」から決まる数（0〜1）。同じ週なら何度押しても同じ。 */
+  function monRand(week, jan) {
+    var t = String(week) + "|" + String(jan);
+    var h = 0x811c9dc5;
+    for (var i = 0; i < t.length; i++) {
+      h ^= t.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h / 4294967296;
+  }
+  /* 8.43 モニターに出す品を選ぶ。
+       rows … 案の候補（subDraftRows と同じ形）
+       sent … **前の週までにモニターへ出した JAN**（配列）
+     返り { items, low, short, min, week, first, n }
+       low   … 下限を下げて埋めた件数
+       short … それでも足りなかった件数
+       first … 1週目（モニターに1枚も出していない）か */
+  function monPick(rows, plan, opt, sent, now) {
+    var o = opt || pickOpt(null), p = plan || plan_("monitor");
+    var was = {};
+    (sent || []).forEach(function (j) { was[String(j)] = 1; });
+    var week = monWeek(now);
+    var first = !(sent || []).length;
+    var want = Math.max(1, Math.round(num(o.monNew)));
+    var min = monSpeed(o, false), min2 = monSpeed(o, true);
+    var ok = [], low = [];
+    (rows || []).forEach(function (r) {
+      if (was[String(r.jan)]) return;                 // 前の週までに出した
+      if (whyNot(r, o)) return;                       // 共通の条件
+      if (fits(p, r, !!r.is_game)) {
+        if (!(num(r.qty) > 0)) return;                // 出せる数が無い
+        var sp = num(r.speed);
+        if (sp >= min) ok.push(r);
+        else if (sp >= min2) low.push(r);
+      }
+    });
+    /* 1週目は速い順。2週目からは「週＋JAN」で決まる順（ランダム）。 */
+    var sortBy = function (a) {
+      a.sort(function (x, y) {
+        if (first) return num(y.speed) - num(x.speed);
+        return monRand(week, x.jan) - monRand(week, y.jan);
+      });
+      return a;
+    };
+    sortBy(ok); sortBy(low);
+    var out = ok.slice(0, want).map(function (r) {
+      return Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
+        maybe: !!normalOf(r.name, p.ng).maybe, slow: !(num(r.speed) > 0),
+        mon_low: false });
+    });
+    var lowN = 0;
+    if (out.length < want) {
+      low.slice(0, want - out.length).forEach(function (r) {
+        lowN++;
+        out.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
+          maybe: !!normalOf(r.name, p.ng).maybe, slow: !(num(r.speed) > 0),
+          mon_low: true }));
+      });
+    }
+    return { items: out, low: lowN, short: Math.max(0, want - out.length),
+             min: min, min2: min2, week: week, first: first, n: want,
+             okN: ok.length, lowN: low.length };
+  }
+  /* 8.43（カジの依頼）線引きを決めるための**分布**。
+     粗利・売れる速さ・粗利×速さ の 下位25%／中央／上位25% を返す。 */
+  function quart(a) {
+    var v = (a || []).filter(function (x) { return isFinite(x); })
+      .sort(function (x, y) { return x - y; });
+    if (!v.length) return { n: 0, q1: 0, med: 0, q3: 0 };
+    var at = function (q) {
+      var i = Math.min(v.length - 1, Math.max(0,
+        Math.round((v.length - 1) * q)));
+      return v[i];
+    };
+    return { n: v.length, q1: at(0.25), med: at(0.5), q3: at(0.75) };
+  }
+  function statsOf(rows, opt) {
+    var o = opt || pickOpt(null);
+    var g = [], sp = [], gs = [];
+    (rows || []).forEach(function (r) {
+      if (whyNot(r, o)) return;
+      var gross = num(r.gross), speed = num(r.speed);
+      g.push(gross); sp.push(speed); gs.push(gross * speed);
+    });
+    var mon = monPick(rows, plan_("monitor"), o, [], null);
+    return { gross: quart(g), speed: quart(sp), gxs: quart(gs),
+             n: g.length, monOk: mon.okN, monLow: mon.lowN,
+             monMin: mon.min, monMin2: mon.min2 };
   }
   /* 販売数の上限のおすすめ（8.18 の2）。0 なら案に出さない。
      row … { stock, speed }（speed は shared/mwstat.js の「1日あたり」） */
@@ -430,10 +564,19 @@
      rows は画面・pj-sync が作った行の配列（下の項目を入れておく）
        jan, name, kishu, stock, speed, gross, price, qty（上限のおすすめ）,
        fit（会員向きか）, rst, amz, buy_qty, no_back, one_off, grades */
-  function draft(rows, plans, cfg) {
+  function draft(rows, plans, cfg, monSent, now) {
     var o = pickOpt(cfg);
     var out = [];
     (plans || []).forEach(function (p) {
+      /* 8.43 モニターだけは「新しく◯件・速く売れる品・前の週は選ばない」。 */
+      if (p.key === "monitor") {
+        var mp = monPick(rows, p, o, monSent || [], now);
+        out.push({ key: p.key, name: p.name, n: mp.n, on: p.on, ch: p.ch,
+                   items: mp.items,
+                   over: Math.max(0, (mp.okN + mp.lowN) - mp.items.length),
+                   skip: 0, mon: mp });
+        return;
+      }
       var pick = [], skip = [];
       (rows || []).forEach(function (r) {
         var why = whyNot(r, o);
@@ -460,7 +603,10 @@
     });
     return { plans: out, opt: o };
   }
-  var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX,
+  function plan_(k) { return plan(k); }
+  var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX, MON: MON,
+              monSpeed: monSpeed, monWeek: monWeek, monRand: monRand,
+              monPick: monPick, statsOf: statsOf, quart: quart,
               plan: plan, list: list, active: active, fits: fits,
     fitWhy: fitWhy, whyNone: whyNone,
     NORMAL_NG: NORMAL_NG, ngWords: ngWords, normalOf: normalOf,

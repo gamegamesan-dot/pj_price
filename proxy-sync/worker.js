@@ -10963,6 +10963,12 @@ async function subSettings(env) {
     guide: gdOf(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
+    /* 8.43（カジの依頼1）モニターの決まり（新しく◯件・人数・期限・
+       速さの下限）。読み方は shared/subplan.js の pickOpt の1か所だけ。 */
+    pick: SUBPLAN.pickOpt(st),
+    /* 8.43（カジの依頼3）モニターのチャンネルに出す「今週の配信」の1通。
+       既定はオン（商品名・JAN・価格は出さない・@everyone は使わない）。 */
+    monNote: st.subMonNote === undefined ? true : !!st.subMonNote,
     /* 8.31（カジの依頼3）受付が終わったカードを消すまでの日数
        （0＝消さない。既定は消さない）。 */
     offDays: Math.max(0, Math.round(Number(st.subOffDays) || 0)),
@@ -11173,8 +11179,12 @@ async function subPosts(env, ch) {
   if (!(await subPostOk(env))) return {};
   /* 8.19 カードの指紋（migrate-0057）。無い D1 でも落とさない。 */
   const hCol = (await colOk(env, "sub_post", "card_h")) ? ", card_h" : "";
+  /* 8.43 受付終了（off_at）のカードは、もう商品カードに戻さない。
+     列が無い D1 でも落とさないよう、あるときだけ読む。 */
+  const oCol = (await colOk(env, "sub_post", "off_at")) ? ", off_at" : "";
   const q = await env.DB.prepare(
-    `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at, edited_at${hCol}
+    `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at,
+            edited_at${hCol}${oCol}
        FROM sub_post WHERE ch = ?1`).bind(String(ch || "")).all();
   const m = {};
   for (const r of ((q && q.results) || [])) m[String(r.jan)] = r;
@@ -11216,8 +11226,14 @@ function subPostIns(x, p, id, at, hasH) {
    「もう今の形」なので飛ばす（続きからやるため）。 */
 function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   const out = [];
+  /* 8.43（カジの依頼1）モニターは「**1回に新しく出すのは monNew 件**」。
+     すでに出しているカードは件数に数えず、値段や残り数の書き換えだけする。 */
+  const mon = String(plan.key || "") === "monitor";
+  const monNew = Math.max(1, Math.round(
+    Number(((cfg || {}).pick || {}).monNew) || SUBPLAN.MON.monNew));
+  let newN = 0;
   for (const r of (rows || [])) {
-    if (out.length >= plan.n) break;
+    if (!mon && out.length >= plan.n) break;
     if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
     /* 8.28（カジの依頼1）確認の画面でチェックを外した行は出さない。
        件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
@@ -11226,9 +11242,16 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
     /* 8.38 前のカードが Discord から消えていた控え（msg_id を空にしてある）。
        **まだ出していない**扱いにして、確認の画面に理由を出す。 */
     const was = (sent || {})[r.jan];
+    /* 8.43 受付終了にしたカードは、もう書き換えない（履歴として残す）。 */
+    if (was && String(was.off_at || "")) continue;
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
     const goneCard = !!(was && !mid);
+    /* 8.43 モニターは、**新しく出すぶんだけ**件数を数える。 */
+    if (mon && !old) {
+      if (newN >= monNew) continue;
+      newN++;
+    }
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった。 */
@@ -12171,6 +12194,9 @@ async function jobSubSend(env, opt) {
       if (redo && !fail && !res.left) {
         try { await stateSet(env, SUB_REDO_KEY, "").run(); } catch (e) {}
       }
+      /* 8.43（カジの依頼3）モニターのチャンネルに「今週の配信」を1通。
+         **商品名・JAN・価格は出さない**。@everyone・@here も使わない。 */
+      try { await subMonNote(env, run, cfg, res); } catch (e) {}
       run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
         + res.edited + "件・そのまま " + res.skipped + "件"
         /* 8.38 Discord から消えていたカード（次の配信で出し直せる）。 */
@@ -12185,6 +12211,77 @@ async function jobSubSend(env, opt) {
     res.error = String((e && e.message) || e);
   }
   return Object.assign(await saveRun(env, run), res);
+}
+/* ===== 8.43（カジの依頼3）モニターへの「今週の配信」=====
+   モニターの人に、上のプランの様子を1通だけ知らせる。
+     ・**件数だけ**（商品名・JAN・価格は出さない）
+     ・**@everyone・@here は使わない**（allowed_mentions で誰にも触れない）
+     ・新しく出したカードが1枚も無い回は出さない
+     ・モニター自身の件数と、購入期限の日付も添える */
+function subMonText(cfg, res, now) {
+  const d = new Date((isFinite(Date.parse(String(now || "")))
+    ? Date.parse(String(now || "")) : Date.now()) + JST_MS);
+  const md = (t) => (t.getUTCMonth() + 1) + "/" + t.getUTCDate();
+  const by = {};
+  for (const p of (res.plans || []))
+    by[String(p.key)] = Math.round(Number(p.add) || 0);
+  const names = { light: "ライト", standard: "スタンダード",
+                  premium: "プレミアム" };
+  const parts = [];
+  for (const k of ["light", "standard", "premium"])
+    if (by[k] > 0) parts.push(names[k] + " " + by[k] + "件");
+  const mon = by.monitor || 0;
+  const days = Math.max(1, Math.round(
+    Number(((cfg || {}).pick || {}).monLimitDays)
+    || SUBPLAN.MON.monLimitDays));
+  const end = new Date(d.getTime() + days * 86400000);
+  const L = ["**今週の配信（" + md(d) + "）**"];
+  L.push(parts.length
+    ? (parts.join("・") + "を配信しました。")
+    : "上のプランへの配信はありません。");
+  if (mon > 0)
+    L.push("モニターの **" + mon + "件**は **" + md(end)
+      + " まで**ご購入いただけます。");
+  L.push("上のプランでは、もっと多くの商品をご覧いただけます。");
+  return L.join("\n");
+}
+/* 8.43（カジの依頼1）モニターのチャンネルに出したことのある商品。
+   受付終了にしたぶんも含める（**もう一度は選ばない**）。 */
+async function subMonSent(env) {
+  const out = { ok: true, sent: [], ch: "", n: 0 };
+  try {
+    if (!(await subPostOk(env))) return out;
+    const cfg = await subSettings(env);
+    const p = (cfg.plans || []).filter((x) => x.key === "monitor")[0];
+    const ch = String((p || {}).ch || "");
+    out.ch = ch;
+    out.new_n = Math.round(Number((cfg.pick || {}).monNew)
+      || SUBPLAN.MON.monNew);
+    out.limit_days = Math.round(Number((cfg.pick || {}).monLimitDays)
+      || SUBPLAN.MON.monLimitDays);
+    out.people = Math.round(Number((cfg.pick || {}).monPeople)
+      || SUBPLAN.MON.monPeople);
+    if (!ch) return out;
+    const q = await env.DB.prepare(
+      `SELECT jan FROM sub_post WHERE ch = ?1`).bind(ch).all();
+    out.sent = ((q && q.results) || []).map((r) => String(r.jan || ""))
+      .filter(Boolean);
+    out.n = out.sent.length;
+  } catch (e) { out.error = String((e && e.message) || e); }
+  return out;
+}
+async function subMonNote(env, run, cfg, res) {
+  if (!cfg.monNote) return 0;
+  const p = (cfg.plans || []).filter((x) => x.key === "monitor")[0];
+  if (!p || !p.on || !p.ch) return 0;
+  const add = (res.plans || []).reduce(
+    (a, x) => a + Math.round(Number(x.add) || 0), 0);
+  if (!add) return 0;                       // 新しく出した回だけ
+  const m = await dcApi(env, run, "POST", "/channels/" + p.ch + "/messages",
+    { content: subMonText(cfg, res).slice(0, 1900),
+      allowed_mentions: { parse: [] } });
+  if (m.ok) res.mon_note = 1;
+  return m.ok ? 1 : 0;
 }
 /* ===== 8.31（カジの依頼3）リストから外れた商品のカード =====
    MW が欠品した・販売終了した・上限を0にした商品は配信の対象から外れるが、
@@ -12210,8 +12307,18 @@ async function subRetire(env, run, cfg, rows, dl) {
   }
   const live = {};
   for (const r of (rows || [])) live[String(r.jan)] = 1;
+  /* 8.43（カジの依頼1）モニターは**購入期限**がある。
+     モニターのチャンネルに出してから ⚙（monLimitDays・既定7日）たった
+     カードは「受付終了」に**書き換える**（消さない＝履歴に残る）。
+     ほかのプランでは売り続ける（期限はモニターの枠だけ）。 */
+  const monCh = String((((cfg || {}).plans || [])
+    .filter((p) => p.key === "monitor")[0] || {}).ch || "");
+  const monMs = Math.max(1, Math.round(
+    Number(((cfg || {}).pick || {}).monLimitDays)
+    || SUBPLAN.MON.monLimitDays)) * 86400000;
   const q = await env.DB.prepare(
     `SELECT p.jan AS jan, p.ch AS ch, p.msg_id AS msg_id, p.off_at AS off_at,
+            p.at AS at,
             COALESCE(a.name, s.name, '') AS name
        FROM sub_post p
             LEFT JOIN mw_amz a ON a.jan = p.jan
@@ -12226,7 +12333,11 @@ async function subRetire(env, run, cfg, rows, dl) {
     const msg = String(r.msg_id || "");
     const off = String(r.off_at || "");
     if (!msg) continue;
-    if (live[jan]) continue;                     // まだリストにある
+    /* 8.43 モニターのカードは、期限が過ぎたら受付終了にする
+       （リストに残っていても）。 */
+    const monOld = monCh && String(r.ch) === monCh
+      && (Date.now() - Date.parse(String(r.at || ""))) >= monMs;
+    if (live[jan] && !monOld) continue;          // まだリストにある
     if (dl && Date.now() > dl) break;
     if (!off) {
       const e = await dcApi(env, run, "PATCH",
@@ -17872,6 +17983,10 @@ export default {
          どれも**管理者だけ**（上の枝で弾いている）。値段と配信が動くため。 */
       if (request.method === "GET" && url.pathname === "/sub/plan")
         return json(await subPlanBuild(env), 200, origin);
+      /* 8.43（カジの依頼1）モニターに**前の週までに出した商品**。
+         画面の「今日の配信の案」が、同じ品を選ばないために使う。 */
+      if (request.method === "GET" && url.pathname === "/sub/mon")
+        return json(await subMonSent(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/send") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubSend(env, { approve: b && b.approve === true,
@@ -18444,6 +18559,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subCardHash, subPostBind, subPostIns,
   /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
+  /* 8.43（カジの依頼）モニターの3週間と「今週の配信」の1通。 */
+  subMonText, subMonNote, subMonSent,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
   /* 8.37（v296）売り方ごとの「赤字にならない売値」。 */

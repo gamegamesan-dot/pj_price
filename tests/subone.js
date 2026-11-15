@@ -64,6 +64,9 @@ await p.evaluate(()=>{
   });
   $('subNMonitor').value='2'; $('subNLight').value='3';
   $('subNStandard').value='4'; $('subNPremium').value='4';
+  /* 8.43（v302）モニターは「新しく◯件・速く売れる品だけ」。
+     ここはのべの数え方を見る試験なので、2件・下限なしにそろえる。 */
+  $('subMonNew').value='2'; $('subMonSpeedMin').value='0.1';
 });
 await openCsvBoxes(p);
 
@@ -72,11 +75,11 @@ const mk=()=>p.evaluate(()=>{
   const S=PJ_SUBPLAN;
   const rows=[];
   for(let i=0;i<4;i++)rows.push({ jan:'490237055000'+i, name:'ゲーム'+i,
-    kishu:'NS', stock:20, speed:1+i*0.1, gross:1500, rate:35, price:3000,
+    kishu:'NS', stock:20, speed:3+i*0.1, gross:1500, rate:35, price:3000,
     fit:true, rst:'ok', amz:0, buy_qty:0, no_back:false, one_off:false,
     grades:'', is_game:true, on:false, qty:2, ship:'クリックポスト',
     ship_sure:true, ship_text:'クリックポスト', ship_warn:'' });
-  const d=S.draft(rows,S.list(subCfgAll()),{});
+  const d=S.draft(rows,S.list(subCfgAll()),subPickCfg(),[],Date.now());
   subDraftData={ at:new Date().toISOString(), plans:d.plans, opt:d.opt,
                  rows:9 };
   $('subDraftBox').innerHTML=subDraftHtml(d.plans);

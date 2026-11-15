@@ -56,6 +56,10 @@ await p.evaluate((META)=>{
   if($('csvMwAmzRstOk'))$('csvMwAmzRstOk').checked=false;
   $('subChMonitor').value='123456789012345678';
   $('subOnMonitor').checked=true;
+  /* 8.43（v302）モニターは「速く売れる品だけ」になったので、
+     この試験の行（1日1点）も入るように下限を下げておく。
+     モニターの決まりそのものは tests/submon.mjs・submonui.js で見る。 */
+  $('subMonSpeedMin').value='0.1';
   window.__post=[]; window.__sub={};
   const res=(v)=>new Response(JSON.stringify(v),{status:200});
   const real=window.fetch;
@@ -96,6 +100,8 @@ await p.evaluate((META)=>{
           price:window.__sub[j].price }));
       return res({ ok:true, table_ok:true, n:rows.length, rows:rows });
     }
+    /* 8.43 モニターに出したことのある商品（まだ1件も無い）。 */
+    if(/\/sub\/mon/.test(url))return res({ ok:true, sent:[], ch:'1', n:0 });
     if(/\/mw\/buy/.test(url))return res({ ok:true, rows:[], n:0 });
     if(/\/mw\/amz/.test(url))return res(META);
     return real(u,i);

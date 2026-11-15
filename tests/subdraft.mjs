@@ -20,6 +20,11 @@ const row=(o)=>Object.assign({ jan:'4902370550001', name:'ゲーム', fit:true,
   rst:'ok', amz:0, buy_qty:0, price:2000, qty:2, gross:800, speed:1,
   stock:9, is_game:true, grades:'', no_back:false, one_off:false },o);
 const monitor=()=>SUBPLAN.list({}).filter((p)=>p.key==='monitor');
+/* 8.43（v302）モニターだけは別の決まり（新しく5件・速く売れる品だけ・
+   前の週は選ばない）になったので、**共通の決まり**はライトで見る
+   （ライトもゲームソフトだけのプラン）。モニターの決まりは
+   tests/submon.mjs で見る。 */
+const light=()=>SUBPLAN.list({ subOnLight:1 }).filter((p)=>p.key==='light');
 const all4=()=>SUBPLAN.list({ subOnLight:1, subOnStandard:1, subOnPremium:1 });
 
 console.log('=== ① 共通の条件 ===');
@@ -49,10 +54,10 @@ console.log('\n=== ② プランごとの振り分け ===');
   const rows=[row({ jan:'4902370550001', is_game:true }),
               row({ jan:'4902370550002', is_game:false }),
               row({ jan:'4902370550003', is_game:true, one_off:true })];
-  const m=SUBPLAN.draft(rows,monitor(),{}).plans[0];
-  console.log('   モニター '+JSON.stringify(m.items.map((x)=>x.jan)));
+  const m=SUBPLAN.draft(rows,light(),{}).plans[0];
+  console.log('   ライト '+JSON.stringify(m.items.map((x)=>x.jan)));
   ok(m.items.length===1&&m.items[0].jan==='4902370550001',
-     '★★★モニターはゲームソフト通常版だけ（1点ものも入れない）');
+     '★★★ゲームソフトのプランは1点ものもほかのジャンルも入れない');
   const d=SUBPLAN.draft(rows,all4(),{});
   const by={}; d.plans.forEach((p)=>{ by[p.key]=p.items.map((x)=>x.jan); });
   console.log('   '+JSON.stringify(by));
@@ -68,7 +73,7 @@ console.log('\n=== ③ 並び順（会員の粗利 × 売れる速さ）===');
               row({ jan:'4902370550003', gross:900, speed:0 }),
               row({ jan:'4902370550004', gross:400, speed:1, no_back:true,
                     sale:true })];
-  const m=SUBPLAN.draft(rows,monitor(),{}).plans[0];
+  const m=SUBPLAN.draft(rows,light(),{}).plans[0];
   console.log('   '+JSON.stringify(m.items.map((x)=>x.jan+':'
     +Math.round(x.score))));
   ok(m.items[0].jan==='4902370550002','★★★粗利×速さの大きい順');
@@ -77,8 +82,8 @@ console.log('\n=== ③ 並び順（会員の粗利 × 売れる速さ）===');
      '★★★在庫処分・再入荷なしは優先（点数を上げる）');
   ok(SUBPLAN.scoreOf(row({ gross:900, speed:0 }))===900*SUBPLAN.SPEED_MIN,
      '★★売れる速さが出せない行は 1日0.3点とみなす');
-  const few=SUBPLAN.draft(rows,SUBPLAN.list({ subNMonitor:2 })
-    .filter((p)=>p.key==='monitor'),{}).plans[0];
+  const few=SUBPLAN.draft(rows,SUBPLAN.list({ subOnLight:1, subNLight:2 })
+    .filter((p)=>p.key==='light'),{}).plans[0];
   ok(few.items.length===2&&few.over===2,
      '★★★1回の件数の上限で切り、あと何件かも返す');
 }
@@ -104,7 +109,7 @@ console.log('\n=== ④ 販売数の上限のおすすめ ===');
      SUBPLAN.pickOpt({ subQtyDays:4 }))===0,
      '★★★MW が先に売る分を引く（20 − 5×4 ＝ 0）');
   /* 上限が 0 の行は案に出ない。 */
-  const m=SUBPLAN.draft([row({ qty:0 })],monitor(),{}).plans[0];
+  const m=SUBPLAN.draft([row({ qty:0 })],light(),{}).plans[0];
   ok(m.items.length===0&&m.skip===1,'★★★出せる数が無い行は案に出さない');
 }
 

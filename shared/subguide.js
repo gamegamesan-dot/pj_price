@@ -409,8 +409,18 @@
     var r2 = [];
     if (ja.length) r2.push("カードには **" + ja.join("・") + "** を出します");
     if (num(p.q) > 0) r2.push("**お一人 " + Math.round(num(p.q)) + "点まで**");
-    if (num(p.n) > 0) r2.push("1回 " + Math.round(num(p.n)) + "件まで");
+    /* 8.43 モニターは「1回◯件まで」ではなく「毎週 新しく◯件」。
+       件数と期限は⚙（shared/subplan.js の MON）から plan.mon で渡す。 */
+    var mon = (k === "monitor") ? (p.mon || null) : null;
+    if (!mon && num(p.n) > 0) r2.push("1回 " + Math.round(num(p.n)) + "件まで");
     if (r2.length) L.push(r2.join("／") + "。");
+    if (mon) {
+      L.push("**お試しの3週間**：毎週 **新しく "
+        + Math.max(1, Math.round(num(mon.n))) + "件**をお知らせします。"
+        + "カードは**出してから "
+        + Math.max(1, Math.round(num(mon.days))) + "日**で締め切ります"
+        + "（過ぎたカードは「**受付終了**」に変わります）。");
+    }
     /* 8.34 「出品できるか」はカードから外したので、ここで指しておく
        （行は増やさない。短い文は2〜3行のまま）。 */
     L.push("読み方と**出品できるかの注意**は " + pinRef(o)
