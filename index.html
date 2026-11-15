@@ -1159,7 +1159,7 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.41（カジの依頼）会員用の商品は Shopify で「非公開（Unlisted）」にする。
              CSV の Status には unlisted を入れられない（active／draft／archived だけ）ので、
              pj は Status の列ごと出さない（上書きで非公開が解けないように）。 -->
-        <div class="note2" style="margin:2px 0 0">読み込んだら、<b>新しく増えた会員用の商品を Shopify で「非公開（Unlisted）」に</b>してください（商品 → タグ <code>member-list</code> で絞り込み → ステータスを非公開）。<b>一覧・検索・<code>/products.json</code> に出なくなり、カードのリンクからは今までどおり買えます。</b><br>CSV は<b>ステータスの欄を出していない</b>ので、<b>上書きしても非公開は解けません</b>（手順書 §13）。</div>
+        <div class="note2" style="margin:2px 0 0">読み込んだら、<b>会員用の商品を Shopify で「非公開（Unlisted）」に</b>してください。<b>商品 → タグ <code>member-list</code> で絞り込み → 全選択（「すべての結果を選択」も押す）→「…」→「商品の掲載を解除」→「商品を未掲載にする」</b>。<b>すでに非公開の商品が混ざっていても大丈夫</b>なので、毎回これを押すだけです。<br><b>一覧・検索・<code>/products.json</code> に出なくなり、カードのリンクからは今までどおり買えます。</b>CSV は<b>ステータスの欄を出していない</b>ので、<b>上書きしても非公開は解けません</b>（手順書 §13）。</div>
         <button class="btn cfgprice" id="subLoaded" style="width:100%;margin-top:6px" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
         <div id="subLoadedBox"></div>
         <!-- 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる -->
@@ -26851,7 +26851,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v299';   // sw.js の const V と必ず同じ値にする
+var APP_V='v300';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
