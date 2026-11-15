@@ -11901,6 +11901,10 @@ async function jobSubSend(env, opt) {
                 /* 8.38 Discord から消えていたカード（控えを片づけた数）。
                    次の配信の確認の画面から出し直せる。 */
                 gone: 0,
+                /* 8.39（カジの確認）書き直しで**出さなかった**カード
+                   （まだ Discord に出していない商品）。出すと通知が鳴るので、
+                   出すのは「全プランに配る」の確認の画面から。 */
+                wait: 0,
                 approve: o.approve === true };
   try {
     if (!(await subPostOk(env))) {
@@ -11980,7 +11984,9 @@ async function jobSubSend(env, opt) {
       const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
                   /* 8.38 Discord から消えていたカード（控えを片づけた数）。 */
-                  gone: 0, left: 0 };
+                  gone: 0,
+                  /* 8.39 書き直しで出さなかった（まだ出していない）カード。 */
+                  wait: 0, left: 0 };
       let gap = false;
       for (const x of pick) {
         if (x.same) { r.keep++; res.skipped++; continue; }
@@ -12020,6 +12026,12 @@ async function jobSubSend(env, opt) {
             .bind(...subPostBind(x, p, at, hasH)).run();
           r.edit++; res.edited++; gap = true;
         } else {
+          /* ===== 8.39（カジの確認）書き直しでは新しいカードを出さない =====
+             v297 まで、「送ったカードをすべて今の形で書き直す」でも
+             **まだ出していない商品は新しく出していた**（会員に通知が鳴る）。
+             書き直しは**出してあるカードを今の形にそろえるだけ**にして、
+             新しく出すのは「全プランに配る」の確認の画面からにする。 */
+          if (redo) { r.wait++; res.wait++; continue; }
           const m = await dcApi(env, run, "POST",
             "/channels/" + p.ch + "/messages", { embeds: [card] });
           const id = String(((m.data || {}).id) || "");
@@ -12058,7 +12070,7 @@ async function jobSubSend(env, opt) {
           if (only && g.key !== only) continue;
           if (!g.on) continue;
           const r = { key: g.key, name: g.name, add: 0, edit: 0, keep: 0,
-                      fail: 0, gone: 0, left: 0, one: true };
+                      fail: 0, gone: 0, wait: 0, left: 0, one: true };
           let gap1 = false;
           for (const x of (g.pick || [])) {
             /* 8.33 書き直しの続き：この回でもう書き換えたカードは飛ばす。 */
@@ -12074,6 +12086,8 @@ async function jobSubSend(env, opt) {
             }
             if (res.approve && gap1) await sleep(SUB_GAP_MS);
             if (!res.approve) { if (x.sent) r.edit++; else r.add++; continue; }
+            /* 8.39 書き直しでは新しいカードを出さない（通知が鳴るため）。 */
+            if (redo && !(x.sent && x.msg_id)) { r.wait++; res.wait++; continue; }
             const at = nowIso();
             let pic = null;
             if (x.pic) {
@@ -12161,6 +12175,8 @@ async function jobSubSend(env, opt) {
         + res.edited + "件・そのまま " + res.skipped + "件"
         /* 8.38 Discord から消えていたカード（次の配信で出し直せる）。 */
         + (res.gone ? ("・消えていたカード " + res.gone + "件") : "")
+        /* 8.39 書き直しで出さなかった（まだ出していない）カード。 */
+        + (res.wait ? ("・まだ出していないカード " + res.wait + "件") : "")
         + (reform ? "（カードの形を新しくしました）" : ""));
     }
     res.ok = true;

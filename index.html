@@ -17237,6 +17237,7 @@ function subSendGo(plan){
       +'件</b>・そのまま '+mwN(g.skipped)+'件'
       +(g.left?('・残り <b>'+mwN(g.left)+'件</b>'):'')
       +(g.fail?('・失敗 <b>'+mwN(g.fail)+'件</b>'):'')
+      +subWaitLine(g.wait)
       +subGoneLine(g.gone);
     if(g.netErr){
       subNote('⚠ 通信が切れました（'+esc(String(g.error))+'）。'
@@ -17649,7 +17650,7 @@ function subAllSend(){
   var jobs=subAllJobs().filter(function(j){ return (j.add+j.edit)>0; });
   if(!jobs.length){ subAllNote('送るものがありません。',1); return; }
   var total=jobs.reduce(function(a,j){ return a+j.add+j.edit; },0);
-  var got={ sent:0, edited:0, skipped:0, fail:0, gone:0 };
+  var got={ sent:0, edited:0, skipped:0, fail:0, gone:0, wait:0 };
   var done=[], stop='', rounds=0, leftN=0;
   var btn=$('subAllSendBtn'), big=$('subAllBtn');
   var was=btn?btn.innerHTML:'';
@@ -17685,6 +17686,7 @@ function subAllSend(){
         got.skipped+=(+(r||{}).skipped||0);
         got.fail+=(+(r||{}).fail||0);
         got.gone+=(+(r||{}).gone||0);      // 8.38 消えていたカード
+        got.wait+=(+(r||{}).wait||0);      // 8.39 まだ出していないカード
         ps+=sn; pe+=en;
         prog(i,base);
         if((+(r||{}).fail||0)){
@@ -17719,6 +17721,7 @@ function subAllSend(){
       +'件</b>・失敗 <b>'+mwN(got.fail)+'件</b>'
       +(leftN?('・残り <b>'+mwN(leftN)+'件</b>'):'')
       +(got.skipped?('・そのまま '+mwN(got.skipped)+'件'):'')
+      +subWaitLine(got.wait)
       +subGoneLine(got.gone);
     var list=done.length?('<br><span class="note2" style="margin:0">'
       +done.map(function(x){
@@ -17773,6 +17776,25 @@ function subGoneLine(n){
     +'（Discord にもう無かったので控えを片づけました。'
     +'<b>次の配信で出し直せます</b>）';
 }
+/* 8.39（カジの確認）書き直しで**出さなかった**カードの1行。
+   書き直しは「出してあるカードを今の形にそろえる」だけなので、
+   まだ出していない商品は出さない（出すと会員に通知が鳴る）。 */
+function subWaitLine(n){
+  var k=Math.max(0,+n||0);
+  if(!k)return '';
+  return '<br><b>まだ出していないカード '+mwN(k)+'件</b>'
+    +'（書き直しでは出しません。<b>「全プランに配る」で出せます</b>'
+    +'＝そのときに会員へ通知が鳴ります）';
+}
+/* 8.39 書き直しなのに新しく出てしまった件数（pj-sync が古いとき）。
+   **通知が鳴った**ことなので、はっきり出す。 */
+function subNewLine(n){
+  var k=Math.max(0,+n||0);
+  if(!k)return '';
+  return '<br><b style="color:var(--bad)">新しく出した '+mwN(k)+'件</b>'
+    +'（<b>会員に通知が鳴りました</b>。pj-sync が v298 より前のときに'
+    +'起きます。deploy-pj-sync を実行してください）';
+}
 /* 通信そのものが切れたか（pj-sync 側では続いているかもしれない）。 */
 function subNetErr(e){
   var m=String((e&&e.message)||e||'');
@@ -17782,8 +17804,10 @@ function subNetErr(e){
 /* body を送り、残りがあるあいだ続きを頼む。
    say(文, わるいか) で途中の様子を出す。返りは合計。 */
 function subSendLoop(body,say,name){
-  /* 8.38 gone＝Discord から消えていたカード（控えを片づけた数）。 */
-  var got={ sent:0, edited:0, skipped:0, fail:0, gone:0, left:0, rounds:0 };
+  /* 8.38 gone＝Discord から消えていたカード（控えを片づけた数）。
+     8.39 wait＝書き直しで**出さなかった**カード（まだ出していない商品）。 */
+  var got={ sent:0, edited:0, skipped:0, fail:0, gone:0, wait:0, left:0,
+            rounds:0 };
   var nm=String(name||'');
   var step=function(){
     got.rounds++;
@@ -17797,6 +17821,7 @@ function subSendLoop(body,say,name){
       got.skipped+=(+(r||{}).skipped||0);
       got.fail+=(+(r||{}).fail||0);
       got.gone+=(+(r||{}).gone||0);
+      got.wait+=(+(r||{}).wait||0);
       got.left=(+(r||{}).left||0);
       if((+(r||{}).fail||0)){
         got.stop=String((r||{}).stop_plan||'')
@@ -17829,6 +17854,11 @@ function subRedoGo(){
   if(!confirm('送ったカードを、すべて今の形に書き直します。\n\n'
     +'※ 新しく送り直すのではなく、前のカードを書き換えます。\n'
     +'※ 中身が同じカードも書き直します。\n'
+    /* 8.39（カジの確認）まだ出していない商品は**出さない**
+       （出すと会員に通知が鳴るので、出すのは確認の画面から）。 */
+    +'※ まだ出していないカードは出しません'
+    +'（「全プランに配る」で出せます）。\n'
+    +'※ 書き換えは通知が鳴りません。\n'
     +'※ 件数が多いと何回かに分けて頼みます（そのまま待ってください）。\n'
     +'\nよろしいですか？'))return;
   subNote('書き直しています…');
@@ -17836,10 +17866,12 @@ function subRedoGo(){
   return subSendLoop({ approve:true, redo:true },subNote,'書き直しています')
     .then(function(g){
       if(btn)btn.disabled=false;
+      /* 8.39（カジの確認）新しく出したかどうかが分かる言い方にする。 */
       var sum='書き換え <b>'+mwN(g.edited)+'件</b>'
-        +(g.sent?('・新しく '+mwN(g.sent)+'件'):'')
         +'・残り <b>'+mwN(g.left)+'件</b>・失敗 <b>'+mwN(g.fail)+'件</b>'
-        +subGoneLine(g.gone);
+        +subWaitLine(g.wait)
+        +subGoneLine(g.gone)
+        +subNewLine(g.sent);
       if(g.netErr){
         subNote('⚠ 通信が切れました（'+esc(String(g.error))+'）。'
           +'<b>pj-sync 側では続いているかもしれません。'
@@ -26815,7 +26847,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v297';   // sw.js の const V と必ず同じ値にする
+var APP_V='v298';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
