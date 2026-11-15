@@ -2558,3 +2558,68 @@ v297 で直したのは**「消えていたカードを書き直しの途中で�
 | 画面 | push すれば GitHub Pages が自動 |
 | pj-sync | **要ります**（出さない直しは Worker 側です） |
 | D1 | **要りません** |
+
+## 8.40 会員用の鍵：ログインの行き先を `/customer_authentication/login` にする（カジの実機確認）
+
+### 症状
+
+`member_login_mode = 'routes'`（既定）で、ログインしていない人が会員用商品を
+開くと、テーマの決まりのログイン URL（`routes.account_login_url`）に
+`return_to` を付けた先へ飛びます。
+このストアは**新しい顧客アカウント**なので、その URL は
+
+```
+/customer_authentication/redirect?locale=ja&region_country=JP
+```
+
+です。8.26 で「`?` があれば `&` でつなぐ」ようにしましたが、
+**ログインのあと注文管理のページに着地して、商品ページに戻りません**でした
+（カジの実機確認・2026-11-15）。
+
+### 原因
+
+`…/customer_authentication/redirect` は**戻り先を見てくれない**口でした。
+Shopify の説明（`shopify.dev/docs/storefronts/themes/sign-in`）が案内して
+いるのは
+
+```
+/customer_authentication/login?return_to=<相対URLを url_encode>
+```
+
+のほうです。
+
+### 直し（`shopify/snippets/member-gate.liquid` の1行）
+
+```
+  変える前： assign lurl = routes.account_login_url | default: '/account/login'
+  変えたあと： assign lurl = '/customer_authentication/login'
+```
+
+- 変えたのは **`routes` のときだけ**です。
+  `'classic'`（`/account/login?return_to=…`）と `'page'`
+  （ログインに飛ばさず `/pages/members-only` に案内）は**そのまま**です
+- `?` があれば `&` でつなぐ判定（8.26）と `return_to` の付け方も**そのまま**です
+  （`/customer_authentication/login` には `?` が無いので、今までどおり
+  `?return_to=…` になります）
+- 複製テーマ「Rise のコピー」には、カジが**同じ内容を手で入れて保存済み**です
+
+### 確かめ方
+
+`tests/mgate.mjs`（62件）
+Liquid の `routes` が **`/customer_authentication/login`** になっていること／
+**`routes.account_login_url` を使っていない**こと／
+`'classic'`・`'page'` の行き先と、`?` があれば `&` でつなぐ決まりは
+**変わっていない**こと。
+
+画面で見分けるには、ログイン画面に飛んだときのアドレスが
+`…/customer_authentication/login?return_to=%2Fproducts%2F…` になっているか
+を見ます（手順書 §12 手順6(C)）。
+
+### デプロイ
+
+| | |
+| --- | --- |
+| 画面 | **変わりません**（版は v298 のまま） |
+| pj-sync | **要りません**（`shared/mgate.js` の判定は変えていません） |
+| D1 | **要りません** |
+| Shopify のテーマ | **複製テーマに貼る**（カジが手で入れ済み）。公開はカジが決めます |

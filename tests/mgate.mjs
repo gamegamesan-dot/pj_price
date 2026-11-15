@@ -200,8 +200,12 @@ console.log('=== Liquid に同じ決まりが入っているか ===');
   const c=fs.readFileSync(path.join(ROOT,'shopify/snippets/member-can-see.liquid'),'utf8');
   ok(/member-list/.test(g)&&/member-staff/.test(g),
      '★★★member-list と member-staff を見ている');
-  ok(/routes\.account_login_url/.test(g)&&/return_to/.test(g),
+  /* 8.40（カジの実機確認）routes は /customer_authentication/login に送る
+     （…/redirect だとログイン後に注文管理のページに着地して戻らなかった）。 */
+  ok(/'\/customer_authentication\/login'/.test(g)&&/return_to/.test(g),
      '★★★ログインへ飛ばす（戻り先つき）');
+  ok(!/assign lurl = routes\.account_login_url/.test(g),
+     '★★★routes でも …/redirect は使わない（8.40）');
   /* 8.26：? があれば & でつなぐ／旧のログイン画面に切り替えられる。 */
   ok(/lurl contains '\?'/.test(g)&&/assign sep = '&'/.test(g),
      '★★★Liquid も「? があれば & でつなぐ」になっている');

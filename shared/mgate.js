@@ -80,7 +80,11 @@
        テーマの routes.account_login_url が
          /customer_authentication/redirect?locale=ja&region_country=JP
        のように**最初から ? が付いて**返る。そこに '?return_to=' を
-       つなぐと戻れないので、**? があれば & でつなぐ**。 */
+       つなぐと戻れないので、**? があれば & でつなぐ**。
+       8.40：テーマ側（member-gate.liquid）の routes は、さらに
+       /customer_authentication/login に送るようにした（…/redirect では
+       ログイン後に注文管理のページに着地したため・カジの実機確認）。
+       ここは**呼ぶ側が渡した URL**をそのまま使うので、判定は同じ。 */
     if (cTags === null || cTags === undefined) {
       var back = s(o.url);
       var to = login;

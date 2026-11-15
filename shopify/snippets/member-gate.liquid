@@ -1,5 +1,5 @@
 {%- comment -%}
-  会員用商品の鍵（pj_price 8.24／8.26）
+  会員用商品の鍵（pj_price 8.24／8.26／8.40）
   Shopify ストア：Omakase Ship ／ テーマ：Rise
 
   これは「商品ページを見せてよいか」を決めるだけの部品です。
@@ -19,21 +19,28 @@
        → /pages/members-only?why=plan
        商品に grade-◯◯ が1つも無いときは、会員ならだれでも見られる
 
-  ▼ ログインの行き先（8.26・カジの確認）
-    このストアは**新しい顧客アカウント**なので、routes.account_login_url が
-      /customer_authentication/redirect?locale=ja&region_country=JP
-    のように**最初から ? が付いて**返ってきます。
-    そこに '?return_to=' をつなぐと
-      …region_country=JP?return_to=/products/…
-    になって戻れませんでした（ログイン後に「注文」の画面に着地）。
-    → **? があれば & でつなぐ**ようにしました。
+  ▼ ログインの行き先（8.26・8.40・カジの実機確認）
+    このストアは**新しい顧客アカウント**です。
+    ① routes.account_login_url は
+         /customer_authentication/redirect?locale=ja&region_country=JP
+       のように**最初から ? が付いて**返るので、'?return_to=' をつなぐと
+       …region_country=JP?return_to=/products/… になって戻れませんでした。
+       → **? があれば & でつなぐ**ようにしました（8.26）。
+    ② それでも、…/redirect に return_to を付けると**ログイン後に
+       注文管理のページに着地**して、商品ページに戻りませんでした
+       （カジの実機確認・8.40）。
+       Shopify の説明（shopify.dev/docs/storefronts/themes/sign-in）では
+         /customer_authentication/login?return_to=<相対URLを url_encode>
+       が案内されているので、routes では**その URL を使います**。
 
-    それでも戻らないときは、下の member_login_mode を 'classic' に変えて
-    /account/login?return_to=… に送る形も試せます（手順書 §7-3 参照）。
+    それでも戻らないときは、下の member_login_mode を 'classic'（旧の
+    /account/login?return_to=…）や 'page'（ログインに飛ばさず案内の
+    ページに出す）に変えて試せます（手順書 §7-3 参照）。
 {%- endcomment -%}
 {%- liquid
   # ログインしていない人の行き先。ここの1行だけで切り替えられる。
-  # 'routes'  … テーマの決まりのログイン URL（既定）
+  # 'routes'  … /customer_authentication/login?return_to=…（既定・8.40）
+  #             新しい顧客アカウントの、戻り先が効くログイン URL
   # 'classic' … /account/login?return_to=… に送る（旧のログイン画面）
   # 'page'    … ログインに飛ばさず /pages/members-only に案内する
   #             （新しい顧客アカウントで「ログインしたのにまた鍵に当たる」
@@ -51,7 +58,10 @@
         if member_login_mode == 'classic'
           assign lurl = '/account/login'
         else
-          assign lurl = routes.account_login_url | default: '/account/login'
+          # 8.40 routes.account_login_url（…/redirect?…）だと、ログイン後に
+          # 注文管理のページに着地して戻らなかった（カジの実機確認）。
+          # Shopify の説明どおり …/customer_authentication/login を使う。
+          assign lurl = '/customer_authentication/login'
         endif
         # すでに ? が付いている URL（新しい顧客アカウント）は & でつなぐ。
         assign sep = '?'

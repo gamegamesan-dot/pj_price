@@ -351,8 +351,16 @@ v283 はそこに `?return_to=` をそのままつないでいたので
 
 **v284 で直したこと**：URL に `?` が入っていれば **`&` でつなぐ**。
 
+**それでも戻りませんでした**（カジの実機確認・2026-11-15）。
+`…/customer_authentication/redirect` に `return_to` を付けても、
+ログインのあと**注文管理のページに着地**します。
+
+**いまの形（8.40）**：Shopify の説明
+（`shopify.dev/docs/storefronts/themes/sign-in`）のとおり、
+`routes` では **`/customer_authentication/login`** に送ります。
+
 ```
-/customer_authentication/redirect?locale=ja&region_country=JP&return_to=%2Fproducts%2Fsub-…
+/customer_authentication/login?return_to=%2Fproducts%2Fsub-…
 ```
 
 #### ⚠ 新しい顧客アカウントの注意
@@ -375,7 +383,7 @@ v283 はそこに `?return_to=` をそのままつないでいたので
 
 | 試す順 | 直すところ | 行き先 |
 | --- | --- | --- |
-| ① 既定 | `member_login_mode = 'routes'`（そのまま） | テーマの決まりの URL（`/customer_authentication/redirect?…&return_to=…`） |
+| ① 既定 | `member_login_mode = 'routes'`（そのまま） | **`/customer_authentication/login?return_to=…`**（8.40・ログイン後に商品ページへ戻る） |
 | ② 試す | `member_login_mode = 'classic'` に書き替える | `/account/login?return_to=…`（旧のログイン画面） |
 | ③ 安全策 | `member_login_mode = 'page'` に書き替える | ログインに飛ばさず `/pages/members-only`（ページの中の「ログイン」を押してもらう） |
 
@@ -440,7 +448,7 @@ v283 はそこに `?return_to=` をそのままつないでいたので
 | `seo.hidden` に 1 で検索・サイトマップから外れる | Shopify のヘルプ・公式ブログで確認（2026-11-14） |
 | `seo.hidden` を**商品CSV で**付けられるか | メタフィールドの列は CSV で入るが、**列名の書き方が資料で違う**。ストアの書き出しの列名を使うのが確実（⚙で入れてもらう形にした） |
 | Shopify Flow が Basic で使えるか | 新しい資料では「Basic でも無料」。古い資料には「Basic 不可」とあるので、**入れるときに確かめてください** |
-| ログイン後に元のページへ戻る（`return_to`） | **このストアは新しい顧客アカウント**。ログイン URL に最初から `?` が付くので **`&` でつなぐ**ようにした（v284）。実際に戻るかは §7-3 の手順でカジが複製テーマで確かめる |
+| ログイン後に元のページへ戻る（`return_to`） | **このストアは新しい顧客アカウント**。`?` があれば `&` でつなぐようにし（v284）、さらに `routes` の行き先を **`/customer_authentication/login`** に変えた（8.40）。`…/redirect` では**ログイン後に注文管理のページに着地**した（カジの実機確認・2026-11-15） |
 | 新しい顧客アカウントのログイン中の扱い | **ログインしても、ストアへ戻ってくるまでストア側は「ログインしていない人」のまま**（§7-3） |
 | `/products/<ハンドル>.js`・`.json` を止められるか | **止められません**（Shopify 本体の口・テーマを通らない）。鍵は「ページを見せない・一覧に出さない・検索に出さない」までです |
 | Liquid が本当に動くか | **この場所から Shopify を触れないので、動かして確かめていません。** §7 の5通りを、必ず複製テーマのプレビューで試してください |
@@ -471,24 +479,31 @@ v283 はそこに `?return_to=` をそのままつないでいたので
 2. 直すのは**複製のほう**だけ。公開中のテーマは触りません
 3. 「…」→ **コードを編集**を開く
 
-### 手順 1. `snippets/member-gate.liquid` を貼り替える（v284）
+### 手順 1. `snippets/member-gate.liquid` を貼り替える（8.40 の版）
 
 左の一覧から `snippets/member-gate.liquid` を開き、**中身をぜんぶ消して**
 下を貼り、**保存**します。
 
-> 見分け方：いまの中身の2行目が `会員用商品の鍵（pj_price 8.24）` だけなら
-> **v283**です（v284 は `8.24／8.26`）。
+> **見分け方**：ファイルの中を `customer_authentication/login` で探して、
+> **`assign lurl = '/customer_authentication/login'` の行があれば最新**です。
+> `assign lurl = routes.account_login_url` のままなら**古い版**なので
+> 貼り替えてください（その版はログイン後に**注文管理のページ**に着地します）。
 
 <!-- Liquid は raw の中に置く（GitHub Pages が自分のものとして読まないように） -->
 {% raw %}
 
 ```liquid
 {%- comment -%}
-  会員用商品の鍵（pj_price 8.24／8.26）
+  会員用商品の鍵（pj_price 8.24／8.26／8.40）
   Shopify ストア：Omakase Ship ／ テーマ：Rise
 
   これは「商品ページを見せてよいか」を決めるだけの部品です。
   **飛ばす先の URL を出すだけ**で、商品の中身は何も出しません。
+
+  使い方（layout/theme.liquid）
+    {%- capture member_gate -%}{%- render 'member-gate' -%}{%- endcapture -%}
+    {%- assign member_gate = member_gate | strip -%}
+    … member_gate が空なら見せてよい。空でなければその URL へ飛ばす。
 
   決まり（上から順に見る。pj の shared/mgate.js と同じ順）
     ① 商品に member-list が無い → だれでも見られる
@@ -499,18 +514,32 @@ v283 はそこに `?return_to=` をそのままつないでいたので
        → /pages/members-only?why=plan
        商品に grade-◯◯ が1つも無いときは、会員ならだれでも見られる
 
-  ▼ ログインの行き先（8.26）
-    このストアは新しい顧客アカウントなので、routes.account_login_url が
-      /customer_authentication/redirect?locale=ja&region_country=JP
-    のように**最初から ? が付いて**返ってきます。
-    そこに '?return_to=' をつなぐと戻れないので、
-    **? があれば & でつなぐ**ようにしました。
+  ▼ ログインの行き先（8.26・8.40・カジの実機確認）
+    このストアは**新しい顧客アカウント**です。
+    ① routes.account_login_url は
+         /customer_authentication/redirect?locale=ja&region_country=JP
+       のように**最初から ? が付いて**返るので、'?return_to=' をつなぐと
+       …region_country=JP?return_to=/products/… になって戻れませんでした。
+       → **? があれば & でつなぐ**ようにしました（8.26）。
+    ② それでも、…/redirect に return_to を付けると**ログイン後に
+       注文管理のページに着地**して、商品ページに戻りませんでした
+       （カジの実機確認・8.40）。
+       Shopify の説明（shopify.dev/docs/storefronts/themes/sign-in）では
+         /customer_authentication/login?return_to=<相対URLを url_encode>
+       が案内されているので、routes では**その URL を使います**。
+
+    それでも戻らないときは、下の member_login_mode を 'classic'（旧の
+    /account/login?return_to=…）や 'page'（ログインに飛ばさず案内の
+    ページに出す）に変えて試せます（手順書 §7-3 参照）。
 {%- endcomment -%}
 {%- liquid
   # ログインしていない人の行き先。ここの1行だけで切り替えられる。
-  # 'routes'  … テーマの決まりのログイン URL（既定）
+  # 'routes'  … /customer_authentication/login?return_to=…（既定・8.40）
+  #             新しい顧客アカウントの、戻り先が効くログイン URL
   # 'classic' … /account/login?return_to=… に送る（旧のログイン画面）
   # 'page'    … ログインに飛ばさず /pages/members-only に案内する
+  #             （新しい顧客アカウントで「ログインしたのにまた鍵に当たる」
+  #               ようになるときは、これがいちばん安全）
   assign member_login_mode = 'routes'
 
   assign gate = ''
@@ -524,7 +553,10 @@ v283 はそこに `?return_to=` をそのままつないでいたので
         if member_login_mode == 'classic'
           assign lurl = '/account/login'
         else
-          assign lurl = routes.account_login_url | default: '/account/login'
+          # 8.40 routes.account_login_url（…/redirect?…）だと、ログイン後に
+          # 注文管理のページに着地して戻らなかった（カジの実機確認）。
+          # Shopify の説明どおり …/customer_authentication/login を使う。
+          assign lurl = '/customer_authentication/login'
         endif
         # すでに ? が付いている URL（新しい顧客アカウント）は & でつなぐ。
         assign sep = '?'
@@ -681,10 +713,18 @@ v284 で直していません。開いて、**最後の行が `{% raw %}{{ ok }}
 1. ログアウトしてから `/products/sub-…`（会員用商品）を開く
 2. ログイン画面に飛ぶ → ログインする
 3. **元の商品ページに戻る**か見る
+   （既定の `routes` は **`/customer_authentication/login?return_to=…`**
+   に送ります。8.40 でここを直しました）
    - 戻った → そのまま（`member_login_mode = 'routes'`）
    - 戻らない → `'classic'` に書き替えて同じ手順
    - どちらも戻らない → **`'page'`** にする（ログインに飛ばさず
      「会員向けのご案内」に出す。2手になりますが行き止まりになりません）
+
+> **飛び先の URL を見れば分かります。** ログイン画面に飛んだときの
+> アドレスが `…/customer_authentication/login?return_to=%2Fproducts%2F…`
+> になっていれば、この直しが入っています。
+> `…/customer_authentication/redirect?…` のままなら、手順 1 の貼り替えが
+> できていません（その版は**注文管理のページに着地**します）。
 
 **（D）ソースに商品名・値段が出ないこと**（PC で）
 
