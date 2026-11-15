@@ -187,7 +187,8 @@ await p.evaluate(()=>{
      '★★案のタブにも件数が出る');
   ok(/ゲームA/.test(t.txt)&&!/ゲームB/.test(t.txt),
      '★★★選んだタブのプランの行だけ出る');
-  ok(t.btn.length===1&&/この案で出す（モニターの 1件）/.test(t.btn[0]),
+  /* 8.42（v301）印は商品ごとに1つなので、ボタンは「商品 ◯件」と書く。 */
+  ok(t.btn.length===1&&/この案で出す（モニターの 商品 1件）/.test(t.btn[0]),
      '★★★ボタンに「どの範囲を出すか」を書く');
   ok(/このプランの 1件だけ/.test(t.txt),'★★★ボタンの下にも書く');
 }
@@ -209,7 +210,7 @@ const allBtn=await p.evaluate(()=>{ subTabSet('all');
     document.querySelectorAll('#subDraftBox button:not(.tabbtn)'),
     (b)=>b.textContent.replace(/\s+/g,' ')); });
 console.log('   ボタン：'+allBtn.join(' / '));
-ok(allBtn.some((x)=>/この案で出す（すべてのプランの 3件）/.test(x)),
+ok(allBtn.some((x)=>/この案で出す（すべてのプランの 商品 3件）/.test(x)),
    '★★ボタンの文も変わる');
 await p.evaluate(()=>{ window.__q=[]; return subDraftApply(); });
 await p.waitForTimeout(600);

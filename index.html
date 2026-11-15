@@ -1130,6 +1130,9 @@ body.staff #syncOnHandFix{display:none !important}
         </details>
         <button class="btn cfgprice" id="subDraftBtn" onclick="subDraftGo();return false" style="width:100%;margin-top:6px">今日の配信の案を作る</button>
         <div class="note2" id="subDraftNote" style="margin-top:2px"></div>
+        <!-- 8.42（カジの依頼）「この案で出す」の結果をここに残す
+             （確認のダイアログを閉じても・次の案を作っても消えない）。 -->
+        <div class="note2" id="subDraftLast" style="margin:4px 0 0;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card)"></div>
         <div id="subDraftBox"></div>
       </div>
       <div class="substep" id="subStep2">
@@ -11721,6 +11724,8 @@ function expInit(){
 expInit();
 /* 8.36（v294）段ごとの「✓ 済」を、覚えてあるぶんだけ出す。 */
 try{ subStepRender(); }catch(e){}
+/* 8.42（v301）直前の「この案で出す」の結果を出す。 */
+try{ subDraftLastRender(); }catch(e){}
 /* ---- 商品を探す（6.92）の結び付け ---- */
 (function(){
   var deb={};
@@ -16627,6 +16632,53 @@ function subDraftRows(){
     return row;
   });
 }
+/* 8.42（カジの報告）案の候補は**いま一覧に出ている行**から数える。
+   絞り込みや検索が効いていると候補が減る（カジの回：136件 → 51件）。
+   何が効いているかを案のまとめに1行で出す。 */
+function subDraftFiltHtml(){
+  var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
+  var q=''; try{ q=String((findState('amz')||{}).q||'').trim(); }catch(e){ q=''; }
+  var on=[];
+  if(f.subOn)on.push('<b style="color:var(--bad)">「会員に出す」印のある行だけ表示</b>');
+  if(q)on.push('<b style="color:var(--bad)">検索「'+esc(q)+'」</b>');
+  if(f.genre)on.push('ジャンル「'+esc(String(f.genre))+'」');
+  if(f.win)on.push('黒字のみ');
+  if(f.multi)on.push('新品出品者が2人以上');
+  if(f.noAmz)on.push('Amazon本体なし');
+  if(f.rstOk)on.push('出品できる行だけ');
+  if(f.dup)on.push('JAN重複だけ');
+  if(+f.minM>0)on.push('利益率 '+esc(String(f.minM))+'% 以上');
+  return '<br><span class="note2" style="margin:0">候補は'
+    +'<b>いま一覧に出ている行</b>から選びます（'
+    +(on.length?('効いている絞り込み：'+on.join('・')):'絞り込みなし')
+    +'）。候補が思ったより少ないときは、ここを外してください。</span>';
+}
+/* 8.42（カジの依頼）「この案で出す」の結果を**画面に残す**。
+   確認のダイアログを閉じると分からなくなっていたので、この端末に控えて、
+   ①の段にいつも出す（次に案を作っても消えない）。 */
+var SUB_DRAFT_LAST='pj:subdraft:last:v1';
+function subDraftLastSet(o){
+  try{ lsSet(SUB_DRAFT_LAST,JSON.stringify(Object.assign(
+    { at:Date.now() },o||{}))); }catch(e){}
+  subDraftLastRender();
+}
+function subDraftLastGet(){
+  try{ var o=JSON.parse(lsGet(SUB_DRAFT_LAST)||'{}');
+       return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; }
+}
+function subDraftLastRender(){
+  var el=$('subDraftLast'); if(!el)return;
+  var o=subDraftLastGet();
+  if(!o.at){ el.innerHTML=''; return; }
+  var w=subStepWhen(o.at);
+  el.innerHTML='<b>直前の「この案で出す」</b>（'+esc(w)+'）　'
+    +(o.ok?('✓ <b>'+mwN(+o.n||0)+'件</b>に「会員に出す」の印を付けました'
+        +((+o.ng>0)?('<b style="color:var(--bad)">・'+mwN(+o.ng)
+          +'件は付けられませんでした</b>'):'')
+        +'（いまの印の合計は②に出ます）')
+      :('<b style="color:var(--bad)">'+esc(String(o.why||'出していません'))
+        +'</b>'));
+}
 function subDraftGo(){
   if(roleDenyPrice('subDraftNote'))return;
   var box=$('subDraftBox');
@@ -16645,10 +16697,19 @@ function subDraftGo(){
   var mb=0, sl=0;
   on.forEach(function(p){ (p.items||[]).forEach(function(x){
     if(x.maybe)mb++; if(x.slow)sl++; }); });
+  /* 8.42 のべ（プランごとの合計）と、商品の数（印を付ける数）を両方出す。 */
+  var uq={};
+  on.forEach(function(p){ (p.items||[]).forEach(function(x){
+    uq[String(x.jan)]=1; }); });
+  var nOne=Object.keys(uq).length;
   subDraftNote('<b>今日の配信の案</b>（まだ何も変えていません）<br>'
-    +'候補 '+mwN(rows.length)+'件 → <b>'+mwN(n)+'件</b>を選びました'
-    +'（'+on.map(function(p){ return esc(p.name)+' '+mwN(p.items.length)+'件'
-      +(p.over?('／あと '+mwN(p.over)+'件'):''); }).join('　')+'）'
+    +'候補 '+mwN(rows.length)+'件 → <b>商品 '+mwN(nOne)+'件</b>を選びました'
+    +'（プランごとに数えると のべ '+mwN(n)+'件）'
+    +'<br>'+on.map(function(p){ return esc(p.name)+' '+mwN(p.items.length)+'件'
+      +(p.over?('／あと '+mwN(p.over)+'件'):''); }).join('　')
+    /* 8.42 候補は**いま一覧に出ている行**から数えるので、
+       絞り込みが効いていると候補が減る（カジの報告の「136→51」）。 */
+    +subDraftFiltHtml()
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
       +'件</span>（作品名に「版」が入っているだけかもしれません。'
       +'限定版なら印を外してください）'):'')
@@ -16866,7 +16927,9 @@ function subDraftHtml(plans){
   var on=(plans||[]).filter(function(p){ return p.on; });
   if(!on.length)return bar+'<div class="note2">動かしているプランがありません'
     +'（⚙で「配信する」を入れてください）。</div>';
+  /* 8.42 印は**商品ごと**に1つなので、商品の数とのべの数を両方出す。 */
   var n=subDraftPicked(tab).length;
+  var nAll=subDraftAll(tab);
   if(!out.length){
     /* 8.23 そのタブに出すものが無いときは、理由を出す。 */
     var why=(tab==='one')
@@ -16882,16 +16945,57 @@ function subDraftHtml(plans){
     +'<div style="display:flex;gap:6px;margin-top:8px">'
     +'<button class="btn primary cfgprice" onclick="subDraftApply();return false"'
     +' style="flex:1">この案で出す（'
-    +(tab==='all'?'すべてのプラン':esc(subTabName(tab)))+'の '+mwN(n)
-    +'件）</button></div>'
+    +(tab==='all'?'すべてのプラン':esc(subTabName(tab)))+'の<b> 商品 '+mwN(n)
+    +'件</b>）</button></div>'
+    /* 8.42 のべの数（同じ商品が複数のプランに出ているぶん）も添える。 */
+    +((nAll>n)?('<div class="note2" style="margin-top:2px">'
+      +'プランごとに数えると のべ <b>'+mwN(nAll)+'件</b>です'
+      +'（<b>同じ商品が下のプランから上のプランまで出る</b>ため）。'
+      +'<b>印を付けるのは商品ごとに1つ</b>なので、'
+      +'出るのは <b>'+mwN(n)+'件</b>です。</div>'):'')
     +(tab==='all'?''
       :('<div class="note2" style="margin-top:2px">いまは <b>'
         +esc(subTabName(tab))+'</b> のタブです。押すと<b>このプランの '
         +mwN(n)+'件だけ</b>を出します（ほかのプランは出しません）。'
         +'ぜんぶ出すときは［すべて］のタブで押してください。</div>'));
 }
+/* ===== 8.42（カジの報告）同じ商品が何度も数えられていた =====
+   8.35（積み上げ型）から、**1つの商品が複数のプランの案に出ます**
+   （モニターの10件はライト・スタンダード・プレミアムにも出る）。
+   そのため
+     ・案のまとめの「◯件を選びました」が**のべの数**（10+13+22+62＝107）
+     ・「この案で出す」も**のべの数**で数え、同じ商品を何度も送っていた
+     ・送る順で**あとの行が前の行を上書き**するので、モニターから上に出す
+       つもりの商品が「プレミアムだけ」になることがあった
+   印は**商品（JAN）ごと**に1つなので、ここで**商品ごとに1件へまとめる**。
+     ・「◯◯だけ」をはっきり選んだ行があれば、それを採る
+     ・無ければ**いちばん下のプラン**（＝いちばん広く出る）を採る */
+function subPickRank(k){
+  var t=String(k||'');
+  if(!t||t==='all')return 0;                 // ぜんぶのプラン（いちばん広い）
+  if(/^only:/.test(t))return 9;              // はっきり選んだ「◯◯だけ」
+  var r=SUBPLAN.rankOf?SUBPLAN.rankOf(t):0;
+  return 1+(r>0?r:0);                        // 下のプランほど小さい＝広い
+}
+/* 同じ JAN を1件にまとめる（上の決まり）。 */
+function subDraftOne(list){
+  var by={}, out=[];
+  (list||[]).forEach(function(x){
+    var j=String(x.jan||'');
+    var was=by[j];
+    if(!was){ by[j]=x; out.push(j); return; }
+    var a=subPickRank(was.pick), b=subPickRank(x.pick);
+    /* 「◯◯だけ」（9）は、はっきり選んだものなので勝つ。
+       どちらもふつうなら、**小さいほう**（下のプラン＝いちばん広く出る）。 */
+    if(b===9&&a!==9)by[j]=x;
+    else if(a===9&&b!==9){ /* そのまま（はっきり選んだほうを残す） */ }
+    else if(b<a)by[j]=x;
+  });
+  return out.map(function(j){ return by[j]; });
+}
 /* 案のうち、チェックが入っている行だけ。
-   8.23 タブを渡すと、そのタブのプランだけを返す（既定はいまのタブ）。 */
+   8.23 タブを渡すと、そのタブのプランだけを返す（既定はいまのタブ）。
+   8.42 **同じ商品は1件にまとめて**返す（印は商品ごとに1つなので）。 */
 function subDraftPicked(tab){
   var t=(tab===undefined||tab===null)?subTab():String(tab);
   var out=[];
@@ -16913,7 +17017,23 @@ function subDraftPicked(tab){
         planKey:(k==='all')?'all':String(k).replace(/^only:/,'') }));
     });
   });
-  return out;
+  /* 8.42 同じ商品（JAN）は1件にまとめる。 */
+  return subDraftOne(out);
+}
+/* 8.42 のべの数（プランをまたいだ行の数）。画面に両方出す。 */
+function subDraftAll(tab){
+  var t=(tab===undefined||tab===null)?subTab():String(tab);
+  var n=0;
+  ((subDraftData||{}).plans||[]).forEach(function(p){
+    if(!p.on)return;
+    if(!subTabHit(p.key,t))return;
+    (p.items||[]).forEach(function(x){
+      var el=$('subDraftChk_'+p.key+'_'+x.jan);
+      if(el&&!el.checked)return;
+      n++;
+    });
+  });
+  return n;
 }
 /* 「この案で出す」。印・上限・価格をまとめて付け、CSV まで書き出す。 */
 function subDraftApply(){
@@ -16958,7 +17078,14 @@ function subDraftApply(){
     +'・そのあと Shopify 用 CSV を書き出します\n\n'
     +'※ 読み込んだら「Shopify に読み込みました」を押してください。\n'
     +'※ 価格は書き出しのときに上乗せを決め直します（そのぶんも控えます）。\n'
-    +'\nよろしいですか？'))return;
+    +'\nよろしいですか？')){
+    /* 8.42 「キャンセル」を押したことも画面に残す（何も変わっていない）。 */
+    subDraftLastSet({ ok:false, n:0, ng:0,
+      why:'キャンセルしました（何も変えていません）' });
+    subDraftNote('✋ やめました（<b>何も変えていません</b>）。'
+      +'もう一度「この案で出す」を押せます。');
+    return;
+  }
   subDraftNote('印を付けています…');
   var items=pick.map(function(x){
     return { jan:x.jan, on:1, max_qty:x.qty, price:x.price, grades:x.plan };
@@ -16996,6 +17123,8 @@ function subDraftApply(){
     else subDraftNote('✓ '+mwN(pick.length-ngPut.length)+'件に印を付けました'
       +(ngPut.length?('（'+mwN(ngPut.length)+'件は付けられませんでした）'):'')
       +'。Shopify 用 CSV を書き出します…');
+    /* 8.42（カジの依頼）結果を**画面に残す**（ダイアログを閉じても分かる）。 */
+    subDraftLastSet({ ok:true, n:pick.length-ngPut.length, ng:ngPut.length });
     if(ngPut.length)$('subDraftNote').innerHTML+=mwSubWhyHtml(ngPut);
     return mwSubLoad(true);
   }).then(function(){
@@ -17006,6 +17135,9 @@ function subDraftApply(){
     return mwSubCsvGo();
   })['catch'](function(e){
     subDraftNote('⚠ 出せませんでした：'+esc(e.message),1);
+    /* 8.42 うまくいかなかったことも残す。 */
+    subDraftLastSet({ ok:false, n:0, ng:0,
+      why:'出せませんでした（'+String(e&&e.message||e)+'）' });
   });
 }
 /* 案の記録（どの案から何が売れたか）。 */
@@ -26851,7 +26983,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v300';   // sw.js の const V と必ず同じ値にする
+var APP_V='v301';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
