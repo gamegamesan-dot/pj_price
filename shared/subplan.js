@@ -130,6 +130,84 @@
   function active(cfg) {
     return list(cfg).filter(function (p) { return p.on && p.ch; });
   }
+  /* ===== 8.35（カジの依頼）プランは「積み上げ型」=====
+     いままでは mw_sub.grades に1つのプランだけを入れていたので、
+     ライトに振り分けた商品はモニターにもプレミアムにも出なかった
+     （「ほかのプランに振り分けてあります」）。そのため
+     ・ライトにはゲームソフトが1件しか残らない
+     ・プレミアムでもモニターの商品が見られない
+     ということになっていた。
+
+     これからは**下のプランに出す商品は、上のプランにも出す**。
+       モニター  < ライト < スタンダード < プレミアム
+     ・ライト      … モニターの商品＋ゲームソフト全部（限定版も）
+     ・スタンダード … ゲームソフト全部＋ほかの商品
+     ・プレミアム  … 全部＋1点ものの先行
+
+     やり方は「**grades にそのプランから上を全部入れる**」だけ
+     （fitWhy は今までどおり「自分のキーが grades にあるか」を見る）。
+     1人あたりの購入数・1回の件数は**プランごと**のまま（上限は積み上げない）。 */
+  var ORDER = ["monitor", "light", "standard", "premium"];
+  function rankOf(key) { return ORDER.indexOf(s(key).trim()); }
+  /* そのプランから**上を全部**（例 light → light,standard,premium）。 */
+  function upFrom(key) {
+    var i = rankOf(key);
+    return (i < 0) ? [] : ORDER.slice(i);
+  }
+  /* 画面の「出すプラン」で選んだ値 → grades の文字。
+       'monitor'      … モニターから上（monitor,light,standard,premium）
+       'only:monitor' … モニターだけ（monitor）
+       'all' / ''     … ぜんぶのプラン（grades は空＝どのプランにも出す）
+     ここ1か所だけに置く（画面・pj-sync・テストが同じものを読む）。 */
+  function gradesOf(choice) {
+    var v = s(choice).trim();
+    if (!v || v === "all") return "";
+    var m = /^only:(.+)$/.exec(v);
+    if (m) return (rankOf(m[1]) >= 0) ? m[1].trim() : "";
+    return upFrom(v).join(",");
+  }
+  /* grades（文字）→ **いちばん下のプラン**（画面に「◯◯から上」と出す用）。 */
+  function lowestOf(grades) {
+    var g = s(grades).split(",").map(function (x) { return x.trim(); })
+      .filter(Boolean);
+    for (var i = 0; i < ORDER.length; i++)
+      if (g.indexOf(ORDER[i]) >= 0) return ORDER[i];
+    return "";
+  }
+  /* その grades が「積み上げ型」になっているか
+     （いちばん下のプランから上が全部入っているか）。
+     空（ぜんぶのプラン）は積み上げ型として扱う。 */
+  function stacked(grades) {
+    var g = s(grades).split(",").map(function (x) { return x.trim(); })
+      .filter(Boolean);
+    if (!g.length) return true;
+    var lo = lowestOf(g);
+    if (!lo) return true;                 // 知らないプランだけ（触らない）
+    var want = upFrom(lo);
+    for (var i = 0; i < want.length; i++)
+      if (g.indexOf(want[i]) < 0) return false;
+    return true;
+  }
+  /* 画面の「出すプラン」の選択肢（並びと言い方もここ1か所）。 */
+  function picks(cfg) {
+    var l = list(cfg || {});
+    var nameOf = function (k) {
+      var h = l.filter(function (p) { return p.key === k; })[0];
+      return h ? h.name : k;
+    };
+    var out = [];
+    ORDER.forEach(function (k) {
+      var up = upFrom(k);
+      out.push({ v: k, label: nameOf(k)
+        + ((up.length > 1) ? ("から上（" + up.map(nameOf).join("・") + "）")
+                           : "だけ") });
+    });
+    ORDER.slice(0, ORDER.length - 1).forEach(function (k) {
+      out.push({ v: "only:" + k, label: nameOf(k) + "だけ" });
+    });
+    out.push({ v: "all", label: "ぜんぶのプラン" });
+    return out;
+  }
   /* その商品をこのプランに出すか。
      ・grades（mw_sub.grades）が入っていれば、その中にプランがあること
      ・kinds が 'game' のプランは**ゲームソフトだけ**
@@ -140,12 +218,23 @@
   /* 8.20（【6】）**出さない理由**。'' なら出す。
      プランごとの予定が0件のときに「なぜ0件か」を出すのに使う
      （画面も pj-sync も同じこの文を使う）。 */
+  /* 8.35 理由の文に出すプランの名前（表から引く。無ければキーのまま）。 */
+  function nameJaOf(plan, key) {
+    var l = PLANS.filter(function (p) { return p.key === key; })[0];
+    return l ? l.name : key;
+  }
   function fitWhy(plan, row, isGame) {
     var p = plan || {}, r = row || {};
     var g = s(r.grades).split(",").map(function (x) { return x.trim(); })
       .filter(Boolean);
-    if (g.length && g.indexOf(p.key) < 0)
-      return "ほかのプランに振り分けてあります（" + g.join("・") + "）";
+    if (g.length && g.indexOf(p.key) < 0) {
+      /* 8.35 積み上げ型：下のプランに出す商品は上にも出る。
+         ここに来るのは「このプランより上から出す」か「◯◯だけ」の行。 */
+      var lo = lowestOf(g);
+      if (lo && rankOf(lo) > rankOf(p.key))
+        return s(nameJaOf(p, lo)) + "から上に出す商品です";
+      return "このプランには出さない商品です（" + g.join("・") + "）";
+    }
     if (r.one_off && p.kinds !== "one")
       return "1点ものはこのプランに出しません";
     if (p.kinds === "game" && !isGame)
@@ -378,6 +467,9 @@
     cleanName: cleanName,
     ONE_PLANS: ONE_PLANS, ONE_PRE_HOURS: ONE_PRE_HOURS,
     ONE_OPEN_GRADES: ONE_OPEN_GRADES, oneHours: oneHours,
+    /* 8.35 積み上げ型（上のプランは下の商品も見られる）。 */
+    ORDER: ORDER, rankOf: rankOf, upFrom: upFrom,
+    gradesOf: gradesOf, lowestOf: lowestOf, stacked: stacked, picks: picks,
     oneGrades: oneGrades, oneList: oneList, oneWhy: oneWhy,
     oneFits: oneFits, oneWhyNone: oneWhyNone,
               keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,

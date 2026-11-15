@@ -1237,6 +1237,12 @@ body.staff #syncOnHandFix{display:none !important}
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="btn cfgprice" id="subRedoBtn" style="flex:1" onclick="subRedoGo();return false">送ったカードをすべて今の形で書き直す</button>
       </div>
+      <!-- 8.35（カジの依頼5）いま印が付いている商品の「出すプラン」を
+           積み上げ型（下のプランの商品は上のプランにも出す）に直す。 -->
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn cfgprice" id="subStackBtn" style="flex:1" onclick="subStackGo();return false">出すプランを積み上げ型に直す</button>
+      </div>
+      <div class="note2" id="subStackNote" style="margin:2px 0 0">1つのプランだけに振り分けてある商品を、<b>そのプランから上のプランにも出す</b>形に直します（例 <code>monitor</code> → <code>monitor,light,standard,premium</code>）。<b>「◯◯だけ」にしたい行は直しません</b>（この画面では直せる行だけを数えて出します）。</div>
       <div class="note2" style="margin:2px 0 0">⚙（送料の文など）を変えたときに押してください。<b>新しく送り直すのではなく、前のカードを書き換えます</b>。</div>
       <div class="note2" id="subNote" style="margin-top:2px"></div>
       <div id="subPlanList" style="margin-top:4px"></div>
@@ -16698,16 +16704,18 @@ function subDraftHtml(plans){
         +'<br><span class="note2" style="margin:0">送料 '+esc(String(x.ship_text||''))
         +'</span>'
         /* 8.20（【6】）出すプランを行ごとに変えられる。
+           8.35（カジの依頼）**積み上げ型**：選ぶのは「いちばん下のプラン」。
+           「◯◯から上」を選ぶと、そのプランから上に全部出す
+           （grades に monitor,light,standard,premium のように入る）。
+           1つのプランだけに出したい行は「◯◯だけ」を選ぶ。
            「ぜんぶのプラン」は grades を空にする（どのプランにも出る）。
-           ライト・スタンダード・プレミアムを試すときに、
-           同じ商品をそのプランにも出せるようにする。 */
+           選択肢と言い方は shared/subplan.js の picks の1か所だけ。 */
         +'<br><span class="note2" style="margin:0">出すプラン </span>'
         +'<select id="'+esc('subDraftPlan_'+p.key+'_'+x.jan)+'"'
-        +' style="max-width:160px;padding:2px 4px;font-size:12px">'
-        +SUBPLAN.list({}).map(function(q){
-          return '<option value="'+esc(q.key)+'"'
-            +(q.key===p.key?' selected':'')+'>'+esc(q.name)+'</option>'; }).join('')
-        +'<option value="all">ぜんぶのプラン</option>'
+        +' style="max-width:230px;padding:2px 4px;font-size:12px">'
+        +SUBPLAN.picks(subCfgAll()).map(function(q){
+          return '<option value="'+esc(q.v)+'"'
+            +(q.v===p.key?' selected':'')+'>'+esc(q.label)+'</option>'; }).join('')
         +'</select>'
         +'</span></label>');
     });
@@ -16750,11 +16758,16 @@ function subDraftPicked(tab){
     p.items.forEach(function(x){
       var el=$('subDraftChk_'+p.key+'_'+x.jan);
       if(el&&!el.checked)return;
-      /* 8.20（【6】）行ごとに選んだプラン。'all' は grades を空にする。 */
+      /* 8.20（【6】）行ごとに選んだプラン。
+         8.35 積み上げ型：grades は shared/subplan.js の gradesOf で作る
+         （「◯◯から上」はそのプランから上を全部、「◯◯だけ」は1つ、
+         「ぜんぶのプラン」は空）。planKey はタブの絞り込みに使うので
+         「いちばん下のプラン」にそろえる。 */
       var sel=$('subDraftPlan_'+p.key+'_'+x.jan);
       var k=sel?String(sel.value||p.key):p.key;
-      out.push(Object.assign({},x,{ plan:(k==='all')?'':k,
-                                    planKey:(k==='all')?'all':k }));
+      var gr=SUBPLAN.gradesOf(k);
+      out.push(Object.assign({},x,{ plan:gr, pick:k,
+        planKey:(k==='all')?'all':String(k).replace(/^only:/,'') }));
     });
   });
   return out;
@@ -16774,13 +16787,30 @@ function subDraftApply(){
     return; }
   var sum=pick.reduce(function(a,x){ return a+(+x.qty||0); },0);
   var allN=pick.filter(function(x){ return x.planKey==='all'; }).length;
+  /* 8.35 積み上げ型：どのプランから上に出すかを、件数つきで出す。 */
+  var upN={}, onlyN=0;
+  pick.forEach(function(x){
+    var k=String(x.pick||x.planKey||'');
+    if(k==='all')return;
+    if(/^only:/.test(k)){ onlyN++; return; }
+    upN[k]=(upN[k]||0)+1;
+  });
+  var upTxt=Object.keys(upN).map(function(k){
+    return '・'+esc(SUBPLAN.upFrom(k).map(function(q){
+      return (SUBPLAN.list({}).filter(function(z){ return z.key===q; })[0]
+              ||{ name:q }).name; }).join('→'))
+      +'：'+upN[k]+'件'; }).join('\n');
   if(!confirm('この案で出します。\n\n'
     +((tab==='all')
       ? '【すべてのプラン】の行を出します。\n'
       : ('【'+subTabName(tab)+'】のタブで押しました。\n'
          +'このプランの行だけを出します（ほかのプランは出しません）。\n'))
     +'・商品：'+pick.length+'件（のべ '+sum+'点）\n'
+    +(upTxt?(upTxt.replace(/<[^>]*>/g,'')+'\n'):'')
+    +(onlyN?('・1つのプランだけに出す行：'+onlyN+'件\n'):'')
     +(allN?('・そのうち '+allN+'件は「ぜんぶのプラン」に出します\n'):'')
+    +'※ 上のプランは下のプランの商品も見られます（積み上げ型）。\n'
+    +'　Shopify のタグも grade-◯◯ を上のプランまで全部付けます。\n'
     +'・「会員に出す」の印・販売数の上限・販売価格をまとめて付けます\n'
     +'・そのあと Shopify 用 CSV を書き出します\n\n'
     +'※ 読み込んだら「Shopify に読み込みました」を押してください。\n'
@@ -17379,7 +17409,13 @@ function subAllHtml(d){
     });
   });
   return out.join('')
+    /* 8.35（カジの依頼5）新しく出すカードは会員に通知が鳴る。
+       書き換えは鳴らないので、そこを分けて書く。 */
     +'<div class="note2" id="subAllSumBox" style="margin:8px 0 2px"></div>'
+    +'<div class="note2" style="margin:0 0 2px">※ <b>新しく出すカードは'
+    +'会員に通知が鳴ります</b>（書き換えは鳴りません）。'
+    +'積み上げ型に直したあとは、<b>上のプランのチャンネルに同じ商品の'
+    +'カードが新しく出ます</b>。</div>'
     +'<div style="display:flex;gap:6px;margin-top:4px">'
     +'<button class="btn primary cfgprice" id="subAllSendBtn" style="flex:1"'
     +' onclick="subAllSend();return false">送る</button>'
@@ -17403,7 +17439,10 @@ function subAllSend(){
     +'\n\n合計：新しく '+add+'件・書き換え '+ed+'件'
     +(off?('\n外した行：'+off+'件（警告のある行です）'):'')
     +'\n\n※ 同じ商品は二重に送らず、変わったぶんは前のカードを'
-    +'書き換えます。\n※ 途中で失敗したらそこで止めます'
+    +'書き換えます。\n'
+    +(add?'※ 新しく出す '+add+'件は、会員に通知が鳴ります（書き換えは'
+         +'鳴りません）。\n':'')
+    +'※ 途中で失敗したらそこで止めます'
     +'（もう一度押せば続きから）。\n\nよろしいですか？'))return;
   var got={ sent:0, edited:0, skipped:0, fail:0 };
   var done=[], stop='', rounds=0;
@@ -17571,6 +17610,90 @@ function subRedoGo(){
       subNote('✓ 今の形に書き直しました（'+sum+'）。');
       return subPlanGo(true);
     });
+}
+/* ===== 8.35（カジの依頼5）出すプランを積み上げ型に直す =====
+   いままで1つのプランだけ入っていた grades を、
+   「そのプランから上を全部」に書き換える（monitor → monitor,light,
+   standard,premium）。**「◯◯だけ」にしたい行は、このあと案で
+   「◯◯だけ」を選び直してください**（ここでは一律に積み上げます）。
+   直したあとにやることも、終わったときに画面に出す。 */
+function subStackGo(){
+  if(roleDenyPrice('subStackNote'))return;
+  if(!subReady())return;
+  var say=function(msg,bad){
+    var n=$('subStackNote'); if(!n)return;
+    n.innerHTML=msg||''; n.style.color=bad?'var(--bad)':'';
+  };
+  say('調べています…');
+  return mwSubLoad(true).then(function(){
+    var fix=[];
+    Object.keys(mwSubMap).forEach(function(jan){
+      var v=mwSubMap[jan]||{};
+      if(!v.on)return;                       // 印が付いている行だけ
+      var g=String(v.grades||'');
+      if(!g)return;                          // ぜんぶのプラン（直さない）
+      if(SUBPLAN.stacked(g))return;          // もう積み上げ型
+      var lo=SUBPLAN.lowestOf(g);
+      if(!lo)return;
+      fix.push({ jan:jan, from:g, to:SUBPLAN.upFrom(lo).join(','),
+                 qty:+v.max_qty||0, price:+v.price||0, low:lo });
+    });
+    if(!fix.length){
+      say('✓ 直すものはありません（ぜんぶ積み上げ型か「ぜんぶのプラン」です）。');
+      return;
+    }
+    var by={};
+    fix.forEach(function(x){ by[x.low]=(by[x.low]||0)+1; });
+    var nameOf=function(k){
+      return (SUBPLAN.list({}).filter(function(z){ return z.key===k; })[0]
+              ||{ name:k }).name;
+    };
+    var lines=Object.keys(by).map(function(k){
+      return '・'+nameOf(k)+' '+by[k]+'件 → '
+        +SUBPLAN.upFrom(k).map(nameOf).join('・'); });
+    if(!confirm('出すプランを積み上げ型に直します。\n\n'
+      +lines.join('\n')+'\n\n'
+      +'※ 上のプランは下のプランの商品も見られるようになります。\n'
+      +'※ このあと「Shopify 用 CSV を書き出す」→ Shopify に読み込むと、'
+      +'タグ（grade-◯◯）も上のプランまで付きます。\n'
+      +'※ 次の配信（または「全プランに配る」）で、**上のプランの'
+      +'チャンネルに新しいカードが出ます（会員に通知が鳴ります）**。\n'
+      +'※ 1つのプランだけに出したい商品は、そのあと案で「◯◯だけ」を'
+      +'選び直してください。\n\n'
+      +'よろしいですか？'))return;
+    say('直しています… 0／'+fix.length);
+    var items=fix.map(function(x){
+      return { jan:x.jan, on:1, max_qty:x.qty, price:x.price, grades:x.to };
+    });
+    var chunks=[];
+    for(var i=0;i<items.length;i+=100)chunks.push(items.slice(i,i+100));
+    var done=0, ng=[];
+    var step=chunks.reduce(function(pr,c){
+      return pr.then(function(){ return mwPost('/mw/sub',{ items:c }); })
+        .then(function(r){
+          ((r&&r.rows)||[]).forEach(function(x){
+            if(x&&x.error)ng.push(String(x.jan)+'（'+String(x.error)+'）');
+          });
+          done+=c.length;
+          say('直しています… '+done+'／'+fix.length);
+        });
+    },Promise.resolve());
+    return step.then(function(){ return mwSubLoad(true); }).then(function(){
+      say('✓ '+mwN(fix.length)+'件を積み上げ型に直しました。'
+        +(ng.length?('<br><b style="color:var(--bad)">直せなかった行 '
+          +mwN(ng.length)+'件</b>：'+esc(ng.slice(0,5).join('・'))):'')
+        +'<br><b>このあと</b>：①「Shopify 用 CSV を書き出す」→ Shopify に'
+        +'読み込む（タグが上のプランまで付きます）→「Shopify に'
+        +'読み込みました」②「全プランに配る」で<b>上のプランに新しいカード</b>'
+        +'を出す（<b>会員に通知が鳴ります</b>）。');
+      try{ mwAmzRender(); }catch(e){}
+      return subPlanGo(true);
+    })['catch'](function(e){
+      say('⚠ 直せませんでした：'+esc(e.message),1);
+    });
+  })['catch'](function(e){
+    say('⚠ 調べられませんでした：'+esc(e.message),1);
+  });
 }
 /* 今日は送らない（印の付け外し）。 */
 function subSkipGo(){
@@ -26434,7 +26557,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v292';   // sw.js の const V と必ず同じ値にする
+var APP_V='v293';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

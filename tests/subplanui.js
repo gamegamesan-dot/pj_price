@@ -146,8 +146,10 @@ await p.evaluate(()=>{
     now:document.querySelectorAll('#subDraftBox select')[0].value,
     name:($('subDraftBox').textContent||'').replace(/\s+/g,' ') }));
   ok(t.sel===2,'★★★行ごとに「出すプラン」の欄がある');
-  ok(t.opts.join(',')==='monitor,light,standard,premium,all',
-     '★★★4つのプランと「ぜんぶのプラン」を選べる');
+  /* 8.35 積み上げ型：「◯◯から上」4つ＋「◯◯だけ」3つ＋ぜんぶ。 */
+  ok(t.opts.join(',')==='monitor,light,standard,premium,only:monitor,'
+     +'only:light,only:standard,all',
+     '★★★「◯◯から上」と「◯◯だけ」と「ぜんぶのプラン」を選べる（8.35）');
   ok(t.now==='monitor','★★はじめは案で振り分けたプランが選ばれている');
   ok(/商品A/.test(t.name)&&!/【新品】/.test(t.name),
      '★★案の商品名も掃除した名前で出す（6.194）');
@@ -168,12 +170,31 @@ await p.waitForTimeout(700);
   const a=items.filter((x)=>x.jan==='4902370550001')[0]||{};
   const b=items.filter((x)=>x.jan==='4902370550002')[0]||{};
   ok(a.grades==='','★★★「ぜんぶのプラン」は grades を空で送る（どのプランにも出る）');
-  ok(b.grades==='standard','★★★選び直したプランで送る');
+  /* 8.35 積み上げ型：スタンダードを選ぶと上（プレミアム）も入る。 */
+  ok(b.grades==='standard,premium',
+     '★★★選び直したプランから上を全部で送る（8.35）');
   const dr=((t.draft||{}).items||[]);
   ok(dr.filter((x)=>x.plan==='all').length===1,
      '★★案の記録には「all」として残す');
   ok(dlg.some((m)=>/「ぜんぶのプラン」に出します/.test(m)),
      '★★確認の文にも件数を出す');
+  ok(dlg.some((m)=>/上のプランは下のプランの商品も見られます/.test(m)),
+     '★★★確認の文に積み上げ型だと書く（8.35）');
+  /* 8.35「◯◯だけ」を選んだときは、そのプランだけで送る。 */
+  const only=await p.evaluate(async()=>{
+    /* 「この案で出す」のあとは案の画面を作り直してから選び直す。 */
+    subTabSet('all');
+    $('subDraftBox').innerHTML=subDraftHtml(subDraftData.plans);
+    const sels=document.querySelectorAll('#subDraftBox select');
+    sels[sels.length-1].value='only:standard';
+    window.__q=[];
+    await subDraftApply();
+    await new Promise((r)=>setTimeout(r,500));
+    const b2=((window.__q.filter((x)=>x.u==='subpost')[0]||{}).b||{});
+    return ((b2.items||[]).filter((x)=>x.jan==='4902370550002')[0]||{}).grades;
+  });
+  ok(only==='standard',
+     '★★★「スタンダードだけ」は上にも出さない（grades は1つ・8.35）');
 }
 
 console.log('=== 8.21（【1】）通常版の印と速さ0の印 ===');
