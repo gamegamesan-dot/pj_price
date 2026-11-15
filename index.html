@@ -212,15 +212,26 @@ details.mwrow>.mwbody{padding:0 7px 7px}
 .mwsum1{display:flex;gap:5px;align-items:center;min-width:0}
 .mwsum1 .nm{flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;
         text-overflow:ellipsis;font-size:12.5px}
-.mwsum2{display:flex;gap:6px;align-items:baseline;margin-top:2px;
+.mwsum2{display:flex;gap:5px;align-items:baseline;margin-top:2px;
         white-space:nowrap;overflow:hidden;font-size:11.5px;color:var(--mute);
-        font-variant-numeric:tabular-nums}
+        font-variant-numeric:tabular-nums;
+        /* 6.196（v295）「在 ◯」を足したので、数字が長い行（利益が5桁など）は
+           1行に収まらないことがある。**切らずに折り返す**（文字が重ならない）。
+           ふつうの行は今までどおり1行に収まる。 */
+        flex-wrap:wrap;row-gap:1px}
 .mwsum2 b{color:var(--fg)}
-.mwsum2 .c1{flex:0 0 52px;text-align:right}
-.mwsum2 .c2{flex:0 0 70px}
-.mwsum2 .c3{flex:0 0 74px}
-.mwsum2 .c4{flex:0 0 auto}
+/* 6.196（v295）幅は **min-width**（固定幅ではない）。
+   桁が増えた行でも**文字が重ならず**、入らないときだけ折り返す。 */
+.mwsum2 .c1{flex:0 0 auto;min-width:46px;text-align:right}
+.mwsum2 .c2{flex:0 0 auto;min-width:62px}
+.mwsum2 .c3{flex:0 0 auto;min-width:66px}
+.mwsum2 .c4{flex:0 0 auto;min-width:56px}
+.mwsum2 .c5{flex:0 0 auto}
 .mwsum2 .bad{color:var(--bad)}
+/* 6.196（v295）MW の在庫数。0 は灰色、⚙の少ない基準以下は赤。 */
+.mwst{font-variant-numeric:tabular-nums}
+.mwst.zero,.mwst.zero b{color:var(--mute);font-weight:400;opacity:.7}
+.mwst.low,.mwst.low b{color:var(--bad)}
 .mwdot{display:inline-block;width:8px;height:8px;border-radius:50%;
         flex:0 0 auto}
 /* タブの目次（6.150）。欄が増えてスクロールが長くなったので、
@@ -1330,6 +1341,8 @@ body.staff #syncOnHandFix{display:none !important}
           <!-- 6.166（【T】）在庫の動きで並べ替える -->
           <option value="speed">売れる速さ順（よく売れている順）</option>
           <option value="nostock">再入荷なし（在庫処分）を先に</option>
+          <!-- 6.196（v295）仕入れる数を決めるのに、在庫の多い行から見る -->
+          <option value="stock">MW の在庫が多い順</option>
         </select>
       </div>
       <!-- 6.167（【V】）チェックの横に「これを外すと何件増えるか」を出す -->
@@ -1927,6 +1940,9 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv"><label>機種（空ならすべて）</label><input type="text" id="amzKishu" placeholder="空＝すべて（例 NS,NS2,figure）"><div class="note2" style="margin-top:2px">空にすると<b>全ジャンル</b>（MW のすべての機種）が候補になります。</div></div>
         <div class="row"><label>出荷（これ以内）</label><input type="number" id="amzShipMax" value="14" step="1" min="0" inputmode="numeric"><span class="unit">営業日</span></div>
         <div class="row"><label>MW 在庫（これ以上）</label><input type="number" id="amzStockMin" value="1" step="1" min="1" inputmode="numeric"><span class="unit">点</span></div>
+        <!-- 6.196（v295）一覧の「在 ◯」を赤で出す基準。画面に出すだけなので
+             この端末に覚える（pj-sync には送りません）。 -->
+        <div class="row"><label for="mwLowStock">MW在庫が少ない（一覧で赤く出す）</label><input type="number" id="mwLowStock" value="5" step="1" min="0" inputmode="numeric"><span class="unit">点以下</span></div>
         <!-- 7.109：件数は下の「自動で取り直す」の選択肢で選ぶ。
              ここは Worker に送る件数の控え（隠し欄）。 -->
         <input type="hidden" id="mwAutoPerHour" value="100">
@@ -6297,6 +6313,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
+                 /* 6.196（v295）一覧の「在 ◯」を赤で出す基準（この端末だけ） */
+                 'mwLowStock',
                  /* 仮のFBA手数料（サイズ区分ごと）と粗利の基準（6.145） */
                  'mwFbaShipS','mwFbaStoreS','mwFbaShipM','mwFbaStoreM',
                  'mwFbaShipL','mwFbaStoreL','mwFbaSizeGame','mwFbaSizeHobby',
@@ -6665,6 +6683,14 @@ advCsvCfg().forEach(function(id){
 });
 ['csvReviewAbs','csvReviewPct'].forEach(function(id){
   $(id).addEventListener('input',function(){ csvRender(); });
+});
+/* 6.196（v295）「MW在庫が少ない」を変えたら、いま出ている一覧を出し直す
+   （赤になる行がその場で変わる）。 */
+$('mwLowStock').addEventListener('change',function(){
+  try{
+    if(mwAmzView==='buy'){ if(mwBuyRows&&mwBuyRows.length)mwBuyRender(); }
+    else if(mwAmzRows&&mwAmzRows.length)mwAmzRender();
+  }catch(e){}
 });
 /* 無在庫のポリシー2つ（6.134）。入れ替えたら振り分けの案内と一覧を作り直す。 */
 ['csvShipProfileMw','csvShipDaysMw','csvShipProfileMw2','csvShipDaysMw2']
@@ -14767,7 +14793,11 @@ function mwBuyRowHtml(r){
       :(gone?';border-color:#a86b00':''))+'">'
     +'<div style="display:flex;gap:6px;align-items:flex-start">'
     +'<div style="flex:1 1 0;min-width:0">'
-    +'<b>'+(+r.qty||0)+'点</b>　'+esc(String(r.mw_name||r.amz_name||r.jan).slice(0,50))
+    +'<b>'+(+r.qty||0)+'点</b>　'
+    /* 6.196（v295）MW の在庫数（候補の一覧と同じ出し方）。
+       MW から消えた行（仕入れ済み）は今の在庫が分からないので「在 —」。 */
+    +mwStockTag(gone?{}:r,'note2')+'　'
+    +esc(String(r.mw_name||r.amz_name||r.jan).slice(0,50))
     +(gone?' <span class="badge" style="background:#a86b00">MWで売り切れ</span>':'')
     /* 6.161：「注文した」の印（日付つき）。 */
     +(ord?(' <span class="badge" style="background:var(--good)">注文した '
@@ -15824,6 +15854,32 @@ function mwOpenBtnRender(){
   var b=$('mwOpenAllBtn'); if(!b)return;
   b.textContent=mwOpenAll?'すべて畳む':'すべて開く';
 }
+/* ===== 6.196（v295・カジの依頼）一覧に MW の在庫数を出す =====
+   仕入れる数・会員に出せる数を決めるのに、**行を開かずに**在庫を
+   見比べられるようにする。出すのは「在 ◯」だけ（卸値などは今までどおり）。
+   ・在庫が取れていない行は「在 —」（0 と区別する）
+   ・0 は灰色、⚙の「MW在庫が少ない」（既定 5点以下）は赤 */
+function mwLowStockN(){
+  var el=$('mwLowStock');
+  var n=el?+el.value:5;
+  if(!(n>=0))n=5;
+  return Math.round(n);
+}
+/* 在庫数（取れていなければ null）。0 と「取れていない」を分ける。 */
+function mwStockOf(r){
+  var v=(r||{}).stock;
+  if(v===undefined||v===null||v==='')return null;
+  var n=+v;
+  if(!isFinite(n))return null;
+  return Math.max(0,Math.round(n));
+}
+function mwStockTag(r,cls){
+  var n=mwStockOf(r);
+  var c=(n===null)?''
+    :(n===0?' zero':((n<=mwLowStockN())?' low':''));
+  return '<span class="'+(cls===undefined?'c5':String(cls))+' mwst'+c+'"'
+    +' title="MW の在庫数">在 <b>'+(n===null?'—':mwN(n))+'</b></span>';
+}
 /* 畳んだ状態でも分かる印（小さな丸）。行の高さは増やさない。 */
 function mwRowDots(r){
   var row=r||{}, jan=String(row.jan||''), d=[];
@@ -15857,6 +15913,8 @@ function mwRowSum(r,c){
     +'<span class="c4'+((net!==null&&net<0)?' bad':'')+'">利 <b'
     +((net!==null&&net<0)?' class="bad"':'')+'>'
     +(net===null?'—':yen(net))+'</b></span>'
+    /* 6.196（v295）MW の在庫数（順位・卸・売・利・在の順）。 */
+    +mwStockTag(row)
     +'</div>';
 }
 /* 行（details）の外側。中身（body）はそのまま入れる。 */
@@ -15956,6 +16014,12 @@ function mwAmzRender(){
   /* 6.166（【T】）売れる速さ順。記録が無い行（0）は後ろへ。 */
   else if(sort==='speed')list.sort(function(a,b){
     var d=mwStatSpeed(b.r)-mwStatSpeed(a.r);
+    return d||(k(b,'net')-k(a,'net'));
+  });
+  /* 6.196（v295）MW の在庫が多い順。取れていない行（—）は後ろへ。 */
+  else if(sort==='stock')list.sort(function(a,b){
+    var sa=mwStockOf(a.r), sb=mwStockOf(b.r);
+    var d=(sb===null?-1:sb)-(sa===null?-1:sa);
     return d||(k(b,'net')-k(a,'net'));
   });
   /* 6.166（【T】）在庫処分で再入荷なしの行を先に（刈り切る候補）。 */
@@ -26684,7 +26748,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v294';   // sw.js の const V と必ず同じ値にする
+var APP_V='v295';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
