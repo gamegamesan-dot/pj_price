@@ -156,6 +156,66 @@ console.log('\n=== ③ 候補の分布（線引きを決めるため）===');
   ok(/下限を下げれば 7件/.test(t.html),'★★★下限を下げたときの件数');
 }
 
+console.log('\n=== ③-2 速さの内訳と、下限を変えたときの件数（8.44）===');
+{
+  const t=await p.evaluate(()=>{
+    const rows=subDraftRows();
+    return { html:subSpdHtml(rows).replace(/<[^>]*>/g,''),
+             mix:SUBPLAN.speedMix(rows,SUBPLAN.pickOpt(subPickCfg())),
+             ok:rows.map((x)=>x.speed_ok) };
+  });
+  console.log('   '+t.html);
+  ok(t.ok.every((x)=>x===true),
+     '★★★案の行に「速さが取れたか」の印を付ける（mwstat の speedSrc）');
+  ok(/売れる速さの内訳/.test(t.html),'★★★内訳を出す');
+  ok(/データなし 0件/.test(t.html)&&/MW の在庫の減りが取れていません/
+     .test(t.html),
+     '★★★「データなし」を別に出す（本当に0と同じに数えない）');
+  ok(/本当に0（減っていない） 0件/.test(t.html),'★★★「本当に0」も別に出す');
+  ok(/0より大きい 8件/.test(t.html),'★★★0より大きい品の件数');
+  ok(/0.1未満 0件/.test(t.html)&&/1〜2.5 3件/.test(t.html)
+     &&/2.5以上 4件/.test(t.html),
+     '★★★0より大きい品の帯（0.1未満／0.1〜0.5／0.5〜1／1〜2.5／2.5以上）');
+  ok(/下限を変えたときのモニターの候補/.test(t.html),
+     '★★★下限を変えたときの件数（試算）を出す');
+  ok(/いま 2.5点\/日 … 4件/.test(t.html),
+     '★★★いまの下限の件数（通常版ゲーム）');
+  ok(/0.3点\/日/.test(t.html)&&/クリックポストで送れる品まで広げた場合/
+     .test(t.html),
+     '★★★1／0.5／0.3 点/日 と「広げた場合」も並べる');
+  ok(t.mix.none===0&&t.mix.pos===8,'★★内訳は shared/subplan.js で数える');
+}
+
+console.log('\n=== ③-3 モニターの開始日（8.44）===');
+{
+  const t=await p.evaluate(async()=>{
+    const el=$('subMonFrom');
+    const was=(el||{}).value;
+    const vals={ has:!!el, type:(el||{}).type, dflt:was,
+                 opt0:SUBPLAN.pickOpt(subPickCfg()).monFrom };
+    window.__mon={ ok:true, n:2, ch:'123456789012345678', new_n:5,
+      limit_days:7, people:5, from:'2026-11-16',
+      sent:['4902370550001','4902370550002'] };
+    el.value='2026-11-16';
+    vals.opt=SUBPLAN.pickOpt(subPickCfg()).monFrom;
+    await subDraftGo();
+    await new Promise((x)=>setTimeout(x,200));
+    vals.note=($('subDraftNote').textContent||'').replace(/\s+/g,' ');
+    el.value=was;
+    window.__mon={ ok:true, sent:[], ch:'123456789012345678', n:0, new_n:5,
+                   limit_days:7, people:5 };
+    return vals;
+  });
+  console.log('   '+(t.note||'').slice(0,240));
+  ok(t.has&&t.type==='date'&&t.dflt==='',
+     '★★★⚙に「モニターの開始日」がある（既定は空＝今までどおり）');
+  ok(t.opt0===''&&t.opt==='2026-11-16','★★⚙を1か所で読む（pickOpt）');
+  ok(/開始日 2026-11-16 から数えています/.test(t.note),
+     '★★★案のまとめに開始日を出す');
+  ok(/それより前のテスト配信は数えません/.test(t.note),
+     '★★★テスト配信を数えないことも書く');
+}
+
 console.log('\n=== ④ ⚙で下限・件数を変えられる ===');
 {
   const t=await p.evaluate(async()=>{

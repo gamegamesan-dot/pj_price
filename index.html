@@ -2199,6 +2199,8 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="subMonSpeedMin">速さの下限（空なら自動）／足りないとき下げる</label><input type="number" id="subMonSpeedMin" value="" step="0.1" min="0" max="999" inputmode="decimal"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">点/日・%</span></div>
         <div class="note2" style="margin:0 0 6px">候補が件数に足りない週は、<b>速さの下限をこの%だけ下げて埋めます</b>（下げて入れた品には案に印が出ます）。それでも足りなければ<b>そのまま少なく出します</b>。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subMonNote" checked><label for="subMonNote" style="flex:1"><b>モニターに「今週の配信」を1通出す</b>（上のプランの件数だけ・商品名や価格は出さない）</label></div>
+        <div class="row cfgprice"><label for="subMonFrom">モニターの開始日（空なら今までどおり）</label><input type="date" id="subMonFrom" value=""></div>
+        <div class="note2" style="margin:0 0 6px">正式にモニターを始める日を入れると、<b>その日より前に出したカード（テスト配信）は「前の週に出した品」に数えません</b>。<b>1週目もこの日から数え直します</b>（開始日から7日間が1週目）。空のままなら、今までどおり<b>モニターに出したことのある品ぜんぶ</b>を外します。</div>
         <div class="note2" style="margin:10px 0 2px"><b>案の振り分け（ライト以上）</b></div>
         <div class="row cfgprice"><label for="subStockPct">MW在庫の何%まで出すか</label><input type="number" id="subStockPct" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="subWantQty">会員の想定購入数（1商品）</label><input type="number" id="subWantQty" value="5" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
@@ -3578,7 +3580,7 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
-             'subMonSpeedMin','subMonShort',
+             'subMonSpeedMin','subMonShort','subMonFrom',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -6421,7 +6423,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
-                 'subMonSpeedMin','subMonShort',
+                 'subMonSpeedMin','subMonShort','subMonFrom',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 8.32 仕入れタブを開いたときの一覧（この端末だけの設定）。 */
@@ -16603,6 +16605,8 @@ function subPickCfg(){
            subMonNew:v('subMonNew'), subMonPeople:v('subMonPeople'),
            subMonDays:v('subMonDays'), subMonLimitDays:v('subMonLimitDays'),
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
+           /* 8.44（カジの確認3）モニターの開始日。 */
+           subMonFrom:v('subMonFrom'),
            /* 8.21（【1】）通常版でない言葉（足す分）。 */
            subNormalNg:v('subNormalNg') };
 }
@@ -16632,9 +16636,13 @@ function subDraftRows(){
     var st=mwStat(r)||{};
     var cur=mwSubOf(jan)||{};
     var speed=(st&&st.speed)?+st.speed:0;
+    /* 8.44（カジの確認1）速さの元データが取れた行か（データなしと 0点を
+       分けて数えるため。決まりは shared/mwstat.js の speedSrc）。 */
+    var speedOk=!!(st&&st.speedSrc);
     var stock=+r.stock||0;
     var row={ jan:jan, name:String(r.amz_name||r.mw_name||''),
       kishu:String(r.kishu||''), stock:stock, speed:speed,
+      speed_ok:speedOk,
       gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
       no_back:!!(st&&st.noBack), one_off:false,
@@ -16676,7 +16684,12 @@ function subMonHtml(d){
     +(subMonSent===null
       ?'　<b style="color:var(--bad)">※ 前の週に出した品の控えが読めませんでした'
        +'（同じ品が選ばれるかもしれません）</b>'
-      :('　前の週までに出した '+mwN((subMonSent||[]).length)+'件は選びません'))
+      :('　前の週までに出した '+mwN((subMonSent||[]).length)+'件は選びません'
+        /* 8.44 開始日（⚙）があれば、その日から数えていることを出す。 */
+        +(((subMonInfo||{}).from)
+          ?('（<b>開始日 '+esc(String(subMonInfo.from))+'</b> から数えています。'
+            +'それより前のテスト配信は数えません）')
+          :'')))
     +'</span>';
 }
 /* 8.43（カジの依頼）線引きを決めるための分布（下位25%／中央／上位25%）。 */
@@ -16696,7 +16709,37 @@ function subStatHtml(rows){
          q3:Math.round(st.gxs.q3) })+' 円/日'
     +'<br>モニターの条件に合う品：<b>'+mwN(st.monOk)+'件</b>'
     +'（下限を下げれば '+mwN(st.monOk+st.monLow)+'件）'
+    +subSpdHtml(rows)
     +'</span>';
+}
+/* 8.44（カジの確認1・2）売れる速さの内訳と、下限を変えたときの件数。
+   ・「データなし」と「本当に0」を分けて出す（0と同じに数えていた）
+   ・0より大きい品の帯（0.1未満／0.1〜0.5／0.5〜1／1〜2.5／2.5以上）
+   ・下限と対象を変えたら何件になるかの試算（数えるだけ・決まりは変えない） */
+function subSpdHtml(rows){
+  var m=null, tb=null;
+  try{
+    var o=SUBPLAN.pickOpt(subPickCfg());
+    m=SUBPLAN.speedMix(rows,o); tb=SUBPLAN.monTable(rows,o);
+  }catch(e){ m=null; tb=null; }
+  if(!m||!m.n)return '';
+  var B=SUBPLAN.SPEED_BANDS||[], ja=[];
+  for(var i=0;i<=B.length;i++){
+    ja.push((i===0?('0.1未満'):(i===B.length?(B[B.length-1]+'以上')
+      :(B[i-1]+'〜'+B[i])))+' <b>'+mwN(m.bands[i]||0)+'件</b>');
+  }
+  return '<br><b>売れる速さの内訳</b>（'+mwN(m.n)+'件）：'
+    +'<b>データなし '+mwN(m.none)+'件</b>'
+    +'（MW の在庫の減りが取れていません）／'
+    +'本当に0（減っていない） <b>'+mwN(m.zero)+'件</b>／'
+    +'0より大きい <b>'+mwN(m.pos)+'件</b>'
+    +(m.pos?('<br>　0より大きい品の帯（点/日）：'+ja.join('　')):'')
+    +(tb?('<br><b>下限を変えたときのモニターの候補</b>'
+      +'（通常版ゲーム → クリックポストで送れる品まで広げた場合）<br>　'
+      +tb.map(function(x){
+        return (x.now?'<b>いま ':'')+x.min+'点/日'+(x.now?'</b>':'')+' … '
+          +'<b>'+mwN(x.game)+'件</b> → <b>'+mwN(x.wide)+'件</b>';
+      }).join('<br>　')):'');
 }
 function subDraftFiltHtml(){
   var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
@@ -27074,7 +27117,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v302';   // sw.js の const V と必ず同じ値にする
+var APP_V='v303';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

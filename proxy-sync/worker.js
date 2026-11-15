@@ -12268,8 +12268,17 @@ async function subMonSent(env) {
     out.people = Math.round(Number((cfg.pick || {}).monPeople)
       || SUBPLAN.MON.monPeople);
     if (!ch) return out;
-    const q = await env.DB.prepare(
-      `SELECT jan FROM sub_post WHERE ch = ?1`).bind(ch).all();
+    /* 8.44（カジの確認3）⚙「モニターの開始日」より前に出したカード
+       （テスト配信）は数えない。空なら今までどおりぜんぶ。 */
+    const from = SUBPLAN.monDay((cfg.pick || {}).monFrom);
+    out.from = from;
+    const t0 = SUBPLAN.monFromMs(from);
+    const q = t0 === null
+      ? await env.DB.prepare(
+          `SELECT jan FROM sub_post WHERE ch = ?1`).bind(ch).all()
+      : await env.DB.prepare(
+          `SELECT jan FROM sub_post WHERE ch = ?1 AND at >= ?2`)
+          .bind(ch, new Date(t0).toISOString()).all();
     out.sent = ((q && q.results) || []).map((r) => String(r.jan || ""))
       .filter(Boolean);
     out.n = out.sent.length;

@@ -288,6 +288,54 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
      '★★⚙（新しく◯件・期限・人数）も返す');
   ok(Array.isArray(got.sent)&&got.sent.every((x)=>/^\d+$/.test(x)),
      '★JAN だけを返す');
+
+  console.log('=== ⑪ モニターの開始日（8.44・カジの確認3）===');
+  /* 正式に始める前のテスト配信を数え直せるように、⚙に開始日を置く。 */
+  ok(SUBPLAN.monDay('2026-11-16')==='2026-11-16'
+     &&SUBPLAN.monDay('2026-11-16T09:00:00Z')==='2026-11-16'
+     &&SUBPLAN.monDay('いつか')===''&&SUBPLAN.monDay('')==='',
+     '★★日付の形（YYYY-MM-DD）だけ受ける');
+  ok(SUBPLAN.pickOpt({ subMonFrom:'2026-11-16' }).monFrom==='2026-11-16'
+     &&SUBPLAN.pickOpt({}).monFrom==='','★★⚙から読む（既定は空）');
+  ok(SUBPLAN.monWeek('2026-11-16T09:00:00+09:00','2026-11-16')===0
+     &&SUBPLAN.monWeek('2026-11-22T23:00:00+09:00','2026-11-16')===0
+     &&SUBPLAN.monWeek('2026-11-23T09:00:00+09:00','2026-11-16')===1
+     &&SUBPLAN.monWeek('2026-12-07T09:00:00+09:00','2026-11-16')===3,
+     '★★★開始日から7日ずつ数え直す（開始日から7日間が1週目）');
+  ok(SUBPLAN.monWeek('2026-11-10T09:00:00+09:00','2026-11-16')===0,
+     '★開始日より前は1週目のまま');
+  /* 開始日があれば、控えが残っていても**1週目は速い順**。 */
+  const row3=(jan,sp)=>({ jan:jan, name:'ゲーム'+jan, fit:true, rst:'ok',
+    amz:0, buy_qty:0, price:3000, qty:1, gross:800, speed:sp, stock:9,
+    is_game:true, grades:'' });
+  const mp=SUBPLAN.monPick([row3('4902370550201',3),row3('4902370550202',5)],
+    null,SUBPLAN.pickOpt({ subMonFrom:'2026-11-16', subMonNew:2 }),
+    ['4902370550999'],Date.parse('2026-11-18T09:00:00+09:00'));
+  ok(mp.first===true&&mp.items[0].jan==='4902370550202',
+     '★★★開始日から1週目のあいだは、控えがあっても速い順');
+  const mp2=SUBPLAN.monPick([row3('4902370550201',3),row3('4902370550202',5)],
+    null,SUBPLAN.pickOpt({ subMonFrom:'2026-11-16', subMonNew:2 }),
+    [],Date.parse('2026-11-25T09:00:00+09:00'));
+  ok(mp2.first===false&&mp2.week===1,
+     '★★★次の週からは2週目（ランダム）になる');
+  /* pj-sync は、開始日より前に出したカードを「出した品」に数えない。 */
+  const day0=(d)=>new Date(Date.now()+d*86400000).toISOString().slice(0,10);
+  const setFrom=async(v)=>{ await env.DB.prepare(
+    `UPDATE sync_state SET v=?1 WHERE k='ui.settings'`)
+    .bind(JSON.stringify({ at:now(), settings:{ subOn:true,
+      subOnMonitor:true, subChMonitor:CH, subMonSpeedMin:'0.1',
+      subMonNew:2, subMonFrom:v, subDomain:'x.myshopify.com' } })).run(); };
+  await setFrom(day0(3));
+  const g2=await api('/sub/mon');
+  console.log('   開始日 '+g2.from+' → '+g2.n+'件');
+  ok(g2.from===day0(3)&&g2.n===0&&g2.sent.length===0,
+     '★★★開始日より前に出したカード（テスト配信）は数えない');
+  await setFrom(day0(-3));
+  const g3=await api('/sub/mon');
+  ok(g3.from===day0(-3)&&g3.n>=3,'★★★開始日より後に出したカードは数える');
+  await setFrom('');
+  const g4=await api('/sub/mon');
+  ok(g4.from===''&&g4.n>=3,'★★空のままなら今までどおりぜんぶ数える');
 }
 
 await T.done();

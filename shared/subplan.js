@@ -391,7 +391,8 @@
     monDays: 2,         // ⚙ subMonDays      … 何日ぶんで見るか
     monLimitDays: 7,    // ⚙ subMonLimitDays … 購入期限（日）
     monSpeedMin: 0,     // ⚙ subMonSpeedMin  … 0（空）なら 人数 ÷ 日数
-    monShort: 50        // ⚙ subMonShort     … 足りないとき下限を下げる%
+    monShort: 50,       // ⚙ subMonShort     … 足りないとき下限を下げる%
+    monFrom: ""         // ⚙ subMonFrom      … モニターの開始日（空なら今まで）
   };
   function bool(v, dflt) {
     if (v === undefined || v === null || v === "") return dflt;
@@ -417,7 +418,11 @@
       monDays: n("subMonDays", MON.monDays, 1, 30),
       monLimitDays: Math.round(n("subMonLimitDays", MON.monLimitDays, 1, 90)),
       monSpeedMin: n("subMonSpeedMin", MON.monSpeedMin, 0, 999),
-      monShort: n("subMonShort", MON.monShort, 0, 90)
+      monShort: n("subMonShort", MON.monShort, 0, 90),
+      /* 8.44（カジの確認3）モニターの開始日（'YYYY-MM-DD'）。
+         入れた日より前に出したカードは「前の週に出した品」に数えず、
+         週の数え直しもこの日から始める（空なら今までどおり）。 */
+      monFrom: monDay(o.subMonFrom)
     };
   }
   /* 8.43 モニターの速さの下限。⚙が空なら **人数 ÷ 日数**。 */
@@ -428,11 +433,26 @@
     if (lowered) v = v * (1 - Math.max(0, Math.min(90, num(o.monShort))) / 100);
     return Math.max(0, v);
   }
-  /* 8.43 「週」。JST の日曜はじまりで数える（押し直しても同じ数になる）。 */
-  function monWeek(now) {
+  /* 8.44 開始日の読み方（'YYYY-MM-DD' だけ。それ以外は空）。 */
+  function monDay(v) {
+    var t = s(v).trim().slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : "";
+  }
+  /* 8.44 開始日の 0時（JST）を時刻にする。読めなければ null。 */
+  function monFromMs(from) {
+    var d = monDay(from);
+    if (!d) return null;
+    var t = Date.parse(d + "T00:00:00+09:00");
+    return isFinite(t) ? t : null;
+  }
+  /* 8.43 「週」。JST の日曜はじまりで数える（押し直しても同じ数になる）。
+     8.44 開始日（⚙）があれば、**その日から数えた週**（0・1・2…）。 */
+  function monWeek(now, from) {
     var t = (now === undefined || now === null) ? Date.now()
       : (typeof now === "number" ? now : Date.parse(String(now)));
     if (!isFinite(t)) t = Date.now();
+    var t0 = monFromMs(from);
+    if (t0 !== null) return Math.max(0, Math.floor((t - t0) / 604800000));
     return Math.floor((t + 9 * 3600000) / 604800000);
   }
   /* 8.43 「週＋JAN」から決まる数（0〜1）。同じ週なら何度押しても同じ。 */
@@ -456,8 +476,10 @@
     var o = opt || pickOpt(null), p = plan || plan_("monitor");
     var was = {};
     (sent || []).forEach(function (j) { was[String(j)] = 1; });
-    var week = monWeek(now);
-    var first = !(sent || []).length;
+    var week = monWeek(now, o.monFrom);
+    /* 8.44 開始日があれば「開始日から1週間」が1週目
+       （それより前のテスト配信は数えない）。 */
+    var first = o.monFrom ? (week === 0) : !(sent || []).length;
     var want = Math.max(1, Math.round(num(o.monNew)));
     var min = monSpeed(o, false), min2 = monSpeed(o, true);
     var ok = [], low = [];
@@ -523,6 +545,80 @@
     return { gross: quart(g), speed: quart(sp), gxs: quart(gs),
              n: g.length, monOk: mon.okN, monLow: mon.lowN,
              monMin: mon.min, monMin2: mon.min2 };
+  }
+  /* ===== 8.44（カジの確認1・2）売れる速さの内訳 =====
+     カジの報告（2026-11-16）「売れる速さ 0／0／0 点/日」。
+     **データが取れていない行を 0点と同じに数えていた**ので、分けて出す。
+       speed_ok … 速さの元データ（MW の在庫の減り）が取れた行か
+                   （shared/mwstat.js の speedSrc が付いた行）
+     帯は 0.1未満／0.1〜0.5／0.5〜1／1〜2.5／2.5以上（カジの確認2）。 */
+  var SPEED_BANDS = [0.1, 0.5, 1, 2.5];
+  function speedBand(sp) {
+    for (var i = 0; i < SPEED_BANDS.length; i++)
+      if (num(sp) < SPEED_BANDS[i]) return i;
+    return SPEED_BANDS.length;
+  }
+  function speedMix(rows, opt) {
+    var o = opt || pickOpt(null);
+    var out = { n: 0, none: 0, zero: 0, pos: 0, bands: [] };
+    for (var i = 0; i <= SPEED_BANDS.length; i++) out.bands.push(0);
+    (rows || []).forEach(function (r) {
+      if (whyNot(r, o)) return;
+      out.n++;
+      var sp = num(r.speed);
+      /* speed_ok を付けていない古い行は、速さ>0 なら取れていたと見る。 */
+      var ok = (r.speed_ok === undefined) ? (sp > 0) : !!r.speed_ok;
+      if (!ok) { out.none++; return; }      // データなし
+      if (!(sp > 0)) { out.zero++; return; }   // 本当に0（7日も全期間も減らず）
+      out.pos++;
+      out.bands[speedBand(sp)]++;
+    });
+    return out;
+  }
+  /* ===== 8.44（カジの相談4）下限・対象を変えたときの件数 =====
+     min  … 速さの下限（点/日）
+     wide … true なら「通常版ゲーム」だけでなく
+            **クリックポストで送れる品**まで広げる（送り方は shopcsv の1か所）
+     ※ 数えるだけ（いまの配信の決まりは変えない）。 */
+  function shipMod() {
+    if (typeof PJ_SHOPCSV !== "undefined" && PJ_SHOPCSV) return PJ_SHOPCSV;
+    if (root && root.PJ_SHOPCSV) return root.PJ_SHOPCSV;
+    try { return require("./shopcsv.js"); } catch (e) { return null; }
+  }
+  function cpJa() {
+    var M = shipMod();
+    try { return s(M.wayOf("cp").name) || "クリックポスト"; }
+    catch (e) { return "クリックポスト"; }
+  }
+  function monCount(rows, opt, min, wide) {
+    var o = opt || pickOpt(null), p = plan_("monitor");
+    var cp = cpJa(), n = 0;
+    (rows || []).forEach(function (r) {
+      if (whyNot(r, o)) return;
+      if (!(num(r.qty) > 0)) return;
+      var kind = fits(p, r, !!r.is_game);
+      /* 広げても、**ゲームソフトは通常版だけ**（8.21 のカジの報告）。
+         ゲーム以外は種類を見ず、送り方だけで見る。 */
+      if (!kind && wide && s(r.ship) === cp)
+        kind = !r.is_game || normalOf(r.name, p.ng).ok;
+      if (!kind) return;
+      if (num(r.speed) < num(min)) return;
+      n++;
+    });
+    return n;
+  }
+  /* 試算の表（いまの下限＋1.0／0.5／0.3 点/日 × 通常版ゲーム／広げた場合）。 */
+  var MON_TRY = [1, 0.5, 0.3];
+  function monTable(rows, opt) {
+    var o = opt || pickOpt(null);
+    var mins = [monSpeed(o, false)];
+    for (var i = 0; i < MON_TRY.length; i++)
+      if (mins.indexOf(MON_TRY[i]) < 0) mins.push(MON_TRY[i]);
+    return mins.map(function (m, i) {
+      return { min: Math.round(num(m) * 100) / 100, now: i === 0,
+               game: monCount(rows, o, m, false),
+               wide: monCount(rows, o, m, true) };
+    });
   }
   /* 販売数の上限のおすすめ（8.18 の2）。0 なら案に出さない。
      row … { stock, speed }（speed は shared/mwstat.js の「1日あたり」） */
@@ -607,6 +703,10 @@
   var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX, MON: MON,
               monSpeed: monSpeed, monWeek: monWeek, monRand: monRand,
               monPick: monPick, statsOf: statsOf, quart: quart,
+              monDay: monDay, monFromMs: monFromMs,
+              SPEED_BANDS: SPEED_BANDS, speedBand: speedBand,
+              speedMix: speedMix, monCount: monCount,
+              MON_TRY: MON_TRY, monTable: monTable, cpJa: cpJa,
               plan: plan, list: list, active: active, fits: fits,
     fitWhy: fitWhy, whyNone: whyNone,
     NORMAL_NG: NORMAL_NG, ngWords: ngWords, normalOf: normalOf,
