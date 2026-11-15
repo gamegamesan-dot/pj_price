@@ -58,19 +58,22 @@
     c: { mark: "△", name: "慎重に" },
     x: { mark: "—", name: "データ確認中" }
   };
-  /* カードに出せる項目（⚙でプランごとに選ぶときの名前）。 */
-  var ITEMS = ["badge", "sell", "px", "rival", "floor", "limit"];
+  /* カードに出せる項目（⚙でプランごとに選ぶときの名前）。
+     8.34（カジの依頼）**「出品できるか」はカードから外した**
+     （商品1枚ごとに同じ注意が出て煩わしかった）。同じ注意は
+     **#はじめに の共通の文に必ず入る**（pinCommon）。
+     ここに無い名前は⚙に書いても無視されるので、⚙でも選べない。 */
+  var ITEMS = ["badge", "sell", "px", "rival", "floor"];
   var ITEM_JA = { badge: "総合", sell: "売れ行き", px: "値動き",
-                  rival: "ライバル", floor: "赤字にならない売値",
-                  limit: "出品できるか" };
+                  rival: "ライバル", floor: "赤字にならない売値" };
   /* プランごとの既定（モニターは短く、プレミアムはぜんぶ）。 */
   var ITEM_DEF = {
     monitor: "badge,sell",
     light: "badge,sell,rival",
     standard: "badge,sell,px,rival,floor",
-    premium: "badge,sell,px,rival,floor,limit",
-    one_pre: "badge,rival,floor,limit",
-    one_open: "badge,rival,floor,limit"
+    premium: "badge,sell,px,rival,floor",
+    one_pre: "badge,rival,floor",
+    one_open: "badge,rival,floor"
   };
   var LIMIT_JA = "出品できるかは**アカウントごとに違います**。"
     + "買う前にセラーセントラルで確かめてください。";
@@ -278,7 +281,7 @@
     var px = pxOf(x, o); if (px.ok) add("px", px.text);
     var rv = rivalOf(x, o); if (rv.ok) add("rival", rv.text);
     var fl = floorOf(x, o); if (fl.ok) add("floor", fl.text);
-    add("limit", LIMIT_JA);
+    /* 8.34 「出品できるか」はカードに出さない（#はじめに に任せる）。 */
     return out;
   }
   /* ===== 8.30（カジの依頼）読み方の固定メッセージ =====
@@ -399,8 +402,8 @@
     var o = opt || {}, p = plan || {};
     var k = s(key);
     var want = itemsOf(k, o);
-    var ja = want.filter(function (x) { return x !== "limit"; })
-      .map(function (x) { return (x === "badge") ? "総合の札" : ITEM_JA[x]; });
+    var ja = want.map(function (x) {
+      return (x === "badge") ? "総合の札" : ITEM_JA[x]; });
     var L = [];
     L.push("**" + (s(p.name) || PLAN_JA[k] || k) + "の商品リスト**");
     var r2 = [];
@@ -408,8 +411,10 @@
     if (num(p.q) > 0) r2.push("**お一人 " + Math.round(num(p.q)) + "点まで**");
     if (num(p.n) > 0) r2.push("1回 " + Math.round(num(p.n)) + "件まで");
     if (r2.length) L.push(r2.join("／") + "。");
-    L.push("読み方は " + pinRef(o) + " をご覧ください。"
-      + "**" + NOTE_JA + "。**");
+    /* 8.34 「出品できるか」はカードから外したので、ここで指しておく
+       （行は増やさない。短い文は2〜3行のまま）。 */
+    L.push("読み方と**出品できるかの注意**は " + pinRef(o)
+      + " をご覧ください。**" + NOTE_JA + "。**");
     return L.join("\n");
   }
   /* Discord の1通（2,000字）に入るように、行の切れ目で分ける。 */

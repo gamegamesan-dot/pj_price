@@ -2197,7 +2197,7 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.29（カジの依頼）買うかどうかの目安。しきい値はここで直せる。
              決まりは shared/subguide.js の1か所だけ。 -->
         <div class="note2" style="margin:10px 0 2px"><b>買うかどうかの目安（会員カード）</b></div>
-        <div class="note2" style="margin:0 0 6px">せどりが初めての会員でも、カードだけで決められるようにする案内です。<b>総合の札（◎ねらい目／○ふつう／△慎重に）</b>と、売れ行き・値動き・ライバル・赤字にならない売値・出品制限を<b>1項目1行</b>で出します。<br><b>カードには必ず「目安です。利益を保証するものではありません」と出ます。</b></div>
+        <div class="note2" style="margin:0 0 6px">せどりが初めての会員でも、カードだけで決められるようにする案内です。<b>総合の札（◎ねらい目／○ふつう／△慎重に）</b>と、売れ行き・値動き・ライバル・赤字にならない売値を<b>1項目1行</b>で出します。<br><b>カードには必ず「目安です。利益を保証するものではありません」と出ます。</b></div>
         <div class="row cfgprice"><label for="gdMode">出し方</label><select id="gdMode"><option value="word" selected>加工した表現だけ（よく売れています）</option><option value="num">数字も出す（ランキング・平均・出品者数）</option></select></div>
         <div class="note2" style="margin:0 0 6px">既定は<b>加工した表現だけ</b>です（外から買ったデータをそのまま会員に配ってよいかが未確認のため。規約を確かめてから「数字も出す」に変えてください）。</div>
         <div class="row cfgprice"><label for="gdOldDays">データが古いとみなす日数</label><input type="number" id="gdOldDays" value="14" step="1" min="0" max="180" inputmode="numeric"><span class="unit">日</span></div>
@@ -2212,8 +2212,8 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv cfgprice"><label for="gdItemsMonitor">　モニター</label><input type="text" id="gdItemsMonitor" value="" placeholder="badge,sell" inputmode="text"></div>
         <div class="rowv cfgprice"><label for="gdItemsLight">　ライト</label><input type="text" id="gdItemsLight" value="" placeholder="badge,sell,rival" inputmode="text"></div>
         <div class="rowv cfgprice"><label for="gdItemsStandard">　スタンダード</label><input type="text" id="gdItemsStandard" value="" placeholder="badge,sell,px,rival,floor" inputmode="text"></div>
-        <div class="rowv cfgprice"><label for="gdItemsPremium">　プレミアム</label><input type="text" id="gdItemsPremium" value="" placeholder="badge,sell,px,rival,floor,limit" inputmode="text"></div>
-        <div class="note2" style="margin:0 0 6px"><b>badge</b>＝総合の札／<b>sell</b>＝売れ行き／<b>px</b>＝値動き／<b>rival</b>＝ライバル／<b>floor</b>＝赤字にならない売値／<b>limit</b>＝出品できるかの注意。空なら上の既定（モニターは短く、プレミアムはぜんぶ）です。<br><b>取れていない項目は、その行ごと出しません</b>（当てずっぽうを書かないため）。</div>
+        <div class="rowv cfgprice"><label for="gdItemsPremium">　プレミアム</label><input type="text" id="gdItemsPremium" value="" placeholder="badge,sell,px,rival,floor" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px"><b>badge</b>＝総合の札／<b>sell</b>＝売れ行き／<b>px</b>＝値動き／<b>rival</b>＝ライバル／<b>floor</b>＝赤字にならない売値。空なら上の既定（モニターは短く、プレミアムはぜんぶ）です。<br><b>取れていない項目は、その行ごと出しません</b>（当てずっぽうを書かないため）。<br>8.34：<b>「出品できるか」の注意はカードに出しません</b>（1枚ごとに同じ文が出て煩わしいため）。<b>#はじめに の共通の文には必ず入ります</b>し、チャンネルごとの短い文からも指しています。</div>
         <!-- 8.30（カジの依頼）固定メッセージは「共通1本＋チャンネルごとの
              短い文」に分ける。共通の置き場と、注文の流れの曜日はここで決める。 -->
         <div class="note2" style="margin:10px 0 2px"><b>読み方の固定メッセージ</b></div>
@@ -26434,7 +26434,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v291';   // sw.js の const V と必ず同じ値にする
+var APP_V='v292';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

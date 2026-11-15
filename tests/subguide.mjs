@@ -113,11 +113,17 @@ console.log('=== ④ プランごとに出す項目 ===');
   ok(G.cardOf(GOOD,{},'monitor',NOW).badge.mark==='◎',
      '★★モニターにも札は出る');
   ok(/値動き/.test(key('premium'))&&/ライバル/.test(key('premium'))
-     &&/赤字にならない売値/.test(key('premium'))
-     &&/出品できるか/.test(key('premium')),
+     &&/赤字にならない売値/.test(key('premium')),
      '★★★プレミアムはぜんぶ出る');
-  ok(key('standard').indexOf('出品できるか')<0,
-     '★スタンダードは出品制限の行を出さない（固定メッセージに任せる）');
+  /* 8.34：「出品できるか」はどのプランのカードにも出さない。 */
+  ok(key('premium').indexOf('出品できるか')<0
+     &&key('one_pre').indexOf('出品できるか')<0
+     &&key('monitor').indexOf('出品できるか')<0,
+     '★★★カードに「出品できるか」の行を出さない（8.34）');
+  ok(G.ITEMS.indexOf('limit')<0
+     &&G.itemsOf('monitor',{ gdItemsMonitor:'badge,sell,limit' })
+         .indexOf('limit')<0,
+     '★★★⚙でも「出品できるか」は選べない（8.34）');
   ok(key('monitor',{ gdItemsMonitor:'badge,sell,rival' })==='売れ行き,ライバル',
      '★★★⚙でプランごとに変えられる');
   ok(G.cardOf(GOOD,{ gdItemsMonitor:'sell' },'monitor',NOW).badge===null,
@@ -184,8 +190,11 @@ console.log('=== ⑦ カード ===');
   const names=e.fields.map((f)=>f.name);
   console.log('   '+names.join(','));
   ok(names.indexOf('売れ行き')>=0&&names.indexOf('値動き')>=0
-     &&names.indexOf('ライバル')>=0&&names.indexOf('赤字にならない売値')>=0
-     &&names.indexOf('出品できるか')>=0,'★★★6つの項目がカードに出る');
+     &&names.indexOf('ライバル')>=0&&names.indexOf('赤字にならない売値')>=0,
+     '★★★目安の項目がカードに出る');
+  ok(names.indexOf('出品できるか')<0
+     &&!/アカウントごとに違います/.test(JSON.stringify(e)),
+     '★★★カードに「出品できるか」の注意を入れない（8.34）');
   ok(names.indexOf('見込みの Amazon 粗利')<names.indexOf('売れ行き')
      &&names.indexOf('売れ行き')<names.indexOf('購入できる数'),
      '★★目安は粗利のあと・購入できる数の前');
@@ -198,8 +207,8 @@ console.log('=== ⑦ カード ===');
                                now:NOW });
   ok(m.fields.map((f)=>f.name).indexOf('値動き')<0,
      '★★★モニターのカードは短い（⚙のとおり）');
-  /* 8.27（6.195）より新しければよい（次の直しで上げても落ちない）。 */
-  ok(parseFloat(C.CARD_V)>6.195,
+  /* 8.29（6.196）より新しければよい（次の直しで上げても落ちない）。 */
+  ok(parseFloat(C.CARD_V)>6.196,
      '★★★カードの形の版を上げた（配ったカードは次の配信で書き換わる）');
   /* 会員に見せない項目が混ざっていないか（§8.2）。 */
   for(const ng of ['卸値','仕入原価','MW','matchingworld','いろは'])
@@ -315,8 +324,8 @@ console.log('=== ⑩ 読み方の固定メッセージ（8.30）===');
      '★★★そのプランのカードに出る項目を書く');
   ok(/お一人 1点まで/.test(m)&&/1回 10件まで/.test(m),
      '★★★プランごとの決まり（1人あたりの点数・1回の件数）を書く');
-  ok(/読み方は #はじめに をご覧ください/.test(m),
-     '★★★「読み方は #はじめに をご覧ください」を書く');
+  ok(/読み方と\*\*出品できるかの注意\*\*は #はじめに をご覧ください/.test(m),
+     '★★★「読み方と出品できるかの注意は #はじめに」と書く（8.34）');
   ok(/目安です/.test(m),'★★短い文にも「目安です」を入れる');
   ok(!/値動き|赤字にならない売値/.test(m),
      '★★★そのプランに出ない項目は書かない');
