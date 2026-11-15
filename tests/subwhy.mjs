@@ -1,8 +1,11 @@
 /* Worker：ライト・スタンダード・プレミアムまで試す（8.20・カジの依頼）
 
    ① プランごとの予定が0件のとき、**なぜ0件か**を返す
-      （印オフ／チャンネルID なし／ほかのプランに振り分け／
+      （印オフ／チャンネルID なし／上のプランから出す商品／
         ゲームソフトだけのプラン／1点ものは出さない／配信できる商品が0）
+   8.35：プランは**積み上げ型**（下のプランの商品は上のプランにも出る）に
+   なったので、「monitor だけ」のような grades は
+   「**モニターだけに出す**」という意味になる（上には出ない）。
    ② `POST /sub/send` に plan を付けると**そのプランだけ**に送る
    ③ grades が空の商品は**どのプランにも出る**（「ぜんぶのプラン」） */
 import { harness, loadWorker, makeEnv, asJson, get, post } from './lib.mjs';
@@ -63,8 +66,19 @@ console.log('=== 決まり（shared/subplan.js）===');
   ok(SUBPLAN.fitWhy(light,{grades:''},true)==='','★ゲームソフトは出す');
   ok(/ゲームソフトだけ/.test(SUBPLAN.fitWhy(light,{grades:''},false)),
      '★★★理由：ゲームソフトだけのプラン');
-  ok(/ほかのプランに振り分け/.test(SUBPLAN.fitWhy(light,{grades:'monitor'},true)),
-     '★★★理由：ほかのプランに振り分けてあります');
+  /* 8.35 'monitor' だけの grades は「モニターだけ」。ライトには出ない。 */
+  ok(/このプランには出さない商品です/
+     .test(SUBPLAN.fitWhy(light,{grades:'monitor'},true)),
+     '★★★理由：このプランには出さない商品です（8.35）');
+  /* 「ライトから上」の商品は、モニターには出ない（下には流れない）。 */
+  const mon=l.filter((p)=>p.key==='monitor')[0];
+  ok(/ライトから上に出す商品です/
+     .test(SUBPLAN.fitWhy(mon,{grades:'light,standard,premium',
+                               name:'ふつうのゲーム'},true)),
+     '★★★理由：ライトから上に出す商品です（8.35）');
+  ok(SUBPLAN.fitWhy(light,{grades:'monitor,light,standard,premium',
+                           name:'ふつうのゲーム'},true)==='',
+     '★★★積み上げ型（モニターから上）ならライトにも出る（8.35）');
   const std=l.filter((p)=>p.key==='standard')[0];
   ok(/1点もの/.test(SUBPLAN.fitWhy(std,{grades:'',one_off:1},false)),
      '★★理由：1点ものはこのプランに出しません');
@@ -93,10 +107,10 @@ console.log('=== ① 予定が0件の理由（GET /sub/plan）===');
   console.log('   '+(d.plans||[]).map((p)=>p.key+':'+p.items.length
     +(p.why?('（'+p.why+'）'):'')).join(' / '));
   ok(planOf(d,'monitor').items.length===1,'★★モニターには出る');
-  ok(/ほかのプランに振り分けてあります（monitor） 1件/
+  ok(/このプランには出さない商品です（monitor） 1件/
      .test(planOf(d,'light').why||''),
-     '★★★ライトが0件の理由（ほかのプランに振り分け）');
-  ok(/ほかのプランに振り分け/.test(planOf(d,'standard').why||''),
+     '★★★ライトが0件の理由（モニターだけに出す商品・8.35）');
+  ok(/このプランには出さない商品です/.test(planOf(d,'standard').why||''),
      '★★スタンダードも同じ理由');
   ok(planOf(d,'monitor').why==='','★出ているプランには理由を付けない');
 }

@@ -183,8 +183,10 @@ console.log('\n=== ④ この案で出す（印・上限・価格＋CSV）===');
   console.log('   '+JSON.stringify(t.items).slice(0,220));
   ok(t.post.indexOf('sub')>=0,'★★★「会員に出す」の印をまとめて付ける');
   const it=(t.items.items||[])[0]||{};
-  ok(it.on===1&&+it.max_qty>0&&+it.price>0&&it.grades==='monitor',
-     '★★★印・上限・価格・プランを送る');
+  /* 8.35 積み上げ型：モニターを選ぶと grades は上まで全部入る。 */
+  ok(it.on===1&&+it.max_qty>0&&+it.price>0
+     &&it.grades==='monitor,light,standard,premium',
+     '★★★印・上限・価格・プラン（積み上げ型）を送る');
   ok(t.post.indexOf('draft')>=0,'★★★案の中身を pj-sync に控える');
   ok((t.draft.items||[]).length>0&&!!t.draft.at,
      '★★★案の日時と中身を控える（あとで売れた数を見る）');
