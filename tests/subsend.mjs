@@ -16,6 +16,7 @@ const ok=T.ok;
 const { worker, T:W }=await loadWorker('subsend');
 
 let dc=[], notes=[];
+let mon=[];        // 8.43 モニターへの「今週の配信」
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   /* Webhook（社内用の知らせ）とボットの口（会員向けの配信）を分ける。 */
@@ -26,8 +27,11 @@ globalThis.fetch=async(u,i)=>{
   if(/discord\.com\/api/.test(url)){
     const m=/\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(url)||[];
     const b=JSON.parse(String(o.body||'{}'));
-    dc.push({ method:String(o.method||'GET'), ch:m[1]||'', msg:m[2]||'', body:b,
-              auth:String((o.headers||{})['authorization']||'') });
+    /* 8.43 モニターへの「今週の配信」は**カードではない**（文だけの1通）。
+       カードの数を見るので、別に取っておく（中身は tests/submon.mjs）。 */
+    const rec={ method:String(o.method||'GET'), ch:m[1]||'', msg:m[2]||'',
+                body:b, auth:String((o.headers||{})['authorization']||'') };
+    (((!b.embeds)&&b.content)?mon:dc).push(rec);
     return new Response(JSON.stringify({ id:String(900000+dc.length) }),
       {status:200,headers:{'content-type':'application/json'}});
   }

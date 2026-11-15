@@ -146,6 +146,7 @@ console.log('=== ⑤ 選択肢（画面に出す言い方）===');
 console.log('=== ⑥ pj-sync（配信）でも積み上げで出る ===');
 {
   let dc=[];
+  let mon=[];        // 8.43 モニターへの「今週の配信」
   globalThis.fetch=async(u,i)=>{
     const url=String(u), o=i||{};
     if(/discord\.com\/api/.test(url)){
@@ -153,7 +154,12 @@ console.log('=== ⑥ pj-sync（配信）でも積み上げで出る ===');
       if(cc)return new Response(JSON.stringify({ id:cc[1], name:'ch',
         guild_id:'1' }),{status:200,headers:{'content-type':'application/json'}});
       const m=/\/channels\/(\d+)\/messages/.exec(url)||[];
-      dc.push({ ch:m[1]||'', method:String(o.method||'GET') });
+      const bd=(()=>{ try{ return JSON.parse(String(o.body||'{}')); }
+                      catch(e){ return {}; } })();
+    /* 8.43 モニターへの「今週の配信」は**カードではない**（文だけの1通）。
+       カードの数を見るので、別に取っておく（中身は tests/submon.mjs）。 */
+      (((!bd.embeds)&&bd.content)?mon:dc).push({ ch:m[1]||'',
+        method:String(o.method||'GET') });
       return new Response(JSON.stringify({ id:String(900000+dc.length) }),
         {status:200,headers:{'content-type':'application/json'}});
     }

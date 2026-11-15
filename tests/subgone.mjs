@@ -31,6 +31,7 @@ const ROOT=path.resolve(new URL('.',import.meta.url).pathname,'..');
    noCh[ch]=1     … チャンネルが無い（404／10003）
    deny[ch]=1     … 見られない（403） */
 let dc=[], gone={}, noCh={}, deny={};
+let mon=[];        // 8.43 モニターへの「今週の配信」
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/\/api\/webhooks\//.test(url))return new Response(null,{status:204});
@@ -38,7 +39,12 @@ globalThis.fetch=async(u,i)=>{
     const m=/\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(url)||[];
     const ch=m[1]||'', msg=m[2]||'';
     const method=String(o.method||'GET');
-    dc.push({ method:method, ch:ch, msg:msg });
+    const bd=(()=>{ try{ return JSON.parse(String(o.body||'{}')); }
+                    catch(e){ return {}; } })();
+    /* 8.43 モニターへの「今週の配信」は**カードではない**（文だけの1通）。
+       カードの数を見るので、別に取っておく（中身は tests/submon.mjs）。 */
+    (((!bd.embeds)&&bd.content)?mon:dc).push({ method:method, ch:ch,
+      msg:msg });
     const err=(st,code)=>new Response(JSON.stringify({ code:code,
       message:'x' }),{status:st,headers:{'content-type':'application/json'}});
     if(deny[ch])return err(403,50001);

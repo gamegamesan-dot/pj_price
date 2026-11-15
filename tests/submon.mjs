@@ -133,11 +133,10 @@ console.log('=== ⑦ 「今週の配信」の1通 ===');
 {
   const cfg={ monNote:true, pick:SUBPLAN.pickOpt({}),
     plans:SUBPLAN.list({ subChMonitor:'111' }) };
-  const res={ plans:[{ key:'monitor', name:'モニター', add:5 },
-    { key:'light', name:'ライト', add:7 },
-    { key:'standard', name:'スタンダード', add:12 },
-    { key:'premium', name:'プレミアム', add:9 }] };
-  const t=W.subMonText(cfg,res,'2026-11-16T09:00:00+09:00');
+  /* 件数は「その日に新しく出たカード」をプランごとに数えたもの
+     （subMonToday が D1 から作る）。 */
+  const by={ monitor:5, light:7, standard:12, premium:9, n:33 };
+  const t=W.subMonText(cfg,by,'2026-11-16T09:00:00+09:00');
   console.log('   '+t.replace(/\n/g,' ／ '));
   ok(/ライト 7件/.test(t)&&/スタンダード 12件/.test(t)&&/プレミアム 9件/.test(t),
      '★★★上のプランの件数を出す');
@@ -146,7 +145,7 @@ console.log('=== ⑦ 「今週の配信」の1通 ===');
   ok(!/¥|JAN|\d{13}/.test(t),
      '★★★商品名・JAN・価格は出さない');
   ok(!/@everyone|@here/.test(t),'★★★@everyone・@here は使わない');
-  const t2=W.subMonText(cfg,{ plans:[{ key:'monitor', add:0 }] },
+  const t2=W.subMonText(cfg,{ monitor:5, n:5 },
     '2026-11-16T09:00:00+09:00');
   ok(/上のプランへの配信はありません/.test(t2),'★上に出なかった週の文');
 }
@@ -199,11 +198,31 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
   console.log('   1回目 '+JSON.stringify({ add:mon1.add, keep:mon1.keep })
     +' / POST '+dc.filter((x)=>x.method==='POST'&&x.embeds).length);
   ok(mon1.add===2,'★★★1回目に新しく出すのは⚙の2件だけ（ほかは出さない）');
+  /* 「今週の配信」の1通は、その日の**最初の1回だけ POST**（通知が鳴る）。 */
+  const note1=dc.filter((x)=>x.ch===CH&&x.content&&!x.embeds);
+  console.log('   1通：'+(note1[0]||{}).content);
+  ok(note1.length===1&&note1[0].method==='POST'&&!note1[0].msg,
+     '★★★新しく出した回に、モニターへ文だけの1通を出す');
+  ok(/今週の配信/.test((note1[0]||{}).content||''),'★★「今週の配信」の文');
+  ok(!/¥|\d{13}/.test((note1[0]||{}).content||''),
+     '★★★商品名・JAN・価格は出さない');
+  ok(r1.mon_note===1,'★出したことを返す');
   dc=[];
   const r2=await api('/sub/send',{ approve:true });
   const mon2=(r2.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
-  console.log('   2回目 '+JSON.stringify({ add:mon2.add, keep:mon2.keep }));
+  console.log('   2回目 '+JSON.stringify({ add:mon2.add, keep:mon2.keep })
+    +' / 1通 '+JSON.stringify(dc.filter((x)=>x.ch===CH&&x.content&&!x.embeds)
+      .map((x)=>x.method+':'+x.msg)));
   ok(mon2.add===2,'★★★2回目も新しく2件（前の2件は件数に数えない）');
+  /* 同じ日の2回目からは**書き換え**（PATCH＝通知は鳴らない）。
+     「全プランに配る」はプランごとに1回ずつ頼むので、
+     1日に何通も出さないため（8.36）。 */
+  const note2=dc.filter((x)=>x.ch===CH&&x.content&&!x.embeds);
+  ok(note2.length===1&&note2[0].method==='PATCH'&&!!note2[0].msg,
+     '★★★同じ日の2回目は、同じ1通を書き換える（通知は鳴らない）');
+  ok(r2.mon_note===2,'★書き換えたことを返す');
+  ok(/4件/.test((note2[0]||{}).content||''),
+     '★★★件数は「その日に新しく出たカード」ぜんぶ（2＋2＝4件）');
   const n=Number(((await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM sub_post WHERE ch=?1`).bind(CH).first())||{})
     .n||0);
@@ -234,8 +253,7 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
   ok(!!String((row2||{}).off_at||''),
      '★★★書き直しでも受付終了のカードは商品カードに戻さない');
 
-  console.log('=== ⑩ 「今週の配信」の1通と /sub/mon ===');
-  /* 新しく出した回だけ、モニターのチャンネルに文だけの1通が出る。 */
+  console.log('=== ⑩ 新しく出していない回と /sub/mon ===');
   dc=[];
   await env.DB.prepare(
     `INSERT INTO mw_stock (jan,sha,idx,kishu,name,stock,row_hash,seen_at,
@@ -250,17 +268,17 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
        at,created_at) VALUES ('4902370550999',1,1,3645,
        'monitor,light,standard,premium',?1,?1,?1,?1)`).bind(now()).run();
   const r5=await api('/sub/send',{ approve:true });
-  const note=dc.filter((x)=>x.method==='POST'&&x.ch===CH&&x.content);
-  console.log('   1通：'+(note[0]||{}).content);
-  ok(note.length===1,'★★★新しく出した回に、モニターへ1通だけ出す');
-  ok(/今週の配信/.test((note[0]||{}).content||''),'★★「今週の配信」の文');
-  ok(!/¥|\d{13}/.test((note[0]||{}).content||''),
-     '★★★商品名・JAN・価格は出さない');
-  ok(r5.mon_note===1,'★出したことを返す');
+  const note5=dc.filter((x)=>x.ch===CH&&x.content&&!x.embeds);
+  console.log('   1通：'+JSON.stringify(note5.map((x)=>x.method))
+    +' '+(note5[0]||{}).content);
+  ok(note5.length===1&&note5[0].method==='PATCH',
+     '★★★そのあとも、新しく出るたびに同じ1通を書き直す（POST しない）');
+  ok(r5.mon_note===2,'★書き換えたことを返す');
   dc=[];
-  await api('/sub/send',{ approve:true });
-  ok(dc.filter((x)=>x.method==='POST'&&x.ch===CH&&x.content).length===0,
-     '★★★新しく出していない回は出さない');
+  const r6=await api('/sub/send',{ approve:true });
+  ok(dc.filter((x)=>x.ch===CH&&x.content&&!x.embeds).length===0,
+     '★★★新しく出していない回は、出しも書き直しもしない');
+  ok(!r6.mon_note,'★出していないことも返す');
   const got=await api('/sub/mon');
   console.log('   /sub/mon '+JSON.stringify({ n:got.n, ch:got.ch,
     new_n:got.new_n, limit:got.limit_days }));

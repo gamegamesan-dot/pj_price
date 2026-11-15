@@ -17,6 +17,7 @@ const { worker, T:W }=await loadWorker('suball');
 const ROOT=path.resolve(new URL('.',import.meta.url).pathname,'..');
 
 let dc=[], notes=[], chNames={}, failCh='';
+let mon=[];        // 8.43 モニターへの「今週の配信」
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/\/api\/webhooks\//.test(url)){
@@ -32,8 +33,10 @@ globalThis.fetch=async(u,i)=>{
       {status:200,headers:{'content-type':'application/json'}});
     const ch=(mm||[])[1]||'';
     const b=JSON.parse(String(o.body||'{}'));
-    dc.push({ method:String(o.method||'GET'), ch:ch, msg:(mm||[])[2]||'',
-              body:b, at:Date.now() });
+    /* 8.43 モニターへの「今週の配信」は**カードではない**（文だけの1通）。
+       カードの数を見るので、別に取っておく（中身は tests/submon.mjs）。 */
+    (((!b.embeds)&&b.content)?mon:dc).push({ method:String(o.method||'GET'),
+      ch:ch, msg:(mm||[])[2]||'', body:b, at:Date.now() });
     /* わざと失敗させるチャンネル（途中で止まるかを見る）。 */
     if(failCh&&ch===failCh)return new Response('{}',{status:403});
     return new Response(JSON.stringify({ id:String(900000+dc.length) }),

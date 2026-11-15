@@ -20,12 +20,18 @@ const ok=T.ok;
 const { worker }=await loadWorker('subwait');
 
 let dc=[];
+let mon=[];        // 8.43 モニターへの「今週の配信」
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/\/api\/webhooks\//.test(url))return new Response(null,{status:204});
   if(/discord\.com\/api/.test(url)){
     const m=/\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(url)||[];
-    dc.push({ method:String(o.method||'GET'), ch:m[1]||'', msg:m[2]||'' });
+    const bd=(()=>{ try{ return JSON.parse(String(o.body||'{}')); }
+                    catch(e){ return {}; } })();
+    /* 8.43 モニターへの「今週の配信」は**カードではない**（文だけの1通）。
+       カードの数を見るので、別に取っておく（中身は tests/submon.mjs）。 */
+    (((!bd.embeds)&&bd.content)?mon:dc).push({
+      method:String(o.method||'GET'), ch:m[1]||'', msg:m[2]||'' });
     return new Response(JSON.stringify({ id:String(900000+dc.length) }),
       {status:200,headers:{'content-type':'application/json'}});
   }

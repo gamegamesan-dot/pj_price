@@ -10860,6 +10860,9 @@ async function mwSubPutAt(env, body) {
 const SUB_SKIP_KEY = "sub.skip";        // 「今日は送らない」印（JSTの日）
 const SUB_PRE_KEY = "sub.pre";          // 予告を出した日
 const SUB_SEND_KEY = "sub.send";        // 配信した日
+/* 8.43 モニターへの「今週の配信」を出した日と、その1通の番号
+   （同じ日は書き換えるだけ＝通知を1回にする）。 */
+const SUB_MON_NOTE_KEY = "sub.mon.note";
 const SUB_HOUR_DEFAULT = 8;
 /* 8.17 ゲームソフト1本の重さの既定（⚙ mwSubGameG と同じ・6.183）。 */
 const SUB_GAME_G = 100;
@@ -12196,7 +12199,7 @@ async function jobSubSend(env, opt) {
       }
       /* 8.43（カジの依頼3）モニターのチャンネルに「今週の配信」を1通。
          **商品名・JAN・価格は出さない**。@everyone・@here も使わない。 */
-      try { await subMonNote(env, run, cfg, res); } catch (e) {}
+      try { await subMonNote(env, run, cfg, res, day); } catch (e) {}
       run.notes.push("会員配信：新しく " + res.sent + "件・書き換え "
         + res.edited + "件・そのまま " + res.skipped + "件"
         /* 8.38 Discord から消えていたカード（次の配信で出し直せる）。 */
@@ -12217,14 +12220,17 @@ async function jobSubSend(env, opt) {
      ・**件数だけ**（商品名・JAN・価格は出さない）
      ・**@everyone・@here は使わない**（allowed_mentions で誰にも触れない）
      ・新しく出したカードが1枚も無い回は出さない
-     ・モニター自身の件数と、購入期限の日付も添える */
-function subMonText(cfg, res, now) {
+     ・モニター自身の件数と、購入期限の日付も添える
+   「全プランに配る」は**プランごとに1回ずつ**頼むので（8.36）、
+   1日に何通も出さないように
+     ・**その日の最初の1通だけ POST**（通知が鳴るのはここだけ）
+     ・そのあと件数が増えたら**同じ1通を PATCH**（通知は鳴らない）
+   件数は D1（`sub_post`）の**その日に新しく出たカード**から数える
+   （どのプランの回で出しても、同じ数になるように）。 */
+function subMonText(cfg, by, now) {
   const d = new Date((isFinite(Date.parse(String(now || "")))
     ? Date.parse(String(now || "")) : Date.now()) + JST_MS);
   const md = (t) => (t.getUTCMonth() + 1) + "/" + t.getUTCDate();
-  const by = {};
-  for (const p of (res.plans || []))
-    by[String(p.key)] = Math.round(Number(p.add) || 0);
   const names = { light: "ライト", standard: "スタンダード",
                   premium: "プレミアム" };
   const parts = [];
@@ -12270,18 +12276,59 @@ async function subMonSent(env) {
   } catch (e) { out.error = String((e && e.message) || e); }
   return out;
 }
-async function subMonNote(env, run, cfg, res) {
+/* その日に新しく出たカードをプランごとに数える（D1）。
+   sub_post.at は**はじめて出した時刻**で、書き換えでは動かない。 */
+async function subMonToday(env, cfg, day) {
+  const out = { n: 0 };
+  const t0 = Date.parse(String(day || "") + "T00:00:00+09:00");
+  if (!isFinite(t0)) return out;
+  const q = await env.DB.prepare(
+    `SELECT ch, COUNT(*) AS n FROM sub_post WHERE at >= ?1 GROUP BY ch`)
+    .bind(new Date(t0).toISOString()).all();
+  const by = {};
+  for (const r of ((q && q.results) || [])) by[String(r.ch || "")] = r.n;
+  for (const p of (cfg.plans || [])) {
+    const n = Math.round(Number(by[String(p.ch || "")]) || 0);
+    if (!p.ch || !n) continue;
+    out[String(p.key)] = (Math.round(Number(out[String(p.key)]) || 0)) + n;
+    out.n += n;
+  }
+  return out;
+}
+async function subMonNote(env, run, cfg, res, day) {
   if (!cfg.monNote) return 0;
   const p = (cfg.plans || []).filter((x) => x.key === "monitor")[0];
   if (!p || !p.on || !p.ch) return 0;
   const add = (res.plans || []).reduce(
     (a, x) => a + Math.round(Number(x.add) || 0), 0);
   if (!add) return 0;                       // 新しく出した回だけ
+  const by = await subMonToday(env, cfg, day);
+  if (!by.n) return 0;
+  const txt = subMonText(cfg, by, nowIso()).slice(0, 1900);
+  const body = { content: txt, allowed_mentions: { parse: [] } };
+  let was = "";
+  try { was = String((await stateGet(env, SUB_MON_NOTE_KEY)) || ""); }
+  catch (e) { was = ""; }
+  const cut = was.indexOf("|");
+  const d0 = cut < 0 ? "" : was.slice(0, cut);
+  const id0 = cut < 0 ? "" : was.slice(cut + 1);
+  /* 同じ日の2回目からは**書き換え**（通知は鳴らない）。 */
+  if (d0 === String(day) && id0) {
+    const e = await dcApi(env, run, "PATCH",
+      "/channels/" + p.ch + "/messages/" + id0, body);
+    if (e.ok) { res.mon_note = 2; return 1; }
+    /* そのカードが消えていたときだけ、もう一度出す。 */
+    if (!dcMsgGone(e)) return 0;
+  }
   const m = await dcApi(env, run, "POST", "/channels/" + p.ch + "/messages",
-    { content: subMonText(cfg, res).slice(0, 1900),
-      allowed_mentions: { parse: [] } });
-  if (m.ok) res.mon_note = 1;
-  return m.ok ? 1 : 0;
+    body);
+  if (!m.ok) return 0;
+  res.mon_note = 1;
+  try {
+    await stateSet(env, SUB_MON_NOTE_KEY,
+      String(day) + "|" + String(((m.data || {}).id) || "")).run();
+  } catch (e) {}
+  return 1;
 }
 /* ===== 8.31（カジの依頼3）リストから外れた商品のカード =====
    MW が欠品した・販売終了した・上限を0にした商品は配信の対象から外れるが、
@@ -18560,7 +18607,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
   /* 8.43（カジの依頼）モニターの3週間と「今週の配信」の1通。 */
-  subMonText, subMonNote, subMonSent,
+  subMonText, subMonNote, subMonToday, subMonSent,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
   /* 8.37（v296）売り方ごとの「赤字にならない売値」。 */
