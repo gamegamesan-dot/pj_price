@@ -432,6 +432,8 @@
       monQ3: n("subMonQ3", MON.monQ3, 0, 100000),
       monSpeedMin: n("subMonSpeedMin", MON.monSpeedMin, 0, 999),
       monWide: bool(o.subMonWide, MON.monWide),
+      /* 8.52（カジの決定）並びを手残りで決めるか（既定オン）。 */
+      sortNet: bool(o.subSortNet, true),
       monShort: n("subMonShort", MON.monShort, 0, 90),
       /* 8.44（カジの確認3）モニターの開始日（'YYYY-MM-DD'）。
          入れた日より前に出したカードは「前の週に出した品」に数えず、
@@ -734,6 +736,35 @@
      rows は画面・pj-sync が作った行の配列（下の項目を入れておく）
        jan, name, kishu, stock, speed, gross, price, qty（上限のおすすめ）,
        fit（会員向きか）, rst, amz, buy_qty, no_back, one_off, grades */
+  /* 8.52（カジの決定）**プランの並び**（案・pj-sync の1か所）。
+       下のプラン（モニター・ライト）… **早い品から**（同じなら手残り）
+       上のプラン（スタンダード・プレミアム）… **手残りの大きい順**
+     ・速さ 0点の行（slow）は、今までどおり**いちばん後ろ**
+     ・⚙ subSortNet を切ると、今までの「粗利×速さ」（score）の順に戻る
+     ・手残り（net）が取れていない行は 0 として見る（当てずっぽうは出さない）
+     list をその場で並べ替えて返す。 */
+  function sortPick(list, key, opt) {
+    var o = opt || {};
+    var upper = (key === "standard" || key === "premium");
+    var spd = function (r) {
+      return num(r.speed) > 0 ? num(r.speed) : num(r.est);
+    };
+    (list || []).sort(function (a, b) {
+      if (!!a.slow !== !!b.slow) return a.slow ? 1 : -1;
+      if (!o.sortNet) return num(b.score) - num(a.score);
+      if (upper) {
+        var dn = num(b.net) - num(a.net);
+        if (dn) return dn;
+        return num(b.score) - num(a.score);
+      }
+      var ds = spd(b) - spd(a);
+      if (ds) return ds;
+      var dn2 = num(b.net) - num(a.net);
+      if (dn2) return dn2;
+      return num(b.score) - num(a.score);
+    });
+    return list || [];
+  }
   function draft(rows, plans, cfg, monSent, now) {
     var o = pickOpt(cfg);
     var out = [];
@@ -762,11 +793,8 @@
                                          maybe: !!nm.maybe,
                                          slow: !(num(r.speed) > 0) }));
       });
-      /* 速さ 0点の行は**いちばん後ろ**に回す（点数より先に見る）。 */
-      pick.sort(function (a, b) {
-        if (!!a.slow !== !!b.slow) return a.slow ? 1 : -1;
-        return b.score - a.score;
-      });
+      /* 8.52（カジの決定）並びはプランで変える（決まりは sortPick の1か所）。 */
+      sortPick(pick, p.key, o);
       out.push({ key: p.key, name: p.name, n: p.n, on: p.on, ch: p.ch,
                  items: pick.slice(0, p.n), over: Math.max(0, pick.length - p.n),
                  skip: skip.length });
@@ -795,6 +823,7 @@
     oneFits: oneFits, oneWhyNone: oneWhyNone,
               keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,
               scoreOf: scoreOf, whyNot: whyNot, draft: draft,
+              sortPick: sortPick,
               SPEED_MIN: SPEED_MIN };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_SUBPLAN = API;

@@ -115,7 +115,11 @@
     var w = wayOf(wayKey);
     if (!w) return { ok: false };
     var x = r || {}, o = opt || {};
-    var cost = Math.round(num(x.price));
+    /* 8.52（カジの確認）会員が**こちらに払う送料**も仕入れ値に入れる
+       （入れるかは⚙。既定は入れる）。会員から見た「出ていくお金」は
+       商品代金＋送料なので、こうしないと手残りが多めに出る。 */
+    var cost = Math.round(num(x.price)) + Math.max(0, Math.round(
+      num(x.buy_ship)));
     if (!(cost > 0)) return { ok: false };
     var sh = Math.max(0, Math.round(num(ship)));
     var rate = 0, fix = 0, parts = [];
@@ -186,7 +190,9 @@
     if (!(amz > 0)) return { ok: false };
     var pc = sellPct(wayKey, opt);
     var sell = Math.round(amz * pc);
-    var cost = Math.round(num(x.price));
+    /* 8.52 仕入れ値は**会員が払う額＋こちらに払う送料**（⚙で入れる）。 */
+    var cost = Math.round(num(x.price)) + Math.max(0, Math.round(
+      num(x.buy_ship)));
     var net = Math.round(sell * (1 - f.rate) - f.fix - cost);
     return { ok: true, key: f.key, ja: f.ja, net: net, sell: sell,
              pct: pc, rate: f.rate, fix: f.fix, ship: f.ship,

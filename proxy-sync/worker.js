@@ -62,6 +62,7 @@ import SHIPGUESS from "../shared/shipguess.js";
 /* 8.37（v296・カジの依頼）売り方ごとの「赤字にならない売値」。
    率・送料・梱包材は⚙。式と表はこの1か所だけ。 */
 import SELLWAY from "../shared/sellway.js";
+import RANKSPD from "../shared/rankspd.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -11019,6 +11020,18 @@ async function subSettings(env) {
                    モニターは「今週の配信」に混ぜるので出さない）
        ・idx     … 行の形の⚙（商品名の字数・カテゴリの順・仕入れ値と粗利・
                    新着の行数）。決まりは shared/subindex.js の1か所 */
+    /* 8.52 カードの手残りで、会員がこちらに払う送料を引くか（⚙）。 */
+    netBuyShip: st.subNetBuyShip === undefined ? true : !!st.subNetBuyShip,
+    /* 8.52（カジの決定）プランの並びに使う売り方（足切りと同じ⚙）。 */
+    cutWay: String(st.subCutWay || "mercari"),
+    /* 8.52 並びの「早い品」は **Amazon の順位からの推定**で見る
+       （pj-sync には MW の在庫の減りが無いため）。
+       表と係数は shared/rankspd.js の1か所だけ（画面も同じものを読む）。 */
+    rank_spd: { rsOn: st.rsOn === undefined ? true : !!st.rsOn,
+                rsB1: st.rsB1, rsB2: st.rsB2, rsB3: st.rsB3,
+                rsB4: st.rsB4, rsB5: st.rsB5, rsCap: st.rsCap,
+                rsGame: st.rsGame, rsHobby: st.rsHobby, rsOther: st.rsOther,
+                rsFast: st.rsFast, rsSlow: st.rsSlow },
     /* 8.49（カジの③）採寸が無い品の目安と「出さない種類（言葉）」。
        言葉と表は shared/shipguess.js の1か所（画面も同じものを読む）。 */
     ship_guess: { sgOn: st.sgOn === undefined ? true : !!st.sgOn,
@@ -11292,6 +11305,30 @@ function subPostIns(x, p, id, at, hasH) {
 }
 /* redoAt … 書き直しを始めた時刻（8.33）。これより後に書き換えたカードは
    「もう今の形」なので飛ばす（続きからやるため）。 */
+/* 8.52（カジの決定）並べ替えに使う**手残り**（⚙の売り方・1点ぶん）。
+   式と率・送料・梱包材は shared/sellway.js の1か所だけ（カードと同じ）。
+   送り方が決まらない行は「送料は別」として見る（外さない）。
+   取れないときは 0（当てずっぽうは出さない）。 */
+function subNetYen(x, cfg) {
+  const o = cfg || {};
+  const sh = subShipInfo(x, o);
+  const gs = sh.sure ? null
+    : SHIPGUESS.guessOf({ name: String(x.name || "") }, o.ship_guess || null);
+  const key = sh.sure ? sh.key : ((gs && gs.way) || "");
+  const name = sh.sure ? sh.name : ((gs && gs.way_ja) || "");
+  const opt = Object.assign({}, o.guide || {},
+    { shipKey: key, shipName: name, shipSure: !!key });
+  const n = SELLWAY.netWay(String(o.cutWay || "mercari"), x, opt);
+  return (n && n.ok) ? (Number(n.net) || 0) : 0;
+}
+/* 8.52 並べ替えに使う**速さ**（点/日）。pj-sync には MW の在庫の減りが
+   無いので、**Amazon の順位からの推定**で見る（shared/rankspd.js）。 */
+function subSpdDay(x, cfg) {
+  const e = RANKSPD.estOf(
+    Object.assign({}, x, { genre: MWFEE.genreOf(x) }),
+    (cfg || {}).rank_spd || null);
+  return Number(e.day) || 0;
+}
 function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   const out = [];
   /* 8.43（カジの依頼1）モニターは「**1回に新しく出すのは monNew 件**」。
@@ -11305,6 +11342,8 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   const want = mon ? monNew
     : Math.max(1, Math.round(Number(plan.n) || 0));
   let newN = 0;
+  /* 8.52 まず出せる行を**ぜんぶ**集めて、並べ替えてから件数を数える。 */
+  const cand = [];
   for (const r of (rows || [])) {
     /* 8.45 モニターの種類は⚙で広げられる（クリックポストで送れる品）。
        送り方は shared/shopcsv.js の1か所（カードの送料と同じ判定）。
@@ -11327,11 +11366,6 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
     const goneCard = !!(was && !mid);
-    /* 8.45 **新しく出すぶんだけ**件数を数える（どのプランも）。 */
-    if (!old) {
-      if (newN >= want) continue;
-      newN++;
-    }
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった。 */
@@ -11343,6 +11377,29 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
       gone_card: goneCard,
       sold: sold, left: left,
     });
+    /* 8.52（カジの決定）カードの「手残りの目安」は、**会員がこちらに
+       払う送料**も引く（⚙）。1点のときの会員便の段を渡す。 */
+    x.buy_ship = ((cfg || {}).netBuyShip === false) ? 0
+      : Math.max(0, Math.round(Number(subShipInfo(x, cfg || {}).yen1) || 0));
+    /* 8.52（カジの決定）並べ替えに使う数（カードには出さない）。 */
+    cand.push({ x: x, speed: subSpdDay(x, cfg || {}),
+                net: subNetYen(x, cfg || {}),
+                score: SUBPLAN.scoreOf(x, (cfg || {}).pick || null) });
+  }
+  /* 8.52（カジの決定）**プランの並び**。下のプラン（モニター・ライト）は
+     早い品から、上のプラン（スタンダード・プレミアム）は手残りの大きい順。
+     決まりは shared/subplan.js の sortPick の1か所だけ（画面の案も同じ）。
+     速さが取れない行は、今までどおりいちばん後ろに回す。 */
+  for (const c of cand) c.slow = !(Number(c.speed) > 0);
+  SUBPLAN.sortPick(cand, plan.key, (cfg || {}).pick || null);
+  for (const c of cand) {
+    const x = c.x;
+    /* 8.45 **新しく出すぶんだけ**件数を数える（どのプランも）。
+       8.52 並べ替えたあとに数えるので、**上から want 件**が新しく出る。 */
+    if (!x.sent) {
+      if (newN >= want) continue;
+      newN++;
+    }
     /* カードを先に作って指紋を取る（送るときもこれをそのまま使う）。 */
     x.card = subCardOf(x, plan, cfg || {});
     x.card_h = subCardHash(x.card);
@@ -11350,12 +11407,13 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
        8.19（不具合2）値段と数だけでなく、出す中身ぜんぶで見る。
        指紋の控えが無い（migrate-0057 の前に送ったぶん）ときは、
        今までどおり値段と数で見る。 */
-    const h = old ? String(old.card_h || "") : "";
+    const was2 = x.sent ? ((sent || {})[x.jan] || null) : null;
+    const h = was2 ? String(was2.card_h || "") : "";
     /* 8.33 書き直しの続き：この回でもう書き換えたカードは飛ばす。 */
-    const redone = !!(redoAt && old && String(old.edited_at || "") >= redoAt);
-    const same = redone || (!reform && old
+    const redone = !!(redoAt && was2 && String(was2.edited_at || "") >= redoAt);
+    const same = redone || (!reform && was2
       && (h ? (h === x.card_h)
-            : (Number(old.price) === r.price && Number(old.qty) === r.qty)));
+            : (Number(was2.price) === x.price && Number(was2.qty) === x.qty)));
     x.same = !!same;
     out.push(x);
   }

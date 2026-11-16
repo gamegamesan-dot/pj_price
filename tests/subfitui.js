@@ -108,12 +108,16 @@ console.log('\n=== ② 会員価格は MW 送料を含めない（カジの利�
 
 console.log('\n=== ③ 会員価格と利益率（例の商品）===');
 {
+  /* 8.52 本判定は**手残り**（⚙ subNetOn・既定オン）に変わったので、
+     粗利・利益率の道は⚙を切ったときの決まり。ここはその道を見る。 */
   const t=await p.evaluate((j)=>{
+    $('subNetOn').checked=false;
     const r={ jan:j, wholesale:1300, price:3000, fee_total:797,
       fee_ref:450, fee_fba:300, fee_tax:47, size_tier:'s', size_g:110 };
     const px=mwSubPriceOf(r).price;
     const g=mwSubGrossOf(r,px);
     const fit=mwSubFitOf(r,px);
+    $('subNetOn').checked=true;            /* 8.52 既定に戻す */
     return { px:px, g:g, fit:fit, fee:(mwFeeOf(r)||{}).fee };
   },JAN);
   console.log('   '+JSON.stringify(t));
@@ -128,7 +132,12 @@ console.log('\n=== ③ 会員価格と利益率（例の商品）===');
 
 console.log('\n=== ④ 行に「（利益率 ◯%）」が出る／会員向きではない行だけ注意 ===');
 {
+  /* 8.52 粗利・利益率の道（⚙ subNetOn オフ）の文を見る。
+     手残りで判定したときの文は tests/subcutui.js で見る。 */
   const t=await p.evaluate((j)=>{
+    $('subNetOn').checked=false;
+    mwSubPxCache={};
+    mwAmzRender();
     const el=document.getElementById('mwSubPx_'+j);
     const box=el?el.parentNode:null;
     return { px:el?el.value:null, text:box?box.textContent:'' };
@@ -146,7 +155,9 @@ console.log('\n=== ④ 行に「（利益率 ◯%）」が出る／会員向き�
     const el=document.getElementById('mwSubPx_'+j);
     const box=el?el.parentNode:null;
     const out={ px:el?el.value:null, text:box?box.textContent:'' };
-    $('mwSubShip').value='0'; mwSubPxCache={}; mwAmzRender();
+    $('mwSubShip').value='0';
+    $('subNetOn').checked=true;            /* 8.52 既定に戻す */
+    mwSubPxCache={}; mwAmzRender();
     return out;
   },JAN);
   console.log('   '+JSON.stringify(t2));
@@ -159,7 +170,9 @@ console.log('\n=== ④ 行に「（利益率 ◯%）」が出る／会員向き�
 
 console.log('\n=== ⑤ ⚙を変えると判定が変わる ===');
 {
+  /* 8.52 粗利・利益率の道（⚙ subNetOn オフ）を見る。 */
   const t=await p.evaluate((j)=>{
+    $('subNetOn').checked=false;
     const r={ jan:j, wholesale:1300, price:3000, fee_total:797,
       fee_ref:450, fee_fba:300, fee_tax:47 };
     const px=1636;
@@ -173,6 +186,7 @@ console.log('\n=== ⑤ ⚙を変えると判定が変わる ===');
     $('mwSubGrossMin').value='300';
     const d=mwSubFitOf(r,px).by;
     $('mwSubGrossMin').value='800';
+    $('subNetOn').checked=true;            /* 8.52 既定に戻す */
     return { a:a, b:b, c:c, d:d };
   },JAN);
   console.log('   '+JSON.stringify(t));

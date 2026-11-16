@@ -77,15 +77,20 @@ await p.waitForTimeout(500);
 console.log('=== ① ⚙の欄と既定（数えるだけ）===');
 {
   const t=await p.evaluate(()=>({
-    rate:($('subCutRate')||{}).value, gross:($('subCutGross')||{}).value,
-    cfg:[subPickCfg().subCutRate,subPickCfg().subCutGross],
-    note:document.body.innerHTML.indexOf('いまは「数えるだけ」です')>=0 }));
+    on:($('subNetOn')||{}).checked, way:($('subCutWay')||{}).value,
+    net:($('subCutNet')||{}).value,
+    rateOn:($('subCutRateOn')||{}).checked, rate:($('subCutRate')||{}).value,
+    buy:($('subNetBuyShip')||{}).checked,
+    cfg:[subPickCfg().subNetOn,subPickCfg().subCutNet] }));
   console.log('   '+JSON.stringify(t));
-  ok(t.rate==='15'&&t.gross==='700',
-     '★★★既定は 率15%・粗利¥700（会員が払う額に対する率）');
-  ok(t.cfg[0]==='15'&&t.cfg[1]==='700','★★⚙を1か所で読む');
-  ok(t.note===true,
-     '★★★「いまは数えるだけです（判定は変わりません）」と書いてある');
+  /* 8.52（カジの決定）足切りは「メルカリの手残り ¥400 以上」で本判定。 */
+  ok(t.on===true&&t.way==='mercari'&&t.net==='400',
+     '★★★既定は メルカリ・手残り¥400 で**本判定**');
+  ok(t.rateOn===false&&t.rate==='15',
+     '★★★利益率の条件は重ねない（⚙オフ・数字は15%のまま）');
+  ok(t.buy===true,
+     '★★★会員がこちらに払う送料も引く（既定オン）');
+  ok(t.cfg[0]===1&&t.cfg[1]==='400','★★⚙を1か所で読む');
 }
 
 console.log('\n=== ② 率の表記（どちらの率か分かる）===');
@@ -105,14 +110,18 @@ console.log('\n=== ② 率の表記（どちらの率か分かる）===');
 console.log('\n=== ③ 案の行に新しい足切りの結果が付く ===');
 {
   const t=await p.evaluate(()=>subDraftRows().map((x)=>({ jan:x.jan,
-    fit:x.fit, cut:x.cut, why:x.cut_why, g:x.gross, r:x.rate })));
+    fit:x.fit, net:x.net, min:x.net_min, why:x.fit_why, way:x.net_way,
+    buy:x.net_buy_ship, g:x.gross, r:x.rate })));
   console.log('   '+JSON.stringify(t));
   const by={}; t.forEach((x)=>{ by[x.jan]=x; });
-  ok(by['4902370550001'].cut===true,'★★★率も粗利も足りる品は通る');
-  ok(by['4902370550003'].cut===false&&by['4902370550003'].why!=='',
+  ok(t.every((x)=>x.way==='mercari'&&x.min===400),
+     '★★★行ごとに「どの売り方で・いくらの下限か」を持つ');
+  ok(by['4902370550001'].net>400&&by['4902370550001'].fit===true,
+     '★★★手残りが下限を通る品は会員向き');
+  ok(by['4902370550003'].fit===false&&by['4902370550003'].why!=='',
      '★★★薄い品は外れ、理由も付く');
-  ok(t.every((x)=>x.cut!==undefined&&x.why!==undefined),
-     '★★行ごとに結果と理由を持つ');
+  ok(t.every((x)=>x.buy!==undefined),
+     '★★会員がこちらに払う送料も行に持つ');
 }
 
 console.log('\n=== ④ まとめに試算が出る（判定は変わらない）===');
@@ -127,21 +136,18 @@ console.log('\n=== ④ まとめに試算が出る（判定は変わらない）
   });
   console.log('   '+t.note.slice(t.note.indexOf('足切りの試算')));
   console.log('   いまの案 '+t.data);
-  ok(/足切りの試算/.test(t.note)&&/判定はまだ変えていません/.test(t.note),
-     '★★★「判定はまだ変えていません」と出す');
-  ok(/いまの決まりで会員向き \d+件/.test(t.note),
-     '★★★いまの決まりの件数');
-  ok(/新しい足切り（率 15% かつ 粗利 ¥700）… \d+件/.test(t.note),
-     '★★★新しい足切りの件数（⚙の数字も出す）');
-  ok(/減る \d+件/.test(t.note)&&/増える \d+件/.test(t.note),
-     '★★★減る件数と増える件数を出す');
-  ok(/率だけ足りない \d+件/.test(t.note)
-     &&/粗利だけ足りない \d+件/.test(t.note)
-     &&/どちらも \d+件/.test(t.note)
+  ok(/足切り：メルカリで売った場合の手残り ¥400以上/.test(t.note),
+     '★★★足切りの決まりを1行で出す');
+  ok(/この決まりで会員向きを決めています/.test(t.note),
+     '★★★**本判定**であることを書く');
+  ok(/通った品 \d+件/.test(t.note),'★★★通った件数');
+  ok(/手残りが足りない \d+件/.test(t.note)
      &&/手数料が取れていない \d+件/.test(t.note),
-     '★★★外れる理由の内訳');
-  ok(/振り分け：モニター \d+件/.test(t.note)&&/ライト \d+件/.test(t.note),
-     '★★★新しい足切りで通した品のプランごとの件数');
+     '★★★外れた理由の内訳');
+  ok(!/利益率が/.test(t.note),
+     '★★★率の条件は重ねていないので出さない');
+  ok(/プランごと：モニター \d+件/.test(t.note)&&/ライト \d+件/.test(t.note),
+     '★★★通った品のプランごとの件数');
   ok(/3か月10個以上 \d+件/.test(t.note)&&/3か月20個以上 \d+件/.test(t.note)
      &&/3か月30個以上 \d+件/.test(t.note),
      '★★★ライトに入る「早い」の線を 10／20／30個 で並べる');
@@ -150,28 +156,33 @@ console.log('\n=== ④ まとめに試算が出る（判定は変わらない）
 console.log('\n=== ⑤ ⚙を変えると試算だけが変わる ===');
 {
   const t=await p.evaluate(async()=>{
-    const was=subDraftRows().filter((x)=>x.cut).length;
-    const fit0=subDraftRows().filter((x)=>x.fit).length;
+    const was=subDraftRows().filter((x)=>x.fit).length;
+    const fit0=was;
     /* 粗利 ¥3,350〜3,410・率 140% ほどの品なので、
        粗利の下限を ¥3,400 にすれば1件だけが通る。 */
-    $('subCutRate').value='40'; $('subCutGross').value='3400';
+    $('subCutNet').value='3400';
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
-    const now=subDraftRows().filter((x)=>x.cut).length;
-    const fit1=subDraftRows().filter((x)=>x.fit).length;
+    const now=subDraftRows().filter((x)=>x.fit).length;
+    const fit1=now;
     const note=($('subDraftNote').textContent||'').replace(/\s+/g,' ');
-    $('subCutRate').value='15'; $('subCutGross').value='700';
+    $('subCutNet').value='400';
     return { was:was, now:now, fit0:fit0, fit1:fit1, note:note };
   });
   console.log('   '+JSON.stringify({ was:t.was, now:t.now, fit0:t.fit0,
     fit1:t.fit1 }));
-  ok(t.now<t.was,'★★★⚙を厳しくすると試算の件数が減る');
-  ok(t.fit0===t.fit1,
-     '★★★⚙を変えても**いまの判定（会員向き）は変わらない**');
-  ok(/率 40% かつ 粗利 ¥3,400/.test(t.note),'★★⚙の数字が試算に出る');
+  ok(t.now<t.was,'★★★⚙を厳しくすると通る件数が減る');
+  ok(t.fit1<t.fit0,
+     '★★★**本判定**なので、⚙を厳しくすると会員向きの件数も減る');
+  ok(/手残り ¥3,400以上/.test(t.note),'★★⚙の数字がまとめに出る');
 }
 console.log('\n=== ⑥ 売り方ごとの手残りの試算（8.50）===');
 {
+  /* ⑤で⚙を動かしたので、既定に戻したうえで作り直してから見る。 */
+  await p.evaluate(async()=>{
+    await subDraftGo();
+    await new Promise((x)=>setTimeout(x,200));
+  });
   const t=await p.evaluate(()=>({
     way:($('subCutWay')||{}).value, net:($('subCutNet')||{}).value,
     pct:[($('gdPctMercari')||{}).value,($('gdPctYahoo')||{}).value],
@@ -180,8 +191,7 @@ console.log('\n=== ⑥ 売り方ごとの手残りの試算（8.50）===');
       unsure:x.net_unsure })),
     note:($('subDraftNote').textContent||'').replace(/\s+/g,' ') }));
   console.log('   '+JSON.stringify(t.rows.slice(0,3)));
-  console.log('   '+t.note.slice(t.note.indexOf('売り方ごとの手残り'),
-    t.note.indexOf('足切りの試算')));
+  console.log('   '+t.note.slice(t.note.indexOf('足切り：')));
   ok(t.way==='mercari'&&t.net==='400',
      '★★★既定は メルカリ・手残り 400円以上（カジの数字）');
   ok(t.pct[0]==='90'&&t.pct[1]==='90',
@@ -206,8 +216,8 @@ console.log('\n=== ⑥ 売り方ごとの手残りの試算（8.50）===');
      '★★★売り方ごと（FBA・自己配送・メルカリ）の件数');
   ok(/いまの⚙（メルカリ・手残り ¥400以上）… \d+件/.test(t.note),
      '★★★いまの⚙での件数も出す');
-  ok(/③の種類の既定の送料を引いたあと/.test(t.note)
-     &&/かっこの中は引かない場合/.test(t.note),
+  ok(/送り方の区分（決まっていなければ③の種類の既定）の送料を引いたあと/
+     .test(t.note)&&/かっこの中は引かない場合/.test(t.note),
      '★★★既定の送料を引いた件数と引かない件数の両方を出す（8.51）');
   ok(/送り方の区分が分からない品 \d+件は外しません/.test(t.note),
      '★★★送り方が分からない品は外さないと書く');
@@ -221,16 +231,22 @@ console.log('\n=== ⑦ ⚙を変えると試算だけが変わる（手残り）
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const note=($('subDraftNote').textContent||'').replace(/\s+/g,' ');
-    const way=subDraftRows()[0].cut_way;
-    const fit1=subDraftRows().filter((x)=>x.fit).length;
+    const rows=subDraftRows();
+    const way=rows[0].net_way, min=rows[0].net_min;
+    const same=rows.every((x)=>!!x.fit===(x.net!==null&&x.net!==undefined
+      &&x.net>=x.net_min));
+    const fit1=rows.filter((x)=>x.fit).length;
     $('subCutWay').value='mercari'; $('subCutNet').value='400';
-    return { note:note, way:way, fit0:fit0, fit1:fit1 };
+    return { note:note, way:way, min:min, same:same, fit0:fit0,
+             fit1:fit1 };
   });
   ok(t.way==='amz_fba','★★★⚙で見る売り方を変えられる');
   ok(/いまの⚙（Amazon FBA・手残り ¥300以上）/.test(t.note),
      '★★★試算の文も変わる');
-  ok(t.fit0===t.fit1,
-     '★★★⚙を変えても**いまの判定（会員向き）は変わらない**');
+  ok(t.min===300,'★★★下限も⚙のとおりになる');
+  ok(t.same===true,
+     '★★★**本判定**なので、会員向きかどうかが「手残り ≧ 下限」と'
+     +'ぴったり合う');
 }
 await T.done();
 })();

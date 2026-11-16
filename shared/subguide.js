@@ -63,17 +63,19 @@
      （商品1枚ごとに同じ注意が出て煩わしかった）。同じ注意は
      **#はじめに の共通の文に必ず入る**（pinCommon）。
      ここに無い名前は⚙に書いても無視されるので、⚙でも選べない。 */
-  var ITEMS = ["badge", "sell", "px", "rival", "floor"];
+  var ITEMS = ["badge", "sell", "px", "rival", "floor", "net"];
   var ITEM_JA = { badge: "総合", sell: "売れ行き", px: "値動き",
-                  rival: "ライバル", floor: "赤字にならない売値" };
+                  rival: "ライバル", floor: "赤字にならない売値",
+                  /* 8.52（カジの決定）売り方ごとの手残りの**目安**。 */
+                  net: "売った場合の手残りの目安" };
   /* プランごとの既定（モニターは短く、プレミアムはぜんぶ）。 */
   var ITEM_DEF = {
-    monitor: "badge,sell",
-    light: "badge,sell,rival",
-    standard: "badge,sell,px,rival,floor",
-    premium: "badge,sell,px,rival,floor",
-    one_pre: "badge,rival,floor",
-    one_open: "badge,rival,floor"
+    monitor: "badge,sell,net",
+    light: "badge,sell,rival,net",
+    standard: "badge,sell,px,rival,floor,net",
+    premium: "badge,sell,px,rival,floor,net",
+    one_pre: "badge,rival,floor,net",
+    one_open: "badge,rival,floor,net"
   };
   var LIMIT_JA = "出品できるかは**アカウントごとに違います**。"
     + "買う前にセラーセントラルで確かめてください。";
@@ -218,6 +220,35 @@
     return { ok: true, text: g.text, items: g.items,
              yen: g.items.length ? g.items[0].yen : 0 };
   }
+  /* ---- 6 売った場合の手残りの目安（8.52・カジの決定）----
+     「赤字にならない売値」と**同じ式・同じ⚙**（shared/sellway.js）から、
+     その売り方で売ったときに手元に残る額を出す。
+     ・**目安**（「約」を付け、10円単位に丸める）
+     ・メルカリ・ヤフオクは Amazon の価格の⚙%で売れたと仮定
+     ・手数料・発送の送料・梱包材と、**会員がこちらに払う送料**を引いたあと
+     ・出す売り方は⚙ gdNetWays（既定 メルカリ＋Amazon 自己配送）
+     ・相場は取りに行かない（規約） */
+  function netOf(r, opt) {
+    var W = sellMod();
+    if (!W || typeof W.netsOf !== "function") return { ok: false, text: "" };
+    var o = opt || {};
+    var ways = s(o.gdNetWays).trim() || "mercari,amz_self";
+    var g = W.netsOf(r || {}, Object.assign({}, o, { gdWays: ways }));
+    var items = (g.items || []).filter(function (x) { return x.net > 0; });
+    if (!items.length) return { ok: false, text: "" };
+    var L = items.map(function (x) {
+      var pct = Math.round(x.pct * 100);
+      var ja = x.ja + ((pct && pct !== 100)
+        ? "（Amazon の" + Math.round(pct / 10) + "割で売れた場合）" : "");
+      /* 10円単位に丸めて「約」を付ける（1円単位では出さない）。 */
+      return ja + " 約 " + yen(Math.floor(x.net / 10) * 10);
+    });
+    L.push(g.sure
+      ? ("※ 手数料と発送の送料（" + (g.shipName || "") + "）、"
+         + "こちらにお支払いの送料を引いたあとの**目安**です")
+      : "※ 手数料を引いたあとの**目安**です（**発送の送料は別**）");
+    return { ok: true, text: L.join("\n"), items: items };
+  }
   /* ---- 1 総合の札 ---- */
   /* 売れ行き・ライバル・利益率の3つで決める。
      Amazon 本体がいる行は ◎ にしない。
@@ -276,6 +307,7 @@
     var px = pxOf(x, o); if (px.ok) add("px", px.text);
     var rv = rivalOf(x, o); if (rv.ok) add("rival", rv.text);
     var fl = floorOf(x, o); if (fl.ok) add("floor", fl.text);
+    var nt = netOf(x, o); if (nt.ok) add("net", nt.text);
     /* 8.34 「出品できるか」はカードに出さない（#はじめに に任せる）。 */
     return out;
   }
@@ -361,6 +393,13 @@
       + planNote("rival", o)
       + " … 新品の出品者の数と、Amazon 本体が売っているかです。"
       + "本体が売っているときは札を下げています");
+    if (has("net")) {
+      it.push("・**" + ITEM_JA.net + "**" + planNote("net", o)
+        + " … その売り方で売ったときに手元に残る額の**目安**です"
+        + "（手数料・発送の送料・梱包材と、こちらにお支払いの送料を"
+        + "引いたあと）。**メルカリ・ヤフオクは Amazon の値段から見た"
+        + "仮の売値**で出しています（相場は見ていません）");
+    }
     /* 8.37（v296）売り方ごとに出すので、説明も売り方に合わせる。
        文は shared/sellway.js の1か所だけ（⚙で売り方を変えると文も変わる）。 */
     if (has("floor")) {
@@ -460,6 +499,7 @@
               ITEM_DEF: ITEM_DEF, LIMIT_JA: LIMIT_JA, NOTE_JA: NOTE_JA,
               modeOf: modeOf, itemsOf: itemsOf, ageDays: ageDays,
               sellOf: sellOf, pxOf: pxOf, rivalOf: rivalOf, floorOf: floorOf,
+              netOf: netOf,
               badgeOf: badgeOf, cardOf: cardOf, badgeText: badgeText,
               /* 8.30 固定メッセージ（共通＋チャンネルごと）。 */
               PIN_MAX: PIN_MAX, DAYS: DAYS, PLAN_ORDER: PLAN_ORDER,

@@ -2186,12 +2186,15 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="mwSubGrossFloor">　そのときの粗利の最低額</label><input type="number" id="mwSubGrossFloor" value="300" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
         <!-- 8.48（カジの②・簡単な版）新しい足切り（率 かつ 粗利）。
              いまは「数えるだけ」で、判定には使わない。 -->
-        <!-- 8.50（カジの依頼）足切りを「送料まで引いた手残り」で見る。
-             どの売り方で見るかは⚙（既定：メルカリ）。いまは数えるだけ。 -->
+        <!-- 8.52（カジの決定）足切りは「売り方ごとの手残り」で**本判定**。
+             既定：メルカリ・手残り¥400・率の条件は重ねない。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subNetOn" checked><label for="subNetOn" style="flex:1"><b>手残りで会員向きかを決める</b>（切ると前の決まり＝粗利の下限 または 率の下限に戻ります）</label></div>
         <div class="row cfgprice"><label for="subCutWay">足切りの売り方／手残りの下限</label><select id="subCutWay"><option value="mercari" selected>メルカリ</option><option value="amz_self">Amazon 自己配送</option><option value="amz_fba">Amazon FBA</option><option value="yahoo">ヤフオク</option></select><input type="number" id="subCutNet" value="400" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
-        <div class="note2" style="margin:0 0 6px"><b>手残り</b>＝売値 −（販売手数料＋送料＋梱包材など）− 会員が払う額。売値は<b>メルカリなら Amazon の価格×90%</b>（⚙）です。<b>送り方の区分が分からない品は「送料は別」</b>として数えます（足切りでは外しません）。<b>いまは数えるだけ</b>です。</div>
-        <div class="row cfgprice"><label for="subCutRate">新しい足切り：利益率／粗利</label><input type="number" id="subCutRate" value="15" step="1" min="0" max="100" inputmode="numeric"><input type="number" id="subCutGross" value="700" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">%・円</span></div>
-        <div class="note2" style="margin:0 0 6px"><b>いまは「数えるだけ」です（判定は変わりません）。</b>①「今日の配信の案を作る」のまとめに「新しい足切りなら何件か」が出ます。率は<b>会員が払う額に対する率</b>（粗利 ÷ 会員が払う額）で、<b>率と粗利の両方</b>を満たすことを求めます。数字を見てから、本判定に入れます。</div>
+        <div class="note2" style="margin:0 0 6px"><b>手残り</b>＝売値 −（販売手数料＋発送の送料＋梱包材など）−（会員が払う額＋こちらに払う送料）。売値は<b>メルカリなら Amazon の価格×90%</b>（⚙）です。<b>送り方の区分が分からない品は「送料は別」</b>として見ます（外しません）。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subNetBuyShip" checked><label for="subNetBuyShip" style="flex:1"><b>会員がこちらに払う送料も引く</b>（1点のときの会員便の段。切ると商品代金だけで見ます）</label></div>
+        <!-- 8.52（カジの決定）プランの並び。下は早い品から・上は手残りの大きい順。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subSortNet" checked><label for="subSortNet" style="flex:1"><b>プランの並びを手残りで決める</b>（<b>モニター・ライト</b>は<b>早い品から</b>／<b>スタンダード・プレミアム</b>は<b>手残りの大きい順</b>。切ると今までの「粗利×速さ」の順に戻ります）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subCutRateOn"><label for="subCutRateOn" style="flex:1">利益率の条件も重ねる（仕入れ値に対して）</label><input type="number" id="subCutRate" value="15" step="1" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>＝Amazon の実売 − Amazon の手数料 − 販売価格。
           <b>会員の利益率（仕入れ値に対して）</b>＝会員の粗利の目安 ÷ 販売価格（＝会員が払う額）。<br>
           <b>粗利が下限（既定 ¥800）以上</b>、または
@@ -3660,7 +3663,7 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
-             'subCutWay','subCutNet','subCutRate','subCutGross',
+             'subCutWay','subCutNet','subCutRate',
              /* 8.49 採寸が無い品の目安。 */
              'sgNg','sgUnknownWay','sgUnknownG','sgTable',
              'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
@@ -3701,6 +3704,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subHotOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
+                /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
+                'subNetOn','subCutRateOn','subNetBuyShip','subSortNet',
                 /* 8.46 会員チャンネルの一覧（目次）。 */
                 'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
@@ -6514,7 +6519,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
-                 'subCutWay','subCutNet','subCutRate','subCutGross',
+                 'subCutWay','subCutNet','subCutRate',
                  'sgNg','sgUnknownWay','sgUnknownG','sgTable',
                  'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
                  'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
@@ -16642,18 +16647,61 @@ function mwSubFitOf(r,px){
   if(!(f&&(f.real||f.mfn)))
     return { ok:false, gross:null, min:SUBPX.fitOf(0,0,0,mwSubPxOpt()).min,
              why:'no_fee' };
-  return SUBPX.fitOf(+row.price||0,f.fee,px,mwSubPxOpt());
+  var fit=SUBPX.fitOf(+row.price||0,f.fee,px,mwSubPxOpt());
+  /* 8.52（カジの決定）会員向きかどうかは**手残り**で決める（⚙で戻せる）。
+     粗利と利益率は今までどおり出す（画面とカードに使う）。 */
+  if(($('subNetOn')||{}).checked){
+    var nt=mwSubNetOf(row,px);
+    var cfg=subPickCfg();
+    var okNet=(nt.net!==null&&nt.net!==undefined&&nt.net>=nt.min);
+    var okRate=true;
+    if(($('subCutRateOn')||{}).checked){
+      var need=Math.round(+cfg.subCutRate||0);
+      okRate=(fit.pct!==null&&fit.pct!==undefined&&fit.pct>=need);
+      fit.need_rate=need;
+    }
+    fit.net=nt.net; fit.net_min=nt.min; fit.net_way=nt.way;
+    fit.net_ja=nt.ja; fit.net_unsure=!!nt.unsure;
+    fit.ok=okNet&&okRate;
+    fit.by=fit.ok?'net':'';
+    fit.why=fit.ok?''
+      :((nt.net===null||nt.net===undefined)?'no_net'
+        :(!okNet?'low_net':'low_rate'));
+  }
+  return fit;
 }
-/* 8.48（カジの②）新しい足切り（率 かつ 粗利）。いまは数えるだけ。 */
-function mwSubCutOf(r,px){
-  var row=r||{};
-  var f=mwFeeOf(row);
-  var o=Object.assign({},mwSubPxOpt(),
-    { cutRate:(($('subCutRate')||{}).value||''),
-      cutGross:(($('subCutGross')||{}).value||'') });
-  if(!(f&&(f.real||f.mfn)))
-    return SUBPX.cutOf(0,0,0,o);
-  return SUBPX.cutOf(+row.price||0,f.fee,px,o);
+/* 8.52（カジの決定）**売り方ごとの手残り**（足切り・案・カードで同じ1か所）。
+     手残り ＝ 売値 ×(1 − 率) − 固定（発送の送料・梱包材・FBA など）
+              −（会員が払う額 ＋ こちらに払う送料）
+   送り方の区分は 手の上書き → 採寸 → 機種 → 種類の言葉 の順（8.51）。
+   区分が分からない行は**発送の送料を引かない**（「送料は別」）。
+   返り { net, nets:{…}, way, ja, ship, unsure, buy_ship } */
+function mwSubNetOf(r,px){
+  var row=r||{}, jan=String(row.jan||'');
+  var cur=mwSubOf(jan)||{};
+  var sh=mwShipInfo(Object.assign({},row,
+    { ship_way:String(cur.ship_way||'') }));
+  var cfg=subPickCfg();
+  /* 8.51 送り方が決まらない行は、種類の言葉の既定を当てて送料を見る。 */
+  var gs=sh.sure?null:SHIPGUESS.guessOf({ name:String(row.amz_name
+    ||row.mw_name||'') },cfg);
+  var key=sh.sure?sh.key:((gs&&gs.way)||'');
+  var name=sh.sure?sh.name:((gs&&gs.way_ja)||'');
+  /* 8.52 会員がこちらに払う送料（1点のときの会員便の段）。⚙で切れる。 */
+  var buy=(($('subNetBuyShip')||{}).checked&&+sh.yen1>0)?(+sh.yen1||0):0;
+  var gr=Object.assign({},gdRowOf(row,px,null),{ buy_ship:buy });
+  var o=Object.assign({},gdCfg(),{ shipKey:key, shipName:name,
+    shipSure:!!key });
+  var nets={};
+  ['amz_fba','amz_self','mercari','yahoo'].forEach(function(k){
+    var n=SELLWAY.netWay(k,gr,o);
+    nets[k]=n.ok?n.net:null;
+  });
+  var way=String(cfg.subCutWay||'mercari');
+  return { net:nets[way], nets:nets, way:way,
+           ja:(SELLWAY.wayOf(way)||{}).ja||way,
+           ship:key, ship_ja:name, unsure:!sh.sure, guess:gs,
+           buy_ship:buy, min:Math.round(+cfg.subCutNet||0) };
 }
 /* 上のまとめ（何件を会員に出すか）。 */
 function mwSubBarRender(){
@@ -16719,8 +16767,13 @@ function subPickCfg(){
            sgOn:($('sgOn')||{}).checked?1:0,
            sgNg:v('sgNg'), sgTable:v('sgTable'),
            sgUnknownWay:v('sgUnknownWay'), sgUnknownG:v('sgUnknownG'),
-           /* 8.48／8.50 新しい足切り（いまは数えるだけ）。 */
-           subCutRate:v('subCutRate'), subCutGross:v('subCutGross'),
+           /* 8.52 足切り（手残りで本判定）。 */
+           subNetOn:($('subNetOn')||{}).checked?1:0,
+           subNetBuyShip:($('subNetBuyShip')||{}).checked?1:0,
+           /* 8.52 プランの並び（下は早い品から・上は手残りの大きい順）。 */
+           subSortNet:($('subSortNet')||{}).checked?1:0,
+           subCutRateOn:($('subCutRateOn')||{}).checked?1:0,
+           subCutRate:v('subCutRate'),
            subCutWay:v('subCutWay'), subCutNet:v('subCutNet'),
            subMonQ3:v('subMonQ3'),
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
@@ -16758,9 +16811,9 @@ function subDraftRows(){
        書き出しのときに上乗せを決め直すので、そこでまた控え直す（6.185）。 */
     var px=mwSubSuggest(r);
     var fit=mwSubFitOf(r,px);
-    /* 8.48（カジの②）新しい足切り（率 かつ 粗利）。**数えるだけ**で、
-       いまの判定（fit）は変えない。決まりは shared/subprice.js の1か所。 */
-    var cut=mwSubCutOf(r,px);
+    /* 8.52（カジの決定）足切りは**手残り**（mwSubNetOf）。判定は fit に
+       入っている（mwSubFitOf）。ここでは画面に出す数字を拾う。 */
+    var nt=mwSubNetOf(r,px);
     var st=mwStat(r)||{};
     var cur=mwSubOf(jan)||{};
     var speed=(st&&st.speed)?+st.speed:0;
@@ -16788,10 +16841,10 @@ function subDraftRows(){
       est:(es.src==='amz')?es.day:0, q3:es.q3, spd_src:es.src,
       rank:+r.rank||0, rank_n:rkN, rank_avg:rkAvg, rank_one:!!es.one,
       gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
-      /* 8.48 新しい足切りを通るか・外れた理由（数えるだけ）。 */
-      cut:!!cut.ok, cut_why:String(cut.why||''),
-      cut_need_rate:Math.round((+cut.needRate||0)*100),
-      cut_need_gross:+cut.needGross||0,
+      /* 8.52 手残り（⚙の売り方）と、足切りの下限・外れた理由。 */
+      net:nt.net, net_min:nt.min, net_way:nt.way, net_ja:nt.ja,
+      net_ship:nt.ship_ja, net_unsure:!!nt.unsure, net_buy_ship:nt.buy_ship,
+      fit_why:String(fit.why||''),
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
       no_back:!!(st&&st.noBack), one_off:false,
       grades:String(cur.grades||''), is_game:(MWFEE.genreOf(r)==='ゲーム'),
@@ -16810,7 +16863,10 @@ function subDraftRows(){
        （「採寸が取れていない品」にも「分からない」にも数えない）。 */
     var sgOpt=subPickCfg();
     row.ng_kind=SHIPGUESS.ngOf(row.name,sgOpt);
-    row.dim_why=sh.sure?'':SHIPGUESS.dimWhy(r);
+    /* 8.52（カジの確認）送り方が決まらない行は**必ず理由を付ける**
+       （採寸がそろっているのに決まらない行は 'nodec'）。
+       理由の合計が「採寸が取れていない品」の件数と合うようにする。 */
+    row.dim_why=sh.sure?'':(SHIPGUESS.dimWhy(r)||'nodec');
     if(row.dim_why&&!row.ng_kind){
       var gs=SHIPGUESS.guessOf({ name:row.name },sgOpt);
       row.guess_kind=gs.kind; row.guess_way=gs.way_ja;
@@ -16821,35 +16877,31 @@ function subDraftRows(){
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
     /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
        決まりは shared/subguide.js の1か所だけ（pj-sync も同じもの）。 */
-    var gr=gdRowOf(r,px,fit);
+    var gr=Object.assign({},gdRowOf(r,px,fit),{ buy_ship:nt.buy_ship });
     var gb=SUBGUIDE.badgeOf(gr,gdCfg());
-    /* 8.50（カジの依頼）売り方ごとの**手残り**（送料まで引いたあと）。
-       式は shared/sellway.js の1か所だけ。送り方の区分が分からない行は
-       送料を引かない（「送料は別」。足切りでは外さない）。 */
-    var swo=Object.assign({},gdCfg(),{ shipKey:sh.key, shipName:sh.name,
-      shipSure:sh.sure });
-    var nw=function(k,o2){
-      var n=SELLWAY.netWay(k,gr,o2||swo);
-      return n.ok?n.net:null;
-    };
-    row.net_fba=nw('amz_fba'); row.net_self=nw('amz_self');
-    row.net_mer=nw('mercari'); row.net_yah=nw('yahoo');
-    row.net_unsure=!sh.sure;
-    /* 8.51（カジの直し3）送り方が分からない品は、上の手残りが
-       **送料を引いていない**ので多めに出る。③の種類の既定（guess_way_key）
-       を当てた場合の手残りも出して、両方を並べられるようにする。 */
-    if(!sh.sure&&row.guess_way_key){
-      var swo2=Object.assign({},gdCfg(),{ shipKey:row.guess_way_key,
-        shipName:row.guess_way, shipSure:true });
-      row.net2_fba=nw('amz_fba',swo2); row.net2_self=nw('amz_self',swo2);
-      row.net2_mer=nw('mercari',swo2); row.net2_yah=nw('yahoo',swo2);
+    /* 8.50／8.51／8.52 売り方ごとの**手残り**。
+       net2_* … 送り方の区分（決まっていなければ③の種類の既定）の
+                 送料を引いたあと＝**判定と同じ数字**（mwSubNetOf）
+       net_*  … 送り方が分からない行の送料を**引かない**場合（比べ用）
+       式は shared/sellway.js の1か所だけ。 */
+    row.net2_fba=nt.nets.amz_fba; row.net2_self=nt.nets.amz_self;
+    row.net2_mer=nt.nets.mercari; row.net2_yah=nt.nets.yahoo;
+    if(sh.sure){
+      row.net_fba=row.net2_fba; row.net_self=row.net2_self;
+      row.net_mer=row.net2_mer; row.net_yah=row.net2_yah;
     }else{
-      row.net2_fba=row.net_fba; row.net2_self=row.net_self;
-      row.net2_mer=row.net_mer; row.net2_yah=row.net_yah;
+      var swoNo=Object.assign({},gdCfg(),{ shipSure:false });
+      var grNo=Object.assign({},gr,{ buy_ship:nt.buy_ship });
+      var nwNo=function(k){
+        var n=SELLWAY.netWay(k,grNo,swoNo);
+        return n.ok?n.net:null;
+      };
+      row.net_fba=nwNo('amz_fba'); row.net_self=nwNo('amz_self');
+      row.net_mer=nwNo('mercari'); row.net_yah=nwNo('yahoo');
     }
-    var cw=String(((subPickCfg()||{}).subCutWay)||'mercari');
-    row.cut_way=cw;
-    row.net_cut=nw(cw);
+    row.net_unsure=!sh.sure;
+    row.cut_way=nt.way;
+    row.net_cut=nt.net;
     row.badge=gb.mark; row.badge_name=gb.name; row.badge_why=gb.why;
     row.badge_ok=!!gb.ok;
     return row;
@@ -16998,19 +17050,17 @@ function subCutHtml(rows){
       &&!(o.skipBuy&&(+r.buy_qty||0)>0)&&(+r.price||0)>0;
   });
   var now=all.filter(function(r){ return !!r.fit; });
-  var cut=all.filter(function(r){ return !!r.cut; });
-  var add=cut.filter(function(r){ return !r.fit; }).length;
-  var off=now.filter(function(r){ return !r.cut; }).length;
-  var why={ rate:0, gross:0, both:0, no_fee:0 };
+  /* 8.52（カジの決定）足切りは**手残り**で本判定。外れた理由を数える。 */
+  var why={ low_net:0, low_rate:0, no_net:0, no_fee:0 };
   all.forEach(function(r){
-    if(r.cut)return;
-    var k=String(r.cut_why||'');
+    if(r.fit)return;
+    var k=String(r.fit_why||'');
     if(why[k]!==undefined)why[k]++;
   });
-  /* 新しい足切りを通した品を、プランごとに数える（件数の上限は見ない）。 */
+  /* 通った品を、プランごとに数える（件数の上限は見ない）。 */
   var plans=SUBPLAN.list(subCfgAll());
   var by=plans.map(function(p){
-    var n=cut.filter(function(r){
+    var n=now.filter(function(r){
       return (p.key==='monitor')
         ? SUBPLAN.monKind(r,p,o)
         : SUBPLAN.fits(p,r,!!r.is_game);
@@ -17019,19 +17069,12 @@ function subCutHtml(rows){
   }).join('　');
   /* ライトに入る「早い」の線（3か月の個数）。 */
   var line=[10,20,30].map(function(q){
-    var n=cut.filter(function(r){
+    var n=now.filter(function(r){
       if(!SUBPLAN.fits(SUBPLAN.plan('light'),r,!!r.is_game))return false;
       return (+r.q3||0)>=q;
     }).length;
     return '3か月'+q+'個以上 <b>'+mwN(n)+'件</b>';
   }).join('／');
-  var needR=0, needG=0;
-  (all.concat(rows||[])).some(function(r){
-    if(r.cut_need_rate!==undefined){
-      needR=+r.cut_need_rate||0; needG=+r.cut_need_gross||0; return true;
-    }
-    return false;
-  });
   /* 8.50（カジの依頼）売り方ごとの手残りで数える（300／400／500円）。 */
   var ways=[['amz_fba','Amazon FBA'],['amz_self','Amazon 自己配送'],
             ['mercari','メルカリ']];
@@ -17063,29 +17106,32 @@ function subCutHtml(rows){
   var cutOk=cnt(key2Of[cw]||'net2_mer',cutN);
   var cutOk0=cnt(keyOf[cw]||'net_mer',cutN);
   var pctM=Math.round(SELLWAY.sellPct('mercari',gdCfg())*100);
-  return '<br><b>売り方ごとの手残りの試算</b>'
-    +'（<b>判定はまだ変えていません</b>・メルカリの売値＝Amazon の '
-    +pctM+'%）<br>'
+  var on=($('subNetOn')||{}).checked;
+  var rateOn=($('subCutRateOn')||{}).checked;
+  var needR=Math.round(+((cfg||{}).subCutRate)||0);
+  var buyOn=($('subNetBuyShip')||{}).checked;
+  return '<br><b>足切り：'+esc(cutJa)+'で売った場合の手残り '
+    +yen(cutN)+'以上</b>'
+    +(on?'（<b>この決まりで会員向きを決めています</b>）'
+       :'（<b style="color:var(--bad)">いまは使っていません（⚙がオフ）</b>）')
+    +'<br>　通った品 <b>'+mwN(now.length)+'件</b>'
+    +'／外れた理由：手残りが足りない '+mwN(why.low_net)+'件'
+    +(rateOn?('／利益率が '+needR+'% に届かない '+mwN(why.low_rate)+'件'):'')
+    +'／手残りが出せない '+mwN(why.no_net)+'件'
+    +'／手数料が取れていない '+mwN(why.no_fee)+'件'
+    +'<br>　プランごと：'+by
+    +'<br>　ライトに入る「早い」の線：'+line
+    +'<br><b>売り方ごとの手残りの試算</b>'
+    +'（メルカリの売値＝Amazon の '+pctM+'%'
+    +(buyOn?'・<b>会員がこちらに払う送料も引いています</b>':'')+'）<br>'
     +netTab
     +'<br>　<b>いまの⚙（'+esc(cutJa)+'・手残り '+yen(cutN)+'以上）'
     +'… '+mwN(cutOk)+'件</b>（送料を引かないと '+mwN(cutOk0)+'件）'
-    +'<br>　<span class="note2">件数は<b>③の種類の既定の送料を引いたあと</b>'
-    +'（かっこの中は引かない場合）。送り方の区分が分からない品 '+mwN(unsure)
-    +'件は外しません'
+    +'<br>　<span class="note2">件数は<b>送り方の区分（決まっていなければ'
+    +'③の種類の既定）の送料を引いたあと</b>（かっこの中は引かない場合）。'
+    +'送り方の区分が分からない品 '+mwN(unsure)+'件は外しません'
     +(noNet?('／手残りが出せない品 '+mwN(noNet)+'件（手数料の率が'
-      +'取れていません）'):'')+'</span>'
-    +'<br><b>足切りの試算</b>（<b>判定はまだ変えていません</b>）<br>'
-    +'　いまの決まりで会員向き <b>'+mwN(now.length)+'件</b>'
-    +'（粗利の下限 または 率の下限＋最低額）<br>'
-    +'　新しい足切り（<b>率 '+needR+'% かつ 粗利 '+yen(needG)+'</b>）'
-    +'… <b>'+mwN(cut.length)+'件</b>'
-    +'（<b style="color:var(--bad)">減る '+mwN(off)+'件</b>'
-    +'／増える '+mwN(add)+'件）<br>'
-    +'　外れる理由：率だけ足りない '+mwN(why.rate)+'件／'
-    +'粗利だけ足りない '+mwN(why.gross)+'件／どちらも '+mwN(why.both)+'件'
-    +'／手数料が取れていない '+mwN(why.no_fee)+'件<br>'
-    +'　新しい足切りで通した品の振り分け：'+by+'<br>'
-    +'　ライトに入る「早い」の線：'+line;
+      +'取れていません）'):'')+'</span>';
 }
 /* ===== 8.49（カジの③）採寸が無い品の内訳 =====
    ・外れている件数と理由（まだ調べていない／3辺そろっていない／
@@ -17100,7 +17146,12 @@ function subDimHtml(rows){
   try{ sm=SHIPGUESS.sumPicked(rows||[]); }catch(e){ return ''; }
   if(!sm||(!sm.n&&!sm.ng))return '';
   var W=SHIPGUESS.WHY_JA||{};
-  var why=['none','part','g','all'].filter(function(k){
+  /* 8.52（カジの確認）**理由の合計が件数と合う**ように、
+     表に無い理由も落とさずに出す（順は shared/shipguess.js の1か所）。 */
+  var ord=(SHIPGUESS.WHY_ORDER||[]).slice();
+  Object.keys(sm.why).forEach(function(k){
+    if(ord.indexOf(k)<0)ord.push(k); });
+  var why=ord.filter(function(k){
     return (sm.why[k]||0)>0; }).map(function(k){
     return esc(W[k]||k)+' '+mwN(sm.why[k]); }).join('／');
   var kinds=Object.keys(sm.kinds).sort(function(a,b){
@@ -27624,7 +27675,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v310';   // sw.js の const V と必ず同じ値にする
+var APP_V='v311';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

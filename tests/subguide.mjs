@@ -109,7 +109,9 @@ console.log('=== ④ プランごとに出す項目 ===');
   const key=(k,o)=>G.cardOf(GOOD,o||{},k,NOW).lines.map((x)=>x.name).join(',');
   console.log('   モニター：'+key('monitor'));
   console.log('   プレミアム：'+key('premium'));
-  ok(key('monitor')==='売れ行き','★★★モニターは札と売れ行きだけ');
+  /* 8.52（カジの決定）どのプランにも「売った場合の手残りの目安」を出す。 */
+  ok(key('monitor')==='売れ行き,売った場合の手残りの目安',
+     '★★★モニターは札と売れ行きと手残りの目安');
   ok(G.cardOf(GOOD,{},'monitor',NOW).badge.mark==='◎',
      '★★モニターにも札は出る');
   ok(/値動き/.test(key('premium'))&&/ライバル/.test(key('premium'))
@@ -129,10 +131,12 @@ console.log('=== ④ プランごとに出す項目 ===');
   ok(G.cardOf(GOOD,{ gdItemsMonitor:'sell' },'monitor',NOW).badge===null,
      '★★★札そのものを外すこともできる');
   /* 1行の長さ（カードが長くなりすぎないように）。
-     8.37（v296）「赤字にならない売値」だけは**売り方ごとに1行**なので
-     改行が入る（ほかの項目は今までどおり1項目1行）。 */
+     8.37（v296）「赤字にならない売値」と 8.52「売った場合の手残りの目安」
+     だけは**売り方ごとに1行**なので改行が入る
+     （ほかの項目は今までどおり1項目1行）。 */
   const L=G.cardOf(GOOD,{ gdMode:'num' },'premium',NOW).lines;
-  ok(L.filter((x)=>x.name!=='赤字にならない売値')
+  ok(L.filter((x)=>x.name!=='赤字にならない売値'
+       &&x.name!=='売った場合の手残りの目安')
       .every((x)=>String(x.value).indexOf('\n')<0),
      '★★★1項目1行（改行を入れない）');
   ok(L.filter((x)=>x.name==='赤字にならない売値')

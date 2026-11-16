@@ -186,11 +186,17 @@
   var WHY_JA = { none: "まだ Amazon を調べていない",
                  long: "長辺だけある（取り直しで埋まります）",
                  part: "2辺だけある",
-                 g: "重さだけある", all: "採寸が丸ごと無い" };
+                 g: "重さだけある", all: "採寸が丸ごと無い",
+                 /* 8.52（カジの確認）採寸はそろっているのに送り方が
+                    決まらない行。**理由の合計が件数と合うように**数える。 */
+                 nodec: "採寸はあるが送り方が決まらない" };
+  /* 内訳に出す順（ここに無い理由も、あとに足して必ず数に入れる）。 */
+  var WHY_ORDER = ["none", "long", "part", "g", "all", "nodec"];
   /* 一覧ぶんの内訳（画面のまとめに出す）。 */
   function sumOf(list, cfg) {
     var o = optOf(cfg);
-    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0 },
+    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0,
+                             nodec: 0 },
                 kinds: {}, ways: {}, unknown: 0, ng: 0, ngWords: {} };
     (list || []).forEach(function (r) {
       var ng = ngOf(r.name, o);
@@ -215,7 +221,8 @@
      （ng_kind・dim_why・guess_kind・guess_way・guess_g・guess_unknown）。
      その行から内訳を作る（元のデータを持っていないので数え直さない）。 */
   function sumPicked(rows) {
-    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0 },
+    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0,
+                             nodec: 0 },
                 kinds: {}, ways: {}, unknown: 0, ng: 0, ngWords: {} };
     (rows || []).forEach(function (r) {
       var ng = s(r.ng_kind);
@@ -237,6 +244,7 @@
     return out;
   }
   var API = { KINDS: KINDS, UNKNOWN: UNKNOWN, NG: NG, WHY_JA: WHY_JA,
+              WHY_ORDER: WHY_ORDER,
               sumPicked: sumPicked,
               optOf: optOf, words: words, rows: rows, wayJa: wayJa,
               ngOf: ngOf, kindOf: kindOf, guessOf: guessOf,
