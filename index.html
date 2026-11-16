@@ -1361,7 +1361,9 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="chk"><input type="checkbox" id="csvMwAmzFbaNg"><label for="csvMwAmzFbaNg" style="flex:1"><b>FBA 不可</b>も表示（Amazon が FBA の手数料を出せない商品）<span id="csvMwAmzFbaNgN" class="note2" style="margin:0 0 0 4px"></span></label></div>
       <!-- JAN重複（要確認）だけ（6.112）。ASIN を選ばないと仕入れられない -->
       <div class="chk"><input type="checkbox" id="csvMwAmzDup"><label for="csvMwAmzDup" style="flex:1">JAN重複（要確認）だけ表示<span id="csvMwAmzDupN" class="note2" style="margin:0 0 0 4px"></span></label></div>
-      <div class="row"><label>利益率がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span><span id="csvMwAmzMinMN" class="note2" style="margin:0 0 0 4px"></span></div>
+      <!-- 8.48（カジの②）どちらの率か分かるようにする。ここは**売上に対する率**
+           （粗利 ÷ Amazon の販売価格）。会員の率は仕入れ値に対する率。 -->
+      <div class="row"><label>利益率（売上に対して）がこれ以上</label><input type="number" id="csvMwAmzMinM" value="0" step="1" min="0" max="99" inputmode="numeric"><span class="unit">%</span><span id="csvMwAmzMinMN" class="note2" style="margin:0 0 0 4px"></span></div>
       <!-- 順位が無い行の出し入れ（6.124）。上限は⚙設定（大分類ごと）で決める -->
       <div class="chk"><input type="checkbox" id="csvMwAmzNoRank"><label for="csvMwAmzNoRank" style="flex:1">順位が無い行も表示</label></div>
       <div class="note2" id="csvMwAmzRankN" style="margin:2px 0 0"></div>
@@ -2178,8 +2180,12 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 6.188（【2】）安い商品でも利益率がよければ出せるようにする。 -->
         <div class="row cfgprice"><label for="mwSubRateMin">会員の利益率の下限</label><input type="number" id="mwSubRateMin" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="mwSubGrossFloor">　そのときの粗利の最低額</label><input type="number" id="mwSubGrossFloor" value="300" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
+        <!-- 8.48（カジの②・簡単な版）新しい足切り（率 かつ 粗利）。
+             いまは「数えるだけ」で、判定には使わない。 -->
+        <div class="row cfgprice"><label for="subCutRate">新しい足切り：利益率／粗利</label><input type="number" id="subCutRate" value="15" step="1" min="0" max="100" inputmode="numeric"><input type="number" id="subCutGross" value="700" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">%・円</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>いまは「数えるだけ」です（判定は変わりません）。</b>①「今日の配信の案を作る」のまとめに「新しい足切りなら何件か」が出ます。率は<b>会員が払う額に対する率</b>（粗利 ÷ 会員が払う額）で、<b>率と粗利の両方</b>を満たすことを求めます。数字を見てから、本判定に入れます。</div>
         <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>＝Amazon の実売 − Amazon の手数料 − 販売価格。
-          <b>会員の利益率</b>＝会員の粗利の目安 ÷ 販売価格。<br>
+          <b>会員の利益率（仕入れ値に対して）</b>＝会員の粗利の目安 ÷ 販売価格（＝会員が払う額）。<br>
           <b>粗利が下限（既定 ¥800）以上</b>、または
           <b>利益率が下限（既定 30%）以上で、粗利が最低額（既定 ¥300）以上</b>なら会員向きです。
           <b>どちらも満たさないときだけ</b>「<b>会員向きではありません</b>」と出します
@@ -3625,6 +3631,7 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
+             'subCutRate','subCutGross',
              'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
              /* 8.47 売れ行きの推定（Amazon の順位から）。 */
              'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
@@ -6475,6 +6482,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
+                 'subCutRate','subCutGross',
                  'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
                  'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
                  'rsGame','rsHobby','rsOther','rsFast','rsSlow',
@@ -16602,6 +16610,17 @@ function mwSubFitOf(r,px){
              why:'no_fee' };
   return SUBPX.fitOf(+row.price||0,f.fee,px,mwSubPxOpt());
 }
+/* 8.48（カジの②）新しい足切り（率 かつ 粗利）。いまは数えるだけ。 */
+function mwSubCutOf(r,px){
+  var row=r||{};
+  var f=mwFeeOf(row);
+  var o=Object.assign({},mwSubPxOpt(),
+    { cutRate:(($('subCutRate')||{}).value||''),
+      cutGross:(($('subCutGross')||{}).value||'') });
+  if(!(f&&(f.real||f.mfn)))
+    return SUBPX.cutOf(0,0,0,o);
+  return SUBPX.cutOf(+row.price||0,f.fee,px,o);
+}
 /* 上のまとめ（何件を会員に出すか）。 */
 function mwSubBarRender(){
   var el=$('mwSubBar'); if(!el)return;
@@ -16662,6 +16681,8 @@ function subPickCfg(){
            subMonLimitDays:v('subMonLimitDays'),
            /* 8.45 モニターの対象を広げるか（クリックポストで送れる品）。 */
            subMonWide:($('subMonWide')||{}).checked?1:0,
+           /* 8.48 新しい足切り（いまは数えるだけ）。 */
+           subCutRate:v('subCutRate'), subCutGross:v('subCutGross'),
            subMonQ3:v('subMonQ3'),
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
            /* 8.47 売れ行きの推定（換算表は shared/rankspd.js の1か所）。 */
@@ -16698,6 +16719,9 @@ function subDraftRows(){
        書き出しのときに上乗せを決め直すので、そこでまた控え直す（6.185）。 */
     var px=mwSubSuggest(r);
     var fit=mwSubFitOf(r,px);
+    /* 8.48（カジの②）新しい足切り（率 かつ 粗利）。**数えるだけ**で、
+       いまの判定（fit）は変えない。決まりは shared/subprice.js の1か所。 */
+    var cut=mwSubCutOf(r,px);
     var st=mwStat(r)||{};
     var cur=mwSubOf(jan)||{};
     var speed=(st&&st.speed)?+st.speed:0;
@@ -16725,6 +16749,10 @@ function subDraftRows(){
       est:(es.src==='amz')?es.day:0, q3:es.q3, spd_src:es.src,
       rank:+r.rank||0, rank_n:rkN, rank_avg:rkAvg, rank_one:!!es.one,
       gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
+      /* 8.48 新しい足切りを通るか・外れた理由（数えるだけ）。 */
+      cut:!!cut.ok, cut_why:String(cut.why||''),
+      cut_need_rate:Math.round((+cut.needRate||0)*100),
+      cut_need_gross:+cut.needGross||0,
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
       no_back:!!(st&&st.noBack), one_off:false,
       grades:String(cur.grades||''), is_game:(MWFEE.genreOf(r)==='ゲーム'),
@@ -16864,6 +16892,70 @@ function subEstHtml(rows){
         +'係数をどれくらい動かすかの目安にしてください）')
       :'<br>　<span>MW の減りと推定の両方がある品がまだありません</span>');
 }
+/* ===== 8.48（カジの②・簡単な版）足切りの試算（**数えるだけ**）=====
+   ・いまの決まり（粗利¥800 または（率30%かつ粗利¥300））で何件
+   ・新しい足切り（率15% かつ 粗利¥700）なら何件（増える・減る）
+   ・新しい足切りで通した品の、プランごとの振り分けの件数
+   ・ライトに入る「早い」の線（3か月10／20／30個）の件数
+   **判定も配信も変えません。**カジが数字を見て決めるための試算です。 */
+function subCutHtml(rows){
+  var o=null;
+  try{ o=SUBPLAN.pickOpt(subPickCfg()); }catch(e){ o=null; }
+  if(!o)return '';
+  var all=(rows||[]).filter(function(r){
+    /* 会員向きの判定だけを比べるので、ほかの条件（出品できる・
+       Amazon 本体・仕入れる印・価格）は通った行で見る。 */
+    return String(r.rst||'')!=='blocked'&&!(o.noAmz&&r.amz)
+      &&!(o.skipBuy&&(+r.buy_qty||0)>0)&&(+r.price||0)>0;
+  });
+  var now=all.filter(function(r){ return !!r.fit; });
+  var cut=all.filter(function(r){ return !!r.cut; });
+  var add=cut.filter(function(r){ return !r.fit; }).length;
+  var off=now.filter(function(r){ return !r.cut; }).length;
+  var why={ rate:0, gross:0, both:0, no_fee:0 };
+  all.forEach(function(r){
+    if(r.cut)return;
+    var k=String(r.cut_why||'');
+    if(why[k]!==undefined)why[k]++;
+  });
+  /* 新しい足切りを通した品を、プランごとに数える（件数の上限は見ない）。 */
+  var plans=SUBPLAN.list(subCfgAll());
+  var by=plans.map(function(p){
+    var n=cut.filter(function(r){
+      return (p.key==='monitor')
+        ? SUBPLAN.monKind(r,p,o)
+        : SUBPLAN.fits(p,r,!!r.is_game);
+    }).length;
+    return esc(p.name)+' <b>'+mwN(n)+'件</b>';
+  }).join('　');
+  /* ライトに入る「早い」の線（3か月の個数）。 */
+  var line=[10,20,30].map(function(q){
+    var n=cut.filter(function(r){
+      if(!SUBPLAN.fits(SUBPLAN.plan('light'),r,!!r.is_game))return false;
+      return (+r.q3||0)>=q;
+    }).length;
+    return '3か月'+q+'個以上 <b>'+mwN(n)+'件</b>';
+  }).join('／');
+  var needR=0, needG=0;
+  (all.concat(rows||[])).some(function(r){
+    if(r.cut_need_rate!==undefined){
+      needR=+r.cut_need_rate||0; needG=+r.cut_need_gross||0; return true;
+    }
+    return false;
+  });
+  return '<br><b>足切りの試算</b>（<b>判定はまだ変えていません</b>）<br>'
+    +'　いまの決まりで会員向き <b>'+mwN(now.length)+'件</b>'
+    +'（粗利の下限 または 率の下限＋最低額）<br>'
+    +'　新しい足切り（<b>率 '+needR+'% かつ 粗利 '+yen(needG)+'</b>）'
+    +'… <b>'+mwN(cut.length)+'件</b>'
+    +'（<b style="color:var(--bad)">減る '+mwN(off)+'件</b>'
+    +'／増える '+mwN(add)+'件）<br>'
+    +'　外れる理由：率だけ足りない '+mwN(why.rate)+'件／'
+    +'粗利だけ足りない '+mwN(why.gross)+'件／どちらも '+mwN(why.both)+'件'
+    +'／手数料が取れていない '+mwN(why.no_fee)+'件<br>'
+    +'　新しい足切りで通した品の振り分け：'+by+'<br>'
+    +'　ライトに入る「早い」の線：'+line;
+}
 function subDraftFiltHtml(){
   var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
   var q=''; try{ q=String((findState('amz')||{}).q||'').trim(); }catch(e){ q=''; }
@@ -16876,7 +16968,7 @@ function subDraftFiltHtml(){
   if(f.noAmz)on.push('Amazon本体なし');
   if(f.rstOk)on.push('出品できる行だけ');
   if(f.dup)on.push('JAN重複だけ');
-  if(+f.minM>0)on.push('利益率 '+esc(String(f.minM))+'% 以上');
+  if(+f.minM>0)on.push('利益率（売上に対して） '+esc(String(f.minM))+'% 以上');
   return '<br><span class="note2" style="margin:0">候補は'
     +'<b>いま一覧に出ている行</b>から選びます（'
     +(on.length?('効いている絞り込み：'+on.join('・')):'絞り込みなし')
@@ -16959,6 +17051,8 @@ function subDraftMake(){
     +subMonHtml(d)
     /* 8.43（カジの依頼）線引きを決めるための分布。 */
     +subStatHtml(rows)
+    /* 8.48（カジの②）足切りの試算（数えるだけ）。 */
+    +subCutHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
       +'件</span>（作品名に「版」が入っているだけかもしれません。'
       +'限定版なら印を外してください）'):'')
@@ -27320,7 +27414,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v306';   // sw.js の const V と必ず同じ値にする
+var APP_V='v307';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

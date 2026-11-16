@@ -42,6 +42,15 @@
   var GROSS_MIN = 800;           // 会員の粗利の下限（⚙ mwSubGrossMin）
   var RATE_MIN = 0.3;            // 会員の利益率の下限（⚙ mwSubRateMin・30%）
   var GROSS_FLOOR = 300;         // 利益率で通すときの粗利の最低額
+  /* 8.48（カジの②・簡単な版）新しい足切りは**1本だけ**。
+       会員の利益率（粗利 ÷ **会員が払う額**）が ⚙以上
+       **かつ** 会員の粗利が ⚙以上
+     いまの決まり（粗利¥800 **または**（率30%かつ粗利¥300））と違い、
+     **両方**を満たすことを求める。
+     まずは「**数えるだけ**」で使い（判定は変えない）、カジが数字を見て
+     決めてから本判定に入れる。 */
+  var CUT_RATE = 0.15;           // ⚙ subCutRate（15%・仕入れ値に対して）
+  var CUT_GROSS = 700;           // ⚙ subCutGross（¥700）
                                  // （⚙ mwSubGrossFloor）
   var SHIP_YEN = 0;              // 会員価格に含める MW 送料（⚙ mwSubShip）
   var FEE_MAX = 0.2;             // 手数料の率の上限（入力ミスの歯止め）
@@ -178,6 +187,31 @@
              by: byGross ? "gross" : (byRate ? "rate" : ""),
              why: (byGross || byRate) ? "" : "low_gross" };
   }
+  /* 8.48 新しい足切り（率 かつ 粗利）。
+     返り { ok, gross, rate, pct, needRate, needGross, why }
+       why … '' 通る／'rate' 率だけ足りない／'gross' 粗利だけ／
+             'both' どちらも／'no_fee' 手数料が無くて出せない */
+  function cutMin(o) {
+    var v = opt(o, "cutRate", CUT_RATE);
+    if (v > 1) v = v / 100;
+    return Math.max(0, Math.min(1, v));
+  }
+  function cutOf(amzPrice, fee, px, o) {
+    var rmin = cutMin(o);
+    var gmin = Math.max(0, yen(opt(o, "cutGross", CUT_GROSS)));
+    var g = grossOf(amzPrice, fee, px);
+    if (g === null)
+      return { ok: false, gross: null, rate: null, pct: null,
+               needRate: rmin, needGross: gmin, why: "no_fee" };
+    var rate = rateOf(g, px);
+    var okR = (rate !== null && rate >= rmin);
+    var okG = (g >= gmin);
+    return { ok: okR && okG, gross: g, rate: rate,
+             pct: (rate === null) ? null : Math.round(rate * 100),
+             needRate: rmin, needGross: gmin,
+             why: (okR && okG) ? ""
+               : ((!okR && !okG) ? "both" : (!okR ? "rate" : "gross")) };
+  }
   /* 内訳の文（画面の注意書き用。**会員には出さない**）。 */
   function text(p) {
     var x = p || {};
@@ -191,6 +225,9 @@
               avoidOf: avoidOf, priceOf: priceOf, inBand: inBand,
               grossOf: grossOf, rateOf: rateOf, rateMin: rateMin,
               fitOf: fitOf, text: text,
+              /* 8.48 新しい足切り（率 かつ 粗利）。 */
+              CUT_RATE: CUT_RATE, CUT_GROSS: CUT_GROSS,
+              cutMin: cutMin, cutOf: cutOf,
               TAX: TAX, CARD_FEE: CARD_FEE, PACK_YEN: PACK_YEN,
               ADD_MIN: ADD_MIN, ADD_MAX: ADD_MAX, GROSS_MIN: GROSS_MIN,
               RATE_MIN: RATE_MIN, GROSS_FLOOR: GROSS_FLOOR,
