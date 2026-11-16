@@ -12566,9 +12566,12 @@ async function jobMwDim(env, opt) {
       res.calls++;
       if (!r.ok) { res.stopped = "api"; break; }
       const stmts = [];
-      /* 聞いた行は（取れても取れなくても）印を進める。 */
+      /* 聞いた行は（取れても取れなくても）印を進める。
+         ⚠ 番号付きの ?N と素の ? は**混ぜない**（SQLite は素の ? に
+         「それまでの最大の番号＋1」を割り当てるので、値が1つずれる。
+         tests/rowbtn.mjs がこの混ぜ方を見張っている）。 */
       if (res.mark) stmts.push(env.DB.prepare(
-        `UPDATE mw_amz SET dim_at=?1 WHERE asin IN (${
+        `UPDATE mw_amz SET dim_at=? WHERE asin IN (${
           part.map(() => "?").join(",")})`).bind(at, ...part));
       for (const it of (r.data && r.data.items) || []) {
         const asin = String(it.asin || "");
