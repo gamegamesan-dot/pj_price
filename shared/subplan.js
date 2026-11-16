@@ -93,7 +93,12 @@
   /* 通常版か。{ ok, hit, maybe } を返す。
      ok=false … 通常版ではない（hit がその言葉）
      maybe=true … 通常版か要確認（名前に「版」が入っているだけ） */
-  function normalOf(name, words) {
+  /* big を渡すと（＝採寸がクリックポストに入らないゲーム）、商品名に
+     「限定版」が無くても**限定版とみなす**（8.58・決まりは
+     shared/shopcsv.js の bigGame の1か所）。 */
+  function normalOf(name, words, big) {
+    if (big) return { ok: false, hit: "採寸から（箱）", maybe: false,
+                      big: true };
     var t = cleanName(name);
     var up = t.toUpperCase();
     var list = (words && words.length) ? words : NORMAL_NG;
@@ -251,7 +256,7 @@
       return "ゲームソフトだけのプランです";
     /* 8.21（【1】）通常版だけのプラン（モニター）。 */
     if (p.normal) {
-      var nm = normalOf(r.name, p.ng);
+      var nm = normalOf(r.name, p.ng, r.big_box);
       if (!nm.ok) return "通常版ではありません（" + nm.hit + "）";
     }
     return "";
@@ -558,7 +563,8 @@
         if (est) estN++;
         if (lowered) lowN++;
         out.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
-          maybe: !!normalOf(r.name, p.ng).maybe, slow: !(spdOf(r) > 0),
+          maybe: !!normalOf(r.name, p.ng, r.big_box).maybe,
+          slow: !(spdOf(r) > 0),
           mon_low: !!lowered, mon_est: !!est }));
       }
     };
@@ -802,7 +808,7 @@
         /* 8.21（【1】）案に出す印
              maybe … 通常版か要確認（名前に「版」が入っているだけ）
              slow  … 売れる速さが 1日 0点（後ろに回す） */
-        var nm = normalOf(r.name, p.ng);
+        var nm = normalOf(r.name, p.ng, r.big_box);
         pick.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
                                          maybe: !!nm.maybe,
                                          slow: !(num(r.speed) > 0) }));

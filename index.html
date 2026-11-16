@@ -16673,6 +16673,8 @@ function mwShipInfo(r){
   if(!g)warn=warn||'重さ未取得（送料の段がずれます）';
   return { key:w.key, name:w.name, sure:!!w.sure, why:w.why, grams:g,
            yen1:yen1, warn:warn,
+           /* 8.58（カジの依頼）機種がゲームなのに採寸が箱＝限定版とみなす。 */
+           big:PJ_SHOPCSV.bigGame(row,o),
            /* 送料が足りない品（⚙で自動の配信から外せる）。 */
            short:short, short_ja:short?sh.ja:'', short_gap:sh.gap,
            short_cost:sh.cost,
@@ -16945,6 +16947,8 @@ function subDraftRows(){
     }
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
+    /* 8.58（カジの依頼）採寸から限定版とみなす品（モニターから外れる）。 */
+    row.big_box=!!sh.big;
     /* 8.57（カジの依頼）会員便の送料が足りない品の印（文は1か所から）。 */
     row.ship_short=sh.short?String(sh.short_ja||''):'';
     row.ship_short_gap=+sh.short_gap||0;
@@ -17336,6 +17340,23 @@ function subCutHtml(rows){
     +(noNet?('／手残りが出せない品 '+mwN(noNet)+'件（手数料の率が'
       +'取れていません）'):'')+'</span>';
 }
+/* 8.58（カジの依頼）**採寸から限定版とみなした品**の件数。
+   機種はゲームなのに、採寸がクリックポストに入らない（箱）品。
+   商品名に「限定版」が無くても、モニター（通常版だけ）から外します。 */
+function subBigHtml(rows){
+  var list=(rows||[]).filter(function(r){ return !!r.big_box; });
+  if(!list.length)return '';
+  var nm=list.slice(0,3).map(function(r){
+    return esc(String(r.name||'').slice(0,20))
+      +'（'+esc(String(r.ship||''))+'）'; }).join('／');
+  return '<br><b>採寸から限定版とみなした品 '+mwN(list.length)+'件</b>'
+    +'（<b>モニターの候補から外しました</b>・ほかのプランには出ます）'
+    +'<br>　<span class="note2">例：'+nm
+    +(list.length>3?('　ほか '+mwN(list.length-3)+'件'):'')
+    +'<br>　機種はゲームソフトでも、採寸がクリックポストに入らない品は'
+    +'<b>限定版の箱</b>とみなします（商品名に「限定版」が無くても）。'
+    +'手で送り方を直した品は、カジの判断に従います。</span>';
+}
 /* 8.57（カジの依頼）**会員便の送料が足りない品**の件数（送り方ごと）。
    会員から受け取る額（会員便の段の1点ぶん）が、実際の送料より安い品。
    ⚙を入れていなければ**出します**（件数を見て決められるように）。 */
@@ -17510,6 +17531,8 @@ function subDraftMake(){
     +subDimHtml(rows)
     /* 8.57（カジの依頼）会員便の送料が足りない品の件数（送り方ごと）。 */
     +subShortHtml(rows)
+    /* 8.58（カジの依頼）採寸から限定版とみなした品の件数。 */
+    +subBigHtml(rows)
     /* 8.55（カジの依頼A）前の①と比べて、外れた品と変わった数字を出す。 */
     +subCmpHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
@@ -28145,7 +28168,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v316';   // sw.js の const V と必ず同じ値にする
+var APP_V='v317';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

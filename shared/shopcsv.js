@@ -303,6 +303,23 @@
     if (k && list.length && list.indexOf("-" + k) >= 0) return false;
     return isGame(r);
   }
+  /* 8.58（カジの依頼）**機種がゲームなのに、採寸がクリックポストに入らない**品。
+     商品名に「限定版」などが無くても、**採寸から限定版とみなす**
+     （ぬいぐるみやブックレットが付いた箱など。カジが実物で確かめた
+      JAN 4589864470205 がこれ）。
+     ・手で送り方を上書きした行は**カジの判断に従う**（みなさない）
+     ・採寸が無い行は false（当てずっぽうにしない）
+     ・機種がゲームでない品（フィギュアなど）は、もともと通常版の話ではない */
+  function bigGame(it, opt) {
+    var r = it || {}, o = opt || {};
+    if (!isThinKind(r, o)) return false;
+    if (wayOf(r.ship_way || r.ship_kind)) return false;
+    var cm = dimsOf(r);
+    if (!cm.length) return false;
+    var g = num(r.size_g) || num(o.grams) || 0;
+    var w = fitWay(cm, g);
+    return !w.thin;
+  }
   /* その行の送り方。
        sure … true＝名乗ってよい（カードに区分の名前を出す）
        why  … どこで決めたか（画面に出す）
@@ -972,6 +989,7 @@
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
+    bigGame: bigGame,
     maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
     seoCol: seoCol, seoAdd: seoAdd,
     ONE_SHIP: ONE_SHIP, ONE_NOTE_JA: ONE_NOTE_JA,

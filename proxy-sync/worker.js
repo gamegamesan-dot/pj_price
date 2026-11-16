@@ -11269,6 +11269,18 @@ async function subRows(env, cfg) {
           (Date.now() - Date.parse(String(r.px_from))) / 86400000)) : 0,
     /* 8.49 ⚙「出さない種類（言葉）」に当たった品の言葉（空なら出す）。 */
     ng_kind: ngOf(String(r.amz_name || r.mw_name || "")),
+    /* 8.58（カジの依頼）**採寸から限定版とみなす**品（機種はゲームなのに
+       採寸がクリックポストに入らない）。モニター（通常版だけ）から外れる。
+       決まりは shared/shopcsv.js の bigGame の1か所。 */
+    big_box: SHOPCSV.bigGame({
+      kishu: String(r.kishu || ""),
+      ship_way: String(r.ship_way || ""),
+      size_long: Number(r.size_long) || 0,
+      size_wid: Number(r.size_wid) || 0,
+      size_hei: Number(r.size_hei) || 0,
+      size_cm3: Number(r.size_cm3) || 0,
+      size_g: Number(r.size_g) || 0,
+    }, { thinKishu: (cfg || {}).thinKishu, gameG: (cfg || {}).gameG }),
   })).filter((r) => !r.ng_kind);
 }
 /* 送ったカードの控え（JAN → 行）。 */
@@ -11621,6 +11633,8 @@ function subShipInfo(x, cfg) {
       ? ("会員便の段が ¥" + yen1 + "（" + w.name + "には足りません）") : "");
   return { key: w.key, name: w.name, sure: !!w.sure, why: w.why,
            grams: g, yen1: yen1, warn: warn,
+           /* 8.58（カジの依頼）機種がゲームなのに採寸が箱＝限定版とみなす。 */
+           big: SHOPCSV.bigGame(x, o),
            /* 送料が足りない品（⚙で自動の配信から外せる）。 */
            short: !!(w.sure && w.name && !w.thin && sh.short),
            short_ja: sh.short ? sh.ja : "", short_gap: sh.gap,

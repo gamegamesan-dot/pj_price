@@ -274,5 +274,33 @@ console.log('\n=== ⑦ 会員便の送料が足りない品（8.57）===');
      '★★★クリックポストの品（会員から ¥200・実際 ¥185）は足りる');
 }
 
+console.log('\n=== ⑧ 採寸から限定版とみなす（8.58）===');
+{
+  const t=await p.evaluate(()=>{
+    /* カジが実物で確かめた品と同じ形（ぬいぐるみ付きの箱・宅配便60）。 */
+    const big={ jan:'4589864470205', kishu:'PS4', size_long:25,
+      size_wid:20, size_hei:10, size_g:900 };
+    const game={ jan:'4902370550001', kishu:'NS', size_long:17,
+      size_wid:13, size_hei:1.5, size_g:100 };
+    return { big:mwShipInfo(big).big, game:mwShipInfo(game).big,
+             hand:mwShipInfo(Object.assign({},big,{ ship_way:'cp' })).big,
+             way:mwShipInfo(big).name,
+             has:typeof subBigHtml==='function',
+             html:subBigHtml([{ name:'アイザック', ship:'宅配便（60サイズ）',
+               big_box:true },{ name:'ふつう', big_box:false }])
+               .replace(/<[^>]*>/g,'') };
+  });
+  console.log('   '+JSON.stringify({ big:t.big, game:t.game, hand:t.hand })
+    +' / '+t.html.replace(/\s+/g,' ').slice(0,140));
+  ok(t.big===true&&t.game===false,
+     '★★★機種がゲームでも、採寸が箱なら限定版とみなす（ふつうの品は違う）');
+  ok(t.hand===false,'★★★手で送り方を直した品はみなさない');
+  ok(t.way==='宅配便（60サイズ）','★送り方は採寸から宅配便60');
+  ok(t.has&&/採寸から限定版とみなした品 1件/.test(t.html),
+     '★★★案に「採寸から限定版とみなした品 ◯件」を出す');
+  ok(/モニターの候補から外しました/.test(t.html),
+     '★★★モニターから外したことも書く');
+}
+
 await T.done();
 })();
