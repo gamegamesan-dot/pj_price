@@ -1769,6 +1769,19 @@ body.staff #syncOnHandFix{display:none !important}
        要対応（キーが空・設定を送っていない）があるグループは自動で開く。 -->
   <nav class="cfgtoc" id="cfgToc"></nav>
 
+  <!-- 8.60（カジの依頼）⚙の項目を**言葉で探す**。
+       ラベル・説明・⚙の名前に当たった項目だけを出し、畳んである
+       「詳細」も開く。空にすれば今までどおり。
+       この欄そのものは絞り込みの対象にしない（#cfgFindBar で見分ける）。 -->
+  <div class="body" id="cfgFindBar" style="padding:0 2px">
+    <div class="row" style="margin-top:6px">
+      <input type="search" id="cfgFind" value="" placeholder="⚙を探す（例：開始日／会員便／ロール／猶予）" inputmode="search" style="flex:1" oninput="cfgFindGo()">
+      <button class="btn" type="button" id="cfgFindClear" onclick="cfgFindClr();return false" style="flex:0 0 auto">消す</button>
+    </div>
+    <div class="note2" id="cfgFindNote" style="margin:2px 0 0"></div>
+    <nav class="toc" id="cfgFindBox"></nav>
+  </div>
+
   <div class="cfgband admcfg" id="cfgBandprice" data-toc="1. 値付け">1. 値付け<span class="cfgbandn">売値の決め方・相場・手数料</span></div>
   <section class="cfgprice admcfg">
     <details class="cfgg" id="advBox" data-cfgg="goal" open>
@@ -4975,6 +4988,161 @@ document.addEventListener('click',function(e){
   }
   try{ el.scrollIntoView({block:'start'}); }catch(e2){ el.scrollIntoView(); }
 },false);
+/* ===== 8.60（カジの依頼）⚙の項目を言葉で探す =====
+   ・ラベル・説明・⚙の名前（id・placeholder）に当たった項目だけを出す
+   ・畳んである「詳細」は**自動で開く**（消したら元に戻す）
+   ・当たった項目へ**飛べる**（目次と同じ data-tocgo を使う）
+   ・何も入れていないときは今までどおり
+   隠してある欄（作業者の端末・設定で隠した欄）は、display を空に戻すだけ
+   なので **CSS の決まりがそのまま効く**（勝手に見えたりしない）。 */
+var CFG_FIND_ON=false;            // いま絞り込んでいるか
+var CFG_FIND_DET=[];              // 開いた「詳細」を戻すための控え
+var CFG_FIND_MAX=12;              // 飛び先のボタンの数
+/* ⚙の項目（1行）と、その下の説明をひとまとめにする。
+   「<b>…</b>」だけの短い説明は**見出し**として扱う。 */
+function cfgFindItems(){
+  var pane=$('tabCfg'); if(!pane)return [];
+  var all=[].slice.call(pane.querySelectorAll('.row,.rowv,.chk,.note2'));
+  var out=[], cur=null;
+  all.forEach(function(el){
+    try{ if(el.closest&&el.closest('#cfgFindBar'))return; }catch(e){}
+    var note=String(el.className||'').indexOf('note2')>=0;
+    var head=note&&el.children.length===1&&el.firstElementChild
+      &&el.firstElementChild.tagName==='B'
+      &&String(el.textContent||'').length<=44;
+    if(head){ cur={ el:el, notes:[], head:1 }; out.push(cur); return; }
+    if(note){
+      if(cur){ cur.notes.push(el); return; }
+      out.push({ el:el, notes:[], head:0 }); return;
+    }
+    cur={ el:el, notes:[], head:0 }; out.push(cur);
+  });
+  return out;
+}
+function cfgFindHay(it){
+  var t=String(it.el.textContent||'');
+  it.notes.forEach(function(n){ t+=' '+String(n.textContent||''); });
+  var ins=it.el.querySelectorAll?it.el.querySelectorAll('input,select,textarea'):[];
+  for(var i=0;i<ins.length;i++)
+    t+=' '+String(ins[i].id||'')+' '+String(ins[i].placeholder||'');
+  return t.toLowerCase();
+}
+function cfgFindSet(it,on){
+  var d=on?'':'none';
+  it.el.style.display=d;
+  it.notes.forEach(function(n){ n.style.display=d; });
+}
+/* その項目の名前（飛び先のボタンに出す）。 */
+function cfgFindLabel(it){
+  var l=it.el.querySelector?it.el.querySelector('label'):null;
+  var t=String((l?l.textContent:it.el.textContent)||'').replace(/\s+/g,' ')
+    .trim();
+  return t.slice(0,22)||'（この項目）';
+}
+/* その項目が入っている「詳細」の見出し。 */
+function cfgFindSec(it){
+  var d=null;
+  try{ d=it.el.closest?it.el.closest('details'):null; }catch(e){ d=null; }
+  var sm=d?d.querySelector('summary'):null;
+  return sm?String(sm.textContent||'').replace(/\s+/g,' ').trim().slice(0,16)
+           :'';
+}
+function cfgFindClr(){
+  var el=$('cfgFind'); if(el)el.value='';
+  cfgFindGo();
+}
+function cfgFindGo(){
+  var pane=$('tabCfg'); if(!pane)return;
+  var q=String(($('cfgFind')||{}).value||'').trim().toLowerCase();
+  var words=q?q.split(/[\s\u3000]+/).filter(Boolean):[];
+  var items=cfgFindItems();
+  var note=$('cfgFindNote'), box=$('cfgFindBox');
+  /* 何も入れていない（または消した）＝今までどおりに戻す。 */
+  if(!words.length){
+    items.forEach(function(it){ cfgFindSet(it,true); });
+    [].slice.call(pane.querySelectorAll('details,section,.cfgband'))
+      .forEach(function(el){ el.style.display=''; });
+    CFG_FIND_DET.forEach(function(x){ x.el.open=x.open; });
+    CFG_FIND_DET=[]; CFG_FIND_ON=false;
+    if(note)note.innerHTML='';
+    if(box)box.innerHTML='';
+    return;
+  }
+  /* 畳んである「詳細」を開く（1回だけ控えて、消したときに戻す）。 */
+  if(!CFG_FIND_ON){
+    CFG_FIND_DET=[];
+    [].slice.call(pane.querySelectorAll('details')).forEach(function(d){
+      CFG_FIND_DET.push({ el:d, open:!!d.open });
+    });
+    CFG_FIND_ON=true;
+  }
+  CFG_FIND_DET.forEach(function(x){ x.el.open=true; });
+  /* ① 1項目ずつ当てる。 */
+  items.forEach(function(it){
+    var hay=cfgFindHay(it);
+    it.ok=words.every(function(w){ return hay.indexOf(w)>=0; });
+  });
+  /* ② 「詳細」の見出しに当たったら、その中はぜんぶ出す。 */
+  [].slice.call(pane.querySelectorAll('details')).forEach(function(d){
+    var sm=d.querySelector('summary');
+    var t=String((sm?sm.textContent:'')||'').toLowerCase();
+    if(!t)return;
+    if(!words.every(function(w){ return t.indexOf(w)>=0; }))return;
+    items.forEach(function(it){
+      try{ if(d.contains(it.el))it.ok=true; }catch(e){}
+    });
+  });
+  /* ③ 見出しは、下に当たりがあれば出す。見出しが当たったら下もぜんぶ出す。 */
+  for(var i=0;i<items.length;i++){
+    if(!items[i].head)continue;
+    var any=!!items[i].ok;
+    for(var j=i+1;j<items.length&&!items[j].head;j++){
+      if(items[i].ok)items[j].ok=true;
+      if(items[j].ok)any=true;
+    }
+    items[i].ok=any;
+  }
+  /* ④ 出す・隠す。飛び先のボタンも作る。 */
+  var n=0, hits=[];
+  items.forEach(function(it,k){
+    cfgFindSet(it,!!it.ok);
+    if(!it.ok||it.head)return;
+    n++;
+    if(hits.length>=CFG_FIND_MAX)return;
+    if(!it.el.id)it.el.id='cfgf_'+k;
+    var sec=cfgFindSec(it);
+    hits.push('<button type="button" data-tocgo="'+esc(it.el.id)+'">'
+      +(sec?('<span style="opacity:.6">'+esc(sec)+' › </span>'):'')
+      +esc(cfgFindLabel(it))+'</button>');
+  });
+  /* ⑤ 中身が無くなった「詳細」・まとまり・帯を隠す。 */
+  var live=function(el){
+    var a=el.querySelectorAll('.row,.rowv,.chk,.note2');
+    for(var i=0;i<a.length;i++)if(a[i].style.display!=='none')return true;
+    return false;
+  };
+  [].slice.call(pane.querySelectorAll('details')).forEach(function(d){
+    d.style.display=live(d)?'':'none';
+  });
+  var secs=[].slice.call(pane.querySelectorAll('section'));
+  secs.forEach(function(sec){ sec.style.display=live(sec)?'':'none'; });
+  /* 帯（1. 値付け など）は、次の帯までのまとまりがぜんぶ隠れたら隠す。 */
+  var bands=[].slice.call(pane.querySelectorAll('.cfgband'));
+  bands.forEach(function(b){
+    var any=false, el=b.nextElementSibling;
+    while(el&&!(el.className&&String(el.className).indexOf('cfgband')>=0)){
+      if(el.tagName==='SECTION'&&el.style.display!=='none')any=true;
+      el=el.nextElementSibling;
+    }
+    b.style.display=any?'':'none';
+  });
+  if(note)note.innerHTML=n
+    ?('<b>'+mwN(n)+'件</b>当たりました（<b>当たった項目だけ</b>出しています。'
+      +'消すと元に戻ります）')
+    :'<b style="color:var(--bad)">当たりませんでした</b>'
+      +'（別の言葉でためしてください。例：開始日／会員便／ロール／猶予）';
+  if(box)box.innerHTML=hits.join('');
+}
 function switchTab(t){
   if(t==='A'||t==='B')EB_SUB=t;
   /* 6.150：仕入れタブは「刈取（F）」「無在庫（M）」のサブタブ。 */
@@ -28168,7 +28336,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v318';   // sw.js の const V と必ず同じ値にする
+var APP_V='v319';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
