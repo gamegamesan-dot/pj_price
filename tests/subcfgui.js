@@ -248,7 +248,9 @@ console.log('\n=== ⑨ ⚙のほかの欄も残る（4）===');
          'csvRevisePrice',
          /* 8.56 会員を「手でつなぐ」ときの入れ物（その回だけ）。
             つないだら空に戻すので、控える意味がない。 */
-         'memLinkCust','memLinkDc','memLinkPlan','memLinkName']);
+         'memLinkCust','memLinkDc','memLinkPlan','memLinkName',
+         /* 8.60 ⚙を探す検索欄（その回だけ・控える意味がない）。 */
+         'cfgFind']);
     return Array.prototype.slice.call(
       (pane||document).querySelectorAll('input[id],select[id],textarea[id]'))
       .filter((el)=>!known[el.id]&&el.type!=='file'&&el.type!=='button')
