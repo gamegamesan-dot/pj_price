@@ -12359,12 +12359,16 @@ async function subMonNote(env, run, cfg, res, day) {
   if (!add) return 0;                       // 新しく出した回だけ
   const by = await subMonToday(env, cfg, day);
   if (!by.n) return 0;
-  /* 8.46 固定の一覧（1ページめ）へのリンクを入れる。 */
+  /* 8.46 固定の一覧（1ページめ）へのリンクを入れる。
+     一覧を出していないときは**チャンネルを読みに行かない**
+     （余計な通信をしない）。 */
   try {
     const st = await subIdxState(env, p.ch);
     const mid = String((((st.pages || [])[0]) || {}).msg_id || "");
-    const info = await dcChInfo(env, run, p.ch);
-    by.idx_url = SUBINDEX.jump(info.guild, p.ch, mid);
+    if (mid) {
+      const info = await dcChInfo(env, run, p.ch);
+      by.idx_url = SUBINDEX.jump(info.guild, p.ch, mid);
+    }
   } catch (e) { by.idx_url = ""; }
   const txt = subMonText(cfg, by, nowIso()).slice(0, 1900);
   const body = { content: txt, allowed_mentions: { parse: [] } };

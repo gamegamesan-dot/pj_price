@@ -47,6 +47,10 @@ const setCfg=(env,o)=>env.DB.prepare(
    ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
   .bind(JSON.stringify({ at:now(),
     settings:Object.assign({ subOn:true, subOnMonitor:true, subOnLight:true,
+      /* 8.46 この試験は**カードの数**を見るので、会員チャンネルの
+         「今週の一覧」は出さない（一覧そのものは
+         tests/subindexw.mjs・subindex.mjs で見る）。 */
+      gdIdxOn:false,
       subChMonitor:CH1, subChLight:CH2, subNMonitor:10, subNLight:10,
       subDomain:'omakase-ship.myshopify.com' },o||{}) }),now()).run();
 const JAN1='4902370550467', JAN2='4902370550468';

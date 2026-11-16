@@ -173,6 +173,10 @@ console.log('=== ⑥ pj-sync（配信）でも積み上げで出る ===');
   await env.DB.prepare(
     `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)`)
     .bind(JSON.stringify({ settings:{ subOn:true, subChMonitor:'111',
+      /* 8.46 この試験は**カードの数**を見るので、会員チャンネルの
+         「今週の一覧」は出さない（一覧そのものは
+         tests/subindexw.mjs・subindex.mjs で見る）。 */
+      gdIdxOn:false,
       subOnLight:true, subChLight:'222',
       subOnPremium:true, subChPremium:'444',
       subDomain:'x.myshopify.com' } }),at).run();

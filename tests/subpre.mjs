@@ -46,6 +46,10 @@ const setCfg=(env,o)=>env.DB.prepare(
    ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
   .bind(JSON.stringify({ at:new Date().toISOString(),
     settings:Object.assign({ subOn:true, subPre:true, subChMonitor:CH,
+      /* 8.46 この試験は**カードの数**を見るので、会員チャンネルの
+         「今週の一覧」は出さない（一覧そのものは
+         tests/subindexw.mjs・subindex.mjs で見る）。 */
+      gdIdxOn:false,
       subDomain:'omakase-ship.myshopify.com' },o||{}) }),
     new Date().toISOString()).run();
 const JAN=['4902370550467','4902370550468','4902370550469'];
