@@ -377,11 +377,14 @@ console.log('\n=== 「次回」に回した手数料を、自動の回でも取�
       .bind('49023705'+String(10000+i).slice(-5),
             'B0FEE0000'+i,'2026-11-09T00:00:00Z').run();
   }
-  /* 1件だけは手数料が取れている（取り直さない）。 */
+  /* 1件だけは手数料が取れている（取り直さない）。
+     ★日付は**今日から数える**（決め打ちの日付だと、MW_FEE_TTL_D＝7日
+     たった日にこの試験が落ちる。2026-11-16 に落ちた）。 */
   await env.DB.prepare(
     `UPDATE mw_amz SET fee_total=1500, fee_ref=975, fee_fba=425, fee_tax=100,
        fee_base=9000, fee_at=?2 WHERE asin=?1`)
-    .bind('B0FEE00000','2026-11-09T00:00:00Z').run();
+    .bind('B0FEE00000',
+          new Date(Date.now()-2*86400000).toISOString()).run();
   const d=await W.jobMwAuto(env,{ kind:'cron' });
   console.log('   '+JSON.stringify({ fee:d.fee_n, ng:d.fee_ng, left:d.fee_left }));
   ok(d.fee_n===2,
