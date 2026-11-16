@@ -49,23 +49,31 @@ console.log('=== ① 速さの出し方（shared/mwstat.js）===');
   ok(c5.speed===null,'★★★記録が1日に届かない行も出さない（当てずっぽうにしない）');
 }
 
-console.log('\n=== ② 内訳（データなし／本当に0／0より大きい）===');
+console.log('\n=== ② 内訳（記録が足りない／まだ減っていない／0より大きい）===');
 {
-  const rows=[r({ jan:'4902370550001', speed:0, speed_ok:false }),
-              r({ jan:'4902370550002', speed:0, speed_ok:false }),
-              r({ jan:'4902370550003', speed:0, speed_ok:true }),
-              r({ jan:'4902370550004', speed:0.05, speed_ok:true }),
-              r({ jan:'4902370550005', speed:3, speed_ok:true }),
+  /* 8.45（カジの確認4・5）MW の減りは「前の数がある記録」からしか
+     出ないので、取り込み1回目は「記録が足りない」、減っていない品は
+     何日たっても速さが出ない（「まだ減っていない」）。 */
+  const rows=[r({ jan:'4902370550001', speed:0, speed_ok:false,
+                  speed_why:'new' }),
+              r({ jan:'4902370550002', speed:0, speed_ok:false,
+                  speed_why:'new' }),
+              r({ jan:'4902370550003', speed:0, speed_ok:false,
+                  speed_why:'nodown' }),
+              r({ jan:'4902370550004', speed:0.05, speed_ok:true,
+                  speed_why:'ok' }),
+              r({ jan:'4902370550005', speed:3, speed_ok:true,
+                  speed_why:'ok' }),
               /* 共通の条件で外れる行は数に入れない。 */
               r({ jan:'4902370550006', speed:3, speed_ok:true, fit:false })];
   const m=P.speedMix(rows,O);
   console.log('   '+JSON.stringify(m));
   ok(m.n===5,'★★★会員向きの候補だけを数える（外れる行は入れない）');
-  ok(m.none===2,'★★★データなしは「データなし」で数える');
-  ok(m.zero===1,'★★★本当に0（減っていない）は別に数える');
+  ok(m.none===2,'★★★「記録が足りない」（取り込み1回目）を数える');
+  ok(m.zero===1,'★★★「まだ減っていない」（売れていない）は別に数える');
   ok(m.pos===2,'★★★0より大きい品も数える');
   ok(m.none+m.zero+m.pos===m.n,'★★内訳の合計は候補の数と同じ');
-  /* speed_ok を付けていない古い行は、速さ>0 なら取れていたと見る。 */
+  /* 印の無い古い行は、分けられないので「記録が足りない」に数える。 */
   const old=P.speedMix([{ jan:'1', fit:true, rst:'ok', price:1, speed:2 },
     { jan:'2', fit:true, rst:'ok', price:1, speed:0 }],O);
   ok(old.pos===1&&old.none===1,'★★印の無い行でも落ちない');
@@ -102,7 +110,7 @@ console.log('\n=== ④ 下限と対象を変えたときの件数 ===');
     r({ jan:'4902370550006', speed:3, speed_ok:true, name:'◯◯ 限定版' }),
     /* 出せる数が無い */
     r({ jan:'4902370550007', speed:3, speed_ok:true, qty:0 })];
-  ok(P.monCount(rows,O,2.5,false)===1,'★★★いまの下限（2.5点/日）では1件');
+  ok(P.monCount(rows,O,2.5,false)===1,'★★★下限 2.5点/日 では1件');
   ok(P.monCount(rows,O,1,false)===2,'★★★下限 1点/日 なら2件');
   ok(P.monCount(rows,O,0.3,false)===3,'★★★下限 0.3点/日 なら3件');
   ok(P.monCount(rows,O,2.5,true)===1,
@@ -114,27 +122,28 @@ console.log('\n=== ④ 下限と対象を変えたときの件数 ===');
      '★★★限定版と「出せる数が無い」行は、下限を 0 にしても入らない');
   const tb=P.monTable(rows,O);
   console.log('   '+JSON.stringify(tb));
-  ok(tb.length===4&&tb[0].now===true&&tb[0].min===2.5,
-     '★★★表の1行目は「いまの下限」');
-  ok(JSON.stringify(tb.map((x)=>x.min))==='[2.5,1,0.5,0.3]',
-     '★★★そのあとは 1／0.5／0.3 点/日');
-  ok(tb[1].game===2&&tb[1].wide===2&&tb[3].game===3&&tb[3].wide===4,
+  ok(tb[0].now===true&&tb[0].min===0.5,
+     '★★★表の1行目は「いまの下限」（⚙の既定 0.5点/日）');
+  ok(JSON.stringify(tb.map((x)=>x.min))==='[0.5,1,0.3,0.1]',
+     '★★★そのあとは 1／0.3／0.1 点/日（いまと同じ数は並べない）');
+  ok(tb[1].game===2&&tb[1].wide===2&&tb[2].game===3&&tb[2].wide===4,
      '★★★通常版ゲームの件数と、広げた場合の件数を並べる');
   /* ⚙を変えると「いまの下限」も変わる。 */
-  const tb2=P.monTable(rows,P.pickOpt({ subMonPeople:10, subMonDays:2 }));
-  ok(tb2[0].min===5&&tb2[0].game===0,'★★人数10・2日なら いまの下限は 5点/日');
+  const tb2=P.monTable(rows,P.pickOpt({ subMonSpeedMin:2.5 }));
+  ok(tb2[0].min===2.5&&tb2[0].game===1,'★★⚙を 2.5点/日 にすれば1件');
   ok(P.cpJa()==='クリックポスト',
      '★★送り方の名前は shared/shopcsv.js の1か所から取る');
 }
 
 console.log('\n=== ⑤ 数えるだけ（いまの配信の決まりは変えない）===');
 {
-  const rows=[r({ jan:'4902370550001', speed:0.4, speed_ok:true }),
+  /* いまの下限は 0.5点/日（⚙の既定）なので、0.2 の品は案に入らない。 */
+  const rows=[r({ jan:'4902370550001', speed:0.2, speed_ok:true }),
               r({ jan:'4902370550002', speed:3, speed_ok:true })];
   const d=P.draft(rows,P.list({ subChMonitor:'111' })
-    .filter((p)=>p.key==='monitor'),{},[],Date.now());
+    .filter((p)=>p.key==='monitor'),{ subMonShort:0 },[],Date.now());
   ok(d.plans[0].items.length===1&&d.plans[0].items[0].jan==='4902370550002',
      '★★★試算をしても、案に入るのは下限を通る品だけ');
-  ok(P.monCount(rows,O,0.3,true)===2,'★試算では2件と出る（数えるだけ）');
+  ok(P.monCount(rows,O,0.1,true)===2,'★試算では2件と出る（数えるだけ）');
 }
 T.done();

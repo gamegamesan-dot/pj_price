@@ -2192,11 +2192,12 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.43（カジの依頼1）モニターは「3週間・週1回・毎回新しい5件」。
              決まりは shared/subplan.js の1か所だけ。 -->
         <div class="note2" style="margin:10px 0 2px"><b>モニター（お試しの3週間）</b></div>
-        <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>通常版のゲーム</b>で<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
-        <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="5" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
-        <div class="row cfgprice"><label for="subMonDays">何日ぶんで見るか／購入期限</label><input type="number" id="subMonDays" value="2" step="1" min="1" max="30" inputmode="numeric"><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
-        <div class="note2" style="margin:0 0 6px"><b>速さの下限 ＝ 人数 ÷ 日数</b>（5人・2日なら <b>1日 2.5点以上</b>）。<b>モニター全員ぶん（1人1点）が1〜2日で売れる速さ</b>の品だけを候補にします。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。ほかのプランでは売り続けます。</div>
-        <div class="row cfgprice"><label for="subMonSpeedMin">速さの下限（空なら自動）／足りないとき下げる</label><input type="number" id="subMonSpeedMin" value="" step="0.1" min="0" max="999" inputmode="decimal"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">点/日・%</span></div>
+        <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
+        <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="10" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
+        <div class="row cfgprice"><label for="subMonLimitDays">購入期限</label><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>速さの下限はこの欄の数（既定 0.5点/日）</b>です（空なら 0.5）。値崩れは<b>お一人1点</b>と<b>出せる数（下の「MW在庫の何%まで」「想定購入数」）</b>で抑えます。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。ほかのプランでは売り続けます。</div>
+        <div class="row cfgprice"><label for="subMonSpeedMin">速さの下限／足りないとき下げる</label><input type="number" id="subMonSpeedMin" value="0.5" step="0.1" min="0" max="999" inputmode="decimal"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">点/日・%</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subMonWide" checked><label for="subMonWide" style="flex:1"><b>クリックポストで送れる品まで広げる</b>（ゲームソフトは<b>通常版だけ</b>のまま。フィギュア・グッズも入ります）</label></div>
         <div class="note2" style="margin:0 0 6px">候補が件数に足りない週は、<b>速さの下限をこの%だけ下げて埋めます</b>（下げて入れた品には案に印が出ます）。それでも足りなければ<b>そのまま少なく出します</b>。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subMonNote" checked><label for="subMonNote" style="flex:1"><b>モニターに「今週の配信」を1通出す</b>（上のプランの件数だけ・商品名や価格は出さない）</label></div>
         <div class="row cfgprice"><label for="subMonFrom">モニターの開始日（空なら今までどおり）</label><input type="date" id="subMonFrom" value=""></div>
@@ -2228,19 +2229,19 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="subCfgNote" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNMonitor">　1回の件数／1商品の数</label><input type="number" id="subNMonitor" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subNMonitor">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNMonitor" value="5" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ・<span id="subOnTxtMonitor">配信中</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNLight">　1回の件数／1商品の数</label><input type="number" id="subNLight" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subNLight">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNLight" value="5" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（<span id="subOnTxtLight">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNStandard">　1回の件数／1商品の数</label><input type="number" id="subNStandard" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subNStandard">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNStandard" value="8" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（<span id="subOnTxtStandard">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNPremium">　1回の件数／1商品の数</label><input type="number" id="subNPremium" value="100" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subNPremium">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNPremium" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（<span id="subOnTxtPremium">いまは止めています</span>・1点ものの先行）</label></div>
         <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="note2" style="margin:0 0 6px">8.27：プランごとの「送料の文」は<b>薄物（クリックポストに入る商品）だけ</b>に使います。フィギュアや限定版の箱には、下の<b>送り方（送料の区分）</b>から出した文を出します（箱に「クリックポスト」と出ないように）。</div>
@@ -2248,6 +2249,7 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 6px"><b>ボットのトークン</b>は pj-sync（Worker）に <code>DISCORD_BOT_TOKEN</code> として登録します（⚙や画面には入れません）。手順は README を見てください。</div>
         <!-- 8.31（カジの依頼3・4）受付終了の扱いと「今週のねらい目」 -->
         <div class="note2" style="margin:10px 0 2px"><b>リストから外れた商品と、今週のねらい目</b></div>
+        <div class="note2" style="margin:10px 0 6px"><b>1回の件数は「新しく出す件数」です</b>（前から出しているカードは数えません。値段と残り数の書き換えだけします）。たたき台は<b>モニター5／ライト5／スタンダード8／プレミアム10</b>。<br>カードが増えすぎるときは、下の「<b>受付終了から消すまで</b>」に日数を入れてください（<b>14日</b>＝配信2回ぶんがおすすめ。モニターは履歴として残すので <b>0</b> のままを おすすめします）。</div>
         <div class="row cfgprice"><label for="subOffDays">受付終了から消すまで</label><input type="number" id="subOffDays" value="0" step="1" min="0" max="180" inputmode="numeric"><span class="unit">日</span></div>
         <div class="note2" style="margin:0 0 6px">MW が欠品した・販売終了した・上限を0にした商品の<b>前に出したカード</b>は、配信のたびに「<b>この商品の受付は終わりました</b>」に<b>書き換え</b>ます（消しません）。<br><b>0 なら消しません（既定）。</b>日数を入れると、受付終了からその日数がたったカードを<b>消します</b>。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subHotOn"><label for="subHotOn" style="flex:1">週1回「今週のねらい目」を出す（<span id="subHotTxt">いまは止めています</span>）</label></div>
@@ -3579,7 +3581,7 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.31 受付終了の扱いと「今週のねらい目」。 */
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
-             'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
+             'subMonNew','subMonPeople','subMonLimitDays',
              'subMonSpeedMin','subMonShort','subMonFrom',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
@@ -3611,7 +3613,7 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
-                'subMonNote'];
+                'subMonNote','subMonWide'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6422,7 +6424,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.31 受付終了の扱いと「今週のねらい目」。 */
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
-                 'subMonNew','subMonPeople','subMonDays','subMonLimitDays',
+                 'subMonNew','subMonPeople','subMonLimitDays',
                  'subMonSpeedMin','subMonShort','subMonFrom',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
@@ -16603,7 +16605,9 @@ function subPickCfg(){
            subQtyDays:v('subQtyDays'),
            /* 8.43 モニターの3週間（決まりは shared/subplan.js）。 */
            subMonNew:v('subMonNew'), subMonPeople:v('subMonPeople'),
-           subMonDays:v('subMonDays'), subMonLimitDays:v('subMonLimitDays'),
+           subMonLimitDays:v('subMonLimitDays'),
+           /* 8.45 モニターの対象を広げるか（クリックポストで送れる品）。 */
+           subMonWide:($('subMonWide')||{}).checked?1:0,
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
            /* 8.44（カジの確認3）モニターの開始日。 */
            subMonFrom:v('subMonFrom'),
@@ -16639,10 +16643,14 @@ function subDraftRows(){
     /* 8.44（カジの確認1）速さの元データが取れた行か（データなしと 0点を
        分けて数えるため。決まりは shared/mwstat.js の speedSrc）。 */
     var speedOk=!!(st&&st.speedSrc);
+    /* 8.45（カジの確認4・5）速さが出せない理由を分ける。
+       new（記録が1日ぶんも無い）／nodown（記録はあるが減っていない）。 */
+    var speedWhy=speedOk?'ok'
+      :((st&&(st.none||st.tooNew))?'new':'nodown');
     var stock=+r.stock||0;
     var row={ jan:jan, name:String(r.amz_name||r.mw_name||''),
       kishu:String(r.kishu||''), stock:stock, speed:speed,
-      speed_ok:speedOk,
+      speed_ok:speedOk, speed_why:speedWhy,
       gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
       no_back:!!(st&&st.noBack), one_off:false,
@@ -16729,9 +16737,9 @@ function subSpdHtml(rows){
       :(B[i-1]+'〜'+B[i])))+' <b>'+mwN(m.bands[i]||0)+'件</b>');
   }
   return '<br><b>売れる速さの内訳</b>（'+mwN(m.n)+'件）：'
-    +'<b>データなし '+mwN(m.none)+'件</b>'
-    +'（MW の在庫の減りが取れていません）／'
-    +'本当に0（減っていない） <b>'+mwN(m.zero)+'件</b>／'
+    +'<b>まだ減っていない（売れていない） '+mwN(m.zero)+'件</b>'
+    +'／<b>記録が足りない '+mwN(m.none)+'件</b>'
+    +'（はじめて見た品・取り込み1回目。MW を取り込むたびに減ります）／'
     +'0より大きい <b>'+mwN(m.pos)+'件</b>'
     +(m.pos?('<br>　0より大きい品の帯（点/日）：'+ja.join('　')):'')
     +(tb?('<br><b>下限を変えたときのモニターの候補</b>'
@@ -27117,7 +27125,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v303';   // sw.js の const V と必ず同じ値にする
+var APP_V='v304';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

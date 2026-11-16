@@ -23,16 +23,21 @@
                 （モニターは「4本以上 送料無料」など、プランごとに変えられる） */
 (function (root) {
   "use strict";
+  /* 8.45（段②・カジの依頼）n は **1回に「新しく出す」件数**。
+     すでに出してあるカードは数に入れない（値段と残り数の書き換えだけ）。
+     たたき台：モニター5／ライト5／スタンダード8／プレミアム10。 */
   var PLANS = [
-    { key: "monitor",  name: "モニター",     kinds: "game", n: 10, q: 1,
-      /* 8.21（【1】）normal … **通常版だけ**のプラン（限定版・特装版などを外す）。 */
+    { key: "monitor",  name: "モニター",     kinds: "game", n: 5, q: 1,
+      /* 8.21（【1】）normal … **通常版だけ**のプラン（限定版・特装版などを外す）。
+         8.45 モニターは⚙でクリックポストで送れる品まで広げられる。 */
       normal: true,
-      on: true,  note: "ゲームソフト通常版のみ・1回10件まで・1商品1点まで" },
-    { key: "light",    name: "ライト",       kinds: "game", n: 20, q: 2,
+      on: true,  note: "通常版のゲーム（⚙でクリックポストの品まで）"
+        + "・1回に新しく5件・1商品1点まで" },
+    { key: "light",    name: "ライト",       kinds: "game", n: 5, q: 2,
       on: false, note: "ゲームソフト全件（いまは止めています）" },
-    { key: "standard", name: "スタンダード", kinds: "all",  n: 50, q: 5,
+    { key: "standard", name: "スタンダード", kinds: "all",  n: 8, q: 5,
       on: false, note: "全部（いまは止めています）" },
-    { key: "premium",  name: "プレミアム",   kinds: "one",  n: 100, q: 5,
+    { key: "premium",  name: "プレミアム",   kinds: "one",  n: 10, q: 5,
       on: false, note: "全部＋1点もの（先行）（いまは止めています）" }
   ];
   /* ===== 8.21（【1】）通常版かどうか =====
@@ -387,12 +392,17 @@
          それでも足りなければ**そのまま少なく出す** */
   var MON = {
     monNew: 5,          // ⚙ subMonNew       … 1回に新しく出す件数
-    monPeople: 5,       // ⚙ subMonPeople    … モニターの人数
-    monDays: 2,         // ⚙ subMonDays      … 何日ぶんで見るか
+    monPeople: 10,      // ⚙ subMonPeople    … モニターの人数（お一人1点）
     monLimitDays: 7,    // ⚙ subMonLimitDays … 購入期限（日）
-    monSpeedMin: 0,     // ⚙ subMonSpeedMin  … 0（空）なら 人数 ÷ 日数
+    /* 8.45（カジの決めたこと2）速さの下限は**⚙の固定値**（人数÷日数は
+       使わない）。既定 0.5点/日。値崩れは「お一人1点」と
+       「出せる数（MW在庫の⚙%・想定購入数）」で抑える。 */
+    monSpeedMin: 0.5,   // ⚙ subMonSpeedMin  … 速さの下限（点/日）
     monShort: 50,       // ⚙ subMonShort     … 足りないとき下限を下げる%
-    monFrom: ""         // ⚙ subMonFrom      … モニターの開始日（空なら今まで）
+    monFrom: "",        // ⚙ subMonFrom      … モニターの開始日（空なら今まで）
+    /* 8.45（カジの決めたこと1）通常版のゲームだけでなく、
+       **クリックポストで送れる品**まで候補に入れる。 */
+    monWide: true       // ⚙ subMonWide
   };
   function bool(v, dflt) {
     if (v === undefined || v === null || v === "") return dflt;
@@ -415,9 +425,9 @@
       /* 8.43 モニターの決まり（⚙）。 */
       monNew: Math.round(n("subMonNew", MON.monNew, 1, 50)),
       monPeople: Math.round(n("subMonPeople", MON.monPeople, 1, 999)),
-      monDays: n("subMonDays", MON.monDays, 1, 30),
       monLimitDays: Math.round(n("subMonLimitDays", MON.monLimitDays, 1, 90)),
       monSpeedMin: n("subMonSpeedMin", MON.monSpeedMin, 0, 999),
+      monWide: bool(o.subMonWide, MON.monWide),
       monShort: n("subMonShort", MON.monShort, 0, 90),
       /* 8.44（カジの確認3）モニターの開始日（'YYYY-MM-DD'）。
          入れた日より前に出したカードは「前の週に出した品」に数えず、
@@ -425,11 +435,13 @@
       monFrom: monDay(o.subMonFrom)
     };
   }
-  /* 8.43 モニターの速さの下限。⚙が空なら **人数 ÷ 日数**。 */
+  /* 8.45 モニターの速さの下限は **⚙の固定値**（空なら既定 0.5点/日）。
+     8.43 では「人数 ÷ 日数」だったが、カジの実データでは 2.5点/日 に
+     届く品がほとんど無かったので、固定値を主にした（カジの決めたこと2）。 */
   function monSpeed(opt, lowered) {
     var o = opt || pickOpt(null);
     var v = num(o.monSpeedMin);
-    if (!(v > 0)) v = num(o.monPeople) / Math.max(1, num(o.monDays));
+    if (!(v > 0)) v = MON.monSpeedMin;
     if (lowered) v = v * (1 - Math.max(0, Math.min(90, num(o.monShort))) / 100);
     return Math.max(0, v);
   }
@@ -486,7 +498,7 @@
     (rows || []).forEach(function (r) {
       if (was[String(r.jan)]) return;                 // 前の週までに出した
       if (whyNot(r, o)) return;                       // 共通の条件
-      if (fits(p, r, !!r.is_game)) {
+      if (monKind(r, p, o)) {                         // 8.45 種類（⚙で広げる）
         if (!(num(r.qty) > 0)) return;                // 出せる数が無い
         var sp = num(r.speed);
         if (sp >= min) ok.push(r);
@@ -558,6 +570,12 @@
       if (num(sp) < SPEED_BANDS[i]) return i;
     return SPEED_BANDS.length;
   }
+  /* 8.45（カジの確認4・5）速さが出せない行は2つに分ける。
+       new    … 記録が1日ぶんも無い（はじめて見た品・取り込み1回目）
+       nodown … 記録はあるが**まだ減っていない**（売れていない）
+     MW の減りは「前の数がある記録」からしか出ないので、
+     取り込み2回目から減りが付き、**減っていない品は何日たっても
+     速さが出ない**（8.44 の「データなし」はこの2つが混ざっていた）。 */
   function speedMix(rows, opt) {
     var o = opt || pickOpt(null);
     var out = { n: 0, none: 0, zero: 0, pos: 0, bands: [] };
@@ -568,10 +586,10 @@
       var sp = num(r.speed);
       /* speed_ok を付けていない古い行は、速さ>0 なら取れていたと見る。 */
       var ok = (r.speed_ok === undefined) ? (sp > 0) : !!r.speed_ok;
-      if (!ok) { out.none++; return; }      // データなし
-      if (!(sp > 0)) { out.zero++; return; }   // 本当に0（7日も全期間も減らず）
-      out.pos++;
-      out.bands[speedBand(sp)]++;
+      if (ok && sp > 0) { out.pos++; out.bands[speedBand(sp)]++; return; }
+      /* speed_why が無い行は、分けられないので「記録が足りない」に数える。 */
+      if (s(r.speed_why) === "nodown") out.zero++;
+      else out.none++;
     });
     return out;
   }
@@ -590,25 +608,40 @@
     try { return s(M.wayOf("cp").name) || "クリックポスト"; }
     catch (e) { return "クリックポスト"; }
   }
+  /* 8.45（カジの決めたこと1）モニターに出せる種類か。
+     ・通常版のゲーム（8.21）
+     ・⚙ monWide なら **クリックポストで送れる品**も
+       （ゲームソフトは広げても通常版だけ・送り方は shopcsv の1か所） */
+  /* isGame・ship は、行に入っていないとき（pj-sync）に外から渡す。 */
+  function monKind(row, plan, opt, wide, isGame, ship) {
+    var r = row || {}, p = plan || plan_("monitor"), o = opt || pickOpt(null);
+    var w = (wide === undefined || wide === null) ? !!o.monWide : !!wide;
+    var g = (isGame === undefined || isGame === null) ? !!r.is_game : !!isGame;
+    var sh = (ship === undefined || ship === null) ? s(r.ship) : s(ship);
+    if (fits(p, r, g)) return true;
+    if (!w || sh !== cpJa()) return false;
+    /* 広げるのは**種類の決まりだけ**（「ゲームソフトだけのプラン」）。
+       グレード（積み上げ型）と1点ものの決まりはそのまま見る。
+       「通常版だけ」はゲームソフトのときだけ見る
+       （フィギュアの「◯◯セット」を限定版と間違えないため）。 */
+    var p2 = { key: p.key, name: p.name, kinds: "all", ng: p.ng,
+               normal: g ? !!p.normal : false };
+    return fits(p2, r, g);
+  }
   function monCount(rows, opt, min, wide) {
     var o = opt || pickOpt(null), p = plan_("monitor");
-    var cp = cpJa(), n = 0;
+    var n = 0;
     (rows || []).forEach(function (r) {
       if (whyNot(r, o)) return;
       if (!(num(r.qty) > 0)) return;
-      var kind = fits(p, r, !!r.is_game);
-      /* 広げても、**ゲームソフトは通常版だけ**（8.21 のカジの報告）。
-         ゲーム以外は種類を見ず、送り方だけで見る。 */
-      if (!kind && wide && s(r.ship) === cp)
-        kind = !r.is_game || normalOf(r.name, p.ng).ok;
-      if (!kind) return;
+      if (!monKind(r, p, o, wide)) return;
       if (num(r.speed) < num(min)) return;
       n++;
     });
     return n;
   }
   /* 試算の表（いまの下限＋1.0／0.5／0.3 点/日 × 通常版ゲーム／広げた場合）。 */
-  var MON_TRY = [1, 0.5, 0.3];
+  var MON_TRY = [1, 0.5, 0.3, 0.1];
   function monTable(rows, opt) {
     var o = opt || pickOpt(null);
     var mins = [monSpeed(o, false)];
@@ -704,7 +737,7 @@
               monSpeed: monSpeed, monWeek: monWeek, monRand: monRand,
               monPick: monPick, statsOf: statsOf, quart: quart,
               monDay: monDay, monFromMs: monFromMs,
-              SPEED_BANDS: SPEED_BANDS, speedBand: speedBand,
+              SPEED_BANDS: SPEED_BANDS, speedBand: speedBand, monKind: monKind,
               speedMix: speedMix, monCount: monCount,
               MON_TRY: MON_TRY, monTable: monTable, cpJa: cpJa,
               plan: plan, list: list, active: active, fits: fits,

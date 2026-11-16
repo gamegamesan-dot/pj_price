@@ -11234,10 +11234,22 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   const mon = String(plan.key || "") === "monitor";
   const monNew = Math.max(1, Math.round(
     Number(((cfg || {}).pick || {}).monNew) || SUBPLAN.MON.monNew));
+  /* 8.45（段②）**どのプランも「1回に新しく出す件数」**。
+     すでに出してあるカードは件数に数えず、書き換えだけする
+     （8.43 でモニターだけこうしていたのを、全プランに揃えた）。 */
+  const want = mon ? monNew
+    : Math.max(1, Math.round(Number(plan.n) || 0));
   let newN = 0;
   for (const r of (rows || [])) {
-    if (!mon && out.length >= plan.n) break;
-    if (!SUBPLAN.fits(plan, r, MWFEE.genreOf(r) === "ゲーム")) continue;
+    /* 8.45 モニターの種類は⚙で広げられる（クリックポストで送れる品）。
+       送り方は shared/shopcsv.js の1か所（カードの送料と同じ判定）。
+       ほかのプランは今までどおり fits だけ。 */
+    const isGame = MWFEE.genreOf(r) === "ゲーム";
+    const kind = mon
+      ? SUBPLAN.monKind(r, plan, (cfg || {}).pick || null, undefined, isGame,
+                        subShipInfo(r, cfg || {}).name)
+      : SUBPLAN.fits(plan, r, isGame);
+    if (!kind) continue;
     /* 8.28（カジの依頼1）確認の画面でチェックを外した行は出さない。
        件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
        別の行が繰り上がることはない（カジが見た一覧のまま出す）。 */
@@ -11250,9 +11262,9 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
     const goneCard = !!(was && !mid);
-    /* 8.43 モニターは、**新しく出すぶんだけ**件数を数える。 */
-    if (mon && !old) {
-      if (newN >= monNew) continue;
+    /* 8.45 **新しく出すぶんだけ**件数を数える（どのプランも）。 */
+    if (!old) {
+      if (newN >= want) continue;
       newN++;
     }
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
@@ -12363,6 +12375,27 @@ async function subRetire(env, run, cfg, rows, dl) {
   }
   const live = {};
   for (const r of (rows || [])) live[String(r.jan)] = 1;
+  /* 8.45（段②・カジの依頼）**プランから外れた品**は、そのプランの
+     カードだけ「受付終了」にする（ほかのプランでは売り続ける）。
+     いま配信しているチャンネルだけを見る（止めているプラン・
+     入れ替えたチャンネルのカードは今までどおり触らない）。 */
+  const chPlan = {};
+  for (const p of ((cfg || {}).plans || []))
+    if (p.on && p.ch) chPlan[String(p.ch)] = p;
+  const liveCh = {};
+  for (const r of (rows || [])) {
+    for (const k of Object.keys(chPlan)) {
+      const p = chPlan[k];
+      const isGame = MWFEE.genreOf(r) === "ゲーム";
+      const kind = String(p.key || "") === "monitor"
+        ? SUBPLAN.monKind(r, p, (cfg || {}).pick || null, undefined, isGame,
+                          subShipInfo(r, cfg || {}).name)
+        : SUBPLAN.fits(p, r, isGame);
+      if (!kind) continue;
+      liveCh[String(r.jan)] = liveCh[String(r.jan)] || {};
+      liveCh[String(r.jan)][k] = 1;
+    }
+  }
   /* 8.43（カジの依頼1）モニターは**購入期限**がある。
      モニターのチャンネルに出してから ⚙（monLimitDays・既定7日）たった
      カードは「受付終了」に**書き換える**（消さない＝履歴に残る）。
@@ -12393,7 +12426,11 @@ async function subRetire(env, run, cfg, rows, dl) {
        （リストに残っていても）。 */
     const monOld = monCh && String(r.ch) === monCh
       && (Date.now() - Date.parse(String(r.at || ""))) >= monMs;
-    if (live[jan] && !monOld) continue;          // まだリストにある
+    /* まだリストにあり、そのプランにも出る品は触らない。 */
+    const inCh = chPlan[String(r.ch)]
+      ? !!(liveCh[jan] && liveCh[jan][String(r.ch)])
+      : !!live[jan];
+    if (inCh && !monOld) continue;
     if (dl && Date.now() > dl) break;
     if (!off) {
       const e = await dcApi(env, run, "PATCH",

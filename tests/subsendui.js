@@ -90,14 +90,15 @@ await openCsvBoxes(p);
   ok(t.hour==='8','★★★配信の時刻は 8時（日本時間）');
   ok(t.pre===true,'★★前日の予告は既定オン');
   ok(t.dom==='','★Shopify のドメインは空から始める');
-  ok(t.mon===true&&t.monN==='10'&&t.monQ==='1',
-     '★★★モニター：オン・1回10件・1商品1点');
+  /* 8.45（段②）件数は「1回に**新しく出す**件数」（モニター5件）。 */
+  ok(t.mon===true&&t.monN==='5'&&t.monQ==='1',
+     '★★★モニター：オン・1回に新しく5件・1商品1点');
   ok(t.light===false&&t.std===false&&t.pre2===false,
      '★★★ライト・スタンダード・プレミアムは止めてある');
   /* プランの表は shared/subplan.js と同じ（画面も pj-sync も同じものを読む）。 */
   const sp=await p.evaluate(()=>SUBPLAN.list({}).map((x)=>x.key+':'+x.n+'/'+x.q));
   console.log('   '+JSON.stringify(sp));
-  ok(sp[0]==='monitor:10/1','★★★画面も同じプランの表を読む');
+  ok(sp[0]==='monitor:5/1','★★★画面も同じプランの表を読む');
 }
 
 console.log('\n=== ② 今日の配信の予定を見る ===');

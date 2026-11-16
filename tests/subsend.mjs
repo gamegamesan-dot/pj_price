@@ -81,8 +81,9 @@ console.log('=== ① プランの表（モニターだけ動かす）===');
   const l=SUBPLAN.list({});
   console.log('   '+l.map((p)=>p.key+' on='+p.on+' n='+p.n+' q='+p.q).join(' / '));
   const m=l.filter((p)=>p.key==='monitor')[0];
-  ok(m.on===true&&m.n===10&&m.q===1&&m.kinds==='game',
-     '★★★モニター：ゲームソフト通常版のみ・1回10件・1商品1点');
+  /* 8.45（段②）n は「1回に**新しく出す**件数」（既定5件）。 */
+  ok(m.on===true&&m.n===5&&m.q===1&&m.kinds==='game',
+     '★★★モニター：ゲームソフト通常版のみ・1回に新しく5件・1商品1点');
   ok(l.filter((p)=>p.key!=='monitor').every((p)=>p.on===false),
      '★★★ライト・スタンダード・プレミアムは止めてある');
   ok(SUBPLAN.active({}).length===0,'★チャンネルIDが無ければ動かさない');

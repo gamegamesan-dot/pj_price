@@ -89,25 +89,32 @@ console.log('=== ① ⚙の欄と既定 ===');
 {
   const t=await p.evaluate(()=>({
     newN:($('subMonNew')||{}).value, people:($('subMonPeople')||{}).value,
-    days:($('subMonDays')||{}).value,
+    days:!!$('subMonDays'),
     limit:($('subMonLimitDays')||{}).value,
     min:($('subMonSpeedMin')||{}).value, short:($('subMonShort')||{}).value,
-    note:($('subMonNote')||{}).checked,
+    note:($('subMonNote')||{}).checked, wide:($('subMonWide')||{}).checked,
     opt:SUBPLAN.pickOpt(subPickCfg()),
     speed:SUBPLAN.monSpeed(SUBPLAN.pickOpt(subPickCfg()),false) }));
   console.log('   '+JSON.stringify(t));
-  ok(t.newN==='5'&&t.people==='5'&&t.days==='2'&&t.limit==='7',
-     '★★★既定は 新しく5件・人数5・2日ぶん・期限7日');
-  ok(t.min===''&&t.short==='50',
-     '★★速さの下限は空（自動）・足りないときは 50% 下げる');
+  ok(t.newN==='5'&&t.people==='10'&&t.limit==='7',
+     '★★★既定は 新しく5件・人数10人・期限7日');
+  /* 8.45 下限は⚙の固定値（0.5点/日）。「人数÷日数」はやめたので
+     「何日ぶんで見るか」の欄も無くした。 */
+  ok(t.min==='0.5'&&t.short==='50',
+     '★★★速さの下限は 0.5点/日・足りないときは 50% 下げる');
+  ok(t.days===false,'★★「何日ぶんで見るか」の欄は無い（8.45）');
   ok(t.note===true,'★★既定で「今週の配信」を1通出す');
-  ok(t.opt.monNew===5&&t.opt.monPeople===5&&t.opt.monDays===2
-     &&t.opt.monLimitDays===7,'★★⚙を1か所で読む（pickOpt）');
-  ok(t.speed===2.5,'★★★速さの下限は 人数5 ÷ 2日 ＝ 1日 2.5点');
+  ok(t.wide===true,
+     '★★★既定で「クリックポストで送れる品まで広げる」が入っている');
+  ok(t.opt.monNew===5&&t.opt.monPeople===10&&t.opt.monLimitDays===7
+     &&t.opt.monWide===true,'★★⚙を1か所で読む（pickOpt）');
+  ok(t.speed===0.5,'★★★速さの下限は⚙の 0.5点/日');
 }
 
 console.log('\n=== ② 1週目：速い順に新しく5件（足りない分は下限を下げる）===');
 {
+  /* ここからは下限 2.5点/日（⚙）で見る（速い4件・ふつう3件・おそい1件）。 */
+  await p.evaluate(()=>{ $('subMonSpeedMin').value='2.5'; });
   const t=await draft();
   console.log('   '+t.note.slice(0,400));
   console.log('   '+JSON.stringify({ jans:t.jans, low:t.low,
@@ -168,10 +175,13 @@ console.log('\n=== ③-2 速さの内訳と、下限を変えたときの件数�
   ok(t.ok.every((x)=>x===true),
      '★★★案の行に「速さが取れたか」の印を付ける（mwstat の speedSrc）');
   ok(/売れる速さの内訳/.test(t.html),'★★★内訳を出す');
-  ok(/データなし 0件/.test(t.html)&&/MW の在庫の減りが取れていません/
-     .test(t.html),
-     '★★★「データなし」を別に出す（本当に0と同じに数えない）');
-  ok(/本当に0（減っていない） 0件/.test(t.html),'★★★「本当に0」も別に出す');
+  /* 8.45 速さが出せない行は「まだ減っていない」と「記録が足りない」に
+     分ける（MW の減りは取り込み2回目から付くため）。 */
+  ok(/まだ減っていない（売れていない） 0件/.test(t.html),
+     '★★★「まだ減っていない（売れていない）」を別に出す');
+  ok(/記録が足りない 0件/.test(t.html)
+     &&/はじめて見た品・取り込み1回目/.test(t.html),
+     '★★★「記録が足りない」も別に出す（取り込み1回目）');
   ok(/0より大きい 8件/.test(t.html),'★★★0より大きい品の件数');
   ok(/0.1未満 0件/.test(t.html)&&/1〜2.5 3件/.test(t.html)
      &&/2.5以上 4件/.test(t.html),
@@ -246,7 +256,7 @@ console.log('\n=== ④ ⚙で下限・件数を変えられる ===');
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const m=(subDraftData.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
-    $('subMonSpeedMin').value='';
+    $('subMonSpeedMin').value='2.5';
     return { min:(m.mon||{}).min, okN:(m.mon||{}).okN,
              note:($('subDraftNote').textContent||'').replace(/\s+/g,' ') };
   });
@@ -281,7 +291,7 @@ console.log('\n=== ⑤ 2週目から：前の週に出した品は選ばない =
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const m=(subDraftData.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
-    $('subMonSpeedMin').value='';
+    $('subMonSpeedMin').value='2.5';
     return (m.items||[]).map((x)=>x.jan);
   });
   ok(t2.join(',')===t.jans.join(','),'★★★同じ週なら押し直しても同じ');

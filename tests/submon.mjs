@@ -28,17 +28,46 @@ const mon=()=>SUBPLAN.plan('monitor');
 const W1=Date.parse('2026-11-16T09:00:00+09:00');
 const W2=Date.parse('2026-11-23T09:00:00+09:00');
 
-console.log('=== ① 速さの下限は「人数 ÷ 日数」 ===');
+console.log('=== ① 速さの下限は⚙の固定値（8.45・既定 0.5点/日）===');
 {
   const o=SUBPLAN.pickOpt({});
-  ok(SUBPLAN.monSpeed(o)===2.5,'★★★既定は 5人 ÷ 2日 ＝ 1日2.5点');
-  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonPeople:10 }))===5,
-     '★★★人数を増やすと下限も上がる（全員ぶんが売れる速さ）');
-  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonDays:1 }))===5,
-     '★★日数を1日にすると下限が上がる');
+  /* 8.43 では「人数 ÷ 日数」だったが、カジの実データ（2026-11-16）で
+     2.5点/日 に届く品が1件しか無かったので、⚙の固定値を主にした。 */
+  ok(SUBPLAN.monSpeed(o)===0.5,'★★★既定は 1日 0.5点');
   ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonSpeedMin:'1.5' }))===1.5,
-     '★★★⚙で下限を直に決められる');
-  ok(SUBPLAN.monSpeed(o,true)===1.25,'★★足りないときは半分まで下げる（既定50%）');
+     '★★★⚙で下限を決める');
+  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonSpeedMin:'' }))===0.5,
+     '★★★空なら既定の 0.5点/日');
+  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonPeople:10 }))===0.5,
+     '★★★人数を変えても下限は動かない（お一人1点と出せる数で抑える）');
+  ok(SUBPLAN.pickOpt({ subMonPeople:10 }).monPeople===10
+     &&SUBPLAN.pickOpt({}).monPeople===10,
+     '★人数は⚙のまま返す（既定10人）');
+  ok(SUBPLAN.monSpeed(o,true)===0.25,'★★足りないときは半分まで下げる（既定50%）');
+}
+
+console.log('=== ①-2 モニターの対象（8.45・クリックポストまで広げる）===');
+{
+  const o=SUBPLAN.pickOpt({});
+  ok(o.monWide===true,'★★★既定でクリックポストの品まで広げる');
+  const g=row({ is_game:true, name:'ふつうのゲーム', ship:'クリックポスト' });
+  const fig=row({ is_game:false, name:'フィギュア',
+                  ship:'クリックポスト' });
+  const box=row({ is_game:false, name:'大きい箱',
+                  ship:'宅配便（60サイズ）' });
+  const ltd=row({ is_game:true, name:'◯◯ 限定版', ship:'クリックポスト' });
+  ok(SUBPLAN.monKind(g,mon(),o)===true,'★通常版のゲームは今までどおり');
+  ok(SUBPLAN.monKind(fig,mon(),o)===true,
+     '★★★クリックポストで送れるフィギュア・グッズも入る');
+  ok(SUBPLAN.monKind(box,mon(),o)===false,
+     '★★★クリックポストで送れない箱ものは入らない');
+  ok(SUBPLAN.monKind(ltd,mon(),o)===false,
+     '★★★広げても、ゲームソフトは通常版だけ（8.21）');
+  ok(SUBPLAN.monKind(fig,mon(),SUBPLAN.pickOpt({ subMonWide:false }))===false,
+     '★★★⚙を切れば通常版のゲームだけに戻る');
+  ok(SUBPLAN.monKind({ name:'フィギュア' },mon(),o,undefined,false,
+     'クリックポスト')===true,
+     '★★種類と送り方は外からも渡せる（pj-sync 用）');
 }
 
 console.log('=== ② 1週目は速い順・新しく5件 ===');
@@ -52,7 +81,7 @@ console.log('=== ② 1週目は速い順・新しく5件 ===');
      &&a.items[1].speed>=a.items[4].speed,
      '★★★1週目はいちばん速く売れる品から出す');
   ok(a.low===0&&a.short===0,'★下限を下げずに足りている');
-  const slow=SUBPLAN.monPick(rows(9,(i)=>({ speed:0.2+i*0.01 })),mon(),
+  const slow=SUBPLAN.monPick(rows(9,(i)=>({ speed:0.05+i*0.001 })),mon(),
     SUBPLAN.pickOpt({}),[],W1);
   ok(slow.items.length===0&&slow.short===5,
      '★★★遅い品しかない週は出さない（お試しの約束を守る）');
@@ -85,9 +114,9 @@ console.log('=== ③ 2週目からはランダム・前の週は選ばない ===
 
 console.log('=== ④ 足りない週は下限を下げて埋める ===');
 {
-  /* 速い品2件＋少し遅い品5件（下限2.5／下げると1.25）。 */
+  /* 速い品2件＋少し遅い品5件（下限 0.5／下げると 0.25）。 */
   const list=rows(2,(i)=>({ speed:3+i })).concat(
-    rows(5,(i)=>({ jan:'49023705502'+(10+i), speed:1.3+i*0.01 })));
+    rows(5,(i)=>({ jan:'49023705502'+(10+i), speed:0.3+i*0.01 })));
   const a=SUBPLAN.monPick(list,mon(),SUBPLAN.pickOpt({}),[],W1);
   console.log('   '+JSON.stringify(a.items.map((x)=>x.jan+':'+x.speed
     +(x.mon_low?'（下げた）':''))));
@@ -95,7 +124,7 @@ console.log('=== ④ 足りない週は下限を下げて埋める ===');
   ok(a.low===3,'★★★下げて埋めた件数を返す');
   ok(a.items.filter((x)=>x.mon_low).length===3,
      '★★★下げて入れた品に印を付ける（案に出す）');
-  ok(a.items.filter((x)=>!x.mon_low).every((x)=>x.speed>=2.5),
+  ok(a.items.filter((x)=>!x.mon_low).every((x)=>x.speed>=0.5),
      '★★印の無い品は下限を満たしている');
   /* ⚙で「下げない」にもできる。 */
   const b=SUBPLAN.monPick(list,mon(),SUBPLAN.pickOpt({ subMonShort:0 }),[],W1);
@@ -284,7 +313,7 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
     new_n:got.new_n, limit:got.limit_days }));
   ok(got.ok&&got.n>=3&&got.ch===CH,
      '★★★/sub/mon がモニターに出した商品を返す（案が同じ品を選ばないため）');
-  ok(got.new_n===2&&got.limit_days===7&&got.people===5,
+  ok(got.new_n===2&&got.limit_days===7&&got.people===10,
      '★★⚙（新しく◯件・期限・人数）も返す');
   ok(Array.isArray(got.sent)&&got.sent.every((x)=>/^\d+$/.test(x)),
      '★JAN だけを返す');
