@@ -62,7 +62,7 @@ await p.evaluate(()=>{
     if($('subOn'+U))$('subOn'+U).checked=true;
     if($('subCh'+U))$('subCh'+U).value=String(111*(i+1));
   });
-  $('subNMonitor').value='2'; $('subNLight').value='3';
+  $('subMonNew').value='2'; $('subNLight').value='3';
   $('subNStandard').value='4'; $('subNPremium').value='4';
   /* 8.43（v302）モニターは「新しく◯件・速く売れる品だけ」。
      ここはのべの数え方を見る試験なので、2件・下限なしにそろえる。 */

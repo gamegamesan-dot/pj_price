@@ -117,7 +117,12 @@
     return PLANS.map(function (p) {
       var U = keyUp(p.key);
       var on = o["subOn" + U];
-      var n = num(o["subN" + U]);
+      /* 8.53（カジの確認）モニターの「1回に新しく出す件数」は
+         ⚙ subMonNew（モニターの決まりの囲み）の**1か所だけ**。
+         プランの表の箱（subNMonitor）は見ない（同じ名前の箱が2つあって、
+         どちらが効くのか分からなくなっていた）。 */
+      var n = (p.key === "monitor") ? num(pickOpt(o).monNew)
+                                    : num(o["subN" + U]);
       var q = num(o["subQ" + U]);
       return { key: p.key, name: p.name, kinds: p.kinds, note: p.note,
                on: (on === undefined || on === null || on === "")

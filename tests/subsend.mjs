@@ -95,7 +95,8 @@ console.log('=== ① プランの表（モニターだけ動かす）===');
      '★★チャンネルIDを入れたプランだけ動く');
   ok(SUBPLAN.list({ subQMonitor:5 }).filter((p)=>p.key==='monitor')[0].q===5,
      '★★★1商品あたりの数は⚙で変えられる');
-  ok(SUBPLAN.list({ subNMonitor:3 }).filter((p)=>p.key==='monitor')[0].n===3,
+  /* 8.53 モニターの件数は ⚙ subMonNew の1か所（プランの表の箱は廃止）。 */
+  ok(SUBPLAN.list({ subMonNew:3 }).filter((p)=>p.key==='monitor')[0].n===3,
      '★★1回の件数も⚙で変えられる');
   /* ゲームソフトだけ（モニター）。フィギュアは出さない。 */
   ok(SUBPLAN.fits(m,{grades:''},true)===true,'★★★ゲームソフトは出す');

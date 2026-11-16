@@ -203,14 +203,14 @@ console.log('=== ④ 今週のねらい目（⚙・既定オフ）===');
   const env=env0();
   await setCfg(env,{});
   for(const j of JAN){ await stock(env,j); await amz(env,j); await sub(env,j); }
-  await setCfg(env,{ subNMonitor:5 });
+  await setCfg(env,{ subMonNew:5 });
   await api(env,'/sub/send',{ approve:true });
   dc=[];
   const off=await api(env,'/sub/hot',{});
   ok(off.sent===0&&dc.length===0,'★★★既定はオフ（出さない）');
   ok(/オフ/.test(String(off.why||'')),'★なぜ出さないかを返す');
   /* オンにすると、◎ の商品のリンクを1通で出す。 */
-  await setCfg(env,{ subNMonitor:5, subHotOn:true, subHotN:2 });
+  await setCfg(env,{ subMonNew:5, subHotOn:true, subHotN:2 });
   dc=[];
   const r=await api(env,'/sub/hot',{});
   const txt=String(((dc[0]||{}).body||{}).content||'');

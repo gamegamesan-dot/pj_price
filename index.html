@@ -2210,7 +2210,8 @@ body.staff #syncOnHandFix{display:none !important}
              決まりは shared/subplan.js の1か所だけ。 -->
         <div class="note2" style="margin:10px 0 2px"><b>モニター（お試しの3週間）</b></div>
         <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
-        <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="10" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
+        <!-- 8.53（カジの確認）**ここが**モニターの件数（左）と人数（右）。 -->
+        <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数（モニターはここだけ）／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="10" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
         <div class="row cfgprice"><label for="subMonLimitDays">購入期限</label><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
         <div class="note2" style="margin:0 0 6px"><b>売れ行きの下限は「3か月で◯個」</b>です（既定 <b>10個</b>）。<b>MW の在庫の減り</b>がある品を先に選び、足りない分だけ<b>Amazon の順位からの推定</b>で埋めます（推定の品には案に印が出ます）。値崩れは<b>お一人1点</b>と<b>出せる数</b>と<b>全会員ぶんの合計の上限</b>で抑えます。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。</div>
         <div class="row cfgprice"><label for="subMonQ3">3か月の個数の下限／足りないとき下げる</label><input type="number" id="subMonQ3" value="10" step="1" min="0" max="10000" inputmode="numeric"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">個・%</span></div>
@@ -2269,7 +2270,10 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" id="subCfgNote" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNMonitor">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNMonitor" value="5" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <!-- 8.53（カジの確認）モニターの「1回に新しく出す件数」の箱は、
+             上の「モニターだけは別の選び方です」の囲みに**1つだけ**にした
+             （ここにも同じ名前の箱があり、どちらが効くのか分からなかった）。 -->
+        <div class="row cfgprice"><label for="subQMonitor">　1商品の数（1回の件数は上の<b>モニターの決まり</b>で入れます）</label><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ・<span id="subOnTxtMonitor">配信中</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
@@ -3648,7 +3652,8 @@ var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
    「⚙の Shopify のドメインが空です」「チャンネルID なし」と出たままだった。
    （チェック欄は ADV_SUBCHK。真偽値なので別に持つ） */
 var ADV_SUB=['subHour','subDomain',
-             'subChMonitor','subNMonitor','subQMonitor',
+             /* 8.53 モニターの件数は subMonNew の1か所（subNMonitor は廃止）。 */
+             'subChMonitor','subQMonitor',
              'subChLight','subNLight','subQLight',
              'subChStandard','subNStandard','subQStandard',
              'subChPremium','subNPremium','subQPremium',
@@ -6503,7 +6508,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                     チェック欄を入れると 'on' という文字が入るだけで、
                     開き直したときに入／切が戻らなかった（ADV_SUBCHK で持つ）。 */
                  'subHour','subDomain',
-                 'subNMonitor','subQMonitor','subChMonitor',
+                 /* 8.53 モニターの件数は subMonNew の1か所。 */
+                 'subQMonitor','subChMonitor',
                  'subNLight','subQLight','subChLight',
                  'subNStandard','subQStandard','subChStandard',
                  'subNPremium','subQPremium','subChPremium',
@@ -27675,7 +27681,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v311';   // sw.js の const V と必ず同じ値にする
+var APP_V='v312';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

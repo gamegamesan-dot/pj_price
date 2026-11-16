@@ -213,7 +213,7 @@ console.log('=== ④ 途中で失敗したらそこで止める ===');
 console.log('=== ⑤ Discord の送信制限に当たらないよう間隔をあける ===');
 {
   const env=env0();
-  await setCfg(env,{ subNMonitor:5, subQMonitor:1 });
+  await setCfg(env,{ subMonNew:5, subQMonitor:1 });
   for(const j of JAN){ await stock(env,j); await amz(env,j); await sub(env,j); }
   dc=[];
   const t0=Date.now();

@@ -80,7 +80,7 @@ await openCsvBoxes(p);
   const t=await p.evaluate(()=>({
     on:($('subOn')||{}).checked, hour:($('subHour')||{}).value,
     pre:($('subPre')||{}).checked, dom:($('subDomain')||{}).value,
-    mon:($('subOnMonitor')||{}).checked, monN:($('subNMonitor')||{}).value,
+    mon:($('subOnMonitor')||{}).checked, monN:($('subMonNew')||{}).value,
     monQ:($('subQMonitor')||{}).value, monCh:($('subChMonitor')||{}).value,
     light:($('subOnLight')||{}).checked,
     std:($('subOnStandard')||{}).checked,
