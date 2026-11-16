@@ -2395,6 +2395,32 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
         <div class="note2" id="gdIdxNote" style="margin-top:2px"></div>
         <div id="gdIdxBox"></div>
+        <!-- 8.56（カジの依頼）会員の月額課金と Discord のロール。
+             pj からは定期購入を読めないので、**支払いの注文**だけを見る。
+             つなぎは**カジが手で**（カジの決定C）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>会員の月額課金と Discord のロール</b></div>
+        <div class="note2" style="margin:0 0 6px">Shopify の<b>支払いの注文</b>（毎月の自動課金）を受けて、<b>支払い済みの期限</b>を1か月延ばします。<b>期限＋猶予</b>を過ぎたらロールを外します（<b>追い出しはしません</b>）。触るのは<b>下に入れた4つのロールだけ</b>です。残すのは<b>会員番号・Discord の番号・プラン・期限・状態</b>だけで、<b>氏名・住所・メールは残しません</b>。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="memOn"><label for="memOn" style="flex:1"><b>ロールを自動で付け外しする</b>（切ると数えるだけ・手の付け直しは押せます）</label></div>
+        <div class="row cfgprice"><label for="memGuild">サーバーID（Discord）</label><input type="text" id="memGuild" value="" inputmode="numeric" style="flex:1"></div>
+        <div class="row cfgprice"><label for="memRoleMonitor">ロールID：モニター／ライト</label><input type="text" id="memRoleMonitor" value="" inputmode="numeric"><input type="text" id="memRoleLight" value="" inputmode="numeric"></div>
+        <div class="row cfgprice"><label for="memRoleStandard">ロールID：スタンダード／プレミアム</label><input type="text" id="memRoleStandard" value="" inputmode="numeric"><input type="text" id="memRolePremium" value="" inputmode="numeric"></div>
+        <div class="note2" style="margin:0 0 6px">ロールID は Discord で<b>ロールを右クリック→「IDをコピー」</b>。ボットに<b>「ロールの管理」</b>が要り、<b>ボットのロールを4つのロールより上</b>に並べてください（下にあると付けられません）。</div>
+        <div class="row cfgprice"><label for="memVarLight">バリアント番号：ライト／スタンダード／プレミアム</label><input type="text" id="memVarLight" value="" inputmode="numeric"><input type="text" id="memVarStandard" value="" inputmode="numeric"><input type="text" id="memVarPremium" value="" inputmode="numeric"></div>
+        <div class="note2" style="margin:0 0 6px">Shopify の商品「Omakase Stock 会員（月額）」の<b>種類（バリアント）の番号</b>です。注文の行がどのプランかを、この番号で見分けます（<b>合わない注文は何もしません</b>）。</div>
+        <div class="row cfgprice"><label for="memGrace">猶予／モニターの日数</label><input type="number" id="memGrace" value="3" step="1" min="0" max="60" inputmode="numeric"><input type="number" id="memMonDays" value="21" step="1" min="1" max="180" inputmode="numeric"><span class="unit">日</span></div>
+        <div class="chk cfgprice"><input type="checkbox" id="memStack" checked><label for="memStack" style="flex:1"><b>上のプランには下のロールも付ける</b>（積み上げ。プレミアム＝ライト＋スタンダード＋プレミアム。<b>モニターは別</b>）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="memMonOff" checked><label for="memMonOff" style="flex:1"><b>モニターのロールを3週間で外す</b>（切ると残します）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="memKeepName" checked><label for="memKeepName" style="flex:1">Discord の<b>表示名</b>も控える（切ると番号だけ。氏名は残しません）</label></div>
+        <div class="note2" style="margin:8px 0 2px"><b>手でつなぐ</b>（Shopify の会員番号と Discord の番号）</div>
+        <div class="row cfgprice"><label for="memLinkCust">会員番号／Discord の番号</label><input type="text" id="memLinkCust" value="" inputmode="numeric"><input type="text" id="memLinkDc" value="" inputmode="numeric"></div>
+        <div class="row cfgprice"><label for="memLinkPlan">プラン（モニターのときだけ選びます）／表示名</label><select id="memLinkPlan"><option value="">そのまま（注文で決める）</option><option value="monitor">モニター</option><option value="light">ライト</option><option value="standard">スタンダード</option><option value="premium">プレミアム</option></select><input type="text" id="memLinkName" value="" inputmode="text" placeholder="表示名（任意）"></div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="memLinkBtn" onclick="memLinkGo();return false" style="flex:1">つなぐ</button>
+          <button class="btn cfgprice" id="memListBtn" onclick="memListGo();return false" style="flex:1">会員の一覧を見る</button>
+          <button class="btn cfgprice" id="memSyncBtn" onclick="memSyncGo();return false" style="flex:1">ぜんぶ付け直す</button>
+        </div>
+        <div class="note2" id="memNote" style="margin-top:2px"></div>
+        <div id="memBox"></div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
           <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
           Shopify は<b>重さの段</b>で送料を決めるので、ここを増やすと段が上に動きます。
@@ -3702,6 +3728,10 @@ var ADV_SUB=['subHour','subDomain',
              'gdPinCh','gdCloseDay','gdShipDay',
              /* 8.46 会員チャンネルの一覧（目次）。 */
              'gdIdxName','gdIdxWeekN','gdIdxCats',
+             /* 8.56 会員の月額課金と Discord のロール（pj-sync が読む）。 */
+             'memGuild','memRoleMonitor','memRoleLight','memRoleStandard',
+             'memRolePremium','memVarLight','memVarStandard','memVarPremium',
+             'memGrace','memMonDays',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              'osPricePct','osFixPct','osVendor','osType'];
@@ -3716,7 +3746,9 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
                 'subNetOn','subCutRateOn','subNetBuyShip','subSortNet',
                 /* 8.46 会員チャンネルの一覧（目次）。 */
-                'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen'];
+                'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen',
+                /* 8.56 会員の月額課金（チェック欄）。 */
+                'memOn','memStack','memMonOff','memKeepName'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6547,6 +6579,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'gdItemsPremium','gdPinCh','gdCloseDay','gdShipDay',
                  /* 8.46 会員チャンネルの一覧（目次）。 */
                  'gdIdxName','gdIdxWeekN','gdIdxCats',
+                 /* 8.56 会員の月額課金と Discord のロール。 */
+                 'memGuild','memRoleMonitor','memRoleLight','memRoleStandard',
+                 'memRolePremium','memVarLight','memVarStandard',
+                 'memVarPremium','memGrace','memMonDays',
                  /* 8.37 売り方ごとの「赤字にならない売値」。 */
                  'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
                  'gdPctMercari','gdPctYahoo',
@@ -18263,6 +18299,169 @@ function gdPinList(){
 /* 8.51（カジの直し2）採寸を取り直す。
    「最後に調べた時刻」を空にするだけで、ASIN・採寸・値段は消さない。
    そのあと「Amazonで調べる」を押すと、その行から先に取り直す。 */
+/* ===== 8.56（カジの依頼）会員の月額課金と Discord のロール =====
+   ・一覧（会員番号は**下4桁**・Discord の名前・プラン・期限・状態）
+   ・手でつなぐ（カジの決定C）／つなぎを外す／状態を変える
+   ・ロールを付け直す（1人・ぜんぶ）
+   氏名・住所・メールは pj に無いので、画面にも出ません。 */
+var MEM_PLAN_JA={ monitor:'モニター', light:'ライト',
+  standard:'スタンダード', premium:'プレミアム' };
+var MEM_STATE_JA={ active:'有効', failed:'支払い失敗', canceled:'解約',
+  expired:'期限切れ' };
+function memNote(t,bad){
+  var el=$('memNote'); if(!el)return;
+  el.innerHTML=(bad?'<b style="color:var(--bad)">':'<b>')+t+'</b>';
+}
+/* 一覧の表（押せるボタン付き）。 */
+function memRowsHtml(d){
+  var rows=(d||{}).rows||[];
+  var head='<div class="note2" style="margin:4px 0 0">'
+    +'<b>会員 '+mwN(rows.length)+'人</b>'
+    +'　自動の付け外し：'+((d||{}).on?'<b>入</b>':'<b style="color:var(--bad)">切</b>')
+    +'　猶予 '+mwN(+(d||{}).grace||0)+'日'
+    +'　積み上げ：'+((d||{}).stack?'入':'切')
+    +'　モニター：'+((d||{}).mon_off?(mwN(+(d||{}).mon_days||21)+'日で外す'):'残す')
+    +'<br>⚙の様子：ロールID '+mwN(+(d||{}).roles_ok||0)+'/4'
+    +'・バリアント '+mwN(+(d||{}).vars_ok||0)+'/3'
+    +'・サーバーID '+((d||{}).guild?'あり':'<b style="color:var(--bad)">なし</b>')
+    +'・ボットのトークン '+((d||{}).token?'あり':'<b style="color:var(--bad)">なし</b>')
+    +'・webhook の秘密 '+((d||{}).hook?'あり':'<b style="color:var(--bad)">なし</b>')
+    +'</div>';
+  if(!rows.length)return head+'<div class="note2">まだ会員がいません'
+    +'（支払いの注文が来るか、上で手でつなぐと出ます）。</div>';
+  return head+'<div class="note2" style="margin:4px 0 0">'
+    +rows.map(function(r){
+      var ja=MEM_PLAN_JA[String(r.plan||'')]||String(r.plan||'—');
+      var st=MEM_STATE_JA[String(r.state||'')]||String(r.state||'—');
+      var d2=(r.days===null||r.days===undefined)?'—'
+        :((+r.days>=0)?('あと'+mwN(+r.days)+'日'):(mwN(-(+r.days))+'日すぎ'));
+      var j=String(r.cust||'');
+      return '<div style="margin:4px 0">'
+        +'<b>…'+esc(String(r.cust4||''))+'</b>'
+        +'　'+esc(ja)
+        +'　<span'+((+r.want>0)?'':' style="color:var(--bad)"')+'>'+esc(st)
+        +'</span>'
+        +'　期限 '+esc(String(r.paid_to||'').slice(0,10)||'—')+'（'+d2+'）'
+        +'　Discord '+(String(r.dc||'')
+          ?('<b>'+esc(String(r.dc_name||'').slice(0,24)
+            ||String(r.dc||'').slice(-4))+'</b>')
+          :'<b style="color:var(--bad)">つないでいません</b>')
+        +'　ロール '+mwN(String(r.roles||'')?String(r.roles).split(',').length:0)
+        +'件'
+        +'<br>　<button class="btn cfgprice" style="padding:2px 6px"'
+        +' onclick="memSyncGo(\''+esc(j)+'\');return false">付け直す</button>'
+        +' <button class="btn cfgprice" style="padding:2px 6px"'
+        +' onclick="memStateGo(\''+esc(j)+'\',\'canceled\');return false">解約にする</button>'
+        +' <button class="btn cfgprice" style="padding:2px 6px"'
+        +' onclick="memStateGo(\''+esc(j)+'\',\'active\');return false">有効に戻す</button>'
+        +' <button class="btn cfgprice" style="padding:2px 6px"'
+        +' onclick="memUnlinkGo(\''+esc(j)+'\');return false">つなぎを外す</button>'
+        +'</div>';
+    }).join('')
+    +'</div>';
+}
+/* quiet を渡すと、上の結果の文を**消さずに**表だけ出し直す
+   （つないだ・付け直した結果が見えなくなるのを防ぐ）。 */
+function memListGo(quiet){
+  if(roleDenyPrice('memNote'))return;
+  if(!quiet)memNote('見ています…');
+  return mwGet('/mem').then(function(d){
+    if(!d||d.error){
+      memNote('⚠ 見られませんでした：'+esc(String((d||{}).detail
+        ||(d||{}).error||'')),1);
+      return;
+    }
+    $('memBox').innerHTML=memRowsHtml(d);
+    if(!quiet)memNote('会員の一覧（<b>会員番号は下4桁だけ</b>・氏名やメールは'
+      +'持っていません）');
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* 手でつなぐ（カジの決定C）。 */
+function memLinkGo(){
+  if(roleDenyPrice('memNote'))return;
+  var cust=String(($('memLinkCust')||{}).value||'').replace(/\D/g,'');
+  var dc=String(($('memLinkDc')||{}).value||'').replace(/\D/g,'');
+  var plan=String(($('memLinkPlan')||{}).value||'');
+  var name=String(($('memLinkName')||{}).value||'').slice(0,60);
+  if(!cust){ memNote('⚠ 会員番号を入れてください',1); return; }
+  memNote('つないでいます…');
+  return mwPost('/mem/link',{ cust:cust, dc:dc, plan:plan,
+    dc_name:name }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ つなげませんでした：'+esc(String((r||{}).detail
+        ||(r||{}).error||'')),1);
+      return;
+    }
+    var sy=(r.sync||{});
+    var why=((sy.rows||[])[0]||{}).why||'';
+    memNote('✓ つなぎました（ロール：付けた '+mwN(+sy.add||0)
+      +'・外した '+mwN(+sy.del||0)
+      +(sy.fail?('・<b style="color:var(--bad)">失敗 '+mwN(+sy.fail)+'</b>'):'')
+      +'）'+(why?('<br><span class="note2">'+esc(String(why))+'</span>'):''));
+    $('memLinkCust').value=''; $('memLinkDc').value='';
+    $('memLinkName').value='';
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* ロールを付け直す（cust を渡せば1人だけ）。 */
+function memSyncGo(cust){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  memNote(one?'付け直しています…':'ぜんぶ付け直しています…');
+  return mwPost('/mem/sync',one?{ cust:one }:{}).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ できませんでした：'+esc(String((r||{}).detail
+        ||(r||{}).error||'')),1);
+      return;
+    }
+    var why=(r.rows||[]).map(function(x){ return String(x.why||''); })
+      .filter(Boolean);
+    memNote('✓ '+mwN(+r.n||0)+'人を見ました（付けた '+mwN(+r.add||0)
+      +'・外した '+mwN(+r.del||0)
+      +(r.fail?('・<b style="color:var(--bad)">失敗 '+mwN(+r.fail)+'</b>'):'')
+      +'）'+(r.why?('<br><span class="note2">'+esc(String(r.why))+'</span>'):'')
+      +(why.length?('<br><span class="note2">'+esc(why[0])+'</span>'):''));
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* 状態を変える（解約・有効に戻す）。 */
+function memStateGo(cust,state){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  var st=String(state||'');
+  if(!one)return;
+  if(st==='canceled'&&!confirm('この会員を「解約」にします。\n'
+    +'ロールを外します（追い出しはしません）。\n\nよろしいですか？'))return;
+  memNote('変えています…');
+  return mwPost('/mem/state',{ cust:one, state:st }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ 変えられませんでした：'+esc(String((r||{}).detail
+        ||(r||{}).error||'')),1);
+      return;
+    }
+    memNote('✓ 状態を変えました（'+esc(MEM_STATE_JA[st]||st)+'）');
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* つなぎを外す（ロールを外してから番号を消す）。 */
+function memUnlinkGo(cust){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  if(!one)return;
+  if(!confirm('この会員の Discord のつなぎを外します。\n'
+    +'付けてあるロールも外します（追い出しはしません）。'
+    +'\n\nよろしいですか？'))return;
+  memNote('外しています…');
+  return mwPost('/mem/unlink',{ cust:one }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ 外せませんでした：'+esc(String((r||{}).detail
+        ||(r||{}).error||'')),1);
+      return;
+    }
+    memNote('✓ つなぎを外しました');
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
 /* 8.55（カジの依頼E）**採寸だけ**取り直す。ASIN は引き直さないので、
    出品の可否・値段・手数料は触らない（1回 120件まで）。 */
 function mwDimGoGo(){
@@ -27897,7 +28096,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v314';   // sw.js の const V と必ず同じ値にする
+var APP_V='v315';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

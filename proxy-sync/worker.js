@@ -274,6 +274,18 @@ const ALLOWED = [
      ・外す（DELETE）ことはしない＝許していない */
   { m: "PUT", write: true,
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/pins\/\d+$/ },
+  /* 8.56（カジの依頼）会員のロールの**付け外し**。
+     ・GET    … いま付いているロールを見る（付け直しを冪等にするため）
+     ・PUT    … ロールを1つ付ける
+     ・DELETE … ロールを1つ外す（**⚙に入れたロールだけ**・追い出しはしない）
+     触るのは⚙の対応表に入れた4つのロールだけで、メンバーの追い出し
+     （DELETE /guilds/…/members/…）は**許していない**。 */
+  { m: "GET",
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/guilds\/\d+\/members\/\d+$/ },
+  { m: "PUT", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/guilds\/\d+\/members\/\d+\/roles\/\d+$/ },
+  { m: "DELETE", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/guilds\/\d+\/members\/\d+\/roles\/\d+$/ },
   /* 8.28（カジの依頼1）**チャンネルの名前だけ**を読む。
      「全プランに配る」の確認の画面に「→ #リスト-プレミアム」と出して、
      ⚙に入れたチャンネルID が思っている先かどうかを配る前に確かめる。
@@ -12660,6 +12672,475 @@ async function mwDimAgain(env, run) {
   res.ok = true;
   return res;
 }
+/* ===== 8.56（カジの依頼）会員の月額課金と Discord のロール =====
+   ・Shopify Subscriptions（公式）で毎月の自動課金。**pj からは定期購入を
+     読めない**（read_own_subscription_contracts は「自分のアプリが作った
+     契約」だけ）。だから pj は**支払いの注文**だけを見る。
+   ・支払いのたびに出る注文を webhook（orders/paid）で受けて、
+     **支払い済みの期限（paid_to）を1か月延ばす**。
+   ・毎時の見回りで「期限＋猶予」を過ぎた会員の**ロールを外す**。
+     追い出し（kick）はしない。触るのは⚙に入れた4つのロールだけ。
+   ・Shopify の会員と Discord をつなぐのは、いまは**カジが⚙で手でつなぐ**
+     （カジの決定C。テーマのページから会員が自分でつなぐ形はあとで）。
+   ・残すのは **会員番号・Discord の番号・プラン・期限・状態**だけ。
+     氏名・住所・メールは残さない（いままでの決まりどおり）。 */
+const MEM_GRACE_D = 3;                  // 猶予の既定（日）
+const MEM_MON_D = 21;                   // モニターの3週間
+const MEM_ROWS_MAX = 500;               // 一覧に返す上限
+/* 上のプランは下のチャンネルも見られる（積み上げ）。
+   モニターは**別**（お試しなので、有料のプランには付けない）。 */
+const MEM_PAID = ["light", "standard", "premium"];
+const MEM_PLANS = ["monitor"].concat(MEM_PAID);
+async function memOk(env) { return await colOk(env, "mem", "paid_to"); }
+/* ⚙（settings）。読み方はここの1か所だけ。 */
+async function memSettings(env) {
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const num = (v, d, lo, hi) => {
+    const n = Math.round(Number(v));
+    return (isFinite(n) && n >= lo && n <= hi) ? n : d;
+  };
+  const id = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+  return {
+    on: !!st.memOn,
+    guild: id(st.memGuild),
+    roles: { monitor: id(st.memRoleMonitor), light: id(st.memRoleLight),
+             standard: id(st.memRoleStandard), premium: id(st.memRolePremium) },
+    /* バリアント（種類）の番号 → プラン。Shopify の注文の行から見分ける。 */
+    vars: { light: id(st.memVarLight), standard: id(st.memVarStandard),
+            premium: id(st.memVarPremium) },
+    graceDays: num(st.memGrace, MEM_GRACE_D, 0, 60),
+    monDays: num(st.memMonDays, MEM_MON_D, 1, 180),
+    /* 上のプランに下のロールも付けるか（既定オン＝積み上げ）。 */
+    stack: st.memStack === undefined ? true : !!st.memStack,
+    /* モニターは3週間でロールを外すか（既定オン）。 */
+    monOff: st.memMonOff === undefined ? true : !!st.memMonOff,
+    /* Discord の表示名を控えるか（既定オン・切ると番号だけ）。 */
+    keepName: st.memKeepName === undefined ? true : !!st.memKeepName,
+  };
+}
+/* そのプランで付けるロール（積み上げ）。⚙に入っていないものは入れない。 */
+function memRolesFor(plan, cfg) {
+  const p = String(plan || "");
+  const r = (cfg || {}).roles || {};
+  const out = [];
+  const add = (k) => { const v = String(r[k] || ""); if (v && out.indexOf(v) < 0) out.push(v); };
+  if (p === "monitor") { add("monitor"); return out; }
+  const i = MEM_PAID.indexOf(p);
+  if (i < 0) return out;
+  if ((cfg || {}).stack) for (let k = 0; k <= i; k++) add(MEM_PAID[k]);
+  else add(p);
+  return out;
+}
+/* ⚙に入れてある4つのロール（pj が触ってよいロール）。 */
+function memAllRoles(cfg) {
+  const r = (cfg || {}).roles || {};
+  const out = [];
+  for (const k of MEM_PLANS) {
+    const v = String(r[k] || "");
+    if (v && out.indexOf(v) < 0) out.push(v);
+  }
+  return out;
+}
+/* 1か月あとの同じ日（月末は月の最後の日に寄せる）。 */
+function memAddMonth(iso) {
+  const d = new Date(String(iso || "") || Date.now());
+  if (!isFinite(d.getTime())) return nowIso();
+  const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+  const last = new Date(Date.UTC(y, m + 2, 0)).getUTCDate();
+  const nd = new Date(Date.UTC(y, m + 1, Math.min(day, last),
+    d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
+  return nd.toISOString();
+}
+function memLog(env, cust, kind, detail) {
+  const at = nowIso();
+  return env.DB.prepare(
+    `INSERT INTO mem_log (at,cust,kind,detail,created_at)
+     VALUES (?,?,?,?,?)`)
+    .bind(at, String(cust || ""), String(kind || ""),
+          String(detail || "").slice(0, 400), at);
+}
+async function memRow(env, cust) {
+  return await env.DB.prepare(`SELECT * FROM mem WHERE cust=?`)
+    .bind(String(cust || "")).first();
+}
+/* Shopify の webhook の署名（HMAC-SHA256・base64）を確かめる。
+   秘密は env.SHOPIFY_WEBHOOK_SECRET（wrangler secret put・コードに書かない）。 */
+async function memHmacOk(env, raw, sig) {
+  const key = String(env.SHOPIFY_WEBHOOK_SECRET || "");
+  const got = String(sig || "");
+  if (!key || !got) return false;
+  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", k,
+    new TextEncoder().encode(String(raw || "")));
+  const want = btoa(String.fromCharCode(...new Uint8Array(mac)));
+  return eqKey(want, got);
+}
+/* 注文の行から**プラン**を見分ける。
+   ・⚙のバリアントの番号と合う行（いちばん上のプランを採る）
+   ・selling_plan_id が入っている行＝定期購入の行（2026-10 以降の webhook）
+   見分けられない注文は何もしない（当てずっぽうで期限を延ばさない）。 */
+function memPlanOfOrder(order, cfg) {
+  const o = order || {}, v = (cfg || {}).vars || {};
+  const items = Array.isArray(o.line_items) ? o.line_items : [];
+  let best = "", sub = false, yen = 0;
+  for (const it of items) {
+    const vid = String((it || {}).variant_id || "").replace(/\D/g, "");
+    const sp = (it || {}).selling_plan_id
+      || (((it || {}).selling_plan_allocation || {}).selling_plan || {}).id;
+    if (sp) sub = true;
+    for (const k of MEM_PAID) {
+      if (vid && String(v[k] || "") === vid) {
+        if (MEM_PAID.indexOf(k) > MEM_PAID.indexOf(best || MEM_PAID[0])
+            || !best) best = k;
+        yen = Math.round(Number((it || {}).price) || 0) || yen;
+      }
+    }
+  }
+  return { plan: best, sub: sub, yen: yen };
+}
+/* 支払いの注文を1件受ける（口は下の /mem/hook）。
+   同じ注文で二重に延ばさない（mem_order に番号を控える）。 */
+async function memPaid(env, order, opt) {
+  const res = { ok: false, same: false, cust: "", plan: "", paid_to: "" };
+  const cfg = (opt || {}).cfg || await memSettings(env);
+  const o = order || {};
+  const oid = String(o.id || o.order_id || "").replace(/\D/g, "");
+  const cust = String(((o.customer || {}).id) || "").replace(/\D/g, "");
+  const at = String(o.created_at || o.processed_at || nowIso());
+  const p = memPlanOfOrder(o, cfg);
+  if (!oid || !cust) { res.why = "注文の番号か会員番号がありません"; return res; }
+  if (!p.plan) {
+    res.why = p.sub ? "⚙のバリアントの番号と合いません（定期購入の行です）"
+                    : "定期購入の行がありません";
+    res.ok = true;                        // 会員の注文ではない（放っておく）
+    return res;
+  }
+  res.cust = cust; res.plan = p.plan;
+  const dup = await env.DB.prepare(
+    `SELECT order_id FROM mem_order WHERE order_id=?`).bind(oid).first();
+  const was = await memRow(env, cust);
+  if (dup) {
+    res.ok = true; res.same = true;
+    res.paid_to = String((was || {}).paid_to || "");
+    return res;
+  }
+  /* 期限は「いまの期限（切れていたら今）」から1か月。 */
+  const base = (was && String(was.paid_to || "")
+    && Date.parse(String(was.paid_to)) > Date.parse(at))
+    ? String(was.paid_to) : at;
+  const to = memAddMonth(base);
+  const now = nowIso();
+  const run0 = (opt || {}).run || newRun("mem-paid");
+  await runBatch(env, run0, [
+    env.DB.prepare(
+      `INSERT INTO mem_order (order_id,cust,plan,yen,at,created_at)
+       VALUES (?,?,?,?,?,?)`)
+      .bind(oid, cust, p.plan, p.yen || 0, at, now),
+    env.DB.prepare(
+      `INSERT INTO mem (cust,plan,paid_to,state,last_order,at,created_at)
+         VALUES (?,?,?,'active',?,?,?)
+       ON CONFLICT(cust) DO UPDATE SET plan=excluded.plan,
+         paid_to=excluded.paid_to, state='active',
+         last_order=excluded.last_order, at=excluded.at`)
+      .bind(cust, p.plan, to, oid, now, now),
+    memLog(env, cust, "paid",
+      p.plan + "／注文 " + oid + "／期限 " + to),
+  ]);
+  res.ok = true; res.paid_to = to;
+  return res;
+}
+/* Discord のいまのロールを読む（取れなければ null）。 */
+async function memMember(env, run, cfg, dc) {
+  const g = String((cfg || {}).guild || "");
+  if (!g || !String(dc || "")) return null;
+  const r = await dcApi(env, run, "GET",
+    "/guilds/" + g + "/members/" + String(dc), null);
+  if (!r.ok) return null;
+  return r.data || null;
+}
+/* その会員の**いま付けるべきロール**を決める。
+     ・支払い済みの期限＋猶予を過ぎていたら なし
+     ・解約（canceled）は なし
+     ・モニターは⚙で「3週間で外す」なら、始めて monDays 日で なし */
+function memWant(row, cfg, now) {
+  const r = row || {}, t = Number(now || Date.now());
+  const plan = String(r.plan || "");
+  const st = String(r.state || "");
+  if (st === "canceled") return [];
+  if (plan === "monitor") {
+    if (!(cfg || {}).monOff) return memRolesFor("monitor", cfg);
+    const from = Date.parse(String(r.mon_from || r.created_at || "")) || t;
+    const end = from + Math.max(1, Number((cfg || {}).monDays)
+      || MEM_MON_D) * 86400000;
+    return (t <= end) ? memRolesFor("monitor", cfg) : [];
+  }
+  const to = Date.parse(String(r.paid_to || ""));
+  if (!isFinite(to)) return [];
+  const grace = Math.max(0, Number((cfg || {}).graceDays) || 0) * 86400000;
+  return (t <= to + grace) ? memRolesFor(plan, cfg) : [];
+}
+/* 会員1人ぶんのロールを合わせる（足りないものを付け、余ったものを外す）。
+   触るのは⚙に入れた4つのロールだけ。追い出しはしない。 */
+async function memSyncOne(env, run, cfg, row, now) {
+  const r = { cust: String((row || {}).cust || ""), dc: String((row || {}).dc || ""),
+              add: 0, del: 0, fail: 0, why: "", roles: [] };
+  if (!r.dc) { r.why = "Discord の番号がありません（⚙で手でつなぎます）"; return r; }
+  if (!String((cfg || {}).guild || "")) { r.why = "⚙にサーバーID がありません"; return r; }
+  const mine = memAllRoles(cfg);
+  if (!mine.length) { r.why = "⚙にロールID がありません"; return r; }
+  const want = memWant(row, cfg, now || Date.now());
+  const m = await memMember(env, run, cfg, r.dc);
+  if (!m) { r.why = "Discord でこの会員が見つかりません（まだ入っていない）"; return r; }
+  const has = (Array.isArray(m.roles) ? m.roles : []).map(String);
+  const add = want.filter((x) => has.indexOf(x) < 0);
+  const del = mine.filter((x) => has.indexOf(x) >= 0 && want.indexOf(x) < 0);
+  const stmts = [];
+  for (const id of add) {
+    const q = await dcApi(env, run, "PUT",
+      "/guilds/" + cfg.guild + "/members/" + r.dc + "/roles/" + id, null);
+    if (q.ok) { r.add++; stmts.push(memLog(env, r.cust, "role_add", id)); }
+    else { r.fail++; r.why = memRoleWhy(q); }
+  }
+  for (const id of del) {
+    const q = await dcApi(env, run, "DELETE",
+      "/guilds/" + cfg.guild + "/members/" + r.dc + "/roles/" + id, null);
+    if (q.ok) { r.del++; stmts.push(memLog(env, r.cust, "role_del", id)); }
+    else { r.fail++; r.why = memRoleWhy(q); }
+  }
+  r.roles = want;
+  /* いま付けてあるロールと、期限切れの状態を控える。 */
+  const st = want.length ? String((row || {}).state || "active") : "expired";
+  stmts.push(env.DB.prepare(
+    `UPDATE mem SET roles=?, state=?, at=? WHERE cust=?`)
+    .bind(want.join(","), st, nowIso(), r.cust));
+  if (stmts.length) await runBatch(env, run, stmts);
+  return r;
+}
+/* ロールを付けられなかった理由（画面にそのまま出す・番号だけ見る）。 */
+function memRoleWhy(e) {
+  const o = e || {};
+  const code = Number(o.code) || 0, st = Number(o.status) || 0;
+  if (String(o.err || "") === "no_token" || st === 0)
+    return "DISCORD_BOT_TOKEN が登録されていません";
+  if (code === 50013 || st === 403)
+    return "権限がありません（ボットに「ロールの管理」が要り、"
+      + "ボットのロールがプランのロールより**上**にある必要があります）";
+  if (code === 50001) return "このサーバーを見る権限がありません";
+  if (code === 10011) return "そのロールがありません（⚙のロールID を確かめてください）";
+  if (code === 10007 || st === 404) return "この会員がサーバーにいません";
+  return "Discord が " + st + (code ? ("/" + code) : "") + " を返しました";
+}
+/* 毎時の見回り（期限＋猶予を過ぎた会員のロールを外す）。 */
+async function jobMemSync(env, opt) {
+  const o = opt || {};
+  const run = newRun("mem-sync");
+  const res = { ok: false, n: 0, add: 0, del: 0, fail: 0, skip: 0, rows: [] };
+  try {
+    if (!(await memOk(env))) {
+      res.error = "no_table";
+      res.detail = "mem がありません（migrate-0065-mem.sql）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const cfg = o.cfg || await memSettings(env);
+    if (!cfg.on && !o.force) {
+      res.why = "⚙で「会員のロールを自動で付け外しする」をオフにしています";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const one = String(o.cust || "").replace(/\D/g, "");
+    const q = one
+      ? await env.DB.prepare(`SELECT * FROM mem WHERE cust=?`).bind(one).all()
+      : await env.DB.prepare(
+          `SELECT * FROM mem WHERE COALESCE(dc,'')<>''
+            ORDER BY at DESC LIMIT ${MEM_ROWS_MAX}`).all();
+    const rows = (q && q.results) || [];
+    const now = Date.now();
+    for (const row of rows) {
+      const r = await memSyncOne(env, run, cfg, row, now);
+      res.n++; res.add += r.add; res.del += r.del; res.fail += r.fail;
+      if (r.why && !r.add && !r.del) res.skip++;
+      res.rows.push(r);
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mem-sync: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* ⚙の一覧（会員番号は**下4桁だけ**・氏名やメールは持っていない）。 */
+async function memList(env) {
+  const res = { ok: false, rows: [], n: 0 };
+  if (!(await memOk(env))) {
+    res.error = "no_table";
+    res.detail = "mem がありません（migrate-0065-mem.sql）";
+    return res;
+  }
+  const cfg = await memSettings(env);
+  const q = await env.DB.prepare(
+    `SELECT * FROM mem ORDER BY COALESCE(paid_to,'') DESC, cust ASC
+      LIMIT ${MEM_ROWS_MAX}`).all();
+  const now = Date.now();
+  res.rows = ((q && q.results) || []).map((r) => {
+    const to = Date.parse(String(r.paid_to || ""));
+    const want = memWant(r, cfg, now);
+    return {
+      cust4: String(r.cust || "").slice(-4),
+      cust: String(r.cust || ""),
+      dc: String(r.dc || ""), dc_name: String(r.dc_name || ""),
+      plan: String(r.plan || ""), paid_to: String(r.paid_to || ""),
+      state: String(r.state || ""), roles: String(r.roles || ""),
+      days: isFinite(to) ? Math.floor((to - now) / 86400000) : null,
+      want: want.length, mon_from: String(r.mon_from || ""),
+    };
+  });
+  res.n = res.rows.length;
+  res.on = cfg.on; res.guild = !!cfg.guild;
+  res.roles_ok = memAllRoles(cfg).length;
+  res.vars_ok = MEM_PAID.filter((k) => cfg.vars[k]).length;
+  res.grace = cfg.graceDays; res.stack = cfg.stack;
+  res.mon_off = cfg.monOff; res.mon_days = cfg.monDays;
+  res.token = !!env.DISCORD_BOT_TOKEN;
+  res.hook = !!env.SHOPIFY_WEBHOOK_SECRET;
+  res.ok = true;
+  return res;
+}
+/* 手でつなぐ（カジの決定C）。会員番号と Discord の番号を結ぶ。 */
+async function memLink(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) {
+    res.error = "no_table";
+    res.detail = "mem がありません（migrate-0065-mem.sql）";
+    return res;
+  }
+  const b = body || {};
+  const cust = String(b.cust || "").replace(/\D/g, "");
+  const dc = String(b.dc || "").replace(/\D/g, "");
+  const plan = String(b.plan || "");
+  if (!cust) { res.error = "bad_cust"; res.detail = "会員番号を入れてください"; return res; }
+  if (plan && MEM_PLANS.indexOf(plan) < 0) {
+    res.error = "bad_plan"; res.detail = "プランの名前が違います"; return res;
+  }
+  const cfg = await memSettings(env);
+  const name = (cfg.keepName && b.dc_name)
+    ? String(b.dc_name).slice(0, 60) : "";
+  const now = nowIso();
+  const was = await memRow(env, cust);
+  const run = newRun("mem-link");
+  /* モニターは3週間を数える元（始めた日時）を控える。 */
+  const monFrom = (plan === "monitor")
+    ? String((was || {}).mon_from || b.mon_from || now) : String((was || {}).mon_from || "");
+  await runBatch(env, run, [
+    env.DB.prepare(
+      `INSERT INTO mem (cust,dc,dc_name,plan,paid_to,state,mon_from,at,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(cust) DO UPDATE SET
+         dc=CASE WHEN excluded.dc<>'' THEN excluded.dc ELSE mem.dc END,
+         dc_name=CASE WHEN excluded.dc_name<>'' THEN excluded.dc_name
+                      ELSE mem.dc_name END,
+         plan=CASE WHEN excluded.plan<>'' THEN excluded.plan ELSE mem.plan END,
+         mon_from=CASE WHEN excluded.mon_from<>'' THEN excluded.mon_from
+                       ELSE mem.mon_from END,
+         at=excluded.at`)
+      .bind(cust, dc, name, plan, String((was || {}).paid_to || ""),
+            String((was || {}).state || (plan === "monitor" ? "active" : "")),
+            monFrom, now, now),
+    memLog(env, cust, "link", (dc ? ("Discord " + dc) : "") + (plan ? ("／" + plan) : "")),
+  ]);
+  await saveRun(env, run);
+  res.ok = true;
+  /* つないだらすぐロールを合わせる（⚙がオンのときだけ）。 */
+  if (cfg.on) res.sync = await jobMemSync(env, { cust: cust, cfg: cfg });
+  res.row = await memRow(env, cust);
+  return res;
+}
+/* つなぎを外す（ロールも外してから番号を消す）。 */
+async function memUnlink(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) {
+    res.error = "no_table";
+    res.detail = "mem がありません（migrate-0065-mem.sql）";
+    return res;
+  }
+  const cust = String((body || {}).cust || "").replace(/\D/g, "");
+  if (!cust) { res.error = "bad_cust"; return res; }
+  const cfg = await memSettings(env);
+  const run = newRun("mem-unlink");
+  const row = await memRow(env, cust);
+  if (row && String(row.dc || "") && cfg.guild) {
+    /* いま付けてあるロールを外す（⚙のロールだけ）。 */
+    res.sync = await memSyncOne(env, run, cfg,
+      Object.assign({}, row, { state: "canceled" }), Date.now());
+  }
+  await runBatch(env, run, [
+    env.DB.prepare(
+      `UPDATE mem SET dc='', dc_name='', roles='', at=? WHERE cust=?`)
+      .bind(nowIso(), cust),
+    memLog(env, cust, "unlink", ""),
+  ]);
+  await saveRun(env, run);
+  res.ok = true;
+  return res;
+}
+/* 解約・支払いの失敗を受ける（Flow が使えない Basic では、画面から押す／
+   あとで口を叩く用。pj は定期購入を読めないので、知らせてもらう形）。 */
+async function memState(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) {
+    res.error = "no_table";
+    res.detail = "mem がありません（migrate-0065-mem.sql）";
+    return res;
+  }
+  const b = body || {};
+  const cust = String(b.cust || "").replace(/\D/g, "");
+  const st = String(b.state || "");
+  if (!cust) { res.error = "bad_cust"; return res; }
+  if (["active", "failed", "canceled", "expired"].indexOf(st) < 0) {
+    res.error = "bad_state"; res.detail = "状態の名前が違います"; return res;
+  }
+  const run = newRun("mem-state");
+  await runBatch(env, run, [
+    env.DB.prepare(`UPDATE mem SET state=?, at=? WHERE cust=?`)
+      .bind(st, nowIso(), cust),
+    memLog(env, cust, st === "canceled" ? "cancel" : st, ""),
+  ]);
+  await saveRun(env, run);
+  const cfg = await memSettings(env);
+  if (cfg.on) res.sync = await jobMemSync(env, { cust: cust, cfg: cfg });
+  res.ok = true;
+  res.row = await memRow(env, cust);
+  return res;
+}
+/* Shopify の webhook（orders/paid）。**鍵ではなく署名**で確かめる。
+   ・X-Shopify-Hmac-Sha256 を env.SHOPIFY_WEBHOOK_SECRET で検証
+   ・題（X-Shopify-Topic）が orders/paid・orders/create のときだけ数える
+   ・同じ注文が2回来ても二重に延ばさない
+   署名が合わなければ 401（Shopify は再送をやめる）。 */
+async function memHook(env, request) {
+  const raw = await request.text();
+  const sig = request.headers.get("X-Shopify-Hmac-Sha256") || "";
+  const topic = String(request.headers.get("X-Shopify-Topic") || "");
+  if (!(await memHmacOk(env, raw, sig)))
+    return { status: 401, body: { error: "bad_signature" } };
+  if (!(await memOk(env)))
+    return { status: 200, body: { ok: false, error: "no_table",
+      detail: "mem がありません（migrate-0065-mem.sql）" } };
+  if (["orders/paid", "orders/create"].indexOf(topic) < 0)
+    return { status: 200, body: { ok: true, skip: topic || "(題がありません)" } };
+  let o = null;
+  try { o = JSON.parse(raw); } catch (e) { o = null; }
+  if (!o) return { status: 200, body: { ok: false, why: "本文が読めません" } };
+  const run = newRun("mem-hook");
+  const cfg = await memSettings(env);
+  const r = await memPaid(env, o, { cfg: cfg, run: run });
+  /* 期限が延びたら、その場でロールも合わせる（つないである会員だけ）。 */
+  if (r.ok && !r.same && r.cust && cfg.on)
+    r.sync = await jobMemSync(env, { cust: r.cust, cfg: cfg });
+  await saveRun(env, run);
+  return { status: 200, body: r };
+}
 /* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
    カードが増えるとスクロールが大変なので、各プランのチャンネルに
    **いま買える品の一覧**を出す。
@@ -17966,6 +18447,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
+  "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
   "sub_post", "sub_order",
   "order_queue", "orders",
@@ -17993,6 +18475,10 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["mem", "migrate-0065-mem.sql"],
+  ["mem_order", "migrate-0065-mem.sql"],
+  ["mem_log", "migrate-0065-mem.sql"],
+  ["paid_to", "migrate-0065-mem.sql"],
   ["dim_at", "migrate-0064-mw-dim.sql"],
   ["rk_from", "migrate-0063-amz-rank.sql"],
   ["rk_n", "migrate-0063-amz-rank.sql"],
@@ -18462,6 +18948,14 @@ export default {
     if (request.method === "OPTIONS")
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (origin && origin !== ALLOW_ORIGIN) return json({ error: "forbidden_origin" }, 403, origin);
+    /* 8.56（カジの依頼）Shopify の webhook（orders/paid）。
+       Shopify は pj の鍵を送れないので、**この口だけ鍵を見ない**。
+       代わりに X-Shopify-Hmac-Sha256 を env.SHOPIFY_WEBHOOK_SECRET で
+       確かめる（合わなければ 401）。中身は注文の支払いだけを見る。 */
+    if (request.method === "POST" && url.pathname === "/mem/hook") {
+      const h = await memHook(env, request);
+      return json(h.body, h.status, origin);
+    }
     const role = keyRole(request, env);
     if (!role) return json({ error: "unauthorized" }, 401, origin);
     /* 作業者用キー（STAFF_KEY）でできないこと（7.40）。
@@ -18491,6 +18985,10 @@ export default {
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
        値段が会員に出て、Discord にも流れるため。
        8.18：配信の案は**見るのも**管理者だけ（売値と粗利が出るため）。 */
+    /* 8.56（カジの依頼）会員の月額課金とロールは**管理者だけ**
+       （プランと期限が見え、Discord のロールが動くため）。 */
+    if (role !== "admin" && url.pathname.indexOf("/mem") === 0)
+      return forbidStaff("会員の月額課金は管理者用のキーが必要です", [], origin);
     if (role !== "admin"
         && (request.method === "POST" || url.pathname === "/sub/draft")
         && url.pathname.indexOf("/sub/") === 0)
@@ -18793,6 +19291,32 @@ export default {
           return json(await mwDimAgain(env, true), 200, origin);
         if (request.method === "GET")
           return json(await mwDimAgain(env, false), 200, origin);
+      }
+      /* ===== 8.56（カジの依頼）会員の月額課金と Discord のロール =====
+           GET  /mem        … 会員の一覧（会員番号は下4桁）と⚙の様子
+           POST /mem/link   … 手でつなぐ（会員番号＋Discord の番号＋プラン）
+           POST /mem/unlink … つなぎを外す（先にロールを外す）
+           POST /mem/state  … 状態を変える（解約・支払い失敗・戻す）
+           POST /mem/sync   … ロールを付け直す（cust を渡せば1人だけ）
+         どれも管理者だけ（上の枝で弾いている）。 */
+      if (request.method === "GET" && url.pathname === "/mem")
+        return json(await memList(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/mem/link") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memLink(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mem/unlink") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memUnlink(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mem/state") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memState(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/mem/sync") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobMemSync(env, { cust: (b || {}).cust,
+          force: true }), 200, origin);
       }
       /* 8.46（カジの依頼）会員チャンネルの「今週の一覧」を書き換える。
          押しただけで分かるように、GET は**予定**（何ページ・何件）を返す。 */
@@ -19206,6 +19730,10 @@ export default {
           if (sc.hotOn && jt.dow === sc.hotDow) await jobSubHot(env, {});
         }
       } catch (e) { /* 配信で落ちても本体は止めない */ }
+      /* 8.56（カジの依頼）会員のロールの見回り（期限＋猶予で外す）。
+         落ちても本体は止めない。 */
+      try { await jobMemSync(env, {}); }
+      catch (e) { /* ロールで落ちても本体は止めない */ }
       /* 在庫の取り込みのあとにも判定する（7.47）。 */
       await jobPhaseB(env, {});
       await jobSoldKeep(env, {});        // 在庫補充（数量を1に戻す）（7.53）
@@ -19372,6 +19900,11 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
   subIdxCards, subIdxLine, subPinWhy, subIdxPin,
   jobMwDim, MW_DIM_MAX, mwAsinResetSet, MW_ASIN_RESET,
+  /* 8.56 会員の月額課金と Discord のロール。 */
+  memSettings, memRolesFor, memAllRoles, memAddMonth, memPlanOfOrder,
+  memWant, memPaid, memSyncOne, memList, memLink, memUnlink, memState,
+  memHook, jobMemSync, memRoleWhy, memHmacOk,
+  MEM_PAID, MEM_PLANS, MEM_GRACE_D, MEM_MON_D,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
