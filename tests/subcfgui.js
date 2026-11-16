@@ -245,7 +245,10 @@ console.log('\n=== ⑨ ⚙のほかの欄も残る（4）===');
          'mwMoveJan','mwFixSku','mwFixPrice',
          'syncOnHand','csvPriceChangedOnly','csvBoCols','csvAutoParse',
          'mwNewOnly','mwNoteAll','csvShowNew','uiHideShopee','uiHideEbay',
-         'csvRevisePrice']);
+         'csvRevisePrice',
+         /* 8.56 会員を「手でつなぐ」ときの入れ物（その回だけ）。
+            つないだら空に戻すので、控える意味がない。 */
+         'memLinkCust','memLinkDc','memLinkPlan','memLinkName']);
     return Array.prototype.slice.call(
       (pane||document).querySelectorAll('input[id],select[id],textarea[id]'))
       .filter((el)=>!known[el.id]&&el.type!=='file'&&el.type!=='button')

@@ -211,10 +211,22 @@ console.log('=== ⑤ 「全プランに配る」と自動の回でも同じ ==='
 console.log('=== ⑥ 消す処理は足していない ===');
 {
   const src=fs.readFileSync(path.join(ROOT,'proxy-sync/worker.js'),'utf8');
-  const dels=(src.match(/dcApi\([^)]*"DELETE"/g)||[]).length;
-  console.log('   DELETE を出すところ：'+dels+'か所');
-  ok(dels===1,
-     '★★★Discord を消すのは「受付終了から◯日で消す」の1か所だけ（増やさない）');
+  /* 8.56 ロールを外す DELETE が増えたので、**何を消す DELETE か**で数える。
+     ・メッセージを消すのは「受付終了から◯日で消す」の1か所だけ
+     ・ロールを外すのは会員の付け外しの1か所だけ
+     ・それ以外の DELETE（メンバーの追い出し＝kick など）は**無い** */
+  const dels=(src.match(/dcApi\([\s\S]{0,120}?"DELETE"[\s\S]{0,240}?\)/g)
+    ||[]);
+  const msgN=dels.filter((x)=>/\/messages\//.test(x)).length;
+  const roleN=dels.filter((x)=>/\/roles\//.test(x)).length;
+  console.log('   DELETE を出すところ：'+dels.length
+    +'か所（メッセージ '+msgN+'／ロール '+roleN+'）');
+  ok(msgN===1,
+     '★★★Discord のメッセージを消すのは「受付終了から◯日で消す」の1か所だけ');
+  ok(roleN===1,
+     '★★★ロールを外すのは会員の付け外しの1か所だけ（8.56）');
+  ok(dels.every((x)=>/\/messages\/|\/roles\//.test(x)),
+     '★★★ほかの DELETE は無い（メンバーの追い出し＝kick は作っていない）');
   ok(dc.every((x)=>x.method!=='DELETE'),
      '★★★この試験でメッセージを消していない');
   ok(/DC_GONE_MSG = 10008/.test(src)&&/DC_GONE_CH = 10003/.test(src),
