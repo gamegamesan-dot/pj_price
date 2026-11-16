@@ -170,5 +170,64 @@ console.log('\n=== ⑤ ⚙を変えると試算だけが変わる ===');
      '★★★⚙を変えても**いまの判定（会員向き）は変わらない**');
   ok(/率 40% かつ 粗利 ¥3,400/.test(t.note),'★★⚙の数字が試算に出る');
 }
+console.log('\n=== ⑥ 売り方ごとの手残りの試算（8.50）===');
+{
+  const t=await p.evaluate(()=>({
+    way:($('subCutWay')||{}).value, net:($('subCutNet')||{}).value,
+    pct:[($('gdPctMercari')||{}).value,($('gdPctYahoo')||{}).value],
+    rows:subDraftRows().map((x)=>({ jan:x.jan, fba:x.net_fba,
+      self:x.net_self, mer:x.net_mer, cut:x.net_cut, way:x.cut_way,
+      unsure:x.net_unsure })),
+    note:($('subDraftNote').textContent||'').replace(/\s+/g,' ') }));
+  console.log('   '+JSON.stringify(t.rows.slice(0,3)));
+  console.log('   '+t.note.slice(t.note.indexOf('売り方ごとの手残り'),
+    t.note.indexOf('足切りの試算')));
+  ok(t.way==='mercari'&&t.net==='400',
+     '★★★既定は メルカリ・手残り 400円以上（カジの数字）');
+  ok(t.pct[0]==='90'&&t.pct[1]==='90',
+     '★★★メルカリ・ヤフオクの売値は Amazon の 90%（⚙）');
+  ok(t.rows.every((x)=>x.way==='mercari'),
+     '★★案の行に「どの売り方で見たか」が入る');
+  ok(t.rows.some((x)=>x.mer!==null&&x.mer!==undefined),
+     '★★★案の行にメルカリの手残りが入る');
+  ok(t.rows.some((x)=>x.fba!==null)&&t.rows.some((x)=>x.self!==null),
+     '★★★Amazon FBA・自己配送の手残りも入る');
+  ok(t.rows.filter((x)=>x.mer!==null&&x.self!==null)
+     .every((x)=>x.self>=x.mer||x.mer>x.fba),
+     '★手残りは売り方で変わる（メルカリは売値が9割・FBA は配送代行がある）');
+  ok(/売り方ごとの手残りの試算/.test(t.note)
+     &&/メルカリの売値＝Amazon の 90%/.test(t.note),
+     '★★★試算に「メルカリの売値＝Amazon の 90%」と書く');
+  ok(/手残り 300円以上/.test(t.note)&&/手残り 400円以上（いま⚙）/.test(t.note)
+     &&/手残り 500円以上/.test(t.note),
+     '★★★手残りの下限 300／400／500円 で並べる');
+  ok(/Amazon FBA \d+件/.test(t.note)&&/Amazon 自己配送 \d+件/.test(t.note)
+     &&/メルカリ \d+件/.test(t.note),
+     '★★★売り方ごと（FBA・自己配送・メルカリ）の件数');
+  ok(/いまの⚙（メルカリ・手残り ¥400以上）… \d+件/.test(t.note),
+     '★★★いまの⚙での件数も出す');
+  ok(/「送料は別」で数えています（外しません）/.test(t.note),
+     '★★★送り方が分からない品は外さないと書く');
+}
+
+console.log('\n=== ⑦ ⚙を変えると試算だけが変わる（手残り）===');
+{
+  const t=await p.evaluate(async()=>{
+    const fit0=subDraftRows().filter((x)=>x.fit).length;
+    $('subCutWay').value='amz_fba'; $('subCutNet').value='300';
+    await subDraftGo();
+    await new Promise((x)=>setTimeout(x,200));
+    const note=($('subDraftNote').textContent||'').replace(/\s+/g,' ');
+    const way=subDraftRows()[0].cut_way;
+    const fit1=subDraftRows().filter((x)=>x.fit).length;
+    $('subCutWay').value='mercari'; $('subCutNet').value='400';
+    return { note:note, way:way, fit0:fit0, fit1:fit1 };
+  });
+  ok(t.way==='amz_fba','★★★⚙で見る売り方を変えられる');
+  ok(/いまの⚙（Amazon FBA・手残り ¥300以上）/.test(t.note),
+     '★★★試算の文も変わる');
+  ok(t.fit0===t.fit1,
+     '★★★⚙を変えても**いまの判定（会員向き）は変わらない**');
+}
 await T.done();
 })();

@@ -2182,6 +2182,10 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="mwSubGrossFloor">　そのときの粗利の最低額</label><input type="number" id="mwSubGrossFloor" value="300" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
         <!-- 8.48（カジの②・簡単な版）新しい足切り（率 かつ 粗利）。
              いまは「数えるだけ」で、判定には使わない。 -->
+        <!-- 8.50（カジの依頼）足切りを「送料まで引いた手残り」で見る。
+             どの売り方で見るかは⚙（既定：メルカリ）。いまは数えるだけ。 -->
+        <div class="row cfgprice"><label for="subCutWay">足切りの売り方／手残りの下限</label><select id="subCutWay"><option value="mercari" selected>メルカリ</option><option value="amz_self">Amazon 自己配送</option><option value="amz_fba">Amazon FBA</option><option value="yahoo">ヤフオク</option></select><input type="number" id="subCutNet" value="400" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">円</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>手残り</b>＝売値 −（販売手数料＋送料＋梱包材など）− 会員が払う額。売値は<b>メルカリなら Amazon の価格×90%</b>（⚙）です。<b>送り方の区分が分からない品は「送料は別」</b>として数えます（足切りでは外しません）。<b>いまは数えるだけ</b>です。</div>
         <div class="row cfgprice"><label for="subCutRate">新しい足切り：利益率／粗利</label><input type="number" id="subCutRate" value="15" step="1" min="0" max="100" inputmode="numeric"><input type="number" id="subCutGross" value="700" step="50" min="0" max="100000" inputmode="numeric"><span class="unit">%・円</span></div>
         <div class="note2" style="margin:0 0 6px"><b>いまは「数えるだけ」です（判定は変わりません）。</b>①「今日の配信の案を作る」のまとめに「新しい足切りなら何件か」が出ます。率は<b>会員が払う額に対する率</b>（粗利 ÷ 会員が払う額）で、<b>率と粗利の両方</b>を満たすことを求めます。数字を見てから、本判定に入れます。</div>
         <div class="note2" style="margin:0 0 6px"><b>会員の粗利の目安</b>＝Amazon の実売 − Amazon の手数料 − 販売価格。
@@ -2330,6 +2334,10 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="gdAmzClose">Amazon の成約料（1点ごと）</label><input type="number" id="gdAmzClose" value="0" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
         <div class="note2" style="margin:0 0 6px">本・CD・DVD などで<b>1点ごとにかかる成約料</b>があるときに入れてください（ゲームは 0 のままで大丈夫です）。<b>販売手数料（カテゴリー別）は、その商品で実際に取れている額</b>を使うので⚙には置いていません。</div>
         <div class="row cfgprice"><label for="gdPack">梱包材（自己配送）／FBA 倉庫までの送料</label><input type="number" id="gdPack" value="20" step="10" min="0" max="2000" inputmode="numeric"><input type="number" id="gdFbaIn" value="50" step="10" min="0" max="2000" inputmode="numeric"><span class="unit">円</span></div>
+        <!-- 8.50（カジの依頼）メルカリ・ヤフオクの売値は Amazon の価格の◯%
+             と仮定する（相場は取りに行かない）。 -->
+        <div class="row cfgprice"><label for="gdPctMercari">売値の仮定：メルカリ／ヤフオク</label><input type="number" id="gdPctMercari" value="90" step="5" min="10" max="200" inputmode="numeric"><input type="number" id="gdPctYahoo" value="90" step="5" min="10" max="200" inputmode="numeric"><span class="unit">% of Amazon</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>メルカリ・ヤフオクの相場は取りに行きません</b>（規約で機械的な読み取りが禁止されているため）。<b>Amazon の価格の◯%</b>で売れると仮定して、手数料と送料を引いた<b>手残り</b>を出します（<b>目安</b>です）。</div>
         <div class="note2" style="margin:0 0 6px">左が<b>自己配送の梱包材</b>（1点あたり）、右が <b>FBA の倉庫までの送料</b>（1点あたり）です。</div>
         <div class="note2" style="margin:6px 0 2px"><b>送料（送り方の区分ごと・1点あたり）</b></div>
         <div class="row cfgprice"><label for="gdShipCp">クリックポスト（薄物）</label><input type="number" id="gdShipCp" value="185" step="10" min="0" max="10000" inputmode="numeric"><span class="unit">円</span></div>
@@ -3648,7 +3656,7 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
-             'subCutRate','subCutGross',
+             'subCutWay','subCutNet','subCutRate','subCutGross',
              /* 8.49 採寸が無い品の目安。 */
              'sgNg','sgUnknownWay','sgUnknownG','sgTable',
              'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
@@ -3671,6 +3679,7 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.37 売り方ごとの「赤字にならない売値」（率・送料・梱包材）。
                 pj-sync がカードを作るときに読む。 */
              'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
+             'gdPctMercari','gdPctYahoo',
              'gdFbaIn','gdShipCp','gdShipLetter','gdShipCompact',
              'gdShipBox60','gdShipBox80','gdShipBox',
              /* 8.30 固定メッセージ（共通の置き場・締めと発送の曜日）。 */
@@ -6501,7 +6510,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
-                 'subCutRate','subCutGross',
+                 'subCutWay','subCutNet','subCutRate','subCutGross',
                  'sgNg','sgUnknownWay','sgUnknownG','sgTable',
                  'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
                  'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
@@ -6521,6 +6530,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'gdIdxName','gdIdxWeekN','gdIdxCats',
                  /* 8.37 売り方ごとの「赤字にならない売値」。 */
                  'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
+                 'gdPctMercari','gdPctYahoo',
                  'gdFbaIn','gdShipCp','gdShipLetter','gdShipCompact',
                  'gdShipBox60','gdShipBox80','gdShipBox',
                  /* 6.176：列名の形（ストアの書き出しに合わせる／今の名前）。 */
@@ -16705,8 +16715,9 @@ function subPickCfg(){
            sgOn:($('sgOn')||{}).checked?1:0,
            sgNg:v('sgNg'), sgTable:v('sgTable'),
            sgUnknownWay:v('sgUnknownWay'), sgUnknownG:v('sgUnknownG'),
-           /* 8.48 新しい足切り（いまは数えるだけ）。 */
+           /* 8.48／8.50 新しい足切り（いまは数えるだけ）。 */
            subCutRate:v('subCutRate'), subCutGross:v('subCutGross'),
+           subCutWay:v('subCutWay'), subCutNet:v('subCutNet'),
            subMonQ3:v('subMonQ3'),
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
            /* 8.47 売れ行きの推定（換算表は shared/rankspd.js の1か所）。 */
@@ -16800,7 +16811,23 @@ function subDraftRows(){
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
     /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
        決まりは shared/subguide.js の1か所だけ（pj-sync も同じもの）。 */
-    var gb=SUBGUIDE.badgeOf(gdRowOf(r,px,fit),gdCfg());
+    var gr=gdRowOf(r,px,fit);
+    var gb=SUBGUIDE.badgeOf(gr,gdCfg());
+    /* 8.50（カジの依頼）売り方ごとの**手残り**（送料まで引いたあと）。
+       式は shared/sellway.js の1か所だけ。送り方の区分が分からない行は
+       送料を引かない（「送料は別」。足切りでは外さない）。 */
+    var swo=Object.assign({},gdCfg(),{ shipKey:sh.key, shipName:sh.name,
+      shipSure:sh.sure });
+    var nw=function(k){
+      var n=SELLWAY.netWay(k,gr,swo);
+      return n.ok?n.net:null;
+    };
+    row.net_fba=nw('amz_fba'); row.net_self=nw('amz_self');
+    row.net_mer=nw('mercari'); row.net_yah=nw('yahoo');
+    row.net_unsure=!sh.sure;
+    var cw=String(((subPickCfg()||{}).subCutWay)||'mercari');
+    row.cut_way=cw;
+    row.net_cut=nw(cw);
     row.badge=gb.mark; row.badge_name=gb.name; row.badge_why=gb.why;
     row.badge_ok=!!gb.ok;
     return row;
@@ -16933,8 +16960,12 @@ function subEstHtml(rows){
    ・ライトに入る「早い」の線（3か月10／20／30個）の件数
    **判定も配信も変えません。**カジが数字を見て決めるための試算です。 */
 function subCutHtml(rows){
-  var o=null;
-  try{ o=SUBPLAN.pickOpt(subPickCfg()); }catch(e){ o=null; }
+  var o=null, cfg=null;
+  try{
+    cfg=subPickCfg(); o=SUBPLAN.pickOpt(cfg);
+    o.cutWay=String(cfg.subCutWay||'mercari');
+    o.cutNet=Math.round(+cfg.subCutNet||0);
+  }catch(e){ o=null; }
   if(!o)return '';
   var all=(rows||[]).filter(function(r){
     /* 会員向きの判定だけを比べるので、ほかの条件（出品できる・
@@ -16977,7 +17008,42 @@ function subCutHtml(rows){
     }
     return false;
   });
-  return '<br><b>足切りの試算</b>（<b>判定はまだ変えていません</b>）<br>'
+  /* 8.50（カジの依頼）売り方ごとの手残りで数える（300／400／500円）。 */
+  var ways=[['amz_fba','Amazon FBA'],['amz_self','Amazon 自己配送'],
+            ['mercari','メルカリ']];
+  var keyOf={ amz_fba:'net_fba', amz_self:'net_self', mercari:'net_mer',
+              yahoo:'net_yah' };
+  var cw=String(o.cutWay||'mercari');
+  var cutN=Math.round(+o.cutNet||0);
+  var netTab=[300,400,500].map(function(min){
+    var cells=ways.map(function(w){
+      var n=all.filter(function(r){
+        var v=r[keyOf[w[0]]];
+        return v!==null&&v!==undefined&&v>=min;
+      }).length;
+      return esc(w[1])+' <b>'+mwN(n)+'件</b>';
+    }).join('　');
+    return '　手残り '+min+'円以上'+((min===cutN)?'（いま⚙）':'')+'　'+cells;
+  }).join('<br>');
+  var unsure=all.filter(function(r){ return r.net_unsure; }).length;
+  var noNet=all.filter(function(r){
+    return r.net_cut===null||r.net_cut===undefined; }).length;
+  var cutJa=(SELLWAY.wayOf(cw)||{}).ja||cw;
+  var cutOk=all.filter(function(r){
+    return r.net_cut!==null&&r.net_cut!==undefined&&r.net_cut>=cutN;
+  }).length;
+  var pctM=Math.round(SELLWAY.sellPct('mercari',gdCfg())*100);
+  return '<br><b>売り方ごとの手残りの試算</b>'
+    +'（<b>判定はまだ変えていません</b>・メルカリの売値＝Amazon の '
+    +pctM+'%）<br>'
+    +netTab
+    +'<br>　<b>いまの⚙（'+esc(cutJa)+'・手残り '+yen(cutN)+'以上）'
+    +'… '+mwN(cutOk)+'件</b>'
+    +'<br>　<span class="note2">送り方の区分が分からない品 '+mwN(unsure)
+    +'件は「<b>送料は別</b>」で数えています（外しません）'
+    +(noNet?('／手残りが出せない品 '+mwN(noNet)+'件（手数料の率が'
+      +'取れていません）'):'')+'</span>'
+    +'<br><b>足切りの試算</b>（<b>判定はまだ変えていません</b>）<br>'
     +'　いまの決まりで会員向き <b>'+mwN(now.length)+'件</b>'
     +'（粗利の下限 または 率の下限＋最低額）<br>'
     +'　新しい足切り（<b>率 '+needR+'% かつ 粗利 '+yen(needG)+'</b>）'
@@ -17858,6 +17924,8 @@ function gdCfg(){
            gdWays:v('gdWays'), gdFeeMercari:v('gdFeeMercari'),
            gdFeeYahoo:v('gdFeeYahoo'), gdAmzClose:v('gdAmzClose'),
            gdPack:v('gdPack'), gdFbaIn:v('gdFbaIn'),
+           /* 8.50 メルカリ・ヤフオクの売値の仮定（Amazon の%）。 */
+           gdPctMercari:v('gdPctMercari'), gdPctYahoo:v('gdPctYahoo'),
            gdShipCp:v('gdShipCp'), gdShipLetter:v('gdShipLetter'),
            gdShipCompact:v('gdShipCompact'), gdShipBox60:v('gdShipBox60'),
            gdShipBox80:v('gdShipBox80'), gdShipBox:v('gdShipBox') };
@@ -27493,7 +27561,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v308';   // sw.js の const V と必ず同じ値にする
+var APP_V='v309';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

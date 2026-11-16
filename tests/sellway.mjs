@@ -175,4 +175,48 @@ console.log('=== ⑦ 相場は取りに行かない ===');
   ok(!/卸値|wholesale/.test(src),'★★★卸値は出てこない');
 }
 
-await T.done();
+await console.log('\n=== 8.50 売り方ごとの手残り（足切りと試算に使う）===');
+{
+  /* 会員が払う額 4,000・Amazon の実売 6,000・率 15%・FBA 500 */
+  const r={ price:4000, amz_price:6000, fee_rate:0.15, fee_fba:500,
+            fee_total:1400 };
+  const sure={ shipKey:'cp', shipSure:true };
+  const nf=W.netWay('amz_fba',r,sure);
+  const ns=W.netWay('amz_self',r,sure);
+  const nm=W.netWay('mercari',r,sure);
+  console.log('   '+JSON.stringify({ fba:nf.net, self:ns.net, mer:nm.net,
+    sell:nm.sell }));
+  ok(W.sellPct('mercari',{})===0.9&&W.sellPct('yahoo',{})===0.9,
+     '★★★メルカリ・ヤフオクの売値は Amazon の 90%（⚙の既定）');
+  ok(W.sellPct('amz_fba',{})===1&&W.sellPct('amz_self',{})===1,
+     '★★Amazon の売り方は Amazon の価格そのまま');
+  ok(W.sellPct('mercari',{ gdPctMercari:80 })===0.8,'★★⚙で変えられる');
+  ok(nm.sell===5400,'★★★メルカリの売値＝6,000 × 90% ＝ 5,400');
+  ok(nm.net===Math.round(5400*0.9-185-4000)&&nm.net===675,
+     '★★★メルカリの手残り＝売値 −（手数料10%＋送料185）− 会員が払う額');
+  ok(ns.net===Math.round(6000*0.85-(185+20)-4000)&&ns.net===895,
+     '★★★自己配送の手残り＝売値 −（販売手数料率＋送料＋梱包材）− 仕入れ値');
+  ok(nf.net===Math.round(6000*0.85-(500+50)-4000)&&nf.net===550,
+     '★★★FBA の手残り＝売値 −（販売手数料率＋FBA＋倉庫までの送料）− 仕入れ値');
+  /* 送り方が分からない行は送料を引かない（足切りでは外さない）。 */
+  const un=W.netWay('mercari',r,{ shipSure:false });
+  console.log('   送料なし '+JSON.stringify({ net:un.net,
+    unsure:un.unsure }));
+  ok(un.ok===true&&un.unsure===true&&un.net===nm.net+185,
+     '★★★送り方が分からない行は送料を引かない（unsure の印を付ける）');
+  /* 率が取れていない Amazon の行は出さない（当てずっぽうにしない）。 */
+  ok(W.netWay('amz_self',{ price:4000, amz_price:6000, fee_rate:0 },
+     sure).ok===false,
+     '★★★Amazon の率が取れていない行は手残りを出さない');
+  ok(W.netWay('mercari',{ price:4000, amz_price:0 },sure).ok===false,
+     '★★★Amazon の価格が無い行も出さない（売値が分からない）');
+  /* ⚙で選んだ売り方ぜんぶ。 */
+  const all=W.netsOf(r,Object.assign({ gdWays:'amz_self,mercari,yahoo' },
+    sure));
+  ok(all.items.length===3&&all.items.map((x)=>x.key).join(',')
+     ==='amz_self,mercari,yahoo',
+     '★★★⚙で選んだ売り方ぜんぶの手残りを返す');
+  ok(all.items.every((x)=>x.floor>0),
+     '★「赤字にならない売値」も一緒に返す（同じ式から）');
+}
+T.done();

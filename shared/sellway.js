@@ -55,7 +55,11 @@
     gdShipCompact: 520,                 // 宅急便コンパクト（専用箱込み）
     gdShipBox60: 800,                   // 宅配便（60サイズ）
     gdShipBox80: 1000,                  // 宅配便（80サイズ）
-    gdShipBox: 1200                     // 宅配便（100サイズ以上）
+    gdShipBox: 1200,                    // 宅配便（100サイズ以上）
+    /* 8.50（カジの依頼）メルカリ・ヤフオクの売値は **Amazon の価格の◯%**
+       と仮定する（相場は取りに行かない・カジの数字は90%）。 */
+    gdPctMercari: 90,                   // メルカリの売値（Amazon の%）
+    gdPctYahoo: 90                      // ヤフオクの売値（Amazon の%）
   };
   /* 区分キー → ⚙の名前。 */
   var SHIP_KEY = { cp: "gdShipCp", letter: "gdShipLetter",
@@ -157,6 +161,57 @@
     return { ok: true, key: w.key, ja: w.ja, yen: up10(p),
              rate: rate, fix: fix, ship: sh, parts: parts };
   }
+  /* 8.50 その売り方の「売値の見かた」（Amazon の価格の何%か）。
+     Amazon の売り方は Amazon の価格そのまま（100%）。 */
+  function sellPct(wayKey, opt) {
+    var w = wayOf(wayKey);
+    if (!w) return 0;
+    if (w.amz) return 1;
+    var v = val(opt, (w.key === "mercari") ? "gdPctMercari" : "gdPctYahoo");
+    if (v > 1) v = v / 100;
+    return Math.max(0, Math.min(2, num(v)));
+  }
+  /* 8.50（カジの依頼）その売り方で売ったときの**手残り**。
+       手残り ＝ 売値 ×(1 − 率) − 固定（送料・梱包材・FBA など）− 仕入れ値
+     ・売値は Amazon の価格（メルカリ・ヤフオクは ⚙の% を掛ける）
+     ・仕入れ値は **会員が払う額**（r.price）
+     ・送り方の区分が分からない行は**送料を引かない**（unsure:true）。
+       足切りではこの行を外さない（カジの指示）
+     出せないときは { ok:false }（当てずっぽうの額は出さない）。 */
+  function netOf(wayKey, r, opt, ship) {
+    var f = floorOf(wayKey, r, opt, ship);
+    if (!f.ok) return { ok: false };
+    var x = r || {};
+    var amz = Math.round(num(x.amz_price));
+    if (!(amz > 0)) return { ok: false };
+    var pc = sellPct(wayKey, opt);
+    var sell = Math.round(amz * pc);
+    var cost = Math.round(num(x.price));
+    var net = Math.round(sell * (1 - f.rate) - f.fix - cost);
+    return { ok: true, key: f.key, ja: f.ja, net: net, sell: sell,
+             pct: pc, rate: f.rate, fix: f.fix, ship: f.ship,
+             unsure: !(num(ship) > 0), floor: f.yen };
+  }
+  /* 売り方ぜんぶの手残り（⚙で選んだ売り方だけ・出せないものは入れない）。
+       opt.shipKey / shipName / shipSure … linesOf と同じ */
+  function netsOf(r, opt) {
+    var o = opt || {};
+    var sure = !!o.shipSure;
+    var ship = sure ? shipOf(o.shipKey, o) : 0;
+    var out = [];
+    listOf(o).forEach(function (w) {
+      var n = netOf(w.key, r, o, ship);
+      if (n.ok) out.push(n);
+    });
+    return { items: out, ship: ship, sure: sure,
+             shipName: s(o.shipName) };
+  }
+  /* 1つの売り方の手残り（⚙で選んでいない売り方でも出す・試算に使う）。 */
+  function netWay(wayKey, r, opt) {
+    var o = opt || {};
+    var ship = o.shipSure ? shipOf(o.shipKey, o) : 0;
+    return netOf(wayKey, r, o, ship);
+  }
   /* カードに出す行（売り方ごと・1行ずつ）。
        opt.shipKey  … 送り方の区分（shared/shopcsv.js の shipWay().key）
        opt.shipName … その区分の名前（文に出す）
@@ -202,7 +257,10 @@
   }
   var API = { WAYS: WAYS, D: D, SHIP_KEY: SHIP_KEY, wayOf: wayOf,
               listOf: listOf, shipOf: shipOf, floorOf: floorOf,
-              linesOf: linesOf, pinJa: pinJa, val: val, pct: pct };
+              linesOf: linesOf, pinJa: pinJa, val: val, pct: pct,
+              /* 8.50 売り方ごとの手残り（足切りと試算に使う）。 */
+              sellPct: sellPct, netOf: netOf, netsOf: netsOf,
+              netWay: netWay };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_SELLWAY = API;
 })(typeof globalThis !== "undefined" ? globalThis : this);
