@@ -719,6 +719,10 @@
   /* 共通の条件。通らない理由を返す（通れば ''）。 */
   function whyNot(row, opt) {
     var r = row || {}, o = opt || pickOpt(null);
+    /* 8.49（カジの③）⚙「出さない種類（言葉）」に当たった品は、
+       **案にも配信にも入れない**（既定：ポスター）。
+       言葉の表は shared/shipguess.js の1か所。 */
+    if (s(r.ng_kind)) return "出さない種類（" + s(r.ng_kind) + "）";
     if (!r.fit) return "会員向きではありません";
     if (s(r.rst) === "blocked") return "出品できません";
     if (o.noAmz && r.amz) return "Amazon 本体あり";

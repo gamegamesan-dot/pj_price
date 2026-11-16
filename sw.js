@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v307';
+const V = 'pj-pricing-v308';
 const ASSETS = [
   './',
   './index.html',
@@ -31,6 +31,8 @@ const ASSETS = [
   './shared/subindex.js',
   // 8.47 売れ行きの推定（Amazon の順位から・換算表は1か所）。
   './shared/rankspd.js',
+  // 8.49 採寸が無い品の送り方と重さの目安（種類の表は1か所）。
+  './shared/shipguess.js',
   // 海外向け Shopify の商品CSV（6.188）。pj-sync も同じこれを読む。
   './shared/osscsv.js',
   './manifest.webmanifest',

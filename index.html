@@ -2209,6 +2209,16 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="chk cfgprice"><input type="checkbox" id="subMonNote" checked><label for="subMonNote" style="flex:1"><b>モニターに「今週の配信」を1通出す</b>（上のプランの件数だけ・商品名や価格は出さない）</label></div>
         <div class="row cfgprice"><label for="subMonFrom">モニターの開始日（空なら今までどおり）</label><input type="date" id="subMonFrom" value=""></div>
         <div class="note2" style="margin:0 0 6px">正式にモニターを始める日を入れると、<b>その日より前に出したカード（テスト配信）は「前の週に出した品」に数えません</b>。<b>1週目もこの日から数え直します</b>（開始日から7日間が1週目）。空のままなら、今までどおり<b>モニターに出したことのある品ぜんぶ</b>を外します。</div>
+        <!-- 8.49（カジの③）採寸が無い品に送り方と重さの目安を当てる。
+             種類の表は shared/shipguess.js の1か所だけ（pj-sync も同じ）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>採寸が無い品（送り方の目安）</b></div>
+        <div class="note2" style="margin:0 0 6px">Amazon に採寸が無い品（グッズはほとんど）は送り方が決められず、会員に出せていませんでした。<b>商品名の言葉から種類を見分けて、送り方と重さの既定を当てます</b>（当てた値は<b>目安</b>です）。<b>迷う種類は大きめの区分</b>に寄せ、<b>重さは必ず入れます</b>（Shopify は重さの段で送料を決めるため）。<b>「分からない」に当てた品は案に印が出ます</b>（自動では出しません）。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="sgOn" checked><label for="sgOn" style="flex:1"><b>採寸が無い品に既定を当てる</b>（切ると今までどおり「送り方 未確認」のままです）</label></div>
+        <div class="rowv cfgprice"><label for="sgNg">出さない種類（言葉）</label><input type="text" id="sgNg" value="ポスター" placeholder="ポスター" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px">この言葉が商品名に入っている品は、<b>案にも配信にも入れません</b>（既定は<b>ポスター</b>＝レターパックでは送れないため）。外した件数は案のまとめに出ます。読点・カンマ・改行で区切れます。</div>
+        <div class="row cfgprice"><label for="sgUnknownWay">分からない品の既定：送り方／重さ</label><select id="sgUnknownWay"><option value="cp">クリックポスト</option><option value="letter">レターパックプラス</option><option value="compact">宅急便コンパクト</option><option value="box60" selected>宅配便（60サイズ）</option><option value="box80">宅配便（80サイズ）</option></select><input type="number" id="sgUnknownG" value="800" step="50" min="0" max="30000" inputmode="numeric"><span class="unit">g</span></div>
+        <div class="rowv cfgprice"><label for="sgTable">種類を足す（1行 <code>言葉=送り方,重さ</code>）</label><textarea id="sgTable" rows="2" placeholder="ドラマCD=クリックポスト,120"></textarea></div>
+        <div class="note2" style="margin:0 0 6px">はじめから入っている種類：<b>缶バッジ 50g・アクリルスタンド 120g・クリアファイル 60g・キーホルダー 60g・色紙 80g</b>（クリックポスト）／<b>タペストリー 700g（宅配便80）</b>・<b>スリム／ミニのタペストリーだけ 200g（クリックポスト）</b>／<b>ぬいぐるみ 400g（宅急便コンパクト）</b>／<b>フィギュア 900g（宅配便60）</b>／<b>BOX・セット 1,500g（宅配便80）</b>。ここに同じ言葉を書くと上書きできます。</div>
         <!-- 8.47（カジの①）Amazon の順位から「売れ行き」を見積もる。
              換算表は shared/rankspd.js の1か所だけ（pj-sync も同じ）。 -->
         <div class="note2" style="margin:10px 0 2px"><b>売れ行きの推定（Amazon の順位から）</b></div>
@@ -2860,6 +2870,9 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/subindex.js"></script>
 <!-- 8.47 Amazon の順位から「売れ行き」を見積もる（換算表はここ1か所）。 -->
 <script src="./shared/rankspd.js"></script>
+<!-- 8.49 採寸が無い品の送り方と重さの目安（種類の表はここ1か所）。
+     shopcsv.js を使うので**あと**に読む。pj-sync も同じこれを読む。 -->
+<script src="./shared/shipguess.js"></script>
 <!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
 <script src="./shared/osscsv.js"></script>
 <script>
@@ -2916,6 +2929,10 @@ var SUBINDEX=PJ_SUBINDEX;
 if(typeof PJ_RANKSPD==='undefined')
   throw new Error('shared/rankspd.js が読み込めていません（売れ行きの推定）');
 var RANKSPD=PJ_RANKSPD;
+/* 8.49 採寸が無い品の送り方と重さの目安。pj-sync も同じこれを読む。 */
+if(typeof PJ_SHIPGUESS==='undefined')
+  throw new Error('shared/shipguess.js が読み込めていません（送り方の目安）');
+var SHIPGUESS=PJ_SHIPGUESS;
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
@@ -3632,6 +3649,8 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
              'subCutRate','subCutGross',
+             /* 8.49 採寸が無い品の目安。 */
+             'sgNg','sgUnknownWay','sgUnknownG','sgTable',
              'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
              /* 8.47 売れ行きの推定（Amazon の順位から）。 */
              'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
@@ -3668,7 +3687,7 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
-                'subMonNote','subMonWide','rsOn',
+                'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.46 会員チャンネルの一覧（目次）。 */
                 'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
@@ -6483,6 +6502,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
                  'subCutRate','subCutGross',
+                 'sgNg','sgUnknownWay','sgUnknownG','sgTable',
                  'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
                  'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
                  'rsGame','rsHobby','rsOther','rsFast','rsSlow',
@@ -16681,6 +16701,10 @@ function subPickCfg(){
            subMonLimitDays:v('subMonLimitDays'),
            /* 8.45 モニターの対象を広げるか（クリックポストで送れる品）。 */
            subMonWide:($('subMonWide')||{}).checked?1:0,
+           /* 8.49 採寸が無い品の目安（種類の表は shared/shipguess.js）。 */
+           sgOn:($('sgOn')||{}).checked?1:0,
+           sgNg:v('sgNg'), sgTable:v('sgTable'),
+           sgUnknownWay:v('sgUnknownWay'), sgUnknownG:v('sgUnknownG'),
            /* 8.48 新しい足切り（いまは数えるだけ）。 */
            subCutRate:v('subCutRate'), subCutGross:v('subCutGross'),
            subMonQ3:v('subMonQ3'),
@@ -16762,6 +16786,16 @@ function subDraftRows(){
        判定は shared/shopcsv.js の1か所だけ（pj-sync の予定も同じもの）。 */
     var sh=mwShipInfo(Object.assign({},r,
       { ship_way:String(cur.ship_way||'') }));
+    /* 8.49（カジの③）採寸が無い品の目安（種類・送り方・重さ）と、
+       「出さない種類」（既定：ポスター）。決まりは shared/shipguess.js。 */
+    var sgOpt=subPickCfg();
+    row.ng_kind=SHIPGUESS.ngOf(row.name,sgOpt);
+    row.dim_why=SHIPGUESS.dimWhy(r);
+    if(row.dim_why&&!row.ng_kind){
+      var gs=SHIPGUESS.guessOf({ name:row.name },sgOpt);
+      row.guess_kind=gs.kind; row.guess_way=gs.way_ja;
+      row.guess_g=gs.g; row.guess_unknown=!!gs.unknown;
+    }
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
     /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
@@ -16956,6 +16990,39 @@ function subCutHtml(rows){
     +'　新しい足切りで通した品の振り分け：'+by+'<br>'
     +'　ライトに入る「早い」の線：'+line;
 }
+/* ===== 8.49（カジの③）採寸が無い品の内訳 =====
+   ・外れている件数と理由（まだ調べていない／3辺そろっていない／
+     重さだけある／採寸が丸ごと無い）
+   ・種類の内訳（商品名の言葉から）と、既定を当てたときの送り方の内訳
+   ・「分からない」に当てた件数（**自動では出さない**ので案で見る）
+   ・⚙「出さない種類」で外した件数（既定：ポスター） */
+function subDimHtml(rows){
+  var sm=null;
+  /* 案の行はもう目安を持っているので、そこから数える
+     （元のデータ（採寸・ASIN）は案の行には入っていない）。 */
+  try{ sm=SHIPGUESS.sumPicked(rows||[]); }catch(e){ return ''; }
+  if(!sm||(!sm.n&&!sm.ng))return '';
+  var W=SHIPGUESS.WHY_JA||{};
+  var why=['none','part','g','all'].filter(function(k){
+    return (sm.why[k]||0)>0; }).map(function(k){
+    return esc(W[k]||k)+' '+mwN(sm.why[k]); }).join('／');
+  var kinds=Object.keys(sm.kinds).sort(function(a,b){
+    return sm.kinds[b]-sm.kinds[a]; }).map(function(k){
+    return esc(k)+' '+mwN(sm.kinds[k])+'件'; }).join('・');
+  var ways=Object.keys(sm.ways).sort(function(a,b){
+    return sm.ways[b]-sm.ways[a]; }).map(function(k){
+    return esc(k)+' '+mwN(sm.ways[k])+'件'; }).join('・');
+  var ng=Object.keys(sm.ngWords).map(function(k){
+    return esc(k)+' '+mwN(sm.ngWords[k])+'件'; }).join('・');
+  return '<br><b>採寸が取れていない品 '+mwN(sm.n)+'件</b>'
+    +(why?('<br>　理由：'+why):'')
+    +(kinds?('<br>　種類（商品名の言葉から）：'+kinds):'')
+    +(ways?('<br>　既定を当てると：'+ways):'')
+    +(sm.unknown?('<br>　<b style="color:var(--bad)">「分からない」に当てた品 '
+      +mwN(sm.unknown)+'件</b>（案に印を出します。'
+      +'自動では出しません）'):'')
+    +(sm.ng?('<br>　<b>出さない種類で外した品 '+mwN(sm.ng)+'件</b>（'+ng+'）'):'');
+}
 function subDraftFiltHtml(){
   var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
   var q=''; try{ q=String((findState('amz')||{}).q||'').trim(); }catch(e){ q=''; }
@@ -17053,6 +17120,8 @@ function subDraftMake(){
     +subStatHtml(rows)
     /* 8.48（カジの②）足切りの試算（数えるだけ）。 */
     +subCutHtml(rows)
+    /* 8.49（カジの③）採寸が無い品の内訳。 */
+    +subDimHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
       +'件</span>（作品名に「版」が入っているだけかもしれません。'
       +'限定版なら印を外してください）'):'')
@@ -17239,6 +17308,16 @@ function subDraftHtml(plans){
         /* 8.47 推定で選んだ品（MW の減りが無い品）。 */
         +(x.mon_est?'<span class="badge" style="background:#3a6ea5">推定で入れました</span>':'')
         +((x.spd_src==='amz'&&!x.mon_est)?'<span class="badge" style="background:#555">順位からの推定</span>':'')
+        /* 8.49 採寸が無い品に既定を当てた行（「分からない」は赤で出す）。 */
+        +(x.guess_unknown
+          ?('<span class="badge" style="background:#a33">送り方が分からない'
+            +'（'+esc(String(x.guess_way||''))+' '+mwN(+x.guess_g||0)
+            +'g の目安）</span>')
+          :(x.guess_kind
+            ?('<span class="badge" style="background:#6a6a6a">'
+              +esc(String(x.guess_kind))+'の目安（'
+              +esc(String(x.guess_way||''))+' '+mwN(+x.guess_g||0)+'g）</span>')
+            :''))
         /* 8.29（カジの依頼）総合の札（◎ねらい目／○ふつう／△慎重に）。 */
         +gdBadgeHtml(x)
         /* 8.27（カジの依頼3）送料の区分（配る前に気づけるように）。 */
@@ -27414,7 +27493,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v307';   // sw.js の const V と必ず同じ値にする
+var APP_V='v308';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

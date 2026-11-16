@@ -58,6 +58,7 @@ import MGATE from "../shared/mgate.js";
    赤字にならない売値）。しきい値と言い方はこの1か所だけ。 */
 import SUBGUIDE from "../shared/subguide.js";
 import SUBINDEX from "../shared/subindex.js";
+import SHIPGUESS from "../shared/shipguess.js";
 /* 8.37（v296・カジの依頼）売り方ごとの「赤字にならない売値」。
    率・送料・梱包材は⚙。式と表はこの1か所だけ。 */
 import SELLWAY from "../shared/sellway.js";
@@ -11013,6 +11014,11 @@ async function subSettings(env) {
                    モニターは「今週の配信」に混ぜるので出さない）
        ・idx     … 行の形の⚙（商品名の字数・カテゴリの順・仕入れ値と粗利・
                    新着の行数）。決まりは shared/subindex.js の1か所 */
+    /* 8.49（カジの③）採寸が無い品の目安と「出さない種類（言葉）」。
+       言葉と表は shared/shipguess.js の1か所（画面も同じものを読む）。 */
+    ship_guess: { sgOn: st.sgOn === undefined ? true : !!st.sgOn,
+                  sgNg: st.sgNg, sgTable: st.sgTable,
+                  sgUnknownWay: st.sgUnknownWay, sgUnknownG: st.sgUnknownG },
     idxOn: st.gdIdxOn === undefined ? true : !!st.gdIdxOn,
     idxAuto: st.gdIdxAuto === undefined ? true : !!st.gdIdxAuto,
     idxWeek: st.gdIdxWeek === undefined ? true : !!st.gdIdxWeek,
@@ -11106,7 +11112,9 @@ async function dcApi(env, run, method, path, body) {
   return { ok: false, status: 0, code: 0 };
 }
 /* 配信できる商品。印あり＋Shopify に読み込み済み＋値段と数がある行だけ。 */
-async function subRows(env) {
+/* 8.49（カジの③）cfg を渡すと、⚙「出さない種類（言葉）」に当たった品を
+   **ここで外す**（案・予定・配信・一覧のすべてで同じになる）。 */
+async function subRows(env, cfg) {
   if (!(await subPostOk(env))) return [];
   /* 8.27（カジの依頼2）送り方の手の上書き（migrate-0060）。
      列が無い D1 でも落とさない。 */
@@ -11162,6 +11170,8 @@ async function subRows(env) {
         AND COALESCE(b.price,0) > 0
         AND COALESCE(b.max_qty,0) > 0
       ORDER BY b.at DESC, b.jan ASC LIMIT ${SUB_ROWS_MAX}`).all();
+  const sgOpt = ((cfg || {}).ship_guess) || null;
+  const ngOf = (nm) => sgOpt ? SHIPGUESS.ngOf(nm, sgOpt) : "";
   return ((q && q.results) || []).map((r) => ({
     jan: String(r.jan || ""),
     name: String(r.amz_name || r.mw_name || ""),
@@ -11223,7 +11233,9 @@ async function subRows(env) {
     px_days: String(r.px_from || "")
       ? Math.max(1, Math.round(
           (Date.now() - Date.parse(String(r.px_from))) / 86400000)) : 0,
-  }));
+    /* 8.49 ⚙「出さない種類（言葉）」に当たった品の言葉（空なら出す）。 */
+    ng_kind: ngOf(String(r.amz_name || r.mw_name || "")),
+  })).filter((r) => !r.ng_kind);
 }
 /* 送ったカードの控え（JAN → 行）。 */
 async function subPosts(env, ch) {
@@ -11347,7 +11359,7 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
 /* 今日の配信の予定（画面の「予定を見る」と、配信の中身の両方に使う）。 */
 async function subPlanBuild(env) {
   const cfg = await subSettings(env);
-  const rows = await subRows(env);
+  const rows = await subRows(env, cfg);
   const day = subJst().day;
   let skip = "";
   try { skip = String(await stateGet(env, SUB_SKIP_KEY) || ""); } catch (e) {}
@@ -11999,7 +12011,7 @@ async function jobSubSend(env, opt) {
       return Object.assign(await saveRun(env, run), res);
     }
     const cfg = await subSettings(env);
-    const rows = await subRows(env);
+    const rows = await subRows(env, cfg);
     const day = subJst().day;
     if (o.auto) {
       let skip = "";
@@ -12630,7 +12642,7 @@ async function subIndexPlan(env) {
     res.on = !!cfg.idxOn;
     res.auto = !!cfg.idxAuto;
     res.week = !!cfg.idxWeek;
-    const rows = await subRows(env);
+    const rows = await subRows(env, cfg);
     const ones = await oneRows(env, {});
     const list = (cfg.plans || []).filter((p) => p.on && p.ch)
       .concat((cfg.one || []).filter((g) => g.on && g.ch)
@@ -12676,7 +12688,7 @@ async function jobSubIndex(env, opt) {
       res.detail = "DISCORD_BOT_TOKEN が登録されていません";
       return Object.assign(await saveRun(env, run), res);
     }
-    const rows = o.rows || await subRows(env);
+    const rows = o.rows || await subRows(env, cfg);
     Object.assign(res, await subIndexAll(env, run, cfg, rows, o.plan));
     res.ok = true;
     run.notes.push("会員の一覧：ページ " + res.pages + "・新しく " + res.add
@@ -12841,7 +12853,7 @@ async function jobSubHot(env, opt) {
     try { last = JSON.parse(String(await stateGet(env, SUB_HOT_LAST) || "[]")); }
     catch (e) { last = []; }
     if (!Array.isArray(last)) last = [];
-    const rows = await subRows(env);
+    const rows = await subRows(env, cfg);
     const got = [];
     for (const p of cfg.active) {
       const sent = await subPosts(env, p.ch);
@@ -13556,7 +13568,7 @@ async function subEditLeft(env, run, jans) {
   const list = (jans || []).map((x) => String(x || "")).filter(Boolean);
   if (!list.length || !env.DISCORD_BOT_TOKEN) return out;
   const cfg = await subSettings(env);
-  const rows = await subRows(env);
+  const rows = await subRows(env, cfg);
   const byJan = {};
   for (const r of rows) byJan[r.jan] = r;
   /* 8.22（【2】）1点もの（jan の欄が 'one-<連番>'）も同じ仕組みで
