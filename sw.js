@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v304';
+const V = 'pj-pricing-v305';
 const ASSETS = [
   './',
   './index.html',
@@ -27,6 +27,8 @@ const ASSETS = [
   // 8.29 買うかどうかの目安（札・売れ行き・値動き・ライバル・最低価格）。
   './shared/subguide.js',
   './shared/subcard.js',
+  // 8.46 会員チャンネルの「今週の一覧（目次）」。pj-sync も同じこれを読む。
+  './shared/subindex.js',
   // 海外向け Shopify の商品CSV（6.188）。pj-sync も同じこれを読む。
   './shared/osscsv.js',
   './manifest.webmanifest',

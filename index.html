@@ -2326,6 +2326,23 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
         <div class="note2" id="gdPinNote" style="margin-top:2px"></div>
         <div id="gdPinBox"></div>
+        <!-- 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」。
+             固定の1通をピン留めして、配信のたびに書き換える（通知なし）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>今週の一覧（目次）</b></div>
+        <div class="note2" style="margin:0 0 6px">カードが増えるとスクロールが大変なので、各プランのチャンネルに<b>いま買える品の一覧</b>を出します。<b>固定の1通をピン留めして書き換える</b>ので、<b>通知は鳴りません</b>。受付終了・完売・残り0の品は一覧から外れます。<b>1品1行：札・商品名・仕入れ値・粗利・残り数・カードへのリンク</b>（卸値や仕入れ先は入りません）。<b>CSV では配りません。</b></div>
+        <div class="chk cfgprice"><input type="checkbox" id="gdIdxOn" checked><label for="gdIdxOn" style="flex:1"><b>一覧を出す</b>（プランごとのチャンネルと目玉商品のチャンネル）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="gdIdxAuto" checked><label for="gdIdxAuto" style="flex:1"><b>配信のあとに書き換える</b>（押さなくても最新になります）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="gdIdxWeek" checked><label for="gdIdxWeek" style="flex:1"><b>配信した日に「今週の新着」を1通出す</b>（一覧へのリンク付き・<b>通知は1日1回</b>。モニターは「今週の配信」に入ります）</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="gdIdxYen" checked><label for="gdIdxYen" style="flex:1"><b>一覧に仕入れ値と粗利を出す</b>（外すと 札・商品名・残り数・リンクだけ）</label></div>
+        <div class="row cfgprice"><label for="gdIdxName">商品名の字数／新着の行数</label><input type="number" id="gdIdxName" value="28" step="1" min="8" max="60" inputmode="numeric"><input type="number" id="gdIdxWeekN" value="10" step="1" min="1" max="30" inputmode="numeric"><span class="unit">字／行</span></div>
+        <div class="rowv cfgprice"><label for="gdIdxCats">カテゴリの順</label><input type="text" id="gdIdxCats" value="" placeholder="ゲーム,フィギュア,その他,1点もの" inputmode="text"></div>
+        <div class="note2" style="margin:0 0 6px">ジャンルは<b>機種から</b>決まります（ゲーム／フィギュア／その他。グッズは「その他」に入ります）。空なら上の順です。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="gdIdxPlanBtn" onclick="gdIdxPlan();return false" style="flex:1">一覧の予定を見る</button>
+          <button class="btn cfgprice" id="gdIdxBtn" onclick="gdIdxGo();return false" style="flex:1">一覧を書き直す</button>
+        </div>
+        <div class="note2" id="gdIdxNote" style="margin-top:2px"></div>
+        <div id="gdIdxBox"></div>
         <div class="note2" style="margin:0 0 6px">Shopify の商品CSV の <code>Weight value (grams)</code> は
           <b>Amazon の梱包重量（なければ商品の重量）＋この足し分</b>で出します。
           Shopify は<b>重さの段</b>で送料を決めるので、ここを増やすと段が上に動きます。
@@ -2819,6 +2836,9 @@ body.staff #syncOnHandFix{display:none !important}
      subcard.js より**先**に読む（カードがこれを使う）。 -->
 <script src="./shared/subguide.js"></script>
 <script src="./shared/subcard.js"></script>
+<!-- 8.46 会員チャンネルの「今週の一覧（目次）」。subguide.js・subcard.js・
+     mwfee.js を使うので**あと**に読む。pj-sync も同じこれを読む。 -->
+<script src="./shared/subindex.js"></script>
 <!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
 <script src="./shared/osscsv.js"></script>
 <script>
@@ -2867,6 +2887,10 @@ if(typeof PJ_SUBGUIDE==='undefined')
 if(typeof PJ_SELLWAY==='undefined')
   throw new Error('shared/sellway.js が読み込めていません（売り方ごとの売値）');
 var SELLWAY=PJ_SELLWAY;
+/* 8.46 会員チャンネルの「今週の一覧（目次）」。pj-sync も同じこれを読む。 */
+if(typeof PJ_SUBINDEX==='undefined')
+  throw new Error('shared/subindex.js が読み込めていません（会員の一覧）');
+var SUBINDEX=PJ_SUBINDEX;
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
@@ -3603,6 +3627,8 @@ var ADV_SUB=['subHour','subDomain',
              'gdShipBox60','gdShipBox80','gdShipBox',
              /* 8.30 固定メッセージ（共通の置き場・締めと発送の曜日）。 */
              'gdPinCh','gdCloseDay','gdShipDay',
+             /* 8.46 会員チャンネルの一覧（目次）。 */
+             'gdIdxName','gdIdxWeekN','gdIdxCats',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              'osPricePct','osFixPct','osVendor','osType'];
@@ -3613,7 +3639,9 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
-                'subMonNote','subMonWide'];
+                'subMonNote','subMonWide',
+                /* 8.46 会員チャンネルの一覧（目次）。 */
+                'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
@@ -6437,6 +6465,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'gdRivalA','gdRivalB','gdRateA','gdRateB','gdPxPct',
                  'gdItemsMonitor','gdItemsLight','gdItemsStandard',
                  'gdItemsPremium','gdPinCh','gdCloseDay','gdShipDay',
+                 /* 8.46 会員チャンネルの一覧（目次）。 */
+                 'gdIdxName','gdIdxWeekN','gdIdxCats',
                  /* 8.37 売り方ごとの「赤字にならない売値」。 */
                  'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
                  'gdFbaIn','gdShipCp','gdShipLetter','gdShipCompact',
@@ -17555,6 +17585,14 @@ function gdCfg(){
            /* 8.30 固定メッセージ（共通の置き場・注文の流れの曜日）。 */
            gdPinCh:v('gdPinCh'), gdCloseDay:v('gdCloseDay'),
            gdShipDay:v('gdShipDay'),
+           /* 8.46 会員チャンネルの一覧（目次）。決まりは
+              shared/subindex.js の1か所（pj-sync も同じものを読む）。 */
+           gdIdxOn:($('gdIdxOn')||{}).checked?1:0,
+           gdIdxAuto:($('gdIdxAuto')||{}).checked?1:0,
+           gdIdxWeek:($('gdIdxWeek')||{}).checked?1:0,
+           gdIdxYen:($('gdIdxYen')||{}).checked?1:0,
+           gdIdxName:v('gdIdxName'), gdIdxWeekN:v('gdIdxWeekN'),
+           gdIdxCats:v('gdIdxCats'),
            /* 8.37 売り方ごとの「赤字にならない売値」（率・送料・梱包材）。 */
            gdWays:v('gdWays'), gdFeeMercari:v('gdFeeMercari'),
            gdFeeYahoo:v('gdFeeYahoo'), gdAmzClose:v('gdAmzClose'),
@@ -17650,6 +17688,75 @@ function gdPinList(){
                  on:(p.on===undefined)?true:!!p.on });
     });
   return out;
+}
+/* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
+   ・「一覧の予定を見る」… Discord には何も出さず、チャンネルごとに
+     何件・何ページになるかを見る
+   ・「一覧を書き直す」… 固定の1通を書き換える（通知は鳴らない）
+   決まり（行の形・並び・分け方）は shared/subindex.js の1か所。 */
+function gdIdxNote(t,bad){
+  var el=$('gdIdxNote'); if(!el)return;
+  el.innerHTML=(bad?'<b style="color:var(--bad)">':'<b>')+t+'</b>';
+}
+function gdIdxRows(d){
+  var chs=(d||{}).chs||[];
+  if(!chs.length)return '<div class="note2">配信するチャンネルがありません'
+    +'（⚙でプランのチャンネルIDを入れてください）。</div>';
+  return '<div class="note2" style="margin:4px 0 0">'
+    +chs.map(function(c){
+      var cat=(c.cats||[]).map(function(g){
+        return esc(g.cat)+' '+mwN(g.n)+'件'; }).join('・');
+      return '<b>'+esc(c.name||c.key)+'</b>　'+mwN(c.n)+'件'
+        +(c.pages?('／'+mwN(c.pages)+'ページ'):'')
+        +(c.was>c.pages?('（前は '+mwN(c.was)+'ページ。余ったページは'
+          +'「空です」に書き換えます）'):'')
+        +(c.new_n?('／今週の新着 '+mwN(c.new_n)+'件'):'')
+        +(c.pin?'／ピン留め済み':'')
+        +(cat?('<br>　'+cat):'')
+        +(c.add!==undefined?('<br>　新しく '+mwN(c.add)+'・書き換え '
+          +mwN(c.edit)+'・そのまま '+mwN(c.same)
+          +(c.empty?('・空にした '+mwN(c.empty)):'')
+          +(c.fail?('・<b style="color:var(--bad)">失敗 '+mwN(c.fail)
+            +'</b>'):'')):'');
+    }).join('<br>')
+    +'</div>';
+}
+function gdIdxPlan(){
+  if(roleDenyPrice('gdIdxNote'))return;
+  gdIdxNote('予定を見ています…');
+  return mwGet('/sub/index').then(function(d){
+    if(!d||d.error){
+      gdIdxNote('⚠ 見られませんでした：'+esc(String((d||{}).detail
+        ||(d||{}).error||'')),1);
+      return;
+    }
+    $('gdIdxBox').innerHTML=gdIdxRows(d);
+    gdIdxNote((d.on?'':'⚠ ⚙で「一覧を出す」が切れています。')
+      +'一覧の予定（<b>まだ何も出していません</b>）');
+  })['catch'](function(e){ gdIdxNote('⚠ '+esc(e.message),1); });
+}
+function gdIdxGo(){
+  if(roleDenyPrice('gdIdxNote'))return;
+  var btn=$('gdIdxBtn');
+  if(btn){ btn.disabled=true; btn.innerHTML='書き直しています…'; }
+  gdIdxNote('書き直しています…');
+  return mwPost('/sub/index',{}).then(function(d){
+    if(btn){ btn.disabled=false; btn.innerHTML='一覧を書き直す'; }
+    if(!d||d.error){
+      gdIdxNote('⚠ 書き直せませんでした：'+esc(String((d||{}).detail
+        ||(d||{}).error||'')),1);
+      return;
+    }
+    $('gdIdxBox').innerHTML=gdIdxRows(d);
+    gdIdxNote(d.why?('⚠ '+esc(String(d.why)))
+      :('✓ 一覧を書き直しました（新しく '+mwN(d.add)+'・書き換え '
+        +mwN(d.edit)+'・そのまま '+mwN(d.same)
+        +(d.fail?('・失敗 '+mwN(d.fail)):'')+'）'
+        +'<br><span class="note2">書き換えでは<b>通知は鳴りません</b>。</span>'));
+  })['catch'](function(e){
+    if(btn){ btn.disabled=false; btn.innerHTML='一覧を書き直す'; }
+    gdIdxNote('⚠ '+esc(e.message),1);
+  });
 }
 function gdPinGo(){
   var box=$('gdPinBox'); if(!box)return;
@@ -27125,7 +27232,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v304';   // sw.js の const V と必ず同じ値にする
+var APP_V='v305';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

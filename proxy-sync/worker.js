@@ -57,6 +57,7 @@ import MGATE from "../shared/mgate.js";
 /* 8.29（カジの依頼）買うかどうかの目安（札・売れ行き・値動き・ライバル・
    赤字にならない売値）。しきい値と言い方はこの1か所だけ。 */
 import SUBGUIDE from "../shared/subguide.js";
+import SUBINDEX from "../shared/subindex.js";
 /* 8.37（v296・カジの依頼）売り方ごとの「赤字にならない売値」。
    率・送料・梱包材は⚙。式と表はこの1か所だけ。 */
 import SELLWAY from "../shared/sellway.js";
@@ -264,6 +265,13 @@ const ALLOWED = [
      ときだけ使う（自分が出したカードだけ・msg_id は sub_post の控え）。 */
   { m: "DELETE", write: true,
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/messages\/\d+$/ },
+  /* 8.46（カジの依頼）「今週の一覧」の1ページめを**ピン留め**する。
+     会員がいつでも最新の一覧を開けるようにするため。
+     ・**自分が出したメッセージだけ**（msg_id は sync_state の控え）
+     ・ピン留めは**1回だけ**（控えに印を残して二度押さない）
+     ・外す（DELETE）ことはしない＝許していない */
+  { m: "PUT", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+\/pins\/\d+$/ },
   /* 8.28（カジの依頼1）**チャンネルの名前だけ**を読む。
      「全プランに配る」の確認の画面に「→ #リスト-プレミアム」と出して、
      ⚙に入れたチャンネルID が思っている先かどうかを配る前に確かめる。
@@ -10972,6 +10980,20 @@ async function subSettings(env) {
     /* 8.43（カジの依頼3）モニターのチャンネルに出す「今週の配信」の1通。
        既定はオン（商品名・JAN・価格は出さない・@everyone は使わない）。 */
     monNote: st.subMonNote === undefined ? true : !!st.subMonNote,
+    /* 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」。
+       ・idxOn   … 一覧を出すか（既定オン）
+       ・idxAuto … 配信のあとに書き換えるか（既定オン）
+       ・idxWeek … 配信した日に「今週の新着」を1通出すか（既定オン・
+                   モニターは「今週の配信」に混ぜるので出さない）
+       ・idx     … 行の形の⚙（商品名の字数・カテゴリの順・仕入れ値と粗利・
+                   新着の行数）。決まりは shared/subindex.js の1か所 */
+    idxOn: st.gdIdxOn === undefined ? true : !!st.gdIdxOn,
+    idxAuto: st.gdIdxAuto === undefined ? true : !!st.gdIdxAuto,
+    idxWeek: st.gdIdxWeek === undefined ? true : !!st.gdIdxWeek,
+    idx: { gdIdxName: st.gdIdxName, gdIdxCats: st.gdIdxCats,
+           gdIdxYen: st.gdIdxYen === undefined ? true : !!st.gdIdxYen,
+           week: Math.max(1, Math.min(30,
+             Math.round(Number(st.gdIdxWeekN) || 10))) },
     /* 8.31（カジの依頼3）受付が終わったカードを消すまでの日数
        （0＝消さない。既定は消さない）。 */
     offDays: Math.max(0, Math.round(Number(st.subOffDays) || 0)),
@@ -12209,6 +12231,16 @@ async function jobSubSend(env, opt) {
       if (redo && !fail && !res.left) {
         try { await stateSet(env, SUB_REDO_KEY, "").run(); } catch (e) {}
       }
+      /* 8.46（カジの依頼）会員チャンネルの「今週の一覧」を書き換える
+         （⚙ idxAuto・既定オン）。**モニターの「今週の配信」より先**に
+         回す（その1通に一覧のリンクを入れるため）。 */
+      if (cfg.idxOn && cfg.idxAuto) {
+        try {
+          res.index = await subIndexAll(env, run, cfg, rows, only);
+        } catch (e) {
+          run.notes.push("sub-index: " + String((e && e.message) || e));
+        }
+      }
       /* 8.43（カジの依頼3）モニターのチャンネルに「今週の配信」を1通。
          **商品名・JAN・価格は出さない**。@everyone・@here も使わない。 */
       try { await subMonNote(env, run, cfg, res, day); } catch (e) {}
@@ -12261,6 +12293,8 @@ function subMonText(cfg, by, now) {
     L.push("モニターの **" + mon + "件**は **" + md(end)
       + " まで**ご購入いただけます。");
   L.push("上のプランでは、もっと多くの商品をご覧いただけます。");
+  /* 8.46 固定の「今週の一覧」へのリンク（あれば）。 */
+  if (by.idx_url) L.push("いま買える品の一覧 \u2192 " + by.idx_url);
   return L.join("\n");
 }
 /* 8.43（カジの依頼1）モニターのチャンネルに出したことのある商品。
@@ -12325,6 +12359,13 @@ async function subMonNote(env, run, cfg, res, day) {
   if (!add) return 0;                       // 新しく出した回だけ
   const by = await subMonToday(env, cfg, day);
   if (!by.n) return 0;
+  /* 8.46 固定の一覧（1ページめ）へのリンクを入れる。 */
+  try {
+    const st = await subIdxState(env, p.ch);
+    const mid = String((((st.pages || [])[0]) || {}).msg_id || "");
+    const info = await dcChInfo(env, run, p.ch);
+    by.idx_url = SUBINDEX.jump(info.guild, p.ch, mid);
+  } catch (e) { by.idx_url = ""; }
   const txt = subMonText(cfg, by, nowIso()).slice(0, 1900);
   const body = { content: txt, allowed_mentions: { parse: [] } };
   let was = "";
@@ -12350,6 +12391,273 @@ async function subMonNote(env, run, cfg, res, day) {
       String(day) + "|" + String(((m.data || {}).id) || "")).run();
   } catch (e) {}
   return 1;
+}
+/* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
+   カードが増えるとスクロールが大変なので、各プランのチャンネルに
+   **いま買える品の一覧**を出す。
+     A … 固定の1通（複数ページ）を**ピン留め**して、配信のたびに**書き換える**
+          （PATCH なので**通知は鳴らない**）
+     B … 配信した日に「**今週の新着 ◯件**＋一覧へのリンク」を1通
+          （その日の最初だけ POST・2回目からは書き換え＝通知は1日1回）
+   ・行の形・並び・カテゴリ・分け方は shared/subindex.js の1か所だけ
+   ・受付終了・完売・残り0・カードが消えた品は出さない
+   ・ページが減ったら「（このページは空です）」に書き換える（**消さない**）
+   ・CSV では配らない（リストの流出を避ける・カジの方針） */
+const SUB_IDX_KEY = "sub.index.";       // + チャンネルID
+const SUB_IDX_MAX = 20;                 // 1チャンネルのページの上限
+async function subIdxState(env, ch) {
+  let v = "";
+  try { v = String(await stateGet(env, SUB_IDX_KEY + String(ch)) || ""); }
+  catch (e) { v = ""; }
+  let o = null;
+  try { o = v ? JSON.parse(v) : null; } catch (e) { o = null; }
+  if (!o || typeof o !== "object") o = {};
+  if (!Array.isArray(o.pages)) o.pages = [];
+  return o;
+}
+function subIdxSave(env, ch, st) {
+  return stateSet(env, SUB_IDX_KEY + String(ch), JSON.stringify(st || {}));
+}
+/* 一覧に出す行（そのチャンネルに**カードを出してある品**だけ）。 */
+async function subIdxRows(env, cfg, plan, rows, ones) {
+  const sent = await subPosts(env, plan.ch);
+  const out = [];
+  for (const r of (rows || [])) {
+    const was = sent[String(r.jan)];
+    if (!was) continue;                 // カードを出していない品は出さない
+    const isGame = MWFEE.genreOf(r) === "ゲーム";
+    const kind = String(plan.key || "") === "monitor"
+      ? SUBPLAN.monKind(r, plan, (cfg || {}).pick || null, undefined, isGame,
+                        subShipInfo(r, cfg || {}).name)
+      : SUBPLAN.fits(plan, r, isGame);
+    if (!kind) continue;
+    const sold = Math.max(0, Number(r.sold) || 0);
+    const left = Math.max(0, (Number(r.qty) || 0) - sold);
+    const x = Object.assign({}, r, { left: left, sold: sold });
+    out.push({
+      jan: String(r.jan), name: String(r.name || ""),
+      kishu: String(r.kishu || ""), genre: MWFEE.genreOf(r),
+      price: Number(r.price) || 0, gross: Number(r.gross) || 0,
+      left: left, msg_id: String(was.msg_id || ""),
+      off_at: String(was.off_at || ""), sold_out: Number(was.sold_out) || 0,
+      mark: SUBGUIDE.badgeOf(x, (cfg || {}).guide || {}).mark,
+      /* その日に新しく出したカードか（B の「今週の新着」に使う）。 */
+      is_new: subJst(was.at).day === subJst().day,
+    });
+  }
+  /* 1点もの（jan が 'one-…'）。先行・みんなのチャンネルにだけ出る。 */
+  for (const r of (ones || [])) {
+    const was = sent[String(r.handle)];
+    if (!was) continue;
+    out.push({
+      jan: String(r.handle), name: String(r.name || ""), kishu: "",
+      genre: "", price: Number(r.price) || 0,
+      gross: Number(r.gross) || 0, left: Math.max(0, Number(r.left) || 0),
+      msg_id: String(was.msg_id || ""), off_at: String(was.off_at || ""),
+      sold_out: Number(was.sold_out) || 0, mark: "",
+      is_new: subJst(was.at).day === subJst().day,
+    });
+  }
+  return out;
+}
+/* チャンネル1つぶんの一覧を書き換える（足りなければ新しく出す）。 */
+async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
+  const ch = String(plan.ch || "");
+  const r = { key: plan.key, name: plan.name, ch: ch, n: 0, pages: 0,
+              add: 0, edit: 0, same: 0, empty: 0, fail: 0, pin: 0 };
+  if (!ch) return r;
+  const info = await dcChInfo(env, run, ch);
+  const opt = Object.assign({}, (cfg || {}).idx || {}, { guild: info.guild });
+  const items = await subIdxRows(env, cfg, plan, rows, ones);
+  const pages = SUBINDEX.pagesOf(items, opt, ch).slice(0, SUB_IDX_MAX);
+  r.n = items.filter((x) => SUBINDEX.liveOf(x)).length;
+  r.pages = pages.length;
+  const st = await subIdxState(env, ch);
+  const was = st.pages || [];
+  const now = nowIso();
+  const out = [];
+  for (let i = 0; i < Math.max(pages.length, was.length); i++) {
+    const pg = pages[i] || SUBINDEX.emptyPage(i, Math.max(1, pages.length));
+    const body = { content: pg.title,
+                   embeds: (pg.embeds || []).map((e) => ({
+                     title: String(e.title || "").slice(0, 250),
+                     description: String(e.description || "")
+                       .slice(0, SUBINDEX.EMBED_MAX),
+                     color: 0x2b6cb0 })),
+                   allowed_mentions: { parse: [] } };
+    const h = SUBINDEX.hashOf(body);
+    const old = was[i] || null;
+    const mid = old ? String(old.msg_id || "") : "";
+    if (!pages[i] && !mid) continue;            // もともと無いページ
+    if (mid && old && String(old.hash || "") === h) {
+      r.same++; out.push(old); continue;        // 中身が同じなら触らない
+    }
+    if (mid) {
+      const e = await dcApi(env, run, "PATCH",
+        "/channels/" + ch + "/messages/" + mid, body);
+      if (e.ok) {
+        if (!pages[i]) r.empty++; else r.edit++;
+        out.push({ msg_id: mid, hash: h, at: now });
+        continue;
+      }
+      /* そのメッセージが消えていたときだけ、もう一度出す（8.38 と同じ）。 */
+      if (!dcMsgGone(e)) { r.fail++; out.push(old); continue; }
+    }
+    if (!pages[i]) continue;                    // 空のページは出し直さない
+    const m = await dcApi(env, run, "POST", "/channels/" + ch + "/messages",
+                          body);
+    if (!m.ok) { r.fail++; continue; }
+    const id = String(((m.data || {}).id) || "");
+    out.push({ msg_id: id, hash: h, at: now });
+    r.add++;
+    /* 1ページめだけピン留めする（ピン留めは1回だけ・消さない）。 */
+    if (i === 0 && !st.pin && id) {
+      const pin = await dcApi(env, run, "PUT",
+        "/channels/" + ch + "/pins/" + id, null);
+      if (pin.ok) { st.pin = 1; r.pin = 1; }
+    }
+  }
+  st.pages = out;
+  st.at = now;
+  try { await subIdxSave(env, ch, st).run(); } catch (e) {}
+  /* B … 配信した日の「今週の新着」1通（その日の最初だけ通知が鳴る）。
+     モニターは「今週の配信」（8.43）に一覧のリンクを足すので出さない。 */
+  if ((cfg || {}).idxWeek && String(plan.key || "") !== "monitor"
+      && items.some((x) => x.is_new && SUBINDEX.liveOf(x))) {
+    const txt = SUBINDEX.weekText(items, opt, ch,
+      (out[0] || {}).msg_id || "", (cfg.idx || {}).week);
+    const note = await subNoteOnce(env, run, ch, txt);
+    r.week = note;
+  }
+  if (res) {
+    res.pages += r.pages; res.add += r.add; res.edit += r.edit;
+    res.same += r.same; res.fail += r.fail;
+  }
+  return r;
+}
+/* 「その日の最初だけ POST・2回目からは同じ1通を書き換え」の口
+   （8.43 のモニターの「今週の配信」と同じやり方）。 */
+const SUB_NOTE_KEY = "sub.note.";       // + チャンネルID
+async function subNoteOnce(env, run, ch, text, key) {
+  const k = String(key || (SUB_NOTE_KEY + String(ch)));
+  const day = subJst().day;
+  const body = { content: String(text || "").slice(0, 1900),
+                 allowed_mentions: { parse: [] } };
+  const h = SUBINDEX.hashOf(body.content);
+  let was = "";
+  try { was = String((await stateGet(env, k)) || ""); } catch (e) { was = ""; }
+  const a = was.split("|");
+  const d0 = a[0] || "", id0 = a[1] || "", h0 = a[2] || "";
+  const save = (id) => {
+    try { return stateSet(env, k, day + "|" + id + "|" + h).run(); }
+    catch (e) { return null; }
+  };
+  if (d0 === day && id0) {
+    /* 文が同じなら触らない（同じ日に何回配信しても1通のまま）。 */
+    if (h0 === h) return 0;
+    const e = await dcApi(env, run, "PATCH",
+      "/channels/" + ch + "/messages/" + id0, body);
+    if (e.ok) { await save(id0); return 2; }    // 書き換え（通知は鳴らない）
+    if (!dcMsgGone(e)) return 0;
+  }
+  const m = await dcApi(env, run, "POST", "/channels/" + ch + "/messages",
+                        body);
+  if (!m.ok) return 0;
+  await save(String(((m.data || {}).id) || ""));
+  return 1;
+}
+/* プランぜんぶの一覧を書き換える（配信のあとにも回す）。 */
+async function subIndexAll(env, run, cfg, rows, plan) {
+  const res = { chs: [], pages: 0, add: 0, edit: 0, same: 0, fail: 0 };
+  const only = String(plan || "").trim();
+  const ones = await oneRows(env, {});
+  for (const p of ((cfg || {}).plans || [])) {
+    if (!p.on || !p.ch) continue;
+    if (only && p.key !== only) continue;
+    res.chs.push(await subIdxOne(env, run, cfg, p, rows, ones, res));
+  }
+  /* 1点もののチャンネル（先行・みんな）も同じ形で出す。 */
+  for (const g of ((cfg || {}).one || [])) {
+    if (!g.on || !g.ch) continue;
+    if (only && g.key !== only) continue;
+    res.chs.push(await subIdxOne(env, run, cfg,
+      { key: g.key, name: g.name, ch: g.ch, kinds: "one", q: g.q || 1 },
+      [], ones, res));
+  }
+  return res;
+}
+/* 一覧の**予定**（GET /sub/index）。Discord には何も出さず、
+   チャンネルごとに「何件・何ページになるか」だけ返す。 */
+async function subIndexPlan(env) {
+  const res = { ok: false, chs: [], on: false, week: false };
+  try {
+    if (!(await subPostOk(env))) {
+      res.error = "no_table";
+      res.detail = "sub_post がありません（migrate-0053-sub-post.sql）";
+      return res;
+    }
+    const cfg = await subSettings(env);
+    res.on = !!cfg.idxOn;
+    res.auto = !!cfg.idxAuto;
+    res.week = !!cfg.idxWeek;
+    const rows = await subRows(env);
+    const ones = await oneRows(env, {});
+    const list = (cfg.plans || []).filter((p) => p.on && p.ch)
+      .concat((cfg.one || []).filter((g) => g.on && g.ch)
+        .map((g) => ({ key: g.key, name: g.name, ch: g.ch, kinds: "one",
+                       q: g.q || 1 })));
+    for (const p of list) {
+      const items = await subIdxRows(env, cfg, p,
+        String(p.kinds || "") === "one" ? [] : rows, ones);
+      const live = items.filter((x) => SUBINDEX.liveOf(x));
+      const pages = SUBINDEX.pagesOf(live, (cfg.idx || {}), p.ch);
+      const st = await subIdxState(env, p.ch);
+      res.chs.push({ key: p.key, name: p.name, ch: p.ch, n: live.length,
+                     pages: pages.length, was: (st.pages || []).length,
+                     pin: !!st.pin,
+                     cats: SUBINDEX.groupsOf(live, cfg.idx || {})
+                       .map((g) => ({ cat: g.cat, n: g.rows.length })),
+                     new_n: live.filter((x) => x.is_new).length });
+    }
+    res.ok = true;
+  } catch (e) { res.error = String((e && e.message) || e); }
+  return res;
+}
+/* 一覧を書き換える（POST /sub/index・配信のあとにも回す）。 */
+async function jobSubIndex(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-index");
+  const res = { ok: false, chs: [], pages: 0, add: 0, edit: 0, same: 0,
+                fail: 0 };
+  try {
+    if (!(await subPostOk(env))) {
+      res.error = "no_table";
+      res.detail = "sub_post がありません（migrate-0053-sub-post.sql）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const cfg = o.cfg || await subSettings(env);
+    if (!cfg.idxOn) {
+      res.why = "⚙で「一覧を出す」をオフにしています";
+      res.ok = true;
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!env.DISCORD_BOT_TOKEN) {
+      res.error = "no_token";
+      res.detail = "DISCORD_BOT_TOKEN が登録されていません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const rows = o.rows || await subRows(env);
+    Object.assign(res, await subIndexAll(env, run, cfg, rows, o.plan));
+    res.ok = true;
+    run.notes.push("会員の一覧：ページ " + res.pages + "・新しく " + res.add
+      + "・書き換え " + res.edit + "・そのまま " + res.same
+      + "・失敗 " + res.fail);
+  } catch (e) {
+    run.errors++;
+    run.notes.push("sub-index: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 /* ===== 8.31（カジの依頼3）リストから外れた商品のカード =====
    MW が欠品した・販売終了した・上限を0にした商品は配信の対象から外れるが、
@@ -18088,6 +18396,14 @@ export default {
           /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
           skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
       }
+      /* 8.46（カジの依頼）会員チャンネルの「今週の一覧」を書き換える。
+         押しただけで分かるように、GET は**予定**（何ページ・何件）を返す。 */
+      if (request.method === "POST" && url.pathname === "/sub/index") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubIndex(env, { plan: b && b.plan }), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/sub/index")
+        return json(await subIndexPlan(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/hot") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubHot(env, { force: !!(b && b.force) }),
@@ -18654,6 +18970,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
   /* 8.43（カジの依頼）モニターの3週間と「今週の配信」の1通。 */
   subMonText, subMonNote, subMonToday, subMonSent,
+  SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
+  subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
   /* 8.37（v296）売り方ごとの「赤字にならない売値」。 */
