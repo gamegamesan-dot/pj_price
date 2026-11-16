@@ -79,6 +79,26 @@ const dm2=W.mwDimPick({ dimensions:[{ item:{
 ok(Math.round(dm2.cm[0])===25&&Math.abs(dm2.g-227)<=1,
    '★★インチ・オンスも cm と g に直す');
 ok(W.mwDimPick({}).cm.length===0,'★無ければ空');
+/* 8.51（カジの直し2・見つけた不具合）梱包のほうに**重さだけ**あるときに、
+   商品のほうの寸法を見ていなかった（「長辺だけ」「採寸が無い」が大量に出た）。 */
+const dm3=W.mwDimPick({ dimensions:[{
+  package:{ weight:{ value:0.5, unit:'kilograms' } },
+  item:{ length:{ value:17, unit:'centimeters' },
+         width:{ value:13, unit:'centimeters' },
+         height:{ value:1.5, unit:'centimeters' } } }] });
+console.log('   '+JSON.stringify(dm3));
+ok(dm3.cm.length===3&&dm3.g===500,
+   '★★★梱包に重さだけのときも、商品のほうの3辺を読む（重さは梱包から）');
+ok(dm3.src==='pkg','★★重さの出どころは梱包（pkg）のまま');
+const dm4=W.mwDimPick({ dimensions:[{
+  package:{ length:{ value:30, unit:'centimeters' } },
+  item:{ length:{ value:17, unit:'centimeters' },
+         width:{ value:13, unit:'centimeters' },
+         height:{ value:1.5, unit:'centimeters' },
+         weight:{ value:110, unit:'grams' } } }] });
+ok(dm4.cm.length===3&&Math.round(dm4.cm[0])===17&&dm4.g===110,
+   '★★★梱包が1辺だけのときは、3辺そろっている商品のほうを使う');
+ok(dm4.src==='item','★★その重さは商品のほう（item）');
 ok(W.MW_FEE_TAX_PCT===10,'★手数料の消費税は10%');
 
 T.done();

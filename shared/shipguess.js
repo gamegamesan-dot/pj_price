@@ -38,7 +38,28 @@
        way   … 送り方（shared/shopcsv.js の key）
        g     … 重さの既定（g）
      **上から順に見て、最初に当たった種類**にする（細かいものを先に置く）。 */
+  /* 8.51（カジの直し5）**大物 → BOX・セット・個入り → 小物**の順に見る。
+     「缶バッジ 5個セット」のようなまとめ買いは、小物の50gでは足りないので
+     BOX の既定（宅急便コンパクト 400g）に寄せる。
+     「ねんどろいど BOX」のような大物は、先にフィギュアで当たる。 */
   var KINDS = [
+    /* ---- 大物（先に見る） ---- */
+    { ja: "フィギュア", way: "box60", g: 900,
+      words: ["フィギュア", "スケール", "ねんどろいど", "プライズ",
+              "figma", "ＦＩＧＵＲＥ"] },
+    { ja: "ぬいぐるみ", way: "compact", g: 400,
+      words: ["ぬいぐるみ", "マスコット", "プラッシュ"] },
+    /* カジの直し：タペストリーは大きいものがあるので宅配便（80）。
+       「スリム」「ミニ」だけクリックポスト（下の slim で見る）。 */
+    { ja: "タペストリー", way: "box80", g: 700,
+      words: ["タペストリー", "タペ"],
+      slim: { words: ["スリム", "ミニ"], way: "cp", g: 200 } },
+    /* ---- まとめ買い（小物より先に見る・カジの直し5） ---- */
+    { ja: "BOX・セット", way: "compact", g: 400,
+      words: ["BOX", "ＢＯＸ", "ボックス", "セット", "コンプリート",
+              "全種", "アソート", "個入り", "個入", "個セット", "個パック",
+              "まとめ"] },
+    /* ---- 小物 ---- */
     { ja: "缶バッジ", way: "cp", g: 50,
       words: ["缶バッジ", "缶バッヂ", "缶バッチ", "カンバッジ", "カンバッヂ",
               "カンバッチ"] },
@@ -52,20 +73,7 @@
               "缶ミラー"] },
     { ja: "色紙・ブロマイド", way: "cp", g: 80,
       words: ["色紙", "ブロマイド", "トレーディングカード", "トレカ",
-              "ポストカード"] },
-    /* カジの直し：タペストリーは大きいものがあるので宅配便（80）。
-       「スリム」「ミニ」だけクリックポスト（下の slim で見る）。 */
-    { ja: "タペストリー", way: "box80", g: 700,
-      words: ["タペストリー", "タペ"],
-      slim: { words: ["スリム", "ミニ"], way: "cp", g: 200 } },
-    { ja: "ぬいぐるみ", way: "compact", g: 400,
-      words: ["ぬいぐるみ", "マスコット", "プラッシュ"] },
-    { ja: "フィギュア", way: "box60", g: 900,
-      words: ["フィギュア", "スケール", "ねんどろいど", "プライズ",
-              "figma", "ＦＩＧＵＲＥ"] },
-    { ja: "BOX・セット", way: "box80", g: 1500,
-      words: ["BOX", "ＢＯＸ", "ボックス", "セット", "コンプリート",
-              "全種", "アソート"] }
+              "ポストカード"] }
   ];
   /* 分からない品の既定（**大きめ**に寄せる・⚙で変えられる）。 */
   var UNKNOWN = { ja: "分からない", way: "box60", g: 800 };
@@ -167,16 +175,22 @@
       .filter(function (x) { return x > 0; }).length;
     if (n >= 3) return "";
     if (!s(r.asin) && !s(r.checked_at) && !s(r.amz_at)) return "none";
-    if (n > 0) return "part";
+    /* 8.51（カジの直し2）**長辺だけ**の行は、migrate-0060（短辺・厚さ）より
+       前に取った行か、Amazon が1辺しか返していない行。取り直せば埋まるので
+       「2辺ある」と分けて数える。 */
+    if (n === 1) return "long";
+    if (n === 2) return "part";
     if (num(r.size_g) > 0) return "g";
     return "all";
   }
-  var WHY_JA = { none: "まだ Amazon を調べていない", part: "3辺そろっていない",
+  var WHY_JA = { none: "まだ Amazon を調べていない",
+                 long: "長辺だけある（取り直しで埋まります）",
+                 part: "2辺だけある",
                  g: "重さだけある", all: "採寸が丸ごと無い" };
   /* 一覧ぶんの内訳（画面のまとめに出す）。 */
   function sumOf(list, cfg) {
     var o = optOf(cfg);
-    var out = { n: 0, why: { none: 0, part: 0, g: 0, all: 0 },
+    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0 },
                 kinds: {}, ways: {}, unknown: 0, ng: 0, ngWords: {} };
     (list || []).forEach(function (r) {
       var ng = ngOf(r.name, o);
@@ -201,7 +215,7 @@
      （ng_kind・dim_why・guess_kind・guess_way・guess_g・guess_unknown）。
      その行から内訳を作る（元のデータを持っていないので数え直さない）。 */
   function sumPicked(rows) {
-    var out = { n: 0, why: { none: 0, part: 0, g: 0, all: 0 },
+    var out = { n: 0, why: { none: 0, long: 0, part: 0, g: 0, all: 0 },
                 kinds: {}, ways: {}, unknown: 0, ng: 0, ngWords: {} };
     (rows || []).forEach(function (r) {
       var ng = s(r.ng_kind);

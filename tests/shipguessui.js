@@ -26,7 +26,7 @@ const base={ sha:'いろは商会', kishu:'ホビー', cond:'新品', list_price
 const mk=(n,jan,o)=>Object.assign({},base,{ jan:jan, mw_name:n, amz_name:n,
   asin:'B00AAA'+jan.slice(-4) },o||{});
 const ROWS=[
-  mk('推しの缶バッジ 5個セット','4902370550001'),
+  mk('推しの缶バッジ','4902370550001'),
   mk('初音ミク アクスタ','4902370550002'),
   mk('B2 タペストリー 描き下ろし','4902370550003'),
   mk('スリムタペストリー ◯◯','4902370550004'),
@@ -39,7 +39,9 @@ const ROWS=[
     size_wid:13, size_hei:1, size_g:110 }),
   /* まだ Amazon を調べていない品 */
   mk('まだ調べていない品','4902370550009',{ asin:'', checked_at:'',
-    amz_at:'', fee_at:'', fee_total:0, fee_ref:0, fee_tax:0 })];
+    amz_at:'', fee_at:'', fee_total:0, fee_ref:0, fee_tax:0 }),
+  /* 8.51（カジの直し5）まとめ買いは BOX の既定（宅急便コンパクト400g）。 */
+  mk('推しの缶バッジ 5個セット','4902370550010')];
 const META={ ok:true, n:ROWS.length, rows:ROWS, seen:9, priced:9, left:0,
   per_run:120, ttl_days:3, limit:3000 };
 
@@ -102,6 +104,10 @@ console.log('\n=== ② 案の行に目安が付く ===');
   ok(by['4902370550001'].kind==='缶バッジ'
      &&by['4902370550001'].way==='クリックポスト'
      &&by['4902370550001'].g===50,'★★★缶バッジの目安が付く');
+  ok(by['4902370550010'].kind==='BOX・セット'
+     &&by['4902370550010'].way==='宅急便コンパクト'
+     &&by['4902370550010'].g===400,
+     '★★★「缶バッジ 5個セット」は BOX の既定（8.51）');
   ok(by['4902370550003'].way==='宅配便（80サイズ）'
      &&by['4902370550003'].g===700,
      '★★★タペストリーは宅配便（80）700g');
@@ -148,14 +154,15 @@ console.log('\n=== ④ 内訳（理由・種類・送り方）===');
              box:($('subDraftBox').textContent||'').replace(/\s+/g,' ') };
   });
   console.log('   '+t.html);
-  ok(/採寸が取れていない品 7件/.test(t.html),
+  ok(/採寸が取れていない品 8件/.test(t.html),
      '★★★採寸が取れていない件数（ポスターと採寸がある品は除く）');
-  ok(/採寸が丸ごと無い 6/.test(t.html)
+  ok(/採寸が丸ごと無い 7/.test(t.html)
      &&/まだ Amazon を調べていない 1/.test(t.html),
      '★★★理由の内訳');
   ok(/缶バッジ 1件/.test(t.html)&&/分からない 2件/.test(t.html),
      '★★★種類の内訳（商品名の言葉から）');
-  ok(/既定を当てると：/.test(t.html)&&/クリックポスト 3件/.test(t.html),
+  ok(/既定を当てると：/.test(t.html)&&/クリックポスト 3件/.test(t.html)
+     &&/宅急便コンパクト 1件/.test(t.html),
      '★★★既定を当てたときの送り方の内訳');
   ok(/「分からない」に当てた品 2件/.test(t.html)
      &&/自動では出しません/.test(t.html),

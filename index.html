@@ -1090,6 +1090,10 @@ body.staff #syncOnHandFix{display:none !important}
            作業者には出さない（6.120）。見る・印・JANコピー・注文用CSVは出す。 -->
       <button class="btn cfgprice" id="csvMwAmz" style="width:100%;margin-top:6px">Amazonで調べる</button>
       <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
+      <!-- 8.51（カジの直し2）採寸が足りない行を、次の「Amazonで調べる」で
+           先に取り直させる（消すのは「最後に調べた時刻」だけ）。 -->
+      <button class="btn cfgprice" id="mwDimAgain" onclick="mwDimAgainGo();return false" style="width:100%;margin-top:6px">採寸を取り直す（3辺そろっていない行）</button>
+      <div class="note2" id="mwDimAgainNote" style="margin-top:2px"></div>
       <!-- JAN重複を決めたときの案内（6.109）。一覧の取り込みで消えない場所に置く -->
       <div class="note2" id="csvMwDupNote" style="margin-top:2px;color:var(--good)"></div>
       <!-- 仕入れる印のまとめ（6.93）。端末をまたいで同じものが見える -->
@@ -16798,13 +16802,19 @@ function subDraftRows(){
     var sh=mwShipInfo(Object.assign({},r,
       { ship_way:String(cur.ship_way||'') }));
     /* 8.49（カジの③）採寸が無い品の目安（種類・送り方・重さ）と、
-       「出さない種類」（既定：ポスター）。決まりは shared/shipguess.js。 */
+       「出さない種類」（既定：ポスター）。決まりは shared/shipguess.js。
+       8.51（カジの直し1）送り方の決め方の順は
+         手の上書き → 採寸 → 機種（ゲームソフトはクリックポスト）
+         → 種類の言葉 → 分からない
+       なので、**sh.sure（もう決まっている）行には目安を当てない**
+       （「採寸が取れていない品」にも「分からない」にも数えない）。 */
     var sgOpt=subPickCfg();
     row.ng_kind=SHIPGUESS.ngOf(row.name,sgOpt);
-    row.dim_why=SHIPGUESS.dimWhy(r);
+    row.dim_why=sh.sure?'':SHIPGUESS.dimWhy(r);
     if(row.dim_why&&!row.ng_kind){
       var gs=SHIPGUESS.guessOf({ name:row.name },sgOpt);
       row.guess_kind=gs.kind; row.guess_way=gs.way_ja;
+      row.guess_way_key=gs.way;
       row.guess_g=gs.g; row.guess_unknown=!!gs.unknown;
     }
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
@@ -16818,13 +16828,25 @@ function subDraftRows(){
        送料を引かない（「送料は別」。足切りでは外さない）。 */
     var swo=Object.assign({},gdCfg(),{ shipKey:sh.key, shipName:sh.name,
       shipSure:sh.sure });
-    var nw=function(k){
-      var n=SELLWAY.netWay(k,gr,swo);
+    var nw=function(k,o2){
+      var n=SELLWAY.netWay(k,gr,o2||swo);
       return n.ok?n.net:null;
     };
     row.net_fba=nw('amz_fba'); row.net_self=nw('amz_self');
     row.net_mer=nw('mercari'); row.net_yah=nw('yahoo');
     row.net_unsure=!sh.sure;
+    /* 8.51（カジの直し3）送り方が分からない品は、上の手残りが
+       **送料を引いていない**ので多めに出る。③の種類の既定（guess_way_key）
+       を当てた場合の手残りも出して、両方を並べられるようにする。 */
+    if(!sh.sure&&row.guess_way_key){
+      var swo2=Object.assign({},gdCfg(),{ shipKey:row.guess_way_key,
+        shipName:row.guess_way, shipSure:true });
+      row.net2_fba=nw('amz_fba',swo2); row.net2_self=nw('amz_self',swo2);
+      row.net2_mer=nw('mercari',swo2); row.net2_yah=nw('yahoo',swo2);
+    }else{
+      row.net2_fba=row.net_fba; row.net2_self=row.net_self;
+      row.net2_mer=row.net_mer; row.net2_yah=row.net_yah;
+    }
     var cw=String(((subPickCfg()||{}).subCutWay)||'mercari');
     row.cut_way=cw;
     row.net_cut=nw(cw);
@@ -16940,10 +16962,12 @@ function subEstHtml(rows){
     else if(ja===RANKSPD.JA_MID)mid++;
     else if(ja)slow++;
   });
-  return '<br><b>Amazon の順位からの推定</b>：'
-    +'推定で売れ行きが出た品 <b>'+mwN(n)+'件</b>'
+  var mw=0;
+  (rows||[]).forEach(function(r){ if(String(r.spd_src||'')==='mw')mw++; });
+  return '<br><b>売れ行きの出どころ</b>（候補 '+mwN((rows||[]).length)+'件）：'
+    +'<b>MW の減り '+mwN(mw)+'件</b>／<b>Amazon の推定 '+mwN(n)+'件</b>'
     +(one?('（うち順位が1回ぶんだけ '+mwN(one)+'件）'):'')
-    +'／どちらも出ない品 '+mwN(none)+'件'
+    +'／どちらも出ない '+mwN(none)+'件'
     +'<br>　売れるまで：早い <b>'+mwN(fast)+'件</b>／ふつう '+mwN(mid)
     +'件／ゆっくり '+mwN(slow)+'件'
     +(((cm||{}).n>0)
@@ -17015,13 +17039,20 @@ function subCutHtml(rows){
               yahoo:'net_yah' };
   var cw=String(o.cutWay||'mercari');
   var cutN=Math.round(+o.cutNet||0);
+  /* 8.51（カジの直し3）送り方が分からない品の送料を
+     「引かない（net_*）」と「③の既定を当てて引いた（net2_*）」の両方で数える。 */
+  var key2Of={ amz_fba:'net2_fba', amz_self:'net2_self',
+               mercari:'net2_mer', yahoo:'net2_yah' };
+  var cnt=function(k,min){
+    return all.filter(function(r){
+      var v=r[k];
+      return v!==null&&v!==undefined&&v>=min;
+    }).length;
+  };
   var netTab=[300,400,500].map(function(min){
     var cells=ways.map(function(w){
-      var n=all.filter(function(r){
-        var v=r[keyOf[w[0]]];
-        return v!==null&&v!==undefined&&v>=min;
-      }).length;
-      return esc(w[1])+' <b>'+mwN(n)+'件</b>';
+      return esc(w[1])+' <b>'+mwN(cnt(key2Of[w[0]],min))+'件</b>'
+        +'（引かない '+mwN(cnt(keyOf[w[0]],min))+'件）';
     }).join('　');
     return '　手残り '+min+'円以上'+((min===cutN)?'（いま⚙）':'')+'　'+cells;
   }).join('<br>');
@@ -17029,18 +17060,18 @@ function subCutHtml(rows){
   var noNet=all.filter(function(r){
     return r.net_cut===null||r.net_cut===undefined; }).length;
   var cutJa=(SELLWAY.wayOf(cw)||{}).ja||cw;
-  var cutOk=all.filter(function(r){
-    return r.net_cut!==null&&r.net_cut!==undefined&&r.net_cut>=cutN;
-  }).length;
+  var cutOk=cnt(key2Of[cw]||'net2_mer',cutN);
+  var cutOk0=cnt(keyOf[cw]||'net_mer',cutN);
   var pctM=Math.round(SELLWAY.sellPct('mercari',gdCfg())*100);
   return '<br><b>売り方ごとの手残りの試算</b>'
     +'（<b>判定はまだ変えていません</b>・メルカリの売値＝Amazon の '
     +pctM+'%）<br>'
     +netTab
     +'<br>　<b>いまの⚙（'+esc(cutJa)+'・手残り '+yen(cutN)+'以上）'
-    +'… '+mwN(cutOk)+'件</b>'
-    +'<br>　<span class="note2">送り方の区分が分からない品 '+mwN(unsure)
-    +'件は「<b>送料は別</b>」で数えています（外しません）'
+    +'… '+mwN(cutOk)+'件</b>（送料を引かないと '+mwN(cutOk0)+'件）'
+    +'<br>　<span class="note2">件数は<b>③の種類の既定の送料を引いたあと</b>'
+    +'（かっこの中は引かない場合）。送り方の区分が分からない品 '+mwN(unsure)
+    +'件は外しません'
     +(noNet?('／手残りが出せない品 '+mwN(noNet)+'件（手数料の率が'
       +'取れていません）'):'')+'</span>'
     +'<br><b>足切りの試算</b>（<b>判定はまだ変えていません</b>）<br>'
@@ -18017,6 +18048,38 @@ function gdPinList(){
                  on:(p.on===undefined)?true:!!p.on });
     });
   return out;
+}
+/* 8.51（カジの直し2）採寸を取り直す。
+   「最後に調べた時刻」を空にするだけで、ASIN・採寸・値段は消さない。
+   そのあと「Amazonで調べる」を押すと、その行から先に取り直す。 */
+function mwDimAgainGo(){
+  if(roleDenyPrice('mwDimAgainNote'))return;
+  var el=$('mwDimAgainNote');
+  var put=function(t,bad){ if(el)el.innerHTML=(bad?'<b style="color:var(--bad)">':'<b>')+t+'</b>'; };
+  put('数えています…');
+  return mwGet('/mw/dim/again').then(function(d){
+    if(!d||d.error){
+      put('⚠ '+esc(String((d||{}).detail||(d||{}).error||'')),1);
+      return;
+    }
+    var n=+d.n||0;
+    if(!n){ put('取り直す行はありません（3辺そろっています）'); return; }
+    if(!confirm('3辺そろっていない '+n+'件を、次の「Amazonで調べる」で'
+      +'取り直します。\n（消すのは「最後に調べた時刻」だけです。'
+      +'ASIN・採寸・値段は消しません）\n\nよろしいですか？')){
+      put('やめました（何も変えていません）');
+      return;
+    }
+    return mwPost('/mw/dim/again',{}).then(function(r){
+      if(!r||r.error){
+        put('⚠ '+esc(String((r||{}).detail||(r||{}).error||'')),1);
+        return;
+      }
+      put('✓ '+mwN(+r.done||0)+'件に印を付けました。'
+        +'「Amazonで調べる」を押してください'
+        +'（1回 120件まで・30秒ほど。自動の回でも順に取り直します）');
+    });
+  })['catch'](function(e){ put('⚠ '+esc(e.message),1); });
 }
 /* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
    ・「一覧の予定を見る」… Discord には何も出さず、チャンネルごとに
@@ -27561,7 +27624,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v309';   // sw.js の const V と必ず同じ値にする
+var APP_V='v310';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

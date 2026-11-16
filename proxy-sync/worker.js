@@ -8409,11 +8409,16 @@ function mwDimPick(it) {
              g: Math.round(gOf(o.weight)) };
   };
   /* 7.112：**どちらの重さか**も返す（画面に出すため）。
-     'pkg'＝梱包重量（package）／'item'＝商品の重量。 */
-  const a = pick(pk);
-  if (a.cm.length >= 3 || a.g) return Object.assign(a, { src: a.g ? "pkg" : "" });
-  const b = pick(im);
-  return Object.assign(b, { src: b.g ? "item" : "" });
+     'pkg'＝梱包重量（package）／'item'＝商品の重量。
+     8.51（カジの直し2・見つけた不具合）**梱包のほうに重さだけがあると、
+     商品のほうの寸法を見ていなかった**（`a.g` があればそこで返していた）。
+     そのため「長辺だけある」「採寸が丸ごと無い」行がたくさん出ていた。
+     寸法と重さは**別々に**、3辺そろっているほうから取る。 */
+  const a = pick(pk), b = pick(im);
+  const cm = (a.cm.length >= 3) ? a.cm
+    : ((b.cm.length >= 3) ? b.cm : (a.cm.length ? a.cm : b.cm));
+  const g = a.g || b.g;
+  return { cm: cm, g: g, src: a.g ? "pkg" : (b.g ? "item" : "") };
 }
 /* ---- 7.128（【V の続き】の4）だめの原因を**切り分ける** ----
    GET /mw/fee/why?asin=&price=
@@ -12433,6 +12438,40 @@ async function subMonNote(env, run, cfg, res, day) {
       String(day) + "|" + String(((m.data || {}).id) || "")).run();
   } catch (e) {}
   return 1;
+}
+/* ===== 8.51（カジの直し2）採寸を取り直す =====
+   「3辺そろっていない」行がたくさん残っていた。原因は2つ。
+     ① 見つけた不具合：**梱包のほうに重さだけあると、商品のほうの寸法を
+        見ていなかった**（mwDimPick）。直した（8.51）。
+     ② migrate-0060（短辺・厚さ）より前に取った行は長辺だけ。
+   ASIN・順位は3日ごとに引き直すので、直した版のあとは順に埋まるが、
+   **すぐ埋めたいとき**はこの口で `asin_at` を空にして、次の
+   「Amazonで調べる」で先に引き直させる（**消すのは時刻だけ**。
+   ASIN・採寸・値段は消さない）。
+   GET  /mw/dim/again … 取り直す件数を数えるだけ
+   POST /mw/dim/again … その行の asin_at を空にする（管理者だけ） */
+async function mwDimAgain(env, run) {
+  const res = { ok: false, n: 0, done: 0 };
+  const hasDim = (await colOk(env, "mw_amz", "size_wid"))
+    && (await colOk(env, "mw_amz", "size_hei"));
+  if (!hasDim) {
+    res.error = "no_column";
+    res.detail = "mw_amz.size_wid がありません（migrate-0060-ship-way.sql）";
+    return res;
+  }
+  const w = `COALESCE(asin,'') <> ''
+      AND (COALESCE(size_long,0) <= 0 OR COALESCE(size_wid,0) <= 0
+           OR COALESCE(size_hei,0) <= 0)`;
+  const q = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_amz WHERE ${w}`).first();
+  res.n = Math.round(Number((q && q.n) || 0));
+  if (run) {
+    const u = await env.DB.prepare(
+      `UPDATE mw_amz SET asin_at=NULL WHERE ${w}`).run();
+    res.done = Math.round(Number(((u && u.meta) || {}).changes || res.n));
+  }
+  res.ok = true;
+  return res;
 }
 /* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
    カードが増えるとスクロールが大変なので、各プランのチャンネルに
@@ -18156,7 +18195,9 @@ export default {
             /* 7.134：在庫の記録の作り直しも管理者だけ。
                7.142：過去の記録の数え直し（下見も実行も）も管理者だけ。 */
             || url.pathname === "/mw/move/fix"
-            || url.pathname === "/mw/move/recount"))
+            || url.pathname === "/mw/move/recount"
+            /* 8.51 採寸の取り直しの印（引き直しが動くため）。 */
+            || url.pathname === "/mw/dim/again"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
        値段が会員に出て、Discord にも流れるため。
@@ -18444,6 +18485,13 @@ export default {
           redo: !!(b && b.redo), plan: b && b.plan,
           /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
           skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
+      }
+      /* 8.51（カジの直し2）採寸の取り直し（asin_at を空にするだけ）。 */
+      if (url.pathname === "/mw/dim/again") {
+        if (request.method === "POST")
+          return json(await mwDimAgain(env, true), 200, origin);
+        if (request.method === "GET")
+          return json(await mwDimAgain(env, false), 200, origin);
       }
       /* 8.46（カジの依頼）会員チャンネルの「今週の一覧」を書き換える。
          押しただけで分かるように、GET は**予定**（何ページ・何件）を返す。 */
@@ -19019,6 +19067,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,
   /* 8.43（カジの依頼）モニターの3週間と「今週の配信」の1通。 */
   subMonText, subMonNote, subMonToday, subMonSent,
+  mwDimAgain,
   SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
