@@ -91,30 +91,33 @@ console.log('=== ① ⚙の欄と既定 ===');
     newN:($('subMonNew')||{}).value, people:($('subMonPeople')||{}).value,
     days:!!$('subMonDays'),
     limit:($('subMonLimitDays')||{}).value,
-    min:($('subMonSpeedMin')||{}).value, short:($('subMonShort')||{}).value,
+    q3:($('subMonQ3')||{}).value, min:($('subMonSpeedMin')||{}).value,
+    short:($('subMonShort')||{}).value,
     note:($('subMonNote')||{}).checked, wide:($('subMonWide')||{}).checked,
     opt:SUBPLAN.pickOpt(subPickCfg()),
     speed:SUBPLAN.monSpeed(SUBPLAN.pickOpt(subPickCfg()),false) }));
   console.log('   '+JSON.stringify(t));
   ok(t.newN==='5'&&t.people==='10'&&t.limit==='7',
      '★★★既定は 新しく5件・人数10人・期限7日');
-  /* 8.45 下限は⚙の固定値（0.5点/日）。「人数÷日数」はやめたので
+  /* 8.47 下限は「3か月の個数」（既定10個）。「人数÷日数」はやめたので
      「何日ぶんで見るか」の欄も無くした。 */
-  ok(t.min==='0.5'&&t.short==='50',
-     '★★★速さの下限は 0.5点/日・足りないときは 50% 下げる');
+  ok(t.q3==='10'&&t.short==='50',
+     '★★★下限は 3か月10個・足りないときは 50% 下げる');
   ok(t.days===false,'★★「何日ぶんで見るか」の欄は無い（8.45）');
   ok(t.note===true,'★★既定で「今週の配信」を1通出す');
   ok(t.wide===true,
      '★★★既定で「クリックポストで送れる品まで広げる」が入っている');
   ok(t.opt.monNew===5&&t.opt.monPeople===10&&t.opt.monLimitDays===7
      &&t.opt.monWide===true,'★★⚙を1か所で読む（pickOpt）');
-  ok(t.speed===0.5,'★★★速さの下限は⚙の 0.5点/日');
+  ok(Math.round(t.speed*90)===10,'★★★下限は⚙の 3か月10個（＝1日 1/9個）');
+  ok(t.min==='','★★「点/日で決めたいとき」の欄は空（使うときだけ入れる）');
 }
 
 console.log('\n=== ② 1週目：速い順に新しく5件（足りない分は下限を下げる）===');
 {
-  /* ここからは下限 2.5点/日（⚙）で見る（速い4件・ふつう3件・おそい1件）。 */
-  await p.evaluate(()=>{ $('subMonSpeedMin').value='2.5'; });
+  /* ここからは下限 3か月225個（＝2.5点/日）で見る
+     （速い4件・ふつう3件・おそい1件）。 */
+  await p.evaluate(()=>{ $('subMonQ3').value='225'; });
   const t=await draft();
   console.log('   '+t.note.slice(0,400));
   console.log('   '+JSON.stringify({ jans:t.jans, low:t.low,
@@ -132,9 +135,9 @@ console.log('\n=== ② 1週目：速い順に新しく5件（足りない分は�
   ok(t.jans.indexOf('4902370550008')<0,
      '★★★下げても通らない品（0.7点/日）は入らない');
   ok(/新しく 5件/.test(t.note)&&/候補 4件/.test(t.note)
-     &&/速さ 2.5点\/日 以上/.test(t.note),
+     &&/3か月で 225個 以上/.test(t.note),
      '★★★新しく出す件数・候補の件数・下限を出す');
-  ok(/下限を 1.25点\/日 まで下げて 1件を埋めました/.test(t.note),
+  ok(/下限を3か月 112.5個 まで下げて 1件を埋めました/.test(t.note),
      '★★★下限を下げたことを出す');
   ok(/下限を下げて入れました/.test(t.box),
      '★★★下げて入れた品には一覧で印を付ける');
@@ -152,10 +155,11 @@ console.log('\n=== ③ 候補の分布（線引きを決めるため）===');
   console.log('   '+t.html);
   ok(/いまの候補 8件の分布/.test(t.html),'★★★候補の件数');
   ok(/下位25%／中央／上位25%/.test(t.html),'★★★下位25%・中央・上位25%');
-  ok(/粗利 ¥/.test(t.html)&&/売れる速さ /.test(t.html)
+  ok(/粗利 ¥/.test(t.html)&&/売れ行き（MW の減り） /.test(t.html)
      &&/粗利×速さ /.test(t.html),
-     '★★★粗利・売れる速さ・粗利×速さ の3つを出す');
-  ok(/点\/日/.test(t.html)&&/円\/日/.test(t.html),'★★単位（点/日・円/日）');
+     '★★★粗利・売れ行き・粗利×速さ の3つを出す');
+  ok(/個\/3か月/.test(t.html)&&/円\/日/.test(t.html),
+     '★★単位（個/3か月・円/日）');
   ok(t.st.speed.q1===2&&t.st.speed.med===3&&t.st.speed.q3===3,
      '★★★速さの分布（下位2.0点／中央3.0点／上位3.0点）');
   ok(/モニターの条件に合う品：4件/.test(t.html),
@@ -188,11 +192,11 @@ console.log('\n=== ③-2 速さの内訳と、下限を変えたときの件数�
      '★★★0より大きい品の帯（0.1未満／0.1〜0.5／0.5〜1／1〜2.5／2.5以上）');
   ok(/下限を変えたときのモニターの候補/.test(t.html),
      '★★★下限を変えたときの件数（試算）を出す');
-  ok(/いま 2.5点\/日 … 4件/.test(t.html),
+  ok(/いま 3か月 225個 … 4件/.test(t.html),
      '★★★いまの下限の件数（通常版ゲーム）');
-  ok(/0.3点\/日/.test(t.html)&&/クリックポストで送れる品まで広げた場合/
-     .test(t.html),
-     '★★★1／0.5／0.3 点/日 と「広げた場合」も並べる');
+  ok(/3か月 30個/.test(t.html)&&/3か月 2個/.test(t.html)
+     &&/クリックポストで送れる品まで広げた場合/.test(t.html),
+     '★★★30／10／5／2個 と「広げた場合」も並べる');
   ok(t.mix.none===0&&t.mix.pos===8,'★★内訳は shared/subplan.js で数える');
 }
 
@@ -252,16 +256,17 @@ console.log('\n=== ④ ⚙で下限・件数を変えられる ===');
   });
   ok(t2.n===2,'★★★⚙の件数（2件）だけ出す');
   const t3=await p.evaluate(async()=>{
-    $('subMonSpeedMin').value='1';
+    $('subMonQ3').value='90';
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const m=(subDraftData.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
-    $('subMonSpeedMin').value='2.5';
+    $('subMonQ3').value='225';
     return { min:(m.mon||{}).min, okN:(m.mon||{}).okN,
              note:($('subDraftNote').textContent||'').replace(/\s+/g,' ') };
   });
-  ok(t3.min===1&&t3.okN===7,'★★★⚙で速さの下限を直に決められる（1点/日）');
-  ok(/速さ 1点\/日 以上/.test(t3.note),'★★下限を画面にも出す');
+  ok(Math.round(t3.min*90)===90&&t3.okN===7,
+     '★★★⚙で下限を直に決められる（3か月90個）');
+  ok(/3か月で 90個 以上/.test(t3.note),'★★下限を画面にも出す');
 }
 
 console.log('\n=== ⑤ 2週目から：前の週に出した品は選ばない ===');
@@ -271,7 +276,7 @@ console.log('\n=== ⑤ 2週目から：前の週に出した品は選ばない =
       limit_days:7, people:5,
       sent:['4902370550001','4902370550002','4902370550003',
             '4902370550004'] };
-    $('subMonSpeedMin').value='1';
+    $('subMonQ3').value='90';
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const m=(subDraftData.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
@@ -291,7 +296,7 @@ console.log('\n=== ⑤ 2週目から：前の週に出した品は選ばない =
     await subDraftGo();
     await new Promise((x)=>setTimeout(x,200));
     const m=(subDraftData.plans||[]).filter((x)=>x.key==='monitor')[0]||{};
-    $('subMonSpeedMin').value='2.5';
+    $('subMonQ3').value='225';
     return (m.items||[]).map((x)=>x.jan);
   });
   ok(t2.join(',')===t.jans.join(','),'★★★同じ週なら押し直しても同じ');

@@ -679,6 +679,13 @@ CREATE TABLE IF NOT EXISTS mw_amz (
   px_sum    INTEGER,
   px_n      INTEGER,
   px_from   TEXT,
+  /* 8.47（migrate-0063）順位の記録（売れ行きの推定に使う平均）。
+     1回の順位はぶれるので、rk_sum / rk_n の平均で見る。 */
+  rk_min    INTEGER,
+  rk_max    INTEGER,
+  rk_sum    INTEGER,
+  rk_n      INTEGER,
+  rk_from   TEXT,
   /* その重さがどこから来たか（7.112・migrate-0043）。
      'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
      MW 無在庫（W-）の送料の計算に使うので、画面にも出す。 */

@@ -394,10 +394,13 @@
     monNew: 5,          // ⚙ subMonNew       … 1回に新しく出す件数
     monPeople: 10,      // ⚙ subMonPeople    … モニターの人数（お一人1点）
     monLimitDays: 7,    // ⚙ subMonLimitDays … 購入期限（日）
-    /* 8.45（カジの決めたこと2）速さの下限は**⚙の固定値**（人数÷日数は
-       使わない）。既定 0.5点/日。値崩れは「お一人1点」と
-       「出せる数（MW在庫の⚙%・想定購入数）」で抑える。 */
-    monSpeedMin: 0.5,   // ⚙ subMonSpeedMin  … 速さの下限（点/日）
+    /* 8.45（カジの決めたこと2）速さの下限は**⚙の固定値**。
+       8.47（カジの①）単位を**3か月の個数**にした（既定 10個）。
+       0.5点/日＝3か月45個は厳しすぎたため。中では 個÷90日 に直す。
+       値崩れは「お一人1点」と「出せる数」と
+       「全会員ぶんの合計の上限（8.47 の4）」で抑える。 */
+    monQ3: 10,          // ⚙ subMonQ3        … 3か月の個数の下限
+    monSpeedMin: 0,     // ⚙ subMonSpeedMin  … 点/日で直に決めるとき（空なら上）
     monShort: 50,       // ⚙ subMonShort     … 足りないとき下限を下げる%
     monFrom: "",        // ⚙ subMonFrom      … モニターの開始日（空なら今まで）
     /* 8.45（カジの決めたこと1）通常版のゲームだけでなく、
@@ -426,6 +429,7 @@
       monNew: Math.round(n("subMonNew", MON.monNew, 1, 50)),
       monPeople: Math.round(n("subMonPeople", MON.monPeople, 1, 999)),
       monLimitDays: Math.round(n("subMonLimitDays", MON.monLimitDays, 1, 90)),
+      monQ3: n("subMonQ3", MON.monQ3, 0, 100000),
       monSpeedMin: n("subMonSpeedMin", MON.monSpeedMin, 0, 999),
       monWide: bool(o.subMonWide, MON.monWide),
       monShort: n("subMonShort", MON.monShort, 0, 90),
@@ -435,15 +439,25 @@
       monFrom: monDay(o.subMonFrom)
     };
   }
-  /* 8.45 モニターの速さの下限は **⚙の固定値**（空なら既定 0.5点/日）。
-     8.43 では「人数 ÷ 日数」だったが、カジの実データでは 2.5点/日 に
-     届く品がほとんど無かったので、固定値を主にした（カジの決めたこと2）。 */
+  /* 8.47（カジの①）モニターの下限は **3か月の個数**（⚙・既定10個）。
+     8.45 では 0.5点/日（＝3か月45個）だったが厳しすぎた。
+     返すのは今までどおり**1日あたり**（個 ÷ 90日）。
+     ⚙ subMonSpeedMin に数を入れたときだけ、そちらを使う。 */
+  var MON_DAYS = 90;
   function monSpeed(opt, lowered) {
     var o = opt || pickOpt(null);
     var v = num(o.monSpeedMin);
-    if (!(v > 0)) v = MON.monSpeedMin;
+    if (!(v > 0)) {
+      var q = num(o.monQ3);
+      if (!(q > 0)) q = MON.monQ3;
+      v = q / MON_DAYS;
+    }
     if (lowered) v = v * (1 - Math.max(0, Math.min(90, num(o.monShort))) / 100);
     return Math.max(0, v);
+  }
+  /* 下限を「3か月の個数」で見るとき（画面に出す数）。 */
+  function monQ3Of(opt, lowered) {
+    return Math.round(monSpeed(opt, lowered) * MON_DAYS * 10) / 10;
   }
   /* 8.44 開始日の読み方（'YYYY-MM-DD' だけ。それ以外は空）。 */
   function monDay(v) {
@@ -494,43 +508,60 @@
     var first = o.monFrom ? (week === 0) : !(sent || []).length;
     var want = Math.max(1, Math.round(num(o.monNew)));
     var min = monSpeed(o, false), min2 = monSpeed(o, true);
-    var ok = [], low = [];
+    /* 8.47（カジの①）**MW の減りがある品を先に**使い、足りない分だけ
+       Amazon の順位からの**推定**で埋める（推定の品には印を付ける）。
+         ok   … MW の減りが下限を通る
+         okE  … 推定が下限を通る（MW の減りが無い品）
+         low  … 下げた下限を MW の減りが通る
+         lowE … 下げた下限を推定が通る */
+    var ok = [], okE = [], low = [], lowE = [];
     (rows || []).forEach(function (r) {
       if (was[String(r.jan)]) return;                 // 前の週までに出した
       if (whyNot(r, o)) return;                       // 共通の条件
       if (monKind(r, p, o)) {                         // 8.45 種類（⚙で広げる）
         if (!(num(r.qty) > 0)) return;                // 出せる数が無い
-        var sp = num(r.speed);
-        if (sp >= min) ok.push(r);
-        else if (sp >= min2) low.push(r);
+        var sp = num(r.speed), es = num(r.est);
+        if (sp > 0) {
+          if (sp >= min) ok.push(r);
+          else if (sp >= min2) low.push(r);
+        } else if (es > 0) {
+          if (es >= min) okE.push(r);
+          else if (es >= min2) lowE.push(r);
+        }
       }
     });
     /* 1週目は速い順。2週目からは「週＋JAN」で決まる順（ランダム）。 */
+    var spdOf = function (r) {
+      return num(r.speed) > 0 ? num(r.speed) : num(r.est);
+    };
     var sortBy = function (a) {
       a.sort(function (x, y) {
-        if (first) return num(y.speed) - num(x.speed);
+        if (first) return spdOf(y) - spdOf(x);
         return monRand(week, x.jan) - monRand(week, y.jan);
       });
       return a;
     };
-    sortBy(ok); sortBy(low);
-    var out = ok.slice(0, want).map(function (r) {
-      return Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
-        maybe: !!normalOf(r.name, p.ng).maybe, slow: !(num(r.speed) > 0),
-        mon_low: false });
-    });
-    var lowN = 0;
-    if (out.length < want) {
-      low.slice(0, want - out.length).forEach(function (r) {
-        lowN++;
+    sortBy(ok); sortBy(okE); sortBy(low); sortBy(lowE);
+    var out = [], lowN = 0, estN = 0;
+    var take = function (a, est, lowered) {
+      for (var i = 0; i < a.length && out.length < want; i++) {
+        var r = a[i];
+        if (est) estN++;
+        if (lowered) lowN++;
         out.push(Object.assign({}, r, { score: scoreOf(r, o), plan: p.key,
-          maybe: !!normalOf(r.name, p.ng).maybe, slow: !(num(r.speed) > 0),
-          mon_low: true }));
-      });
-    }
-    return { items: out, low: lowN, short: Math.max(0, want - out.length),
+          maybe: !!normalOf(r.name, p.ng).maybe, slow: !(spdOf(r) > 0),
+          mon_low: !!lowered, mon_est: !!est }));
+      }
+    };
+    take(ok, false, false);
+    take(okE, true, false);
+    take(low, false, true);
+    take(lowE, true, true);
+    return { items: out, low: lowN, est: estN,
+             short: Math.max(0, want - out.length),
              min: min, min2: min2, week: week, first: first, n: want,
-             okN: ok.length, lowN: low.length };
+             okN: ok.length, okEN: okE.length,
+             lowN: low.length + lowE.length };
   }
   /* 8.43（カジの依頼）線引きを決めるための**分布**。
      粗利・売れる速さ・粗利×速さ の 下位25%／中央／上位25% を返す。 */
@@ -628,6 +659,8 @@
                normal: g ? !!p.normal : false };
     return fits(p2, r, g);
   }
+  /* min は**1日あたり**。8.47 から、MW の減りが無い品は
+     Amazon の順位からの**推定**（r.est）で見る（monPick と同じ）。 */
   function monCount(rows, opt, min, wide) {
     var o = opt || pickOpt(null), p = plan_("monitor");
     var n = 0;
@@ -635,20 +668,24 @@
       if (whyNot(r, o)) return;
       if (!(num(r.qty) > 0)) return;
       if (!monKind(r, p, o, wide)) return;
-      if (num(r.speed) < num(min)) return;
+      var sp = num(r.speed) > 0 ? num(r.speed) : num(r.est);
+      if (sp < num(min)) return;
       n++;
     });
     return n;
   }
-  /* 試算の表（いまの下限＋1.0／0.5／0.3 点/日 × 通常版ゲーム／広げた場合）。 */
-  var MON_TRY = [1, 0.5, 0.3, 0.1];
+  /* 試算の表。8.47 から**3か月の個数**で並べる
+     （いまの下限＋30／10／5／2個 × 通常版ゲーム／広げた場合）。 */
+  var MON_TRY = [30, 10, 5, 2];
   function monTable(rows, opt) {
     var o = opt || pickOpt(null);
-    var mins = [monSpeed(o, false)];
+    var q3s = [monQ3Of(o, false)];
     for (var i = 0; i < MON_TRY.length; i++)
-      if (mins.indexOf(MON_TRY[i]) < 0) mins.push(MON_TRY[i]);
-    return mins.map(function (m, i) {
-      return { min: Math.round(num(m) * 100) / 100, now: i === 0,
+      if (q3s.indexOf(MON_TRY[i]) < 0) q3s.push(MON_TRY[i]);
+    return q3s.map(function (q, i) {
+      var m = num(q) / MON_DAYS;
+      return { q3: Math.round(num(q) * 10) / 10,
+               min: Math.round(m * 1000) / 1000, now: i === 0,
                game: monCount(rows, o, m, false),
                wide: monCount(rows, o, m, true) };
     });
@@ -737,6 +774,7 @@
               monSpeed: monSpeed, monWeek: monWeek, monRand: monRand,
               monPick: monPick, statsOf: statsOf, quart: quart,
               monDay: monDay, monFromMs: monFromMs,
+              MON_DAYS: MON_DAYS, monQ3Of: monQ3Of,
               SPEED_BANDS: SPEED_BANDS, speedBand: speedBand, monKind: monKind,
               speedMix: speedMix, monCount: monCount,
               MON_TRY: MON_TRY, monTable: monTable, cpJa: cpJa,

@@ -8334,6 +8334,29 @@ function pxSet(p, a) {
     + ", px_from=CASE WHEN " + p + " > 0 THEN COALESCE(px_from," + a
     + ") ELSE px_from END";
 }
+/* ===== 8.47（カジの①）順位の記録（売れ行きの推定に使う平均）=====
+   Amazon の順位は1回の値がぶれるので、推定は**平均**で見る。
+   値段の記録（8.29）と同じやり方で mw_amz の列だけを書き足す。
+   migrate-0063 を流す前の D1 では書かない（RK_OK が false のまま）。 */
+let RK_OK = null;
+async function rkOk(env) {
+  if (RK_OK === null) RK_OK = await colOk(env, "mw_amz", "rk_from");
+  return RK_OK;
+}
+/* 順位 r（プレースホルダの文字）と時刻 a を使って、記録を足す欄を作る。
+   **新しい値は渡さない**（すでに文にある ?N をそのまま使う）。 */
+function rkSet(r, a) {
+  if (!RK_OK) return "";
+  return ", rk_min=CASE WHEN " + r + " > 0 THEN MIN(COALESCE(rk_min," + r + "),"
+    + r + ") ELSE rk_min END"
+    + ", rk_max=CASE WHEN " + r + " > 0 THEN MAX(COALESCE(rk_max," + r + "),"
+    + r + ") ELSE rk_max END"
+    + ", rk_sum=CASE WHEN " + r + " > 0 THEN COALESCE(rk_sum,0)+" + r
+    + " ELSE rk_sum END"
+    + ", rk_n=CASE WHEN " + r + " > 0 THEN COALESCE(rk_n,0)+1 ELSE rk_n END"
+    + ", rk_from=CASE WHEN " + r + " > 0 THEN COALESCE(rk_from," + a
+    + ") ELSE rk_from END";
+}
 const MW_SIZE_S = { len: 25, wid: 18, hei: 2, g: 250 };
 const MW_SIZE_M = { len: 45, wid: 35, hei: 20, g: 9000 };
 /* 8.27（カジの依頼1）長い順に並べた採寸の i 番目（cm・小数1桁）。
@@ -9030,6 +9053,8 @@ async function mwScanAsin(env, run, o, dl) {
   if (!all.length) return st;
   if (Date.now() > dl) { st.stopped = "time"; st.left = st.asked; return st; }
   /* 8.27 採寸の短辺・厚さ（migrate-0060）。無い D1 では書かない。 */
+  /* 8.47 順位の記録（rk_*）を書けるか（migrate-0063）。 */
+  await rkOk(env);
   const hasDim = (await colOk(env, "mw_amz", "size_wid"))
     && (await colOk(env, "mw_amz", "size_hei"));
   const dimCol = hasDim ? ",size_wid,size_hei" : "";
@@ -9091,7 +9116,8 @@ async function mwScanAsin(env, run, o, dl) {
          size_long=COALESCE(NULLIF(excluded.size_long,0), mw_amz.size_long),
          size_g=COALESCE(NULLIF(excluded.size_g,0), mw_amz.size_g),
          size_src=COALESCE(NULLIF(excluded.size_src,''), mw_amz.size_src)${dimSet},
-         err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at`)
+         err='', checked_at=excluded.checked_at,
+         asin_at=excluded.asin_at${rkSet("excluded.rank", "excluded.checked_at")}`)
       .bind(...[j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
             f.rank_sub || null, f.rank_sub_cat || "", at,
             String(f.size_tier || ""), Number(f.cm3 || 0),
@@ -15550,6 +15576,11 @@ async function mwAmzList(env, url) {
   const pxCols = (await pxOk(env))
     ? `\n            a.px_min AS px_min, a.px_max AS px_max,
             a.px_sum AS px_sum, a.px_n AS px_n, a.px_from AS px_from,` : "";
+  /* 8.47（カジの①）順位の記録（migrate-0063）。売れ行きの推定は
+     **順位の平均**で見る（1回の順位はぶれる）。無い D1 では出さない。 */
+  const rkCols = (await rkOk(env))
+    ? `\n            a.rk_sum AS rk_sum, a.rk_n AS rk_n,
+            a.rk_min AS rk_min, a.rk_max AS rk_max, a.rk_from AS rk_from,` : "";
   /* 7.130（【U の改】の1）会員に出す印・上限・販売価格（migrate-0051）。
      表が無い D1 でも落とさないよう、あるときだけ足す。 */
   const subOk = await mwSubOk(env);
@@ -15583,7 +15614,7 @@ async function mwAmzList(env, url) {
             /* サイズ区分（7.108）。在庫管理手数料の目安に使う。
                8.27：短辺・厚さは送り方（送料の区分）に使う。 */
             a.size_tier AS size_tier, a.size_cm3 AS size_cm3,
-            a.size_long AS size_long, a.size_g AS size_g,${dimCols}${pxCols}
+            a.size_long AS size_long, a.size_g AS size_g,${dimCols}${pxCols}${rkCols}
             /* MW の写真の控え（6.133）。Amazon刈取の行でも見えるように。 */
             COALESCE(i.ok_n,0) AS pics_ok, COALESCE(i.n,0) AS pics_n,
             i.long_px AS pics_long, i.main AS pics_main, i.at AS pics_at,
@@ -17625,6 +17656,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["rk_from", "migrate-0063-amz-rank.sql"],
+  ["rk_n", "migrate-0063-amz-rank.sql"],
   ["off_at", "migrate-0062-sub-off.sql"],
   ["px_from", "migrate-0061-amz-px.sql"],
   ["px_min", "migrate-0061-amz-px.sql"],

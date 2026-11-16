@@ -122,28 +122,29 @@ console.log('\n=== ④ 下限と対象を変えたときの件数 ===');
      '★★★限定版と「出せる数が無い」行は、下限を 0 にしても入らない');
   const tb=P.monTable(rows,O);
   console.log('   '+JSON.stringify(tb));
-  ok(tb[0].now===true&&tb[0].min===0.5,
-     '★★★表の1行目は「いまの下限」（⚙の既定 0.5点/日）');
-  ok(JSON.stringify(tb.map((x)=>x.min))==='[0.5,1,0.3,0.1]',
-     '★★★そのあとは 1／0.3／0.1 点/日（いまと同じ数は並べない）');
-  ok(tb[1].game===2&&tb[1].wide===2&&tb[2].game===3&&tb[2].wide===4,
+  /* 8.47 試算の表も「3か月の個数」で並べる。 */
+  ok(tb[0].now===true&&tb[0].q3===10,
+     '★★★表の1行目は「いまの下限」（⚙の既定 3か月10個）');
+  ok(JSON.stringify(tb.map((x)=>x.q3))==='[10,30,5,2]',
+     '★★★そのあとは 30／5／2個（いまと同じ数は並べない）');
+  ok(tb[1].game===3&&tb[1].wide===4,
      '★★★通常版ゲームの件数と、広げた場合の件数を並べる');
   /* ⚙を変えると「いまの下限」も変わる。 */
-  const tb2=P.monTable(rows,P.pickOpt({ subMonSpeedMin:2.5 }));
-  ok(tb2[0].min===2.5&&tb2[0].game===1,'★★⚙を 2.5点/日 にすれば1件');
+  const tb2=P.monTable(rows,P.pickOpt({ subMonQ3:225 }));
+  ok(tb2[0].q3===225&&tb2[0].game===1,'★★⚙を 3か月225個にすれば1件');
   ok(P.cpJa()==='クリックポスト',
      '★★送り方の名前は shared/shopcsv.js の1か所から取る');
 }
 
 console.log('\n=== ⑤ 数えるだけ（いまの配信の決まりは変えない）===');
 {
-  /* いまの下限は 0.5点/日（⚙の既定）なので、0.2 の品は案に入らない。 */
-  const rows=[r({ jan:'4902370550001', speed:0.2, speed_ok:true }),
+  /* いまの下限は3か月10個（＝1日0.111）なので、0.05 の品は案に入らない。 */
+  const rows=[r({ jan:'4902370550001', speed:0.05, speed_ok:true }),
               r({ jan:'4902370550002', speed:3, speed_ok:true })];
   const d=P.draft(rows,P.list({ subChMonitor:'111' })
     .filter((p)=>p.key==='monitor'),{ subMonShort:0 },[],Date.now());
   ok(d.plans[0].items.length===1&&d.plans[0].items[0].jan==='4902370550002',
      '★★★試算をしても、案に入るのは下限を通る品だけ');
-  ok(P.monCount(rows,O,0.1,true)===2,'★試算では2件と出る（数えるだけ）');
+  ok(P.monCount(rows,O,0.02,true)===2,'★試算では2件と出る（数えるだけ）');
 }
 T.done();

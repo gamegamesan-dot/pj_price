@@ -28,22 +28,27 @@ const mon=()=>SUBPLAN.plan('monitor');
 const W1=Date.parse('2026-11-16T09:00:00+09:00');
 const W2=Date.parse('2026-11-23T09:00:00+09:00');
 
-console.log('=== ① 速さの下限は⚙の固定値（8.45・既定 0.5点/日）===');
+console.log('=== ① 下限は「3か月の個数」（8.47・既定10個）===');
 {
   const o=SUBPLAN.pickOpt({});
-  /* 8.43 では「人数 ÷ 日数」だったが、カジの実データ（2026-11-16）で
-     2.5点/日 に届く品が1件しか無かったので、⚙の固定値を主にした。 */
-  ok(SUBPLAN.monSpeed(o)===0.5,'★★★既定は 1日 0.5点');
-  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonSpeedMin:'1.5' }))===1.5,
+  /* 8.45 は 0.5点/日（＝3か月45個）だったが、カジの実感
+     （ゲームは3万位で3か月に2〜3個）に対して厳しすぎた。
+     8.47 から単位を**3か月の個数**にして既定10個。 */
+  ok(SUBPLAN.monQ3Of(o)===10,'★★★既定は 3か月で10個');
+  ok(SUBPLAN.MON_DAYS===90&&Math.round(SUBPLAN.monSpeed(o)*90)===10,
+     '★★★中では 1日あたり（個 ÷ 90日）で見る');
+  ok(SUBPLAN.monQ3Of(SUBPLAN.pickOpt({ subMonQ3:30 }))===30,
      '★★★⚙で下限を決める');
-  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonSpeedMin:'' }))===0.5,
-     '★★★空なら既定の 0.5点/日');
-  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonPeople:10 }))===0.5,
+  ok(SUBPLAN.monQ3Of(SUBPLAN.pickOpt({ subMonQ3:'' }))===10,
+     '★★★空なら既定の10個');
+  ok(SUBPLAN.monSpeed(SUBPLAN.pickOpt({ subMonSpeedMin:'1.5' }))===1.5,
+     '★★点/日で決めたいときは subMonSpeedMin（そちらが優先）');
+  ok(SUBPLAN.monQ3Of(SUBPLAN.pickOpt({ subMonPeople:10 }))===10,
      '★★★人数を変えても下限は動かない（お一人1点と出せる数で抑える）');
   ok(SUBPLAN.pickOpt({ subMonPeople:10 }).monPeople===10
      &&SUBPLAN.pickOpt({}).monPeople===10,
      '★人数は⚙のまま返す（既定10人）');
-  ok(SUBPLAN.monSpeed(o,true)===0.25,'★★足りないときは半分まで下げる（既定50%）');
+  ok(SUBPLAN.monQ3Of(o,true)===5,'★★足りないときは半分まで下げる（既定50%）');
 }
 
 console.log('=== ①-2 モニターの対象（8.45・クリックポストまで広げる）===');
@@ -81,7 +86,9 @@ console.log('=== ② 1週目は速い順・新しく5件 ===');
      &&a.items[1].speed>=a.items[4].speed,
      '★★★1週目はいちばん速く売れる品から出す');
   ok(a.low===0&&a.short===0,'★下限を下げずに足りている');
-  const slow=SUBPLAN.monPick(rows(9,(i)=>({ speed:0.05+i*0.001 })),mon(),
+  /* 下限は3か月10個（＝1日0.111個）・下げても5個（0.055）なので、
+     1日0.02個（3か月1.8個）の品しかない週は出さない。 */
+  const slow=SUBPLAN.monPick(rows(9,(i)=>({ speed:0.02+i*0.001 })),mon(),
     SUBPLAN.pickOpt({}),[],W1);
   ok(slow.items.length===0&&slow.short===5,
      '★★★遅い品しかない週は出さない（お試しの約束を守る）');
@@ -114,9 +121,10 @@ console.log('=== ③ 2週目からはランダム・前の週は選ばない ===
 
 console.log('=== ④ 足りない週は下限を下げて埋める ===');
 {
-  /* 速い品2件＋少し遅い品5件（下限 0.5／下げると 0.25）。 */
+  /* 速い品2件＋少し遅い品5件
+     （下限は3か月10個＝1日0.111・下げると5個＝0.055）。 */
   const list=rows(2,(i)=>({ speed:3+i })).concat(
-    rows(5,(i)=>({ jan:'49023705502'+(10+i), speed:0.3+i*0.01 })));
+    rows(5,(i)=>({ jan:'49023705502'+(10+i), speed:0.08+i*0.001 })));
   const a=SUBPLAN.monPick(list,mon(),SUBPLAN.pickOpt({}),[],W1);
   console.log('   '+JSON.stringify(a.items.map((x)=>x.jan+':'+x.speed
     +(x.mon_low?'（下げた）':''))));
@@ -124,7 +132,7 @@ console.log('=== ④ 足りない週は下限を下げて埋める ===');
   ok(a.low===3,'★★★下げて埋めた件数を返す');
   ok(a.items.filter((x)=>x.mon_low).length===3,
      '★★★下げて入れた品に印を付ける（案に出す）');
-  ok(a.items.filter((x)=>!x.mon_low).every((x)=>x.speed>=0.5),
+  ok(a.items.filter((x)=>!x.mon_low).every((x)=>x.speed*90>=10),
      '★★印の無い品は下限を満たしている');
   /* ⚙で「下げない」にもできる。 */
   const b=SUBPLAN.monPick(list,mon(),SUBPLAN.pickOpt({ subMonShort:0 }),[],W1);

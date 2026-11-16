@@ -2195,13 +2195,26 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
         <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="10" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
         <div class="row cfgprice"><label for="subMonLimitDays">購入期限</label><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
-        <div class="note2" style="margin:0 0 6px"><b>速さの下限はこの欄の数（既定 0.5点/日）</b>です（空なら 0.5）。値崩れは<b>お一人1点</b>と<b>出せる数（下の「MW在庫の何%まで」「想定購入数」）</b>で抑えます。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。ほかのプランでは売り続けます。</div>
-        <div class="row cfgprice"><label for="subMonSpeedMin">速さの下限／足りないとき下げる</label><input type="number" id="subMonSpeedMin" value="0.5" step="0.1" min="0" max="999" inputmode="decimal"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">点/日・%</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>売れ行きの下限は「3か月で◯個」</b>です（既定 <b>10個</b>）。<b>MW の在庫の減り</b>がある品を先に選び、足りない分だけ<b>Amazon の順位からの推定</b>で埋めます（推定の品には案に印が出ます）。値崩れは<b>お一人1点</b>と<b>出せる数</b>と<b>全会員ぶんの合計の上限</b>で抑えます。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。</div>
+        <div class="row cfgprice"><label for="subMonQ3">3か月の個数の下限／足りないとき下げる</label><input type="number" id="subMonQ3" value="10" step="1" min="0" max="10000" inputmode="numeric"><input type="number" id="subMonShort" value="50" step="5" min="0" max="90" inputmode="numeric"><span class="unit">個・%</span></div>
+        <div class="row cfgprice"><label for="subMonSpeedMin">（点/日で決めたいとき）</label><input type="number" id="subMonSpeedMin" value="" step="0.1" min="0" max="999" inputmode="decimal"><span class="unit">点/日</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subMonWide" checked><label for="subMonWide" style="flex:1"><b>クリックポストで送れる品まで広げる</b>（ゲームソフトは<b>通常版だけ</b>のまま。フィギュア・グッズも入ります）</label></div>
         <div class="note2" style="margin:0 0 6px">候補が件数に足りない週は、<b>速さの下限をこの%だけ下げて埋めます</b>（下げて入れた品には案に印が出ます）。それでも足りなければ<b>そのまま少なく出します</b>。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subMonNote" checked><label for="subMonNote" style="flex:1"><b>モニターに「今週の配信」を1通出す</b>（上のプランの件数だけ・商品名や価格は出さない）</label></div>
         <div class="row cfgprice"><label for="subMonFrom">モニターの開始日（空なら今までどおり）</label><input type="date" id="subMonFrom" value=""></div>
         <div class="note2" style="margin:0 0 6px">正式にモニターを始める日を入れると、<b>その日より前に出したカード（テスト配信）は「前の週に出した品」に数えません</b>。<b>1週目もこの日から数え直します</b>（開始日から7日間が1週目）。空のままなら、今までどおり<b>モニターに出したことのある品ぜんぶ</b>を外します。</div>
+        <!-- 8.47（カジの①）Amazon の順位から「売れ行き」を見積もる。
+             換算表は shared/rankspd.js の1か所だけ（pj-sync も同じ）。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>売れ行きの推定（Amazon の順位から）</b></div>
+        <div class="note2" style="margin:0 0 6px"><b>これは推定です</b>（pj は Keepa の月間販売数を持っていません）。<b>MW の在庫の減りがある品はそちらを先に使います。</b><b>会員のカードに数字は出しません</b>（出すのは「売れるまで：早い／ふつう／ゆっくり」の言葉だけ）。数は<b>3か月の個数</b>で入れてください。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="rsOn" checked><label for="rsOn" style="flex:1"><b>順位からの推定を使う</b>（切ると MW の減りがある品だけになります）</label></div>
+        <div class="row cfgprice"><label for="rsB1">〜1,000位／〜5,000位</label><input type="number" id="rsB1" value="270" step="1" min="0" max="100000" inputmode="numeric"><input type="number" id="rsB2" value="30" step="1" min="0" max="100000" inputmode="numeric"><span class="unit">個/3か月</span></div>
+        <div class="row cfgprice"><label for="rsB3">〜10,000位／〜30,000位</label><input type="number" id="rsB3" value="11" step="1" min="0" max="100000" inputmode="numeric"><input type="number" id="rsB4" value="2.5" step="0.5" min="0" max="100000" inputmode="decimal"><span class="unit">個/3か月</span></div>
+        <div class="row cfgprice"><label for="rsB5">〜50,000位／上限</label><input type="number" id="rsB5" value="1" step="0.5" min="0" max="100000" inputmode="decimal"><input type="number" id="rsCap" value="270" step="10" min="1" max="100000" inputmode="numeric"><span class="unit">個/3か月</span></div>
+        <div class="note2" style="margin:0 0 6px"><b>50,000位より下・順位が無い品は推定しません</b>（候補に入りません）。</div>
+        <div class="row cfgprice"><label for="rsGame">係数：ゲーム／フィギュア／その他</label><input type="number" id="rsGame" value="1" step="0.1" min="0" max="10" inputmode="decimal"><input type="number" id="rsHobby" value="0.5" step="0.1" min="0" max="10" inputmode="decimal"><input type="number" id="rsOther" value="0.3" step="0.1" min="0" max="10" inputmode="decimal"><span class="unit">倍</span></div>
+        <div class="row cfgprice"><label for="rsFast">「早い」／「ゆっくり」の境目</label><input type="number" id="rsFast" value="30" step="1" min="0" max="100000" inputmode="numeric"><input type="number" id="rsSlow" value="10" step="1" min="0" max="100000" inputmode="numeric"><span class="unit">個/3か月</span></div>
+        <div class="note2" style="margin:0 0 6px">カードの言葉はこの2つの境目で決まります（<b>30個以上＝早い／10〜30個＝ふつう／10個未満＝ゆっくり</b>）。</div>
         <div class="note2" style="margin:10px 0 2px"><b>案の振り分け（ライト以上）</b></div>
         <div class="row cfgprice"><label for="subStockPct">MW在庫の何%まで出すか</label><input type="number" id="subStockPct" value="30" step="5" min="0" max="100" inputmode="numeric"><span class="unit">%</span></div>
         <div class="row cfgprice"><label for="subWantQty">会員の想定購入数（1商品）</label><input type="number" id="subWantQty" value="5" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
@@ -2839,6 +2852,8 @@ body.staff #syncOnHandFix{display:none !important}
 <!-- 8.46 会員チャンネルの「今週の一覧（目次）」。subguide.js・subcard.js・
      mwfee.js を使うので**あと**に読む。pj-sync も同じこれを読む。 -->
 <script src="./shared/subindex.js"></script>
+<!-- 8.47 Amazon の順位から「売れ行き」を見積もる（換算表はここ1か所）。 -->
+<script src="./shared/rankspd.js"></script>
 <!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
 <script src="./shared/osscsv.js"></script>
 <script>
@@ -2891,6 +2906,10 @@ var SELLWAY=PJ_SELLWAY;
 if(typeof PJ_SUBINDEX==='undefined')
   throw new Error('shared/subindex.js が読み込めていません（会員の一覧）');
 var SUBINDEX=PJ_SUBINDEX;
+/* 8.47 売れ行きの推定（Amazon の順位から）。pj-sync も同じこれを読む。 */
+if(typeof PJ_RANKSPD==='undefined')
+  throw new Error('shared/rankspd.js が読み込めていません（売れ行きの推定）');
+var RANKSPD=PJ_RANKSPD;
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
@@ -3606,7 +3625,10 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
-             'subMonSpeedMin','subMonShort','subMonFrom',
+             'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
+             /* 8.47 売れ行きの推定（Amazon の順位から）。 */
+             'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
+             'rsGame','rsHobby','rsOther','rsFast','rsSlow',
              /* 会員価格（6.178／6.187／6.188）。pj-sync も仕入原価に使う
                 （mwSubShip）。どの端末でも同じ値段になるように送る。 */
              'mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
@@ -3639,7 +3661,7 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
-                'subMonNote','subMonWide',
+                'subMonNote','subMonWide','rsOn',
                 /* 8.46 会員チャンネルの一覧（目次）。 */
                 'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen'];
 var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
@@ -6453,7 +6475,9 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
-                 'subMonSpeedMin','subMonShort','subMonFrom',
+                 'subMonQ3','subMonSpeedMin','subMonShort','subMonFrom',
+                 'rsB1','rsB2','rsB3','rsB4','rsB5','rsCap',
+                 'rsGame','rsHobby','rsOther','rsFast','rsSlow',
                  /* 6.183（v263）ゲームソフト1本の重さ（Shopify 用）。 */
                  'mwSubGameG',
                  /* 8.32 仕入れタブを開いたときの一覧（この端末だけの設定）。 */
@@ -16638,7 +16662,14 @@ function subPickCfg(){
            subMonLimitDays:v('subMonLimitDays'),
            /* 8.45 モニターの対象を広げるか（クリックポストで送れる品）。 */
            subMonWide:($('subMonWide')||{}).checked?1:0,
+           subMonQ3:v('subMonQ3'),
            subMonSpeedMin:v('subMonSpeedMin'), subMonShort:v('subMonShort'),
+           /* 8.47 売れ行きの推定（換算表は shared/rankspd.js の1か所）。 */
+           rsOn:($('rsOn')||{}).checked?1:0,
+           rsB1:v('rsB1'), rsB2:v('rsB2'), rsB3:v('rsB3'), rsB4:v('rsB4'),
+           rsB5:v('rsB5'), rsCap:v('rsCap'), rsGame:v('rsGame'),
+           rsHobby:v('rsHobby'), rsOther:v('rsOther'),
+           rsFast:v('rsFast'), rsSlow:v('rsSlow'),
            /* 8.44（カジの確認3）モニターの開始日。 */
            subMonFrom:v('subMonFrom'),
            /* 8.21（【1】）通常版でない言葉（足す分）。 */
@@ -16677,10 +16708,22 @@ function subDraftRows(){
        new（記録が1日ぶんも無い）／nodown（記録はあるが減っていない）。 */
     var speedWhy=speedOk?'ok'
       :((st&&(st.none||st.tooNew))?'new':'nodown');
+    /* 8.47（カジの①）Amazon の順位からの推定（3か月の個数）。
+       MW の減りがある品はそちらが先（決まりは shared/rankspd.js）。 */
+    /* 順位の平均は pj-sync の控え（rk_sum ÷ rk_n・migrate-0063）。
+       記録が無い D1 では最新の順位だけで見る（画面に印を出す）。 */
+    var rkN=+r.rk_n||0;
+    var rkAvg=(rkN>0)?Math.round((+r.rk_sum||0)/rkN):0;
+    var es=RANKSPD.estOf({ speed:speed, speed_ok:speedOk,
+      rank:+r.rank||0, rank_avg:rkAvg, rank_n:rkN,
+      genre:MWFEE.genreOf(r) },subPickCfg());
     var stock=+r.stock||0;
     var row={ jan:jan, name:String(r.amz_name||r.mw_name||''),
       kishu:String(r.kishu||''), stock:stock, speed:speed,
       speed_ok:speedOk, speed_why:speedWhy,
+      /* 8.47 推定（1日あたり・3か月の個数・出どころ・順位が1回ぶんか）。 */
+      est:(es.src==='amz')?es.day:0, q3:es.q3, spd_src:es.src,
+      rank:+r.rank||0, rank_n:rkN, rank_avg:rkAvg, rank_one:!!es.one,
       gross:fit.gross, rate:fit.pct, price:px, fit:!!fit.ok,
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
       no_back:!!(st&&st.noBack), one_off:false,
@@ -16709,14 +16752,18 @@ function subMonHtml(d){
   var p=((d||{}).plans||[]).filter(function(x){ return x.key==='monitor'; })[0];
   if(!p||!p.on)return '';
   var m=p.mon||{};
-  var r1=Math.round((+m.min||0)*100)/100, r2=Math.round((+m.min2||0)*100)/100;
+  var D=SUBPLAN.MON_DAYS||90;
+  var r1=Math.round((+m.min||0)*D*10)/10, r2=Math.round((+m.min2||0)*D*10)/10;
   return '<br><span class="note2" style="margin:0">'
     +'<b>モニター</b>（'+(m.first?'<b>1週目：速い順</b>'
       :'2週目から：候補からランダム')+'）　'
     +'新しく <b>'+mwN(+m.n||0)+'件</b>／候補 '+mwN(+m.okN||0)+'件'
-    +'（速さ '+r1+'点/日 以上）'
-    +((+m.low>0)?('　<b style="color:var(--bad)">下限を '+r2
-      +'点/日 まで下げて '+mwN(+m.low)+'件を埋めました</b>'):'')
+    +((+m.okEN>0)?('＋推定 '+mwN(+m.okEN)+'件'):'')
+    +'（3か月で '+r1+'個 以上）'
+    /* 8.47 MW の減りが足りない分は推定で埋める（印を出す）。 */
+    +((+m.est>0)?('　<b>推定で '+mwN(+m.est)+'件を埋めました</b>'):'')
+    +((+m.low>0)?('　<b style="color:var(--bad)">下限を3か月 '+r2
+      +'個 まで下げて '+mwN(+m.low)+'件を埋めました</b>'):'')
     +((+m.short>0)?('　<b style="color:var(--bad)">'+mwN(+m.short)
       +'件たりません（そのまま少なく出します）</b>'):'')
     +(subMonSent===null
@@ -16738,16 +16785,21 @@ function subStatHtml(rows){
   var q=function(x,f){
     return (f?f(x.q1):x.q1)+'／'+(f?f(x.med):x.med)+'／'+(f?f(x.q3):x.q3); };
   var one=function(v){ return Math.round(v*100)/100; };
+  var D=SUBPLAN.MON_DAYS||90;
+  var q3=function(x){ return Math.round(x*D*10)/10; };
   return '<br><span class="note2" style="margin:0">'
     +'<b>いまの候補 '+mwN(st.n)+'件の分布</b>（下位25%／中央／上位25%）<br>'
-    +'粗利 '+q(st.gross,yen)+'　／　売れる速さ '
-    +q({ q1:one(st.speed.q1), med:one(st.speed.med), q3:one(st.speed.q3) })
-    +' 点/日　／　<b>粗利×速さ</b> '
+    +'粗利 '+q(st.gross,yen)
+    /* 8.47 単位は「3か月の個数」（Keepa の既定が3か月のため）。 */
+    +'　／　売れ行き（MW の減り） '
+    +q({ q1:q3(st.speed.q1), med:q3(st.speed.med), q3:q3(st.speed.q3) })
+    +' 個/3か月　／　<b>粗利×速さ</b> '
     +q({ q1:Math.round(st.gxs.q1), med:Math.round(st.gxs.med),
          q3:Math.round(st.gxs.q3) })+' 円/日'
     +'<br>モニターの条件に合う品：<b>'+mwN(st.monOk)+'件</b>'
     +'（下限を下げれば '+mwN(st.monOk+st.monLow)+'件）'
     +subSpdHtml(rows)
+    +subEstHtml(rows)
     +'</span>';
 }
 /* 8.44（カジの確認1・2）売れる速さの内訳と、下限を変えたときの件数。
@@ -16775,9 +16827,42 @@ function subSpdHtml(rows){
     +(tb?('<br><b>下限を変えたときのモニターの候補</b>'
       +'（通常版ゲーム → クリックポストで送れる品まで広げた場合）<br>　'
       +tb.map(function(x){
-        return (x.now?'<b>いま ':'')+x.min+'点/日'+(x.now?'</b>':'')+' … '
-          +'<b>'+mwN(x.game)+'件</b> → <b>'+mwN(x.wide)+'件</b>';
+        /* 8.47 単位は「3か月で◯個」。MW の減りが無い品は推定で見る。 */
+        return (x.now?'<b>いま ':'')+'3か月 '+x.q3+'個'+(x.now?'</b>':'')
+          +' … <b>'+mwN(x.game)+'件</b> → <b>'+mwN(x.wide)+'件</b>';
       }).join('<br>　')):'');
+}
+/* 8.47（カジの①）Amazon の順位からの推定の内訳と、
+   MW の減りとの比べ（**参考**）。
+   MW の減りは**卸での売れ方**で、Amazon の売れ方とは別物なので、
+   「合っているか」ではなく「どれくらい違うか」の参考として出す。 */
+function subEstHtml(rows){
+  var o=null, cm=null;
+  try{ o=subPickCfg(); cm=RANKSPD.compare(rows,o); }catch(e){ return ''; }
+  var n=0, one=0, none=0;
+  (rows||[]).forEach(function(r){
+    if(String(r.spd_src||'')==='amz'){ n++; if(r.rank_one)one++; }
+    else if(!r.spd_src)none++;
+  });
+  var fast=0, mid=0, slow=0;
+  (rows||[]).forEach(function(r){
+    var ja=RANKSPD.jaOf(r.q3,o);
+    if(ja===RANKSPD.JA_FAST)fast++;
+    else if(ja===RANKSPD.JA_MID)mid++;
+    else if(ja)slow++;
+  });
+  return '<br><b>Amazon の順位からの推定</b>：'
+    +'推定で売れ行きが出た品 <b>'+mwN(n)+'件</b>'
+    +(one?('（うち順位が1回ぶんだけ '+mwN(one)+'件）'):'')
+    +'／どちらも出ない品 '+mwN(none)+'件'
+    +'<br>　売れるまで：早い <b>'+mwN(fast)+'件</b>／ふつう '+mwN(mid)
+    +'件／ゆっくり '+mwN(slow)+'件'
+    +(((cm||{}).n>0)
+      ?('<br>　<b>MW の減りとの比較（参考）</b>：両方ある '+mwN(cm.n)
+        +'件で <b>実測 ÷ 推定 ＝ '+cm.ratio+'</b>'
+        +'（<b>MW の減りは卸での売れ方</b>で、Amazon の売れ方とは別物です。'
+        +'係数をどれくらい動かすかの目安にしてください）')
+      :'<br>　<span>MW の減りと推定の両方がある品がまだありません</span>');
 }
 function subDraftFiltHtml(){
   var f={}; try{ f=mwAmzFilters()||{}; }catch(e){ f={}; }
@@ -17057,6 +17142,9 @@ function subDraftHtml(plans){
         +(x.slow?'<span class="badge" style="background:#8a8a8a">売れる速さ 0</span>':'')
         /* 8.43 モニターで、速さの下限を下げて入れた品。 */
         +(x.mon_low?'<span class="badge" style="background:#b07000">下限を下げて入れました</span>':'')
+        /* 8.47 推定で選んだ品（MW の減りが無い品）。 */
+        +(x.mon_est?'<span class="badge" style="background:#3a6ea5">推定で入れました</span>':'')
+        +((x.spd_src==='amz'&&!x.mon_est)?'<span class="badge" style="background:#555">順位からの推定</span>':'')
         /* 8.29（カジの依頼）総合の札（◎ねらい目／○ふつう／△慎重に）。 */
         +gdBadgeHtml(x)
         /* 8.27（カジの依頼3）送料の区分（配る前に気づけるように）。 */
@@ -27232,7 +27320,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v305';   // sw.js の const V と必ず同じ値にする
+var APP_V='v306';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
