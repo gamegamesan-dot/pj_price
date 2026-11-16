@@ -248,5 +248,31 @@ console.log('\n=== ⑦ ⚙を変えると試算だけが変わる（手残り）
      '★★★**本判定**なので、会員向きかどうかが「手残り ≧ 下限」と'
      +'ぴったり合う');
 }
+console.log('\n=== ⑦ 会員便の送料が足りない品（8.57）===');
+{
+  const t=await p.evaluate(async()=>{
+    /* 箱もの（25×20×10cm・900g → 宅配便60）を1件足す。
+       会員便の段は 350g 超なので ¥600・実額は ¥800 → 不足 ¥200。 */
+    const rows=(window.__rows||[]).slice();
+    return { on:($('subShipShortOff')||{}).checked,
+             cfg:subPickCfg().subShipShortOff,
+             sh:mwShipInfo({ jan:'4589864470205', kishu:'FIG',
+               size_long:25, size_wid:20, size_hei:10, size_g:900 }),
+             thin:mwShipInfo({ jan:'4902370550001', kishu:'NS',
+               size_long:17, size_wid:13, size_hei:1.5, size_g:100 }) };
+  });
+  console.log('   '+JSON.stringify(t));
+  ok(t.on===false&&t.cfg===0,
+     '★★★⚙「送料が足りない品は自動では出さない」は**既定オフ**');
+  ok(t.sh.short===true&&t.sh.short_gap===200,
+     '★★★箱もの（宅配便60）は 会員から ¥600・実際 ¥800 で**不足 ¥200**');
+  ok(/会員から ¥600/.test(String(t.sh.warn||''))
+     &&/実際 ¥800/.test(String(t.sh.warn||''))
+     &&/不足 ¥200/.test(String(t.sh.warn||'')),
+     '★★★警告の文に**実額と不足額**が入る');
+  ok(t.thin.short===false&&!/足りません/.test(String(t.thin.warn||'')),
+     '★★★クリックポストの品（会員から ¥200・実際 ¥185）は足りる');
+}
+
 await T.done();
 })();

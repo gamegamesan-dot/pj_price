@@ -11374,6 +11374,13 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
        件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
        別の行が繰り上がることはない（カジが見た一覧のまま出す）。 */
     if (skip && skip[String(r.jan)]) continue;
+    /* 8.57（カジの依頼）**会員便の送料が足りない品は、新しく出さない**
+       （⚙ subShipShortOff・既定オフ）。**出してあるカードは触らない**
+       （値段と残り数の書き換えは今までどおり・勝手に受付終了にしない）。
+       カジが送り方を直せば、次の回から出る。 */
+    if (((cfg || {}).pick || {}).shipShortOff
+        && !((sent || {})[r.jan] || {}).msg_id
+        && subShipInfo(r, cfg || {}).short) continue;
     /* 8.38 前のカードが Discord から消えていた控え（msg_id を空にしてある）。
        **まだ出していない**扱いにして、確認の画面に理由を出す。 */
     const was = (sent || {})[r.jan];
@@ -11602,11 +11609,21 @@ function subShipInfo(x, cfg) {
                                             unit: SHOPCSV.shipUnit(x, o) })
                    : null;
   const yen1 = st ? Number(st.yen1) || 0 : 0;
-  /* 箱ものなのに段が安いと、送るたびに足が出る（⚙ mwSubBoxMin）。 */
-  const warn = (w.sure && w.name && !w.thin && yen1 && yen1 < cfg.boxMin)
-    ? ("会員便の段が ¥" + yen1 + "（" + w.name + "には足りません）") : "";
+  /* 8.57（カジの依頼）**会員から受け取る額と実際の送料を比べる**。
+     決まりは shared/sellway.js の shortOf の1か所（画面も同じものを読む）。 */
+  const sh = SELLWAY.shortOf(w.key, yen1,
+    Object.assign({}, cfg.guide || {}, { shipName: w.name }));
+  /* 箱ものなのに段が安いと、送るたびに足が出る。
+     8.57 まずは**実額との差**で知らせ、⚙ mwSubBoxMin（下限）も今までどおり。 */
+  const warn = (w.sure && w.name && !w.thin && yen1 && sh.short)
+    ? ("送料が足りません（" + sh.ja + "）")
+    : ((w.sure && w.name && !w.thin && yen1 && yen1 < cfg.boxMin)
+      ? ("会員便の段が ¥" + yen1 + "（" + w.name + "には足りません）") : "");
   return { key: w.key, name: w.name, sure: !!w.sure, why: w.why,
            grams: g, yen1: yen1, warn: warn,
+           /* 送料が足りない品（⚙で自動の配信から外せる）。 */
+           short: !!(w.sure && w.name && !w.thin && sh.short),
+           short_ja: sh.short ? sh.ja : "", short_gap: sh.gap,
            text: SHOPCSV.shipLine(x, o) };
 }
 /* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====

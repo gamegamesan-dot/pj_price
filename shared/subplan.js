@@ -439,6 +439,8 @@
       monWide: bool(o.subMonWide, MON.monWide),
       /* 8.52（カジの決定）並びを手残りで決めるか（既定オン）。 */
       sortNet: bool(o.subSortNet, true),
+      /* 8.57（カジの依頼）送料が足りない品を自動では出さないか（既定オフ）。 */
+      shipShortOff: bool(o.subShipShortOff, false),
       monShort: n("subMonShort", MON.monShort, 0, 90),
       /* 8.44（カジの確認3）モニターの開始日（'YYYY-MM-DD'）。
          入れた日より前に出したカードは「前の週に出した品」に数えず、
@@ -730,6 +732,13 @@
        **案にも配信にも入れない**（既定：ポスター）。
        言葉の表は shared/shipguess.js の1か所。 */
     if (s(r.ng_kind)) return "出さない種類（" + s(r.ng_kind) + "）";
+    /* 8.57（カジの依頼）**会員便の送料が足りない品**（会員から受け取る額が
+       実際の送料より安い）。⚙「送料が足りない品は自動では出さない」を
+       入れたときだけ外す（既定は出す＝いまの箱ものが消えないように）。
+       文は shared/sellway.js の shortOf が作る1か所。
+       カジが送り方を直せば（手で上書き・採寸の取り直し）すぐ戻る。 */
+    if (o.shipShortOff && s(r.ship_short))
+      return "会員便の送料が足りません（" + s(r.ship_short) + "）";
     if (!r.fit) return "会員向きではありません";
     if (s(r.rst) === "blocked") return "出品できません";
     if (o.noAmz && r.amz) return "Amazon 本体あり";

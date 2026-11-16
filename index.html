@@ -2322,6 +2322,11 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv cfgprice"><label for="mwSubThinKishu">薄物とみなす機種（足す分）</label><input type="text" id="mwSubThinKishu" value="" placeholder="NS,NS2,PS5" inputmode="text"></div>
         <div class="note2" style="margin:0 0 6px">クリックポスト（34×25cm・厚さ3cm・1kg まで）に入る商品の<b>機種</b>をカンマ区切りで足せます。空なら<b>機種の表のとおり</b>（ゲーム機の記号は薄物、フィギュア・プラモデルは箱）。<br>機種の前に <code>-</code> を付けると薄物から外します（例 <code>-NS2</code>）。<br><b>採寸（3辺）が取れている行は採寸が優先です</b>（機種がゲームでも、限定版の大きな箱は宅配便になります）。</div>
         <div class="row cfgprice"><label for="mwSubBoxMin">箱ものの送料の下限</label><input type="number" id="mwSubBoxMin" value="600" step="50" min="0" max="5000" inputmode="numeric"><span class="unit">円</span></div>
+        <!-- 8.57（カジの依頼）会員から受け取る額が実際の送料より安い品の扱い。
+             既定オフ（いまの段では箱ものがほぼ全部当たるので、
+             まず件数を見てから決める）。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subShipShortOff"><label for="subShipShortOff" style="flex:1"><b>送料が足りない品は自動では出さない</b>（会員から受け取る額＜実際の送料。<b>出してあるカードは触りません</b>・送り方を直せば戻ります）</label></div>
+        <div class="note2" style="margin:0 0 6px">実際の送料は⚙「売り方ごとの送料」（クリックポスト ¥185／レターパックプラス ¥600／宅急便コンパクト ¥520／宅配便60 ¥800／80 ¥1,000／100以上 ¥1,200）と比べます。<b>入れる前に、①の案に出る件数を見てください</b>（いまの段だと箱ものがほぼ全部当たります）。</div>
         <div class="note2" style="margin:0 0 6px">クリックポスト<b>以外</b>の送り方なのに、会員便の段がこの額より安いとき、案と一覧に <b style="color:var(--bad)">⚠ 送料が足りません</b> と出します（レターパックプラスは ¥600・宅急便コンパクトと宅配便はそれ以上かかります）。0 にすると知らせません。</div>
         <!-- 8.29（カジの依頼）買うかどうかの目安。しきい値はここで直せる。
              決まりは shared/subguide.js の1か所だけ。 -->
@@ -3745,6 +3750,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
                 'subNetOn','subCutRateOn','subNetBuyShip','subSortNet',
+                /* 8.57 送料が足りない品を自動では出さない（既定オフ）。 */
+                'subShipShortOff',
                 /* 8.46 会員チャンネルの一覧（目次）。 */
                 'gdIdxOn','gdIdxAuto','gdIdxWeek','gdIdxYen',
                 /* 8.56 会員の月額課金（チェック欄）。 */
@@ -16654,11 +16661,22 @@ function mwShipInfo(r){
                                         unit:PJ_SHOPCSV.shipUnit(row,o) }):null;
   var yen1=st?(+st.yen1||0):0;
   var min=mwShipBoxMin();
-  var warn=(w.sure&&w.name&&!w.thin&&yen1&&min&&yen1<min)
-    ?('送料が足りません（会員便の段 '+yen(yen1)+'／'+w.name+'）'):'';
+  /* 8.57（カジの依頼）**会員から受け取る額と実際の送料を比べる**。
+     決まりは shared/sellway.js の shortOf の1か所（pj-sync も同じ）。 */
+  var sh=SELLWAY.shortOf(w.key,yen1,
+    Object.assign({},gdCfg(),{ shipName:w.name }));
+  var box=!!(w.sure&&w.name&&!w.thin&&yen1);
+  var short=!!(box&&sh.short);
+  var warn=short?('送料が足りません（'+sh.ja+'）')
+    :((box&&min&&yen1<min)
+      ?('送料が足りません（会員便の段 '+yen(yen1)+'／'+w.name+'）'):'');
   if(!g)warn=warn||'重さ未取得（送料の段がずれます）';
   return { key:w.key, name:w.name, sure:!!w.sure, why:w.why, grams:g,
-           yen1:yen1, warn:warn, text:PJ_SHOPCSV.shipLine(row,o) };
+           yen1:yen1, warn:warn,
+           /* 送料が足りない品（⚙で自動の配信から外せる）。 */
+           short:short, short_ja:short?sh.ja:'', short_gap:sh.gap,
+           short_cost:sh.cost,
+           text:PJ_SHOPCSV.shipLine(row,o) };
 }
 /* 区分の札（案・一覧で同じ見た目にする）。
    はっきりしない行（採寸が無い行）は灰色で「要確認」と出す。 */
@@ -16818,6 +16836,8 @@ function subPickCfg(){
            subNetBuyShip:($('subNetBuyShip')||{}).checked?1:0,
            /* 8.52 プランの並び（下は早い品から・上は手残りの大きい順）。 */
            subSortNet:($('subSortNet')||{}).checked?1:0,
+           /* 8.57 送料が足りない品を自動では出さないか（既定オフ）。 */
+           subShipShortOff:($('subShipShortOff')||{}).checked?1:0,
            subCutRateOn:($('subCutRateOn')||{}).checked?1:0,
            subCutRate:v('subCutRate'),
            subCutWay:v('subCutWay'), subCutNet:v('subCutNet'),
@@ -16925,6 +16945,10 @@ function subDraftRows(){
     }
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
+    /* 8.57（カジの依頼）会員便の送料が足りない品の印（文は1か所から）。 */
+    row.ship_short=sh.short?String(sh.short_ja||''):'';
+    row.ship_short_gap=+sh.short_gap||0;
+    row.ship_key=sh.key;
     /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
        決まりは shared/subguide.js の1か所だけ（pj-sync も同じもの）。 */
     var gr=Object.assign({},gdRowOf(r,px,fit),{ buy_ship:nt.buy_ship });
@@ -17312,6 +17336,29 @@ function subCutHtml(rows){
     +(noNet?('／手残りが出せない品 '+mwN(noNet)+'件（手数料の率が'
       +'取れていません）'):'')+'</span>';
 }
+/* 8.57（カジの依頼）**会員便の送料が足りない品**の件数（送り方ごと）。
+   会員から受け取る額（会員便の段の1点ぶん）が、実際の送料より安い品。
+   ⚙を入れていなければ**出します**（件数を見て決められるように）。 */
+function subShortHtml(rows){
+  var list=(rows||[]).filter(function(r){ return !!r.ship_short; });
+  if(!list.length)return '';
+  var by={}, gap=0;
+  list.forEach(function(r){
+    var k=String(r.ship||'（分かりません）');
+    by[k]=(by[k]||0)+1;
+    gap+=Math.max(0,+r.ship_short_gap||0);
+  });
+  var on=($('subShipShortOff')||{}).checked;
+  var ja=Object.keys(by).sort(function(a,b){ return by[b]-by[a]; })
+    .map(function(k){ return esc(k)+' '+mwN(by[k])+'件'; }).join('／');
+  return '<br><b style="color:var(--bad)">会員便の送料が足りない品 '
+    +mwN(list.length)+'件</b>'
+    +(on?'（<b>自動では出しません</b>）':'（<b>いまは出します</b>・⚙で外せます）')
+    +'<br>　'+ja
+    +'<br>　<span class="note2">足りない額の合計は1点ずつで '+yen(gap)
+    +'（会員便の段は Shopify の「マーケット → 日本 → 配送」で決まります。'
+    +'段を箱ものまで伸ばすか、送り方を手で直すと消えます）。</span>';
+}
 /* ===== 8.49（カジの③）採寸が無い品の内訳 =====
    ・外れている件数と理由（まだ調べていない／3辺そろっていない／
      重さだけある／採寸が丸ごと無い）
@@ -17461,6 +17508,8 @@ function subDraftMake(){
     +subCutHtml(rows)
     /* 8.49（カジの③）採寸が無い品の内訳。 */
     +subDimHtml(rows)
+    /* 8.57（カジの依頼）会員便の送料が足りない品の件数（送り方ごと）。 */
+    +subShortHtml(rows)
     /* 8.55（カジの依頼A）前の①と比べて、外れた品と変わった数字を出す。 */
     +subCmpHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
@@ -28096,7 +28145,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v315';   // sw.js の const V と必ず同じ値にする
+var APP_V='v316';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

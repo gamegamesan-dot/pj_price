@@ -105,6 +105,27 @@
     if (!k) return 0;
     return Math.max(0, Math.round(val(opt, k)));
   }
+  /* 8.57（カジの依頼）**会員から受け取る送料が、実際の送料より安いか**。
+       wayKey … 送り方の区分（shared/shopcsv.js の shipWay().key）
+       got    … 会員から受け取る額（会員便の段の1点ぶん・shipSteps の yen1）
+     実額は⚙（gdShipCp など）の1か所から取る。
+     どちらかが分からないときは **short:false**（当てずっぽうで外さない）。
+     返り { short, cost, got, gap, ja } */
+  function shortOf(wayKey, got, opt) {
+    var k = s(wayKey).trim();
+    var cost = shipOf(k, opt);
+    var g = Math.max(0, Math.round(num(got)));
+    var out = { short: false, cost: cost, got: g, gap: 0, ja: "" };
+    if (!(cost > 0) || !(g > 0)) return out;
+    if (cost <= g) return out;
+    out.short = true;
+    out.gap = cost - g;
+    /* 送り方の名前は呼ぶ側から渡す（名前の表は shared/shopcsv.js の1か所）。 */
+    var nm = s((opt || {}).shipName).trim();
+    out.ja = "会員から " + yen(g) + "／実際 " + yen(cost)
+      + (nm ? ("・" + nm) : "") + "・不足 " + yen(out.gap);
+    return out;
+  }
   /* 10円単位で切り上げ。 */
   function up10(v) { return Math.ceil(num(v) / 10) * 10; }
   /* 1つの売り方の「赤字にならない売値」。
@@ -261,7 +282,7 @@
       + "（送り方が分からない商品は送料を入れていません）。"
       + "メルカリ・ヤフオクの相場は見ていません";
   }
-  var API = { WAYS: WAYS, D: D, SHIP_KEY: SHIP_KEY, wayOf: wayOf,
+  var API = { shortOf: shortOf, WAYS: WAYS, D: D, SHIP_KEY: SHIP_KEY, wayOf: wayOf,
               listOf: listOf, shipOf: shipOf, floorOf: floorOf,
               linesOf: linesOf, pinJa: pinJa, val: val, pct: pct,
               /* 8.50 売り方ごとの手残り（足切りと試算に使う）。 */
