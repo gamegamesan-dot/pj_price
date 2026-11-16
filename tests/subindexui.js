@@ -24,15 +24,23 @@ await p.evaluate(()=>{
     if(/\/sub\/index/.test(url)){
       const post=String(o.method||'')==='POST';
       window.__post.push({ u:'index', post:post });
+      /* 8.54 ピン留めの失敗を返す回（window.__pinFail）。 */
+      const pf=!!window.__pinFail;
       const chs=[{ key:'light', name:'ライト', ch:'222', n:12, pages:1,
-        was:1, pin:true, new_n:5,
+        was:1, pin:pf?0:1, pinned:pf?0:1,
+        pin_fail:pf?1:0,
+        pin_why:pf?'権限がありません（ボットに「メッセージの管理」が要ります）':'',
+        new_n:5,
         cats:[{ cat:'ゲーム', n:9 },{ cat:'フィギュア', n:3 }] },
         { key:'premium', name:'プレミアム', ch:'333', n:48, pages:2, was:3,
           pin:false, new_n:10, cats:[{ cat:'ゲーム', n:40 },
             { cat:'その他', n:8 }] }];
       if(post)return res({ ok:true, chs:chs.map((c)=>Object.assign({},c,
         { add:0, edit:1, same:0, empty:1, fail:0 })),
-        pages:3, add:0, edit:2, same:0, fail:0 });
+        pages:3, add:0, edit:2, same:0, fail:0,
+        pin:pf?0:1, pin_fail:pf?1:0,
+        pin_why:pf?'権限がありません（ボットに「メッセージの管理」が要ります）'
+          :'' });
       return res({ ok:true, on:true, auto:true, week:true, chs:chs });
     }
     return real(u,i);
@@ -131,5 +139,41 @@ console.log('\n=== ⑤ 決まりは shared/subindex.js の1か所 ===');
   ok(!/卸値|いろは|matchingworld/.test(t.line),
      '★★★卸値・仕入れ先は入らない（8.2）');
 }
+console.log('\n=== ⑥ ピン留めの失敗は必ず出す（8.54・カジの報告）===');
+{
+  const t=await p.evaluate(async()=>{
+    window.__pinFail=true;
+    await gdIdxPlan();
+    await new Promise((x)=>setTimeout(x,200));
+    const plan=($('gdIdxBox').textContent||'').replace(/\s+/g,' ');
+    await gdIdxGo();
+    await new Promise((x)=>setTimeout(x,200));
+    const out={ plan:plan, note:$('gdIdxNote').textContent
+      .replace(/\s+/g,' '),
+      box:($('gdIdxBox').textContent||'').replace(/\s+/g,' ') };
+    window.__pinFail=false;
+    return out;
+  });
+  console.log('   '+t.note);
+  ok(/ピン留め 失敗 1/.test(t.note),
+     '★★★結果に「ピン留め 失敗 1」を出す');
+  ok(/権限がありません/.test(t.note)&&/メッセージの管理/.test(t.note),
+     '★★★理由（権限がありません・メッセージの管理）も出す');
+  ok(/もう一度このボタンを押して/.test(t.note)
+     &&/ピン留めできるまで毎回ためします/.test(t.note),
+     '★★★権限を足して押し直せば留まる、と書く');
+  ok(/ピン留め 失敗 1/.test(t.box),
+     '★★チャンネルごとの行にも失敗と理由を出す');
+  ok(/ピン留めはまだ/.test(t.plan)||/ピン留め 失敗/.test(t.plan),
+     '★★予定のほうでも「ピン留めはまだ」が分かる');
+  const u=await p.evaluate(async()=>{
+    await gdIdxGo();
+    await new Promise((x)=>setTimeout(x,200));
+    return $('gdIdxNote').textContent.replace(/\s+/g,' ');
+  });
+  ok(/ピン留め 1/.test(u)&&!/失敗/.test(u),
+     '★★★ピン留めできた回は「ピン留め 1」だけを出す');
+}
+
 await T.done();
 })();

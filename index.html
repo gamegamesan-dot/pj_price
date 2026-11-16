@@ -18160,13 +18160,19 @@ function gdIdxRows(d){
         +(c.was>c.pages?('（前は '+mwN(c.was)+'ページ。余ったページは'
           +'「空です」に書き換えます）'):'')
         +(c.new_n?('／今週の新着 '+mwN(c.new_n)+'件'):'')
-        +(c.pin?'／ピン留め済み':'')
+        /* 8.54（カジの報告）ピン留めは**できたか・できなかったか**を必ず出す
+           （前は失敗を黙って捨てていた）。pinned＝いまピン留めされているか。 */
+        +((c.pinned||c.pin)?'／ピン留め済み'
+          :(c.pin_fail?'':'／<b>ピン留めはまだ</b>'))
         +(cat?('<br>　'+cat):'')
         +(c.add!==undefined?('<br>　新しく '+mwN(c.add)+'・書き換え '
           +mwN(c.edit)+'・そのまま '+mwN(c.same)
           +(c.empty?('・空にした '+mwN(c.empty)):'')
+          +(c.pin?('・ピン留め '+mwN(c.pin)):'')
           +(c.fail?('・<b style="color:var(--bad)">失敗 '+mwN(c.fail)
-            +'</b>'):'')):'');
+            +'</b>'):'')):'')
+        +(c.pin_fail?('<br>　<b style="color:var(--bad)">ピン留め 失敗 '
+          +mwN(c.pin_fail)+'</b>（'+esc(String(c.pin_why||''))+'）'):'');
     }).join('<br>')
     +'</div>';
 }
@@ -18200,7 +18206,14 @@ function gdIdxGo(){
     gdIdxNote(d.why?('⚠ '+esc(String(d.why)))
       :('✓ 一覧を書き直しました（新しく '+mwN(d.add)+'・書き換え '
         +mwN(d.edit)+'・そのまま '+mwN(d.same)
+        +(d.pin?('・ピン留め '+mwN(d.pin)):'')
         +(d.fail?('・失敗 '+mwN(d.fail)):'')+'）'
+        /* 8.54 ピン留めの失敗は**件数と理由**をここにも出す。 */
+        +(d.pin_fail?('<br><b style="color:var(--bad)">ピン留め 失敗 '
+          +mwN(d.pin_fail)+'</b>（'+esc(String(d.pin_why||''))+'）'
+          +'<br><span class="note2">ボットに「<b>メッセージの管理</b>」を'
+          +'足してから、もう一度このボタンを押してください（'
+          +'<b>ピン留めできるまで毎回ためします</b>）。</span>'):'')
         +'<br><span class="note2">書き換えでは<b>通知は鳴りません</b>。</span>'));
   })['catch'](function(e){
     if(btn){ btn.disabled=false; btn.innerHTML='一覧を書き直す'; }
@@ -27681,7 +27694,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v312';   // sw.js の const V と必ず同じ値にする
+var APP_V='v313';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
