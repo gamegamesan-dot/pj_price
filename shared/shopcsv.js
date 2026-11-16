@@ -141,6 +141,8 @@
      「1〜2本 ¥200／3本 ¥300／4本以上 ¥600」を出せる。
      会員用カードの「送料」もここから作る（表はこの1か所だけ）。
      g は「この重さまで」。最後の 0 は「それより上はぜんぶ」。 */
+  /* クリックポストに入る重さの目安（g）。ここと shipTag の見方を同じにする。 */
+  var THIN_G = 250;
   var SHIP_TIERS = [{ g: 250, yen: 200, name: "クリックポスト" },
                     { g: 350, yen: 300, name: "クリックポスト" },
                     { g: 0, yen: 600, name: "宅配便" }];
@@ -533,7 +535,13 @@
     /* 8.27（カジの依頼1）**採寸で箱と分かった行は一律にしない**。
        限定版の大きな箱まで 100g で出していたので、Shopify の送料の段が
        実際の送り方（宅配便）と合わなかった。 */
-    if (gg > 0 && isGame(r) && shipTag(r, o) === SHIP_SMALL) return gg;
+    /* 8.59（カジの依頼）**重さが取れていて、クリックポストの目安（250g）より
+       重い行**は、3辺が取れていなくても一律にしない。
+       採寸の3辺が入る前（取り直す前）は shipTag が ship-small になるので、
+       **900g の限定版の箱が 100g で Shopify に出て**、段がずれていた。 */
+    var own = Math.round(num((r || {}).size_g));
+    if (gg > 0 && isGame(r) && shipTag(r, o) === SHIP_SMALL
+        && !(own > THIN_G)) return gg;
     var g = Math.round(num((r || {}).size_g) || num(o.grams) || 0);
     if (g <= 0) return 0;              // 取れていない行は 0（画面が注意を出す）
     /* 足し分は0以上だけ（負の値で軽くはしない）。 */
@@ -560,7 +568,7 @@
     var w = shipWay(r, o);
     if (w.sure) return w.thin ? SHIP_SMALL : SHIP_BOX;
     /* 採寸も区分も無いときは重さで見る（ゲームソフトは 250g 以内）。 */
-    if (g) return g <= 250 ? SHIP_SMALL : SHIP_BOX;
+    if (g) return g <= THIN_G ? SHIP_SMALL : SHIP_BOX;
     return SHIP_SMALL;
   }
   /* 見せるプランのタグ。'' や未指定のときは**全プラン**に見せる。 */
@@ -989,7 +997,7 @@
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
-    bigGame: bigGame,
+    bigGame: bigGame, THIN_G: THIN_G,
     maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
     seoCol: seoCol, seoAdd: seoAdd,
     ONE_SHIP: ONE_SHIP, ONE_NOTE_JA: ONE_NOTE_JA,

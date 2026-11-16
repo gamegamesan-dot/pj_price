@@ -253,4 +253,37 @@ const ROOT=path.resolve(new URL('.',import.meta.url).pathname,'..');
      '★schema.sql にも入っている');
 }
 
+console.log('\n=== 8.59 限定版の箱は一律の重さを使わない（カジの依頼）===');
+{
+  const o={ gameG:100, addG:0 };
+  /* カジの品（ぬいぐるみ・ブックレット付きの限定版・900g）。 */
+  const box={ jan:'4589864470205', kishu:'PS4', size_long:25, size_wid:20,
+    size_hei:10, size_g:900, size_tier:'s' };
+  ok(A.weightOf(box,o)===900,
+     '★★★採寸が箱の行は、Amazon の採寸の重さ（900g）を Shopify に出す');
+  ok(A.weightOf(Object.assign({},box,{}),{ gameG:100, addG:20 })===920,
+     '★★★⚙の足し分も足す（900＋20＝920g）');
+  /* 3辺が取れていない行（採寸を取り直す前の形）でも、重さがあれば使う。 */
+  const old={ jan:'4589864470205', kishu:'PS4', size_g:900, size_tier:'s' };
+  ok(A.weightOf(old,o)===900,
+     '★★★3辺が無くても、クリックポストの目安（250g）より重ければ'
+     +'一律にしない（900g を 100g で出していた）');
+  ok(A.weightOf({ kishu:'NS', size_g:250, size_tier:'s' },o)===100,
+     '★★★250g までのゲームソフトは今までどおり一律 100g');
+  ok(A.weightOf({ kishu:'NS', size_g:251, size_tier:'s' },o)===251,
+     '★★★251g からは実際の重さ');
+  ok(A.weightOf({ kishu:'NS', size_long:17, size_wid:13,
+    size_hei:1.5, size_g:120 },o)===100,
+     '★★ふつうのゲームソフト（採寸も薄物）は一律 100g');
+  /* 段（会員便）もカジの新しい表で確かめる。 */
+  const tiers=A.tiersOf('250:200／350:300／600:600／1500:800／3000:1000／0:1200');
+  const st=(g)=>A.shipSteps(g,{ tiers:tiers });
+  console.log('   段 '+JSON.stringify({ g900:st(900).yen1, g100:st(100).yen1,
+    g400:st(400).yen1 }));
+  ok(st(900).yen1===800,
+     '★★★900g はカジの新しい段で ¥800（宅配便60の実額と同じ）');
+  ok(st(100).yen1===200,'★★100g は ¥200');
+  ok(st(400).yen1===600,'★★400g（宅急便コンパクト）は ¥600');
+}
+
 T.done();
