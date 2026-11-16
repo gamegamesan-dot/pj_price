@@ -250,4 +250,53 @@ ok(cc.every((u)=>/marketplaceIds=A1VC38T7YXB528/.test(u)),
 ok(calls.filter((u)=>/catalog/.test(u)&&!/identifiersType=EAN/.test(u)).length===0,
    '★商品名などでの検索はしない（JAN照合だけ）');
 
+console.log('\n=== 8.55 ASIN が変わったら、前の ASIN の値段と手数料は消す ===');
+{
+  /* カジの報告（11/17）の調査で見つけた不具合。
+     採寸の取り直しなどで ASIN を引き直したとき、ASIN が別の商品に
+     変わっても**前の ASIN の値段と手数料がそのまま残り**、その数字で
+     黒字・利益率・手残りを判定していた。 */
+  const J='4902370550467';
+  /* いまは B00GAME001・値段も手数料も入っている。 */
+  const b0=await a(J);
+  await env.DB.prepare(
+    `UPDATE mw_amz SET fee_total=1500, fee_ref=975, fee_fba=425, fee_tax=100,
+       fee_base=24829, fee_at=?2, asin_at=NULL WHERE jan=?1`)
+    .bind(J,new Date().toISOString()).run();
+  const b1=await a(J);
+  ok(!!b1.price&&!!b1.fee_total,'★前の ASIN の値段と手数料が入っている');
+  /* カタログが**別の ASIN** を返すようにして、引き直す。 */
+  cat[J]=mkCat(J,'B00GAME999','ゲームA（別のASIN）',649);
+  offers['B00GAME999']=mkOff('B00GAME999',[]);      // 値段はまだ取れない
+  await put('/mw/amz',{ kishu:'NS', ship_max:4, stock_min:2 });
+  const b2=await a(J);
+  console.log('   '+JSON.stringify({ asin:b2.asin, price:b2.price,
+    basis:b2.basis, low:b2.low, new_n:b2.new_n, amz:b2.amz,
+    fee_total:b2.fee_total, fee_at:b2.fee_at }));
+  ok(b2.asin==='B00GAME999','★★★引き直して ASIN が変わる');
+  ok(!b2.price&&String(b2.basis||'')==='',
+     '★★★前の ASIN の値段を消す（次の「値段を取る」で入り直す）');
+  /* 同じ回の「値段を取る」段が、新しい ASIN で入れ直す（ここでは出品が
+     無いので 0 が入る）。前の ASIN の 4件・Amazon本体ありは残らない。 */
+  ok(!b2.low&&!(+b2.new_n)&&!(+b2.amz)&&!(+b2.fba_n),
+     '★★★最安値・出品者数・Amazon本体の印も前の ASIN のままにしない');
+  ok(!b2.fee_total&&!b2.fee_ref&&!b2.fee_tax&&!b2.fee_at,
+     '★★★前の ASIN の手数料も消す（次の「手数料を聞く」で入り直す）');
+  /* ASIN が**変わらない**ときは消さない（毎回取り直しになるのを防ぐ）。 */
+  await env.DB.prepare(
+    /* fee_base（聞いたときの値段）も入れる。空だと「値段が1割以上
+       変わった」の判定がいつも真になり、手数料を取りに行ってしまう。 */
+    `UPDATE mw_amz SET price=9000, basis='カート', price_at=?2,
+       fee_total=1200, fee_base=9000, fee_at=?2, asin_at=NULL WHERE jan=?1`)
+    .bind(J,new Date().toISOString()).run();
+  await put('/mw/amz',{ kishu:'NS', ship_max:4, stock_min:2 });
+  const b3=await a(J);
+  console.log('   '+JSON.stringify({ asin:b3.asin, price:b3.price,
+    fee_total:b3.fee_total }));
+  ok(b3.asin==='B00GAME999'&&b3.price===9000&&b3.fee_total===1200,
+     '★★★ASIN が同じなら、値段と手数料はそのまま残す');
+  /* もとに戻す（あとの試験のため）。 */
+  cat[J]=mkCat(J,'B00GAME001','ゲームA（Amazon名）',649);
+}
+
 await T.done();

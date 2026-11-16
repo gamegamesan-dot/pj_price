@@ -1092,7 +1092,11 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" id="csvMwAmzNote" style="margin-top:2px"></div>
       <!-- 8.51（カジの直し2）採寸が足りない行を、次の「Amazonで調べる」で
            先に取り直させる（消すのは「最後に調べた時刻」だけ）。 -->
-      <button class="btn cfgprice" id="mwDimAgain" onclick="mwDimAgainGo();return false" style="width:100%;margin-top:6px">採寸を取り直す（3辺そろっていない行）</button>
+      <!-- 8.55（カジの依頼E）**採寸だけ**聞く（ASIN は引き直さない）。
+           こちらは出品の可否も値段も手数料も触らないので、ふだんはこれ。 -->
+      <button class="btn cfgprice" id="mwDimGo" onclick="mwDimGoGo();return false" style="width:100%;margin-top:6px">採寸だけ取り直す（ASIN は引き直さない）</button>
+      <div class="note2" id="mwDimGoNote" style="margin-top:2px"></div>
+      <button class="btn cfgprice" id="mwDimAgain" onclick="mwDimAgainGo();return false" style="width:100%;margin-top:6px">採寸を取り直す（3辺そろっていない行・ASIN も引き直す）</button>
       <div class="note2" id="mwDimAgainNote" style="margin-top:2px"></div>
       <!-- JAN重複を決めたときの案内（6.109）。一覧の取り込みで消えない場所に置く -->
       <div class="note2" id="csvMwDupNote" style="margin-top:2px;color:var(--good)"></div>
@@ -16852,6 +16856,10 @@ function subDraftRows(){
       net_ship:nt.ship_ja, net_unsure:!!nt.unsure, net_buy_ship:nt.buy_ship,
       fit_why:String(fit.why||''),
       rst:mwRstOf(r), amz:+r.amz||0, buy_qty:+r.buy_qty||0,
+      /* 8.55（カジの依頼A）前の①と比べるための数字（表示にも使える）。 */
+      amz_px:+r.price||+r.low||0, fee_total:+r.fee_total||0,
+      size_tier:String(r.size_tier||''),
+      dim_ok:((+r.size_long>0)&&(+r.size_wid>0)&&(+r.size_hei>0))?1:0,
       no_back:!!(st&&st.noBack), one_off:false,
       grades:String(cur.grades||''), is_game:(MWFEE.genreOf(r)==='ゲーム'),
       on:!!cur.on, sale:!!(st&&st.sale) };
@@ -16912,6 +16920,119 @@ function subDraftRows(){
     row.badge_ok=!!gb.ok;
     return row;
   });
+}
+/* ===== 8.55（カジの依頼A）**前の①と比べる** =====
+   ①（今日の配信の案）を押したときの行ごとの数字を、**2回分だけ**この端末に
+   控えて、次に押したときに「**前は通っていて今は外れた品**」と、
+   **何の数字が前→後でどう変わったか**を出す。
+   ・CSV では出さない（リストの流出を避ける・カジの方針）
+   ・置くのは端末の覚え書き（localStorage）だけ（pj-sync には送らない）
+   ・11/17 の「候補148→59」のような減りを、次からは行ごとに追えるようにする */
+var SUB_CMP_KEY='pj:subcmp:v1';
+var SUB_CMP_MAX=3000;                 // 1回に控える行の上限
+var SUB_CMP_SHOW=20;                  // 画面に並べる行の上限
+/* 控える数字（並び順はこの表のまま・形は 円／%／位／そのまま）。 */
+var SUB_CMP_F=[
+  ['px','Amazon の値段','yen'],
+  ['fee','手数料（FBA込み）','yen'],
+  ['tier','サイズ区分','txt'],
+  ['dim','3辺そろい','dim'],
+  ['way','送り方','txt'],
+  ['bship','会員への送料','yen'],
+  ['mp','会員価格','yen'],
+  ['gross','粗利','yen'],
+  ['rate','利益率','pct'],
+  ['net','手残り','yen'],
+  ['rank','順位','rank'],
+  ['rst','出品できるか','rst']];
+function subCmpOf(r){
+  var x=r||{};
+  return [Math.round(+x.amz_px||0), Math.round(+x.fee_total||0),
+          String(x.size_tier||''), (+x.dim_ok?1:0),
+          String(x.ship||''), Math.round(+x.net_buy_ship||0),
+          Math.round(+x.price||0), Math.round(+x.gross||0),
+          Math.round(+x.rate||0), (x.net===null||x.net===undefined)
+            ? '' : Math.round(+x.net||0),
+          Math.round(+x.rank||0), String(x.rst||''),
+          /* 通ったか・外れた理由・名前（画面に出すため）。 */
+          (x.fit?1:0), String(x.fit_why||''),
+          String(x.name||'').slice(0,40)];
+}
+function subCmpGet(){
+  try{ var a=JSON.parse(lsGet(SUB_CMP_KEY)||'[]');
+       return Array.isArray(a)?a:[]; }catch(e){ return []; }
+}
+/* いまの①を控える（古いほうから捨てて2回分だけ持つ）。 */
+function subCmpSave(rows){
+  var by={}, n=0;
+  (rows||[]).forEach(function(r){
+    if(n>=SUB_CMP_MAX)return;
+    var j=String(r.jan||''); if(!j)return;
+    by[j]=subCmpOf(r); n++;
+  });
+  var a=subCmpGet();
+  a.push({ at:Date.now(), n:(rows||[]).length, by:by });
+  while(a.length>2)a.shift();
+  try{ lsSet(SUB_CMP_KEY,JSON.stringify(a)); }catch(e){
+    /* 入らなければ1回分だけにして、もう一度ためす。 */
+    try{ lsSet(SUB_CMP_KEY,JSON.stringify(a.slice(-1))); }catch(e2){}
+  }
+}
+/* 数字の出し方（表の形のとおり）。 */
+function subCmpV(kind,v){
+  if(kind==='yen')return (v===''||v===null||v===undefined)?'—':yen(+v||0);
+  if(kind==='pct')return (+v||0)+'%';
+  if(kind==='rank')return (+v>0)?(mwN(+v)+'位'):'—';
+  if(kind==='dim')return (+v)?'そろい':'足りない';
+  if(kind==='rst')return ({ ok:'出品できる', approval:'許可が要る',
+    blocked:'出品できない' })[String(v||'')]||'未確認';
+  return String(v||'')||'—';
+}
+var SUB_CMP_WHY={ low_net:'手残りが足りない', low_rate:'利益率が足りない',
+  no_net:'手残りが出せない', no_fee:'手数料が取れていない' };
+/* 前の①と比べて、外れた品・新しく通った品を出す。 */
+function subCmpHtml(rows){
+  var a=subCmpGet();
+  var prev=a.length?a[a.length-1]:null;
+  if(!prev||!prev.by)return '<br><span class="note2">前の①の控えが'
+    +'ありません（この回を控えました。次に押すと比べられます）。</span>';
+  var gone=[], back=0, same=0, newN=0;
+  (rows||[]).forEach(function(r){
+    var j=String(r.jan||''); if(!j)return;
+    var p=prev.by[j];
+    if(!p){ newN++; return; }
+    var nowFit=r.fit?1:0, wasFit=(+p[12]?1:0);
+    if(wasFit&&!nowFit)gone.push({ r:r, p:p });
+    else if(!wasFit&&nowFit)back++;
+    else same++;
+  });
+  var w=subStepWhen(prev.at);
+  var head='<br><b>前の①と比べて</b>（前は '+esc(String(w||''))+'・'
+    +mwN(+prev.n||0)+'件）：'
+    +'<b style="color:var(--bad)">前は通っていて今は外れた品 '
+    +mwN(gone.length)+'件</b>'
+    +'／新しく通った品 '+mwN(back)+'件'
+    +'／変わらない '+mwN(same)+'件'
+    +(newN?('／前の控えに無い品 '+mwN(newN)+'件'):'');
+  if(!gone.length)return head;
+  var list=gone.slice(0,SUB_CMP_SHOW).map(function(g){
+    var now=subCmpOf(g.r), p=g.p, ch=[];
+    SUB_CMP_F.forEach(function(f,i){
+      if(String(p[i])===String(now[i]))return;
+      ch.push(esc(f[1])+' '+esc(subCmpV(f[2],p[i]))+'→<b>'
+        +esc(subCmpV(f[2],now[i]))+'</b>');
+    });
+    return '　<b>'+esc(String(g.r.name||'').slice(0,28))+'</b>'
+      +'（外れた理由：'+esc(SUB_CMP_WHY[String(g.r.fit_why||'')]
+        ||String(g.r.fit_why||'')||'—')+'）<br>　　'
+      +(ch.length?ch.join('／'):'<span class="note2">数字は同じです'
+        +'（⚙か絞り込みが変わったのかもしれません）</span>');
+  }).join('<br>');
+  return head+'<br>'+list
+    +(gone.length>SUB_CMP_SHOW?('<br>　<span class="note2">ほか '
+      +mwN(gone.length-SUB_CMP_SHOW)+'件</span>'):'')
+    +'<br><span class="note2">控えは<b>この端末だけ</b>に置いています'
+    +'（CSV では出しません）。</span>';
 }
 /* 8.42（カジの報告）案の候補は**いま一覧に出ている行**から数える。
    絞り込みや検索が効いていると候補が減る（カジの回：136件 → 51件）。
@@ -17056,6 +17177,10 @@ function subCutHtml(rows){
       &&!(o.skipBuy&&(+r.buy_qty||0)>0)&&(+r.price||0)>0;
   });
   var now=all.filter(function(r){ return !!r.fit; });
+  /* 8.55（カジの依頼D）内訳の母数は「**会員価格が出る行**」なので、
+     候補の件数とは合わない。合わないように見えていたので件数を出す
+     （11/17 の報告「2,587件なのに内訳は671件」）。 */
+  var skipN=Math.max(0,(rows||[]).length-all.length);
   /* 8.52（カジの決定）足切りは**手残り**で本判定。外れた理由を数える。 */
   var why={ low_net:0, low_rate:0, no_net:0, no_fee:0 };
   all.forEach(function(r){
@@ -17120,11 +17245,23 @@ function subCutHtml(rows){
     +yen(cutN)+'以上</b>'
     +(on?'（<b>この決まりで会員向きを決めています</b>）'
        :'（<b style="color:var(--bad)">いまは使っていません（⚙がオフ）</b>）')
+    /* 8.55（カジの依頼D）**母数**を出す（候補との差が分かるように）。 */
+    +'<br>　見た品 <b>'+mwN(all.length)+'件</b>'
+    +'（候補 '+mwN((rows||[]).length)+'件のうち'
+    +(skipN?('、会員価格が出ない・出品できない品 '+mwN(skipN)+'件は'
+      +'数えていません'):'ぜんぶ')+'）'
     +'<br>　通った品 <b>'+mwN(now.length)+'件</b>'
     +'／外れた理由：手残りが足りない '+mwN(why.low_net)+'件'
     +(rateOn?('／利益率が '+needR+'% に届かない '+mwN(why.low_rate)+'件'):'')
     +'／手残りが出せない '+mwN(why.no_net)+'件'
     +'／手数料が取れていない '+mwN(why.no_fee)+'件'
+    /* 内訳の合計が「見た品」と合うか（合わなければ理由が抜けている）。 */
+    +(function(){
+      var sum=now.length+why.low_net+why.low_rate+why.no_net+why.no_fee;
+      return (sum===all.length)?'（合計＝見た品）'
+        :('<br>　<span style="color:var(--bad)">理由が分からない '
+          +mwN(Math.max(0,all.length-sum))+'件</span>');
+    })()
     +'<br>　プランごと：'+by
     +'<br>　ライトに入る「早い」の線：'+line
     +'<br><b>売り方ごとの手残りの試算</b>'
@@ -17190,6 +17327,18 @@ function subDraftFiltHtml(){
   if(f.rstOk)on.push('出品できる行だけ');
   if(f.dup)on.push('JAN重複だけ');
   if(+f.minM>0)on.push('利益率（売上に対して） '+esc(String(f.minM))+'% 以上');
+  /* 8.55（カジの依頼D）**ランキングの上限**も出す。上限を入れていると、
+     上限より下の行と**順位が取れていない行**が一覧から隠れるので、
+     候補が減った理由がここだけ分からなかった（11/17 の報告の調査）。 */
+  var caps=(f.caps&&typeof f.caps==='object')?f.caps:{};
+  var capL=Object.keys(caps).filter(function(k){ return +caps[k]>0; })
+    .map(function(k){ return esc(k)+' '+mwN(+caps[k])+'位まで'; });
+  if(capL.length){
+    on.push('<b style="color:var(--bad)">ランキング上限（'+capL.join('・')
+      +'）</b>'+(f.noRank?'':'＋<b>順位が取れていない行は隠す</b>'));
+    try{ if(+mwRankHid>0)on.push('上限で隠れている '+mwN(+mwRankHid)+'件'); }
+    catch(e){}
+  }
   return '<br><span class="note2" style="margin:0">候補は'
     +'<b>いま一覧に出ている行</b>から選びます（'
     +(on.length?('効いている絞り込み：'+on.join('・')):'絞り込みなし')
@@ -17276,6 +17425,8 @@ function subDraftMake(){
     +subCutHtml(rows)
     /* 8.49（カジの③）採寸が無い品の内訳。 */
     +subDimHtml(rows)
+    /* 8.55（カジの依頼A）前の①と比べて、外れた品と変わった数字を出す。 */
+    +subCmpHtml(rows)
     +(mb?('<br><span style="color:var(--bad)">通常版か要確認 '+mwN(mb)
       +'件</span>（作品名に「版」が入っているだけかもしれません。'
       +'限定版なら印を外してください）'):'')
@@ -17284,6 +17435,9 @@ function subDraftMake(){
     +(+d.opt.qtyDays||0)+'日ぶん先に売れる分を引く）と、想定購入数 '
     +mwN(+d.opt.wantQty||0)+'点の小さいほうを上限にしています。</span>');
   if(box)box.innerHTML=subDraftHtml(d.plans);
+  /* 8.55（カジの依頼A）**上の文を作ったあとで**この回を控える
+     （比べるのは「前の回」なので、控えるのは最後）。 */
+  subCmpSave(rows);
   /* 8.31（カジの依頼5）自動の回で何が起きるか（予定を読んでいれば出す）。 */
   var au=subAutoHtml();
   if(au)$('subDraftNote').innerHTML+=au;
@@ -18109,6 +18263,46 @@ function gdPinList(){
 /* 8.51（カジの直し2）採寸を取り直す。
    「最後に調べた時刻」を空にするだけで、ASIN・採寸・値段は消さない。
    そのあと「Amazonで調べる」を押すと、その行から先に取り直す。 */
+/* 8.55（カジの依頼E）**採寸だけ**取り直す。ASIN は引き直さないので、
+   出品の可否・値段・手数料は触らない（1回 120件まで）。 */
+function mwDimGoGo(){
+  if(roleDenyPrice('mwDimGoNote'))return;
+  var el=$('mwDimGoNote'), btn=$('mwDimGo');
+  var put=function(t,bad){ if(el)el.innerHTML=(bad?'<b style="color:var(--bad)">':'<b>')+t+'</b>'; };
+  put('数えています…');
+  return mwGet('/mw/dim/go').then(function(d){
+    if(!d||d.error){
+      put('⚠ '+esc(String((d||{}).detail||(d||{}).error||'')),1);
+      return;
+    }
+    var n=+d.asked||0;
+    if(!n){ put('採寸が足りない行はありません'); return; }
+    if(!confirm('採寸が足りない '+n+'件のうち、いまから 120件まで'
+      +'Amazon に採寸だけ聞きます。\n（ASIN・順位・値段・手数料・'
+      +'出品の可否は触りません）\n\nよろしいですか？')){
+      put('やめました（何も変えていません）');
+      return;
+    }
+    if(btn){ btn.disabled=true; btn.innerHTML='聞いています…'; }
+    put('聞いています…（30秒ほど）');
+    return mwPost('/mw/dim/go',{}).then(function(r){
+      if(btn){ btn.disabled=false;
+               btn.innerHTML='採寸だけ取り直す（ASIN は引き直さない）'; }
+      if(!r||r.error){
+        put('⚠ '+esc(String((r||{}).detail||(r||{}).error||'')),1);
+        return;
+      }
+      put('✓ '+mwN(+r.done||0)+'件に聞いて '+mwN(+r.fix||0)+'件に採寸が'
+        +'入りました（残り '+mwN(+r.left||0)+'件）。'
+        +'残りがあるときは、もう一度押してください'
+        +(r.mark?'':'　⚠ '+esc(String(r.detail||''))));
+    });
+  })['catch'](function(e){
+    if(btn){ btn.disabled=false;
+             btn.innerHTML='採寸だけ取り直す（ASIN は引き直さない）'; }
+    put('⚠ '+esc(e.message),1);
+  });
+}
 function mwDimAgainGo(){
   if(roleDenyPrice('mwDimAgainNote'))return;
   var el=$('mwDimAgainNote');
@@ -18121,9 +18315,18 @@ function mwDimAgainGo(){
     }
     var n=+d.n||0;
     if(!n){ put('取り直す行はありません（3辺そろっています）'); return; }
+    /* 8.55（カジの依頼E）この口は ASIN と順位も引き直すので、
+       出品の可否（ASIN で結んでいる）が未確認に戻る行が出る。
+       そのことを**押す前に**書く（11/17 の候補148→59 の主因）。 */
     if(!confirm('3辺そろっていない '+n+'件を、次の「Amazonで調べる」で'
       +'取り直します。\n（消すのは「最後に調べた時刻」だけです。'
-      +'ASIN・採寸・値段は消しません）\n\nよろしいですか？')){
+      +'ASIN・採寸・値段は消しません）'
+      +'\n\n※ ASIN と順位も引き直します。ASIN が変わった行は'
+      +'「出品できるか」が未確認に戻り、その行の値段と手数料も'
+      +'入れ直しになります。\nあとで「Amazonで調べる」を何回か'
+      +'押してください。\n\n採寸だけでよいときは、上の'
+      +'「採寸だけ取り直す」を使ってください。'
+      +'\n\nよろしいですか？')){
       put('やめました（何も変えていません）');
       return;
     }
@@ -27694,7 +27897,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v313';   // sw.js の const V と必ず同じ値にする
+var APP_V='v314';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

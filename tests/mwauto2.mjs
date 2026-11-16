@@ -372,10 +372,15 @@ console.log('\n=== 「次回」に回した手数料を、自動の回でも取�
   for(let i=0;i<3;i++){
     await stock(env,i);
     await env.DB.prepare(
-      `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,checked_at,price_at)
-       VALUES (?1,?2,'名前',9000,'カート',1,?3,?3)`)
+      /* 8.55 ASIN は**カタログが返すものと同じ**にしておく。違う ASIN を
+         入れておくと、引き直しで ASIN が変わったと見なされ、**前の ASIN の
+         値段と手数料が消える**ので、この試験が見たい「次回に回した手数料」
+         が見えなくなる。 */
+      `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,checked_at,price_at,
+         asin_at) VALUES (?1,?2,'名前',9000,'カート',1,?3,?3,?4)`)
       .bind('49023705'+String(10000+i).slice(-5),
-            'B0FEE0000'+i,'2026-11-09T00:00:00Z').run();
+            'B0AUTO'+String(1000+i).slice(-4),'2026-11-09T00:00:00Z',
+            new Date().toISOString()).run();
   }
   /* 1件だけは手数料が取れている（取り直さない）。
      ★日付は**今日から数える**（決め打ちの日付だと、MW_FEE_TTL_D＝7日
@@ -383,7 +388,7 @@ console.log('\n=== 「次回」に回した手数料を、自動の回でも取�
   await env.DB.prepare(
     `UPDATE mw_amz SET fee_total=1500, fee_ref=975, fee_fba=425, fee_tax=100,
        fee_base=9000, fee_at=?2 WHERE asin=?1`)
-    .bind('B0FEE00000',
+    .bind('B0AUTO1000',
           new Date(Date.now()-2*86400000).toISOString()).run();
   const d=await W.jobMwAuto(env,{ kind:'cron' });
   console.log('   '+JSON.stringify({ fee:d.fee_n, ng:d.fee_ng, left:d.fee_left }));
@@ -403,10 +408,15 @@ console.log('\n=== 「次回」に回した手数料を、自動の回でも取�
   for(let i=0;i<4;i++){
     await stock(env,i);
     await env.DB.prepare(
-      `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,checked_at,price_at)
-       VALUES (?1,?2,'名前',9000,'カート',1,?3,?3)`)
+      /* 8.55 ASIN は**カタログが返すものと同じ**にしておく。違う ASIN を
+         入れておくと、引き直しで ASIN が変わったと見なされ、**前の ASIN の
+         値段と手数料が消える**ので、この試験が見たい「次回に回した手数料」
+         が見えなくなる。 */
+      `INSERT INTO mw_amz (jan,asin,name,price,basis,new_n,checked_at,price_at,
+         asin_at) VALUES (?1,?2,'名前',9000,'カート',1,?3,?3,?4)`)
       .bind('49023705'+String(10000+i).slice(-5),
-            'B0LEFT000'+i,'2026-11-09T00:00:00Z').run();
+            'B0AUTO'+String(1000+i).slice(-4),'2026-11-09T00:00:00Z',
+            new Date().toISOString()).run();
   }
   /* 1回目：手数料だけ取れない。 */
   globalThis.fetch=async(u,i)=>{

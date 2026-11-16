@@ -9124,6 +9124,10 @@ async function mwScanAsin(env, run, o, dl) {
          size_g=COALESCE(NULLIF(excluded.size_g,0), mw_amz.size_g),
          size_src=COALESCE(NULLIF(excluded.size_src,''), mw_amz.size_src)${dimSet},
          err='', checked_at=excluded.checked_at,
+         /* 8.55（カジの依頼E）ASIN が**変わった**行は、前の ASIN の
+            値段と手数料を消す（別の商品の数字で判定しないため）。
+            次の「値段を取る」「手数料を聞く」の段で入り直す。 */
+         ${mwAsinResetSet("mw_amz.asin IS NOT excluded.asin")},
          asin_at=excluded.asin_at${rkSet("excluded.rank", "excluded.checked_at")}`)
       .bind(...[j, f.asin, f.name || "", f.rank || null, f.rank_cat || "",
             f.rank_sub || null, f.rank_sub_cat || "", at,
@@ -12508,6 +12512,128 @@ async function subMonNote(env, run, cfg, res, day) {
    ASIN・採寸・値段は消さない）。
    GET  /mw/dim/again … 取り直す件数を数えるだけ
    POST /mw/dim/again … その行の asin_at を空にする（管理者だけ） */
+/* 8.55（カジの依頼E）**採寸だけ**取り直す（ASIN は引き直さない）。
+   採寸が足りない行を **ASIN で** Catalog Items に聞いて、**size_* だけ**書く。
+   ASIN・順位・値段・手数料・出品の可否は**触らない**ので、
+   「出品できるか」が未確認に戻らない（これが 11/17 の候補148→59 の主因）。
+   ・1回 MW_DIM_MAX 件まで（①と同じ考え方）
+   ・聞いた行には dim_at を入れて次の回に進める（migrate-0064。
+     列が無い D1 でも動くが、同じ行ばかり聞いてしまうので案内を返す） */
+const MW_DIM_MAX = 120;                 // 1回に聞く件数
+async function jobMwDim(env, opt) {
+  const o = opt || {};
+  const run = newRun("mw-dim");
+  const res = { ok: false, asked: 0, done: 0, fix: 0, calls: 0, left: 0,
+                stopped: "", mark: false };
+  try {
+    const hasDim = (await colOk(env, "mw_amz", "size_wid"))
+      && (await colOk(env, "mw_amz", "size_hei"));
+    if (!hasDim) {
+      res.error = "no_column";
+      res.detail = "mw_amz.size_wid がありません（migrate-0060-ship-way.sql）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    res.mark = await colOk(env, "mw_amz", "dim_at");
+    if (!res.mark)
+      res.detail = "migrate-0064-mw-dim.sql を流すと、聞いた行を覚えて"
+        + "次の回に進めます（いまは同じ行から聞きます）";
+    const limit = Math.max(1, Math.min(MW_DIM_MAX,
+      Math.round(Number(o.limit) || MW_DIM_MAX)));
+    /* 3辺のどれかが無い、または重さが無い行（ASIN がある行だけ）。 */
+    const w = `COALESCE(asin,'') <> ''
+      AND (COALESCE(size_long,0) <= 0 OR COALESCE(size_wid,0) <= 0
+           OR COALESCE(size_hei,0) <= 0 OR COALESCE(size_g,0) <= 0)`;
+    const cnt = await env.DB.prepare(
+      `SELECT COUNT(DISTINCT asin) AS n FROM mw_amz WHERE ${w}`).first();
+    res.asked = Math.round(Number((cnt && cnt.n) || 0));
+    if (!run || !o.go) { res.ok = true; return res; }   // GET は数えるだけ
+    const q = await env.DB.prepare(
+      `SELECT asin FROM mw_amz WHERE ${w} GROUP BY asin
+        ORDER BY ${res.mark ? "COALESCE(MAX(dim_at),'') ASC," : ""}
+                 asin ASC LIMIT ${limit}`).all();
+    const todo = ((q && q.results) || []).map((x) => String(x.asin));
+    res.left = Math.max(0, res.asked - todo.length);
+    const at = nowIso();
+    for (let i = 0; i < todo.length; i += MW_AMZ_CAT_BATCH) {
+      const part = todo.slice(i, i + MW_AMZ_CAT_BATCH);
+      const u = new URLSearchParams({
+        identifiers: part.join(","), identifiersType: "ASIN",
+        marketplaceIds: MP_FE, includedData: "dimensions",
+      });
+      const r = await spCall(env, run,
+        "/catalog/2022-04-01/items?" + u.toString(),
+        { label: "searchCatalogItems" });
+      res.calls++;
+      if (!r.ok) { res.stopped = "api"; break; }
+      const stmts = [];
+      /* 聞いた行は（取れても取れなくても）印を進める。 */
+      if (res.mark) stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET dim_at=?1 WHERE asin IN (${
+          part.map(() => "?").join(",")})`).bind(at, ...part));
+      for (const it of (r.data && r.data.items) || []) {
+        const asin = String(it.asin || "");
+        if (!asin) continue;
+        res.done++;
+        const dm = mwDimPick(it);
+        /* 取れた値だけ書く（0 は書かない＝前の値を消さない）。
+           値段・手数料・ASIN・順位・可否の列は**1つも触らない**。 */
+        const cm3 = (dm.cm.length >= 3)
+          ? Math.round(dm.cm[0] * dm.cm[1] * dm.cm[2]) : 0;
+        const long = dm.cm.length
+          ? Math.round(Math.max.apply(null, dm.cm) * 10) / 10 : 0;
+        const wid = mwDim2(dm.cm, 1), hei = mwDim2(dm.cm, 2);
+        const g = dm.g || 0;
+        if (!(cm3 || long || wid || hei || g)) continue;
+        res.fix++;
+        stmts.push(env.DB.prepare(
+          `UPDATE mw_amz SET
+             size_cm3=COALESCE(NULLIF(?2,0), size_cm3),
+             size_long=COALESCE(NULLIF(?3,0), size_long),
+             size_wid=COALESCE(NULLIF(?4,0), size_wid),
+             size_hei=COALESCE(NULLIF(?5,0), size_hei),
+             size_g=COALESCE(NULLIF(?6,0), size_g),
+             size_src=COALESCE(NULLIF(?7,''), size_src),
+             size_tier=COALESCE(NULLIF(?8,''), size_tier)
+            WHERE asin=?1`)
+          .bind(asin, cm3, long, wid, hei, g, String(dm.src || ""),
+                String(mwSizeTier(dm.cm, dm.g) || "")));
+      }
+      if (stmts.length) await runBatch(env, run, stmts);
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("mw-dim: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 8.55（カジの依頼E）**ASIN が変わったら、前の ASIN の数字は使わない**。
+   手で選ぶ口（/mw/jan/pick）は前から値段と手数料を消していたが、
+   **自動の引き直し**は消していなかったので、「別の商品の値段と手数料」で
+   黒字・利益率・手残りを判定してしまうことがあった（カジの報告の調査で
+   見つけた）。消す列はここの1か所だけ（手で選ぶ口も同じものを読む）。
+     値段の段  … price / basis / price_at / low / low_n / new_n / amz / fba_n
+     手数料の段 … fee_ref / fee_fba / fee_tax / fee_total / fee_base /
+                 fee_at / fee_err / fee_kind / fee_kind_at / fee_mfn /
+                 fee_fba_ship / fee_fba_store
+   ※ 採寸（size_*）と順位（rank）は、同じ文で**新しい値を書く**ので
+      ここでは消さない（新しい値が無いときだけ前の値が残る）。 */
+const MW_ASIN_RESET = [
+  ["price", "NULL"], ["basis", "''"], ["price_at", "NULL"],
+  ["low", "NULL"], ["low_n", "NULL"], ["new_n", "NULL"],
+  ["amz", "NULL"], ["fba_n", "NULL"],
+  ["fee_ref", "NULL"], ["fee_fba", "NULL"], ["fee_tax", "NULL"],
+  ["fee_total", "NULL"], ["fee_base", "NULL"], ["fee_at", "NULL"],
+  ["fee_err", "''"], ["fee_kind", "NULL"], ["fee_kind_at", "NULL"],
+  ["fee_mfn", "NULL"], ["fee_fba_ship", "NULL"], ["fee_fba_store", "NULL"],
+];
+/* 消す SET の文。cond を渡すと「変わったときだけ消す」になる
+   （cond が無いときは必ず消す＝手で選ぶ口と同じ）。 */
+function mwAsinResetSet(cond) {
+  return MW_ASIN_RESET.map(([c, v]) => cond
+    ? (c + "=CASE WHEN " + cond + " THEN " + v + " ELSE mw_amz." + c + " END")
+    : (c + "=" + v)).join(", ");
+}
 async function mwDimAgain(env, run) {
   const res = { ok: false, n: 0, done: 0 };
   const hasDim = (await colOk(env, "mw_amz", "size_wid"))
@@ -15656,9 +15782,8 @@ async function mwJanPick(env, body) {
          ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin,
            name=COALESCE(NULLIF(excluded.name,''), mw_amz.name),
            err='', checked_at=excluded.checked_at, asin_at=excluded.asin_at,
-           price=NULL, basis='', price_at=NULL,
-           fee_ref=NULL, fee_fba=NULL, fee_tax=NULL, fee_total=NULL,
-           fee_base=NULL, fee_at=NULL, fee_err=''`)
+           /* 8.55 消す列は mwAsinResetSet の1か所だけ（自動の口と同じ）。 */
+           ${mwAsinResetSet("")}`)
         .bind(jan, asin, String(hit.name || ""), at),
     ]);
     run.notes.push("JAN重複を決めました " + jan + " → " + asin);
@@ -17865,6 +17990,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["dim_at", "migrate-0064-mw-dim.sql"],
   ["rk_from", "migrate-0063-amz-rank.sql"],
   ["rk_n", "migrate-0063-amz-rank.sql"],
   ["off_at", "migrate-0062-sub-off.sql"],
@@ -18355,7 +18481,9 @@ export default {
             || url.pathname === "/mw/move/fix"
             || url.pathname === "/mw/move/recount"
             /* 8.51 採寸の取り直しの印（引き直しが動くため）。 */
-            || url.pathname === "/mw/dim/again"))
+            || url.pathname === "/mw/dim/again"
+            /* 8.55 採寸だけの取り直し（SP-API を呼ぶため）。 */
+            || url.pathname === "/mw/dim/go"))
       return forbidStaff("MW の取り込み・相場は管理者用のキーが必要です", [], origin);
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
        値段が会員に出て、Discord にも流れるため。
@@ -18643,6 +18771,18 @@ export default {
           redo: !!(b && b.redo), plan: b && b.plan,
           /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
           skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
+      }
+      /* 8.55（カジの依頼E）**採寸だけ**取り直す（ASIN は引き直さない）。
+           GET  /mw/dim/go … 採寸が足りない件数を数えるだけ
+           POST /mw/dim/go … 1回 120件まで聞いて size_* だけ書く */
+      if (url.pathname === "/mw/dim/go") {
+        if (request.method === "POST") {
+          const b = await request.json().catch(() => ({}));
+          return json(await jobMwDim(env, { go: true, limit: (b || {}).limit }),
+                      200, origin);
+        }
+        if (request.method === "GET")
+          return json(await jobMwDim(env, { go: false }), 200, origin);
       }
       /* 8.51（カジの直し2）採寸の取り直し（asin_at を空にするだけ）。 */
       if (url.pathname === "/mw/dim/again") {
@@ -19228,6 +19368,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwDimAgain,
   SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
   subIdxCards, subIdxLine, subPinWhy, subIdxPin,
+  jobMwDim, MW_DIM_MAX, mwAsinResetSet, MW_ASIN_RESET,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,

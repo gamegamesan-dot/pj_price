@@ -690,6 +690,11 @@ CREATE TABLE IF NOT EXISTS mw_amz (
      'pkg'＝梱包重量（package weight）／'item'＝商品の重量。
      MW 無在庫（W-）の送料の計算に使うので、画面にも出す。 */
   size_src  TEXT,
+  /* 8.55（カジの依頼E・migrate-0064）「採寸だけ」聞いた時刻。
+     ASIN の引き直し（asin_at）とは別に持つ。ASIN を引き直すと
+     出品の可否（mw_restrict は ASIN で結ぶ）が未確認に戻り、
+     値段と手数料も消すので、採寸だけ埋めたいときはこちらを使う。 */
+  dim_at    TEXT,
   /* 7.129（【V の続き】の4）手数料の「だめ」の切り分け。
      fee_kind … ''／NULL 未分類／'fba_ng' FBA の見積もりが出せない／
                 'price' 送っている値段が原因／'other' ASIN か市場が原因
