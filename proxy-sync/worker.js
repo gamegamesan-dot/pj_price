@@ -12667,10 +12667,39 @@ async function subIdxRows(env, cfg, plan, rows, ones) {
   return out;
 }
 /* チャンネル1つぶんの一覧を書き換える（足りなければ新しく出す）。 */
+/* 8.54（カジの報告）ピン留めが**できなかった理由**（画面にそのまま出す）。
+   本文は読まない（トークンや個人の情報が混ざらないよう番号だけ見る）。 */
+function subPinWhy(e) {
+  const o = e || {};
+  const code = Number(o.code) || 0;
+  const st = Number(o.status) || 0;
+  if (String(o.err || "") === "no_token" || st === 0)
+    return "DISCORD_BOT_TOKEN が登録されていません";
+  if (code === 50013 || st === 403)
+    return "権限がありません（ボットに「メッセージの管理」が要ります）";
+  if (code === 50001) return "チャンネルを見る権限がありません";
+  if (code === 30003) return "ピン留めが上限（50件）です";
+  if (code === 10008 || st === 404) return "そのメッセージが見つかりません";
+  return "Discord が " + st + (code ? ("/" + code) : "") + " を返しました";
+}
+/* 1ページめをピン留めする。**ピン留めできるまで毎回ためす**
+   （8.54 前は「新しく出した回だけ」だったので、権限を足して押し直しても
+   書き換えだけで終わり、ずっとピン留めされなかった）。
+   外すことはしない（カジが手で外したぶんは、そのままにする）。 */
+async function subIdxPin(env, run, ch, id, st, r) {
+  if (!String(id || "") || st.pin) return;
+  const pin = await dcApi(env, run, "PUT",
+    "/channels/" + String(ch) + "/pins/" + String(id), null);
+  if (pin.ok) { st.pin = 1; r.pin = (Number(r.pin) || 0) + 1; return; }
+  r.pin_fail = (Number(r.pin_fail) || 0) + 1;
+  r.pin_why = subPinWhy(pin);
+}
 async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
   const ch = String(plan.ch || "");
   const r = { key: plan.key, name: plan.name, ch: ch, n: 0, pages: 0,
-              add: 0, edit: 0, same: 0, empty: 0, fail: 0, pin: 0 };
+              add: 0, edit: 0, same: 0, empty: 0, fail: 0, pin: 0,
+              /* 8.54（カジの報告）ピン留めの失敗は**件数と理由**を返す。 */
+              pin_fail: 0, pin_why: "", pinned: 0 };
   if (!ch) return r;
   const info = await dcChInfo(env, run, ch);
   const opt = Object.assign({}, (cfg || {}).idx || {}, { guild: info.guild });
@@ -12716,13 +12745,12 @@ async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
     const id = String(((m.data || {}).id) || "");
     out.push({ msg_id: id, hash: h, at: now });
     r.add++;
-    /* 1ページめだけピン留めする（ピン留めは1回だけ・消さない）。 */
-    if (i === 0 && !st.pin && id) {
-      const pin = await dcApi(env, run, "PUT",
-        "/channels/" + ch + "/pins/" + id, null);
-      if (pin.ok) { st.pin = 1; r.pin = 1; }
-    }
   }
+  /* 8.54 1ページめをピン留めする。**できるまで毎回ためす**
+     （新しく出した回だけでなく、書き換えの回も・中身が同じ回も）。 */
+  if (pages.length) await subIdxPin(env, run, ch,
+    String((out[0] || {}).msg_id || ""), st, r);
+  r.pinned = st.pin ? 1 : 0;
   st.pages = out;
   st.at = now;
   try { await subIdxSave(env, ch, st).run(); } catch (e) {}
@@ -12738,6 +12766,10 @@ async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
   if (res) {
     res.pages += r.pages; res.add += r.add; res.edit += r.edit;
     res.same += r.same; res.fail += r.fail;
+    /* 8.54 ピン留めの数と失敗の数・理由も上に足す（黙って失敗しない）。 */
+    res.pin = (Number(res.pin) || 0) + (Number(r.pin) || 0);
+    res.pin_fail = (Number(res.pin_fail) || 0) + (Number(r.pin_fail) || 0);
+    if (r.pin_why && !res.pin_why) res.pin_why = r.pin_why;
   }
   return r;
 }
@@ -12774,7 +12806,8 @@ async function subNoteOnce(env, run, ch, text, key) {
 }
 /* プランぜんぶの一覧を書き換える（配信のあとにも回す）。 */
 async function subIndexAll(env, run, cfg, rows, plan) {
-  const res = { chs: [], pages: 0, add: 0, edit: 0, same: 0, fail: 0 };
+  const res = { chs: [], pages: 0, add: 0, edit: 0, same: 0, fail: 0,
+                pin: 0, pin_fail: 0, pin_why: "" };
   const only = String(plan || "").trim();
   const ones = await oneRows(env, {});
   for (const p of ((cfg || {}).plans || [])) {
@@ -12834,7 +12867,7 @@ async function jobSubIndex(env, opt) {
   const o = opt || {};
   const run = newRun("sub-index");
   const res = { ok: false, chs: [], pages: 0, add: 0, edit: 0, same: 0,
-                fail: 0 };
+                fail: 0, pin: 0, pin_fail: 0, pin_why: "" };
   try {
     if (!(await subPostOk(env))) {
       res.error = "no_table";
@@ -19194,7 +19227,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subMonText, subMonNote, subMonToday, subMonSent,
   mwDimAgain,
   SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
-  subIdxCards, subIdxLine,
+  subIdxCards, subIdxLine, subPinWhy, subIdxPin,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,

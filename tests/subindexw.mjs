@@ -13,13 +13,17 @@ const T=harness('Worker：会員チャンネルの一覧（8.46）');
 const ok=T.ok;
 const { worker, T:W }=await loadWorker('subindexw');
 
-let dc=[], pins=[];
+let dc=[], pins=[], pinFail=false;
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/\/api\/webhooks\//.test(url))return new Response(null,{status:204});
   if(/discord\.com\/api/.test(url)){
     const pn=/\/channels\/(\d+)\/pins\/(\d+)/.exec(url);
     if(pn){ pins.push({ ch:pn[1], msg:pn[2], method:String(o.method||'') });
+      /* 8.54 権限が無いときの Discord の返り（50013）をまねる。 */
+      if(pinFail)return new Response(JSON.stringify({ code:50013,
+        message:'Missing Permissions' }),
+        {status:403,headers:{'content-type':'application/json'}});
       return new Response(null,{status:204}); }
     const cc=/\/channels\/(\d+)$/.exec(url);
     if(cc)return new Response(JSON.stringify({ id:cc[1], name:'ch-'+cc[1],
@@ -318,6 +322,66 @@ console.log('\n=== ⑦ 一覧は「いま買えるカードぜんぶ」（8.53�
      '★★★受付終了・完売・残り0・カードが消えたぶんは出さない');
   /* 「1回に新しく出す件数」（⚙ 1件）では切らない。 */
   ok(pr4.n>1,'★★★一覧は「1回に新しく出す件数」で切らない');
+}
+
+console.log('\n=== ⑧ ピン留めは「できるまで毎回ためす」（8.54・カジの報告）===');
+{
+  /* カジの報告（2026-11-16）
+     「一覧は出ているのにピン留めされていない。結果に失敗も出ていない」
+     → ピン留めを**新しく出した回だけ**ためしていた（書き換えの回は
+       ためさない）。失敗の件数も理由も返していなかった。 */
+  const e8=env0();
+  await setCfg(e8,{});
+  /* 8.53 一覧は sub_post（出したカード）を起点にするので、控えを入れる。 */
+  const at8=new Date().toISOString();
+  for(let i=0;i<2;i++){
+    const j=await add(e8,i);
+    await e8.DB.prepare(
+      `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,at,
+         created_at) VALUES (?1,?2,'light',?3,3645,2,0,0,?4,?4)`)
+      .bind(j,LI,String(930000+i),at8).run();
+  }
+  /* 1回目：権限が無くてピン留めできない。 */
+  pinFail=true; dc=[]; pins=[];
+  const r1=await api(e8,'/sub/index',{});
+  const c1=(r1.chs||[]).filter((x)=>x.ch===LI)[0]||{};
+  console.log('   1回目 '+JSON.stringify({ add:c1.add, pin:c1.pin,
+    pin_fail:c1.pin_fail, why:c1.pin_why, top:r1.pin_fail }));
+  ok(pins.length===1&&pins[0].method==='PUT','★★★1回目にピン留めをためす');
+  ok(c1.pin===0&&c1.pin_fail===1,'★★★できなければ「失敗1」を返す');
+  ok(/権限がありません/.test(String(c1.pin_why||'')),
+     '★★★理由に「権限がありません（メッセージの管理）」を出す');
+  ok(r1.pin_fail===1&&/権限/.test(String(r1.pin_why||'')),
+     '★★まとめにも失敗の数と理由を出す');
+  ok(c1.pinned===0,'★ピン留めできていないことが分かる');
+  /* 2回目：中身は同じ（書き換えも無い）が、**またためす**。 */
+  pins=[]; dc=[];
+  const r2=await api(e8,'/sub/index',{});
+  const c2=(r2.chs||[]).filter((x)=>x.ch===LI)[0]||{};
+  console.log('   2回目 '+JSON.stringify({ same:c2.same, add:c2.add,
+    pins:pins.length, pin_fail:c2.pin_fail }));
+  ok(c2.add===0&&c2.same>0,'★★中身が同じなので一覧は書き換えない');
+  ok(pins.length===1,'★★★中身が同じ回でも、ピン留めはまたためす');
+  ok(c2.pin_fail===1,'★★★失敗の件数と理由をまた返す');
+  /* 3回目：権限を足したあと。押し直すだけでピン留めされる。 */
+  pinFail=false; pins=[]; dc=[];
+  const r3=await api(e8,'/sub/index',{});
+  const c3=(r3.chs||[]).filter((x)=>x.ch===LI)[0]||{};
+  console.log('   3回目 '+JSON.stringify({ pin:c3.pin,
+    pin_fail:c3.pin_fail, pinned:c3.pinned }));
+  ok(pins.length===1&&c3.pin===1&&c3.pin_fail===0,
+     '★★★権限を足して押し直せばピン留めされる');
+  ok(c3.pinned===1,'★★ピン留め済みが分かる');
+  /* 4回目：もうピン留めしてあるので、ためさない（二重に留めない）。 */
+  pins=[]; dc=[];
+  const r4=await api(e8,'/sub/index',{});
+  ok(pins.length===0,'★★★ピン留めできたあとは、もうためさない');
+  ok(((r4.chs||[]).filter((x)=>x.ch===LI)[0]||{}).pinned===1,
+     '★ピン留め済みのまま');
+  /* 外す処理は足さない（カジが手で外したぶんはそのまま）。 */
+  ok(pins.filter((x)=>x.method==='DELETE').length===0,
+     '★★★ピン留めを外す処理は無い');
+  pinFail=false;
 }
 
 T.done();
