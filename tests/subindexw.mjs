@@ -170,8 +170,10 @@ console.log('\n=== ④ ページが減ったら「空です」に書き換える
      '★★見出しに「1/◯」を入れる');
   ok(pins.length===1&&pins[0].method==='PUT'&&pins[0].ch===LI,
      '★★★ピン留めは1ページめだけ');
-  /* 半分を取り下げて、ページが1つに減る。 */
-  await e2.DB.prepare(`UPDATE mw_sub SET on_sale=0 WHERE jan > ?1`)
+  /* 半分を**完売**にして、ページが1つに減る。
+     8.53 印を外しただけ（on_sale=0）では一覧から消えない
+     （カードは生きているので ⑦ で見る）。 */
+  await e2.DB.prepare(`UPDATE sub_post SET sold_out=1 WHERE jan > ?1`)
     .bind(jan(34)).run();
   dc=[];
   const r2=await api(e2,'/sub/index',{});
@@ -257,4 +259,65 @@ console.log('\n=== ⑦ ⚙で止められる・作業者のキーでは動かせ
   const z=await asJson(await worker.fetch(req('/sub/index',{}),env,{}));
   ok(z.status===403,'★★★動かすのは管理者だけ');
 }
+console.log('\n=== ⑦ 一覧は「いま買えるカードぜんぶ」（8.53・カジの報告）===');
+{
+  /* カジの報告（2026-11-16 22:53）
+     「プレミアムが0件」「スタンダードも5件だけ」「どのプランも5件」
+     → 一覧が**いまの候補 × プラン向きの判定**で数えていた。
+     一覧は **sub_post（出したカード）**を起点にして、判定はやり直さない。 */
+  const PR='4444444444';
+  const e7=env0();
+  await setCfg(e7,{ subOnPremium:true, subChPremium:PR, subNLight:1 });
+  const at=new Date().toISOString();
+  /* プレミアムのチャンネルに、無在庫の品のカードを7枚出してある。 */
+  for(let i=0;i<7;i++){
+    const j=await add(e7,i);
+    await e7.DB.prepare(
+      `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,at,
+         created_at) VALUES (?1,?2,'premium',?3,3645,2,0,0,?4,?4)`)
+      .bind(j,PR,String(920000+i),at).run();
+  }
+  const r=await api(e7,'/sub/index');
+  const pr=(r.chs||[]).filter((x)=>x.ch===PR)[0]||{};
+  console.log('   premium '+JSON.stringify({ n:pr.n, pages:pr.pages,
+    cats:pr.cats }));
+  ok(pr.n===7,
+     '★★★プレミアムでも、出してあるカードぜんぶを数える（型で落とさない）');
+  /* 印を外した品・出せる数を0にした品も、カードは生きている。 */
+  await e7.DB.prepare(`UPDATE mw_sub SET on_sale=0 WHERE jan=?1`)
+    .bind(jan(0)).run();
+  await e7.DB.prepare(`UPDATE mw_sub SET max_qty=0 WHERE jan=?1`)
+    .bind(jan(1)).run();
+  const r2=await api(e7,'/sub/index');
+  const pr2=(r2.chs||[]).filter((x)=>x.ch===PR)[0]||{};
+  console.log('   印を外したあと '+JSON.stringify({ n:pr2.n }));
+  ok(pr2.n===7,
+     '★★★印を外した品・出せる数を0にした品も、カードが生きていれば出る');
+  /* 商品のデータが**まったく取れない**カード（MW から消えた品）。 */
+  await e7.DB.prepare(
+    `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,at,
+       created_at) VALUES ('4902370559999',?1,'premium','920099',5000,1,0,0,
+       ?2,?2)`).bind(PR,at).run();
+  const r3=await api(e7,'/sub/index');
+  const pr3=(r3.chs||[]).filter((x)=>x.ch===PR)[0]||{};
+  ok(pr3.n===8,
+     '★★商品のデータが取れないカードも、控えの値段と点数で出す');
+  /* 出さないのは 受付終了・完売・残り0・カードが消えたぶんだけ。 */
+  await e7.DB.prepare(`UPDATE sub_post SET off_at=?1 WHERE jan=?2`)
+    .bind(at,jan(2)).run();
+  await e7.DB.prepare(`UPDATE sub_post SET sold_out=1 WHERE jan=?1`)
+    .bind(jan(3)).run();
+  await e7.DB.prepare(`UPDATE sub_post SET sold=qty WHERE jan=?1`)
+    .bind(jan(4)).run();
+  await e7.DB.prepare(`UPDATE sub_post SET msg_id='' WHERE jan=?1`)
+    .bind(jan(5)).run();
+  const r4=await api(e7,'/sub/index');
+  const pr4=(r4.chs||[]).filter((x)=>x.ch===PR)[0]||{};
+  console.log('   除いたあと '+JSON.stringify({ n:pr4.n }));
+  ok(pr4.n===4,
+     '★★★受付終了・完売・残り0・カードが消えたぶんは出さない');
+  /* 「1回に新しく出す件数」（⚙ 1件）では切らない。 */
+  ok(pr4.n>1,'★★★一覧は「1回に新しく出す件数」で切らない');
+}
+
 T.done();

@@ -12557,45 +12557,112 @@ async function subIdxState(env, ch) {
 function subIdxSave(env, ch, st) {
   return stateSet(env, SUB_IDX_KEY + String(ch), JSON.stringify(st || {}));
 }
-/* 一覧に出す行（そのチャンネルに**カードを出してある品**だけ）。 */
+/* 8.53（カジの報告）一覧に出す行は、**そのチャンネルに出してあるカード
+   ぜんぶ**。起点は sub_post（出したカードの控え）で、**プラン向きの判定
+   （fits／monKind）はやり直さない**（現にそのチャンネルに出ているカード
+   だから）。出さないのは 受付終了・完売・残り0・メッセージが消えたぶん
+   （shared/subindex.js の liveOf の1か所）。
+
+   v305 の作りでは「いまの候補（subRows）」を回して、その中からカードが
+   出ている品だけを拾い、さらにプラン向きの判定を重ねていた。そのため
+     ・プレミアム（型は「1点もの」）は MW の無在庫の品がぜんぶ落ちて 0件
+     ・スタンダードは「ライト向け」の印の品が落ちる（積み上げ型を見ていない）
+     ・印を外した品・出せる数を0にした品は、カードが生きていても落ちる
+   になっていた。 */
+const SUB_IDX_ROWS = 600;              // 1チャンネルぶんに読む控えの上限
+/* mw_stock の1行（MW_ONE_JOIN と同じ決まり・突き合わせだけ sub_post 側）。 */
+const SUB_IDX_JOIN = `LEFT JOIN mw_stock s ON s.id = (
+              SELECT t.id FROM mw_stock t WHERE t.jan = p.jan
+               ORDER BY CASE WHEN t.pick=1 AND t.gone_at IS NULL THEN 0
+                             WHEN t.gone_at IS NULL THEN 1 ELSE 2 END,
+                        t.id ASC LIMIT 1)`;
+/* そのチャンネルに出してあるカードの控え（商品のデータは取れるぶんだけ）。 */
+async function subIdxCards(env, ch) {
+  if (!String(ch || "")) return [];
+  /* 8.43 受付終了（off_at）。列が無い D1 でも落とさない。 */
+  const oCol = (await colOk(env, "sub_post", "off_at"))
+    ? "COALESCE(p.off_at,'')" : "''";
+  const q = await env.DB.prepare(
+    `SELECT p.jan AS jan, p.msg_id AS msg_id, p.price AS post_price,
+            p.qty AS post_qty, p.sold AS post_sold,
+            COALESCE(p.sold_out,0) AS sold_out, ${oCol} AS off_at,
+            p.at AS at,
+            b.price AS sub_price, b.max_qty AS max_qty,
+            s.name AS mw_name, s.kishu AS kishu, s.gone_at AS gone_at,
+            a.name AS amz_name, a.price AS amz_price, a.low AS amz_low,
+            a.fee_total AS fee_total, a.rank AS rank, a.rank_cat AS rank_cat,
+            a.new_n AS new_n, a.amz AS amz, a.basis AS basis,
+            a.price_at AS price_at,
+            (SELECT COALESCE(SUM(o.qty),0) FROM sub_order o
+              WHERE o.jan = p.jan) AS sold_n
+       FROM sub_post p
+            LEFT JOIN mw_sub b ON b.jan = p.jan
+            ${SUB_IDX_JOIN}
+            LEFT JOIN mw_amz a ON a.jan = p.jan
+      WHERE p.ch = ?1
+      ORDER BY p.at DESC, p.jan ASC LIMIT ${SUB_IDX_ROWS}`).bind(
+    String(ch)).all();
+  return (q && q.results) || [];
+}
+/* 控えの1行を、一覧の行（shared/subindex.js の形）にする。
+   商品のデータが取れない品は、**送ったときの値段と点数**で出す。 */
+function subIdxLine(c, cfg, row) {
+  const name = String((row && row.name) || c.amz_name || c.mw_name || "");
+  const price = Math.round(Number((row && row.price) || c.sub_price
+    || c.post_price) || 0);
+  /* 残り＝出した点数 − 取り込んだ注文の点数（8.19 と同じ決まり）。
+     いまも候補にある品は、出せる数（max_qty）のほうを見る。 */
+  const qty = Math.max(0, Math.round(Number(
+    (row ? row.qty : null) || c.max_qty || c.post_qty) || 0));
+  const sold = Math.max(0, Number(c.sold_n) || Number(c.post_sold) || 0);
+  /* 札（◎○△）は材料が取れるときだけ。取れない品は札なしで名前だけ出す。 */
+  const x = row || {
+    jan: String(c.jan || ""), name: name, kishu: String(c.kishu || ""),
+    price: price,
+    amz_price: Number(c.amz_price) || Number(c.amz_low) || 0,
+    fee_total: Number(c.fee_total) || 0,
+    rank: Number(c.rank) || 0, rank_cat: String(c.rank_cat || ""),
+    new_n: Number(c.new_n) || 0, amz: Number(c.amz) || 0,
+    amz_basis: String(c.basis || ""), amz_at: String(c.price_at || ""),
+    gross: SUBPX.grossOf(Number(c.amz_price) || Number(c.amz_low) || 0,
+                         Number(c.fee_total) || 0, price),
+  };
+  const left = Math.max(0, qty - sold);
+  return {
+    jan: String(c.jan || ""), name: name,
+    kishu: String(x.kishu || ""), genre: MWFEE.genreOf(x),
+    price: price, gross: Number(x.gross) || 0,
+    left: left, msg_id: String(c.msg_id || ""),
+    off_at: String(c.off_at || ""), sold_out: Number(c.sold_out) || 0,
+    mark: SUBGUIDE.badgeOf(Object.assign({}, x, { left: left, sold: sold }),
+                           (cfg || {}).guide || {}).mark,
+    /* その日に新しく出したカードか（B の「今週の新着」に使う）。 */
+    is_new: subJst(c.at).day === subJst().day,
+  };
+}
 async function subIdxRows(env, cfg, plan, rows, ones) {
-  const sent = await subPosts(env, plan.ch);
+  const byJan = {};
+  for (const r of (rows || [])) byJan[String(r.jan)] = r;
+  /* 1点もの（jan が 'one-…'）は handle で突き合わせる。 */
+  const oneBy = {};
+  for (const r of (ones || [])) oneBy[String(r.handle)] = r;
+  const cards = await subIdxCards(env, String((plan || {}).ch || ""));
   const out = [];
-  for (const r of (rows || [])) {
-    const was = sent[String(r.jan)];
-    if (!was) continue;                 // カードを出していない品は出さない
-    const isGame = MWFEE.genreOf(r) === "ゲーム";
-    const kind = String(plan.key || "") === "monitor"
-      ? SUBPLAN.monKind(r, plan, (cfg || {}).pick || null, undefined, isGame,
-                        subShipInfo(r, cfg || {}).name)
-      : SUBPLAN.fits(plan, r, isGame);
-    if (!kind) continue;
-    const sold = Math.max(0, Number(r.sold) || 0);
-    const left = Math.max(0, (Number(r.qty) || 0) - sold);
-    const x = Object.assign({}, r, { left: left, sold: sold });
-    out.push({
-      jan: String(r.jan), name: String(r.name || ""),
-      kishu: String(r.kishu || ""), genre: MWFEE.genreOf(r),
-      price: Number(r.price) || 0, gross: Number(r.gross) || 0,
-      left: left, msg_id: String(was.msg_id || ""),
-      off_at: String(was.off_at || ""), sold_out: Number(was.sold_out) || 0,
-      mark: SUBGUIDE.badgeOf(x, (cfg || {}).guide || {}).mark,
-      /* その日に新しく出したカードか（B の「今週の新着」に使う）。 */
-      is_new: subJst(was.at).day === subJst().day,
-    });
-  }
-  /* 1点もの（jan が 'one-…'）。先行・みんなのチャンネルにだけ出る。 */
-  for (const r of (ones || [])) {
-    const was = sent[String(r.handle)];
-    if (!was) continue;
-    out.push({
-      jan: String(r.handle), name: String(r.name || ""), kishu: "",
-      genre: "", price: Number(r.price) || 0,
-      gross: Number(r.gross) || 0, left: Math.max(0, Number(r.left) || 0),
-      msg_id: String(was.msg_id || ""), off_at: String(was.off_at || ""),
-      sold_out: Number(was.sold_out) || 0, mark: "",
-      is_new: subJst(was.at).day === subJst().day,
-    });
+  for (const c of cards) {
+    const jan = String(c.jan || "");
+    const one = oneBy[jan];
+    if (one) {
+      out.push({
+        jan: jan, name: String(one.name || ""), kishu: "", genre: "",
+        price: Number(one.price) || 0, gross: Number(one.gross) || 0,
+        left: Math.max(0, Number(one.left) || 0),
+        msg_id: String(c.msg_id || ""), off_at: String(c.off_at || ""),
+        sold_out: Number(c.sold_out) || 0, mark: "",
+        is_new: subJst(c.at).day === subJst().day,
+      });
+      continue;
+    }
+    out.push(subIdxLine(c, cfg || {}, byJan[jan] || null));
   }
   return out;
 }
@@ -19127,6 +19194,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subMonText, subMonNote, subMonToday, subMonSent,
   mwDimAgain,
   SUBINDEX, jobSubIndex, subIndexPlan, subIndexAll, subIdxOne, subIdxRows,
+  subIdxCards, subIdxLine,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */
   SUBGUIDE, gdOf, pxSet, pxOk,
