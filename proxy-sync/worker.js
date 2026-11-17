@@ -13146,6 +13146,50 @@ async function memUnlink(env, body) {
   res.ok = true;
   return res;
 }
+/* 8.64（カジの依頼）**間違えて作った行を消す**。
+   手でつなぐときに番号を間違えた行が残るので、画面から消せるようにする。
+   消せるのは **解約（canceled）で Discord とつないでいない行**だけ。
+   ・支払いの注文がある行は消さない（本物の会員なので、解約のまま残す）
+   ・記録（mem_log）は残す（あとで追えるように） */
+async function memDel(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) {
+    res.error = "no_table";
+    res.detail = "mem がありません（migrate-0065-mem.sql）";
+    return res;
+  }
+  const cust = String((body || {}).cust || "").replace(/\D/g, "");
+  if (!cust) { res.error = "bad_cust"; return res; }
+  const row = await memRow(env, cust);
+  if (!row) { res.error = "no_row"; res.detail = "その行がありません"; return res; }
+  if (String(row.dc || "")) {
+    res.error = "linked";
+    res.detail = "Discord とつないでいる行は消せません"
+      + "（先に「つなぎを外す」を押してください）";
+    return res;
+  }
+  if (String(row.state || "") !== "canceled") {
+    res.error = "not_canceled";
+    res.detail = "解約の行だけ消せます（先に「解約にする」を押してください）";
+    return res;
+  }
+  const paid = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mem_order WHERE cust=?`).bind(cust).first();
+  if (Math.round(Number((paid && paid.n) || 0)) > 0) {
+    res.error = "has_order";
+    res.detail = "支払いの注文がある行は消せません（解約のまま残します）";
+    return res;
+  }
+  const run = newRun("mem-del");
+  await runBatch(env, run, [
+    memLog(env, cust, "delete", "画面から行を消しました"),
+    env.DB.prepare(`DELETE FROM mem WHERE cust=?`).bind(cust),
+  ]);
+  await saveRun(env, run);
+  res.ok = true;
+  res.cust = cust;
+  return res;
+}
 /* 解約・支払いの失敗を受ける（Flow が使えない Basic では、画面から押す／
    あとで口を叩く用。pj は定期購入を読めないので、知らせてもらう形）。 */
 async function memState(env, body) {
@@ -19375,6 +19419,11 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await memState(env, b), 200, origin);
       }
+      /* 8.64（カジの依頼）間違えて作った行を消す（解約・Discord なしだけ）。 */
+      if (request.method === "POST" && url.pathname === "/mem/del") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memDel(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mem/sync") {
         const b = await request.json().catch(() => ({}));
         return json(await jobMemSync(env, { cust: (b || {}).cust,
@@ -19965,7 +20014,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.56 会員の月額課金と Discord のロール。 */
   memSettings, memRolesFor, memAllRoles, memAddMonth, memPlanOfOrder,
   memWant, memPaid, memSyncOne, memList, memLink, memUnlink, memState,
-  memHook, jobMemSync, memRoleWhy, memHmacOk,
+  memHook, jobMemSync, memRoleWhy, memHmacOk, memDel,
   MEM_PAID, MEM_PLANS, MEM_GRACE_D, MEM_MON_D,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */

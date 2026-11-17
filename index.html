@@ -18721,6 +18721,13 @@ function memRowsHtml(d){
         +' onclick="memStateGo(\''+esc(j)+'\',\'active\');return false">有効に戻す</button>'
         +' <button class="btn cfgprice" style="padding:2px 6px"'
         +' onclick="memUnlinkGo(\''+esc(j)+'\');return false">つなぎを外す</button>'
+        /* 8.64（カジの依頼）間違えて作った行を消す。
+           **解約で Discord とつないでいない行**にだけ出す。 */
+        +((String(r.state||'')==='canceled'&&!String(r.dc||''))
+          ?(' <button class="btn cfgprice" style="padding:2px 6px'
+            +';color:var(--bad)"'
+            +' onclick="memDelGo(\''+esc(j)+'\');return false">行を消す</button>')
+          :'')
         +'</div>';
     }).join('')
     +'</div>';
@@ -18805,6 +18812,27 @@ function memStateGo(cust,state){
       return;
     }
     memNote('✓ 状態を変えました（'+esc(MEM_STATE_JA[st]||st)+'）');
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* 8.64（カジの依頼）間違えて作った行を消す。
+   押せるのは**解約で Discord とつないでいない行**だけ（画面もその行にしか
+   ボタンを出さないが、pj-sync 側でも確かめる）。 */
+function memDelGo(cust){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  if(!one)return;
+  if(!confirm('会員番号 …'+one.slice(-4)+' の行を消します。\n'
+    +'（解約で Discord とつないでいない行だけ消せます。'
+    +'付け外しの記録は残ります）\n\nよろしいですか？'))return;
+  memNote('消しています…');
+  return mwPost('/mem/del',{ cust:one }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ 消せませんでした：'+esc(String((r||{}).detail
+        ||(r||{}).error||'')),1);
+      return;
+    }
+    memNote('✓ 行を消しました（…'+esc(one.slice(-4))+'）');
     return memListGo(1);
   })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
 }
@@ -28461,7 +28489,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v321';   // sw.js の const V と必ず同じ値にする
+var APP_V='v322';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -28,7 +28,11 @@ await p.evaluate(()=>{
       { cust:'7777000003', cust4:'0003', dc:'999000111',
         dc_name:'monitor-san', plan:'monitor',
         paid_to:'2026-12-08T00:00:00Z', state:'canceled', roles:'',
-        days:21, want:0 }] };
+        days:21, want:0 },
+      /* 8.64（カジの報告）番号を間違えて作った行（解約・Discord なし）。 */
+      { cust:'7777009198', cust4:'9198', dc:'', dc_name:'',
+        plan:'monitor', paid_to:'', state:'canceled', roles:'',
+        days:null, want:0 }] };
   const res=(v)=>new Response(JSON.stringify(v),{status:200});
   const real=window.fetch;
   window.fetch=async(u,i)=>{
@@ -48,6 +52,10 @@ await p.evaluate(()=>{
     if(/\/mem\/state/.test(url)){
       window.__post.push({ u:'state', body:body });
       return res({ ok:true });
+    }
+    if(/\/mem\/del/.test(url)){
+      window.__post.push({ u:'del', body:body });
+      return res({ ok:true, cust:(body||{}).cust });
     }
     if(/\/mem\/sync/.test(url)){
       window.__post.push({ u:'sync', body:body });
@@ -194,6 +202,45 @@ console.log('\n=== ⑤ 作業者の端末では押せない ===');
   console.log('   '+t.note);
   ok(t.post===0,'★★★作業者の端末では1回も呼ばない');
   ok(/管理者|作業者/.test(t.note),'★★理由を出す');
+}
+
+console.log('\n=== ⑥ 間違えて作った行を消す（8.64・カジの依頼）===');
+{
+  const t=await p.evaluate(async()=>{
+    window.__post=[];
+    await memListGo();
+    await new Promise((x)=>setTimeout(x,200));
+    const btns=[].slice.call($('memBox').querySelectorAll('button'))
+      .map((b)=>(b.textContent||'').trim());
+    /* 行ごとに「行を消す」が出ているか（解約で Discord なしの行だけ）。 */
+    /* 行は <div style="margin:4px 0"> の1つずつ（外側の箱は数えない）。 */
+    const rows=[].slice.call($('memBox')
+      .querySelectorAll('div[style="margin:4px 0"]'));
+    const per=rows.map((d)=>({
+      t:(d.textContent||'').replace(/\s+/g,' ').slice(0,28),
+      del:/行を消す/.test(d.innerHTML) }));
+    window.__post=[];
+    await memDelGo('7777009198');
+    await new Promise((x)=>setTimeout(x,200));
+    return { n:btns.filter((x)=>x==='行を消す').length, per:per,
+             post:window.__post, note:$('memNote').textContent };
+  });
+  console.log('   '+JSON.stringify({ n:t.n, per:t.per.map((x)=>x.del),
+    post:(t.post[0]||{}).u }));
+  ok(t.n===1,'★★★「行を消す」は1つだけ（解約で Discord なしの行）');
+  ok(t.per.filter((x)=>x.del).length===1
+     &&/9198/.test((t.per.filter((x)=>x.del)[0]||{}).t||''),
+     '★★★出ているのは …9198（解約・Discord なし）の行だけ');
+  ok(!t.per.filter((x)=>/0003/.test(x.t))[0].del,
+     '★★★解約でも**つないである**行には出さない（先に外す）');
+  ok(!t.per.filter((x)=>/0001/.test(x.t))[0].del,
+     '★★★有効でつないである行には出さない');
+  ok(!t.per.filter((x)=>/0002/.test(x.t))[0].del,
+     '★★★期限切れ（解約ではない）行にも出さない');
+  ok((t.post[0]||{}).u==='del'&&((t.post[0]||{}).body||{}).cust==='7777009198',
+     '★★★押すと会員番号を送る');
+  ok(/行を消しました/.test(t.note)&&/9198/.test(t.note),
+     '★★結果を出す（下4桁で）');
 }
 
 await T.done();

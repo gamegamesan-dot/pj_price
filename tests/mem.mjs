@@ -439,4 +439,65 @@ console.log('\n=== ⑬ 解約にした行は「付け直す」でも戻らない
   ok(li.cust4==='4883','★会員番号は下4桁');
 }
 
+console.log('\n=== ⑭ 間違えて作った行を消す（8.64・カジの依頼）===');
+{
+  /* カジの報告：手でつなぐときに番号を間違えて、会員番号 …9198 の行が
+     できてしまった（解約・Discord なし）。「つなぎを外す」では行が残る。 */
+  const e10=env0();
+  await setCfg(e10,{});
+  dcRoles={ '880011220':[] };
+  /* ① 間違えて作った行（つないで、外して、解約にする）。 */
+  await api(e10,'/mem/link',{ cust:'1500009198', plan:'monitor' });
+  await api(e10,'/mem/state',{ cust:'1500009198', state:'canceled' });
+  const r0=await row(e10,'1500009198');
+  console.log('   作った行 '+JSON.stringify({ state:r0.state,
+    dc:String(r0.dc||'') }));
+  ok(!!r0&&r0.state==='canceled'&&!String(r0.dc||''),
+     '★解約で Discord なしの行がある');
+  /* ② 消せる。 */
+  const d=await api(e10,'/mem/del',{ cust:'1500009198' });
+  console.log('   消した '+JSON.stringify(d));
+  ok(d.ok===true,'★★★解約で Discord なしの行は消せる');
+  ok(!(await row(e10,'1500009198')),'★★★行が無くなる');
+  /* ③ 記録は残る（あとで追える）。 */
+  const log=((await e10.DB.prepare(
+    `SELECT kind FROM mem_log WHERE cust='1500009198' ORDER BY id`).all())
+    .results||[]).map((x)=>String(x.kind));
+  console.log('   記録 '+JSON.stringify(log));
+  ok(log.indexOf('delete')>=0,'★★★消した記録（mem_log）は残る');
+  /* ④ Discord とつないでいる行は消せない。 */
+  await api(e10,'/mem/link',{ cust:'1500001111', dc:'880011220',
+    plan:'monitor' });
+  await api(e10,'/mem/state',{ cust:'1500001111', state:'canceled' });
+  const a=await api(e10,'/mem/del',{ cust:'1500001111' });
+  console.log('   つないでいる行 '+JSON.stringify(a));
+  ok(a.error==='linked'&&/つなぎを外す/.test(String(a.detail||'')),
+     '★★★Discord とつないでいる行は消せない（先に外す）');
+  ok(!!(await row(e10,'1500001111')),'★★その行は残っている');
+  /* ⑤ 解約でない行は消せない。 */
+  await api(e10,'/mem/unlink',{ cust:'1500001111' });
+  await api(e10,'/mem/state',{ cust:'1500001111', state:'active' });
+  const b=await api(e10,'/mem/del',{ cust:'1500001111' });
+  ok(b.error==='not_canceled'&&/解約にする/.test(String(b.detail||'')),
+     '★★★解約でない行は消せない（先に解約にする）');
+  /* ⑥ 支払いの注文がある行は消せない（本物の会員）。 */
+  const e11=env0();
+  await setCfg(e11,{});
+  await hook(e11,order({ id:'7777', customer:{ id:'1600002222' } }));
+  await api(e11,'/mem/state',{ cust:'1600002222', state:'canceled' });
+  const c=await api(e11,'/mem/del',{ cust:'1600002222' });
+  console.log('   支払いのある行 '+JSON.stringify(c));
+  ok(c.error==='has_order'&&/解約のまま/.test(String(c.detail||'')),
+     '★★★支払いの注文がある行は消せない（解約のまま残す）');
+  ok(!!(await row(e11,'1600002222')),'★★その行は残っている');
+  /* ⑦ 無い行・管理者だけ。 */
+  const z=await api(e11,'/mem/del',{ cust:'1600009999' });
+  ok(z.error==='no_row','★無い行はそう返す');
+  const req=new Request('https://x/mem/del',{ method:'POST',
+    headers:{ 'X-PJ-Key':'staff-key-123', 'content-type':'application/json' },
+    body:JSON.stringify({ cust:'1' }) });
+  ok((await asJson(await worker.fetch(req,e11,{}))).status===403,
+     '★★★消すのは管理者だけ');
+}
+
 T.done();
