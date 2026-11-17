@@ -166,5 +166,117 @@ console.log('\n=== ⑥ 作業者の端末では、隠してある欄が見えな
      '★★★作業者の端末では、当たっても**CSS の決まりで隠れたまま**');
 }
 
+console.log('\n=== ⑦ 日本語の変換中は検索しない（8.61・カジの報告）===');
+{
+  /* iPhone で「かいいん」と打つと、変換する前に検索が走って画面が
+     描き直され、変換候補が消えて漢字にできなかった。
+     ここでは変換の出来事（composition*）をまねて、
+     **確定するまで何も描き直さない**ことを見る。 */
+  const t=await p.evaluate(async()=>{
+    const el=$('cfgFind');
+    el.value=''; cfgFindGo();
+    await new Promise((x)=>setTimeout(x,60));
+    const vis=()=>[].slice.call($('tabCfg')
+      .querySelectorAll('.row,.rowv,.chk'))
+      .filter((x)=>!x.closest('#cfgFindBar'))
+      .filter((x)=>x.style.display!=='none').length;
+    const n0=vis();
+    /* ① 変換を始める（compositionstart）。 */
+    el.dispatchEvent(new CompositionEvent('compositionstart',
+      { bubbles:true }));
+    /* ② 変換中の入力（isComposing が立っている）。 */
+    el.value='かいいん';
+    el.dispatchEvent(new InputEvent('input',
+      { bubbles:true, isComposing:true, data:'かいいん' }));
+    el.dispatchEvent(new CompositionEvent('compositionupdate',
+      { bubbles:true, data:'かいいん' }));
+    await new Promise((x)=>setTimeout(x,80));
+    const during={ n:vis(), note:($('cfgFindNote').textContent||''),
+      box:$('cfgFindBox').innerHTML };
+    /* ③ 変換を確定（compositionend）→ ここで1回だけ走る。 */
+    el.value='会員';
+    el.dispatchEvent(new CompositionEvent('compositionend',
+      { bubbles:true, data:'会員' }));
+    await new Promise((x)=>setTimeout(x,120));
+    const after={ n:vis(), note:($('cfgFindNote').textContent||''),
+      hits:[].slice.call($('cfgFindBox').querySelectorAll('button')).length };
+    cfgFindClr();
+    return { n0:n0, during:during, after:after };
+  });
+  console.log('   '+JSON.stringify({ during:t.during.n,
+    note:t.during.note.slice(0,14), after:t.after.n }));
+  ok(t.during.n===t.n0&&!t.during.note&&!t.during.box,
+     '★★★変換中（compositionstart〜end）は**1つも隠さず・何も描き直さない**');
+  ok(t.after.n>0&&t.after.n<t.n0,
+     '★★★確定したら、そのとき1回だけ絞り込む');
+  ok(/件/.test(t.after.note)&&t.after.hits>0,
+     '★★★確定後は件数と飛び先が出る');
+}
+
+console.log('\n=== ⑧ 平仮名のままでも当たる（8.61）===');
+{
+  const t=await p.evaluate(async()=>{
+    const go=async(v)=>{
+      $('cfgFind').value=v; cfgFindGo();
+      await new Promise((x)=>setTimeout(x,60));
+      return [].slice.call($('tabCfg').querySelectorAll('.row,.rowv,.chk'))
+        .filter((x)=>!x.closest('#cfgFindBar'))
+        .filter((x)=>x.style.display!=='none').length;
+    };
+    const out={};
+    out.kana=await go('かいいん');                 // 読み → 会員
+    out.kanji=await go('会員');
+    out.hira=await go('おくりかた');               // 読み → 送り方
+    out.kata=await go('オクリカタ');               // カタカナでも同じ
+    out.mon=await go('もにたー');                  // カタカナの言葉（モニター）
+    out.monk=await go('モニター');
+    out.full=await go('ＭＥＭＧＵＩＬＤ');          // 全角でも⚙の名前に当たる
+    out.half=await go('memGuild');
+    out.yomi2=await go('かいしび');                // 読み → 開始日
+    out.tiers=await go('そうりょう');              // 読み → 送料
+    cfgFindClr();
+    return out;
+  });
+  console.log('   '+JSON.stringify(t));
+  ok(t.kana>0,'★★★「かいいん」（平仮名のまま）で会員の項目に当たる');
+  ok(t.hira>0&&t.hira===t.kata,
+     '★★★「おくりかた」でも「オクリカタ」でも同じだけ当たる');
+  ok(t.mon>0&&t.mon===t.monk,
+     '★★★カタカナの言葉は平仮名でも当たる（もにたー＝モニター）');
+  ok(t.full===t.half&&t.full>0,
+     '★★★全角の英数字でも⚙の名前に当たる（ＭＥＭＧＵＩＬＤ＝memGuild）');
+  ok(t.yomi2>0,'★★★「かいしび」で開始日に当たる');
+  ok(t.tiers>0,'★★★「そうりょう」で送料の項目に当たる');
+}
+
+console.log('\n=== ⑨ 打っているあいだは待ってから1回だけ描き直す（8.61）===');
+{
+  const t=await p.evaluate(async()=>{
+    const el=$('cfgFind');
+    cfgFindClr();
+    await new Promise((x)=>setTimeout(x,60));
+    const vis=()=>[].slice.call($('tabCfg')
+      .querySelectorAll('.row,.rowv,.chk'))
+      .filter((x)=>!x.closest('#cfgFindBar'))
+      .filter((x)=>x.style.display!=='none').length;
+    const n0=vis();
+    /* 「か」「かい」「かいいん」と打つ（変換の出来事が取れない入力の形）。 */
+    ['か','かい','かいいん'].forEach(function(v){
+      el.value=v;
+      el.dispatchEvent(new InputEvent('input',{ bubbles:true }));
+    });
+    const soon=vis();                      // すぐには描き直さない
+    await new Promise((x)=>setTimeout(x,400));
+    const late=vis();                      // 少し待つと1回だけ走る
+    const note=$('cfgFindNote').textContent||'';
+    cfgFindClr();
+    return { n0:n0, soon:soon, late:late, note:note };
+  });
+  console.log('   '+JSON.stringify({ n0:t.n0, soon:t.soon, late:t.late }));
+  ok(t.soon===t.n0,'★★★打った直後は描き直さない（候補が消えない）');
+  ok(t.late>0&&t.late<t.n0&&/件/.test(t.note),
+     '★★★少し待つと1回だけ絞り込む（「かいいん」で当たる）');
+}
+
 await T.done();
 })();

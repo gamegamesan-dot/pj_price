@@ -1775,7 +1775,7 @@ body.staff #syncOnHandFix{display:none !important}
        この欄そのものは絞り込みの対象にしない（#cfgFindBar で見分ける）。 -->
   <div class="body" id="cfgFindBar" style="padding:0 2px">
     <div class="row" style="margin-top:6px">
-      <input type="search" id="cfgFind" value="" placeholder="⚙を探す（例：開始日／会員便／ロール／猶予）" inputmode="search" style="flex:1" oninput="cfgFindGo()">
+      <input type="search" id="cfgFind" value="" placeholder="⚙を探す（例：かいいん／開始日／会員便／ロール）" inputmode="search" style="flex:1" oninput="cfgFindGo(event)">
       <button class="btn" type="button" id="cfgFindClear" onclick="cfgFindClr();return false" style="flex:0 0 auto">消す</button>
     </div>
     <div class="note2" id="cfgFindNote" style="margin:2px 0 0"></div>
@@ -4995,6 +4995,58 @@ document.addEventListener('click',function(e){
    ・何も入れていないときは今までどおり
    隠してある欄（作業者の端末・設定で隠した欄）は、display を空に戻すだけ
    なので **CSS の決まりがそのまま効く**（勝手に見えたりしない）。 */
+/* 8.61（カジの報告）**日本語の変換中は検索しない**。
+   iPhone で「かいいん」と打つと、変換する前に検索が走って画面が描き直され、
+   変換候補が消えて漢字にできなかった。
+   ・compositionstart／compositionupdate のあいだは**何もしない**
+   ・compositionend（確定）で**1回だけ**検索する
+   ・input のときも e.isComposing が立っていれば何もしない */
+var CFG_FIND_IME=false;           // いま変換中か
+function cfgFindIme(on){
+  CFG_FIND_IME=!!on;
+  /* 確定したときだけ、値が落ち着いてから1回走らせる。 */
+  if(!on)setTimeout(function(){ cfgFindGo(); },0);
+}
+/* 8.61 平仮名・カタカナ・全角英数をそろえる（平仮名のままでも当たるように）。
+   ・全角の英数字 → 半角（ＭＥＭ → mem）
+   ・カタカナ → 平仮名（オクリカタ → おくりかた）
+   ・大文字 → 小文字 */
+function cfgFindNorm(t){
+  var v=String(t==null?'':t);
+  v=v.replace(/[\uff01-\uff5e]/g,function(c){
+    return String.fromCharCode(c.charCodeAt(0)-0xfee0); });
+  v=v.replace(/[\u30a1-\u30f6]/g,function(c){
+    return String.fromCharCode(c.charCodeAt(0)-0x60); });
+  return v.toLowerCase();
+}
+/* 8.61 よく使う項目の**読み**（平仮名のままでも当たるように）。
+   カタカナの言葉（モニター・ロール・ピン留めなど）は上の「かなをそろえる」で
+   そのまま当たるので、ここには**漢字の言葉**だけを入れる。 */
+var CFG_YOMI={
+  かいいん:'会員', かいひ:'会費', そうりょう:'送料', おくりかた:'送り方',
+  かいしび:'開始日', きげん:'期限', じょうたい:'状態', にんずう:'人数',
+  にっすう:'日数', ゆうよ:'猶予', だん:'段', けんすう:'件数',
+  さいすん:'採寸', おもさ:'重さ', てのこり:'手残り', あしきり:'足切り',
+  ねだん:'値段', かかく:'価格', てすうりょう:'手数料', あらり:'粗利',
+  りえき:'利益', りえきりつ:'利益率', ざいこ:'在庫', おろしね:'卸値',
+  しいれ:'仕入れ', はいしん:'配信', いちらん:'一覧', もくじ:'目次',
+  わりびき:'割引', げつがく:'月額', じゅんい:'順位', うれゆき:'売れ行き',
+  はやさ:'速さ', つうじょうばん:'通常版', げんていばん:'限定版',
+  じょうげん:'上限', かげん:'下限', しゃしん:'写真', がぞう:'画像',
+  ちゅうもん:'注文', はっそう:'発送', むざいこ:'無在庫', ひんめい:'商品名',
+  きしゅ:'機種', ばりあんと:'バリアント', あんごう:'合言葉'
+};
+/* 8.61 変換の出来事（compositionstart／update／end）は**HTML の属性では
+   拾えない**（oncompositionstart という属性は無い）ので、ここで付ける。
+   画面が読み込まれたときと、⚙のタブを開いたときに1回だけ付く。 */
+function cfgFindInit(){
+  var el=$('cfgFind');
+  if(!el||el.__pjIme)return;
+  el.__pjIme=1;
+  el.addEventListener('compositionstart',function(){ cfgFindIme(1); },false);
+  el.addEventListener('compositionupdate',function(){ cfgFindIme(1); },false);
+  el.addEventListener('compositionend',function(){ cfgFindIme(0); },false);
+}
 var CFG_FIND_ON=false;            // いま絞り込んでいるか
 var CFG_FIND_DET=[];              // 開いた「詳細」を戻すための控え
 var CFG_FIND_MAX=12;              // 飛び先のボタンの数
@@ -5025,7 +5077,28 @@ function cfgFindHay(it){
   var ins=it.el.querySelectorAll?it.el.querySelectorAll('input,select,textarea'):[];
   for(var i=0;i<ins.length;i++)
     t+=' '+String(ins[i].id||'')+' '+String(ins[i].placeholder||'');
-  return t.toLowerCase();
+  /* 8.61 平仮名・カタカナ・全角英数をそろえてから比べる。 */
+  return cfgFindNorm(t);
+}
+/* 8.61 入れた言葉 → 当たりとみなす言い方の一覧（どれかに当たればよい）。
+   ・そのままの言葉
+   ・読みの表に当たれば、その漢字の言葉も見る（かいいん → 会員）
+     2文字以上なら「読みの途中まで」でも見る（かいい → 会員） */
+function cfgFindAlts(word){
+  var w=cfgFindNorm(word);
+  var out=[w], k, v;
+  for(k in CFG_YOMI){
+    if(!CFG_YOMI.hasOwnProperty(k))continue;
+    var hit=(k===w)||(w.length>=2&&(k.indexOf(w)===0||w.indexOf(k)===0));
+    if(!hit)continue;
+    v=cfgFindNorm(CFG_YOMI[k]);
+    if(v&&out.indexOf(v)<0)out.push(v);
+  }
+  return out;
+}
+function cfgFindHit(hay,alts){
+  for(var i=0;i<alts.length;i++)if(hay.indexOf(alts[i])>=0)return true;
+  return false;
 }
 function cfgFindSet(it,on){
   var d=on?'':'none';
@@ -5051,10 +5124,26 @@ function cfgFindClr(){
   var el=$('cfgFind'); if(el)el.value='';
   cfgFindGo();
 }
-function cfgFindGo(){
+var CFG_FIND_T=0;                 // 打っているあいだの待ち（描き直しを減らす）
+function cfgFindGo(e){
+  /* 8.61（カジの報告）**変換中は何もしない**（画面を描き直すと iPhone の
+     変換候補が消えて、漢字にできなかった）。確定したら1回だけ走る。 */
+  if(CFG_FIND_IME)return;
+  if(e&&e.isComposing)return;
+  /* 打っているときは**少し待ってから1回**だけ描き直す（変換の出来事が
+     取れない日本語入力でも、候補が消えにくくなる）。
+     押したボタン・確定・「消す」からは待たずにすぐ走る。 */
+  if(e){
+    clearTimeout(CFG_FIND_T);
+    CFG_FIND_T=setTimeout(function(){ cfgFindGo(); },250);
+    return;
+  }
+  clearTimeout(CFG_FIND_T);
   var pane=$('tabCfg'); if(!pane)return;
-  var q=String(($('cfgFind')||{}).value||'').trim().toLowerCase();
-  var words=q?q.split(/[\s\u3000]+/).filter(Boolean):[];
+  var q=String(($('cfgFind')||{}).value||'').trim();
+  /* 8.61 平仮名・カタカナ・全角英数をそろえ、読みの表も見る。 */
+  var words=q?cfgFindNorm(q).split(/[\s\u3000]+/).filter(Boolean)
+    .map(cfgFindAlts):[];
   var items=cfgFindItems();
   var note=$('cfgFindNote'), box=$('cfgFindBox');
   /* 何も入れていない（または消した）＝今までどおりに戻す。 */
@@ -5077,17 +5166,17 @@ function cfgFindGo(){
     CFG_FIND_ON=true;
   }
   CFG_FIND_DET.forEach(function(x){ x.el.open=true; });
-  /* ① 1項目ずつ当てる。 */
+  /* ① 1項目ずつ当てる（言葉ぜんぶに当たるものだけ）。 */
   items.forEach(function(it){
     var hay=cfgFindHay(it);
-    it.ok=words.every(function(w){ return hay.indexOf(w)>=0; });
+    it.ok=words.every(function(alts){ return cfgFindHit(hay,alts); });
   });
   /* ② 「詳細」の見出しに当たったら、その中はぜんぶ出す。 */
   [].slice.call(pane.querySelectorAll('details')).forEach(function(d){
     var sm=d.querySelector('summary');
-    var t=String((sm?sm.textContent:'')||'').toLowerCase();
+    var t=cfgFindNorm(String((sm?sm.textContent:'')||''));
     if(!t)return;
-    if(!words.every(function(w){ return t.indexOf(w)>=0; }))return;
+    if(!words.every(function(alts){ return cfgFindHit(t,alts); }))return;
     items.forEach(function(it){
       try{ if(d.contains(it.el))it.ok=true; }catch(e){}
     });
@@ -5155,6 +5244,8 @@ function switchTab(t){
   $('tabC').setAttribute('aria-pressed',t==='C');
   $('tabG').setAttribute('aria-pressed',t==='G');
   $('tabCfg').style.display=t==='G'?'block':'none';
+  /* 8.61 ⚙の検索窓の「変換中は検索しない」を付ける（1回だけ）。 */
+  if(t==='G')try{ cfgFindInit(); }catch(e){}
   $('tabD').setAttribute('aria-pressed',t==='D');
   $('tabE').setAttribute('aria-pressed',t==='E');
   $('tabF').setAttribute('aria-pressed',bu);        // 仕入れ（6.150）
@@ -28336,7 +28427,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v319';   // sw.js の const V と必ず同じ値にする
+var APP_V='v320';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
@@ -28482,6 +28573,9 @@ document.addEventListener('visibilitychange',function(){
   appVerChecked=Date.now();
   appVerFromSw().then(appVerStale)['catch'](function(){});
 });
+
+/* 8.61 ⚙の検索窓の「変換中は検索しない」を、読み込みのときに付ける。 */
+try{ cfgFindInit(); }catch(e){}
 
 (function(){
   var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
