@@ -437,6 +437,31 @@ ok(!/[A-Za-z0-9_-]{32,}\.[A-Za-z0-9_-]{16,}/.test(y),
 ok(!/discord\.com\/api\/webhooks\/\d/.test(y),
    '★★★webhook の URL をファイルに書かない');
 
+console.log('\n=== 鍵を Worker に登録し直す（8.11／8.56）===');
+{
+  /* スマホからでも鍵を入れ直せるように、GitHub の Secrets から移す段。
+     8.56（会員の月額課金）で SHOPIFY_WEBHOOK_SECRET も同じ形で足した。 */
+  const puts=(y.match(/^ *put [A-Z_]+$/gm)||[])
+    .map((x)=>x.trim().replace(/^put /,''));
+  console.log('   '+JSON.stringify(puts));
+  ok(puts.indexOf('DISCORD_BOT_TOKEN')>=0,
+     '★★★DISCORD_BOT_TOKEN を登録する');
+  ok(puts.indexOf('SHOPIFY_WEBHOOK_SECRET')>=0,
+     '★★★SHOPIFY_WEBHOOK_SECRET も登録する（8.56）');
+  puts.forEach(function(n){
+    ok(new RegExp('^ *'+n+': \\$\\{\\{ secrets\\.'+n+' \\}\\}$','m')
+      .test(y),'★★'+n+' は env で Secrets から読む');
+  });
+  ok(/if: inputs\.put_secrets && !inputs\.dry_run/.test(y),
+     '★★★入れ直すのは「鍵も入れ直す」を選んだときだけ・確かめだけでは何もしない');
+  ok(/GitHub の Secrets が空なので飛ばします/.test(y),
+     '★★★Secrets が空のものは飛ばす');
+  ok(/wrangler\.js secret put "\$name"/.test(y)&&/printf '%s' "\$val"/.test(y),
+     '★★★値は標準入力で渡す（コマンドの引数に書かない）');
+  ok(/\$\{#val\} 文字/.test(y)&&!/echo .*\$val/.test(y),
+     '★★★ログに出すのは**文字数だけ**（値は出さない）');
+}
+
 console.log('\n=== 知らせの中身 ===');
 ok(/if: always\(\)/.test(y),'★★★成功でも失敗でも知らせる');
 ok(/job\.status/.test(y),'★★成功／失敗を入れる');

@@ -162,12 +162,17 @@ Actions から Worker に移す**。値はどこにも表示されない。
 1. GitHub の **Settings → Secrets and variables → Actions → New repository secret**
    - 名前 `DISCORD_BOT_TOKEN`／値はボットのトークン
    - （ボットのトークンは Discord Developer Portal の **Bot → Reset Token**）
+   - 8.56（会員の月額課金）を使うなら、名前
+     **`SHOPIFY_WEBHOOK_SECRET`**／値は **Shopify のアプリの client secret**
+     （`orders/paid` の webhook の署名を確かめるのに使う）も入れる
 2. GitHub アプリで **Actions → deploy-pj-sync → Run workflow**
    - **確かめだけ（dry_run）を外す**
    - **鍵を Worker に登録し直す（put_secrets）を オン**
 3. 「✅ pj-sync のデプロイ」の知らせに
    「鍵の登録：オン（値は出しません）」と出れば終わり
 
+> ・いま入れ直せるのは **`DISCORD_BOT_TOKEN`** と
+>   **`SHOPIFY_WEBHOOK_SECRET`** の2つ。
 > ・Actions の記録に出るのは**名前と文字数だけ**（値は出ない）。
 > ・GitHub の Secrets が空の鍵は**飛ばす**（消したいときは
 >   Cloudflare の画面で消す）。

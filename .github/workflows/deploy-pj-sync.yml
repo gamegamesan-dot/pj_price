@@ -181,6 +181,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # 8.56（カジの依頼）会員の月額課金：Shopify の webhook の署名を
+          # 確かめる秘密。GitHub の Secrets が空なら飛ばす（値は出さない）。
+          SHOPIFY_WEBHOOK_SECRET: ${{ secrets.SHOPIFY_WEBHOOK_SECRET }}
         run: |
           set -o pipefail
           put() {
@@ -197,6 +200,7 @@ jobs:
             echo "$name: 登録しました（${#val} 文字）"
           }
           put DISCORD_BOT_TOKEN
+          put SHOPIFY_WEBHOOK_SECRET
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run
