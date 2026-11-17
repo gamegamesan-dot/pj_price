@@ -23,7 +23,12 @@ await p.evaluate(()=>{
         state:'active', roles:'9001,9002,9003', days:30, want:3 },
       { cust:'7777000002', cust4:'0002', dc:'', dc_name:'',
         plan:'light', paid_to:'2026-11-10T00:00:00Z',
-        state:'expired', roles:'', days:-7, want:0 }] };
+        state:'expired', roles:'', days:-7, want:0 },
+      /* 8.62（カジの報告）解約の行とモニターの行も出す。 */
+      { cust:'7777000003', cust4:'0003', dc:'999000111',
+        dc_name:'monitor-san', plan:'monitor',
+        paid_to:'2026-12-08T00:00:00Z', state:'canceled', roles:'',
+        days:21, want:0 }] };
   const res=(v)=>new Response(JSON.stringify(v),{status:200});
   const real=window.fetch;
   window.fetch=async(u,i)=>{
@@ -101,6 +106,11 @@ console.log('\n=== ② 一覧（会員番号は下4桁・氏名やメールは�
      '★★★期限まで（過ぎたぶんも）日数で出す');
   ok(/つないでいません/.test(t.box),
      '★★★Discord とつないでいない会員が分かる');
+  /* 8.62 状態（有効／解約／期限切れ）と期限が、行ごとに正しく出る。 */
+  ok(/解約/.test(t.box)&&/期限切れ/.test(t.box)&&/有効/.test(t.box),
+     '★★★状態を日本語で出す（有効・解約・期限切れ）');
+  ok(/モニター/.test(t.box)&&/期限 2026-12-08/.test(t.box),
+     '★★★モニターの行にも期限が出る（「—」のままにしない）');
   ok(/猶予 3日/.test(t.box)&&/積み上げ：入/.test(t.box)
      &&/21日で外す/.test(t.box),'★★⚙の様子も出す');
   ok(/ロールID 4\/4/.test(t.box)&&/バリアント 3\/3/.test(t.box)

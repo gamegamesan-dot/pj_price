@@ -355,4 +355,88 @@ console.log('\n=== ⑫ 表が無い D1 でも落ちない ===');
      '★★★webhook も落ちない（Shopify に 200 を返す）');
 }
 
+console.log('\n=== ⑬ 解約にした行は「付け直す」でも戻らない（8.62・カジの報告）===');
+{
+  /* カジの流れ（会員番号 …4883・モニター・手でつないだ行）
+       つなぐ → 解約にする → 付け直す → 有効に戻す → 付け直す
+     v315 では「解約にする」でロールが外れたあと、状態を expired に
+     書き換えていたので、「付け直す」でモニターのロールがまた付いていた。 */
+  const e9=env0();
+  await setCfg(e9,{});
+  dcRoles={ '999000111':[] };
+  /* ① 手でモニターをつなぐ。 */
+  const a=await api(e9,'/mem/link',{ cust:'1400004883', dc:'999000111',
+    plan:'monitor' });
+  const r1=await row(e9,'1400004883');
+  console.log('   つないだ '+JSON.stringify({ state:r1.state,
+    paid_to:String(r1.paid_to||'').slice(0,10), roles:dcRoles['999000111'] }));
+  ok(dcRoles['999000111'].indexOf(RM)>=0,'★★モニターのロールが付く');
+  ok(r1.state==='active','★★★つないだ行の状態は「有効」');
+  /* 8.62 期限は「つないだ日＋モニターの日数（21日）」。 */
+  const want=new Date(Date.now()+21*86400000).toISOString().slice(0,10);
+  ok(String(r1.paid_to||'').slice(0,10)===want,
+     '★★★期限は「つないだ日＋21日」（空のままにしない）');
+  /* ② 解約にする → ロールが外れる。 */
+  await api(e9,'/mem/state',{ cust:'1400004883', state:'canceled' });
+  const r2=await row(e9,'1400004883');
+  console.log('   解約 '+JSON.stringify({ state:r2.state,
+    roles:dcRoles['999000111'] }));
+  ok(dcRoles['999000111'].length===0,'★★★解約でロールが外れる');
+  ok(r2.state==='canceled',
+     '★★★状態は「解約」のまま（expired に書き換えない）');
+  /* ③ 「付け直す」→ 付かない（ここが不具合だった）。 */
+  const s3=await api(e9,'/mem/sync',{ cust:'1400004883' });
+  console.log('   付け直す '+JSON.stringify({ add:s3.add,
+    roles:dcRoles['999000111'] }));
+  ok(s3.add===0&&dcRoles['999000111'].length===0,
+     '★★★解約の行は「付け直す」でもロールを付けない');
+  /* ④ 「ぜんぶ付け直す」でも付かない。 */
+  const s4=await api(e9,'/mem/sync',{});
+  ok(dcRoles['999000111'].length===0,
+     '★★★「ぜんぶ付け直す」でも付かない');
+  /* ⑤ 毎時の見回りでも付かない。 */
+  await W.jobMemSync(e9,{});
+  ok(dcRoles['999000111'].length===0,'★★★毎時の見回りでも付かない');
+  const r5=await row(e9,'1400004883');
+  ok(r5.state==='canceled','★★★見回りのあとも「解約」のまま');
+  /* ⑥ 「有効に戻す」を押したときだけ戻る。 */
+  await api(e9,'/mem/state',{ cust:'1400004883', state:'active' });
+  const r6=await row(e9,'1400004883');
+  console.log('   有効に戻す '+JSON.stringify({ state:r6.state,
+    roles:dcRoles['999000111'] }));
+  ok(dcRoles['999000111'].indexOf(RM)>=0,
+     '★★★「有効に戻す」でロールが戻る');
+  ok(r6.state==='active','★★状態は「有効」');
+  /* ⑦ そのあとの「付け直す」でも、付いたまま（二重に付けない）。 */
+  dcCalls=[];
+  await api(e9,'/mem/sync',{ cust:'1400004883' });
+  ok(dcRoles['999000111'].length===1
+     &&dcCalls.filter((x)=>x.m==='PUT').length===0,
+     '★★★もう付いているロールは付け直さない（PUT を出さない）');
+  /* ⑧ つなぎ直しても、入っている期限や状態は上書きしない。 */
+  await api(e9,'/mem/state',{ cust:'1400004883', state:'canceled' });
+  await api(e9,'/mem/link',{ cust:'1400004883', dc:'999000111',
+    plan:'monitor' });
+  const r8=await row(e9,'1400004883');
+  console.log('   つなぎ直し '+JSON.stringify({ state:r8.state,
+    roles:dcRoles['999000111'] }));
+  ok(r8.state==='canceled'&&dcRoles['999000111'].length===0,
+     '★★★つなぎ直しても解約は解約のまま（勝手に戻さない）');
+  /* ⑨ モニターの期限が空の古い行は、付け直しで入り直す。 */
+  await e9.DB.prepare(
+    `UPDATE mem SET paid_to='', state='active' WHERE cust='1400004883'`).run();
+  await api(e9,'/mem/sync',{ cust:'1400004883' });
+  const r9=await row(e9,'1400004883');
+  console.log('   期限の入れ直し '+String(r9.paid_to||'').slice(0,10));
+  ok(String(r9.paid_to||'').slice(0,10)===want,
+     '★★★「期限 —」の古い行も、付け直すと期限が入る');
+  /* ⑩ 一覧にも状態と期限が出る。 */
+  const d=await api(e9,'/mem');
+  const li=(d.rows||[]).filter((x)=>x.cust==='1400004883')[0]||{};
+  console.log('   一覧 '+JSON.stringify(li));
+  ok(li.state==='active'&&String(li.paid_to||'').slice(0,10)===want
+     &&li.days>=20,'★★★一覧に状態（有効）と期限（あと21日）が出る');
+  ok(li.cust4==='4883','★会員番号は下4桁');
+}
+
 T.done();

@@ -12941,11 +12941,26 @@ async function memSyncOne(env, run, cfg, row, now) {
     else { r.fail++; r.why = memRoleWhy(q); }
   }
   r.roles = want;
-  /* いま付けてあるロールと、期限切れの状態を控える。 */
-  const st = want.length ? String((row || {}).state || "active") : "expired";
+  /* いま付けてあるロールと、期限切れの状態を控える。
+     8.62（カジの報告）**解約（canceled）は上書きしない**。
+     ここで 'expired' に書き換えていたため、次に「付け直す」を押すと
+     「解約ではない」と見なされ、モニターのロールがまた付いていた。 */
+  const was = String((row || {}).state || "");
+  const st = (was === "canceled") ? "canceled"
+    : (want.length ? ((was === "failed") ? "failed" : "active") : "expired");
+  /* 8.62（カジの依頼）モニターの期限が空の行は、ここで入れ直す
+     （手でつないだ古い行が「期限 —」のままだったのを直す）。
+     モニターの期限＝始めた日＋⚙の日数。 */
+  let to = String((row || {}).paid_to || "");
+  if (String((row || {}).plan || "") === "monitor" && !to) {
+    const from = Date.parse(String((row || {}).mon_from
+      || (row || {}).created_at || "")) || Date.now();
+    to = new Date(from + Math.max(1, Number((cfg || {}).monDays)
+      || MEM_MON_D) * 86400000).toISOString();
+  }
   stmts.push(env.DB.prepare(
-    `UPDATE mem SET roles=?, state=?, at=? WHERE cust=?`)
-    .bind(want.join(","), st, nowIso(), r.cust));
+    `UPDATE mem SET roles=?, state=?, paid_to=?, at=? WHERE cust=?`)
+    .bind(want.join(","), st, to, nowIso(), r.cust));
   if (stmts.length) await runBatch(env, run, stmts);
   return r;
 }
@@ -13063,6 +13078,18 @@ async function memLink(env, body) {
   /* モニターは3週間を数える元（始めた日時）を控える。 */
   const monFrom = (plan === "monitor")
     ? String((was || {}).mon_from || b.mon_from || now) : String((was || {}).mon_from || "");
+  /* 8.62（カジの依頼）**手でモニターをつないだら、期限は「つないだ日＋
+     モニターの日数（⚙ memMonDays・既定21日）」**。
+     入れていなかったので、一覧が「期限 —」「期限切れ」のままだった。 */
+  let paidTo = String((was || {}).paid_to || "");
+  let state0 = String((was || {}).state || "");
+  if (plan === "monitor" && !paidTo) {
+    const from = Date.parse(monFrom) || Date.now();
+    paidTo = new Date(from + Math.max(1, Number(cfg.monDays) || MEM_MON_D)
+      * 86400000).toISOString();
+  }
+  /* つないだときに状態が空なら「有効」から始める（解約は上書きしない）。 */
+  if (!state0) state0 = "active";
   await runBatch(env, run, [
     env.DB.prepare(
       `INSERT INTO mem (cust,dc,dc_name,plan,paid_to,state,mon_from,at,created_at)
@@ -13074,10 +13101,14 @@ async function memLink(env, body) {
          plan=CASE WHEN excluded.plan<>'' THEN excluded.plan ELSE mem.plan END,
          mon_from=CASE WHEN excluded.mon_from<>'' THEN excluded.mon_from
                        ELSE mem.mon_from END,
+         /* 8.62（カジの依頼）**空のときだけ**入れる（すでに入っている期限や
+            状態は上書きしない＝解約を勝手に戻さない）。 */
+         paid_to=CASE WHEN COALESCE(mem.paid_to,'')=''
+                      THEN excluded.paid_to ELSE mem.paid_to END,
+         state=CASE WHEN COALESCE(mem.state,'')=''
+                    THEN excluded.state ELSE mem.state END,
          at=excluded.at`)
-      .bind(cust, dc, name, plan, String((was || {}).paid_to || ""),
-            String((was || {}).state || (plan === "monitor" ? "active" : "")),
-            monFrom, now, now),
+      .bind(cust, dc, name, plan, paidTo, state0, monFrom, now, now),
     memLog(env, cust, "link", (dc ? ("Discord " + dc) : "") + (plan ? ("／" + plan) : "")),
   ]);
   await saveRun(env, run);
