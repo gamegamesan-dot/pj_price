@@ -17212,6 +17212,9 @@ function subDraftRows(){
     row.ship_short=sh.short?String(sh.short_ja||''):'';
     row.ship_short_gap=+sh.short_gap||0;
     row.ship_key=sh.key;
+    /* 8.63（カジの依頼）段ごとに数えるため、会員から受け取る額と実額も持つ。 */
+    row.ship_yen1=+sh.yen1||0;
+    row.ship_cost=+sh.short_cost||0;
     /* 8.29（カジの依頼）総合の札（配る前に見えるように）。
        決まりは shared/subguide.js の1か所だけ（pj-sync も同じもの）。 */
     var gr=Object.assign({},gdRowOf(r,px,fit),{ buy_ship:nt.buy_ship });
@@ -17631,10 +17634,41 @@ function subShortHtml(rows){
   var on=($('subShipShortOff')||{}).checked;
   var ja=Object.keys(by).sort(function(a,b){ return by[b]-by[a]; })
     .map(function(k){ return esc(k)+' '+mwN(by[k])+'件'; }).join('／');
+  /* 8.63（カジの依頼）**段ごと**にも数える（どの段を直せばよいか分かるように）。
+     ・段の額（会員から受け取る額）ごとの件数と、重さの幅
+     ・その段を「実額まで上げる」と出せるようになる件数 */
+  var step={};
+  list.forEach(function(r){
+    var y=Math.round(+r.ship_yen1||0);
+    var o2=step[y]||(step[y]={ n:0, lo:0, hi:0, cost:0 });
+    var g=Math.round(+r.ship_g||0);
+    o2.n++;
+    if(!o2.lo||g<o2.lo)o2.lo=g;
+    if(g>o2.hi)o2.hi=g;
+    o2.cost=Math.max(o2.cost,Math.round(+r.ship_cost||0));
+  });
+  var stepJa=Object.keys(step).map(Number)
+    .sort(function(a,b){ return a-b; })
+    .map(function(y){
+      var o2=step[y];
+      return yen(y)+'の段 <b>'+mwN(o2.n)+'件</b>'
+        +'（'+mwN(o2.lo)+'〜'+mwN(o2.hi)+'g・実額 '+yen(o2.cost)+'まで）';
+    }).join('／');
+  /* カジの検討：⚙の段「350:520」にすると出せるようになる品。
+     その段が受け持つのは **251〜350g**（250g までは別の段）なので、
+     重さがその幅で、実額が ¥520 までの品が当たる。 */
+  var fix520=list.filter(function(r){
+    var g=Math.round(+r.ship_g||0);
+    return g>250 && g<=350 && Math.round(+r.ship_cost||0)<=520;
+  }).length;
   return '<br><b style="color:var(--bad)">会員便の送料が足りない品 '
     +mwN(list.length)+'件</b>'
     +(on?'（<b>自動では出しません</b>）':'（<b>いまは出します</b>・⚙で外せます）')
     +'<br>　'+ja
+    +'<br>　段ごと：'+stepJa
+    +(fix520?('<br>　<b>段を 350:520 にすると出せるようになる品 '
+      +mwN(fix520)+'件</b>（**251〜350g** の箱もの。いまの段では ¥300 しか'
+      +'受け取れません）'):'')
     +'<br>　<span class="note2">足りない額の合計は1点ずつで '+yen(gap)
     +'（会員便の段は Shopify の「マーケット → 日本 → 配送」で決まります。'
     +'段を箱ものまで伸ばすか、送り方を手で直すと消えます）。</span>';
@@ -28427,7 +28461,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v320';   // sw.js の const V と必ず同じ値にする
+var APP_V='v321';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
