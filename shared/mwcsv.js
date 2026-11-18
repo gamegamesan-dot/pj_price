@@ -107,6 +107,12 @@
     var iJ = col("JAN"), iS = col("社"), iK = col("機種"), iN = col("商品名"),
         iL = col("定価"), iR = col("発売日"), iC = col("新・中", "新中"),
         iW = col("卸値"), iQ = col("掲載数"), iB = col("備考"), iD = col("出荷日");
+    /* 8.68（カジの依頼）メーカーの型番（MPN に使う）とメーカー名。
+       MW のファイルにその列があれば使う。**無ければ空**にする
+       （推測で JAN を入れない）。列の名前はいくつかの書き方を見る。 */
+    var iMc = col("メーカーコード", "メーカー品番", "メーカー型番",
+                  "品番", "型番", "商品コード", "商品番号");
+    var iMk = col("メーカー", "メーカー名", "製造元", "ブランド");
     if (iJ < 0 || iS < 0 || iW < 0)
       return { err: "JAN・社・卸値の列が見つかりません（MW の在庫CSVか確かめてください）" };
     var out = [], bad = {}, seen = {}, ng = 0, dup = 0, empty = 0;
@@ -135,13 +141,27 @@
         release: String(r[iR] || "").trim(), cond: String(r[iC] || "").trim(),
         wholesale: +String(r[iW] || "").replace(/[^0-9]/g, "") || 0,
         stock: +String(r[iQ] || "").replace(/[^0-9]/g, "") || 0,
-        note: String(r[iB] || "").trim(), ship_text: txt.trim(), ship_days: d });
+        note: String(r[iB] || "").trim(), ship_text: txt.trim(), ship_days: d,
+        /* 8.68 あれば使う。無い列は空のまま。 */
+        maker_code: (iMc >= 0) ? String(r[iMc] || "").trim() : "",
+        maker: (iMk >= 0) ? String(r[iMk] || "").trim() : "" });
     }
     var unread = 0;
     Object.keys(bad).forEach(function (x) { unread += bad[x]; });
+    /* 8.68 どの列を使い、どの列を使っていないかを返す。
+       MW がファイルの列を増やしたとき（メーカーコードなど）に、
+       取り込みの結果でその名前が見えるようにする。 */
+    var used = {};
+    [iJ, iS, iK, iN, iL, iR, iC, iW, iQ, iB, iD, iMc, iMk].forEach(function (i) {
+      if (i >= 0) used[i] = 1; });
+    var extra = head.filter(function (x, i) { return !used[i] && String(x || "").trim(); });
     return { rows: out, ng: ng, dup: dup, bad: bad, unread: unread, empty: empty,
              lines: raw.length, data: raw.length - 1, cols: cols,
-             few: few, many: many, blank: blank };
+             few: few, many: many, blank: blank,
+             head: head, extra: extra,
+             has_maker_code: iMc >= 0, has_maker: iMk >= 0,
+             maker_code_col: (iMc >= 0) ? head[iMc] : "",
+             maker_col: (iMk >= 0) ? head[iMk] : "" };
   }
 
   /* ---- Shift_JIS のバイト列を文字にする（【P】）----

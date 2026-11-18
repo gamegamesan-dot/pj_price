@@ -724,7 +724,7 @@ body.staff #syncOnHandFix{display:none !important}
           <option value="139973">ゲーム（139973）</option>
         </select>
       </div>
-      <div class="rowv"><label>JAN（任意・13桁）</label><input type="text" id="addCsvJan" inputmode="numeric" placeholder="C:MPN に入ります。無ければ空欄"></div>
+      <div class="rowv"><label>JAN（任意・13桁）</label><input type="text" id="addCsvJan" inputmode="numeric" placeholder="EAN に入ります（型番は別の欄）。無ければ空欄"></div>
       <button class="btn primary" id="addToCsv" style="width:100%">この内容で出品リストに追加</button>
       <details class="exp" data-exp="ebAdd"><summary>説明</summary>
       <div class="note2">いまのタイトル・説明文・SKU・推奨売値・最低売値をそのまま使います。追加後は「出品CSV」タブで確認・書き出しできます。</div>
@@ -2626,6 +2626,8 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn" id="ebCatBtnPull" style="flex:0 0 auto;padding:7px 10px;font-size:13px">一覧を取り直す</button>
         </div>
         <div class="note2" style="margin-top:2px">カテゴリ番号を入れると、その番号をそのまま足せます。英語の商品名を入れると eBay のカテゴリ候補が出ます。足すときに<b>そのカテゴリで必須の Item specifics</b> も eBay から取って控え、列ヘッダと「不備」の判定に使います。はじめから入っている3つ（ゲーム・フィギュア2つ）は外せません。足したカテゴリは、行のカテゴリ選択と「出品文」の「eBayカテゴリ」にも出ます。</div>
+      <!-- 8.70：メーカーごとの原産国と英語のブランド名。MW の「社」（メーカー名）で引く。 -->
+      <div class="rowv"><label>メーカーごとの原産国</label><textarea id="csvMakerOrigin" rows="3" placeholder="キーズファクトリー,Japan,Keys Factory" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">キーズファクトリー,Japan,Keys Factory</textarea><div class="note2" style="margin-top:2px">1行に「メーカー名,原産国,英語のブランド名（省略可）」。MW の在庫CSVの「社」がメーカー名です。行の原産国が空のとき、この表にあればその値を入れ、カードに「原産国：メーカーの既定」と出します。ブランド名を書いておくと、空の行の <b>C:Brand</b> にも入ります。<b>表に無いメーカーの無在庫の行は、原産国を空のままにして「不備」で止めます</b>（推測で入れません）。</div></div>
         <div class="note2" id="ebCatNote" style="margin-top:2px"></div>
         <div id="ebCatFoundBox" style="margin-top:4px"></div>
         <div id="ebCatListBox" style="margin-top:4px"></div>
@@ -6737,6 +6739,75 @@ function csvCatNeed(cat){
 /* 項目名 → すでに行が持っている値。登録したカテゴリの Item specifics は、
    英題生成で埋めた値（specs.aspects）を先に見て、無ければここで補う。
    ここに無い項目は空のままにし、必須なら「不備」として書き出さない。 */
+/* ================= 8.70 メーカーから原産国とブランド（カジの依頼）=================
+   MW の在庫CSVの「社」はメーカー名（例 キーズファクトリー）。行に mwSha として
+   持っているので、そこから
+     ・原産国 … ⚙「メーカーごとの原産国」の表から入れる（カードに
+                「原産国：メーカーの既定」と出す）
+     ・ブランド … 英語のブランド名を C:Brand に入れる
+   を埋める。**表に無いメーカーは何も入れない**（推測しない）。
+   ひな形（コードに持つ分）はカジが確かめた1件だけ。あとは⚙で足せる。 */
+var MAKER_BRAND={ 'キーズファクトリー':'Keys Factory' };
+var MAKER_ORIGIN={ 'キーズファクトリー':'Japan' };
+// 表記のゆれを吸収する（空白・大文字小文字・全角半角の英数字）
+function makerKey(v){
+  return String(v||'').trim().toLowerCase()
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g,function(c){
+      return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })
+    .replace(/[\s\u3000・,，、\-ー―]/g,'');
+}
+/* ⚙の表（1行に「メーカー名,原産国,ブランド（省略可）」）。 */
+function csvMakerRows(){
+  var el=$('csvMakerOrigin'), out=[], seen={};
+  if(el)String(el.value||'').split(/\r?\n/).forEach(function(ln){
+    var a=String(ln).replace(/[\u3001\uff0c\t]/g,',').split(',');
+    var nm=String(a[0]||'').trim(); if(!nm)return;
+    var k=makerKey(nm); if(!k||seen[k])return;
+    seen[k]=1;
+    out.push({ maker:nm, key:k, origin:String(a[1]||'').trim(),
+               brand:String(a[2]||'').trim() });
+  });
+  return out;
+}
+// 行のメーカー名（いまは MW の無在庫の行だけが持っている）
+function csvMakerOf(r){ return String((r||{}).mwSha||'').trim(); }
+/* メーカー名 → { origin, brand }。⚙の表を先に見て、無ければひな形を見る。 */
+function csvMakerInfo(r){
+  var nm=csvMakerOf(r); if(!nm)return null;
+  var k=makerKey(nm), o={ maker:nm, origin:'', brand:'' };
+  csvMakerRows().forEach(function(x){
+    if(x.key!==k)return;
+    if(x.origin)o.origin=x.origin;
+    if(x.brand)o.brand=x.brand;
+  });
+  Object.keys(MAKER_ORIGIN).forEach(function(m){
+    if(makerKey(m)===k&&!o.origin)o.origin=MAKER_ORIGIN[m]; });
+  Object.keys(MAKER_BRAND).forEach(function(m){
+    if(makerKey(m)===k&&!o.brand)o.brand=MAKER_BRAND[m]; });
+  return (o.origin||o.brand)?o:null;
+}
+/* ブランドが空の行に、メーカーの英語名を入れる。入れたら true。 */
+function csvBrandFill(r){
+  var sp=r.specs=r.specs||{};
+  if(String(sp.brand||'').trim())return false;
+  var mi=csvMakerInfo(r);
+  if(!mi||!mi.brand)return false;
+  sp.brand=mi.brand; sp.brandMaker=true;
+  return true;
+}
+/* ---- 型番（MPN）と JAN（8.68・カジの報告）----
+   MPN は**メーカーの型番**（例 KCP-004-1）。JAN を入れるのは誤りだった
+   （v323 まで C:MPN に JAN を入れていた）。
+   ・型番が行にあればそれ（MW の商品情報の「メーカーコード」。手でも入れられる）
+   ・無ければ「Does not apply」（eBay が「型番は無い」として受け取る決まりの言葉）
+   JAN は **EAN** として出す。eBay のテンプレート3本（ゲーム・フィギュア2つ）には
+   EAN の列が無い（この3カテゴリでは eBay が製品識別子を求めていない）ので、
+   **そのカテゴリに EAN の項目があるときだけ** C:EAN に入れる。
+   UPC には入れない（13桁の JAN は EAN で、UPC（12桁）ではない）。 */
+var CSV_MPN_NA='Does not apply';
+function csvMpnOf(r){
+  return String(((r||{}).specs||{}).mpn||'').trim()||CSV_MPN_NA;
+}
 function csvAspectFallback(r,name){
   var sp=r.specs||{}, n=String(name||'').trim().toLowerCase();
   if(n==='brand')return sp.brand||'';
@@ -6745,8 +6816,9 @@ function csvAspectFallback(r,name){
   if(n==='theme')return sp.franchise||'';
   if(n==='model')return sp.model||'';
   if(n==='scale')return sp.scale||'';
-  if(n==='mpn')return r.jan||'';
-  if(n==='upc'||n==='ean')return r.jan||'';
+  if(n==='mpn')return csvMpnOf(r);
+  if(n==='ean'||n==='gtin'||n==='ean/upc')return r.jan||'';
+  if(n==='upc')return '';                  // JAN は UPC ではない（推測で入れない）
   if(n==='country/region of manufacture'||n==='country of origin')return sp.origin||'';
   if(n==='platform'||n==='compatible platform'||n==='compatible brand')return sp.platform||'';
   if(n==='california prop 65 warning')return '';
@@ -6766,6 +6838,87 @@ function csvNeedMiss(r){
     if(!csvAspectVal(r,n))miss.push(n);
   });
   return miss;
+}
+/* ================= 8.69 英題と specs の食い違い（カジの報告）=================
+   英題を手で「Nintendo Switch」→「Nintendo Switch 2」に直しても、
+   C:Platform は古い値のまま書き出されていた（specs は英題と別に持っている）。
+   ・英題に出ている機種を読み、行の Platform と食い違う行は**書き出さない**
+   ・「specs を英題に合わせる」で、その場で直せる（Game Name も作り直す）
+   機種の表（PLATFORMS）は1か所しかないので、読むのも書くのもそこを使う。
+   読めない英題（機種が書かれていない英題）は何も言わない（推測しない）。 */
+function csvPlatInEn(text){
+  var s=' '+String(text||'').replace(/[^0-9A-Za-z\s/+.-]/g,' ')
+        .replace(/\s+/g,' ')+' ';
+  var best=null, bw='', bl=0;
+  PLATFORMS.forEach(function(p){
+    [p.spec,p.title].concat(p.pat||[]).forEach(function(w){
+      var t=String(w||'').trim();
+      if(!t||!/^[0-9A-Za-z][0-9A-Za-z\s/+.-]*$/.test(t))return;   // 和名は見ない
+      if(t.length<=bl)return;                                     // 長いものを採る
+      var re=new RegExp('(^|\\s)'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+                        +'(\\s|$)','i');
+      if(re.test(s)){ best=p; bw=t; bl=t.length; }
+    });
+  });
+  return best?{ plat:best, word:bw }:null;
+}
+/* 英題から機種の言葉を外して、ソフト名だけにする（ゲームの Game Name 用）。
+   英題の形は [Used] [機種] [ソフト名] [Cartridge Only] [Japan Import]。 */
+function csvGameNameFromEn(r){
+  var t=String(r.titleEn||'').trim().replace(/^Used\s+/i,'');
+  var hit=csvPlatInEn(t);
+  if(hit)t=t.replace(hit.word,' ');
+  t=t.replace(new RegExp('\\s*'+CSV_CART_TITLE+'\\s*','i'),' ');
+  t=t.replace(/\s+Japan(\s+Import)?\s*$/i,' ');
+  return t.replace(/\s+/g,' ').trim();
+}
+/* いま行が持っている機種（Item specifics の値）。登録したカテゴリでは
+   aspects の Platform／Compatible Platform も見る。 */
+function csvPlatSpecOf(r){
+  var sp=r.specs||{}, av=sp.aspects||{};
+  return String(av['Platform']||av['Compatible Platform']||sp.platform||'').trim();
+}
+/* 英題と食い違っているか。食い違っていれば {en, sp} を返す。
+   ・英題に機種が書かれていない行は null（何も言わない）
+   ・行に機種が入っていない行も null（「機種なし」は別の不備で出る） */
+function csvPlatOff(r){
+  var hit=csvPlatInEn(r.titleEn);
+  if(!hit)return null;
+  var want=String(hit.plat.spec||'').trim(), now=csvPlatSpecOf(r);
+  if(!now||now===want)return null;
+  /* 行の値が別の機種を指しているときだけ食い違いとする
+     （表に無い書き方で入っている値は触らない）。 */
+  var cur=platBy('spec',now);
+  if(!cur)return null;
+  if(cur.key===hit.plat.key)return null;
+  return { en:want, sp:now };
+}
+/* specs を英題に合わせる。機種（と、ゲームは Game Name）を入れ替える。 */
+function csvSpecSync(id){
+  var r=csvRowById(id); if(!r)return;
+  var hit=csvPlatInEn(r.titleEn); if(!hit)return;
+  var sp=r.specs=r.specs||{};
+  sp.platform=hit.plat.spec;
+  /* 登録したカテゴリで Platform を項目として持っている行は、そちらも直す
+     （書き出しは aspects を先に見るため）。 */
+  if(sp.aspects){
+    ['Platform','Compatible Platform'].forEach(function(k){
+      if(sp.aspects[k]!==undefined)sp.aspects[k]=hit.plat.spec;
+    });
+  }
+  if(String(r.cat||'')==='139973'){
+    var nm=csvGameNameFromEn(r);
+    if(nm)sp.gameName=nm;
+  }
+  csvSaveList(); csvRender();
+}
+/* 行のボタン。食い違っている行にだけ出す。 */
+function csvSpecSyncBtn(r){
+  var off=csvPlatOff(r);
+  if(!off)return '';
+  return '<button class="btn" data-spsync="'+r.id+'" style="padding:5px 8px;'
+    +'font-size:12px;background:#8a4f00;color:#fff;border-color:#8a4f00">'
+    +'specs を英題に合わせる（'+esc(off.en)+'）</button>';
 }
 /* ================= 8.66 カテゴリ候補（英題から eBay に聞く） =================
    ③「写真・原産国・カテゴリ」の段で、英題を eBay の getCategorySuggestions
@@ -7173,7 +7326,8 @@ var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
                  'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
-                 'csvCatCustom','syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
+                 'csvCatCustom','csvMakerOrigin',
+                 'syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
                  'syncSoldCut','syncDropMax','syncLimit','csvWeightCart','csvSort',
                  // フィギュアのみ（箱なし・封筒で送る）
                  'csvWeightLoose','csvShipLoose','csvShipProfileLoose','csvLooseAmz',
@@ -8219,6 +8373,11 @@ function csvIssues(r){
   /* 登録したカテゴリ（8.65）で必須の Item specifics が空の行は書き出さない。
      空のまま出すと File Exchange が弾くので、理由を行に出して直してもらう。 */
   csvNeedMiss(r).forEach(function(n){ a.push('必須の項目「'+n+'」が空'); });
+  /* 8.69 英題と Platform の食い違い（英題を手で直した行）。
+     古い機種のまま出すと別の機種の商品として出てしまうので止める。 */
+  var poff=csvPlatOff(r);
+  if(poff)a.push('英題と Platform が食い違う（英題：'+poff.en
+    +'／Platform：'+poff.sp+'）');
   /* 8.66 英題から聞いたカテゴリ候補が、登録していないカテゴリのとき。
      そのまま出すと別の種類の商品として出てしまうので止める
      （カテゴリを足す／「このままでよい」を押すと出せる）。 */
@@ -9062,6 +9221,23 @@ function csvFigFields(r){
 /* 登録したカテゴリ（8.65）で必須の Item specifics を、行で直せるようにする。
    空のままだと書き出しを止めるので、空があるときは開いた状態で出す。
    値は specs.aspects に項目名のまま持つ（列ヘッダと同じ名前で書き出す）。 */
+/* 行の型番（MPN・8.68）。MW の商品情報の「メーカーコード」を手で入れられる
+   ようにする。空のままなら「Does not apply」で出す（JAN は入れない）。 */
+function csvMpnField(r){
+  var v=String((r.specs||{}).mpn||'').trim();
+  return '<details style="margin-top:2px"><summary class="note2" style="margin:0">'
+    +'型番（MPN）'+(v?('：'+esc(v)):'：なし → '+CSV_MPN_NA)+'</summary>'
+    +'<div style="padding:2px 0 0">'
+    +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+    +'<span class="note2" style="margin:0;flex:0 0 110px">MPN</span>'
+    +'<input type="text" data-mpn="'+r.id+'" value="'+esc(v)
+    +'" placeholder="KCP-004-1 など（空なら '+CSV_MPN_NA+'）" '
+    +'style="flex:1 1 0;min-width:0;padding:5px;font-size:13px;'
+    +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+    +'<div class="note2" style="margin:2px 0 0">メーカーの型番です。'
+    +'JAN は入れません（JAN は EAN の項目に入ります）。</div>'
+    +'</div></details>';
+}
 function csvAspectFields(r){
   var need=csvCatNeed(r.cat);
   if(!need.length)return '';
@@ -9091,8 +9267,12 @@ var CSV_ORIGINS=['China','Japan','Vietnam'];
 function csvOriginSelect(r){
   if(r.cat==='139973')return '';
   var sp=r.specs||{}, cur=String(sp.origin||'').trim();
-  var def=(!cur||!!sp.originDefault);              // 未選択（既定値のまま）
-  var h='<option value=""'+(def?' selected':'')+'>原産国：既定値'
+  /* 8.70 メーカーの表から入れた値も「まだ人が選んでいない」扱いにして、
+     「原産国：メーカーの既定（Japan）」と出す。 */
+  var mk=(!!sp.originMaker&&!sp.originManual&&!!cur);
+  var def=(!cur||!!sp.originDefault||mk);          // 未選択（既定のまま）
+  var h='<option value=""'+(def?' selected':'')+'>原産国：'
+    +(mk?'メーカーの既定':'既定値')
     +(cur?('（'+esc(cur)+'）'):'')+'</option>';
   CSV_ORIGINS.forEach(function(v){
     h+='<option value="'+esc(v)+'"'+((!def&&cur===v)?' selected':'')+'>原産国：'
@@ -9154,6 +9334,7 @@ function csvTitleBox(r){
   h=pre+h;
   if(csvTitleKind(r)==='fig')h+=csvFigFields(r);
   h+=csvAspectFields(r);                 // 8.65 登録したカテゴリの必須の項目
+  h+=csvMpnField(r);                     // 8.68 型番（MPN）
   if((r.titleCands||[]).length)
     h+='<details style="margin-top:2px"><summary class="note2" style="margin:0">候補にした元タイトル '
       +r.titleCands.length+'件</summary><div class="note2" style="margin:2px 0 0">'
@@ -9626,7 +9807,9 @@ var CSV_STEPS=[
         return !(r.pics||[]).length||csvOriginNeed(r)
             ||!String(r.cat||'').trim()
             /* 8.66 カテゴリ候補が未登録の行と、必須の項目が空の行も数える。 */
-            ||csvCatSugBlock(r)||csvNeedMiss(r).length; }).length; },
+            ||csvCatSugBlock(r)||csvNeedMiss(r).length
+            /* 8.69 英題と Platform が食い違う行も数える。 */
+            ||!!csvPlatOff(r); }).length; },
     s:function(n){ return n?('確認 '+n+'件'):'そろいました'; },
     todo:function(n){ return n>0; } },
   { k:'④', t:'CSVを書き出す', box:'csvExport',
@@ -9796,7 +9979,7 @@ function csvRender(){
     /* カテゴリの選択はどの行にも出す。ゲームの行にも出さないと、
        取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
     /* カテゴリと原産国は同じ形のプルダウンで並べる（6.56）。 */
-    btns+=csvCatSelect(r)+csvOriginSelect(r)+csvCatSugBtns(r);
+    btns+=csvCatSelect(r)+csvOriginSelect(r)+csvCatSugBtns(r)+csvSpecSyncBtn(r);
     if(v==='amazon')
       btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -9983,6 +10166,8 @@ $('csvList').addEventListener('click',function(e){
   }
   if(t.hasAttribute('data-catuse')){ csvCatSugUse(t.getAttribute('data-catuse')); return; }
   if(t.hasAttribute('data-catkeep')){ csvCatSugKeep(t.getAttribute('data-catkeep')); return; }
+  /* 8.69 specs を英題に合わせる。 */
+  if(t.hasAttribute('data-spsync')){ csvSpecSync(t.getAttribute('data-spsync')); return; }
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
@@ -10091,6 +10276,15 @@ $('csvList').addEventListener('input',function(e){
      英題欄の表示と文字数も入れ替える（行は作り直さない＝いま触っている欄を消さない）。 */
   /* 8.65 登録したカテゴリの Item specifics。項目名のまま specs.aspects に持つ。
      行は作り直さない（いま触っている欄が消えないように）。 */
+  /* 8.68 型番（MPN）。空にすると「Does not apply」で出す。 */
+  var mk=t.getAttribute('data-mpn');
+  if(mk){
+    var rm=csvRowById(mk); if(!rm)return;
+    rm.specs=rm.specs||{};
+    rm.specs.mpn=t.value.trim();
+    csvSaveList();
+    return;
+  }
   var ak=t.getAttribute('data-aspk');
   if(ak){
     var ra=csvRowById(t.getAttribute('data-aspid')); if(!ra)return;
@@ -11380,7 +11574,7 @@ function csvRowFor(r,raw){
     o['C:Region Code']='NTSC-J (Japan)';
     o['C:Release Year']=sp.year||'';
     o['C:Country of Origin']='Japan';
-    o['C:MPN']=r.jan||'';
+    o['C:MPN']=csvMpnOf(r);               // 8.68 型番（無ければ Does not apply）
   }else if(csvCatNeed(r.cat).length){
     /* pj-sync に登録したカテゴリ（8.65）。列は eBay から取った項目で作るので、
        値も項目名で入れる。英題生成で埋めた値（specs.aspects）を先に見て、
@@ -11402,7 +11596,7 @@ function csvRowFor(r,raw){
     o['C:Country of Origin']=sp.origin||'';   // 空なら補完せず、csvIssues で指摘する
     o['C:Model']=sp.model||'';
     o['C:Series']='';                               // 推奨値に日本の商品ラインが無いため空欄
-    o['C:MPN']=r.jan||'';
+    o['C:MPN']=csvMpnOf(r);               // 8.68 型番（無ければ Does not apply）
     o['C:Scale']=sp.scale||'';
     o['C:Year Manufactured']='';                    // フェーズ2でSP-APIから
     o['C:Item Height']=sp.height||'';
@@ -12416,6 +12610,27 @@ function mwOut(which){
     els:els
   };
 }
+/* ---- メーカーの型番（8.68）----
+   MW の在庫CSVに「メーカーコード」の列があれば、JAN ごとに覚えておき、
+   出品リストに入れるときに型番（MPN）として使う。
+   ・いまは **この端末のこの画面を開いているあいだ**だけ覚える（D1 には置いて
+     いない）。列が本当にあると分かったら pj-sync 側（D1）に移す
+   ・列が無い在庫CSVでは空のまま。そのときは行のカードで手で入れる
+     （空なら書き出しは「Does not apply」になる） */
+var mwMpnMap={};
+function mwMpnLearn(rows){
+  var n=0;
+  (rows||[]).forEach(function(r){
+    var j=String((r||{}).jan||'').replace(/\D/g,'');
+    var c=String((r||{}).maker_code||'').trim();
+    if(j.length!==13||!c)return;
+    mwMpnMap[j]=c.slice(0,60); n++;
+  });
+  return n;
+}
+function mwMpnOf(jan){
+  return mwMpnMap[String(jan||'').replace(/\D/g,'')]||'';
+}
 /* 取り込み中はどちらのボタンも押せないようにする（二重に送らない）。 */
 function mwImportBusy(on){
   ['csvMwImport','mwTopImport'].forEach(function(id){
@@ -12430,6 +12645,7 @@ function mwImportRun(text,fi){
   mwShipBadRender();
   if(d.err){ note.text('⚠ '+d.err); return; }
   mwReadNote(d,fi);                      // 送る前に読んだ結果を出す（6.88）
+  mwMpnLearn(d.rows);                    // 8.68 メーカーコードがあれば覚える
   if(!d.rows.length){ note.text('⚠ 取り込める行がありませんでした。'); return; }
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
@@ -13520,6 +13736,16 @@ function mwReadNote(d,fi){
       +'）'):'')+'</span>'
     +'<br>送る行 <b>'+d.rows.length+'行</b>'
     +'（JANが13桁でない '+(d.ng||0)+'行を除いた）';
+  /* 8.68 どの列があるか／使っていない列の名前を出す。
+     MW がメーカーコードの列を増やしたときに、こちらで気づけるようにする。 */
+  h+='<br>メーカーコードの列 <b>'+(d.has_maker_code
+    ?('あり（'+esc(d.maker_code_col||'')+'）'):'なし')+'</b>'
+    +'　メーカー名の列 '+(d.has_maker?('あり（'+esc(d.maker_col||'')+'）')
+      :'なし（「社」をメーカー名として使います）');
+  if((d.extra||[]).length)
+    h+='<br>使っていない列 '+(d.extra||[]).length+'個：'
+      +esc((d.extra||[]).slice(0,12).join('／'))
+      +((d.extra||[]).length>12?' ほか':'');
   /* 読んだ中身と送る行の数が合わない分は、ここで必ず説明が付くようにする。 */
   var lost=(d.data||0)-d.rows.length-(d.ng||0)-(d.blank||0)-(d.few||0);
   if(lost>0)h+='<br><span style="color:var(--bad)">'
@@ -13863,7 +14089,9 @@ function mwListRow(r,pics,n){
     titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
     specs:{ scale:'', height:'', platform:'', brand:'', line:'',
             gameName:'', publisher:'', franchise:'', character:'', model:'',
-            genre:'', year:'' } };
+            genre:'', year:'',
+            /* 8.68 メーカーの型番（在庫CSVに列があったときだけ入る）。 */
+            mpn:mwMpnOf(r.jan) } };
 }
 /* ---- 出品リストに入れられるか（6.136）----
    対象は **①出品候補 と ②相場なし**（相場なしは目標利益の売値で出す）。
@@ -21328,6 +21556,40 @@ function mwImgProbe(jan,ids,out){
     ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
       +esc(e.message)+'</span>'; });
 }
+/* ================= 8.71 取り込んだら、その場で「写真あり」にする =================
+   候補の行の pics_ok（写真の枚数）は pj-sync（D1）から来る値で、
+   「候補一覧を取り込む」を押すまで 0 のままだった。そのため写真を取り込んでも
+   「写真が付いた出品候補を出品リストに入れる」の対象にならなかった（カジの報告）。
+   取り込みが成功したら、一覧の持っている値をその場で直す。
+   数え方は pj-sync と同じ（**取れて使える枚数**＝ok の数）。 */
+function mwPicsOkApply(jan,z){
+  var j=String(jan||'').replace(/\D/g,''); if(!j||!z)return 0;
+  var rows=z.rows||[], ok=0, long=0, main='';
+  rows.forEach(function(x){
+    if(!x||!x.ok)return;
+    ok++;
+    if((+x.long||0)>long)long=+x.long||0;
+  });
+  var first=(z.saved||[]).filter(function(x){ return +x.pos===0; })[0];
+  if(first)main=String(first.url||'');
+  var hit=0;
+  [mwRows,mwAmzRows,mwBuyRows].forEach(function(list){
+    try{
+      (list||[]).forEach(function(r){
+        if(String(r.jan||'')!==j)return;
+        r.pics_ok=ok; r.pics_n=rows.length;
+        if(long)r.pics_long=long;
+        if(main)r.pics_main=main;
+        hit++;
+      });
+    }catch(e){}
+  });
+  try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
+  try{ if(typeof mwAmzRender==='function'&&mwAmzRows.length
+    &&mwAmzView==='list')mwAmzRender(); }catch(e){}
+  try{ if(typeof mwBuyRender==='function'&&mwBuyRows.length)mwBuyRender(); }catch(e){}
+  return hit;
+}
 /* 取り込む：MW から取って測り、使える画像だけ pj-img（R2）に控える。 */
 function mwImgTake(jan,ids,out){
   out=out||mwImgOut(jan); ids=ids||mwImgIds(jan);
@@ -21364,6 +21626,8 @@ function mwImgTake(jan,ids,out){
     })
     .then(function(z){
       if(!z)return null;
+      /* 8.71 一覧の「写真」の数をその場で直す（取り直しを待たない）。 */
+      mwPicsOkApply(jan,z);
       var first=z.saved.filter(function(x){ return +x.pos===0; })[0];
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'
         +'<b>'+z.saved.length+'枚</b>を控えました'
@@ -21375,7 +21639,8 @@ function mwImgTake(jan,ids,out){
             +'</a>'; }).join('　')+'</div>'):'')
         +'<div class="note2" style="margin:4px 0 0;opacity:.8">'
         +'写真が付いた行は、<b>出品CSVタブの MW 無在庫</b>から'
-        +'<b>出品リストに入れられます</b>。</div>';
+        +'<b>出品リストに入れられます</b>'
+        +'（候補一覧を取り直さなくても、この行はもう対象です）。</div>';
       return z;
     })
     ['catch'](function(e){ out.innerHTML='<span class="note2" style="color:var(--bad)">⚠ '
@@ -22309,8 +22574,18 @@ function csvOriginFill(r){
   var sp=r.specs=r.specs||{};
   if(sp.originManual)return false;          // 手で確定した値は触らない
   if(String(sp.origin||'').trim())return false;
+  /* 8.70 メーカーの表にあればそれを使う（カードに「メーカーの既定」と出す）。 */
+  var mi=csvMakerInfo(r);
+  if(mi&&mi.origin){
+    sp.origin=mi.origin; sp.originMaker=true; sp.originDefault=false;
+    return true;
+  }
+  /* 8.70 無在庫（MW）の行は、表に無いメーカーの原産国を推測しない。
+     空のままにして「原産国なし」で止める（別の国で出してしまわないため）。 */
+  if(String(r.buySource||'')==='mw')return false;
   sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
   sp.originDefault=true;
+  sp.originMaker=false;
   return true;
 }
 function csvApplyFields(r,f){
@@ -22343,9 +22618,10 @@ function csvApplyFields(r,f){
      （古いキャッシュで origin が返らない場合も含む）ときは既定値で埋めて
      「原産国：既定値」のバッジを出す。 */
   if(!sp.originManual){
-    if(f.origin){ sp.origin=f.origin; sp.originDefault=false; }
+    if(f.origin){ sp.origin=f.origin; sp.originDefault=false; sp.originMaker=false; }
     else csvOriginFill(r);
   }
+  csvBrandFill(r);                        // 8.70 メーカーの英語名をブランドに
   // 商品ラインとスケールからカテゴリを決める。決まらない行は未振分のまま残す。
   if(!r.catFixed&&!r.catDone){
     var c=csvCatFromLine(r);
@@ -22473,6 +22749,7 @@ function csvDescPhase(pre,tfail){
   todo.forEach(function(r){
     // 原産国が空のままだと説明文にも出ないので、ここでも既定値で埋める
     if(r.cat!=='139973'&&csvOriginFill(r))filled++;
+    csvBrandFill(r);                      // 8.70 メーカーの英語名をブランドに
     try{ r.descHtml=csvDescFor(r); }catch(e){ ng++; }
   });
   csvSaveList();
@@ -29034,7 +29311,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v323';   // sw.js の const V と必ず同じ値にする
+var APP_V='v324';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
