@@ -250,7 +250,10 @@ console.log('\n=== ⑨ ⚙のほかの欄も残る（4）===');
             つないだら空に戻すので、控える意味がない。 */
          'memLinkCust','memLinkDc','memLinkPlan','memLinkName',
          /* 8.60 ⚙を探す検索欄（その回だけ・控える意味がない）。 */
-         'cfgFind']);
+         'cfgFind',
+         /* 8.65 eBayカテゴリを足すときの入れ物（その回だけ）。
+            足したら空に戻すし、カテゴリの表は pj-sync が持っている。 */
+         'ebCatQ','ebCatJa']);
     return Array.prototype.slice.call(
       (pane||document).querySelectorAll('input[id],select[id],textarea[id]'))
       .filter((el)=>!known[el.id]&&el.type!=='file'&&el.type!=='button')
