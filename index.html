@@ -696,6 +696,9 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="chk"><input type="checkbox" id="bJP"><label for="bJP" style="flex:1">日本仕様の注意（言語・リージョン・100V）</label></div>
       <div class="chk"><input type="checkbox" id="bCart"><label for="bCart" style="flex:1">カートリッジのみ（箱・説明書なし）の注記を入れる</label></div>
       <div class="chk"><input type="checkbox" id="bLoose"><label for="bLoose" style="flex:1">フィギュアのみ（箱なし・封筒発送）の注記を入れる</label></div>
+      <!-- 8.67：無在庫（MW）の行かどうか。手で押す欄ではないので出さない。
+           出品文を作るときに行の値（buySource）から入れる。 -->
+      <input type="checkbox" id="bDrop" style="display:none">
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
@@ -962,6 +965,11 @@ body.staff #syncOnHandFix{display:none !important}
         <div style="display:flex;gap:6px;margin-bottom:6px">
           <button class="btn" id="csvListToMw" style="flex:1 1 0;min-width:0">MW の候補一覧へ ↑</button>
         </div>
+        <!-- 8.66：英題から eBay のカテゴリ候補を聞き、いまのカテゴリと比べる -->
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <button class="btn" id="csvCatSugAll" style="flex:1 1 0;min-width:0">カテゴリ候補をまとめて調べる</button>
+        </div>
+        <div class="note2" id="csvCatSugNote" style="margin:0 0 6px"></div>
         <div id="csvPagerTop"></div>
         <div id="csvList"></div>
         <div id="csvPagerBot"></div>
@@ -2608,6 +2616,20 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="body">
       <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや eBayタブの「出品文」で確定した値は上書きしません。</div></div>
       <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
+      <!-- 8.65：出品に使う eBayカテゴリ。表は pj-sync（D1 の ebay_cat）が持つので、
+           新しい種類の商品を出すときもコードを直さずにここから足せる。 -->
+      <div class="rowv"><label>eBayカテゴリ（pj-sync に登録）</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="ebCatQ" placeholder="261068 または card case for Nintendo Switch" style="flex:1 1 190px;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <input type="text" id="ebCatJa" placeholder="表示名（省略可）" style="flex:0 1 140px;min-width:0" autocomplete="off">
+          <button class="btn" id="ebCatBtnFind" style="flex:0 0 auto;padding:7px 10px;font-size:13px">探す</button>
+          <button class="btn" id="ebCatBtnPull" style="flex:0 0 auto;padding:7px 10px;font-size:13px">一覧を取り直す</button>
+        </div>
+        <div class="note2" style="margin-top:2px">カテゴリ番号を入れると、その番号をそのまま足せます。英語の商品名を入れると eBay のカテゴリ候補が出ます。足すときに<b>そのカテゴリで必須の Item specifics</b> も eBay から取って控え、列ヘッダと「不備」の判定に使います。はじめから入っている3つ（ゲーム・フィギュア2つ）は外せません。足したカテゴリは、行のカテゴリ選択と「出品文」の「eBayカテゴリ」にも出ます。</div>
+        <div class="note2" id="ebCatNote" style="margin-top:2px"></div>
+        <div id="ebCatFoundBox" style="margin-top:4px"></div>
+        <div id="ebCatListBox" style="margin-top:4px"></div>
+      </div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="cfgsub">出品の既定値</div>
       <div class="row"><label>ハンドリングタイム</label><input type="number" id="csvDispatch" value="3" inputmode="numeric"><span class="unit">日</span></div>
@@ -5339,6 +5361,21 @@ var CONDNOTE={
   likenew:'Inspected by hand and found to be in excellent condition with no significant wear. Everything is shown in the photos.',
   used:'A pre-owned item, inspected by hand. Condition is shown honestly in the photos; please review them before buying.'
 };
+/* 無在庫（MW）の行の状態の説明文（8.67）。
+   手元に無い品なので「手で検品した」とは書かない。写真は MW が使ってよいとした
+   商品写真で、届く1点を撮ったものではないため、写真が実物だと受け取れる書き方も
+   しない。どの状態でも、その2つを言わない文にしてある。 */
+var CONDNOTE_MW={
+  sealed:'The item is brand new and sealed in its original box. It is shipped out unopened, so the box is not opened for photographs. The photos are product images of this item, not photographs of the individual copy you will receive.',
+  newopen:'The item is brand new and unused in its original box. The photos are product images of this item, not photographs of the individual copy you will receive.',
+  likenew:'The condition stated above is the condition this item is supplied in. The photos are product images of this item, not photographs of the individual copy you will receive.',
+  used:'The condition stated above is the condition this item is supplied in; please read it before buying. The photos are product images of this item, not photographs of the individual copy you will receive.'
+};
+/* 状態の説明文はここ1か所で選ぶ。HTML版もアプリ用の文字だけの版も同じものを使う。 */
+function condNoteOf(c){
+  var mw=!!($('bDrop')&&$('bDrop').checked);
+  return (mw?CONDNOTE_MW[c]:CONDNOTE[c])||CONDNOTE[c]||'';
+}
 
 /* ---- 機種の変換表（ここ1か所に集める）----
    title … タイトルに出す表記（gPlat の選択肢の値もこれ）
@@ -5700,7 +5737,7 @@ function descHTML(){
   }
   S+=h2('Condition');
   S+='<p style="margin:0 0 6px;"><strong>'+CONDLABEL[c]+'</strong></p>';
-  S+='<p style="margin:0 0 22px;">'+CONDNOTE[c]+(extra?' '+esc(extra):'')+'</p>';
+  S+='<p style="margin:0 0 22px;">'+condNoteOf(c)+(extra?' '+esc(extra):'')+'</p>';
 
   // アーケードパーツは正規流通であることが要なので、原産国に関わらず必ず出す。
   if(isArcade()){
@@ -6368,7 +6405,7 @@ function descPlain(){
   L.push('');
   L.push('\u25A0 CONDITION');
   L.push(CONDLABEL[c]);
-  L.push(CONDNOTE[c]+(extra?' '+extra:''));
+  L.push(condNoteOf(c)+(extra?' '+extra:''));
   L.push('');
   if(isArcade()){
     L.push('\u25A0 AUTHENTICITY');
@@ -6443,21 +6480,215 @@ function skuCatOf(prefix){ return PREFIX_CAT[String(prefix||'')]||''; }
 var PREFIX_SRC={mwgame:'mw',mwhobby:'mw'};
 function skuSrcOf(prefix){ return PREFIX_SRC[String(prefix||'')]||'other'; }
 var CSV_FIG_CATS=['261055','261068'];        // hobby / toy の手動振り分け先
-/* 設定で登録した任意のeBayカテゴリ。1行に「カテゴリID,表示名,act|fig」。
-   列ヘッダとItem Specifics はテンプレート3本しか手元に無いので、登録カテゴリでは
-   フィギュア2本のどちらかを流用する（3列目でどちらかを指定する）。
+/* ================= 登録した eBayカテゴリ（8.65） =================
+   出品に使うカテゴリの表は **pj-sync（D1 の ebay_cat）** が持つ。コードに書くのは
+   はじめから入っている3つ（CSV_CAT）だけで、新しい種類の商品のカテゴリは
+   コードを直さずに⚙から足せる。
+   ・画面は開いたときに GET /ebay/cat で読み、端末の覚え書きに控える
+     （通信できないときも前回の内容で選択肢を出せるようにする）
+   ・足すときは eBay の Taxonomy API（pj-sync 経由）で名前・道筋・必須の
+     Item specifics を取って一緒に控える。列ヘッダと「不備」の判定に使う
+   ・鍵は⚙の「pj-sync のキー」を使う（ここにも覚え書きにも書かない） */
+var EB_CAT_LS='pj:ebcat:v1';
+var ebCats=[];                 // [{code,name,ja,path,need:[],opt:[],tpl,seed}]
+var ebCatFoundRows=[];         // 「探す」で出た候補（画面だけ・保存しない）
+function ebCatLsLoad(){
+  try{ var a=JSON.parse(lsGet(EB_CAT_LS)||'[]'); if(a&&a.length)ebCats=a; }catch(e){}
+}
+function ebCatLsSave(){ try{ lsSet(EB_CAT_LS,JSON.stringify(ebCats)); }catch(e){} }
+function ebCatOf(code){
+  var c=String(code||'');
+  for(var i=0;i<ebCats.length;i++)if(String(ebCats[i].code)===c)return ebCats[i];
+  return null;
+}
+// そのカテゴリで必須の Item specifics（登録が無いカテゴリは空）
+function ebCatNeed(code){ var c=ebCatOf(code); return (c&&c.need)||[]; }
+// 登録してあるカテゴリか（はじめの3つ・⚙の覚え書きの行も含める）
+function ebCatKnown(code){
+  var c=String(code||'').trim();
+  return !!c&&(!!CSV_CAT[c]||!!ebCatOf(c)||!!csvCatOf(c));
+}
+function ebCatSay(msg){ var el=$('ebCatNote'); if(el)el.textContent=msg||''; }
+function ebCatWhy(d,e){
+  if(e&&e.message)return e.message;
+  return (d&&(d.detail||d.error))||'pj-sync が受け取りませんでした';
+}
+/* pj-sync から一覧を読む。読めたら覚え書きに控え、選択肢と一覧を作り直す。
+   quiet を渡したときは経過を出さない（開いたときの読み込み）。 */
+function ebCatPull(quiet){
+  try{ csvSecretFill(); }catch(e){}       // 鍵の欄が空のときは保存済みの鍵を入れる
+  if(!syncUrl()||!syncApiKey()){
+    if(!quiet)ebCatSay('⚙の「pj-sync の URL」と「pj-sync のキー」を入れてください');
+    return Promise.resolve(false);
+  }
+  if(!quiet)ebCatSay('読んでいます…');
+  return fetch(syncUrl()+'/ebay/cat',{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){
+        if(!quiet)ebCatSay('⚠ 読めませんでした：'+ebCatWhy(d));
+        return false;
+      }
+      ebCats=(d.rows||[]).map(function(c){
+        return { code:String(c.code||''), name:String(c.name||''),
+                 ja:String(c.ja||''), path:String(c.path||''),
+                 need:c.need||[], opt:c.opt||[],
+                 tpl:String(c.tpl||''), seed:!!c.seed };
+      });
+      ebCatLsSave();
+      if(!quiet)ebCatSay('登録してあるカテゴリ '+ebCats.length+'件');
+      ebCatRender(); csvAddCatOpts();
+      try{ csvRender(); }catch(e){}
+      return true;
+    })['catch'](function(e){
+      if(!quiet)ebCatSay('⚠ 読めませんでした：'+ebCatWhy(null,e));
+      return false;
+    });
+}
+/* 「探す」。番号だけのときはその番号を候補にする（足すときに eBay で確かめる）。
+   言葉のときは getCategorySuggestions の候補を並べる。 */
+function ebCatFind(){
+  var q=String(($('ebCatQ')||{}).value||'').trim();
+  ebCatFoundRows=[]; ebCatFoundRender();
+  if(!q){ ebCatSay('カテゴリ番号か、英語の商品名を入れてください'); return; }
+  if(!syncUrl()||!syncApiKey()){
+    ebCatSay('⚙の「pj-sync の URL」と「pj-sync のキー」を入れてください'); return; }
+  if(/^[0-9]+$/.test(q)){
+    ebCatFoundRows=[{code:q,name:'',path:''}];
+    ebCatSay('カテゴリ '+q+'。「足す」を押すと、必須の Item specifics を'
+      +'eBay から取って登録します');
+    ebCatFoundRender(); return;
+  }
+  ebCatSay('eBay に候補を聞いています…');
+  fetch(syncUrl()+'/ebay/cat/find',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({q:q})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ ebCatSay('⚠ 探せませんでした：'+ebCatWhy(d)); return; }
+      ebCatFoundRows=d.rows||[];
+      ebCatSay(ebCatFoundRows.length?('候補 '+ebCatFoundRows.length+'件')
+        :'候補がありませんでした（英語の商品名で入れ直してください）');
+      ebCatFoundRender();
+    })['catch'](function(e){ ebCatSay('⚠ 探せませんでした：'+ebCatWhy(null,e)); });
+}
+function ebCatFoundRender(){
+  var el=$('ebCatFoundBox'); if(!el)return;
+  var h='';
+  ebCatFoundRows.forEach(function(c,i){
+    var has=ebCatOf(c.code);
+    h+='<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">'
+      +'<div style="flex:1 1 0;min-width:0;font-size:13px">'
+      +esc(c.name||('カテゴリ '+c.code))+'（'+esc(c.code)+'）'
+      +(c.path?('<div class="note2" style="margin:0">'+esc(c.path)+'</div>'):'')+'</div>'
+      +(has?'<span class="note2" style="margin:0;flex:0 0 auto">登録済み</span>'
+         :('<button class="btn" data-ebadd="'+i+'" style="flex:0 0 auto;padding:5px 8px;'
+           +'font-size:12px">足す</button>'))
+      +'</div>';
+  });
+  el.innerHTML=h;
+}
+/* 足す。名前と道筋は候補のものを渡す（Item specifics の API は名前を返さない）。
+   出品文の形は非可動フィギュア（261055）のものを使う。 */
+function ebCatAdd(i){
+  var c=ebCatFoundRows[i]; if(!c)return;
+  ebCatSay('eBay から必須の Item specifics を取っています…');
+  fetch(syncUrl()+'/ebay/cat/add',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({ code:c.code, name:c.name||'', path:c.path||'',
+                          ja:String(($('ebCatJa')||{}).value||'').trim(),
+                          tpl:'261055' })})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ ebCatSay('⚠ 足せませんでした：'+ebCatWhy(d)); return; }
+      var nd=d.need||[];
+      ebCatSay('カテゴリ '+d.code+' を足しました。必須の Item specifics：'
+        +(nd.length?nd.join('／'):'なし'));
+      if($('ebCatJa'))$('ebCatJa').value='';
+      ebCatPull(true).then(function(){ ebCatFoundRender(); });
+    })['catch'](function(e){ ebCatSay('⚠ 足せませんでした：'+ebCatWhy(null,e)); });
+}
+function ebCatDel(code){
+  if(!confirm('カテゴリ '+code+' を登録から外しますか。\n'
+    +'（この番号が入っている行は「登録なし」と出るようになります）'))return;
+  fetch(syncUrl()+'/ebay/cat/del',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({code:code})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true){ ebCatSay('⚠ 外せませんでした：'+ebCatWhy(d)); return; }
+      ebCatSay('カテゴリ '+code+' を外しました');
+      ebCatPull(true);
+    })['catch'](function(e){ ebCatSay('⚠ 外せませんでした：'+ebCatWhy(null,e)); });
+}
+function ebCatRender(){
+  var el=$('ebCatListBox'); if(!el)return;
+  if(!ebCats.length){
+    el.innerHTML='<div class="note2" style="margin:0">まだ読んでいません'
+      +'（「一覧を取り直す」を押してください）</div>';
+    return;
+  }
+  var h='';
+  ebCats.forEach(function(c){
+    h+='<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px;'
+      +'border-top:1px solid var(--line);padding-top:4px">'
+      +'<div style="flex:1 1 0;min-width:0;font-size:13px">'
+      +esc(c.ja||c.name||('カテゴリ '+c.code))+'（'+esc(c.code)+'）'
+      +(c.seed?'　<span class="note2" style="margin:0;display:inline">はじめから</span>':'')
+      +(c.path?('<div class="note2" style="margin:0">'+esc(c.path)+'</div>'):'')
+      +'<div class="note2" style="margin:0">必須：'
+      +((c.need||[]).length?esc(c.need.join('／')):'なし')+'</div>'
+      +'</div>'
+      +(c.seed?''
+        :('<button class="btn" data-ebdel="'+esc(c.code)+'" style="flex:0 0 auto;'
+          +'padding:5px 8px;font-size:12px">外す</button>'))
+      +'</div>';
+  });
+  el.innerHTML=h;
+}
+if($('ebCatBtnFind'))$('ebCatBtnFind').onclick=ebCatFind;
+if($('ebCatBtnPull'))$('ebCatBtnPull').onclick=function(){ ebCatPull(); };
+if($('ebCatQ'))$('ebCatQ').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){ e.preventDefault(); ebCatFind(); }
+});
+if($('ebCatFoundBox'))$('ebCatFoundBox').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.hasAttribute('data-ebadd'))return;
+  ebCatAdd(+t.getAttribute('data-ebadd'));
+});
+if($('ebCatListBox'))$('ebCatListBox').addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.hasAttribute('data-ebdel'))return;
+  ebCatDel(t.getAttribute('data-ebdel'));
+});
+/* 既定の3つ以外のeBayカテゴリ。2通りある。
+   1) pj-sync に登録したカテゴリ（8.65・d1:true）。必須の Item specifics を
+      持っているので、列ヘッダをそのカテゴリ用に作れる
+   2) ⚙「よく使うeBayカテゴリ」の覚え書き（この端末だけ・d1:false）。必須の
+      項目が分からないので、列ヘッダはフィギュア2本のどちらかを流用する
+   どちらも、行のカテゴリ選択と「出品文」の「eBayカテゴリ」に出る。
    ゲームのテンプレートは選べない。ゲームは機種・出品文の作り方が別のため。 */
 function csvCustomCats(){
-  var el=$('csvCatCustom'); if(!el)return [];
   var out=[], seen={};
-  String(el.value||'').split(/\r?\n/).forEach(function(ln){
+  // 1) pj-sync に登録してあるカテゴリ。はじめの3つは別に出すので飛ばす
+  ebCats.forEach(function(c){
+    var id=String(c.code||'').replace(/[^0-9]/g,'');
+    if(!id||CSV_CAT[id]||seen[id])return;
+    seen[id]=1;
+    out.push({ id:id, name:String(c.ja||c.name||'').trim()||('カテゴリ '+id),
+               tpl:(String(c.tpl||'')==='261068')?'261068':'261055',
+               need:(c.need||[]).slice(), opt:(c.opt||[]).slice(),
+               path:String(c.path||''), d1:true });
+  });
+  // 2) ⚙の覚え書き
+  var el=$('csvCatCustom');
+  if(el)String(el.value||'').split(/\r?\n/).forEach(function(ln){
     var a=ln.replace(/[\u3001\uff0c\t\uff1a:]/g,',').split(',');
     var id=String(a[0]||'').replace(/[^0-9]/g,'');
     if(!id||CSV_CAT[id]||seen[id])return;      // 既定の3つと重複するIDは無視する
     seen[id]=1;
     var tp=String(a[2]||'').trim().toLowerCase();
     out.push({ id:id, name:String(a[1]||'').trim()||('カテゴリ '+id),
-               tpl:(tp==='act'||tp==='\u53ef\u52d5')?'261068':'261055' });
+               tpl:(tp==='act'||tp==='\u53ef\u52d5')?'261068':'261055',
+               need:[], opt:[], path:'', d1:false });
   });
   return out;
 }
@@ -6478,6 +6709,197 @@ function csvCatName(cat){
   var c=csvCatOf(cat);
   return c?(c.name+'（'+c.id+'）'):('カテゴリ '+cat);
 }
+/* ---- 登録したカテゴリの列ヘッダと Item specifics（8.65）----
+   pj-sync に登録したカテゴリは、eBay から取った項目で C: の並びを作り直す。
+   テンプレートの流用では、そのカテゴリで必須の列が足りない（File Exchange が
+   「必須の項目がない」で弾く）ため。C: 以外の列（価格・送料・ポリシーなど）は
+   テンプレートのままにする。 */
+function csvHeadFor(cat){
+  if(CSV_HEAD[cat])return CSV_HEAD[cat];
+  var base=CSV_HEAD[csvCatTpl(cat)], c=csvCatOf(cat);
+  if(!c||!c.d1||!(c.need||[]).length)return base;
+  var a=base.split(','), i0=-1, i1=-1;
+  for(var i=0;i<a.length;i++)if(/^\*?C:/.test(a[i])){ if(i0<0)i0=i; i1=i; }
+  if(i0<0)return base;
+  var seen={}, cols=[];
+  (c.need||[]).forEach(function(n){
+    var k=String(n||'').trim(); if(!k||seen[k])return; seen[k]=1; cols.push('*C:'+k); });
+  (c.opt||[]).forEach(function(n){
+    var k=String(n||'').trim(); if(!k||seen[k])return; seen[k]=1; cols.push('C:'+k); });
+  if(!cols.length)return base;
+  return a.slice(0,i0).concat(cols,a.slice(i1+1)).join(',');
+}
+// そのカテゴリで必須の Item specifics の項目名（登録していないカテゴリは空）
+function csvCatNeed(cat){
+  var c=csvCatOf(cat);
+  return (c&&c.d1&&c.need)?c.need:[];
+}
+/* 項目名 → すでに行が持っている値。登録したカテゴリの Item specifics は、
+   英題生成で埋めた値（specs.aspects）を先に見て、無ければここで補う。
+   ここに無い項目は空のままにし、必須なら「不備」として書き出さない。 */
+function csvAspectFallback(r,name){
+  var sp=r.specs||{}, n=String(name||'').trim().toLowerCase();
+  if(n==='brand')return sp.brand||'';
+  if(n==='franchise')return sp.franchise||'';
+  if(n==='character')return sp.character||'';
+  if(n==='theme')return sp.franchise||'';
+  if(n==='model')return sp.model||'';
+  if(n==='scale')return sp.scale||'';
+  if(n==='mpn')return r.jan||'';
+  if(n==='upc'||n==='ean')return r.jan||'';
+  if(n==='country/region of manufacture'||n==='country of origin')return sp.origin||'';
+  if(n==='platform'||n==='compatible platform'||n==='compatible brand')return sp.platform||'';
+  if(n==='california prop 65 warning')return '';
+  return '';
+}
+// 項目1つぶんの値（specs.aspects → 既にある値）
+function csvAspectVal(r,name){
+  var sp=r.specs||{}, av=sp.aspects||{};
+  var v=av[name];
+  if(v!==undefined&&String(v).trim())return String(v).trim();
+  return String(csvAspectFallback(r,name)||'').trim();
+}
+/* 必須なのに空の項目。ここが空の行は書き出さない（eBay 側で弾かれるため）。 */
+function csvNeedMiss(r){
+  var miss=[];
+  csvCatNeed(r.cat).forEach(function(n){
+    if(!csvAspectVal(r,n))miss.push(n);
+  });
+  return miss;
+}
+/* ================= 8.66 カテゴリ候補（英題から eBay に聞く） =================
+   ③「写真・原産国・カテゴリ」の段で、英題を eBay の getCategorySuggestions
+   （pj-sync 経由）に通し、いま選んでいるカテゴリと比べる。
+   ・登録してあるカテゴリなら、その場で切り替えられる
+   ・登録していないカテゴリなら「新しいカテゴリ（未登録）」と出して書き出さない
+     （カードポッドがゲーム 139973 のまま出ていくのを防ぐ）
+   ・「このままでよい」を押した行は以後止めない（候補が変わればまた聞く）
+   ・英題を直した行は、前の結果を使わずに調べ直す */
+function csvCatSugOf(r){
+  var s=r.catSug||null;
+  if(!s||!s.code)return null;
+  if(String(s.t||'')!==String(r.titleEn||'').trim())return null;
+  var code=String(s.code);
+  if(code===String(r.cat||''))return { same:true, code:code, name:s.name||'' };
+  return { same:false, code:code, name:s.name||'', path:s.path||'',
+           known:ebCatKnown(code),
+           ok:(!!r.catSugOk&&String(r.catSugOkCode||'')===code) };
+}
+// 書き出しを止める行（未登録の候補が出たまま、このままでよいとも言われていない行）
+function csvCatSugBlock(r){
+  var s=csvCatSugOf(r);
+  return !!(s&&!s.same&&!s.known&&!s.ok);
+}
+function csvCatSugLabel(s){
+  return (s.name||('カテゴリ '+s.code))+'（'+s.code+'）';
+}
+/* 行に出す1行。いまのカテゴリと同じときは出さない（うるさくしない）。 */
+function csvCatSugHtml(r){
+  var s=csvCatSugOf(r);
+  if(!s||s.same)return '';
+  return '<div class="note2" style="margin-top:4px;color:'
+    +(s.known?'#2f6fb0':'var(--bad)')+'">'
+    +'カテゴリ候補：'+esc(csvCatSugLabel(s))
+    +(s.known?'':'　<b>新しいカテゴリ（未登録）</b>')
+    +(s.ok?'　（このままでよいとしました）':'')
+    +(s.path?('<div class="note2" style="margin:0">'+esc(s.path)+'</div>'):'')
+    +(s.known?''
+      :('<div class="note2" style="margin:0">⚙「eBayカテゴリ（pj-sync に登録）」で '
+        +esc(s.code)+' を足すと、この行も出せるようになります。</div>'))
+    +'</div>';
+}
+/* 行のボタン。調べる／候補に切り替える／このままでよい。 */
+function csvCatSugBtns(r){
+  var s=csvCatSugOf(r), h='';
+  h+='<button class="btn" data-catsug="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+    +'カテゴリ候補'+(s?'を調べ直す':'を調べる')+'</button>';
+  if(s&&!s.same&&s.known)
+    h+='<button class="btn" data-catuse="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+      +esc(csvCatSugLabel(s))+'にする</button>';
+  if(s&&!s.same&&!s.ok)
+    h+='<button class="btn" data-catkeep="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+      +'このままでよい</button>';
+  return h;
+}
+function csvCatSugSay(msg){ var el=$('csvCatSugNote'); if(el)el.textContent=msg||''; }
+/* 1行ぶん聞く。英題が無い行は飛ばす。 */
+function csvCatSugAsk(r){
+  var t=String(r.titleEn||'').trim();
+  if(!t)return Promise.resolve({ skip:true });
+  return fetch(syncUrl()+'/ebay/cat/find',{method:'POST',
+    headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+    body:JSON.stringify({q:t})})
+    .then(function(x){ return x.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true)return { err:ebCatWhy(d) };
+      var c=(d.rows||[])[0];
+      if(!c||!c.code)return { none:true };
+      r.catSug={ code:String(c.code), name:String(c.name||''),
+                 path:String(c.path||''), t:t, at:new Date().toISOString() };
+      return { ok:true };
+    })['catch'](function(e){ return { err:ebCatWhy(null,e) }; });
+}
+/* まとめて調べる。eBay の呼び出しは1件ずつ順番に（呼び出し上限に触れないように）。 */
+var csvCatSugRunning=false;
+function csvCatSugRun(rows){
+  if(csvCatSugRunning){ csvCatSugSay('いま調べています…'); return; }
+  if(!syncUrl()||!syncApiKey()){
+    csvCatSugSay('⚙の「pj-sync の URL」と「pj-sync のキー」を入れてください'); return; }
+  var list=(rows||[]).filter(function(r){ return r&&String(r.titleEn||'').trim(); });
+  if(!list.length){
+    csvCatSugSay('英題のある行がありません（先に②で英題を作ってください）'); return; }
+  csvCatSugRunning=true;
+  var i=0, chg=0, err=0, newc={};
+  function step(){
+    if(i>=list.length){
+      csvCatSugRunning=false;
+      csvSaveList(); csvRender();
+      var ks=Object.keys(newc);
+      csvCatSugSay('カテゴリ候補を調べました：'+list.length+'件'
+        +(chg?('　いまのカテゴリと違う '+chg+'件'):'　いまのカテゴリと同じでした')
+        +(ks.length?('　未登録の候補 '+ks.length+'種（'+ks.join('／')
+                     +'）。⚙で足してください'):'')
+        +(err?('　失敗 '+err+'件'):''));
+      return;
+    }
+    var r=list[i++];
+    csvCatSugSay('調べています… '+i+'/'+list.length);
+    csvCatSugAsk(r).then(function(res){
+      if(res&&res.err)err++;
+      var s=csvCatSugOf(r);
+      if(s&&!s.same){ chg++; if(!s.known)newc[s.code]=1; }
+      step();
+    });
+  }
+  step();
+}
+function csvCatSugUse(id){
+  var r=csvRowById(id); if(!r)return;
+  var s=csvCatSugOf(r); if(!s||s.same||!s.known)return;
+  csvCatApply(r,s.code,true);
+  r.catSugOk=false; r.catSugOkCode='';
+  csvSaveList(); csvRender();
+}
+function csvCatSugKeep(id){
+  var r=csvRowById(id); if(!r)return;
+  var s=csvCatSugOf(r); if(!s)return;
+  r.catSugOk=true; r.catSugOkCode=s.code;
+  csvSaveList(); csvRender();
+}
+if($('csvCatSugAll'))$('csvCatSugAll').onclick=function(){
+  /* まだ調べていない行だけ（英題があって、まだ出していない行）。
+     調べ直しは行ごとのボタンでする。 */
+  var todo=csvList.filter(function(r){
+    return String(r.titleEn||'').trim()&&!String(r.itemId||'').trim()
+        &&!csvCatSugOf(r); });
+  if(!todo.length){
+    csvCatSugSay('まだ調べていない行はありません'
+      +'（行ごとの「カテゴリ候補を調べ直す」で聞き直せます）');
+    return;
+  }
+  csvCatSugRun(todo);
+};
+
 /* 出品文タブの「eBayカテゴリ」の選択肢も、登録したカテゴリを含めて作り直す。
    いま選んでいる値は選び直さない（登録から消えた値だけは先頭に戻る）。 */
 function csvAddCatOpts(keep){
@@ -7794,6 +8216,14 @@ function csvIssues(r){
   if(!(r.pics||[]).length)a.push('写真なし');
   // フィギュアの原産国は補完しないので、空なら指摘する。
   if(csvOriginNeed(r))a.push('原産国なし');
+  /* 登録したカテゴリ（8.65）で必須の Item specifics が空の行は書き出さない。
+     空のまま出すと File Exchange が弾くので、理由を行に出して直してもらう。 */
+  csvNeedMiss(r).forEach(function(n){ a.push('必須の項目「'+n+'」が空'); });
+  /* 8.66 英題から聞いたカテゴリ候補が、登録していないカテゴリのとき。
+     そのまま出すと別の種類の商品として出てしまうので止める
+     （カテゴリを足す／「このままでよい」を押すと出せる）。 */
+  if(csvCatSugBlock(r))
+    a.push('新しいカテゴリ（未登録）'+((r.catSug&&r.catSug.code)?('：'+r.catSug.code):''));
   // 一点物は再調達できない（別セラーから買い直す前提が成り立たない）。
   if(r.oneOff&&r.zeroAct==='restock')a.push('一点物は再調達不可（寝かせる／終了にする）');
   /* 無在庫（MW）の行は、MW の出荷日数＋2日がポリシーのハンドリングに収まること（6.96）。
@@ -8629,6 +9059,28 @@ function csvFigFields(r){
   if(sp.scale)h+='<div class="note2" style="margin-top:4px">スケール '+esc(sp.scale)+'（和名から自動）</div>';
   return h+'</div></details>';
 }
+/* 登録したカテゴリ（8.65）で必須の Item specifics を、行で直せるようにする。
+   空のままだと書き出しを止めるので、空があるときは開いた状態で出す。
+   値は specs.aspects に項目名のまま持つ（列ヘッダと同じ名前で書き出す）。 */
+function csvAspectFields(r){
+  var need=csvCatNeed(r.cat);
+  if(!need.length)return '';
+  var miss=csvNeedMiss(r);
+  var h='<details'+(miss.length?' open':'')+' style="margin-top:2px">'
+    +'<summary class="note2" style="margin:0">このカテゴリの必須の項目'
+    +(miss.length?('（空 '+miss.length+'件）'):'（そろいました）')
+    +'</summary><div style="padding:2px 0 0">';
+  need.forEach(function(n){
+    var nm=String(n).replace(/"/g,'');
+    h+='<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
+      +'<span class="note2" style="margin:0;flex:0 0 110px">'+esc(nm)+'</span>'
+      +'<input type="text" data-aspk="'+esc(nm)+'" data-aspid="'+r.id+'" value="'
+      +esc(csvAspectVal(r,nm))+'" style="flex:1 1 0;min-width:0;padding:5px;'
+      +'font-size:13px;border:1px solid var(--line);border-radius:2px;'
+      +'background:#fcfbf8"></div>';
+  });
+  return h+'</div></details>';
+}
 /* 原産国のワンタップ。撮影のときに箱の表記を見て押す。
    押すと行の原産国が確定し、「原産国：既定値」のバッジが消える。
    フィギュア・アーケードだけ（ゲームは Japan 固定）。 */
@@ -8701,6 +9153,7 @@ function csvTitleBox(r){
     +(r.titleNote?('　'+esc(r.titleNote)):'')+'</div>';
   h=pre+h;
   if(csvTitleKind(r)==='fig')h+=csvFigFields(r);
+  h+=csvAspectFields(r);                 // 8.65 登録したカテゴリの必須の項目
   if((r.titleCands||[]).length)
     h+='<details style="margin-top:2px"><summary class="note2" style="margin:0">候補にした元タイトル '
       +r.titleCands.length+'件</summary><div class="note2" style="margin:2px 0 0">'
@@ -9171,7 +9624,9 @@ var CSV_STEPS=[
        原産国が既定値のままの行は数えない（6.84）。 */
     n:function(){ return csvList.filter(function(r){
         return !(r.pics||[]).length||csvOriginNeed(r)
-            ||!String(r.cat||'').trim(); }).length; },
+            ||!String(r.cat||'').trim()
+            /* 8.66 カテゴリ候補が未登録の行と、必須の項目が空の行も数える。 */
+            ||csvCatSugBlock(r)||csvNeedMiss(r).length; }).length; },
     s:function(n){ return n?('確認 '+n+'件'):'そろいました'; },
     todo:function(n){ return n>0; } },
   { k:'④', t:'CSVを書き出す', box:'csvExport',
@@ -9327,7 +9782,7 @@ function csvRender(){
       /* カートリッジのみ：既存の出品への積み上げと、値段・状態の確認 */
       +csvCartHtml(r)
       /* 無在庫（新品）の推奨売値と、eBayカタログの候補 */
-      +csvNewHtml(r)+csvCatHtml(r)
+      +csvNewHtml(r)+csvCatHtml(r)+csvCatSugHtml(r)
       /* 写真の送信中・失敗の表示は、必ずその商品のカードの中に出す */
       +'<div class="note2" data-picnote="'+r.id+'" style="margin-top:4px"></div>'
       +((csvPicTarget===r.id&&csvPicFailed.length)
@@ -9341,7 +9796,7 @@ function csvRender(){
     /* カテゴリの選択はどの行にも出す。ゲームの行にも出さないと、
        取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
     /* カテゴリと原産国は同じ形のプルダウンで並べる（6.56）。 */
-    btns+=csvCatSelect(r)+csvOriginSelect(r);
+    btns+=csvCatSelect(r)+csvOriginSelect(r)+csvCatSugBtns(r);
     if(v==='amazon')
       btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -9520,6 +9975,14 @@ $('csvList').addEventListener('click',function(e){
   var t=e.target; if(!t||t.tagName!=='BUTTON')return;
   /* eBayカタログの候補は「行ID|ePID」を持つので、行IDの照合より先に処理する。 */
   if(t.hasAttribute('data-cepid')){ csvCatPickClick(t.getAttribute('data-cepid')); return; }
+  /* 8.66 カテゴリ候補。調べる・候補に切り替える・このままでよい。 */
+  if(t.hasAttribute('data-catsug')){
+    var sr=csvRowById(t.getAttribute('data-catsug'));
+    if(sr)csvCatSugRun([sr]);
+    return;
+  }
+  if(t.hasAttribute('data-catuse')){ csvCatSugUse(t.getAttribute('data-catuse')); return; }
+  if(t.hasAttribute('data-catkeep')){ csvCatSugKeep(t.getAttribute('data-catkeep')); return; }
   var id=t.getAttribute('data-del')
         ||t.getAttribute('data-fba')||t.getAttribute('data-zero')||t.getAttribute('data-edit')
         ||t.getAttribute('data-force')||t.getAttribute('data-one')||t.getAttribute('data-pics')
@@ -9626,12 +10089,25 @@ $('csvList').addEventListener('input',function(e){
   }
   /* フィギュアの5項目を直したら、その場で英題を組み直して「編集済み」にする。
      英題欄の表示と文字数も入れ替える（行は作り直さない＝いま触っている欄を消さない）。 */
+  /* 8.65 登録したカテゴリの Item specifics。項目名のまま specs.aspects に持つ。
+     行は作り直さない（いま触っている欄が消えないように）。 */
+  var ak=t.getAttribute('data-aspk');
+  if(ak){
+    var ra=csvRowById(t.getAttribute('data-aspid')); if(!ra)return;
+    ra.specs=ra.specs||{};
+    ra.specs.aspects=ra.specs.aspects||{};
+    ra.specs.aspects[ak]=t.value.trim();
+    csvSaveList();
+    return;
+  }
   var fk=t.getAttribute('data-figk');
   if(fk){
     var rf=csvRowById(t.getAttribute('data-figid')); if(!rf)return;
     rf.specs=rf.specs||{};
     rf.specs[CSV_FIG_MAP[fk]]=t.value.trim();
-    csvFigRebuild(rf); rf.titleManual=true; csvSaveList();
+    csvFigRebuild(rf); rf.titleManual=true;
+    csvDescTitleFix(rf);                   // 8.67 出品文の商品名も合わせる
+    csvSaveList();
     var box=t.closest('div[data-row]')||null;
     var en=document.querySelector('#csvList textarea[data-ten="'+rf.id+'"]');
     if(en){
@@ -9652,7 +10128,10 @@ $('csvList').addEventListener('input',function(e){
     // 貼り付けで改行が入ることがあるので、空白1つに畳んでおく
     var clean=String(t.value).replace(/[\r\n]+/g,' ');
     if(clean!==t.value)t.value=clean;
-    rt.titleEn=clean; rt.titleManual=true; csvSaveList();
+    rt.titleEn=clean; rt.titleManual=true;
+    /* 8.67 出品文の商品名（大見出し）も、直した英題に合わせる。 */
+    csvDescTitleFix(rt);
+    csvSaveList();
     csvTaFit(t);
     var n=t.parentNode.nextSibling;
     if(n&&n.firstChild){
@@ -10855,6 +11334,8 @@ function csvRowFor(r,raw){
   o['*Category']=r.cat;
   o['*Title']=r.titleEn;
   o['*ConditionID']=r.condId;
+  /* 8.67 出品文の大見出しと、無在庫（MW）の言い方を直してから出す。 */
+  csvDescFix(r);
   o['*Description']=r.descHtml;
   o['*Format']='FixedPrice';
   o['*Duration']='GTC';
@@ -10900,6 +11381,15 @@ function csvRowFor(r,raw){
     o['C:Release Year']=sp.year||'';
     o['C:Country of Origin']='Japan';
     o['C:MPN']=r.jan||'';
+  }else if(csvCatNeed(r.cat).length){
+    /* pj-sync に登録したカテゴリ（8.65）。列は eBay から取った項目で作るので、
+       値も項目名で入れる。英題生成で埋めた値（specs.aspects）を先に見て、
+       無ければ行がすでに持っている値で補う。
+       必須の項目が空の行は csvIssues で止める（ここでは作らない）。 */
+    var cd=csvCatOf(r.cat)||{};
+    (cd.need||[]).forEach(function(n){ o['*C:'+n]=csvAspectVal(r,n); });
+    (cd.opt||[]).forEach(function(n){
+      if(o['*C:'+n]===undefined)o['C:'+n]=csvAspectVal(r,n); });
   }else{
     o['*C:Type']=(csvCatTpl(r.cat)==='261068')?'Action Figure':'Figure';
     o['C:Brand']=sp.brand||'';
@@ -10925,7 +11415,7 @@ function csvRowFor(r,raw){
   return o;
 }
 function csvBuild(cat,rows,action){
-  var head=CSV_HEAD[csvCatTpl(cat)].split(',');
+  var head=csvHeadFor(cat).split(',');
   /* カートリッジのみの行があるときだけ ConditionDescription の列を足す。
      ほかの書き出しの列は今までどおりにする。 */
   if(rows.some(function(r){ return csvIsLoose(r); })&&head.indexOf('ConditionDescription')<0)
@@ -21836,6 +22326,15 @@ function csvApplyFields(r,f){
   if(f.series_short!==undefined)sp.seriesShort=f.series_short||'';
   if(f.chara_short!==undefined)sp.charaShort=f.chara_short||'';
   if(f.item_type!==undefined)sp.itemType=f.item_type||'figure';
+  /* 8.65 登録したカテゴリの必須の Item specifics。取れた項目だけ入れる
+     （取れなかった項目は手で入れてもらうので、前の値は消さない）。 */
+  if(f.aspects&&typeof f.aspects==='object'){
+    sp.aspects=sp.aspects||{};
+    Object.keys(f.aspects).forEach(function(k){
+      var v=String(f.aspects[k]||'').trim();
+      if(v)sp.aspects[k]=v;
+    });
+  }
   /* 原産国。Amazonから取れていればそれを使い、取れなければ設定の既定値を入れる。
      既定値を使った行は人の目で確かめてもらう（Worker側でも review に落ちる）。 */
   /* 原産国。ワンタップボタンや出品文タブで手で確定した値（originManual）は
@@ -21880,7 +22379,10 @@ function csvTitleSend(kind,rows,force){
   var items=rows.map(function(r){
     var cond=(r.condId===1000?'new':'used');
     if(kind==='fig')
-      return { jan:r.jan||'', asin:r.asin||'', ja_title:r.titleJa||'', condition:cond };
+      /* 8.65 登録したカテゴリの行は、そのカテゴリで必須の Item specifics も
+         一緒に埋めてもらう（項目名は eBay から取ったものをそのまま渡す）。 */
+      return { jan:r.jan||'', asin:r.asin||'', ja_title:r.titleJa||'', condition:cond,
+               need_aspects:csvCatNeed(r.cat) };
     var p=csvPlatOf(r);
     // ASINも送る。JANが商品と結びついていない行はASINで引いてもらう。
     return { jan:r.jan, asin:r.asin||'', ja_title:r.titleJa||'', platform:p?p.title:'',
@@ -22160,7 +22662,40 @@ var CSV_DESC_FIELDS=['cat','brand','series','chara','variant','line','cond','ori
                      'gPlat','gPlatFree','gTitle','gPub','gCond',
                      'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aCond',
                      'extra','title'];
-var CSV_DESC_CHECKS=['bPrize','bJP','bCart','bLoose'];
+var CSV_DESC_CHECKS=['bPrize','bJP','bCart','bLoose','bDrop'];
+/* ---- 出品文の小さな直し（8.67）----
+   作り直さずに、食い違っているところだけ入れ替える。
+   どちらも直したら true を返す（呼ぶ側で保存する）。 */
+/* 大見出しを、いまの英題に合わせる。英題を手で直した行で、出品文の商品名が
+   古いままになるのを防ぐ（descHTML() が <!--TITLE--> の目印を入れている）。 */
+function csvDescTitleFix(r){
+  var d=String(r.descHtml||''), t=String(r.titleEn||'').trim();
+  if(!d||!t)return false;
+  var m=d.match(/<!--TITLE-->([\s\S]*?)<!--\/TITLE-->/);
+  if(!m||m[1]===esc(t))return false;
+  var h='<!--TITLE-->'+esc(t)+'<!--/TITLE-->';
+  r.descHtml=d.replace(m[0],function(){ return h; });
+  return true;
+}
+/* 無在庫（MW）の行から、手で検品した言い方と「写真が実物」と受け取れる
+   言い方を外す。すでに作ってある出品文も、その文だけ入れ替える。 */
+function csvDescMwFix(r){
+  if(String((r||{}).buySource||'')!=='mw')return false;
+  var d=String(r.descHtml||''); if(!d)return false;
+  var hit=false;
+  Object.keys(CONDNOTE).forEach(function(k){
+    if(d.indexOf(CONDNOTE[k])<0)return;
+    d=d.split(CONDNOTE[k]).join(CONDNOTE_MW[k]); hit=true;
+  });
+  if(!hit)return false;
+  r.descHtml=d;
+  return true;
+}
+// 書き出し・表示の前に通す（2つまとめて）
+function csvDescFix(r){
+  var a=csvDescTitleFix(r), b=csvDescMwFix(r);
+  return a||b;
+}
 function csvDescFor(r){
   var save={}, savec={};
   CSV_DESC_FIELDS.forEach(function(id){ save[id]=$(id).value; });
@@ -22172,6 +22707,9 @@ function csvDescFor(r){
     // カートリッジのみの注記は行の印で決める（計算機のチェック状態は持ち込まない）
     $('bCart').checked=!!r.cartOnly;
     $('bLoose').checked=!!r.looseOnly;
+    /* 8.67 無在庫（MW）の行は、状態の説明文を手で検品しない言い方にする。
+       写真も「届く1点を撮ったもの」とは書かない。 */
+    $('bDrop').checked=(String(r.buySource||'')==='mw');
     if(g)$('gCond').value=csvCondToSel(r.condId,true);
     else $('cond').value=csvCondToSel(r.condId,false);
     if(g){
@@ -28274,6 +28812,9 @@ function csvEditOpen(id){
      ゲームは applyCat() が Japan 固定にするので触らない。
      originPrev を空けておくのは、applyCat() が前回値で上書きするのを防ぐため。 */
   if(!g){ originPrev=null; $('origin').value=sp.origin||''; }
+  /* 8.67 無在庫（MW）の行かどうか。ここで入れておかないと、
+     「書き戻す」で手で検品した言い方の出品文に戻ってしまう。 */
+  $('bDrop').checked=(String(r.buySource||'')==='mw');
   // 英題があれば戻す。無ければ既存の自動生成に任せる。
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
@@ -28409,7 +28950,11 @@ $('addToCsv').onclick=function(){
   setTimeout(function(){ b.textContent=o; },1600);
 };
 
+/* 8.65 登録した eBayカテゴリは、まず端末の覚え書きで立ち上げ（通信できなくても
+   選択肢が出るように）、そのあと pj-sync から読み直す。 */
+ebCatLsLoad(); ebCatRender();
 csvLoad(); csvNewLoad(); csvCartLoad(); csvNewBoxApply(); csvAddCatOpts(); csvRender(); syncLoadCache(); syncSoldLoad();
+try{ ebCatPull(true); }catch(e){}
 /* 6.191（【2】）大きいものは IndexedDB に置いてある。開くのを待てないので、
    まず今までどおり立ち上げ、**読み終えてから当て直す**（数ミリ秒後）。
    引っ越し（localStorage → IndexedDB）もここで走る。
@@ -28489,7 +29034,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v322';   // sw.js の const V と必ず同じ値にする
+var APP_V='v323';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

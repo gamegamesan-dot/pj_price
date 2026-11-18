@@ -728,8 +728,37 @@ const FIG_SYSTEM = [
 
 const FIG_FIELDS = ["brand", "series", "series_short", "chara", "chara_short",
                     "item_name", "variant", "line", "scale", "origin"];
+/* pj_price 側で登録した eBay カテゴリの「必須の Item specifics」（8.65）。
+   項目名は eBay の Taxonomy API から取ったものをそのまま渡してもらう。
+   名前の形だけ確かめ、最大12件まで使う（prompt を長くしすぎない）。 */
+const FIG_ASPECT_MAX = 12;
+function figNeedAspects(item) {
+  const a = Array.isArray(item && item.need_aspects) ? item.need_aspects : [];
+  const out = [];
+  for (const x of a) {
+    const n = String(x || "").trim().slice(0, 40);
+    if (!n || !/^[A-Za-z0-9][A-Za-z0-9 ,.:;'()/&+-]*$/.test(n)) continue;
+    if (out.indexOf(n) < 0) out.push(n);
+    if (out.length >= FIG_ASPECT_MAX) break;
+  }
+  return out;
+}
+function figAspectRule(need) {
+  if (!need.length) return "";
+  return [
+    "",
+    'Also output an "aspects" object with exactly these keys:',
+    need.map((n) => '  "' + n + '"').join("\n"),
+    "They are the eBay Item Specifics that are REQUIRED for this item's listing",
+    "category, so fill every one of them from the Japanese name and the Amazon",
+    "Japan catalog data whenever the value is stated or unambiguous.",
+    'Use "" only when the value genuinely cannot be determined. Never guess.',
+    "Each value is plain English text of at most 60 characters.",
+  ].join("\n");
+}
 
-async function figAskClaude(env, jaTitle, jp, titles, log) {
+async function figAskClaude(env, jaTitle, jp, titles, log, need) {
+  const nd = need || [];
   const lines = [
     `Japanese name: ${jaTitle || "(none)"}`,
     `Amazon Japan name: ${jp && jp.title ? jp.title : "(none)"}`,
@@ -746,7 +775,8 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 300, system: FIG_SYSTEM,
+        model: MODEL, max_tokens: Math.min(800, 300 + nd.length * 40),
+        system: FIG_SYSTEM + figAspectRule(nd),
         messages: [{ role: "user", content: lines }],
       }),
     });
@@ -783,6 +813,17 @@ async function figAskClaude(env, jaTitle, jp, titles, log) {
      なるので残す（例「超合金 CHOGOKIN ROBO 50」→ Chogokin Robo 50）。 */
   if (fields.item_type === "figure" && (fields.chara || fields.series))
     fields.item_name = "";
+  /* 必須の Item specifics（8.65）。項目名のまま返す。取れなかった項目は
+     入れない（pj_price 側が「不備」として書き出しを止める）。 */
+  if (nd.length) {
+    const ao = (obj && typeof obj.aspects === "object" && obj.aspects) || {};
+    const asp = {};
+    for (const n of nd) {
+      const v = typeof ao[n] === "string" ? ao[n].trim().slice(0, 60) : "";
+      if (v) asp[n] = v;
+    }
+    fields.aspects = asp;
+  }
   return {
     fields,
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
@@ -803,7 +844,10 @@ async function handleFigure(env, item, force) {
   /* キャッシュの版。返す項目を増やしたら上げる。
      v1 … 5項目のみ。v2 … origin / item_type / item_name / series_short を含む。
      古い版のキャッシュを読むと原産国が空のまま返ってしまうので、キーごと変える。 */
-  const ck = "fig:v2:" + key;
+  const need = figNeedAspects(item);
+  /* 必須の項目を頼まれたときは、その並びごとキャッシュを分ける
+     （前に取った結果には aspects が入っていないため）。 */
+  const ck = "fig:v2:" + key + (need.length ? ("|a:" + need.join(",")) : "");
   if (!force) {
     const hit = await env.TITLE_CACHE.get(ck, "json");
     // 項目が足りない古い形のときは、キャッシュ無しとして扱い作り直す
@@ -839,7 +883,7 @@ async function handleFigure(env, item, force) {
     return { key, status: "not_found", fields: emptyFields(), jan_resolved: janResolved,
              sources: [], candidates: [], note: "Amazonでも見つからず、日本語名もありません", log };
 
-  const ai = await figAskClaude(env, jaTitle, jp, flt.kept, log);
+  const ai = await figAskClaude(env, jaTitle, jp, flt.kept, log, need);
   if (!ai)
     return { key, status: "review", fields: emptyFields(), jan_resolved: janResolved,
              sources: [], candidates, note: "5項目を判定できませんでした", log };
@@ -1080,4 +1124,5 @@ export default {
 
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch からは使わない）。 */
-export const __test = { platformsIn, platformKey, filterCandidates, keyRole, eqKey };
+export const __test = { platformsIn, platformKey, filterCandidates, keyRole, eqKey,
+                        figNeedAspects, figAspectRule };

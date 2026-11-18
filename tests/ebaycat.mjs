@@ -187,9 +187,13 @@ console.log('\n=== ⑦ 変えるのは管理者だけ（見るのは作業者で
   const c=await asJson(await worker.fetch(req('/ebay/cat/del',
     { code:'183455' }),env,{}));
   ok(c.status===403,'★★★外すのも管理者だけ');
+  /* 候補を探すのは作業者でもよい（③「写真・原産国・カテゴリ」の仕事なので、
+     作業者の端末で使えないと流れが止まる。番号と項目の名前だけで、
+     値段も会員の情報も出ない）。 */
   const d=await asJson(await worker.fetch(req('/ebay/cat/find',
-    { q:'x' }),env,{}));
-  ok(d.status===403,'★★探すのも管理者だけ（eBay を呼ぶため）');
+    { q:'card case' }),env,{}));
+  ok(d.status===200&&d.body.ok===true,
+     '★★★候補を探すのは作業者でもよい（値段は出ない）');
 }
 
 console.log('\n=== ⑧ 表が無い D1 でも落ちない ===');
