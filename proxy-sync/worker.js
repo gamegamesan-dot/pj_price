@@ -227,6 +227,12 @@ const ALLOWED = [
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/sell\/fulfillment\/v1\/order\?/ },
   // eBayカタログの照会（JANから候補を探す）。どちらも読み取り。
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/catalog\/v1_beta\/product_summary\/search\?/ },
+  /* 8.65（カジの依頼）eBay のカテゴリを⚙から足す。**読み取りだけ**。
+     ・get_category_suggestions … 英語の商品名から候補を出す
+     ・get_item_aspects_for_category … そのカテゴリの Item specifics（必須も）
+     相場調べと同じアプリの認証（client_credentials・基本スコープ）を使う。 */
+  { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/taxonomy\/v1\/category_tree\/\d+\/get_category_suggestions\?/ },
+  { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/taxonomy\/v1\/category_tree\/\d+\/get_item_aspects_for_category\?/ },
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/commerce\/catalog\/v1_beta\/product\// },
   // カタログのスコープが無いときの代わり。出品の検索からePIDだけを拾う。
   { m: "GET",  re: /^https:\/\/api\.ebay\.com\/buy\/browse\/v1\/item_summary\/search\?/ },
@@ -12703,6 +12709,203 @@ async function mwDimAgain(env, run) {
   res.ok = true;
   return res;
 }
+/* ===== 8.65（カジの依頼）eBay の出品カテゴリを⚙から足す =====
+   新しい種類の商品を出すたびに、コードを直さずカテゴリを足せるようにする。
+   ・一覧は D1（ebay_cat）に持つ ＝ PC とスマホで同じものが見える
+   ・探す … Taxonomy API の **getCategorySuggestions**（英語の商品名で候補）
+   ・足す … **getItemAspectsForCategory** で 名前・道筋・必須の Item specifics
+            を取って一緒に控える
+   ・eBay の呼び出しは**相場調べと同じアプリの認証**（client_credentials・
+     基本スコープ）を使い回す。鍵は env から読み、ログにも画面にも出さない
+   ・読み取りだけ（出品はしない）。SP-API の権限は触らない */
+const EBAY_TREE_ID = "0";               // アメリカのカテゴリツリー
+const EBAY_CAT_MAX = 100;               // 一覧に返す上限
+const EBAY_CAT_FIND_MAX = 8;            // 候補に返す上限
+const EBAY_CAT_SEED = ["139973", "261055", "261068"];
+async function ebayCatOk(env) { return await colOk(env, "ebay_cat", "need"); }
+/* Taxonomy API を読む（読み取りだけ）。 */
+async function ebayTax(env, run, path) {
+  const a = await ebayAppToken(env, run, EBAY_BASE_SCOPE);
+  if (!a.ok)
+    return { ok: false, status: a.status || 0,
+             why: "eBay のアプリの認証が取れません（鍵を確かめてください）" };
+  const r = await net(run, EBAY_API + path, {
+    headers: { authorization: "Bearer " + a.token, accept: "application/json",
+               "Accept-Language": "en-US",
+               "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+  });
+  const t = await r.text();
+  if (!r.ok) {
+    if (run) { run.errors++; run.notes.push("taxonomy -> " + r.status); }
+    return { ok: false, status: r.status,
+             why: "eBay が " + r.status + " を返しました" };
+  }
+  try { return { ok: true, data: JSON.parse(t) }; }
+  catch (e) { return { ok: false, status: r.status, why: "読めない返事です" }; }
+}
+/* 英語の商品名 → カテゴリの候補（番号・名前・道筋）。 */
+async function ebayCatFind(env, q) {
+  const res = { ok: false, rows: [] };
+  const s0 = String(q || "").trim().slice(0, 350);
+  if (!s0) {
+    res.error = "bad_q"; res.detail = "探す言葉を入れてください（英語）";
+    return res;
+  }
+  const run = newRun("ebay-cat-find");
+  const u = new URLSearchParams({ q: s0 });
+  const r = await ebayTax(env, run,
+    "/commerce/taxonomy/v1/category_tree/" + EBAY_TREE_ID
+    + "/get_category_suggestions?" + u.toString());
+  if (!r.ok) {
+    res.error = "api"; res.detail = r.why;
+    return Object.assign(await saveRun(env, run), res);
+  }
+  const list = ((r.data || {}).categorySuggestions) || [];
+  for (const x of list.slice(0, EBAY_CAT_FIND_MAX)) {
+    const c = (x || {}).category || {};
+    /* 道筋は祖先（上に向かって並ぶ）をひっくり返して作る。 */
+    const anc = ((x || {}).categoryTreeNodeAncestors || [])
+      .map((a) => String((a || {}).categoryName || "")).filter(Boolean)
+      .reverse();
+    const nm = String(c.categoryName || "");
+    res.rows.push({ code: String(c.categoryId || ""), name: nm,
+                    path: anc.concat(nm ? [nm] : []).join(" > ") });
+  }
+  res.ok = true;
+  res.q = s0;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* カテゴリ番号 → Item specifics（必須とそれ以外）。 */
+async function ebayCatAspects(env, code) {
+  const res = { ok: false, need: [], opt: [], all: [] };
+  const c = String(code || "").replace(/\D/g, "");
+  if (!c) {
+    res.error = "bad_code"; res.detail = "カテゴリ番号を入れてください";
+    return res;
+  }
+  const run = newRun("ebay-cat-aspects");
+  const u = new URLSearchParams({ category_id: c });
+  const r = await ebayTax(env, run,
+    "/commerce/taxonomy/v1/category_tree/" + EBAY_TREE_ID
+    + "/get_item_aspects_for_category?" + u.toString());
+  if (!r.ok) {
+    res.error = "api"; res.detail = r.why;
+    return Object.assign(await saveRun(env, run), res);
+  }
+  for (const a of (((r.data || {}).aspects) || [])) {
+    const nm = String((a || {}).localizedAspectName || "").trim();
+    if (!nm) continue;
+    const con = (a || {}).aspectConstraint || {};
+    const need = !!con.aspectRequired;
+    const vals = ((a || {}).aspectValues || [])
+      .map((v) => String((v || {}).localizedValue || "")).filter(Boolean)
+      .slice(0, 20);
+    res.all.push({ name: nm, need: need, vals: vals });
+    (need ? res.need : res.opt).push(nm);
+  }
+  res.code = c;
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
+}
+/* ⚙の一覧（登録してあるカテゴリ）。 */
+async function ebayCatList(env) {
+  const res = { ok: false, rows: [], n: 0 };
+  if (!(await ebayCatOk(env))) {
+    res.error = "no_table";
+    res.detail = "ebay_cat がありません（migrate-0066-ebay-cat.sql）";
+    return res;
+  }
+  const q = await env.DB.prepare(
+    `SELECT code,name,ja,path,need,tpl,at,aspects FROM ebay_cat
+      ORDER BY COALESCE(created_at,'') ASC, code ASC LIMIT ${EBAY_CAT_MAX}`).all();
+  res.rows = ((q && q.results) || []).map((r) => {
+    let a = [];
+    try { a = JSON.parse(String(r.aspects || "[]")) || []; } catch (e) { a = []; }
+    return {
+      code: String(r.code || ""), name: String(r.name || ""),
+      ja: String(r.ja || ""), path: String(r.path || ""),
+      need: String(r.need || "").split(",").map((x) => x.trim()).filter(Boolean),
+      /* 列ヘッダに使う「そのほかの項目」。選べる値まで返すと重いので名前だけ。 */
+      opt: a.filter((x) => x && !x.need).map((x) => String(x.name || ""))
+        .filter(Boolean).slice(0, 40),
+      tpl: String(r.tpl || ""), at: String(r.at || ""),
+      seed: EBAY_CAT_SEED.indexOf(String(r.code || "")) >= 0,
+    };
+  });
+  res.n = res.rows.length;
+  res.ok = true;
+  return res;
+}
+/* カテゴリを足す（名前・道筋・必須の項目は eBay から取る）。 */
+async function ebayCatAdd(env, body) {
+  const res = { ok: false };
+  if (!(await ebayCatOk(env))) {
+    res.error = "no_table";
+    res.detail = "ebay_cat がありません（migrate-0066-ebay-cat.sql）";
+    return res;
+  }
+  const b = body || {};
+  const code = String(b.code || "").replace(/\D/g, "");
+  if (!code) {
+    res.error = "bad_code"; res.detail = "カテゴリ番号を入れてください";
+    return res;
+  }
+  const a = await ebayCatAspects(env, code);
+  if (!a.ok) { res.error = a.error || "api"; res.detail = a.detail; return res; }
+  /* 名前と道筋は、候補を引いたときの値を渡してもらう（この API は
+     名前を返さないため）。無ければ番号だけで登録し、あとから足せる。 */
+  const name = String(b.name || "").slice(0, 120);
+  const path = String(b.path || "").slice(0, 300);
+  const ja = String(b.ja || "").slice(0, 60);
+  const tpl = String(b.tpl || "").replace(/\D/g, "");
+  const now = nowIso();
+  const run = newRun("ebay-cat-add");
+  await runBatch(env, run, [
+    env.DB.prepare(
+      `INSERT INTO ebay_cat (code,name,ja,path,need,aspects,tpl,at,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(code) DO UPDATE SET
+         name=CASE WHEN excluded.name<>'' THEN excluded.name
+                   ELSE ebay_cat.name END,
+         ja=CASE WHEN excluded.ja<>'' THEN excluded.ja ELSE ebay_cat.ja END,
+         path=CASE WHEN excluded.path<>'' THEN excluded.path
+                   ELSE ebay_cat.path END,
+         need=excluded.need, aspects=excluded.aspects,
+         tpl=CASE WHEN excluded.tpl<>'' THEN excluded.tpl
+                  ELSE ebay_cat.tpl END,
+         at=excluded.at`)
+      .bind(code, name, ja, path, a.need.join(","),
+            JSON.stringify(a.all || []), tpl, now, now),
+  ]);
+  await saveRun(env, run);
+  res.ok = true;
+  res.code = code; res.name = name; res.path = path;
+  res.need = a.need; res.opt = a.opt;
+  return res;
+}
+/* カテゴリを外す（はじめから入っている3つは外せない）。 */
+async function ebayCatDel(env, body) {
+  const res = { ok: false };
+  if (!(await ebayCatOk(env))) {
+    res.error = "no_table";
+    res.detail = "ebay_cat がありません（migrate-0066-ebay-cat.sql）";
+    return res;
+  }
+  const code = String((body || {}).code || "").replace(/\D/g, "");
+  if (!code) { res.error = "bad_code"; return res; }
+  if (EBAY_CAT_SEED.indexOf(code) >= 0) {
+    res.error = "seed";
+    res.detail = "はじめから入っているカテゴリは外せません";
+    return res;
+  }
+  const run = newRun("ebay-cat-del");
+  await runBatch(env, run, [
+    env.DB.prepare(`DELETE FROM ebay_cat WHERE code=?`).bind(code),
+  ]);
+  await saveRun(env, run);
+  res.ok = true; res.code = code;
+  return res;
+}
 /* ===== 8.56（カジの依頼）会員の月額課金と Discord のロール =====
    ・Shopify Subscriptions（公式）で毎月の自動課金。**pj からは定期購入を
      読めない**（read_own_subscription_contracts は「自分のアプリが作った
@@ -18553,6 +18756,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
   "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
+  "ebay_cat",
   "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
   "sub_post", "sub_order",
@@ -18581,6 +18785,7 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  ["ebay_cat", "migrate-0066-ebay-cat.sql"],
   ["mem", "migrate-0065-mem.sql"],
   ["mem_order", "migrate-0065-mem.sql"],
   ["mem_log", "migrate-0065-mem.sql"],
@@ -19091,6 +19296,12 @@ export default {
     /* 8.11／8.13（【Y】）会員向けの配信と注文の取り込みは管理者だけ。
        値段が会員に出て、Discord にも流れるため。
        8.18：配信の案は**見るのも**管理者だけ（売値と粗利が出るため）。 */
+    /* 8.65（カジの依頼）eBay のカテゴリを**変える**のは管理者だけ
+       （見るのは作業者でもよい：番号と項目の名前だけ）。 */
+    if (role !== "admin" && request.method === "POST"
+        && url.pathname.indexOf("/ebay/cat") === 0)
+      return forbidStaff("eBay のカテゴリを変えるのは管理者用のキーが必要です",
+                         [], origin);
     /* 8.56（カジの依頼）会員の月額課金とロールは**管理者だけ**
        （プランと期限が見え、Discord のロールが動くため）。 */
     if (role !== "admin" && url.pathname.indexOf("/mem") === 0)
@@ -19397,6 +19608,27 @@ export default {
           return json(await mwDimAgain(env, true), 200, origin);
         if (request.method === "GET")
           return json(await mwDimAgain(env, false), 200, origin);
+      }
+      /* ===== 8.65（カジの依頼）eBay の出品カテゴリ =====
+           GET  /ebay/cat       … 登録してあるカテゴリの一覧（見るだけ）
+           POST /ebay/cat/find  … 英語の商品名から候補を探す（Taxonomy API）
+           POST /ebay/cat/add   … カテゴリを足す（必須の項目も取って控える）
+           POST /ebay/cat/del   … カテゴリを外す（はじめの3つは外せない）
+         変えるのは管理者だけ（下の枝で弾く）。見るのは作業者でもよい
+         （カテゴリ番号と項目の名前だけで、値段は入っていない）。 */
+      if (request.method === "GET" && url.pathname === "/ebay/cat")
+        return json(await ebayCatList(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/ebay/cat/find") {
+        const b = await request.json().catch(() => ({}));
+        return json(await ebayCatFind(env, (b || {}).q), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/ebay/cat/add") {
+        const b = await request.json().catch(() => ({}));
+        return json(await ebayCatAdd(env, b), 200, origin);
+      }
+      if (request.method === "POST" && url.pathname === "/ebay/cat/del") {
+        const b = await request.json().catch(() => ({}));
+        return json(await ebayCatDel(env, b), 200, origin);
       }
       /* ===== 8.56（カジの依頼）会員の月額課金と Discord のロール =====
            GET  /mem        … 会員の一覧（会員番号は下4桁）と⚙の様子
@@ -20015,6 +20247,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   memSettings, memRolesFor, memAllRoles, memAddMonth, memPlanOfOrder,
   memWant, memPaid, memSyncOne, memList, memLink, memUnlink, memState,
   memHook, jobMemSync, memRoleWhy, memHmacOk, memDel,
+  /* 8.65 eBay の出品カテゴリ。 */
+  ebayCatList, ebayCatAdd, ebayCatDel, ebayCatFind, ebayCatAspects,
+  EBAY_TREE_ID, EBAY_CAT_SEED,
   MEM_PAID, MEM_PLANS, MEM_GRACE_D, MEM_MON_D,
   subIdxState, subNoteOnce,
   /* 8.29（カジの依頼）買うかどうかの目安。 */

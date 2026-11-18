@@ -1140,3 +1140,34 @@ CREATE TABLE IF NOT EXISTS mem_log (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mem_log_at ON mem_log(at);
+
+/* ===== 8.65（カジの依頼）eBay の出品カテゴリ（migrate-0066）=====
+   カテゴリの一覧をコードに書かずデータで持つ（PC とスマホで同じものを見る）。
+   name/path/need/aspects は eBay の Taxonomy API から取って控える。 */
+CREATE TABLE IF NOT EXISTS ebay_cat (
+  code       TEXT PRIMARY KEY,          -- eBay のカテゴリ番号（末端）
+  name       TEXT,                      -- 英語の名前
+  ja         TEXT,                      -- 画面に出す名前（空なら name）
+  path       TEXT,                      -- カテゴリの道筋
+  need       TEXT,                      -- 必須の Item specifics（カンマ区切り）
+  aspects    TEXT,                      -- 取った中身（JSON）
+  tpl        TEXT,                      -- 列ヘッダのひな形（空なら aspects から）
+  at         TEXT,
+  created_at TEXT
+);
+/* いまの3つ（コードに書いてあったもの）。ひな形は自分自身。 */
+INSERT INTO ebay_cat (code,name,ja,path,need,aspects,tpl,at,created_at)
+  VALUES ('139973','Video Games','ゲーム',
+          'Video Games & Consoles > Video Games','Game Name,Platform','',
+          '139973','','seed')
+  ON CONFLICT(code) DO NOTHING;
+INSERT INTO ebay_cat (code,name,ja,path,need,aspects,tpl,at,created_at)
+  VALUES ('261055','Action Figures & Accessories','フィギュア（非可動）',
+          'Toys & Hobbies > Action Figures & Accessories','Type','',
+          '261055','','seed')
+  ON CONFLICT(code) DO NOTHING;
+INSERT INTO ebay_cat (code,name,ja,path,need,aspects,tpl,at,created_at)
+  VALUES ('261068','Action Figures','フィギュア（可動）',
+          'Toys & Hobbies > Action Figures & Accessories > Action Figures',
+          'Type','','261068','','seed')
+  ON CONFLICT(code) DO NOTHING;
