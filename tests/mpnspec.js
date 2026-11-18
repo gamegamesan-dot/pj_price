@@ -216,7 +216,9 @@ const four=await p.evaluate(async()=>{
            long:mwRows[0].pics_long,
            why2:mwPushWhy?mwPushWhy(mwRows[0]):'',
            saved:z?z.saved.length:0, posts:posts.join('／'),
-           txt:out.innerHTML };
+           /* 8.71 一覧を描き直したあとは、結果は**描き直した枠**に出る。 */
+           txt:((document.getElementById('mwImgOut_4528272010290')||{}).innerHTML
+                ||out.innerHTML) };
 });
 ok(four.before===0&&/写真なし/.test(four.why),
    '★取り込む前は「写真なし」（出品リストに入れられない）');

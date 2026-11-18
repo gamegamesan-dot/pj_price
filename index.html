@@ -21626,8 +21626,14 @@ function mwImgTake(jan,ids,out){
     })
     .then(function(z){
       if(!z)return null;
-      /* 8.71 一覧の「写真」の数をその場で直す（取り直しを待たない）。 */
+      /* 8.71 一覧の「写真」の数をその場で直す（取り直しを待たない）。
+         一覧を描き直すと、結果を書く枠（mwImgOut_<JAN>）も作り直されるので、
+         **描き直したあとの枠**を取り直してからそこに書く
+         （古い枠に書くと、画面には何も出ない）。 */
       mwPicsOkApply(jan,z);
+      var o2=mwImgOut(jan); if(o2)out=o2;
+      var box=out.closest?out.closest('details'):null;
+      if(box&&!box.open)box.open=true;        // 結果が見えるように開けておく
       var first=z.saved.filter(function(x){ return +x.pos===0; })[0];
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'
         +'<b>'+z.saved.length+'枚</b>を控えました'

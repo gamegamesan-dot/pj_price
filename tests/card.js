@@ -207,7 +207,9 @@ ok(/game-20260101-UG-B0CRD10001-1200/.test(cc.detText)&&/ポリシー/.test(cc.d
 let csvSaved=await p.evaluate(()=>localStorage.getItem('pj:det:v1')||'');
 ok(/"csv":\{"c1":1\}/.test(csvSaved),'★出品CSVタブの行も別に覚える');
 await p.evaluate(()=>{
-  document.querySelector('#csvList [data-row="c1"] summary').click();
+  /* 畳むのは「計算の詳細」（details[data-det]）。カードには型番（MPN）など
+     ほかの details もあるので、最初の summary ではなくこれを狙う。 */
+  document.querySelector('#csvList [data-row="c1"] details[data-det] > summary').click();
 });
 await p.waitForTimeout(150);
 csvSaved=await p.evaluate(()=>localStorage.getItem('pj:det:v1')||'');

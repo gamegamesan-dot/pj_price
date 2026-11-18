@@ -312,10 +312,14 @@ ok(!/まだ作っていません/.test(out),'★★古い文言（まだ作っ�
 console.log('\n=== 出品はしない ===');
 let noList=await p.evaluate(()=>{
   const t=$('csvMwList').innerHTML;
-  return { push:/出品する|出品リストに入れる|書き出す/.test(t),
+  return { direct:/出品する|書き出す|CSVを出す/.test(t),
+    push:/出品リストに入れる/.test(t),
     api:typeof window.mwListPush };
 });
-ok(noList.push===false,'★★一覧に「出品する」ボタンは無い');
+ok(noList.direct===false,'★★一覧から eBay に出すボタン・書き出しは無い');
+/* 6.136：写真が付いた行だけ「出品リストに入れる」が出る（出品そのものは
+   しない。8.71 で、写真を取り込んだその場で出るようになった）。 */
+ok(noList.push===true,'★★写真が付いた行に「出品リストに入れる」が出る');
 ok(noList.api==='undefined','★★出品の処理そのものが無い');
 
 console.log('\n=== 画像サーバーの設定が無いとき ===');
