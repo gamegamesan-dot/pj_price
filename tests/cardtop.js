@@ -23,7 +23,7 @@ const setup=async()=>await p.evaluate(()=>{
   $('saleRate').value='15'; $('usTaxRate').value='8';
   $('csvShipProfile').value='W1000'; $('csvRetProfile').value='R';
   $('csvPayProfile').value='P'; $('csvLocation').value='Tokyo';
-  $('csvOriginDefault').value='China';
+  $('csvGenreOrigin').value='ゲーム,Japan\nフィギュア・ホビー,China';
   $('syncApi').value=''; $('syncKey').value='';
   csvList=[
    {id:'c1',src:'sedori',sku:'toy-20261017-UG-B0TOP00001-7980',

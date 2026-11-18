@@ -2614,7 +2614,10 @@ body.staff #syncOnHandFix{display:none !important}
     <details class="cfgg" id="cfgListBox" data-cfgg="list">
       <summary class="cfggsum">原産国・eBayカテゴリ・出品の既定値<span class="cfggn"></span></summary>
       <div class="body">
-      <div class="rowv"><label>原産国の既定値</label><input type="text" id="csvOriginDefault" value="China"><div class="note2" style="margin-top:2px">Amazonのカタログから原産国が取れなかったフィギュアの行に入れます。入れた行には「原産国：既定値」の黄色いバッジを付け、一覧の絞り込みでその行だけ選べます。英題の status は変えません。行の原産国ボタンや eBayタブの「出品文」で確定した値は上書きしません。</div></div>
+      <!-- 8.72：原産国の既定は**ジャンルごと**。ここ1か所だけで決める
+           （v324 までの「原産国の既定値（China）」はこの表にまとめた）。 -->
+      <div class="rowv"><label>ジャンルごとの原産国の既定</label><textarea id="csvGenreOrigin" rows="4" placeholder="ゲーム,Japan" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">ゲーム,Japan
+フィギュア・ホビー,China</textarea><div class="note2" style="margin-top:2px">1行に「<b>ジャンル名,原産国,見分ける言葉（省略可）</b>」。Amazon のカタログから原産国が取れなかった行に、そのジャンルの値を入れます。入れた行には「<b>原産国：ジャンルの既定</b>」と出し、一覧の絞り込みでその行だけ選べます（書き出しは止めません。<b>発送のときに実物で確かめてください</b>）。<br>ジャンルは eBay のカテゴリで見分けます（ゲーム 139973 と Video Games &amp; Consoles の下＝ゲーム／フィギュア 261055・261068 と Toys &amp; Hobbies・Collectibles の下＝フィギュア・ホビー）。足したジャンルは3列目の「見分ける言葉」（カテゴリ番号・カテゴリの道筋の言葉・MW の機種の言葉）で見分けます。<b>どのジャンルにも当てはまらない行は入れずに「原産国なし」で止めます</b>（推測で入れません）。手で確定した値・Amazon から取れた値・⚙「メーカーごとの原産国」のほうが優先です。</div></div>
       <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
       <!-- 8.65：出品に使う eBayカテゴリ。表は pj-sync（D1 の ebay_cat）が持つので、
            新しい種類の商品を出すときもコードを直さずにここから足せる。 -->
@@ -6716,10 +6719,18 @@ function csvCatName(cat){
    テンプレートの流用では、そのカテゴリで必須の列が足りない（File Exchange が
    「必須の項目がない」で弾く）ため。C: 以外の列（価格・送料・ポリシーなど）は
    テンプレートのままにする。 */
+/* pj-sync に登録したカテゴリで、eBay から取った項目を持っているもの。
+   必須が0件でもそのほかの項目があれば、そのカテゴリの列で出す
+   （フィギュアの決め打ちの項目を混ぜないため）。 */
+function csvCatD1(cat){
+  var c=csvCatOf(cat);
+  if(!c||!c.d1)return null;
+  return ((c.need||[]).length||(c.opt||[]).length)?c:null;
+}
 function csvHeadFor(cat){
   if(CSV_HEAD[cat])return CSV_HEAD[cat];
-  var base=CSV_HEAD[csvCatTpl(cat)], c=csvCatOf(cat);
-  if(!c||!c.d1||!(c.need||[]).length)return base;
+  var base=CSV_HEAD[csvCatTpl(cat)], c=csvCatD1(cat);
+  if(!c)return base;
   var a=base.split(','), i0=-1, i1=-1;
   for(var i=0;i<a.length;i++)if(/^\*?C:/.test(a[i])){ if(i0<0)i0=i; i1=i; }
   if(i0<0)return base;
@@ -6794,6 +6805,109 @@ function csvBrandFill(r){
   if(!mi||!mi.brand)return false;
   sp.brand=mi.brand; sp.brandMaker=true;
   return true;
+}
+/* ================= 8.72 ジャンルごとの原産国の既定（カジの方針）=================
+   ・ゲーム関連（ソフト・ハード・周辺機器・アクセサリー）→ Japan
+   ・フィギュア・ホビー関連 → China
+   Amazon の商品ページで原産国が分からない品は、この既定で出す。
+   **発送のときに実物で確かめ、違っていたら再出品のときに直す**（8.72 の下）。
+   入れる順（上が優先）：行で確定した値 → Amazon のカタログ →
+   ⚙「メーカーごとの原産国」→ **ジャンルの既定** → （どれも無ければ入れない）。 */
+var CSV_GENRES=[
+  { key:'game', ja:'ゲーム', origin:'Japan',
+    alias:['ゲーム関連','ゲーム・ハード','ゲーム周辺機器','game'] },
+  { key:'fig', ja:'フィギュア・ホビー', origin:'China',
+    alias:['フィギュア','ホビー','フィギュア・ホビー関連','fig','hobby'] }
+];
+/* eBay のカテゴリの道筋で見分ける（登録したカテゴリ）。
+   上から順に見るので、ゲームを先に置く。 */
+var GENRE_PATH={ game:['Video Games & Consoles'],
+                 fig:['Toys & Hobbies','Collectibles'] };
+/* MW の「機種」で見分ける（補助）。フィギュア側を先に見る
+   （b2cchara_figure のような言葉のほうが確かなため）。 */
+var GENRE_KISHU={
+  fig:/(figure|chara|hobby|toy|doll|plush|goods|anime|statue)/i,
+  game:/(game|soft|hard|console|switch|playstation|xbox|^ns|^sw|^ps[0-9]|^3ds|^wii|^gc|^psp|^vita)/i
+};
+// ジャンル名（⚙に書いた名前）→ 組み込みのジャンルの印
+function csvGenreKeyOf(name){
+  var k=makerKey(name), hit='';
+  if(!k)return '';
+  CSV_GENRES.forEach(function(g){
+    if(hit)return;
+    if(makerKey(g.ja)===k||makerKey(g.key)===k){ hit=g.key; return; }
+    (g.alias||[]).forEach(function(a){ if(!hit&&makerKey(a)===k)hit=g.key; });
+  });
+  return hit;
+}
+/* ⚙の表（1行に「ジャンル名,原産国,見分ける言葉」）。
+   書いていないジャンルは組み込みの既定で補う（⚙を空にしても効く）。 */
+function csvGenreRows(){
+  var out=[], seen={}, el=$('csvGenreOrigin');
+  if(el)String(el.value||'').split(/\r?\n/).forEach(function(ln){
+    var a=String(ln).replace(/[\u3001\uff0c\t]/g,',').split(',');
+    var nm=String(a[0]||'').trim(); if(!nm)return;
+    var key=csvGenreKeyOf(nm)||('x:'+makerKey(nm));
+    if(seen[key])return;
+    seen[key]=1;
+    out.push({ key:key, ja:nm, origin:String(a[1]||'').trim(),
+               hint:String(a[2]||'').trim() });
+  });
+  CSV_GENRES.forEach(function(g){
+    if(seen[g.key])return;
+    seen[g.key]=1;
+    out.push({ key:g.key, ja:g.ja, origin:g.origin, hint:'' });
+  });
+  return out;
+}
+/* その行のジャンル。eBay のカテゴリで決め、決まらなければ MW の機種で補う。
+   どちらでも決まらなければ ''（推測しない＝原産国は入れない）。 */
+function csvGenreOf(r){
+  var cat=String((r||{}).cat||'').trim();
+  if(cat==='139973')return 'game';
+  if(cat==='261055'||cat==='261068')return 'fig';
+  var cd=csvCatOf(cat), path=String((cd&&cd.path)||'');
+  var kishu=String((r||{}).mwKishu||'');
+  /* ⚙の「見分ける言葉」（カテゴリ番号・道筋の言葉・機種の言葉）。
+     足したジャンルはこれで見分ける。 */
+  var rows=csvGenreRows(), hit='';
+  rows.forEach(function(x){
+    if(hit||!x.hint)return;
+    var w=x.hint.toLowerCase();
+    if(x.hint===cat){ hit=x.key; return; }
+    if(path&&path.toLowerCase().indexOf(w)>=0){ hit=x.key; return; }
+    if(kishu&&kishu.toLowerCase().indexOf(w)>=0){ hit=x.key; return; }
+  });
+  if(hit)return hit;
+  if(path){
+    Object.keys(GENRE_PATH).forEach(function(k){
+      if(hit)return;
+      GENRE_PATH[k].forEach(function(w){
+        if(!hit&&path.toLowerCase().indexOf(String(w).toLowerCase())>=0)hit=k; });
+    });
+    if(hit)return hit;
+  }
+  if(kishu){
+    if(GENRE_KISHU.fig.test(kishu))return 'fig';
+    if(GENRE_KISHU.game.test(kishu))return 'game';
+  }
+  return '';
+}
+// その行に入れるジャンルの既定（決まらなければ null）
+function csvGenreInfo(r){
+  var k=csvGenreOf(r); if(!k)return null;
+  var hit=null;
+  csvGenreRows().forEach(function(x){ if(!hit&&x.key===k)hit=x; });
+  if(!hit||!String(hit.origin||'').trim())return null;
+  return { key:k, ja:hit.ja, origin:String(hit.origin).trim() };
+}
+/* 原産国が「既定で入った値」か（人が確かめていない値か）。
+   発送のときに確かめてほしい行はこれで見る。 */
+function csvOriginIsDef(r){
+  var sp=(r||{}).specs||{};
+  if(sp.originManual)return false;
+  if(!String(sp.origin||'').trim())return false;
+  return !!(sp.originDefault||sp.originGenre||sp.originMaker);
 }
 /* ---- 型番（MPN）と JAN（8.68・カジの報告）----
    MPN は**メーカーの型番**（例 KCP-004-1）。JAN を入れるのは誤りだった
@@ -7325,7 +7439,8 @@ var CSV_LOG_KEY ='pj:csvlog:v1';    // 書き出し済みログ
 var CSV_CFG_KEY ='pj:csvcfg:v1';    // このタブの設定
 var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRankLimit',
                  'csvShipProfile','csvShipProfileRe','csvRetProfile','csvPayProfile','csvLocation',
-                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey','csvOriginDefault','csvCostMin',
+                 'csvImgBase','csvImgToken','csvTitleApi','csvTitleKey',
+                 'csvGenreOrigin','csvCostMin',
                  'csvCatCustom','csvMakerOrigin',
                  'syncApi','syncKey','syncWeight','syncWeightGame','syncTol',
                  'syncSoldCut','syncDropMax','syncLimit','csvWeightCart','csvSort',
@@ -9132,7 +9247,9 @@ var CSV_FILTERS=[
   { v:'ng',     label:'不備がある行だけ',
     f:function(r){ return csvIssues(r).length>0; } },
   { v:'origin', label:'原産国：既定値の行だけ',
-    f:function(r){ return !!(r.specs||{}).originDefault; } },
+    /* 8.72 ジャンルの既定・メーカーの既定で入れた行もここで探せる
+       （どれも「人が確かめていない値」なので、まとめて見たい）。 */
+    f:function(r){ return csvOriginIsDef(r); } },
   { v:'review', label:'要確認（review）の行だけ',
     f:function(r){ return r.titleStatus==='review'; } },
   /* 中古フィギュアなのに一点物がオフの行（6.94）。書き出し・名簿送信で
@@ -9270,9 +9387,10 @@ function csvOriginSelect(r){
   /* 8.70 メーカーの表から入れた値も「まだ人が選んでいない」扱いにして、
      「原産国：メーカーの既定（Japan）」と出す。 */
   var mk=(!!sp.originMaker&&!sp.originManual&&!!cur);
-  var def=(!cur||!!sp.originDefault||mk);          // 未選択（既定のまま）
+  var gn=(!mk&&!!sp.originGenre&&!sp.originManual&&!!cur);
+  var def=(!cur||!!sp.originDefault||mk||gn);      // 未選択（既定のまま）
   var h='<option value=""'+(def?' selected':'')+'>原産国：'
-    +(mk?'メーカーの既定':'既定値')
+    +(mk?'メーカーの既定':(gn?'ジャンルの既定':'既定値'))
     +(cur?('（'+esc(cur)+'）'):'')+'</option>';
   CSV_ORIGINS.forEach(function(v){
     h+='<option value="'+esc(v)+'"'+((!def&&cur===v)?' selected':'')+'>原産国：'
@@ -10452,6 +10570,7 @@ $('csvList').addEventListener('change',function(e){
     var sp=ro.specs=ro.specs||{};
     // 手で確定した印。以後どの処理でも上書きしない（英題の再生成でも残る）
     sp.origin=ov; sp.originDefault=false; sp.originManual=true;
+    sp.originGenre=false; sp.originMaker=false;
     csvSaveList(); csvRender(); return;
   }
   var cid=t.getAttribute('data-cat');
@@ -11575,12 +11694,12 @@ function csvRowFor(r,raw){
     o['C:Release Year']=sp.year||'';
     o['C:Country of Origin']='Japan';
     o['C:MPN']=csvMpnOf(r);               // 8.68 型番（無ければ Does not apply）
-  }else if(csvCatNeed(r.cat).length){
+  }else if(csvCatD1(r.cat)){
     /* pj-sync に登録したカテゴリ（8.65）。列は eBay から取った項目で作るので、
        値も項目名で入れる。英題生成で埋めた値（specs.aspects）を先に見て、
        無ければ行がすでに持っている値で補う。
        必須の項目が空の行は csvIssues で止める（ここでは作らない）。 */
-    var cd=csvCatOf(r.cat)||{};
+    var cd=csvCatD1(r.cat)||{};
     (cd.need||[]).forEach(function(n){ o['*C:'+n]=csvAspectVal(r,n); });
     (cd.opt||[]).forEach(function(n){
       if(o['*C:'+n]===undefined)o['C:'+n]=csvAspectVal(r,n); });
@@ -22583,16 +22702,23 @@ function csvOriginFill(r){
   /* 8.70 メーカーの表にあればそれを使う（カードに「メーカーの既定」と出す）。 */
   var mi=csvMakerInfo(r);
   if(mi&&mi.origin){
-    sp.origin=mi.origin; sp.originMaker=true; sp.originDefault=false;
+    sp.origin=mi.origin; sp.originMaker=true;
+    sp.originDefault=false; sp.originGenre=false;
     return true;
   }
-  /* 8.70 無在庫（MW）の行は、表に無いメーカーの原産国を推測しない。
-     空のままにして「原産国なし」で止める（別の国で出してしまわないため）。 */
-  if(String(r.buySource||'')==='mw')return false;
-  sp.origin=String($('csvOriginDefault').value||'').trim()||'China';
-  sp.originDefault=true;
-  sp.originMaker=false;
-  return true;
+  /* 8.72 ジャンルの既定（ゲーム＝Japan／フィギュア・ホビー＝China）。 */
+  var gi=csvGenreInfo(r);
+  if(gi){
+    sp.origin=gi.origin;
+    sp.originGenre=true; sp.originGenreJa=gi.ja;
+    /* 「既定で入れた」印は今までと同じ名前でも立てる
+       （絞り込み・6.84 の「既定値は要確認にしない」をそのまま効かせる）。 */
+    sp.originDefault=true; sp.originMaker=false;
+    return true;
+  }
+  /* 8.72 どのジャンルにも当てはまらない行は入れない（推測しない）。
+     空のままなので「原産国なし」で書き出しが止まる。 */
+  return false;
 }
 function csvApplyFields(r,f){
   var sp=r.specs=r.specs||{};
@@ -22624,7 +22750,9 @@ function csvApplyFields(r,f){
      （古いキャッシュで origin が返らない場合も含む）ときは既定値で埋めて
      「原産国：既定値」のバッジを出す。 */
   if(!sp.originManual){
-    if(f.origin){ sp.origin=f.origin; sp.originDefault=false; sp.originMaker=false; }
+    if(f.origin){ sp.origin=f.origin;
+                  sp.originDefault=false; sp.originMaker=false;
+                  sp.originGenre=false; }
     else csvOriginFill(r);
   }
   csvBrandFill(r);                        // 8.70 メーカーの英語名をブランドに
@@ -25928,6 +26056,48 @@ function syncSoldKeepHtml(r){
     +'　<span style="opacity:.8">値下げも値上げもしません</span>'
     +syncSkWhyHtml(r)+'</div>';
 }
+/* ================= 8.72 発送のときに原産国を確かめる =================
+   既定（ジャンル・メーカー）で入れた原産国は**人が確かめていない値**なので、
+   売れた行に「原産国は既定値（発送時に確認）」と出し、その場で実物の値を
+   入れて保存できるようにする。
+   入れた値は**出品リストの行**に「手で確定した値」として入る。再出品・Revise は
+   どちらも出品リストの行から作るので、次からはその値で出る。 */
+function syncCsvRowOf(x){
+  var asin=String((x||{}).asin||'').trim(); if(!asin)return null;
+  var cond=String((x||{}).cond||''), hit=null;
+  csvList.forEach(function(r){
+    if(String(r.asin||'')!==asin)return;
+    if(cond&&csvKindOf(r)!==cond)return;
+    hit=r;
+  });
+  return hit;
+}
+function syncOriginHtml(x){
+  if(!syncSoldKeepOf(x))return '';            // 売れた行だけに出す
+  var r=syncCsvRowOf(x); if(!r)return '';
+  if(String(r.cat||'')==='139973')return '';  // ゲームは Japan 固定（確認不要）
+  var sp=r.specs||{}, cur=String(sp.origin||'').trim();
+  if(sp.originManual)
+    return '<div class="note2" style="margin-top:4px">'
+      +'原産国 <b>'+esc(cur||'（空）')+'</b>'
+      +'<span style="opacity:.8">（実物で確かめた値。次の再出品もこの値です）'
+      +'</span></div>';
+  if(!csvOriginIsDef(r))return '';
+  var how=sp.originMaker?'メーカーの既定'
+         :(sp.originGenre?('ジャンルの既定'
+            +(sp.originGenreJa?('・'+sp.originGenreJa):'')):'既定値');
+  var h='<option value="">そのままにする</option>';
+  CSV_ORIGINS.forEach(function(v){
+    h+='<option value="'+esc(v)+'">'+esc(v)+' にする</option>'; });
+  h+='<option value="*">その他…</option>';
+  return '<div class="note2" style="margin-top:4px;color:#8a6d00">'
+    +'<b>原産国は既定値（発送時に確認）</b>：'+esc(cur)
+    +'（'+esc(how)+'）　'
+    +'<select data-sorig="'+esc(r.id)+'" style="padding:4px;font-size:12px;'
+    +'border:1px solid #8a6d00;border-radius:2px;background:#fff6d6">'+h+'</select>'
+    +'<br><span style="opacity:.85">箱の表記を見て、違っていたら入れ直して'
+    +'ください。入れた値は<b>次の再出品・Revise</b>で使われます。</span></div>';
+}
 /* 数量0の行に、同じ値段で出し直せるか・出せないならその理由を出す。
    出せない行は絞り込み「対応が必要」にも入る。 */
 function syncSkWhyHtml(r){
@@ -27809,6 +27979,7 @@ function syncRowHtml(r,key){
       +syncRevHtml(r)
       +syncPicsWaitHtml(r)+syncPicsGoneHtml(r)
       +syncSoldKeepHtml(r)      // 売れた値段で保っています（6.77）
+      +syncOriginHtml(r)        // 8.72 原産国は既定値（発送時に確認）
       +syncMarkHtml(r)
       /* 次の自動値下げ（日付・新しい売値・残り回数・下限） */
       +syncMdRowHtml(r)
@@ -28875,6 +29046,31 @@ $('syncList').addEventListener('change',function(e){
     if(r){ syncSoldSet(r,t.value); syncSoldPost(r,t.value); }
     syncRowReplace(ks); return;
   }
+  /* 8.72 発送のときに確かめた原産国を、出品リストの行に入れる。 */
+  var so=t.getAttribute('data-sorig');
+  if(so){
+    var ro=csvRowById(so);
+    var ov=String(t.value||'');
+    if(!ro||!ov){ syncRender(); return; }
+    if(ov==='*'){
+      var cur0=String((ro.specs||{}).origin||'');
+      var v=prompt('実物の原産国を入力してください（eBayに出る表記）',
+                   CSV_ORIGINS.indexOf(cur0)<0?cur0:'');
+      if(v===null||!String(v).trim()){ syncRender(); return; }
+      ov=String(v).trim();
+    }
+    var spo=ro.specs=ro.specs||{};
+    spo.origin=ov; spo.originManual=true;
+    spo.originDefault=false; spo.originGenre=false; spo.originMaker=false;
+    csvSaveList();
+    /* 出品文の中の原産国も作り直す（まだ出していない行のため）。
+       出品済みの行は次の再出品・Revise でこの値が使われる。 */
+    try{ if(String(ro.descHtml||'').trim())ro.descHtml=csvDescFor(ro); }catch(e){}
+    csvSaveList();
+    try{ csvRender(); }catch(e){}
+    syncRender();
+    return;
+  }
   var k=t.getAttribute('data-spick');
   if(!k)return;
   syncPick[k]=t.checked;
@@ -29317,7 +29513,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v324';   // sw.js の const V と必ず同じ値にする
+var APP_V='v325';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

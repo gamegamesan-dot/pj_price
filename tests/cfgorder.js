@@ -76,7 +76,7 @@ ok(has('tune','csvReviewAbs')&&has('tune','csvReviewPct')&&has('tune','syncWeigh
 ok(has('amz','mwAmzFeeGame')&&has('amz','mwAmzFbaGame')&&has('amz','mwAmzFeeHobby')
    &&has('amz','mwAmzFbaHobby')&&has('amz','mwNetMode')&&has('amz','mwAutoMode'),
    '★★★Amazon刈取：手数料・税抜の粗利の出し方・自動の取り直し');
-ok(has('list','csvOriginDefault')&&has('list','csvCatCustom'),
+ok(has('list','csvGenreOrigin')&&has('list','csvCatCustom'),
    '★ときどき：原産国の既定値・よく使うeBayカテゴリ');
 ok(has('conn','csvTitleApi')&&has('conn','csvTitleKey')&&has('conn','syncApi')
    &&has('conn','syncKey')&&has('conn','csvImgBase')&&has('conn','csvImgToken'),

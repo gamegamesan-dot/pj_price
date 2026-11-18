@@ -35,7 +35,7 @@ await p.evaluate(()=>{
   csvAddCatOpts();
   $('csvRetProfile').value='R'; $('csvPayProfile').value='P';
   $('csvLocation').value='Tokyo'; $('csvShipProfile').value='W1000';
-  $('csvOriginDefault').value='China';
+  $('csvGenreOrigin').value='ゲーム,Japan\nフィギュア・ホビー,China';
   $('csvMakerOrigin').value='キーズファクトリー,Japan,Keys Factory';
 });
 await openCsvBoxes(p);
@@ -155,13 +155,20 @@ const three=await p.evaluate(()=>{
   o.sel=sel?sel.options[0].textContent:'';
   o.col=csvRowFor(pod)['*C:Brand']||csvRowFor(pod)['C:Brand'];
   o.cor=csvRowFor(pod)['C:Country/Region of Manufacture'];
-  /* 表に無いメーカーの無在庫の行は、原産国を入れない（不備で止める）。 */
+  /* 8.72：表に無いメーカーでも、**ジャンルの既定**が入る（この行は
+     Video Games & Consoles の下＝ゲームなので Japan）。 */
   var pod2=csvList[0];
   pod2.specs.origin=''; pod2.specs.originMaker=false; pod2.mwSha='知らない社';
+  o.genreFill=csvOriginFill(pod2);
+  o.genreOrigin=pod2.specs.origin;
+  o.genre=!!pod2.specs.originGenre;
+  /* どのジャンルにも当てはまらない行は、今までどおり入れずに止める。 */
+  pod2.specs.origin=''; pod2.specs.originGenre=false; pod2.cat='999001';
   o.noFill=csvOriginFill(pod2);
   o.after=pod2.specs.origin;
   o.need=csvIssues(pod2).filter(function(x){ return x==='原産国なし'; }).length;
   o.rows=csvExportSplit([pod2.id]).rows.length;
+  pod2.cat='171831';
   /* 手持ちの行（MW でない行）は今までどおり⚙の既定値を入れる。 */
   var g=csvList[1];
   g.specs.origin=''; g.cat='261055';
@@ -178,10 +185,12 @@ ok(three.o1===true&&three.origin==='Japan'&&three.maker&&!three.def,
 ok(/メーカーの既定/.test(three.sel)&&/Japan/.test(three.sel),
    '★★★カードに「原産国：メーカーの既定（Japan）」と出る：'+three.sel);
 ok(three.cor==='Japan','★★原産国の項目にも入る');
+ok(three.genreFill===true&&three.genreOrigin==='Japan'&&three.genre,
+   '★★★メーカーが表に無くても、ジャンル（ゲーム）の既定 Japan が入る（8.72）');
 ok(three.noFill===false&&three.after===''&&three.need===1&&three.rows===0,
-   '★★★表に無いメーカーの無在庫の行は入れずに「原産国なし」で止める');
+   '★★★どのジャンルにも当てはまらない行は入れずに「原産国なし」で止める');
 ok(three.gf===true&&three.gOrigin==='China'&&three.gDef,
-   '★★手持ちの行は今までどおり⚙の既定値（China）を入れる');
+   '★★フィギュアの行は「フィギュア・ホビー」の既定（China）を入れる');
 
 console.log('=== ④ 写真を取り込んだら、その場で「写真あり」===');
 const four=await p.evaluate(async()=>{
