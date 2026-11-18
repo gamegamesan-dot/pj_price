@@ -54,13 +54,29 @@ export function fileList(dir) {
     });
 }
 
+/* ---- 何度流しても同じ初期データ（8.65 で足した）----
+   `INSERT OR IGNORE INTO …` と `INSERT INTO … ON CONFLICT … DO NOTHING` は、
+   同じ行が既にあれば何もしない。**2回流しても結果が変わらない**ので、
+   「データを動かす文」として人の目で止める必要がない（止めると、表を作る
+   ファイルに初期データを1行入れただけで Actions が通らなくなる）。
+   `DO UPDATE` が入っているものは**書き換える**ので、ここには入れない。 */
+export function isSeedStmt(stmt) {
+  const t = String(stmt || "").trim();
+  if (!/^INSERT\s/i.test(t)) return false;
+  if (/\bDO\s+UPDATE\b/i.test(t)) return false;          // 書き換えるものは別
+  if (/^INSERT\s+OR\s+IGNORE\s+INTO\s/i.test(t)) return true;
+  return /^INSERT\s+INTO\s/i.test(t) && /\bON\s+CONFLICT\b/i.test(t)
+      && /\bDO\s+NOTHING\b/i.test(t);
+}
 /* ---- そのファイルが足すもの（表・列・索引）----
    「もう当たっているか」を D1 のいまの作りと見比べるために使う。
    読み取るのは CREATE TABLE / ALTER TABLE … ADD COLUMN / CREATE INDEX だけ。
    UPDATE や INSERT しかないファイル（backfill）は、ここでは何も返さない
-   （＝作りからは判定できないので「適用済み」とは決めない）。 */
+   （＝作りからは判定できないので「適用済み」とは決めない）。
+   何度流しても同じ初期データ（上の isSeedStmt）だけは seeds に数え、
+   `other`（人の目で止める文）には入れない（8.65）。 */
 export function sqlObjects(sql) {
-  const out = { tables: [], columns: [], indexes: [], other: 0 };
+  const out = { tables: [], columns: [], indexes: [], other: 0, seeds: 0 };
   for (const stmt of splitSql(sql)) {
     let m = /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z0-9_]+)["'`]?/i
       .exec(stmt);
@@ -71,6 +87,7 @@ export function sqlObjects(sql) {
     m = /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z0-9_]+)["'`]?/i
       .exec(stmt);
     if (m) { out.indexes.push(m[1]); continue; }
+    if (isSeedStmt(stmt)) { out.seeds++; continue; }
     out.other++;
   }
   return out;
@@ -126,7 +143,7 @@ export function missKind(err) {
    返り: { state:'done'|'todo'|'data'|'unknown', miss:[], why } */
 export async function judgeFile(objs, probe, memo) {
   const mem = memo || {};
-  const o = objs || { tables: [], columns: [], indexes: [], other: 0 };
+  const o = objs || { tables: [], columns: [], indexes: [], other: 0, seeds: 0 };
   const miss = [];
   /* ① データを動かす文（UPDATE・INSERT など）が入っているファイルは、
         作りからは「済み」と決められない。人に見てもらう。 */
@@ -135,7 +152,9 @@ export async function judgeFile(objs, probe, memo) {
              why: "UPDATE などデータを動かす文が " + o.other + "つあるので要確認" };
   if (!o.tables.length && !o.columns.length)
     return { state: "data", miss: [],
-             why: "表も列も足さないファイルなので要確認" };
+             why: o.seeds
+               ? ("初期データだけのファイル（" + o.seeds + "件）なので要確認")
+               : "表も列も足さないファイルなので要確認" };
   const ask = async (sql) => {
     if (mem[sql] === undefined) mem[sql] = await probe(sql);
     return mem[sql];

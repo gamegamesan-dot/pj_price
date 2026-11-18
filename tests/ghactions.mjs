@@ -51,6 +51,39 @@ ok(o.tables.indexOf('_migrations')>=0&&o.indexes.length===1,
 o=M.sqlObjects("UPDATE items SET x=1 WHERE y=2");
 ok(o.other===1&&!o.tables.length,'★★作りを変えない文は other に数える');
 
+console.log('\n=== 何度流しても同じ初期データは止めない（8.65）===');
+/* 2026-11-18 の実行（runs/44328966535）で、表を作って初期データを3件入れる
+   ファイル（migrate-0066）が「UPDATE などデータを動かす文が3つ」として
+   止まり、Actions が exit 1 になった。
+   `ON CONFLICT … DO NOTHING` と `INSERT OR IGNORE` は2回流しても結果が
+   同じなので、人の目で止める必要がない。`DO UPDATE` は書き換えるので止める。 */
+ok(M.isSeedStmt("INSERT INTO t (a) VALUES (1) ON CONFLICT(a) DO NOTHING"),
+   '★★★ON CONFLICT … DO NOTHING は何度流しても同じ');
+ok(M.isSeedStmt("insert or ignore into t (a) values (1)"),
+   '★★INSERT OR IGNORE も同じ（大文字小文字は見ない）');
+ok(!M.isSeedStmt("INSERT INTO t (a) VALUES (1) ON CONFLICT(a) DO UPDATE SET a=2"),
+   '★★★DO UPDATE は**書き換える**ので止める');
+ok(!M.isSeedStmt("INSERT INTO t (a) VALUES (1)"),
+   '★★★ただの INSERT は止める（2回流すと二重に入る）');
+ok(!M.isSeedStmt("UPDATE t SET a=1")&&!M.isSeedStmt("DELETE FROM t"),
+   '★★UPDATE・DELETE は止める');
+{
+  const o66=M.sqlObjects(fs.readFileSync(
+    path.join(DIR,'migrate-0066-ebay-cat.sql'),'utf8'));
+  console.log('   0066: '+JSON.stringify(o66));
+  ok(o66.tables.indexOf('ebay_cat')>=0&&o66.seeds===3&&o66.other===0,
+     '★★★0066（表＋初期データ3件）は other 0・seeds 3 になる');
+  const g=await M.judgeFile(o66,async()=>({ok:false,err:'no such table: ebay_cat'}),{});
+  ok(g.state==='todo','★★★表が無い D1 では「未適用」（流す）になる');
+  const g2=await M.judgeFile(o66,async()=>({ok:true}),{});
+  ok(g2.state==='done',
+     '★★★表がある D1 では「済み」になる（毎回流し直さない）');
+  const gu=await M.judgeFile(M.sqlObjects(
+    "CREATE TABLE IF NOT EXISTS t (a TEXT);\nUPDATE t SET a=1;"),
+    async()=>({ok:true}),{});
+  ok(gu.state==='data','★★★UPDATE が入るファイルは今までどおり「要確認」');
+}
+
 console.log('\n=== もう当たっているかの判定（空振りの SELECT・7.117）===');
 /* sqlite_master と pragma_table_info は Cloudflare の API に断られる
    （2026-11-08 runs/42489949958：45本ぜんぶ「流す」になった原因）。

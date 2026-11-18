@@ -4965,3 +4965,38 @@ eBay の出品文に **eBay の外（Shopify など）への誘導は入れて�
 | pj-sync | **要ります**（`/ebay/cat` の4つの口） |
 | proxy-title | **要ります**（必須の Item specifics を埋める指示） |
 | D1 | **要ります**（`migrate-0066-ebay-cat.sql`） |
+
+#### D1 のマイグレーションが止まった件（2026-11-18・runs/44328966535）
+
+`deploy-pj-sync #74` が `exit 1` で止まりました。**止まった手順は D1 の
+マイグレーション**で、理由は
+
+```
+❔ migrate-0066-ebay-cat.sql　要確認（UPDATE などデータを動かす文が 3つあるので要確認）
+❌ データを動かす文が入っているファイルが 1本あります
+   何も流していません（記録もしていません）。
+```
+
+`d1-migrate.mjs` は、作りから「済みか未適用か」を決められない文
+（`UPDATE` など）が入っているファイルを**既定で止めます**。
+`migrate-0066` の**初期データ3件（`INSERT … ON CONFLICT(code) DO NOTHING`）**が
+その数に入っていました。D1 は何も変わっていません（記録もされていません）。
+
+直し方は `--allow-data` を押すのではなく、**判定の方を直しました**。
+`ON CONFLICT … DO NOTHING` と `INSERT OR IGNORE` は**2回流しても結果が同じ**
+なので、人の目で止める必要がありません（`isSeedStmt`）。
+
+| 文 | 判定 |
+| --- | --- |
+| `INSERT … ON CONFLICT … DO NOTHING` | 止めない（`seeds` に数える） |
+| `INSERT OR IGNORE INTO …` | 止めない |
+| `INSERT … ON CONFLICT … DO UPDATE` | **止める**（書き換えるため） |
+| ただの `INSERT` | **止める**（2回流すと二重に入る） |
+| `UPDATE` / `DELETE` | **止める**（今までどおり） |
+
+`migrate-0066` は「表 `ebay_cat` が無い → 未適用」で流れ、流れたあとは
+「表がある → 済み」になります（毎回流し直しません）。
+`--allow-data` は**オフのまま**でよくなりました（オンにすると、ほかの
+`UPDATE` の入ったファイルまで一緒に流れてしまうので、既定のままが安全です）。
+
+確かめ方：`tests/ghactions.mjs`（165件）
