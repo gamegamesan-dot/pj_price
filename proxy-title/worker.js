@@ -528,6 +528,11 @@ function validAsin(a) { return /^[A-Z0-9]{10}$/i.test(String(a || "").trim()); }
 /* ブランドの正規化。pj_price の CSV_BRAND と同じ表記に揃える。
    大文字小文字は区別しない。 */
 const FIG_BRAND = [
+  /* 8.76（カジの報告）エイベックス・ピクチャーズが「A-Pictures」になっていた
+     （別の会社の名前に寄ってしまう）。分かっている会社は表で決める。 */
+  ["エイベックス・ピクチャーズ", "Avex Pictures"], ["エイベックスピクチャーズ", "Avex Pictures"],
+  ["avex pictures", "Avex Pictures"],
+  ["キーズファクトリー", "Keys Factory"], ["keys factory", "Keys Factory"],
   ["バンプレスト", "Banpresto"], ["banpresto", "Banpresto"],
   ["バンダイスピリッツ", "Bandai Spirits"], ["bandai spirits", "Bandai Spirits"],
   ["グッドスマイル", "Good Smile Company"], ["good smile", "Good Smile Company"],
@@ -682,7 +687,7 @@ const FIG_SYSTEM = [
   "Output ONLY a JSON object with exactly these keys:",
   '  "brand","series","series_short","chara","chara_short","item_name","variant","line",',
   '  "item_type","confidence","same_item"',
-  '  item_type: "figure" | "prop_replica" | "other"',
+  '  item_type: "figure" | "model_kit" | "prop_replica" | "other"',
   '  confidence: "high" | "medium" | "low"',
   '  same_item: true only if at least one candidate is clearly the SAME figure.',
   "",
@@ -703,9 +708,30 @@ const FIG_SYSTEM = [
   '  hyphens from the source ("Touken Ranbu -ONLINE-" -> "Touken Ranbu Online").',
   "- Do not put the scale (1/7 etc.) in any field; it is added separately.",
   "- item_type says what the product is. Most items are a figure. Use",
+  '  "model_kit" for a plastic model kit that the buyer assembles (the Japanese',
+  "  name says プラモデル, or it is a kit line such as 30MM, 30MS, HG, MG, RG,",
+  '  Frame Arms, Hexa Gear). A model kit is NOT a figure: never write "Figure"',
+  "  for it in any field. Use",
   '  "prop_replica" for a wearable or hand-held replica of an item from the work',
   '  (PROPLICA, DX henshin toys, badges, rings, bangles), and "other" for',
-  "  anything that is neither a figure nor a replica.",
+  "  anything that is neither a figure, a model kit nor a replica (cases, card",
+  "  holders, accessories, stationery).",
+  "- Text inside brackets in the Japanese name -- 【 】, （ ）, ( ), [ ], 「 」 --",
+  "  usually carries the work title, the character name or the model number.",
+  "  NEVER drop it. Put a work title in series, a character name in chara, and a",
+  "  model number or product code in variant, copied exactly as written",
+  '  (e.g. "bEXM-40", "KCP-004"). A title built without them is too thin to',
+  "  identify the product.",
+  "- The LAST 【 】 at the very end of the Japanese name is the manufacturer, not",
+  '  part of the product name. When a "Maker" line is given, it is that',
+  "  manufacturer. Use the manufacturer's own official English company name for",
+  "  brand. If you are not certain of the official English name, romanize the",
+  "  Japanese name faithfully. NEVER substitute the name of a different company",
+  '  (エイベックス・ピクチャーズ is "Avex Pictures", not "A-1 Pictures").',
+  "- For a product that is not a figure, item_name must say what the product is",
+  "  AND series must keep the work it belongs to",
+  '  (カードポッド コレクション スプラトゥーン レイダース -> item_name "Card Pod',
+  '  Collection", series "Splatoon Raiders").',
   "- item_name is the product noun, for a non-figure",
   '  (e.g. "Storage Bangle", "Henshin Belt"). Leave it empty for a figure,',
   "  EXCEPT when neither chara nor series can be determined: then put the",
@@ -757,10 +783,15 @@ function figAspectRule(need) {
   ].join("\n");
 }
 
-async function figAskClaude(env, jaTitle, jp, titles, log, need) {
+async function figAskClaude(env, jaTitle, jp, titles, log, need, extra) {
   const nd = need || [];
+  const ex = extra || {};
   const lines = [
     `Japanese name: ${jaTitle || "(none)"}`,
+    /* 8.74／8.75 メーカー名（商品名の末尾の【 】）と、種類の手がかり。 */
+    ...(ex.maker ? [`Maker: ${ex.maker}`] : []),
+    ...(ex.hint === "model_kit"
+      ? ["Product category: plastic model kit (item_type must be \"model_kit\")"] : []),
     `Amazon Japan name: ${jp && jp.title ? jp.title : "(none)"}`,
     `Amazon Japan brand: ${jp && jp.brand ? jp.brand : "(none)"}`,
     `eBay candidate titles:\n${titles.length ? titles.map((t) => "- " + t).join("\n") : "- (none)"}`,
@@ -807,7 +838,16 @@ async function figAskClaude(env, jaTitle, jp, titles, log, need) {
   // 「Ver.」だけ残った版は意味がないので空にする
   if (/^Ver\.?$/i.test(fields.variant)) fields.variant = "";
   const ty = String(obj.item_type || "").toLowerCase();
-  fields.item_type = ["figure", "prop_replica", "other"].includes(ty) ? ty : "figure";
+  fields.item_type = ["figure", "model_kit", "prop_replica", "other"].includes(ty)
+    ? ty : "figure";
+  /* 8.75 プラモデルだと分かっている行は、AI の答えに関わらず model_kit にする。 */
+  if (ex.hint === "model_kit") fields.item_type = "model_kit";
+  /* プラモデルの項目に Figure と書いてきたら落とす（英題に Figure を出さない）。 */
+  if (fields.item_type === "model_kit") {
+    for (const k of ["item_name", "variant", "line"])
+      fields[k] = String(fields[k] || "").replace(/\bFigures?\b/gi, "")
+        .replace(/\s+/g, " ").trim();
+  }
   /* フィギュアに商品名は付けない。
      ただしキャラクター名も作品名も取れなかったときは、商品名が唯一の手がかりに
      なるので残す（例「超合金 CHOGOKIN ROBO 50」→ Chogokin Robo 50）。 */
@@ -831,6 +871,38 @@ async function figAskClaude(env, jaTitle, jp, titles, log, need) {
   };
 }
 
+/* ---- 型番の拾い漏れを補う（8.76・カジの報告）----
+   「Bandai Spirits 30MM Green Japan Import」のように、商品名の（ ）や【 】に
+   ある型番（bEXM-40）が英題から抜けていた。型番は英数字なので**そのまま
+   写せる**。AI が落としていたら、版（variant）に足す。
+   ・拾うのは**かっこの中**の、ハイフン入りの英数字（bEXM-40・KCP-004-1）だけ
+     （PS5・Ver2 のような語を型番と取り違えないため）
+   ・末尾の【 】（メーカー名）は見ない */
+function figCodesIn(jaTitle) {
+  const t = String(jaTitle || "").replace(/【[^【】]{1,40}】\s*$/, "");
+  const out = [];
+  const re = /[（(【\[「]([^）)】\]」]{1,60})[）)】\]」]/g;
+  let m;
+  while ((m = re.exec(t))) {
+    for (const w of m[1].split(/[\s　,、・/]+/)) {
+      const c = w.trim();
+      if (!/^[A-Za-z][A-Za-z0-9]{0,7}-[A-Za-z0-9]{1,6}(-[A-Za-z0-9]{1,4})?$/.test(c)) continue;
+      if (!/\d/.test(c)) continue;
+      if (out.indexOf(c) < 0) out.push(c);
+    }
+  }
+  return out.slice(0, 3);
+}
+function figCodeFill(fields, jaTitle) {
+  const key = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const all = key(["brand", "series", "chara", "item_name", "variant", "line"]
+    .map((k) => fields[k] || "").join(" "));
+  const add = figCodesIn(jaTitle).filter((c) => all.indexOf(key(c)) < 0);
+  if (!add.length) return [];
+  fields.variant = [fields.variant || "", ...add].filter(Boolean).join(" ").trim();
+  return add;
+}
+
 async function handleFigure(env, item, force) {
   const log = [];
   const jan = String(item.jan || "").trim();
@@ -847,7 +919,13 @@ async function handleFigure(env, item, force) {
   const need = figNeedAspects(item);
   /* 必須の項目を頼まれたときは、その並びごとキャッシュを分ける
      （前に取った結果には aspects が入っていないため）。 */
-  const ck = "fig:v2:" + key + (need.length ? ("|a:" + need.join(",")) : "");
+  /* 8.74／8.75 メーカー名と種類の手がかり（pj_price が渡す）。 */
+  const maker = String(item.maker || "").replace(/[\r\n]/g, " ").trim().slice(0, 40);
+  const hint = (String(item.hint || "") === "model_kit") ? "model_kit" : "";
+  /* v3 … 8.76 で指示文を直した（かっこの中の作品名・型番を落とさない・
+     プラモデルは Figure と書かない）。前の版の薄い英題を使い回さない。 */
+  const ck = "fig:v3:" + key + (need.length ? ("|a:" + need.join(",")) : "")
+    + (hint ? ("|h:" + hint) : "");
   if (!force) {
     const hit = await env.TITLE_CACHE.get(ck, "json");
     // 項目が足りない古い形のときは、キャッシュ無しとして扱い作り直す
@@ -883,7 +961,8 @@ async function handleFigure(env, item, force) {
     return { key, status: "not_found", fields: emptyFields(), jan_resolved: janResolved,
              sources: [], candidates: [], note: "Amazonでも見つからず、日本語名もありません", log };
 
-  const ai = await figAskClaude(env, jaTitle, jp, flt.kept, log, need);
+  const ai = await figAskClaude(env, jaTitle, jp, flt.kept, log, need,
+                                { maker, hint });
   if (!ai)
     return { key, status: "review", fields: emptyFields(), jan_resolved: janResolved,
              sources: [], candidates, note: "5項目を判定できませんでした", log };
@@ -895,6 +974,12 @@ async function handleFigure(env, item, force) {
   /* 原産国はAmazon（日本）のカタログ属性から取る。AIには推測させない。
      取れなかったときは空で返し、pj_price 側が設定の既定値を入れる。 */
   f.origin = (jp && jp.origin) || "";
+  /* 8.76 かっこの中の型番を AI が落としていたら補う。 */
+  const codeAdd = figCodeFill(f, jaTitle);
+  if (codeAdd.length) log.push("型番を補いました " + codeAdd.join(" "));
+  /* ブランドは、メーカー名（商品名の末尾の【 】）を先に表で引く。 */
+  const mkBrand = maker ? figBrand(maker) : "";
+  if (mkBrand) f.brand = mkBrand;
   const src = [jaTitle, (jp && jp.title) || "", f.line, f.brand].join(" ");
   const ln = figLine(src);
   if (ln) { if (!f.line) f.line = ln.line; if (!f.brand) f.brand = ln.brand; }
@@ -1125,4 +1210,5 @@ export default {
 /* 受け入れテスト用に、外部通信を伴わない小さな関数だけ公開する。
    本番の動きには関与しない（fetch からは使わない）。 */
 export const __test = { platformsIn, platformKey, filterCandidates, keyRole, eqKey,
-                        figNeedAspects, figAspectRule };
+                        figNeedAspects, figAspectRule,
+                        figCodesIn, figCodeFill, figBrand, FIG_SYSTEM };

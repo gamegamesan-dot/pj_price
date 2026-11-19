@@ -71,7 +71,14 @@ ok(cell(csv,1,'Variant Inventory Qty')==='1','★★★在庫は eBay に出す�
 ok(cell(csv,1,'Variant Inventory Policy')==='deny','★★★Inventory policy は deny');
 ok(cell(csv,1,'Variant Inventory Tracker')==='shopify','★在庫は Shopify が数える');
 ok(cell(csv,1,'Cost per item')==='4200','★★★Cost per item は仕入原価');
-ok(cell(csv,1,'Published')==='true'&&cell(csv,1,'Status')==='active','★公開で出す');
+/* 8.73（カジの報告）既定は**下書き・非公開**。⚙で「公開」にしたときだけ公開。 */
+ok(cell(csv,1,'Published')==='false'&&cell(csv,1,'Status')==='draft',
+   '★★★既定は下書き・非公開で出す（8.73）');
+{
+  const live=A.build([IT],{...OPT,status:'active',date:DAY});
+  ok(cell(live,1,'Published')==='true'&&cell(live,1,'Status')==='active',
+     '★⚙で「公開」にすると公開で出す');
+}
 ok(cell(csv,1,'Vendor')==='Play Japan','★Vendor は⚙の値');
 ok(cell(csv,1,'Variant Requires Shipping')==='true','★送るものとして出す');
 
@@ -94,22 +101,24 @@ ok(tg2.indexOf('member-list')<0&&tg2.join(',').indexOf('grade-')<0,
    '★★★⚙ で足したタグでも会員の印は弾く');
 ok(tg2.indexOf('sale')>=0,'★ほかの足したタグは通す');
 
-console.log('=== 説明（eBay 固有の文言・リンクを外す）===');
+console.log('=== 説明（Shopify 用を別に組み立てる・8.73）===');
+/* v325 までは eBay の出品文から eBay の文を外して載せていたが、
+   eBay 向けの文が残ったり段落が消えたりしたので、別に組み立てる。
+   eBay の出品文（descHtml）の中身は**持ち込まない**。 */
 const body=cell(csv,1,'Body (HTML)');
-ok(!/ebay/i.test(body),'★★★eBay の文字が残らない');
-ok(body.indexOf('<!--')<0,'★★eBay 側の差し替えの目印（コメント）を外す');
-ok(body.indexOf('Shipping and payments')<0,'★★★eBay の画面の案内を外す');
+ok(!/ebay/i.test(body),'★★★eBay の文字が入らない');
+ok(body.indexOf('<!--')<0,'★★eBay 側の差し替えの目印（コメント）が入らない');
+ok(body.indexOf('Shipping and payments')<0,'★★★eBay の画面の案内が入らない');
 ok(body.indexOf('import duties are prepaid')<0,
-   '★★★eBay の関税前払いの文を外す（Shopify では成り立たない）');
+   '★★★eBay の関税前払いの文が入らない（Shopify では成り立たない）');
 ok(body.indexOf('Delivery options and costs are shown at checkout.')>=0,
-   '★★配送の文は Shopify 向けに置き換える');
+   '★★配送の文は Shopify 向け');
 ok(body.indexOf('If anything arrives damaged or not as described, contact us first')>=0,
-   '★★返品の文は Shopify 向けに置き換える');
-ok(body.indexOf('Brand new, factory sealed.')>=0,'★★★商品の説明は残る');
-ok(body.indexOf('responsibility of the buyer')>=0,'★★関税の一般の文は残る');
-ok(body.indexOf('We ship from Tokyo.')>=0,'★店の紹介は残る');
-const lnk=A.stripEbay('<p>See <a href="https://www.ebay.com/itm/1">our listing</a> here.</p>');
-ok(lnk.indexOf('ebay.com')<0,'★★★eBay へのリンクを外す');
+   '★★困ったときの文は Shopify 向け');
+ok(body.indexOf(IT.titleEn)>=0,'★★★商品名が入る');
+ok(body.indexOf('We ship from Tokyo.')<0&&body.indexOf('Brand new, factory sealed.')<0,
+   '★★★eBay の出品文の中身は持ち込まない（別に組み立てる）');
+ok(!/shopify/i.test(body),'★★Shopify の名前も書かない');
 
 console.log('=== 画像（MW が許諾した画像だけ）===');
 ok(cell(csv,1,'Image Src')==='https://img.example.jp/a.jpg','★★★1枚目がメイン');
@@ -135,7 +144,9 @@ const bad=[{...IT,jan:''},{...IT,titleEn:''},{...IT,qty:0},
            {...IT,pics:[{url:'https://m.media-amazon.com/images/I/1.jpg'}]},
            {...IT,descHtml:''},{...IT,member:true}];
 const sp=A.split([IT,...bad],OPT);
-ok(sp.go.length===1&&sp.no.length===6,'★★★出す1件・外す6件に分ける');
+/* 8.73：説明は別に組み立てるので、eBay の出品文が無い行も出せる
+   （「英語の説明がありません」で外していたのをやめた）。 */
+ok(sp.go.length===2&&sp.no.length===5,'★★★出す2件・外す5件に分ける');
 ok(A.whyNot({...IT,jan:''},OPT)==='JAN がありません','★理由：JAN');
 ok(A.whyNot({...IT,titleEn:''},OPT)==='英題がありません','★★理由：英題');
 ok(A.whyNot({...IT,qty:0},OPT)==='数量が0です','★理由：数量0');
@@ -164,8 +175,14 @@ ok(cells(upd)[0].indexOf('Body (HTML)')<0&&cells(upd)[0].indexOf('Tags')<0,
    '★★★触らない項目は列ごと出さない（説明・タグを空で上書きしない）');
 ok(cell(upd,1,'Variant Inventory Qty')==='0','★★★品切れは在庫0');
 ok(cell(upd,1,'Status')==='draft','★★★品切れは下書きに落とす');
-ok(cell(upd,2,'Variant Inventory Qty')==='2'&&cell(upd,2,'Status')==='active',
-   '★★在庫があれば公開のまま');
+/* 8.73：在庫があるときは**⚙の状態**。⚙が下書きのあいだは公開にしない。 */
+ok(cell(upd,2,'Variant Inventory Qty')==='2'&&cell(upd,2,'Status')==='draft',
+   '★★★在庫があっても、⚙が下書きのあいだは公開にしない（8.73）');
+{
+  const updA=A.updCsv([{...IT,qty:0},{...IT,qty:2,usd:59.99}],{...OPT,status:'active'});
+  ok(cell(updA,1,'Status')==='draft'&&cell(updA,2,'Status')==='active',
+     '★★⚙が「公開」なら、在庫があれば公開・品切れは下書き');
+}
 ok(cell(upd,2,'Variant Price')==='9598','★★★値段も直す（59.99 × 160）');
 ok(cell(upd,1,'Handle')==='os-4902370550467'&&cell(upd,1,'Variant SKU')==='W-4902370550467',
    '★★Handle と SKU で突き合わせる');

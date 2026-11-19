@@ -68,7 +68,7 @@ console.log('=== ③ 在庫CSV にもない（毎回出すもの）===');
      '★★★在庫CSV は Status を触らない（非公開のまま数だけ直せる）');
 }
 
-console.log('=== ④ 一般向け（海外向け os-）は今までどおり active ===');
+console.log('=== ④ 一般向け（海外向け os-）：既定は下書き・⚙で公開（8.73）===');
 {
   const csv=O.build([{ jan:'4902370550467',
     titleEn:'Super Mario Party Jamboree', descHtml:'<p>x</p>', kishu:'NS',
@@ -77,8 +77,18 @@ console.log('=== ④ 一般向け（海外向け os-）は今までどおり act
   const h=cells(csv);
   const i=h[0].indexOf('Status');
   console.log('   Status='+(i<0?'（無い）':h[1][i]));
-  ok(i>=0&&h[1][i]==='active',
-     '★★★一般向けの商品は active のまま（カジの依頼）');
+  /* 8.73（カジの依頼・2026-11-19）一般向けも**最初は下書き**で書き出し、
+     ⚙「Shopify に出すときの状態」を「公開」にしたときだけ active にする。
+     会員向けの「非公開（unlisted）」とは別のもの（一般向けは draft か active）。 */
+  ok(i>=0&&h[1][i]==='draft',
+     '★★★一般向けの商品は、既定では下書き（draft）で出す');
+  const csv2=O.build([{ jan:'4902370550467',
+    titleEn:'Super Mario Party Jamboree', descHtml:'<p>x</p>', kishu:'NS',
+    usd:49.99, qty:1, grams:210, cost:4200,
+    pics:[{ url:'https://img.example.jp/a.jpg' }] }],
+    { fx:160, pct:100, status:'active' });
+  const h2=cells(csv2);
+  ok(h2[1][i]==='active','★★★⚙で「公開」にすると active（unlisted にはしない）');
   ok(O.COLS.indexOf('Status')>=0,'★★海外向けは Status の列も今までどおり');
 }
 

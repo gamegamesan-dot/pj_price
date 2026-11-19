@@ -90,7 +90,11 @@ console.log('\n=== ブックマークレット ===');
 const code=await p.evaluate(()=>mwMarkCode());
 console.log('   長さ '+code.length+' / '+code.slice(0,60)+'…');
 ok(code.indexOf('javascript:')===0,'★★★javascript: で始まる1行');
-ok(code.length<5000,'★1行におさまる長さ（ブックマークに入る）');
+/* 8.74 メーカー名（商品名の末尾の【 】）も持ってくるようにしたぶん、
+   108字ほど長くなった（5,000 → 5,108）。5,000 は余裕を見た目安で、
+   ブックマークのアドレスはこれより長くても入る。目安を 6,000 に上げる
+   （見張りは残す：気づかないうちに倍になるのを防ぐ）。 */
+ok(code.length<6000,'★1行におさまる長さ（ブックマークに入る・6,000字まで）');
 const src=decodeURIComponent(code.replace(/^javascript:/,''));
 ok(src.indexOf('syncKey')<0&&src.indexOf('X-PJ-Key')<0&&src.indexOf("'k'")<0,
    '★★★鍵はブックマークに入らない（送るのは pj の側）');

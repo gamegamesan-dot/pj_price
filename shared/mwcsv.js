@@ -91,6 +91,24 @@
     return a;
   }
 
+  /* ---- メーカー名（8.74・カジの報告）----
+     在庫CSVの「社」は**売主のコード**（MC02・ST00・M200 など）で、メーカー名
+     ではない（v324 はここをメーカー名として見ていたので効いていなかった）。
+     メーカー名は、MW の商品名の**末尾の【 】**に入っている
+     （例「… カードポッド【キーズファクトリー 】」）。
+     末尾の【 】だけを読む（途中の【特典】などは読まない）。無ければ ''。 */
+  function makerOf(name) {
+    var t = String(name || "").replace(/[\s\u3000]+$/, "");
+    var m = /【\s*([^【】]{1,40}?)\s*】$/.exec(t);
+    if (!m) return "";
+    return m[1].replace(/[\s\u3000]+/g, " ").trim();
+  }
+  /* 商品名から末尾の【メーカー】を外したもの（英題生成に渡す名前など）。 */
+  function nameNoMaker(name) {
+    var t = String(name || "").replace(/[\s\u3000]+$/, "");
+    return makerOf(t) ? t.replace(/【[^【】]{1,40}】$/, "").replace(/[\s\u3000]+$/, "") : t;
+  }
+
   /* CSV の文字列 → { rows, ng, dup, bad, unread, empty, lines, data, cols,
                       few, many, blank } または { err }
      bad … 読めなかった出荷日の文字 → 件数（呼ぶ側が画面に出す） */
@@ -116,6 +134,7 @@
     if (iJ < 0 || iS < 0 || iW < 0)
       return { err: "JAN・社・卸値の列が見つかりません（MW の在庫CSVか確かめてください）" };
     var out = [], bad = {}, seen = {}, ng = 0, dup = 0, empty = 0;
+    var mkN = 0, mkEx = [], mkSeen = {};       // 商品名の【 】から読めたメーカー名
     var cols = head.length, few = 0, many = 0, blank = 0;
     for (var n = 1; n < rows.length; n++) {
       var r = rows[n];
@@ -144,7 +163,14 @@
         note: String(r[iB] || "").trim(), ship_text: txt.trim(), ship_days: d,
         /* 8.68 あれば使う。無い列は空のまま。 */
         maker_code: (iMc >= 0) ? String(r[iMc] || "").trim() : "",
-        maker: (iMk >= 0) ? String(r[iMk] || "").trim() : "" });
+        /* メーカー名は、列があればそれ、無ければ商品名の末尾の【 】（8.74）。 */
+        maker: ((iMk >= 0) ? String(r[iMk] || "").trim() : "")
+               || makerOf(r[iN]) });
+      if (iMk < 0 && out[out.length - 1].maker) {
+        mkN++;
+        var mk0 = out[out.length - 1].maker;
+        if (mkSeen[mk0] === undefined && mkEx.length < 5) { mkSeen[mk0] = 1; mkEx.push(mk0); }
+      }
     }
     var unread = 0;
     Object.keys(bad).forEach(function (x) { unread += bad[x]; });
@@ -161,7 +187,8 @@
              head: head, extra: extra,
              has_maker_code: iMc >= 0, has_maker: iMk >= 0,
              maker_code_col: (iMc >= 0) ? head[iMc] : "",
-             maker_col: (iMk >= 0) ? head[iMk] : "" };
+             maker_col: (iMk >= 0) ? head[iMk] : "",
+             maker_from_name: mkN, maker_examples: mkEx };
   }
 
   /* ---- Shift_JIS のバイト列を文字にする（【P】）----
@@ -202,6 +229,7 @@
   var API = {
     norm: norm, shipDays: shipDays,
     splitLine: splitLine, lines: lines, parse: parse,
+    makerOf: makerOf, nameNoMaker: nameNoMaker,
     SJIS_LABELS: SJIS_LABELS, sjisOk: sjisOk, garbled: garbled, decode: decode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;

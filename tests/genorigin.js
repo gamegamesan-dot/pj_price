@@ -100,13 +100,14 @@ const two=await p.evaluate(()=>{
   o.amz=(b.specs.origin==='Thailand'&&!b.specs.originGenre&&!b.specs.originDefault);
   // ③メーカーの表
   var c=csvRowById('2');
-  c.specs={ origin:'' }; c.mwSha='キーズファクトリー'; c.buySource='mw';
+  c.specs={ origin:'' }; c.mwSha='MC02'; c.buySource='mw';
+  c.titleJa='カードポッド【キーズファクトリー 】';
   var f3=csvOriginFill(c);
   o.maker={ f:f3, origin:c.specs.origin, mk:!!c.specs.originMaker,
             gn:!!c.specs.originGenre };
   // ④ジャンルの既定（メーカーが表に無い行）
   var d=csvRowById('2');
-  d.specs={ origin:'' }; d.mwSha='知らない社';
+  d.specs={ origin:'' }; d.titleJa='カードポッド【知らない社 】';
   var f4=csvOriginFill(d);
   o.genre={ f:f4, origin:d.specs.origin, gn:!!d.specs.originGenre,
             ja:d.specs.originGenreJa||'', def:!!d.specs.originDefault };
@@ -133,7 +134,7 @@ const three=await p.evaluate(()=>{
           box:!!document.getElementById('csvGenreOrigin'),
           saved:CSV_CFG_IDS.indexOf('csvGenreOrigin')>=0 };
   var d=csvRowById('2');
-  d.specs={ origin:'' }; d.mwSha='知らない社';
+  d.specs={ origin:'' }; d.titleJa='カードポッド【知らない社 】';
   csvOriginFill(d);
   csvRender();
   var sel=document.querySelector('#csvList select[data-origsel="2"]');
@@ -176,7 +177,7 @@ ok(three.addFill&&three.added==='Thailand'&&three.addedJa==='そのほか',
 console.log('=== ④ 売れた行で発送のときに確かめる ===');
 const four=await p.evaluate(()=>{
   var d=csvRowById('2');
-  d.specs={ origin:'' }; d.mwSha='知らない社'; d.asin='B0GEN0002';
+  d.specs={ origin:'' }; d.titleJa='カードポッド【知らない社 】'; d.asin='B0GEN0002';
   csvOriginFill(d);
   d.descHtml='<p>x</p>';
   /* 販売連携の行（D1 の出品データ）を作る。売れた行（sold_keep=1）。 */

@@ -50,7 +50,9 @@ const base=async()=>await p.evaluate((text)=>{
   // ①カードポッド：MW 無在庫・メーカーは キーズファクトリー
   var pod=csvList[0];
   csvCatApply(pod,'171831',true);
-  pod.buySource='mw'; pod.dropship=true; pod.mwSha='キーズファクトリー';
+  /* 8.74「社」は売主のコード（MC02 など）。メーカー名は商品名の末尾の【 】。 */
+  pod.buySource='mw'; pod.dropship=true; pod.mwSha='MC02';
+  pod.titleJa='カードポッド スイッチ2用【キーズファクトリー 】';
   pod.titleEn='Keys Factory Card Pod 24 for Nintendo Switch 2 Japan';
   pod.specs.aspects={Type:'Card Case',Brand:'Keys Factory',
                      Platform:'Nintendo Switch 2'};
@@ -158,7 +160,8 @@ const three=await p.evaluate(()=>{
   /* 8.72：表に無いメーカーでも、**ジャンルの既定**が入る（この行は
      Video Games & Consoles の下＝ゲームなので Japan）。 */
   var pod2=csvList[0];
-  pod2.specs.origin=''; pod2.specs.originMaker=false; pod2.mwSha='知らない社';
+  pod2.specs.origin=''; pod2.specs.originMaker=false;
+  pod2.titleJa='カードポッド スイッチ2用【知らない社 】';
   o.genreFill=csvOriginFill(pod2);
   o.genreOrigin=pod2.specs.origin;
   o.genre=!!pod2.specs.originGenre;

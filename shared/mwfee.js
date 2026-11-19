@@ -48,6 +48,53 @@
     b2cchara_figure: "フィギュア",
     plasticmodel: "プラモデル"
   };
+  /* 機種の記号 → **英語**の呼び名（8.73）。海外向け Shopify のタグなど、
+     海外のお客さまに見せるところで使う（日本語の「フィギュア」を出さない）。
+     ここに無い記号は、英数字だけの記号ならそのまま、そうでなければ空を返す
+     （当てずっぽうの英語を付けない）。 */
+  var KISHU_EN = {
+    NS: "Nintendo Switch",
+    NS2: "Nintendo Switch 2",
+    NS2H: "Nintendo Switch 2",
+    SW: "Nintendo Switch",
+    "3DS": "Nintendo 3DS",
+    PS5: "PlayStation 5",
+    P5: "PlayStation 5",
+    PS4: "PlayStation 4",
+    P4: "PlayStation 4",
+    PV: "PlayStation Vita",
+    XBX: "Xbox Series X|S",
+    XB: "Xbox",
+    WIN: "Windows PC",
+    PCC: "PC",
+    figure: "Figure",
+    FIG: "Figure",
+    b2cchara_figure: "Figure",
+    plasticmodel: "Model Kit"
+  };
+  /* 機種の記号 → ゲーム機の印（画面の PLATFORMS 表の key）（8.77）。
+     MW の行を出品リストに入れるとき、Item specifics の Platform に使う。
+     **はっきり1つに決まる記号だけ**（Xbox・PC は世代が決まらないので入れない）。 */
+  var KISHU_PLAT = {
+    NS: "switch", SW: "switch", NS2: "switch2", NS2H: "switch2",
+    "3DS": "3ds", PS5: "ps5", P5: "ps5", PS4: "ps4", P4: "ps4", PV: "psvita"
+  };
+  function pickCase(tbl, v) {
+    var k = (v === null || v === undefined) ? "" : String(v).trim();
+    if (!k) return "";
+    if (Object.prototype.hasOwnProperty.call(tbl, k)) return tbl[k];
+    for (var n in tbl)
+      if (Object.prototype.hasOwnProperty.call(tbl, n)
+          && n.toLowerCase() === k.toLowerCase()) return tbl[n];
+    return null;
+  }
+  function kishuEn(v) {
+    var hit = pickCase(KISHU_EN, v);
+    if (hit) return hit;
+    var k = (v === null || v === undefined) ? "" : String(v).trim();
+    return /^[A-Za-z0-9][A-Za-z0-9 _+.-]*$/.test(k) ? k : "";
+  }
+  function kishuPlat(v) { return pickCase(KISHU_PLAT, v) || ""; }
   /* 正式な呼び名（分からない記号はそのまま返す）。 */
   function kishuJa(v) {
     var k = (v === null || v === undefined) ? "" : String(v).trim();
@@ -136,6 +183,8 @@
   var API = { guess: guess, fbaGuess: fbaGuess, rateOf: rateOf,
               genreOf: genreOf, sizeOf: sizeOf, sizeFrom: sizeFrom,
               kishuJa: kishuJa, KISHU_JA: KISHU_JA,
+              kishuEn: kishuEn, KISHU_EN: KISHU_EN,
+              kishuPlat: kishuPlat, KISHU_PLAT: KISHU_PLAT,
               TAX_PCT: TAX_PCT, SIZE: SIZE, GAME: GAME, HOBBY: HOBBY, D: D };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   root.PJ_MWFEE = API;

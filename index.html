@@ -834,6 +834,8 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvOsAll" style="width:100%">Shopify にも出す（まとめて印）</button>
         <button class="btn" id="csvOsNone" style="width:100%;margin-top:6px">Shopify の印を外す</button>
         <div class="note2" style="margin-top:2px" id="csvOsNote"></div>
+        <button class="btn" id="csvOsOnly" style="width:100%;margin-top:6px">Shopify 用CSV だけを書き出す（「まだ」の行）</button>
+        <button class="btn" id="csvOsReset" style="width:100%;margin-top:6px">Shopify の書き出し済みを「まだ」に戻す</button>
         <button class="btn" id="csvPickNew" style="width:100%;margin-top:6px">まだ書き出していない行だけ選ぶ</button>
         <button class="btn" id="csvOsFix" style="width:100%;margin-top:6px">Shopify の直しCSVを作る</button>
         <div class="note2" style="margin-top:2px" id="csvOsFixNote"></div>
@@ -2598,8 +2600,11 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" style="margin-top:0">eBay の売値（総額$）を<b>⚙の為替</b>で円に直し、この割合を掛けた額を Shopify の値段にします（<b>送料込み</b>）。</div>
       <div class="row"><label for="osFixPct">値段が変わったとみなす割合</label><input type="number" id="osFixPct" value="1" step="0.5" min="0.1" max="50" inputmode="decimal"><span class="unit">%</span></div>
       <div class="note2" style="margin-top:0">MW の卸値がこの割合より大きく変わったら、pj-sync が「Shopify に読み込んでください」と社内用の Discord に知らせます。</div>
-      <div class="row"><label for="osVendor">Vendor（空のままでよい）</label><input type="text" id="osVendor" value="" style="flex:1"></div>
-      <div class="row"><label for="osType">Type（商品の種類）</label><input type="text" id="osType" value="" style="flex:1"></div>
+      <div class="row"><label for="osStatus">Shopify に出すときの状態</label><select id="osStatus" style="flex:1"><option value="draft" selected>下書き（非公開）</option><option value="active">公開</option></select></div>
+      <div class="note2" style="margin-top:0">既定は<b>下書き・非公開</b>（Status=draft／Published=false）です。Shopify で中身を確かめてから公開してください。「公開」にすると active／true で書き出します。<b>直しCSV も、ここが「下書き」のあいだは公開にしません</b>（在庫が戻った商品を勝手に公開しないため）。</div>
+      <div class="row"><label for="osVendor">Vendor（ブランドが空の行にだけ使う）</label><input type="text" id="osVendor" value="" style="flex:1" autocomplete="off"></div>
+      <div class="row"><label for="osType">Type（種類が決まらない行にだけ使う）</label><input type="text" id="osType" value="" style="flex:1" autocomplete="off"></div>
+      <div class="note2" style="margin-top:0" id="osCfgNote">Vendor は<b>その行のブランド</b>、Type は<b>その行の商品の種類</b>（Video Game／Video Game Accessory／Figure／Model Kit など。eBay のカテゴリから決めます）を出します。ここの2つは、行から決まらないときの代わりです（空のままでかまいません）。<b>数字だけの値は使いません</b>。</div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="cfgsub">判定のしきい値</div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
@@ -2617,6 +2622,7 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 8.72：原産国の既定は**ジャンルごと**。ここ1か所だけで決める
            （v324 までの「原産国の既定値（China）」はこの表にまとめた）。 -->
       <div class="rowv"><label>ジャンルごとの原産国の既定</label><textarea id="csvGenreOrigin" rows="4" placeholder="ゲーム,Japan" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">ゲーム,Japan
+プラモデル,Japan
 フィギュア・ホビー,China</textarea><div class="note2" style="margin-top:2px">1行に「<b>ジャンル名,原産国,見分ける言葉（省略可）</b>」。Amazon のカタログから原産国が取れなかった行に、そのジャンルの値を入れます。入れた行には「<b>原産国：ジャンルの既定</b>」と出し、一覧の絞り込みでその行だけ選べます（書き出しは止めません。<b>発送のときに実物で確かめてください</b>）。<br>ジャンルは eBay のカテゴリで見分けます（ゲーム 139973 と Video Games &amp; Consoles の下＝ゲーム／フィギュア 261055・261068 と Toys &amp; Hobbies・Collectibles の下＝フィギュア・ホビー）。足したジャンルは3列目の「見分ける言葉」（カテゴリ番号・カテゴリの道筋の言葉・MW の機種の言葉）で見分けます。<b>どのジャンルにも当てはまらない行は入れずに「原産国なし」で止めます</b>（推測で入れません）。手で確定した値・Amazon から取れた値・⚙「メーカーごとの原産国」のほうが優先です。</div></div>
       <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
       <!-- 8.65：出品に使う eBayカテゴリ。表は pj-sync（D1 の ebay_cat）が持つので、
@@ -2630,7 +2636,7 @@ body.staff #syncOnHandFix{display:none !important}
         </div>
         <div class="note2" style="margin-top:2px">カテゴリ番号を入れると、その番号をそのまま足せます。英語の商品名を入れると eBay のカテゴリ候補が出ます。足すときに<b>そのカテゴリで必須の Item specifics</b> も eBay から取って控え、列ヘッダと「不備」の判定に使います。はじめから入っている3つ（ゲーム・フィギュア2つ）は外せません。足したカテゴリは、行のカテゴリ選択と「出品文」の「eBayカテゴリ」にも出ます。</div>
       <!-- 8.70：メーカーごとの原産国と英語のブランド名。MW の「社」（メーカー名）で引く。 -->
-      <div class="rowv"><label>メーカーごとの原産国</label><textarea id="csvMakerOrigin" rows="3" placeholder="キーズファクトリー,Japan,Keys Factory" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">キーズファクトリー,Japan,Keys Factory</textarea><div class="note2" style="margin-top:2px">1行に「メーカー名,原産国,英語のブランド名（省略可）」。MW の在庫CSVの「社」がメーカー名です。行の原産国が空のとき、この表にあればその値を入れ、カードに「原産国：メーカーの既定」と出します。ブランド名を書いておくと、空の行の <b>C:Brand</b> にも入ります。<b>表に無いメーカーの無在庫の行は、原産国を空のままにして「不備」で止めます</b>（推測で入れません）。</div></div>
+      <div class="rowv"><label>メーカーごとの原産国</label><textarea id="csvMakerOrigin" rows="3" placeholder="キーズファクトリー,Japan,Keys Factory" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">キーズファクトリー,Japan,Keys Factory</textarea><div class="note2" style="margin-top:2px">1行に「メーカー名,原産国,英語のブランド名（省略可）」。メーカー名は <b>MW の商品名の末尾の【 】</b>（例「…【キーズファクトリー 】」）から読みます（在庫CSVの「社」は売主のコードなので使いません）。読めない行は、行のカードの「メーカー」の欄に手で入れられます。行の原産国が空のとき、この表にあればその値を入れ、カードに「原産国：メーカーの既定」と出します。ブランド名を書いておくと、空の行の <b>C:Brand</b> にも入ります。<b>表に無いメーカーの無在庫の行は、原産国を空のままにして「不備」で止めます</b>（推測で入れません）。</div></div>
         <div class="note2" id="ebCatNote" style="margin-top:2px"></div>
         <div id="ebCatFoundBox" style="margin-top:4px"></div>
         <div id="ebCatListBox" style="margin-top:4px"></div>
@@ -3779,7 +3785,7 @@ var ADV_SUB=['subHour','subDomain',
              'memGrace','memMonDays',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
-             'osPricePct','osFixPct','osVendor','osType'];
+             'osPricePct','osFixPct','osVendor','osType','osStatus'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -3961,6 +3967,8 @@ function advAdopt(d){
   advSentMark(d&&d.settings);          // D1 の値を差分の基準にする（7.109）
   if(!advApply(d&&d.settings))return false;
   advAt=String((d&&d.at)||'');
+  /* 8.73 pj-sync から来た⚙の Vendor／Type が数字だけなら消す（送り返す）。 */
+  try{ if(typeof osCfgClean==='function')osCfgClean(); }catch(e){}
   save(); applyTargetUnit();
   try{ calc(); buildListing(); buildShopee(); }catch(e){}
   try{ if(typeof csvRender==='function'&&typeof csvList!=='undefined')csvRender(); }catch(e){}
@@ -5477,6 +5485,9 @@ function isGame(){ return $('cat').value==='game'; }
 function isArcade(){ return $('cat').value==='arcade'; }
 // 種別はカテゴリで決まるので入力欄を持たない。フィギュアだけタイトル末尾に付く。
 const FIG_PTYPE='Figure';
+/* 8.75 プラモデルの種類の語（英題の末尾）。 */
+const MODEL_PTYPE='Plastic Model Kit';
+const MODEL_PTYPE_SHORT='Model Kit';
 // タイトルと説明文に出すメーカー表記。選択肢の値とは別に、表に出す名前を持つ。
 // Others のときだけ自由入力の値をそのまま使う。
 const MAKER_LABEL={'Sanwa Denshi':'Sanwa','Seimitsu':'Seimitsu'};
@@ -5662,7 +5673,9 @@ function figTitleFrom(used, p, loose){
   var cshort=p.charaShort||p.chara_short||'';
   // フィギュア以外は末尾の Figure を付けない
   var ty=p.itemType||p.item_type||'figure';
-  var tail=(ty==='figure')?FIG_PTYPE:'', tail0=tail;
+  /* 8.75 プラモデルは Figure と書かず「Plastic Model Kit」と書く
+     （入りきらないときは「Model Kit」に縮める）。 */
+  var tail=(ty==='figure')?FIG_PTYPE:((ty==='model_kit')?MODEL_PTYPE:''), tail0=tail;
   var lo=loose?CSV_LOOSE_TITLE:'';
   /* フィギュアに商品名は入れない。ただしキャラクター名も作品名も無いときは
      商品名が唯一の手がかりなので残す（超合金 CHOGOKIN ROBO 50 など）。 */
@@ -5689,13 +5702,24 @@ function figTitleFrom(used, p, loose){
     /* 6.144：**末尾がもう Figure のときは、種類の Figure を足さない**
        （例「… World Collectible Figure Figure」）。
        Figures・figure も同じものとして見る。 */
-    var tl=(tail&&/figures?$/i.test(pre.replace(/[^A-Za-z0-9 ]/g,' ').trim()))?'':tail;
+    var end=pre.replace(/[^A-Za-z0-9 ]/g,' ').trim();
+    var tl=(tail&&/figures?$/i.test(end))?'':tail;
+    /* 8.75 プラモデルは、もう Model Kit／Plastic Model で終わっていたら足さない。
+       「Plastic Model」で終わるときは Kit だけ足す。 */
+    if(ty==='model_kit'&&tail){
+      if(/model kits?$/i.test(end))tl='';
+      else if(/plastic models?$/i.test(end))tl='Kit';
+      else tl=tail;
+    }
     return [pre, tl, lo].filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
   // 箱なしの印は残す。長いときは「Loose No Box」→「Loose」に縮める
   if(t.length>80&&lo===CSV_LOOSE_TITLE){
     lo=CSV_LOOSE_TITLE_SHORT; dropped.push('箱なしの表記を短縮'); t=join();
+  }
+  if(t.length>80&&ty==='model_kit'&&tail===MODEL_PTYPE){
+    tail=MODEL_PTYPE_SHORT; tail0=tail; dropped.push('Plastic Model Kit を Model Kit に短縮'); t=join();
   }
   if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
   if(t.length>80&&cshort&&cshort!==st.chara){ st.chara=cshort; dropped.push('キャラクター名を短縮'); t=join(); }
@@ -5786,7 +5810,7 @@ function descHTML(){
 
   S+='<div style="background:#f4f4f2;padding:16px 18px;border-radius:4px;margin-bottom:8px;">';
   S+='<h2 style="font-size:15px;margin:0 0 8px;">About Play Japan</h2>';
-  S+='<p style="margin:0;">'+pick(V_ABOUT)+'</p></div>';
+  S+='<p style="margin:0;">'+aboutPick()+'</p></div>';
   S+='</div>';
   return S;
 }
@@ -6392,6 +6416,19 @@ var V_ABOUT=[
  'We are a Tokyo-registered second-hand dealer buying directly from the shops and arcades of Akihabara. Thirteen years working in the Japanese collectors market means every piece is checked by hand before it leaves us. Feel free to ask anything through eBay messages.',
  'Based in Tokyo and licensed as a second-hand dealer, we source games, figures and hobby goods from Akihabara ourselves rather than through wholesalers. Thirteen years in this market, and every item goes out only after a hand inspection. Questions are always welcome via eBay messages.'
 ];
+/* 無在庫（MW）の行の「About」（8.67 の直し残し・8.73 で直した）。
+   V_ABOUT は「1点ずつ手で検品して出す」「卸を通さず自分で仕入れる」と書いて
+   いるが、無在庫の品には当てはまらない（8.67 で状態の説明文は直したが、
+   ここが残っていた）。その2つを言わない文にする。 */
+var V_ABOUT_MW=[
+ 'A licensed second-hand dealer registered in Tokyo, handling games, figures and hobby goods from Japan. Thirteen years in the Japanese collectors market. Questions about an item are welcome through eBay messages.',
+ 'We are a Tokyo-registered second-hand dealer with thirteen years in the Japanese collectors market, handling games, figures and hobby goods from Japan. Feel free to ask anything through eBay messages.',
+ 'Based in Tokyo and licensed as a second-hand dealer, we handle games, figures and hobby goods from Japan. Thirteen years in this market. Questions are always welcome via eBay messages.'
+];
+// 「About」の文はここ1か所で選ぶ（HTML版も文字だけの版も同じ）
+function aboutPick(){
+  return pick(($('bDrop')&&$('bDrop').checked)?V_ABOUT_MW:V_ABOUT);
+}
 var V_PACK=[
  'Every parcel ships with tracking and is packed with protective material inside an outer box.',
  'All parcels are tracked, and the product box travels inside a second outer carton with cushioning around it.',
@@ -6451,7 +6488,7 @@ function descPlain(){
   L.push('Returns are accepted under the terms shown in the Shipping and payments section. If anything arrives damaged or not as described, message us through eBay first and it will be put right.');
   L.push('');
   L.push('\u25A0 ABOUT PLAY JAPAN');
-  L.push(pick(V_ABOUT));
+  L.push(aboutPick());
   return L.join('\n');
 }
 $('copyPlain').onclick=function(){copyText(descPlain(),this,'説明文をコピー（アプリ用・文字だけ）');};
@@ -6780,8 +6817,39 @@ function csvMakerRows(){
   });
   return out;
 }
-// 行のメーカー名（いまは MW の無在庫の行だけが持っている）
-function csvMakerOf(r){ return String((r||{}).mwSha||'').trim(); }
+/* 行のメーカー名（8.74）。**在庫CSVの「社」は売主のコード**（MC02・ST00 など）
+   なので使わない（v324 はここを見ていて効いていなかった）。見る順は
+     1) 行に手で入れたメーカー名（カードの「メーカー」の欄）
+     2) MW のページから読んだ名前（写真のブックマークレットが一緒に持ってくる）
+     3) MW の商品名の末尾の【 】（例「…【キーズファクトリー 】」） */
+var MW_MAKER_LS='pj:mwmaker:v1';
+var mwMakerMap=null;
+function mwMakerLoad(){
+  if(mwMakerMap)return mwMakerMap;
+  try{ mwMakerMap=JSON.parse(lsGet(MW_MAKER_LS)||'{}')||{}; }catch(e){ mwMakerMap={}; }
+  return mwMakerMap;
+}
+function mwMakerSet(jan,maker){
+  var j=String(jan||'').replace(/\D/g,''), m=String(maker||'').replace(/\s+/g,' ').trim();
+  if(j.length!==13||!m||m.length>40)return false;
+  var o=mwMakerLoad();
+  if(o[j]===m)return false;
+  o[j]=m;
+  /* 増えすぎないように、古いものから捨てる（3000件まで）。 */
+  var ks=Object.keys(o);
+  if(ks.length>3000)ks.slice(0,ks.length-3000).forEach(function(k){ delete o[k]; });
+  try{ lsSet(MW_MAKER_LS,JSON.stringify(o)); }catch(e){}
+  return true;
+}
+function mwMakerGet(jan){
+  return String(mwMakerLoad()[String(jan||'').replace(/\D/g,'')]||'');
+}
+function csvMakerOf(r){
+  var x=r||{};
+  return String(x.mwMaker||'').trim()
+      || mwMakerGet(x.jan)
+      || PJ_MWCSV.makerOf(x.titleJa||x.mw_name||x.name||'');
+}
 /* メーカー名 → { origin, brand }。⚙の表を先に見て、無ければひな形を見る。 */
 function csvMakerInfo(r){
   var nm=csvMakerOf(r); if(!nm)return null;
@@ -6816,12 +6884,17 @@ function csvBrandFill(r){
 var CSV_GENRES=[
   { key:'game', ja:'ゲーム', origin:'Japan',
     alias:['ゲーム関連','ゲーム・ハード','ゲーム周辺機器','game'] },
+  /* 8.75 プラモデル（バンダイなど）は Japan。フィギュア・ホビーより先に見る
+     （カテゴリの道筋がどちらも Toys & Hobbies の下にあるため）。 */
+  { key:'model', ja:'プラモデル', origin:'Japan',
+    alias:['プラモ','模型','model','model kit','plastic model'] },
   { key:'fig', ja:'フィギュア・ホビー', origin:'China',
     alias:['フィギュア','ホビー','フィギュア・ホビー関連','fig','hobby'] }
 ];
 /* eBay のカテゴリの道筋で見分ける（登録したカテゴリ）。
    上から順に見るので、ゲームを先に置く。 */
 var GENRE_PATH={ game:['Video Games & Consoles'],
+                 model:['Models & Kits'],
                  fig:['Toys & Hobbies','Collectibles'] };
 /* MW の「機種」で見分ける（補助）。フィギュア側を先に見る
    （b2cchara_figure のような言葉のほうが確かなため）。 */
@@ -6865,7 +6938,12 @@ function csvGenreRows(){
 function csvGenreOf(r){
   var cat=String((r||{}).cat||'').trim();
   if(cat==='139973')return 'game';
-  if(cat==='261055'||cat==='261068')return 'fig';
+  if(cat===MODEL_CAT)return 'model';
+  if(cat==='261055'||cat==='261068'){
+    /* フィギュアのカテゴリに入ったままのプラモデル（v325 までの行）も
+       プラモデルとして見る。 */
+    return /^plasticmodel$/i.test(String((r||{}).mwKishu||'').trim())?'model':'fig';
+  }
   var cd=csvCatOf(cat), path=String((cd&&cd.path)||'');
   var kishu=String((r||{}).mwKishu||'');
   /* ⚙の「見分ける言葉」（カテゴリ番号・道筋の言葉・機種の言葉）。
@@ -6888,6 +6966,7 @@ function csvGenreOf(r){
     if(hit)return hit;
   }
   if(kishu){
+    if(/plasticmodel|plamo/i.test(kishu))return 'model';
     if(GENRE_KISHU.fig.test(kishu))return 'fig';
     if(GENRE_KISHU.game.test(kishu))return 'game';
   }
@@ -6908,6 +6987,24 @@ function csvOriginIsDef(r){
   if(sp.originManual)return false;
   if(!String(sp.origin||'').trim())return false;
   return !!(sp.originDefault||sp.originGenre||sp.originMaker);
+}
+/* ================= 8.75 プラモデル（カジの報告）=================
+   MW の機種が plasticmodel の行が、フィギュア（非可動）261055 に入り、英題も
+   「… Figure Japan Import」になっていた（MW の行は「ゲームでなければ 261055」
+   と決めていたため）。
+   ・機種 plasticmodel → カテゴリ 262324（Toys & Hobbies > Models & Kits）を既定に
+     する（⚙に登録してあるときだけ。登録が無い端末では今までどおり 261055）
+   ・英題は Figure と書かず「Plastic Model Kit」（入らなければ「Model Kit」）
+   ・原産国のジャンルは「プラモデル」＝Japan（8.72 の表に足した） */
+var MODEL_CAT='262324';
+var MW_KISHU_CAT={ plasticmodel:MODEL_CAT };
+function csvIsModelKit(r){
+  var cat=String((r||{}).cat||'');
+  if(cat==='139973')return false;
+  if(cat===MODEL_CAT)return true;
+  var cd=csvCatOf(cat), path=String((cd&&cd.path)||'').toLowerCase();
+  if(path.indexOf('models & kits')>=0)return true;
+  return /^plasticmodel$/i.test(String((r||{}).mwKishu||'').trim());
 }
 /* ---- 型番（MPN）と JAN（8.68・カジの報告）----
    MPN は**メーカーの型番**（例 KCP-004-1）。JAN を入れるのは誤りだった
@@ -7550,7 +7647,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
                  'mwSubSeoHidden',
                  /* 6.193 海外向け Shopify（os-）。 */
-                 'osPricePct','osFixPct','osVendor','osType',
+                 'osPricePct','osFixPct','osVendor','osType','osStatus',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
                  'syncPxMax','syncHotMax'];
 
@@ -7563,6 +7660,15 @@ function csvLoad(){
     /* 6.193 海外向け Shopify（os-）の印と書き出し済みの日。 */
     if(r.osOn===undefined)r.osOn=false;
     if(r.osAt===undefined)r.osAt='';
+    /* 8.77 MW の行で Platform が空のものは、機種（NS・PS5 など）から入れる
+       （v325 までに入れた行のため）。手で選んだ値・Amazon から入った値は触らない。 */
+    try{
+      if(String(r.buySource||'')==='mw'&&r.mwKishu
+         &&!String((r.specs||{}).platform||'').trim()){
+        var ps8=mwPlatSpecOf(r.mwKishu);
+        if(ps8){ r.specs=r.specs||{}; r.specs.platform=ps8; }
+      }
+    }catch(e){}
     if(r.expAt===undefined)r.expAt='';
     if(r.oneOff===undefined)r.oneOff=false;
     if(!Array.isArray(r.pics))r.pics=[];
@@ -9353,6 +9459,18 @@ function csvMpnField(r){
     +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
     +'<div class="note2" style="margin:2px 0 0">メーカーの型番です。'
     +'JAN は入れません（JAN は EAN の項目に入ります）。</div>'
+    /* 8.74 メーカー名（MW の行だけ）。原産国とブランドの表を引くのに使う。 */
+    +((String(r.buySource||'')==='mw')
+      ? ('<div style="display:flex;gap:6px;align-items:center;margin-top:6px">'
+         +'<span class="note2" style="margin:0;flex:0 0 110px">メーカー</span>'
+         +'<input type="text" data-mwmaker="'+r.id+'" value="'+esc(csvMakerOf(r))
+         +'" placeholder="キーズファクトリー など" '
+         +'style="flex:1 1 0;min-width:0;padding:5px;font-size:13px;'
+         +'border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></div>'
+         +'<div class="note2" style="margin:2px 0 0">MW の商品名の末尾の【 】から'
+         +'読んでいます。違うときはここで直せます（⚙「メーカーごとの原産国」の表を'
+         +'引くのに使います）。</div>')
+      : '')
     +'</div></details>';
 }
 function csvAspectFields(r){
@@ -10394,6 +10512,14 @@ $('csvList').addEventListener('input',function(e){
      英題欄の表示と文字数も入れ替える（行は作り直さない＝いま触っている欄を消さない）。 */
   /* 8.65 登録したカテゴリの Item specifics。項目名のまま specs.aspects に持つ。
      行は作り直さない（いま触っている欄が消えないように）。 */
+  /* 8.74 メーカー名（MW の行）。行に持たせる。 */
+  var mm=t.getAttribute('data-mwmaker');
+  if(mm){
+    var rk=csvRowById(mm); if(!rk)return;
+    rk.mwMaker=t.value.trim();
+    csvSaveList();
+    return;
+  }
   /* 8.68 型番（MPN）。空にすると「Does not apply」で出す。 */
   var mk=t.getAttribute('data-mpn');
   if(mk){
@@ -10551,6 +10677,10 @@ $('csvList').addEventListener('change',function(e){
     var pk=platByKey(t.value);
     rp.specs=rp.specs||{};
     rp.specs.platform=pk?pk.spec:'';
+    /* 8.77 機種を選んだら、英題にも機種を入れる（手で直した英題は触らない）。 */
+    if(pk&&String(rp.cat||'')==='139973'&&!rp.titleManual
+       &&String(rp.specs.gameName||'').trim())
+      csvApplyName(rp,rp.specs.gameName);
     csvSaveList(); csvRender(); return;      // 表示が入れ替わるので作り直す
   }
   /* 原産国（6.56）。「その他…」は今までどおり入力して決める。
@@ -12352,11 +12482,61 @@ function osPricePct(){
   var n=+($('osPricePct')&&$('osPricePct').value);
   return (isFinite(n)&&n>0)?n:OSS.PCT_DEF;
 }
-function osVendor(){ return String(($('osVendor')&&$('osVendor').value)||'').trim(); }
-function osTypeV(){ return String(($('osType')&&$('osType').value)||'').trim(); }
+/* 8.73 ⚙の Vendor／Type は「行から決まらないとき」の代わり。
+   **数字だけの値は使わない**（会員プランのバリアント番号が入っていて、
+   それがそのまま Shopify 用CSV の Vendor／Type に出ていた）。 */
+function osVendor(){ return OSS.word(($('osVendor')&&$('osVendor').value)||''); }
+function osTypeV(){ return OSS.word(($('osType')&&$('osType').value)||''); }
+function osStatusV(){
+  return (String(($('osStatus')&&$('osStatus').value)||'')==='active')?'active':'draft';
+}
 function osOpt(){
   return { fx:+$('fx').value||0, pct:osPricePct(),
-           vendor:osVendor(), type:osTypeV() };
+           vendor:osVendor(), type:osTypeV(), status:osStatusV() };
+}
+/* ⚙の Vendor／Type に数字だけの値（ID の取り違え）が入っていたら空にする。
+   pj-sync に残っている値も消す（空にした印を付けて送る）。 */
+function osCfgClean(){
+  var n=0;
+  ['osVendor','osType'].forEach(function(id){
+    var el=$(id); if(!el)return;
+    var v=String(el.value||'').trim();
+    if(!v||OSS.word(v))return;
+    el.value=''; n++;
+    try{ advBlankMark(id); }catch(e){}
+  });
+  if(n){
+    try{ csvSaveCfg(); }catch(e){}
+    try{ advTouch(); }catch(e){}
+    var nt=$('osCfgNote');
+    if(nt&&!/数字だけの値が入っていたので/.test(nt.innerHTML))
+      nt.innerHTML+='<br><b style="color:var(--bad)">⚙の Vendor／Type に'
+        +'数字だけの値が入っていたので空にしました（'+n+'か所）。</b>';
+  }
+  return n;
+}
+/* その行の商品の種類（Shopify の Type）。eBay のカテゴリから決める。
+   決まらない行は ''（⚙の Type が代わりに入る）。 */
+function osTypeOf(r){
+  var cat=String((r||{}).cat||'');
+  if(csvIsModelKit(r))return 'Model Kit';
+  if(cat==='139973')return 'Video Game';
+  if(cat==='261055'||cat==='261068')return 'Figure';
+  var cd=csvCatOf(cat), path=String((cd&&cd.path)||'').toLowerCase();
+  if(path.indexOf('video game accessories')>=0)return 'Video Game Accessory';
+  if(path.indexOf('video game consoles')>=0)return 'Video Game Console';
+  if(path.indexOf('video games & consoles > video games')>=0)return 'Video Game';
+  if(path.indexOf('action figures')>=0)return 'Figure';
+  return '';
+}
+/* Shopify の説明に足す注意書き（機種のリージョンの注意）。 */
+function osNotesOf(r){
+  var out=[];
+  if(String((r||{}).cat||'')==='139973'){
+    var p=csvPlatOf(r), lk=p&&p.lock?PLAT_LOCK[p.lock]:null;
+    if(lk&&lk.b)out.push(String(lk.b).replace(/<[^>]*>/g,''));
+  }
+  return out;
 }
 /* 1日ごとの通し番号（書き出すたびに1つ進む）。ファイル名に入れる。 */
 function osSeqNext(){
@@ -12374,14 +12554,83 @@ function csvOsOn(r){ return !!(r&&r.osOn&&csvOsCan(r)); }
 /* 出品リストの行 → 海外向け Shopify の品物。
    重さは **eBay の送料計算に使っている重さ**、仕入原価は行の仕入値。 */
 function csvOsItem(r){
+  var sp=r.specs||{};
+  var plat=csvPlatSpecOf(r);
   return { jan:r.jan, titleEn:r.titleEn, descHtml:r.descHtml,
-    kishu:String(r.mwKishu||''), type:osTypeV(),
+    kishu:String(r.mwKishu||''),
+    /* 8.73 Vendor＝ブランド、Type＝商品の種類（行ごと）。 */
+    vendor:String(sp.brand||(sp.aspects||{}).Brand||'').trim(),
+    type:osTypeOf(r),
+    platform:plat,
+    mpn:String(sp.mpn||'').trim(),
+    cond:(r.condId===1000)?'new':'used',
+    stockPhoto:(String(r.buySource||'')==='mw'),
+    notes:osNotesOf(r),
     usd:csvStartPrice(r), qty:+r.qty||0, grams:+r.weight||0,
     cost:csvCostOf(r), pics:r.pics||[],
     wholesale:+r.mwWholesale||0, stock:+r.mwStock||0 };
 }
 function csvOsItems(rows){
   return (rows||[]).filter(csvOsOn).map(csvOsItem);
+}
+/* ---- 8.73 Shopify 用CSV だけを書き出す ----
+   いままでは eBay の書き出しと**一緒にしか**出せなかったので、eBay に出し終えた
+   行（出品済み）は Shopify 用を作り直せなかった。印の付いた行のうち
+   「まだ」の行（選んでいればその行）を、Shopify 用CSV だけで書き出す。 */
+function csvOsOnlyRun(){
+  var note=$('csvOsNote');
+  var ids=csvPickIds(), only=null;
+  if(ids.length){ only={}; ids.forEach(function(x){ only[x]=1; }); }
+  var rows=csvOsCanRows().filter(csvOsOn).filter(function(r){
+    return only?!!only[r.id]:!r.osAt; });
+  if(!rows.length){
+    note.innerHTML='Shopify 用に書き出す行がありません'
+      +'（印の付いた行のうち「まだ」の行が対象です。'
+      +'書き出し済みの行は、選んでから押すか、先に「まだ」に戻してください）。';
+    return;
+  }
+  var sp=OSS.split(rows.map(csvOsItem),osOpt());
+  if(!sp.go.length){
+    var why={}; sp.no.forEach(function(x){ why[x.why]=(why[x.why]||0)+1; });
+    note.innerHTML='<span style="color:var(--bad)">書き出せる行がありません：'
+      +esc(Object.keys(why).map(function(k){ return k+' '+why[k]+'件'; }).join('・'))
+      +'</span>';
+    return;
+  }
+  var day=new Date(), seq=osSeqNext();
+  var name=OSS.shopName(day,seq,sp.go.length);
+  var okDl=csvDownload(name,OSS.build(sp.go,osOpt()));
+  if(!okDl){ note.textContent='書き出しに失敗しました（ブラウザのダウンロードを許可してください）'; return; }
+  var at=jstToday(), osJan={};
+  sp.go.forEach(function(x){ osJan[String(x.jan)]=1; });
+  rows.forEach(function(r){ if(osJan[String(r.jan)])r.osAt=at; });
+  csvOsPut(sp.go,new Date().toISOString());
+  csvSaveList(); csvRender();
+  var why2={}; sp.no.forEach(function(x){ why2[x.why]=(why2[x.why]||0)+1; });
+  note.innerHTML='<b>Shopify 用CSV を書き出しました</b>：'+esc(name)
+    +'（'+sp.go.length+'件・状態は<b>'
+    +(osStatusV()==='active'?'公開':'下書き')+'</b>）'
+    +(sp.no.length?('<br>外した行 '+sp.no.length+'件（'
+      +esc(Object.keys(why2).map(function(k){ return k+' '+why2[k]+'件'; }).join('・'))
+      +'）'):'')
+    +'<br>'+csvOsCountText();
+}
+/* 「書き出し済み」を「まだ」に戻す（8.73）。Shopify への取り込みを止めた
+   ときに、もう一度書き出せるようにする。選んでいればその行だけ。 */
+function csvOsResetRun(){
+  var ids=csvPickIds(), only=null;
+  if(ids.length){ only={}; ids.forEach(function(x){ only[x]=1; }); }
+  var rows=csvOsCanRows().filter(function(r){
+    return !!r.osAt&&(!only||only[r.id]); });
+  if(!rows.length){
+    $('csvOsNote').textContent='「書き出し済み」の行がありません。'; return; }
+  if(!confirm('Shopify の「書き出し済み」を「まだ」に戻します：'+rows.length+'件'
+    +(only?'（選んだ行）':'（書き出し済みの行ぜんぶ）')
+    +'\n印（Shopify にも出す）はそのままです。よろしいですか？'))return;
+  rows.forEach(function(r){ r.osAt=''; });
+  csvSaveList(); csvRender();
+  $('csvOsNote').innerHTML='✓ <b>'+rows.length+'件</b>を「まだ」に戻しました。'
+    +'<br>'+csvOsCountText();
 }
 function csvOsCanRows(){ return csvList.filter(csvOsCan); }
 function csvRowByJan(jan){
@@ -12638,6 +12887,8 @@ $('csvExport').onclick=function(){ csvExportRun(null); };
 $('csvOsAll').onclick=function(){ csvOsMark(true); };
 $('csvOsNone').onclick=function(){ csvOsMark(false); };
 $('csvPickNew').onclick=function(){ csvPickNewGo(); };
+$('csvOsOnly').onclick=function(){ csvOsOnlyRun(); };
+$('csvOsReset').onclick=function(){ csvOsResetRun(); };
 $('csvOsFix').onclick=function(){ csvOsFixGo(); };
 $('csvExportPick').onclick=function(){
   var ids=csvPickIds();
@@ -13860,7 +14111,13 @@ function mwReadNote(d,fi){
   h+='<br>メーカーコードの列 <b>'+(d.has_maker_code
     ?('あり（'+esc(d.maker_code_col||'')+'）'):'なし')+'</b>'
     +'　メーカー名の列 '+(d.has_maker?('あり（'+esc(d.maker_col||'')+'）')
-      :'なし（「社」をメーカー名として使います）');
+      :'なし');
+  /* 8.74 「社」は売主のコード。メーカー名は商品名の末尾の【 】から読む。 */
+  if(!d.has_maker)
+    h+='<br>商品名の末尾の【 】からメーカー名を読めた行 <b>'
+      +(d.maker_from_name||0)+'行</b>'
+      +((d.maker_examples||[]).length
+        ?('（例：'+esc((d.maker_examples||[]).join('／'))+'）'):'');
   if((d.extra||[]).length)
     h+='<br>使っていない列 '+(d.extra||[]).length+'個：'
       +esc((d.extra||[]).slice(0,12).join('／'))
@@ -14154,7 +14411,18 @@ function mwCsvWhenHtml(c){
    **今までの流れがそのまま使える**（式も画面も増やさない）。 */
 /* 機種から eBay カテゴリを決める。ゲームは 139973、ホビーは 261055。 */
 function mwCatOf(r){
+  /* 8.75 機種ごとに決まっているカテゴリ（プラモデル → 262324）。
+     ⚙に登録してあるときだけ使う（登録が無いと列を作れないため）。 */
+  var c=MW_KISHU_CAT[String((r||{}).kishu||'').trim().toLowerCase()];
+  if(c&&ebCatOf(c))return c;
   return (mwAmzGenre(r)==='ゲーム')?'139973':'261055';
+}
+/* 8.77 MW の機種（NS・PS5 など）→ Item specifics の Platform。
+   表は shared/mwfee.js（KISHU_PLAT）の1か所。決まらない機種は ''。 */
+function mwPlatSpecOf(kishu){
+  var k=MWFEE.kishuPlat(kishu); if(!k)return '';
+  var p=platByKey(k);
+  return p?p.spec:'';
 }
 /* いま出ている無在庫の数（販売連携の取り込み）＋出品リストの無在庫の行。 */
 function mwDropNow(){
@@ -14191,6 +14459,8 @@ function mwListRow(r,pics,n){
     amzLowAmz:+r.amz_low||0, amzAtMw:String(r.amz_at||''),
     /* 無在庫の印。仕入れ先は MW。 */
     dropship:true, buySource:'mw', mwSha:String(r.sha||''),
+    /* 8.74 メーカー名（ページから読んだ名前 → 商品名の末尾の【 】）。 */
+    mwMaker:mwMakerGet(jan)||PJ_MWCSV.makerOf(String(r.mw_name||r.name||'')),
     mwShipDays:+r.ship_days||0, mwShipText:String(r.ship_text||''),
     /* 6.193：海外向け Shopify のタグ（機種）に使う。 */
     mwKishu:String(r.kishu||''),
@@ -14206,7 +14476,10 @@ function mwListRow(r,pics,n){
     price:sl?sl.price:0, floor:rec?rec.floor:0,
     picsEps:0, picsErr:'',
     titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
-    specs:{ scale:'', height:'', platform:'', brand:'', line:'',
+    /* 8.77 Platform は MW の機種（NS・PS5 など）から入れる。
+       いままでは空のまま入れて英題生成（Amazon）に任せていたので、
+       Amazon で機種が分からない品（AirTwister など）は英題も作れなかった。 */
+    specs:{ scale:'', height:'', platform:mwPlatSpecOf(r.kishu), brand:'', line:'',
             gameName:'', publisher:'', franchise:'', character:'', model:'',
             genre:'', year:'',
             /* 8.68 メーカーの型番（在庫CSVに列があったときだけ入る）。 */
@@ -21567,7 +21840,7 @@ function mwMarkCode(){
    /* その箱の中にある JAN（重複は1つに）。1つだけなら、その箱の商品の JAN。 */
    +'var JS=function(t){var a=(String(t||"").match(J)||[]),o=[],i2;'
    +'for(i2=0;i2<a.length;i2++)if(o.indexOf(a[i2])<0)o.push(a[i2]);return o;};'
-   +'var ps=[],ids={},bad=0,used={};'
+   +'var ps=[],ids={},bad=0,used={},mks={};'
    +'var es=D.querySelectorAll("img,a,source");'
    +'for(var i=0;i<es.length;i++){var e=es[i];'
    +'var u=e.getAttribute("src")||e.getAttribute("data-src")'
@@ -21575,15 +21848,20 @@ function mwMarkCode(){
    +'var m=R.exec(u);if(!m)continue;var id=m[1];if(ids[id])continue;'
    /* 写真から上へ。**JAN がちょうど1つだけ**になる箱で止める（一覧でも
       となりの商品の JAN と取り違えない）。2つ以上出たら組にできない。 */
-   +'var b=e,n=0,j="";'
+   /* 8.74 その箱（JAN がちょうど1つ）の中の**最後の【 】**がメーカー名
+      （商品名の末尾に付いている）。写真と同じページからしか読まない。 */
+   +'var b=e,n=0,j="",mk="";'
    +'while(b&&n<8){var o2=JS(b.textContent);'
-   +'if(o2.length===1){j=o2[0];break;}'
+   +'if(o2.length===1){j=o2[0];'
+   +'var mm=b.textContent.match(/【[^】]+】/g);'
+   +'if(mm)mk=mm.pop().slice(1,-1).trim();'
+   +'break;}'
    +'if(o2.length>1)break;'
    +'b=b.parentElement;n++;}'
    +'if(!j)j=q;'
    +'if(!j){bad++;continue;}'
    +'if(q&&j!==q){bad++;continue;}'
-   +'ids[id]=1;used[j]=1;ps.push({id:id,jan:j});}'
+   +'ids[id]=1;used[j]=1;ps.push({id:id,jan:j});if(mk)mks[j]=mk;}'
    /* 画面に出ている JAN のうち、写真と組にできなかったもの（No Image など）。 */
    +'var all=JS(D.body?D.body.textContent:""),none=0,i3;'
    +'for(i3=0;i3<all.length;i3++)if(!used[all[i3]])none++;'
@@ -21593,7 +21871,8 @@ function mwMarkCode(){
    +'JAN で検索した画面で押してください。");return;}'
    +'var g={};for(var x=0;x<ps.length;x++){'
    +'(g[ps[x].jan]=g[ps[x].jan]||[]).push(ps[x].id);}'
-   +'var out=[];for(var k2 in g)out.push(k2+":"+g[k2].slice(0,12).join("."));'
+   +'var out=[];for(var k2 in g)out.push(k2+":"+g[k2].slice(0,12).join(".")'
+   +'+(mks[k2]?("#"+mks[k2]):""));'
    /* 100件でも貼りやすいよう、1行1件（改行区切り）にする。 */
    +'var S=out.join("\\n");'
    /* 知らせの枠。コピーできた／できないをここに出す。 */
@@ -21783,7 +22062,11 @@ var mwPicGot=[];
 function mwPicRead(text){
   var out=[], idx={};
   String(text||'').split(/[|\r\n]+/).forEach(function(part){
-    var nums=String(part).match(/\d{4,14}/g)||[];
+    /* 8.74 「JAN:番号.番号#メーカー名」の # より後ろはメーカー名
+       （番号として読まないよう、先に切り分ける）。 */
+    var raw=String(part), mk='', hi=raw.indexOf('#');
+    if(hi>=0){ mk=raw.slice(hi+1).replace(/\s+/g,' ').trim(); raw=raw.slice(0,hi); }
+    var nums=raw.match(/\d{4,14}/g)||[];
     var jan='', ids=[];
     nums.forEach(function(n){
       if(!jan&&n.length===13){ jan=n; return; }
@@ -21792,6 +22075,11 @@ function mwPicRead(text){
     if(!jan||!ids.length)return;
     if(idx[jan]===undefined){ idx[jan]=out.length; out.push({ jan:jan, ids:[] }); }
     var o=out[idx[jan]];
+    if(mk&&!o.maker){
+      o.maker=mk.slice(0,40);
+      /* 読めたメーカー名は端末に控える（出品リストに入れるときに使う）。 */
+      try{ mwMakerSet(jan,o.maker); }catch(e){}
+    }
     ids.forEach(function(n){
       if(o.ids.indexOf(n)<0&&o.ids.length<MW_IMG_MAX)o.ids.push(n);
     });
@@ -22686,6 +22974,8 @@ function csvFigParts(r){
   o.seriesShort=sp.seriesShort||'';
   o.charaShort=sp.charaShort||'';
   o.itemType=sp.itemType||'figure';
+  /* 8.75 プラモデルは Figure と書かない（AI が figure と返しても直す）。 */
+  if(csvIsModelKit(r))o.itemType='model_kit';
   return o;
 }
 // 5項目からタイトルを組み立てて行へ書き戻す（フィギュア）
@@ -22792,7 +23082,11 @@ function csvTitleSend(kind,rows,force){
       /* 8.65 登録したカテゴリの行は、そのカテゴリで必須の Item specifics も
          一緒に埋めてもらう（項目名は eBay から取ったものをそのまま渡す）。 */
       return { jan:r.jan||'', asin:r.asin||'', ja_title:r.titleJa||'', condition:cond,
-               need_aspects:csvCatNeed(r.cat) };
+               need_aspects:csvCatNeed(r.cat),
+               /* 8.74 メーカー名（商品名の末尾の【 】など）。ブランドの取り違えを
+                  防ぐ。8.75 プラモデルは Figure と書かせない。 */
+               maker:csvMakerOf(r),
+               hint:csvIsModelKit(r)?'model_kit':'' };
     var p=csvPlatOf(r);
     // ASINも送る。JANが商品と結びついていない行はASINで引いてもらう。
     return { jan:r.jan, asin:r.asin||'', ja_title:r.titleJa||'', platform:p?p.title:'',
@@ -22823,7 +23117,11 @@ function csvTitleSend(kind,rows,force){
           var pk=platByKey(x.platform_key);
           if(pk){ r.specs=r.specs||{}; r.specs.platform=pk.spec; }
         }
-        if(x.english_name&&csvTitleTarget(r)==='ok')csvApplyName(r,x.english_name);
+        /* 8.77 機種が分からない行でも、返ってきた英語名は入れる
+           （いままでは捨てていたので Game Name も空のまま止まっていた）。
+           Platform が空の行は「Platform なし」で書き出しが止まり、
+           行で機種を選ぶと英題に機種が入る。 */
+        if(x.english_name&&csvTitleSendable(r))csvApplyName(r,x.english_name);
       }
     });
     csvSaveList();
@@ -23097,6 +23395,11 @@ function csvDescMwFix(r){
   Object.keys(CONDNOTE).forEach(function(k){
     if(d.indexOf(CONDNOTE[k])<0)return;
     d=d.split(CONDNOTE[k]).join(CONDNOTE_MW[k]); hit=true;
+  });
+  /* 8.73 「About」の段も同じ（手で検品・卸を通さない、を言わない文に）。 */
+  V_ABOUT.forEach(function(t,i){
+    if(d.indexOf(t)<0)return;
+    d=d.split(t).join(V_ABOUT_MW[i]||V_ABOUT_MW[0]); hit=true;
   });
   if(!hit)return false;
   r.descHtml=d;
@@ -29449,6 +29752,19 @@ function pjStoreApply(){
   try{ pjStoreRender(); }catch(e){}
 }
 try{ pjStoreInit().then(pjStoreApply)['catch'](function(){}); }catch(e){}
+/* 8.73 ブラウザの「入力欄の復元」を止める。
+   この画面の欄には name が無いので、再読み込みや復元のとき、ブラウザは
+   **並び順だけ**で値を戻す。版が上がって欄が増えると、値が別の欄にずれて入る
+   おそれがある（⚙の値はこの画面が自分で保存・復元しているので、ブラウザの
+   復元は要らない）。autocomplete="off" の欄は復元の対象から外れる。 */
+try{
+  Array.prototype.forEach.call(
+    document.querySelectorAll('input,select,textarea'),function(el){
+      if(el.type==='password')return;            // 鍵の欄はそのまま
+      if(!el.getAttribute('autocomplete'))el.setAttribute('autocomplete','off');
+    });
+}catch(e){}
+try{ osCfgClean(); }catch(e){}     // 8.73 ⚙の Vendor／Type の ID の取り違えを消す
 roleLoad(); roleApply();          // 作業者用キーなら価格の欄を出さない（6.52）
 uiTabsApply(); cfgNotesTrim(); cfgGrpLoad(); cfgLineRender();
 syncSentLoad(); syncMoreLoad(); detLoad(); boxApply();   // 折りたたみの開閉（6.80）
@@ -29513,7 +29829,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v325';   // sw.js の const V と必ず同じ値にする
+var APP_V='v326';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

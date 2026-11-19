@@ -21,8 +21,9 @@
    ・画像は **MW が利用を許諾した画像だけ**。Amazon の画像は使わない
      （念のため Amazon の画像置き場のアドレスは行ごと弾く）
    ・MW の商品番号・卸値・社・MW在庫・備考・仕入先は**出さない**
-   ・eBay の出品文から **eBay 固有の文言・eBay へのリンク**を外して載せる
-     （eBay 側には Shopify への誘導を一切入れない＝今の決まりのまま） */
+   ・説明は **Shopify 用に別に組み立てる**（8.73）。eBay の出品文は持ち込まない
+     （eBay 向けの文が混じるため）。eBay への誘導も Shopify の外への誘導も書かない
+     （eBay 側にも Shopify への誘導を一切入れない＝今の決まりのまま） */
 (function () {
   "use strict";
   var root = (typeof globalThis !== "undefined") ? globalThis : this;
@@ -133,6 +134,12 @@
     if (F && typeof F.kishuJa === "function") return F.kishuJa(v);
     return s(v).trim();
   }
+  function kishuEn(v) {
+    var F = feeMod();
+    if (F && typeof F.kishuEn === "function") return F.kishuEn(v);
+    var k = s(v).trim();
+    return /^[A-Za-z0-9][A-Za-z0-9 _+.-]*$/.test(k) ? k : "";
+  }
 
   /* ---- 商品名（英語）----
      eBay の英題をそのまま使う。Shopify の上限（255字）で切る。 */
@@ -142,49 +149,80 @@
     return t.length > n ? t.slice(0, n).trim() : t;
   }
 
-  /* ---- 説明（Body (HTML)）----
-     eBay の出品文から、**eBay 固有の文言と eBay へのリンク**を外す。
-     ・「Shipping and payments section」「this listing」は eBay の画面の話
-     ・「message us through eBay」は eBay のメッセージ機能の話
-     ・「import duties are prepaid」は eBay の輸入関税前払いの話
-       （Shopify では成り立たないので丸ごと外す）
-     文を消すだけだと見出しだけが残るので、置き換えられる文は置き換える。 */
-  var BODY_REPL = [
-    [/Delivery speed and carrier options are shown in the Shipping and payments section of this listing\./gi,
-      "Delivery options and costs are shown at checkout."],
-    [/Returns are accepted under the terms shown in the Shipping and payments section\.\s*If anything arrives damaged or not as described, message us through eBay first and it will be put right\./gi,
-      "If anything arrives damaged or not as described, contact us first and it will be put right."]
-  ];
-  /* これが入っている <p>・<li> は丸ごと外す。 */
-  var BODY_CUT = [/\bebay\b/i, /shipping and payments/i, /\bthis listing\b/i,
-                  /best offer/i, /watch list/i, /import duties are prepaid/i];
-  function cutIt(html) {
-    var t = s(html);
-    for (var i = 0; i < BODY_CUT.length; i++) if (BODY_CUT[i].test(t)) return true;
-    return false;
+  /* ---- Shopify 用の説明（8.73・カジの報告）----
+     v325 までは **eBay の出品文から eBay の文を外して**載せていたが、
+     ・外し方の不具合で、段落がほとんど消えたり eBay 向けの文が残ったりした
+     ・そもそも eBay 向けに書いた文（Best Offer・eBay のメッセージ・関税の前払い）
+       を Shopify に持ち込むのが筋違い
+     なので、**Shopify 用の英語の説明を別に組み立てる**。
+     eBay への誘導も、Shopify の外への誘導も書かない。
+     入れるのは行が持っている事実だけ（商品名・ブランド・種類・機種・状態）。
+     分からない項目は**その行ごと出さない**（推測で埋めない）。 */
+  function esc(v) {
+    return s(v).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function stripEbay(html) {
-    var t = s(html);
-    /* eBay へのリンクは外す（中の文字は残す）。 */
-    t = t.replace(/<a\b[^>]*href\s*=\s*["'][^"']*ebay\.[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi, "$1");
-    /* 置き換えられる文は置き換える。 */
-    for (var i = 0; i < BODY_REPL.length; i++) t = t.replace(BODY_REPL[i][0], BODY_REPL[i][1]);
-    /* 残った eBay 固有の文は、その <li>・<p> ごと外す。 */
-    t = t.replace(/<li\b[^>]*>[\s\S]*?<\/li>/gi, function (m) { return cutIt(m) ? "" : m; });
-    t = t.replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, function (m) { return cutIt(m) ? "" : m; });
-    /* 中身が空になった箇条書きと、見出しだけになった段を外す。 */
-    t = t.replace(/<ul\b[^>]*>\s*<\/ul>/gi, "");
-    t = t.replace(/<h2\b[^>]*>[\s\S]*?<\/h2>(?=\s*(?:<h2|<div|<\/div|$))/gi, "");
-    /* HTML のコメント（<!--TITLE--> など・eBay 側の差し替えの目印）は外す。 */
-    t = t.replace(/<!--[\s\S]*?-->/g, "");
-    return t.trim();
+  /* 数字だけの長い値は ID の取り違え（会員プランのバリアント番号など）。
+     Vendor・Type・タグには出さない。 */
+  function word(v) {
+    var t = s(v).replace(/\s+/g, " ").trim();
+    return /^\d{6,}$/.test(t) ? "" : t;
+  }
+  var BODY_PHOTO = "The photos are product images of this item, not photographs "
+    + "of the individual copy you will receive.";
+  var BODY_JP = "This is the Japanese release. Packaging and printed materials "
+    + "are in Japanese.";
+  var BODY_SHIP = "Ships from Japan with tracking. Delivery options and costs "
+    + "are shown at checkout.";
+  var BODY_HELP = "If anything arrives damaged or not as described, contact us "
+    + "first and it will be put right.";
+  function shopBody(it) {
+    var r = it || {};
+    var li = [];
+    var add = function (k, v) {
+      var t = word(v);
+      if (t) li.push("<li>" + esc(k) + ": " + esc(t) + "</li>");
+    };
+    if (s(r.cond).toLowerCase() === "new") li.push("<li>Condition: Brand new</li>");
+    add("Brand", r.vendor);
+    add("Type", r.type);
+    add("Platform", r.platform);
+    add("Model number", r.mpn);
+    var h = "<p><strong>" + esc(titleOf(r)) + "</strong></p>";
+    if (li.length) h += "<ul>" + li.join("") + "</ul>";
+    /* 無在庫の行は、写真が届く1点を撮ったものではないと書く（8.67 と同じ考え）。 */
+    if (r.stockPhoto) h += "<p>" + BODY_PHOTO + "</p>";
+    h += "<p>" + BODY_JP + "</p>";
+    var notes = r.notes || [];
+    for (var i = 0; i < notes.length; i++) {
+      var n = s(notes[i]).trim();
+      /* eBay・Shopify の名前が入った注意書きは持ち込まない。 */
+      if (!n || /\bebay\b|\bshopify\b/i.test(n)) continue;
+      h += "<p>" + esc(n) + "</p>";
+    }
+    h += "<p>" + BODY_SHIP + "</p><p>" + BODY_HELP + "</p>";
+    return h;
   }
   function bodyOf(it, opt) {
     var o = opt || {};
-    var t = stripEbay((it || {}).descHtml);
+    var t = shopBody(it);
     var tail = s(o.tail).trim();
     return tail ? (t + tail) : t;
   }
+  /* ---- Vendor と Type（8.73）----
+     Vendor ＝ その行のブランド。Type ＝ その行の商品の種類。
+     行に無いときだけ⚙の値を使う。**数字だけの値は出さない**
+     （⚙の Vendor／Type に会員プランのバリアント番号が入っていて、
+       それがそのまま CSV に出ていた）。 */
+  function vendorOf(it, opt) {
+    return word((it || {}).vendor) || word((opt || {}).vendor);
+  }
+  function typeOf(it, opt) {
+    return word((it || {}).type) || word((opt || {}).type);
+  }
+  /* ---- 出すときの状態（8.73）----
+     既定は**下書き・非公開**。⚙で「公開」にしたときだけ active／true。 */
+  function liveOf(opt) { return s((opt || {}).status).toLowerCase() === "active"; }
 
   /* ---- 値段（円）----
      eBay の売値（USD・送料込みの総額）を ⚙ の為替で円に直し、
@@ -250,13 +288,16 @@
     var o = opt || {};
     var r = it || {};
     var out = [], add = function (x) {
-      var t = s(x).trim();
+      var t = word(x);
       if (!t || tagNg(t)) return;
+      if (/[^\x20-\x7E]/.test(t)) return;        // 英数字と記号だけ（8.73）
       for (var i = 0; i < out.length; i++) if (out[i].toLowerCase() === t.toLowerCase()) return;
       out.push(t);
     };
     add(TAG_EXPORT);
-    add(kishuJa(r.kishu));
+    /* 8.73 機種は**英語**の呼び名で付ける（「フィギュア」を出さない）。
+       英語の呼び名が分からない記号は付けない。日本語が混じるタグも付けない。 */
+    add(kishuEn(r.kishu));
     var more = o.tags || [];
     for (var i = 0; i < more.length; i++) add(more[i]);
     return out;
@@ -270,7 +311,6 @@
     /* 会員向けの行は海外向けに混ぜない（【4】）。 */
     if (memberish(r)) return "会員向けの行です";
     if (!titleOf(r)) return "英題がありません";
-    if (!s(r.descHtml).trim()) return "英語の説明がありません";
     if (priceOf(r, opt) <= 0) return "値段が出せません（eBay の売値か為替が0）";
     if (qtyOf(r) <= 0) return "数量が0です";
     if (!picsOf(r, opt).length) return "MW の画像がありません";
@@ -288,10 +328,10 @@
     row["Handle"] = handleOf(jan);
     row["Title"] = titleOf(r);
     row["Body (HTML)"] = bodyOf(r, o);
-    row["Vendor"] = s(o.vendor);
-    row["Type"] = s(r.type || o.type);
+    row["Vendor"] = vendorOf(r, o);
+    row["Type"] = typeOf(r, o);
     row["Tags"] = tagsOf(r, o).join(", ");
-    row["Published"] = "true";
+    row["Published"] = liveOf(o) ? "true" : "false";
     row["Option1 Name"] = s(o1.name);
     row["Option1 Value"] = s(o1.value);
     row["Variant SKU"] = skuOf(jan);
@@ -306,7 +346,7 @@
     row["Variant Taxable"] = (o.taxable === false) ? "false" : "true";
     row["Image Src"] = pics[0] || "";
     row["Image Position"] = pics.length ? "1" : "";
-    row["Status"] = "active";
+    row["Status"] = liveOf(o) ? "active" : "draft";
     /* 仕入原価。Shopify の Cost per item は管理画面だけに出る（客には見えない）。 */
     row["Cost per item"] = costOf(r);
     return row;
@@ -379,8 +419,10 @@
        変えない行）は price をそのまま使う。eBay の売値（usd）から
        出し直す行だけ、⚙の為替と割合で計算する。 */
     row["Variant Price"] = String(updPxOf(r, o));
-    /* 品切れは下書きに落とす（買えない商品を公開のままにしない）。 */
-    row["Status"] = (qty > 0) ? "active" : "draft";
+    /* 品切れは下書きに落とす（買えない商品を公開のままにしない）。
+       8.73：在庫があるときは**⚙の状態**にする。⚙が「下書き」のあいだは
+       直しの CSV で勝手に公開されない（公開は⚙を「公開」にしてから）。 */
+    row["Status"] = (qty > 0) ? (liveOf(o) ? "active" : "draft") : "draft";
     return row;
   }
   function updPxOf(it, opt) {
@@ -408,7 +450,9 @@
     handleOf: handleOf, skuOf: skuOf, isOs: isOs, isSub: isSub, janOk: janOk,
     ymd: ymd, seq2: seq2, fileName: fileName,
     ebayName: ebayName, shopName: shopName, updName: updName,
-    kishuJa: kishuJa, titleOf: titleOf, stripEbay: stripEbay, bodyOf: bodyOf,
+    kishuJa: kishuJa, kishuEn: kishuEn, titleOf: titleOf,
+    bodyOf: bodyOf, shopBody: shopBody, word: word,
+    vendorOf: vendorOf, typeOf: typeOf, liveOf: liveOf,
     pctOf: pctOf, yenOf: yenOf, priceOf: priceOf, gramsOf: gramsOf,
     qtyOf: qtyOf, costOf: costOf, picOk: picOk, picsOf: picsOf,
     tagNg: tagNg, tagsOf: tagsOf, whyNot: whyNot,

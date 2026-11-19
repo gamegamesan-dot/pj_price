@@ -163,7 +163,9 @@ await p.waitForTimeout(500);
      '★★★会員の印（member-list・grade-*）は付けない');
   const body=cellOf(csv,1,'Body (HTML)');
   ok(!/ebay/i.test(body),'★★★eBay 固有の文言・リンクは入れない');
-  ok(/Brand new, factory sealed\./.test(body),'★★商品の説明は残る');
+  /* 8.73：説明は Shopify 用に別に組み立てる（eBay の出品文は持ち込まない）。 */
+  ok(/contact us first/.test(body)&&!/Brand new, factory sealed\./.test(body),
+     '★★説明は Shopify 用（eBay の出品文の中身は持ち込まない）');
   ok(!/shopify/i.test(ebay)&&ebay.indexOf('os-')<0,
      '★★★eBay の出品文に Shopify への誘導を入れない（今の決まりのまま）');
 }
