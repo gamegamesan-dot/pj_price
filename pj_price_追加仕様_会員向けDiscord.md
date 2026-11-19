@@ -5286,7 +5286,7 @@ MW 無在庫の本格出品（eBay 18件・成功）のとき、一緒に出た
 
 ### 確かめ方
 
-`tests/osfix.mjs`（48件）／`tests/osfixui.js`（50件・①⑤⑥）／
+`tests/oscsvfix.mjs`（48件）／`tests/osfixui.js`（50件・①⑤⑥）／
 `tests/osscsv.mjs`（81件）／`tests/osui.js`（49件）／`tests/unlisted.mjs`（14件）
 
 ## 8.74 MW の「社」はメーカー名ではない（v326・カジの報告）
@@ -5320,7 +5320,7 @@ v324（8.70）で「社＝メーカー名」と**思い込んで**作ってい�
 
 ### 確かめ方
 
-`tests/osfix.mjs`（48件）／`tests/osfixui.js`（50件・②）／`tests/mwpic.js`（80件）
+`tests/oscsvfix.mjs`（48件）／`tests/osfixui.js`（50件・②）／`tests/mwpic.js`（80件）
 
 ## 8.75 プラモデルがフィギュアとして扱われる（v326・カジの報告）
 
@@ -5342,7 +5342,7 @@ MW の行を出品リストに入れるとき、カテゴリを「**ゲームで
 
 ### 確かめ方
 
-`tests/osfixui.js`（50件・③）／`tests/osfix.mjs`（48件）
+`tests/osfixui.js`（50件・③）／`tests/oscsvfix.mjs`（48件）
 
 ## 8.76 英題生成の質（v326・カジの報告）
 
@@ -5361,7 +5361,7 @@ AI の出す英題そのものは、この環境からは確かめられませ�
 
 ### 確かめ方
 
-`tests/osfix.mjs`（48件）
+`tests/oscsvfix.mjs`（48件）
 
 ## 8.77 AirTwister で英題が作れなかった（v326・カジの報告）
 

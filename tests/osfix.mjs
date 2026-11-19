@@ -1,146 +1,217 @@
-/* 海外向け Shopify の商品CSV（os-）の直し（8.73・カジの報告）
-   MW 無在庫の本格出品（18件）で見つかったこと。
-   ・Vendor／Type に会員プランのバリアント番号（数字）が入っていた
-     → Vendor＝その行のブランド、Type＝その行の商品の種類。数字だけの値は出さない
-   ・Status=active／Published=true だった → 既定は draft／false（⚙で切り替え）
-   ・Body が eBay 用の出品文そのままだった → Shopify 用の説明を別に組み立てる
-   ・Tags に日本語（フィギュア）が入っていた → 英語にする
-   あわせて 8.74（メーカー名は商品名の末尾の【 】）と、英題の Worker（8.75・8.76）。 */
-import path from 'node:path';
-import OSS from '../shared/osscsv.js';
-import MWFEE from '../shared/mwfee.js';
-import MWCSV from '../shared/mwcsv.js';
-import { harness, ROOT } from './lib.mjs';
-const T=harness('海外向け Shopify の商品CSV の直し・メーカー名・英題の Worker');
+/* Worker：海外向け Shopify（os-）の在庫・値段の追従（7.143・カジの依頼【3】）
+
+   ① POST /os/put … Shopify 用 CSV を書き出した商品を控える
+   ② MW の取り込みのあと … 品切れ・値段が変わった商品に印を付け、
+      社内用の Discord に「Shopify に読み込んでください ◯件」と知らせる
+   ③ GET /os/diff … 直しが要る行（画面が直しCSVを作るのに使う）
+   ④ POST /os/done … Shopify に読み込んだら印を消す
+   ⑤ 会員向け（sub-）とは混ざらない・作業者用のキーでは触れない */
+import { harness, loadWorker, makeEnv, asJson, get, post } from './lib.mjs';
+import OSSCSV from '../shared/osscsv.js';
+const T=harness('Worker：海外向け Shopify の追従（7.143）');
 const ok=T.ok;
+const { worker, T:W }=await loadWorker('osfix');
 
-const item=(x)=>Object.assign({ jan:'4528272010290',
-  titleEn:'Keys Factory Card Pod Collection Splatoon Raiders Nintendo Switch 2 Japan',
-  vendor:'Keys Factory', type:'Video Game Accessory', platform:'Nintendo Switch 2',
-  cond:'new', stockPhoto:true, kishu:'NS2H', usd:30, qty:1, grams:200, cost:1200,
-  pics:[{url:'https://img.test/i/20261118/a.jpg'}],
-  descHtml:'<div><p>message us through eBay first</p></div>' },x||{});
-/* カジの⚙に入っていた値（会員プランのバリアント番号）。 */
-const BAD={ fx:150, pct:100, vendor:'67979822694563', type:'67979822727331' };
+let msg=[];
+globalThis.fetch=async(u,i)=>{
+  const url=String(u), o=i||{};
+  if(/discord/.test(url)){
+    const b=JSON.parse(String(o.body||'{}'));
+    msg.push(String(b.content||''));
+    ((b.embeds)||[]).forEach((e)=>msg.push(JSON.stringify(e)));
+    return new Response(null,{status:204});
+  }
+  return new Response('{}',{status:200});
+};
+const env0=()=>makeEnv({ STAFF_KEY:'staff-key-123' });
+const api=async(env,path,body)=>(await asJson(await worker.fetch(
+  body?post(path,body):get(path),env,{}))).body;
+const row=(o)=>Object.assign({ sha:'いろは商会', idx:0, kishu:'NS',
+  name:'商品'+o.jan, list_price:7678, release:'', cond:'新品',
+  wholesale:3000, note:'', ship_text:'即日', ship_days:0 },o);
+const impo=async(env,at,rows)=>await api(env,'/mw/stock',
+  { at:at, part:1, parts:1, rows_in:rows.length, rows:rows });
+/* 3割の歯止めが効かないよう、動かさない行を並べておく。 */
+const fill=(n)=>{ const a=[]; for(let i=0;i<(n||12);i++)
+  a.push(row({ jan:'49023709'+String(i).padStart(5,'0'), stock:9 })); return a; };
+const F=fill(12);
+const J='4902370550467';
+const item=(o)=>Object.assign({ jan:J, name:'Super Mario Party Jamboree',
+  usd:49.99, fx:160, pct:100, price:7998, qty:1, wholesale:3000, stock:5 },o);
+const osRow=async(env,jan)=>(await env.DB.prepare(
+  `SELECT * FROM os_item WHERE jan=?1`).bind(jan||J).first())||{};
 
-console.log('=== Vendor と Type ===');
+console.log('=== ① 書き出した商品を控える（POST /os/put）===');
 {
-  const r=OSS.rowOf(item(),BAD);
-  ok(r['Vendor']==='Keys Factory','★★★Vendor はその行のブランド');
-  ok(r['Type']==='Video Game Accessory','★★★Type はその行の商品の種類');
-  const r2=OSS.rowOf(item({vendor:'',type:''}),BAD);
-  ok(r2['Vendor']===''&&r2['Type']==='',
-     '★★★行に無くても、⚙の**数字だけの値**（ID の取り違え）は出さない');
-  const r3=OSS.rowOf(item({vendor:'',type:''}),{fx:150,pct:100,vendor:'Play Japan',type:'Toy'});
-  ok(r3['Vendor']==='Play Japan'&&r3['Type']==='Toy',
-     '★★行に無いときだけ⚙の値（言葉）を使う');
-  ok(OSS.word('67979822694563')===''&&OSS.word('30MM')==='30MM'&&OSS.word('2024')==='2024',
-     '★★数字だけの長い値だけを捨てる（30MM・2024 は残す）');
+  const env=env0();
+  const r=await api(env,'/os/put',{ items:[item({})] });
+  ok(r.ok&&r.n===1,'★★★1件を控える');
+  const o=await osRow(env);
+  ok(o.handle==='os-4902370550467','★★★Handle は os-<JAN>');
+  ok(o.sku==='W-4902370550467','★★★SKU は eBay と同じ W-<JAN>');
+  ok(Math.round(o.price)===7998&&Math.round(o.qty)===1,'★値段と数量を控える');
+  ok(Math.round(o.wholesale)===3000,'★★そのときの卸値を控える（値段の変化を見る元）');
+  ok(!o.fix_at,'★控えた直後は直し不要');
+  const r2=await api(env,'/os/put',{ items:[item({ price:8500, qty:2 })] });
+  ok(r2.n===1&&Math.round((await osRow(env)).price)===8500,
+     '★★同じ JAN は上書きする（1商品1行）');
+  const bad=await api(env,'/os/put',{ items:[item({ jan:'12' })] });
+  ok(bad.ok&&bad.n===0,'★JAN がおかしい行は控えない');
 }
 
-console.log('\n=== Status と Published ===');
+console.log('=== ② 品切れを見つけて知らせる ===');
 {
-  const r=OSS.rowOf(item(),BAD);
-  ok(r['Status']==='draft'&&r['Published']==='false',
-     '★★★既定は下書き・非公開（draft／false）');
-  const r2=OSS.rowOf(item(),Object.assign({},BAD,{status:'active'}));
-  ok(r2['Status']==='active'&&r2['Published']==='true','★★⚙で「公開」にすると active／true');
-  /* 直しの CSV：⚙が下書きのあいだは公開にしない。品切れは下書き。 */
-  const u=OSS.updRowOf(item({qty:2}),BAD), u0=OSS.updRowOf(item({qty:0}),BAD);
-  ok(u['Status']==='draft','★★★直しCSV も、⚙が下書きのあいだは公開にしない');
-  ok(u0['Status']==='draft','★品切れは下書き（今までどおり）');
-  const ua=OSS.updRowOf(item({qty:2}),Object.assign({},BAD,{status:'active'}));
-  ok(ua['Status']==='active','★★⚙が「公開」なら、在庫が戻った商品は公開（今までどおり）');
+  const env=env0();
+  msg=[];
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  msg=[];
+  /* MW の CSV から行が消える＝品切れ */
+  await impo(env,'2026-11-13T06:00:00Z',F);
+  const o=await osRow(env);
+  ok(String(o.fix_why||'')==='gone','★★★品切れは gone の印');
+  ok(Math.round(o.fix_qty)===0,'★★★直したあとの数量は0');
+  ok(!!o.fix_at,'★★直しが要るようになった日時が入る');
+  const t=msg.join('\n');
+  ok(/Shopify に読み込んでください/.test(t),
+     '★★★社内用の Discord に「Shopify に読み込んでください ◯件」');
+  ok(/1件/.test(t),'★★件数が出る');
+  ok(t.indexOf(J)>=0,'★どの商品かが分かる');
+  /* 同じ理由でもう印が付いているときは知らせ直さない */
+  msg=[];
+  await impo(env,'2026-11-13T12:00:00Z',F);
+  ok(msg.join('\n').indexOf('Shopify に読み込んでください')<0,
+     '★★★同じ商品を毎回は知らせない');
 }
 
-console.log('\n=== 説明（Shopify 用を別に作る）===');
+console.log('=== ② 値段が変わったときも知らせる ===');
 {
-  const b=OSS.rowOf(item(),BAD)['Body (HTML)'];
-  console.log('   '+b.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,260));
-  ok(!/ebay/i.test(b),'★★★eBay の文が1つも入らない（message us through eBay など）');
-  ok(!/shopify/i.test(b),'★★★Shopify の名前も入れない');
-  ok(!/best offer|shipping and payments|this listing|import duties/i.test(b),
-     '★★eBay の画面の言葉（Best Offer・Shipping and payments・関税の前払い）が無い');
-  ok(b.includes('Keys Factory Card Pod Collection Splatoon Raiders'),'★★商品名が入る');
-  ok(/Brand: Keys Factory/.test(b)&&/Type: Video Game Accessory/.test(b)
-     &&/Platform: Nintendo Switch 2/.test(b)&&/Condition: Brand new/.test(b),
-     '★★ブランド・種類・機種・状態（行が持っている事実だけ）');
-  ok(/not photographs of the individual copy/.test(b),
-     '★★★無在庫の行は「写真は届く1点のものではない」と書く');
-  ok(!/inspected by hand|checked by hand|hand inspection/i.test(b),
-     '★★★「手で検品した」とは書かない');
-  ok(/contact us first/.test(b)&&/shown at checkout/.test(b),'★困ったときと配送の案内');
-  const b2=OSS.rowOf(item({vendor:'',type:'',platform:'',stockPhoto:false}),BAD)['Body (HTML)'];
-  ok(!/Brand:|Type:|Platform:/.test(b2),'★★★分からない項目は行ごと出さない（推測で埋めない）');
-  ok(!/67979822/.test(b2),'★★ID の取り違えが説明にも出ない');
-  const b3=OSS.rowOf(item({notes:['Region locked to Japanese systems.',
-    'Ask via eBay messages.']}),BAD)['Body (HTML)'];
-  ok(/Region locked/.test(b3)&&!/eBay/.test(b3),'★★注意書きは持ち込むが、eBay の名前が入ったものは外す');
-  ok(OSS.whyNot(item({descHtml:''}),BAD)==='',
-     '★★eBay の出品文が無くても Shopify 用は作れる（別に作るため）');
+  const env=env0();
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  msg=[];
+  await impo(env,'2026-11-13T06:00:00Z',
+    [...F,row({ jan:J, stock:5, wholesale:3400 })]);
+  const o=await osRow(env);
+  ok(String(o.fix_why||'')==='price','★★★卸値が変わったら price の印');
+  ok(Math.round(o.fix_qty)===1,'★★数量はそのまま（値段だけ直す）');
+  const t=msg.join('\n');
+  ok(/Shopify に読み込んでください/.test(t),'★★★知らせが出る');
+  ok(/3000/.test(t)&&/3400/.test(t),'★★卸値の前と後が出る');
+}
+{
+  const env=env0();
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  msg=[];
+  await impo(env,'2026-11-13T06:00:00Z',
+    [...F,row({ jan:J, stock:5, wholesale:3010 })]);
+  ok(!(await osRow(env)).fix_at,
+     '★★★わずかな違い（3000→3010・0.3%）では直さない（既定 1%）');
+}
+{
+  const env=env0();
+  await env.DB.prepare(
+    `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
+     ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
+    .bind(JSON.stringify({ at:'2026-11-13T00:00:00Z',
+      settings:{ osFixPct:10 } }),'2026-11-13T00:00:00Z').run();
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  await impo(env,'2026-11-13T06:00:00Z',
+    [...F,row({ jan:J, stock:5, wholesale:3100 })]);
+  ok(!(await osRow(env)).fix_at,
+     '★★★⚙「値段が変わったとみなす割合」を10%にすると 3000→3100 は直さない');
+}
+console.log('=== 見立ての決まり（osFixOf）===');
+{
+  const f=(r)=>W.osFixOf(r,1);
+  ok(f({ live:1, now_stock:5, wholesale:3000, now_px:3000, qty:1 }).why==='',
+     '★変わっていなければ直し不要');
+  ok(f({ live:0, now_stock:0, wholesale:3000, now_px:0, qty:1 }).why==='gone',
+     '★★MW から消えたら品切れ');
+  ok(f({ live:1, now_stock:0, wholesale:3000, now_px:3000, qty:1 }).why==='gone',
+     '★★★在庫0でも品切れ');
+  ok(f({ live:0, now_stock:0, wholesale:3000, now_px:0, qty:0 }).why==='',
+     '★★★もう数量0で出しているなら直しは済んでいる');
+  ok(f({ live:1, now_stock:2, wholesale:3000, now_px:3000, qty:5 }).qty===2,
+     '★★★数量は MW の在庫を超えない');
+  ok(W.osPxPct({})===1&&W.osPxPct({ osFixPct:5 })===5,
+     '★★⚙の割合（既定 1%）');
 }
 
-console.log('\n=== Tags（英語）===');
+console.log('=== ③ 直しが要る行（GET /os/diff）===');
 {
-  const t=(k)=>OSS.rowOf(item({kishu:k}),BAD)['Tags'];
-  ok(t('b2cchara_figure')==='export, Figure','★★★フィギュア → Figure（日本語を出さない）');
-  ok(t('plasticmodel')==='export, Model Kit','★★プラモデル → Model Kit');
-  ok(t('NS2H')==='export, Nintendo Switch 2','★★NS2H → Nintendo Switch 2');
-  ok(t('3DS')==='export, Nintendo 3DS','★3DS も英語（ニンテンドー3DS と出さない）');
-  ok(t('謎の機種')==='export','★★英語の呼び名が分からない記号は付けない');
-  ok(!/[^\x20-\x7E]/.test(t('figure')+t('WIN')+t('PV')),'★★★どのタグにも日本語が入らない');
-  ok(!/member-list|grade-/.test(t('NS')),'★会員の印は付けない（今までどおり）');
-  ok(MWFEE.kishuPlat('P5')==='ps5'&&MWFEE.kishuPlat('NS2H')==='switch2'
-     &&MWFEE.kishuPlat('XB')==='','★★機種 → ゲーム機の印（はっきり決まるものだけ）');
+  const env=env0();
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  const none=await api(env,'/os/diff');
+  ok(none.ok&&none.n===0,'★直しが無ければ0件');
+  await impo(env,'2026-11-13T06:00:00Z',F);
+  const d=await api(env,'/os/diff');
+  ok(d.ok&&d.n===1,'★★★品切れの1件が出る');
+  const x=d.rows[0];
+  ok(x.handle==='os-4902370550467'&&x.sku==='W-4902370550467',
+     '★★Handle と SKU で突き合わせる');
+  ok(x.why==='gone'&&x.fix_qty===0,'★★★理由と直したあとの数量');
+  ok(x.usd===49.99&&x.fx===160&&x.pct===100,
+     '★★★書き出したときの売値・為替・⚙% を返す（画面が値段を出し直せる）');
+  ok(!!x.fix_at_jst,'★日本時間の表示も返す');
 }
 
-console.log('\n=== メーカー名は商品名の末尾の【 】（8.74）===');
+console.log('=== ④ 読み込んだら印を消す（POST /os/done）===');
 {
-  ok(MWCSV.makerOf('カードポッド スプラトゥーン【キーズファクトリー 】')==='キーズファクトリー',
-     '★★★末尾の【 】を読む（中の空白は落とす）');
-  ok(MWCSV.makerOf('アニメ BD【エイベックス・ピクチャーズ 】　')==='エイベックス・ピクチャーズ',
-     '★★後ろに空白があっても読む');
-  ok(MWCSV.makerOf('【特典付き】ソフト名')==='','★★★途中・先頭の【 】は読まない');
-  ok(MWCSV.makerOf('ただの商品名')==='','★無ければ空');
-  ok(MWCSV.nameNoMaker('カードポッド【キーズファクトリー 】')==='カードポッド',
-     '★メーカー名を外した商品名');
-  const d=MWCSV.parse('JAN,社,機種,商品名,定価,発売日,新・中,卸値,掲載数,備考,出荷日\n'
-    +'4528272010290,MC02,NS2H,カードポッド【キーズファクトリー 】,1500,2026/06/05,新,1200,10,,即日\n'
-    +'4528272010306,ST00,NS,ソフト名,1500,2026/06/05,新,1200,10,,即日\n');
-  ok(d.rows[0].sha==='MC02'&&d.rows[0].maker==='キーズファクトリー',
-     '★★★「社」は売主のコードのまま・メーカー名は商品名から');
-  ok(d.rows[1].maker==='','★【 】が無い行は空');
-  ok(d.maker_from_name===1&&d.maker_examples[0]==='キーズファクトリー',
-     '★★読めた行の数と例を返す（取り込みの結果に出す）');
+  const env=env0();
+  await impo(env,'2026-11-13T00:00:00Z',[...F,row({ jan:J, stock:5 })]);
+  await api(env,'/os/put',{ items:[item({})] });
+  await impo(env,'2026-11-13T06:00:00Z',F);
+  const r=await api(env,'/os/done',{ items:[{ jan:J, qty:0, price:7998 }] });
+  ok(r.ok&&r.n===1,'★★★1件を読み込み済みにする');
+  const o=await osRow(env);
+  ok(!o.fix_at&&!o.fix_why,'★★★直しの印が消える');
+  ok(Math.round(o.qty)===0,'★★読み込んだ数量に書き替える');
+  ok(!!o.done_at,'★読み込んだ日時が入る');
+  ok((await api(env,'/os/diff')).n===0,'★★直しの一覧から消える');
+  msg=[];
+  await impo(env,'2026-11-13T12:00:00Z',F);
+  ok(msg.join('\n').indexOf('Shopify に読み込んでください')<0,
+     '★★★読み込み済みの品切れを知らせ直さない');
 }
 
-console.log('\n=== 英題の Worker（8.75・8.76）===');
+console.log('=== ⑤ 会員向けと混ざらない・鍵（カジの依頼【4】）===');
 {
-  const m=await import('file://'+path.join(ROOT,'proxy-title/worker.js')+'?t='+Date.now());
-  const { figCodesIn, figCodeFill, figBrand, FIG_SYSTEM }=m.__test;
-  ok(figBrand('エイベックス・ピクチャーズ')==='Avex Pictures',
-     '★★★エイベックス・ピクチャーズ → Avex Pictures（A-Pictures にしない）');
-  ok(figBrand('キーズファクトリー')==='Keys Factory','★★キーズファクトリー → Keys Factory');
-  ok(/model_kit/.test(FIG_SYSTEM)&&/NEVER drop it/.test(FIG_SYSTEM)
-     &&/never write "Figure"/.test(FIG_SYSTEM),
-     '★★★指示文：プラモデルは Figure と書かない・かっこの中を落とさない');
-  ok(/LAST 【 】/.test(FIG_SYSTEM)&&/Avex Pictures/.test(FIG_SYSTEM),
-     '★★指示文：末尾の【 】はメーカー名・別の会社の名前にしない');
-  const codes=figCodesIn('30MM 1/144 オプションパーツセット（bEXM-40）[グリーン]【BANDAI SPIRITS 】');
-  ok(codes.join(',')==='bEXM-40','★★★かっこの中の型番を拾う：'+codes.join(','));
-  ok(figCodesIn('ソフト名（PS5）【Ver2】').length===0,
-     '★★PS5・Ver2 のような語は型番と取り違えない');
-  ok(figCodesIn('商品【KCP-004-1】').length===0,
-     '★★末尾の【 】（メーカー名の場所）は型番として見ない');
-  ok(figCodesIn('カードポッド（KCP-004-1）【キーズファクトリー 】').join(',')==='KCP-004-1',
-     '★ハイフンが2つの型番も拾う');
-  const f={brand:'Bandai Spirits',series:'',chara:'',item_name:'',variant:'Green',line:'30MM'};
-  const add=figCodeFill(f,'30MM（bEXM-40）[グリーン]');
-  ok(add.join(',')==='bEXM-40'&&f.variant==='Green bEXM-40',
-     '★★★AI が落とした型番を版に足す：'+f.variant);
-  const f2={brand:'',series:'',chara:'',item_name:'bEXM-40 Option Parts',variant:'',line:''};
-  ok(figCodeFill(f2,'30MM（bEXM-40）').length===0&&f2.variant==='',
-     '★★もう入っている型番は二重に足さない');
+  const env=env0();
+  await api(env,'/os/put',{ items:[item({})] });
+  const o=await osRow(env);
+  ok(String(o.handle).indexOf('sub-')<0,'★★★os_item に sub- の Handle は入らない');
+  ok(OSSCSV.handleOf(J)!=='sub-'+J,'★★★会員用とは別の商品');
+  const sub=await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mw_sub WHERE jan=?1`).bind(J).first();
+  ok(Number((sub&&sub.n)||0)===0,
+     '★★★海外向けに出しても会員向け（mw_sub）には入らない');
+  const key={'X-PJ-Key':'staff-key-123','content-type':'application/json'};
+  const r1=await worker.fetch(new Request('https://x/os/diff',{ headers:key }),env,{});
+  ok(r1.status===403,'★★★作業者用のキーでは海外向けの窓口を触れない');
+  const r2=await worker.fetch(new Request('https://x/os/put',
+    { method:'POST', headers:key, body:'{}' }),env,{});
+  ok(r2.status===403,'★★★控えるのも管理者だけ');
+}
+
+console.log('=== 表が無くても落ちない ===');
+{
+  /* 列があるかの答えは worker.js の中で覚えているので、別に読み込む。 */
+  const { worker:w2, T:W2 }=await loadWorker('osfix-notable');
+  const env=env0();
+  env.DB._db.exec('DROP TABLE os_item');
+  const api2=async(path,body)=>(await asJson(await w2.fetch(
+    body?post(path,body):get(path),env,{}))).body;
+  const r=await api2('/os/put',{ items:[item({})] });
+  ok(r.ok===false&&r.error==='no_table','★表が無ければ no_table を返す');
+  ok(/migrate-0058/.test(String(r.detail||'')),'★★流すマイグレーションを教える');
+  const d=await api2('/os/diff');
+  ok(d.table_ok===false,'★一覧も落ちない');
+  ok(W2.schemaFixOf('os_item')==='migrate-0058-os-item.sql',
+     '★★★足りない表 → migrate-0058 を案内する');
 }
 
 T.done();
