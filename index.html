@@ -20032,15 +20032,17 @@ function subPlanGo(quiet){
    予定（/sub/plan）が返す plans（n・q）と q_over をそのまま出す
    （数えるのは pj-sync。ここでは何も書き換えない）。 */
 function subLimHtml(d,pre,list){
-  var ps=list||(d&&d.plans)||[];
+  /* 1点もののチャンネル（目玉商品）にはプランの上限が無いので並べない。 */
+  var ps=(list||(d&&d.plans)||[]).filter(function(p){ return !p.one; });
   if(!ps.length)return '';
   var ID=(pre||'sub');
   var a=ps.map(function(p){
-    return esc(String(p.name||p.key))+' '+mwN(+p.n||0)+'件・'
+    /* 見出し（「ライト　3件」）と紛れない書き方にする。 */
+    return esc(String(p.name||p.key))+'：1回 '+mwN(+p.n||0)+'件・お一人 '
       +mwN(+p.q||0)+'点'+((p.on||list)?'':'（止めています）');
   });
   var h='<div class="note2" id="'+ID+'LimLine" style="margin:6px 0 0">'
-    +'<b>プランの上限</b>（1回のリスト・お一人で買える数）　'+a.join('／')+'</div>';
+    +'<b>プランの上限</b>（1回のリストの件数・1商品で買える数）　'+a.join('／')+'</div>';
   var o=d.q_over;
   if(!o)return h;
   /* 列（migrate-0069）がまだ無い D1：カードごとの数を控えられないので、
@@ -20057,7 +20059,7 @@ function subLimHtml(d,pre,list){
   var b=(o.plans||[]).filter(function(r){ return +r.n>0; }).map(function(r){
     var by=Object.keys(r.by||{}).sort(function(x,y){ return (+y)-(+x); })
       .map(function(k){ return k+'点まで '+mwN(+r.by[k])+'件'; }).join('・');
-    return esc(String(r.name||r.key))+' '+mwN(+r.n)+'件（いまの上限 '
+    return esc(String(r.name||r.key))+'：'+mwN(+r.n)+'件（いまの上限 '
       +mwN(+r.now||0)+'点／カードは '+by+'）';
   });
   return h+open+';color:var(--bad)">出ているカードで、「お一人◯点まで」が上限より多いもの：'

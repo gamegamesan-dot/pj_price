@@ -101,7 +101,10 @@ console.log('\n=== ③ 予定の画面：上限と、上限より多いカード
     { key:'light', name:'ライト', on:true, ch:'2', n:5, q:1, items:[] },
     { key:'standard', name:'スタンダード', on:true, ch:'3', n:20, q:2, items:[] },
     { key:'premium', name:'プレミアム', on:false, ch:'', n:50, q:5, items:[],
-      why:'止めています' }];
+      why:'止めています' },
+    /* 1点もののチャンネルも予定に入っている（上限の行には並べない）。 */
+    { key:'one_pre', name:'目玉商品-先行（プレミアム）', on:true, ch:'7',
+      one:true, items:[] }];
   const show=async(q_over)=>await p.evaluate((a)=>{
     const d={ ok:true, plans:a.plans, q_over:a.q_over };
     const h=subLimHtml(d);
@@ -114,8 +117,9 @@ console.log('\n=== ③ 予定の画面：上限と、上限より多いカード
   const t0=await show({ total:0, fix:false, col:true, plans:[] });
   console.log('   '+t0.lim);
   console.log('   '+t0.over);
-  ok(/モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点／プレミアム 50件・5点（止めています）/
+  ok(/モニター：1回 5件・お一人 1点／ライト：1回 5件・お一人 1点／スタンダード：1回 20件・お一人 2点／プレミアム：1回 50件・お一人 5点（止めています）/
      .test(t0.lim),'★★★プランの上限を1行で出す（止めているプランも分かる）');
+  ok(!/目玉商品/.test(t0.lim),'★★1点もののチャンネルは上限の行に並べない');
   ok(/0件/.test(t0.over)&&!t0.red,'★★★上限より多いカードが無ければ「0件」');
   const t1=await show({ total:12, fix:false, col:true, plans:[
     { key:'monitor', name:'モニター', now:1, n:0, cards:9, by:{} },
@@ -123,11 +127,11 @@ console.log('\n=== ③ 予定の画面：上限と、上限より多いカード
     { key:'standard', name:'スタンダード', now:2, n:4, cards:6, by:{ 5:3, 3:1 } }] });
   console.log('   '+t1.over);
   ok(/12件/.test(t1.over)&&t1.red,'★★★上限より多いカードの件数を赤で出す（12件）');
-  ok(/ライト 8件（いまの上限 1点／カードは 2点まで 8件）/.test(t1.over),
+  ok(/ライト：8件（いまの上限 1点／カードは 2点まで 8件）/.test(t1.over),
      '★★★プランごとの件数と、カードに書いてある数');
-  ok(/スタンダード 4件（いまの上限 2点／カードは 5点まで 3件・3点まで 1件）/
+  ok(/スタンダード：4件（いまの上限 2点／カードは 5点まで 3件・3点まで 1件）/
      .test(t1.over),'★★数が混ざっていても分けて出す');
-  ok(!/モニター 0件/.test(t1.over),'★0件のプランは並べない');
+  ok(!/モニター：0件/.test(t1.over),'★0件のプランは並べない');
   ok(/前の数のまま/.test(t1.over)&&/オンにして配信/.test(t1.over),
      '★★★いまは書き換えていないことと、直し方を出す');
   const t2=await show({ total:12, fix:true, col:true, plans:[
@@ -171,9 +175,9 @@ console.log('\n=== ④ 自動配信の「試し」にも同じ行が出る ===')
              dup:document.querySelectorAll('#subLimLine').length };
   });
   console.log('   '+t.lim);
-  ok(/モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点/.test(t.lim)
+  ok(/モニター：1回 5件・お一人 1点／ライト：1回 5件・お一人 1点／スタンダード：1回 20件・お一人 2点/.test(t.lim)
      &&!/止めています/.test(t.lim),'★★★試しの結果に、この回が使う上限を出す');
-  ok(/3件/.test(t.over)&&/スタンダード 3件/.test(t.over),
+  ok(/3件/.test(t.over)&&/スタンダード：3件/.test(t.over),
      '★★上限より多いカードの件数も出す');
   ok(t.dup<=1,'★予定の行と id が重ならない');
 }
