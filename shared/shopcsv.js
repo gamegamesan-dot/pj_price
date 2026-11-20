@@ -706,11 +706,45 @@
       if (use.indexOf(GRADES[i]) >= 0) out.push("grade-" + GRADES[i]);
     return out;
   }
+  /* ===== 8.83（カジの依頼）お一人の上限のタグ =====
+     会員用の商品は JAN ごとに1つで、どのプランの会員も同じ商品ページから
+     買う。プランごとの「お一人◯点まで」を Shopify に伝えるために、
+     商品に **qty-<プラン>-<点数>** のタグを付ける（例 qty-light-1）。
+     テーマのスニペット（shopify/snippets/member-qty.liquid）が、買う人の
+     プランのタグ（grade-◯◯）と突き合わせて数量を抑える。
+       opt.qtyBy … { monitor:1, light:1, standard:2, premium:5 }
+                   （無ければ付けない。数の元は shared/subplan.js と、
+                     出ているカードに書いてある数。決めるのは pj-sync）
+     その商品のプラン（grade-◯◯ を付けるプラン）のぶんだけ付ける。 */
+  var QTY_PRE = "qty-";
+  function qtyTags(it, opt) {
+    var by = (opt || {}).qtyBy;
+    if (!by) return [];
+    var gs = gradeTags((it || {}).grades), out = [];
+    for (var i = 0; i < gs.length; i++) {
+      var k = gs[i].slice("grade-".length);
+      var n = Math.round(num(by[k]));
+      if (n > 0) out.push(QTY_PRE + k + "-" + n);
+    }
+    return out;
+  }
+  /* タグの並びから、上限のタグだけを「light-1,standard-2」の形にする
+     （Shopify に入れた中身の控え。D1 の mw_sub.shop_q に入れて比べる）。 */
+  function qtyText(tags) {
+    var out = [];
+    for (var i = 0; i < (tags || []).length; i++) {
+      var t = s(tags[i]).trim().toLowerCase();
+      if (t.slice(0, QTY_PRE.length) === QTY_PRE)
+        out.push(t.slice(QTY_PRE.length));
+    }
+    return out.join(",");
+  }
   function tagsOf(it, opt) {
     var o = opt || {};
     var t = [TAG_MEMBER];
     t = t.concat(gradeTags((it || {}).grades));
     t.push(shipTag(it, o));
+    t = t.concat(qtyTags(it, o));
     for (var i = 0; i < (o.tags || []).length; i++) {
       var x = s(o.tags[i]).trim();
       if (x && t.indexOf(x) < 0) t.push(x);
@@ -1173,6 +1207,8 @@
     splitToku: splitToku, tokuOf: tokuOf, tidy: tidy,
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
+    /* 8.83 お一人の上限のタグ。 */
+    QTY_PRE: QTY_PRE, qtyTags: qtyTags, qtyText: qtyText,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
     /* 8.80 Shopify の管理 API に渡す形（自動配信）。 */
     apiOf: apiOf, API_STATUS: API_STATUS, costOf: costOf,

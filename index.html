@@ -2340,6 +2340,11 @@ body.staff #syncOnHandFix{display:none !important}
              引き継がず、新しい上限から始まる。 -->
         <div class="note2" id="subLimNote" style="margin:0 0 6px">8.82：<b>プランの上限</b>は下の欄で変えられます（既定：モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点／プレミアム 50件・5点）。件数が上限を超えるときは、<b>今の並びのまま上から</b>上限までを出します。今日の配信の案・予定・カード・自動配信が<b>同じ数</b>を使います。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subQFix"><label for="subQFix" style="flex:1"><b>出ているカードの「お一人◯点まで」も、新しい上限に書き換える</b>（既定オフ：出ているカードは前の数のまま・新しく出すカードだけ新しい上限）</label></div>
+        <!-- 8.83（カジの依頼）お一人の上限を Shopify でも抑える。pj が会員用の
+             商品に上限のタグ（qty-プラン-点数）を付け、テーマのスニペット
+             （shopify/snippets/member-qty-guard.liquid）が数量を抑える。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subShopQtyOn"><label for="subShopQtyOn" style="flex:1"><b>お一人の上限を Shopify の商品にも入れる</b>（テーマで数量を抑える・既定オフ）</label></div>
+        <div class="note2" id="subShopQtyNote" style="margin:0 0 6px">オンにすると、会員用の商品に<b>プランごとの上限のタグ</b>（例 <code>qty-light-1</code>）を付けます。数は、そのプランのチャンネルに<b>出ているカードに書いてある数</b>（出ていなければ上の欄の数）です。テーマにスニペットを貼ってあると、商品ページとカートの数量が上限までになります（貼り方は「Shopify会員用の鍵」の手順書 §14）。オンにしたあと、下の<b>「いまある会員用の商品を直す」</b>で、もうある商品にも付けます。<b>会員用でない商品（海外向け・サービス商品）には付けません。</b>上限を超えた注文が入ったときは、この欄に関係なく運営のチャンネルに知らせます。</div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <!-- 8.53（カジの確認）モニターの「1回に新しく出す件数」の箱は、
              上の「モニターだけは別の選び方です」の囲みに**1つだけ**にした
@@ -3870,6 +3875,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subBoxOn',
                 /* 8.82 出ているカードの「お一人◯点まで」も書き換える（既定オフ）。 */
                 'subQFix',
+                /* 8.83 お一人の上限を Shopify の商品にも入れる（既定オフ）。 */
+                'subShopQtyOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -18113,6 +18120,14 @@ function mwShipOpt(){
    重さの表・段の作り方は shared/shopcsv.js の1か所（pj-sync も同じ）。
    箱ものの料金は⚙「売り方ごとの送料（実額）」（gdShip*）から取る。 */
 function subBoxOn(){ return !!($('subBoxOn')||{}).checked; }
+/* 8.83 お一人の上限を Shopify の商品にも入れるか／タグの元（プラン→点数）。 */
+function subShopQtyOn(){ return !!($('subShopQtyOn')||{}).checked; }
+function subShopQtyBy(){
+  if(!subShopQtyOn())return null;
+  var o={};
+  SUBPLAN.list(subCfgAll()).forEach(function(p){ o[p.key]=p.q; });
+  return o;
+}
 function subBoxTiers(){
   return PJ_SHOPCSV.tiersBox(
     PJ_SHOPCSV.tiersOf(($('mwSubTiers')||{}).value||''),
@@ -18171,15 +18186,19 @@ function subBoxGo(approve){
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     subBoxNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return; }
-  if(approve&&!subBoxOn()){
-    subBoxNote('先に「箱ものは送料用の重さで実額を取る」を入れてください。',1);
-    return; }
+  /* 8.83 上限のタグだけを直すこともできる（どちらかがオンなら進む。
+     両方オフでも、前に付けたタグを外すぶんは pj-sync が見つけて直す）。 */
   if(approve&&!confirm('いまある会員用の商品を直します。\n\n'
-    +'・箱もの（クリックポスト以外）の重さを「送料用の重さ」にします\n'
-    +'・クリックポストの品は実際の重さのままです\n'
-    +'・海外向けの商品リストから外します\n'
+    +(subBoxOn()
+      ? ('・箱もの（クリックポスト以外）の重さを「送料用の重さ」にします\n'
+        +'・クリックポストの品は実際の重さのままです\n'
+        +'・海外向けの商品リストから外します\n')
+      : '・重さは今までどおりです（箱ものの⚙はオフ）\n')
+    +(subShopQtyOn()
+      ? '・お一人の上限のタグ（qty-プラン-点数）を付けます\n'
+      : '・お一人の上限のタグは付けません（前に付けたタグは外します）\n')
     +'・値段・在庫・非公開の設定は pj の今の中身にそろえます\n\n'
-    +'※ Shopify の会員便の段を、⚙の表のとおりにしてありますか？\n'
+    +(subBoxOn()?'※ Shopify の会員便の段を、⚙の表のとおりにしてありますか？\n':'')
     +'\nよろしいですか？')){
     subBoxNote('✋ やめました（何も変えていません）。'); return; }
   var b1=$('subBoxChkBtn'), b2=$('subBoxGoBtn');
@@ -18233,8 +18252,13 @@ function subBoxShow(d,sum,approve){
           +'」が見つかりません</b>（送料用の重さの品は作りません・直しません）')
         :('見つかりました（'+mwN(+ov.found||0)+'件・会員用の商品を外します）')))
     +(x.on?'':'<br><b style="color:var(--bad)">⚙「箱ものは送料用の重さで'
-      +'実額を取る」がオフです</b>（オンにすると直せます）')
-    +'</div>');
+      +'実額を取る」がオフです</b>（オンにすると重さを直せます）')
+    /* 8.83 お一人の上限のタグ。 */
+    +'<br><span id="subBoxQtyLine">お一人の上限のタグ：'
+    +(x.qcol===false?'<b style="color:var(--bad)">D1 に migrate-0070 がまだです</b>'
+      :((x.qty_on?'付けます':'付けません（⚙がオフ）')
+        +'　直す必要がある '+mwN(+x.qty_n||0)+'件'))
+    +'</span></div>');
   if(sum.errors.length)
     H.push('<div class="note2" style="color:var(--bad)">'
       +sum.errors.map(function(e){ return esc(e); }).join('<br>')+'</div>');
@@ -18251,7 +18275,11 @@ function subBoxShow(d,sum,approve){
       +it.map(function(r){
         return '<tr data-boxitem="'+esc(String(r.jan))+'"><td>'
           +esc(String(r.name||''))+'<br><span class="note2" style="margin:0">'
-          +esc(String(r.jan))+'</span></td><td>'+esc(String(r.ship||'（未確認）'))
+          +esc(String(r.jan))
+          /* 8.83 直す理由（重さ・海外のリスト・買える数）と、付けるタグ。 */
+          +(r.why?('　直す所：'+esc(String(r.why))):'')
+          +(r.q?('　上限 '+esc(String(r.q))):'')
+          +'</span></td><td>'+esc(String(r.ship||'（未確認）'))
           +'</td><td style="text-align:right">'+mwN(+r.g||0)+'g'
           +(r.box?'（送料用）':'')+'</td><td style="text-align:right">'
           +mwN(+r.real_g||0)+'g</td></tr>';
@@ -18414,6 +18442,9 @@ function mwSubOpt(){
            thinKishu:String(($('mwSubThinKishu')||{}).value||''),
            /* 8.81 箱ものは「送料用の重さ」を出す（管理 API と同じ重さ）。 */
            boxOn:subBoxOn(),
+           /* 8.83 お一人の上限のタグ（⚙がオンのとき。数は⚙の上限。
+              出ているカードの数に合わせるのは pj-sync の「商品を直す」）。 */
+           qtyBy:subShopQtyBy(),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
            /* 8.24：検索・サイトマップから隠す（seo.hidden）の列名。
@@ -30800,7 +30831,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v331';   // sw.js の const V と必ず同じ値にする
+var APP_V='v332';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -11066,6 +11066,9 @@ async function subSettings(env) {
        ・qFix    … ⚙「出ているカードも新しい上限に書き換える」（既定オフ）
        ・legacyQ … 8.82 より前に出したカードに書いてある数（プランごと） */
     qFix: !!st.subQFix,
+    /* 8.83（カジの依頼）お一人の上限を Shopify の商品にも入れる
+       （タグ qty-<プラン>-<点数>。テーマのスニペットが数量を抑える）。 */
+    qtyOn: !!st.subShopQtyOn,
     /* カードごとの数を控える列（migrate-0069）があるか。
        無いあいだは、どのカードに何点と書いたかを覚えられないので、
        **新しく出すカードも前の数のまま**にする（数字が行ったり来たり
@@ -11496,6 +11499,150 @@ async function subQOver(env, cfg) {
     out.plans.push(r);
   }
   return out;
+}
+/* ===== 8.83（カジの依頼）お一人の上限を Shopify の商品に入れる =====
+   会員用の商品は JAN ごとに1つで、どのプランの会員も同じ商品ページから
+   買う。プランごとの上限を、商品のタグ（qty-<プラン>-<点数>）で渡す
+   （タグの形は shared/shopcsv.js の qtyTags、読む決まりは shared/mgate.js
+    の qtyOf と shopify/snippets/member-qty.liquid）。
+   数は**そのプランのチャンネルに出ているカードに書いてある数**
+   （出ていなければいまの上限）。カードと商品ページが食い違わない。 */
+async function subQtyColOk(env) { return await colOk(env, "mw_sub", "shop_q"); }
+/* プランごとの、出してあるカードの控え（チャンネルがあるプランだけ）。 */
+async function subSentAll(env, cfg) {
+  const out = {};
+  for (const p of ((cfg || {}).plans || []))
+    if (p.ch) out[p.key] = await subPosts(env, p.ch);
+  return out;
+}
+/* その商品の { プラン: お一人◯点 }（4つのプランぶん）。 */
+function subQtyBy(cfg, jan, sentBy) {
+  const o = {};
+  for (const p of ((cfg || {}).plans || [])) {
+    const was = ((sentBy || {})[p.key] || {})[String(jan)];
+    const live = !!(was && String(was.msg_id || "") && !String(was.off_at || ""));
+    o[p.key] = subQOf(p, live ? was : null, cfg);
+  }
+  return o;
+}
+/* Shopify に渡す設定に、上限のタグの元を足す（⚙がオンのときだけ）。 */
+function subShopOptQ(o, cfg, jan, sentBy) {
+  if (!(cfg || {}).qtyOn) return o;
+  return Object.assign({}, o, { qtyBy: subQtyBy(cfg, jan, sentBy) });
+}
+/* ===== 8.83 上限を超えた数量の注文を運営に知らせる =====
+   テーマの上限は画面の上のもので、カートの URL を直接組まれると抜けられる。
+   注文が入ったら数量を見て、超えていたら運営のチャンネルに知らせる
+   （対応はカジが手でする。pj は注文を止めない・直さない）。
+   ・見るのは 注文番号・SKU・数量・顧客のタグ（grade-◯◯）だけ。
+     **氏名・住所・メールは読まない・保存しない・出さない**
+   ・1つの注文の中の数量だけを見る（注文を分けて買われた分は分からない）
+   ・会員用の商品（SKU が SUB-<JAN>）だけ。海外向け・サービス商品・
+     1点ものは見ない
+   ・上限の決まりはテーマと同じ（shared/mgate.js の qtyOf）
+   ・同じ注文を2回知らせない（知らせた注文番号だけを 200件まで控える）
+   lines … [{ order_no, jan, qty, title }]（同じ注文の同じ商品は足す）
+   tagsOf(order_no) … 買った人のタグ（配列）。分からなければ null */
+const SUB_OVERQ_KEY = "sub.overq.seen";
+const SUB_OVERQ_KEEP = 200;
+const SUB_OVERQ_SAY = 10;
+function subPlanJa(key) {
+  for (const p of SUBPLAN.PLANS) if (p.key === String(key || "")) return p.name;
+  return "";
+}
+async function subOverQty(env, run, lines, tagsOf, opt) {
+  const out = { n: 0, rows: [], told: false };
+  const by = {};
+  for (const r of (lines || [])) {
+    const jan = String((r || {}).jan || "");
+    if (!/^[0-9]{8,}$/.test(jan)) continue;          // 1点ものは見ない
+    const k = String(r.order_no || "") + "|" + jan;
+    const o = by[k] || (by[k] = { order_no: String(r.order_no || ""), jan: jan,
+                                  qty: 0, title: "" });
+    o.qty += Math.max(0, Math.round(Number(r.qty) || 0));
+    if (!o.title && r.title) o.title = String(r.title).slice(0, 60);
+  }
+  const keys = Object.keys(by).filter((k) => by[k].order_no && by[k].qty > 1);
+  if (!keys.length || !(await mwSubOk(env))) return out;
+  const cfg = (opt || {}).cfg || await subSettings(env);
+  const sentBy = await subSentAll(env, cfg);
+  /* その商品のプラン（grades）。 */
+  const jans = [];
+  for (const k of keys) if (jans.indexOf(by[k].jan) < 0) jans.push(by[k].jan);
+  const grades = {};
+  const step = d1Step(1);
+  for (let i = 0; i < jans.length; i += step) {
+    const part = jans.slice(i, i + step);
+    const q = await env.DB.prepare(
+      `SELECT jan, COALESCE(grades,'') AS grades FROM mw_sub
+        WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const y of ((q && q.results) || []))
+      grades[String(y.jan)] = String(y.grades || "");
+  }
+  let seen = [];
+  try { seen = JSON.parse(String(await stateGet(env, SUB_OVERQ_KEY) || "[]")); }
+  catch (e) { seen = []; }
+  if (!Array.isArray(seen)) seen = [];
+  const fresh = [];
+  for (const k of keys) {
+    const o = by[k];
+    if (grades[o.jan] === undefined) continue;        // pj の知らない商品
+    const tags = SHOPCSV.tagsOf({ grades: grades[o.jan] },
+      { qtyBy: subQtyBy(cfg, o.jan, sentBy) });
+    const mine = tagsOf ? tagsOf(o.order_no) : null;
+    const known = Array.isArray(mine) && MGATE.gradesOf(mine).length > 0;
+    /* タグが取れた注文（webhook）はテーマと同じ決まり。プランが分からない
+       注文（CSV にタグが無い）は、**どのプランでも超える**ときだけ知らせる。 */
+    const z = MGATE.qtyOf(tags, Array.isArray(mine) ? mine : [],
+      (Array.isArray(mine) || (opt || {}).strict) ? {} : { unknown: "max" });
+    if (!(z.max > 0) || !(o.qty > z.max)) continue;
+    if (seen.indexOf(k) >= 0) continue;
+    out.n++;
+    fresh.push(k);
+    const plans = known
+      ? MGATE.gradesOf(mine).map((g) => subPlanJa(g.slice(6)) || g).join("・")
+      : (Array.isArray(mine) ? "プランのタグなし" : "分かりません（注文にタグがありません）");
+    out.rows.push({ order_no: o.order_no, jan: o.jan, qty: o.qty, max: z.max,
+                    plan: plans, title: o.title });
+  }
+  if (!out.n) return out;
+  const t = ["⚠️ **上限を超えた数量の注文** … " + out.n + "件",
+    "会員用の商品を、お一人の上限より多く買われています"
+      + "（テーマの上限をすり抜けた可能性があります）。対応は手でお願いします。"];
+  for (const x of out.rows.slice(0, SUB_OVERQ_SAY))
+    t.push("・注文 " + x.order_no + "　プラン：" + x.plan + "　商品："
+      + (x.title ? (x.title + "（" + x.jan + "）") : x.jan)
+      + "　数量 " + x.qty + "点／上限 " + x.max + "点");
+  if (out.n > SUB_OVERQ_SAY) t.push("ほか " + (out.n - SUB_OVERQ_SAY) + "件");
+  out.told = !!(await notify(env, run, t.join("\n"), { ops: true }));
+  /* 知らせた注文だけ控える（注文番号と JAN。人の情報は入れない）。 */
+  if (out.told) {
+    try {
+      await stateSet(env, SUB_OVERQ_KEY,
+        JSON.stringify(seen.concat(fresh).slice(-SUB_OVERQ_KEEP))).run();
+    } catch (e) { /* 控えが書けなくても止めない */ }
+  }
+  if (run) run.notes.push("上限を超えた数量の注文 " + out.n + "件"
+    + (out.told ? "を知らせました" : "（知らせの宛先がありません）"));
+  return out;
+}
+/* Shopify の webhook（orders/create・orders/paid）の注文から見る。
+   読むのは name（注文番号）・line_items の sku／quantity／title・
+   customer.tags だけ。 */
+async function subOverHook(env, run, order) {
+  const o = order || {};
+  const no = String(o.name || o.order_number || "").trim();
+  if (!no) return { n: 0, rows: [], told: false };
+  const lines = [];
+  for (const li of (Array.isArray(o.line_items) ? o.line_items : [])) {
+    const jan = subSkuJan(String((li || {}).sku || ""));
+    if (!jan) continue;
+    lines.push({ order_no: no, jan: jan, qty: (li || {}).quantity,
+                 title: String((li || {}).title || "") });
+  }
+  if (!lines.length) return { n: 0, rows: [], told: false };
+  const tags = MGATE.tags(String(((o.customer || {}).tags) || ""));
+  return await subOverQty(env, run, lines, () => tags, {});
 }
 /* 8.80（カジの依頼）MW で在庫が切れた品か（自動配信を使うあいだだけ見る）。
    当たった品は、出してあるカードを**完売**に書き換え、新しくは出さない。
@@ -12140,6 +12287,8 @@ async function shopPut(env, run, rdy, item, opt) {
            g: Math.round(Number(wv.value) || 0),
            ov: (ov === (rdy.over || []).length && !(rdy.over_miss || []).length)
              ? 1 : 0,
+           /* 8.83 入れた「お一人の上限」のタグ（控えに残す）。 */
+           q: SHOPCSV.qtyText(a.input.tags),
            status: String(((ps.product || {}).status) || "") };
 }
 /* 在庫の数を入れる（MW で在庫が切れたら 0・戻ったら残りの数）。
@@ -12220,14 +12369,21 @@ async function subBoxColsOk(env) {
    subBoxRun  … 上から順に直す（持ち時間と件数の上限つき） */
 async function subBoxPlan(env, cfg, st, rdy) {
   const out = { on: !!cfg.boxOn, cols: await subBoxColsOk(env), rows: [],
-                all: 0, box_n: 0 };
-  if (!out.on || !out.cols) return out;
+                all: 0, box_n: 0,
+                /* 8.83 お一人の上限のタグ（migrate-0070 の控えと比べる）。 */
+                qty_on: !!cfg.qtyOn, qcol: await subQtyColOk(env), qty_n: 0 };
+  const doBox = out.on && out.cols;
+  const doQty = out.qcol && await subShopColsOk(env);
+  if (!doBox && !doQty) return out;
   const rows = await subRows(env, cfg);
   const q = await env.DB.prepare(
-    `SELECT jan, shop_g, COALESCE(shop_ov,0) AS shop_ov,
+    `SELECT jan, ${out.cols ? "shop_g, COALESCE(shop_ov,0) AS shop_ov"
+                            : "NULL AS shop_g, 0 AS shop_ov"},
+            ${out.qcol ? "COALESCE(shop_q,'')" : "''"} AS shop_q,
             COALESCE(shop_at,'') AS shop_at
        FROM mw_sub WHERE COALESCE(on_sale,0)=1
         AND COALESCE(loaded_at,'') <> ''`).all();
+  const sentBy = (doQty && cfg.qtyOn) ? await subSentAll(env, cfg) : {};
   const by = {};
   for (const r of ((q && q.results) || [])) by[String(r.jan)] = r;
   /* 海外向けの商品リストが Shopify に見つからないときは、「外していない」
@@ -12242,13 +12398,20 @@ async function subBoxPlan(env, cfg, st, rdy) {
     const m = by[r.jan] || {};
     out.all++;
     if (boxed) out.box_n++;
-    const gOk = m.shop_g !== null && m.shop_g !== undefined
-      && Math.round(Number(m.shop_g)) === g;
-    const ovOk = !wantOv || Number(m.shop_ov) === 1;
-    if (gOk && ovOk) continue;
+    const gOk = !doBox || (m.shop_g !== null && m.shop_g !== undefined
+      && Math.round(Number(m.shop_g)) === g);
+    const ovOk = !doBox || !wantOv || Number(m.shop_ov) === 1;
+    /* 8.83 お一人の上限のタグ。⚙がオフなら「付けない」が正しい中身
+       （前に付けたタグが残っていれば外す）。 */
+    const wantQ = !doQty ? "" : SHOPCSV.qtyText(SHOPCSV.qtyTags(
+      { grades: r.grades }, subShopOptQ({}, cfg, r.jan, sentBy)));
+    const qOk = !doQty || wantQ === String(m.shop_q || "");
+    if (!qOk) out.qty_n++;
+    if (gOk && ovOk && qOk) continue;
     out.rows.push({ r: r, g: g, real_g: Math.round(SHOPCSV.realG(r, o)),
                     box: boxed, shop_at: String(m.shop_at || ""),
-                    why: !gOk ? "重さ" : "海外のリスト" });
+                    q: wantQ, sentBy: sentBy,
+                    why: !gOk ? "重さ" : (!ovOk ? "海外のリスト" : "買える数") });
   }
   return out;
 }
@@ -12257,6 +12420,8 @@ async function subBoxRun(env, run, rdy, cfg, st, list, deadline, max) {
   const lim = Math.max(1, Math.round(Number(max) || 0) || 9999);
   let n = 0;
   const why = {};
+  const boxCols = await subBoxColsOk(env);
+  const qCol = await subQtyColOk(env);
   for (const t of (list || [])) {
     if (n >= lim || Date.now() > deadline) { res.left++; continue; }
     n++;
@@ -12266,7 +12431,8 @@ async function subBoxRun(env, run, rdy, cfg, st, list, deadline, max) {
       size_tier: r.size_tier, size_g: r.size_g, size_cm3: r.size_cm3,
       size_long: r.size_long, size_wid: r.size_wid, size_hei: r.size_hei,
       ship_way: r.ship_way };
-    const z = await shopPut(env, run, rdy, item, subShopOpt(st, cfg, t.shop_at));
+    const z = await shopPut(env, run, rdy, item,
+      subShopOptQ(subShopOpt(st, cfg, t.shop_at), cfg, r.jan, t.sentBy));
     if (!z.ok) {
       res.fail++;
       const k = shopWhyJa(z);
@@ -12275,11 +12441,17 @@ async function subBoxRun(env, run, rdy, cfg, st, list, deadline, max) {
     }
     const at = nowIso();
     await env.DB.prepare(
-      `UPDATE mw_sub SET shop_g=?2, shop_ov=?3, shop_pid=?4, shop_iid=?5,
-              shop_at=COALESCE(NULLIF(shop_at,''), ?6), shop_err=''
+      `UPDATE mw_sub SET shop_pid=?2, shop_iid=?3,
+              shop_at=COALESCE(NULLIF(shop_at,''), ?4), shop_err=''
         WHERE jan=?1`)
-      .bind(String(r.jan), z.g, z.ov, String(z.pid || ""), String(z.iid || ""),
-            at).run();
+      .bind(String(r.jan), String(z.pid || ""), String(z.iid || ""), at).run();
+    if (boxCols)
+      await env.DB.prepare(
+        `UPDATE mw_sub SET shop_g=?2, shop_ov=?3 WHERE jan=?1`)
+        .bind(String(r.jan), z.g, z.ov).run();
+    if (qCol)
+      await env.DB.prepare(`UPDATE mw_sub SET shop_q=?2 WHERE jan=?1`)
+        .bind(String(r.jan), String(z.q || "")).run();
     res.done++;
   }
   for (const k of Object.keys(why).slice(0, 5))
@@ -12316,17 +12488,19 @@ async function jobSubBox(env, opt) {
     const plan = await subBoxPlan(env, cfg, st, rdy);
     res.all = plan.all; res.box_n = plan.box_n;
     res.todo = plan.rows.length;
+    /* 8.83 お一人の上限のタグ（⚙・D1 の列・直す件数）。 */
+    res.qty_on = plan.qty_on; res.qcol = plan.qcol; res.qty_n = plan.qty_n;
     res.items = plan.rows.slice(0, 40).map((t) => ({ jan: t.r.jan,
       name: String(t.r.name || "").slice(0, 50), g: t.g, real_g: t.real_g,
-      box: t.box, why: t.why,
+      box: t.box, why: t.why, q: t.q,
       ship: SHOPCSV.shipWay(t.r, subShopOpt(st, cfg, "")).name }));
     if (!res.approve || !plan.rows.length) { res.ok = true;
       res.left = res.approve ? 0 : res.todo;
       return Object.assign(await saveRun(env, run), res); }
-    if (!cfg.boxOn) { res.error = "off";
+    if (!cfg.boxOn && !plan.qty_n) { res.error = "off";
       res.detail = "⚙「箱ものは送料用の重さで実額を取る」が入っていません";
       return Object.assign(await saveRun(env, run), res); }
-    if (!res.cols) { res.error = "no_cols";
+    if (cfg.boxOn && !res.cols) { res.error = "no_cols";
       res.detail = "D1 に migrate-0068-sub-box.sql が流れていません";
       return Object.assign(await saveRun(env, run), res); }
     if (!rdy.ok) { res.error = "shop"; res.detail = res.why;
@@ -12742,6 +12916,7 @@ async function jobSubAuto(env, opt) {
     const dlShop = Date.now() + SUB_AUTO_SHOP_MS;
     let shopDown = "";                 // Shopify が使えない理由（1回だけ報告）
     const boxCols = await subBoxColsOk(env);
+    const qtyCol = await subQtyColOk(env);
     /* 8.81 海外向けの商品リストが見つからない（会員用の商品を外せない）。 */
     if (rdy.ok && (rdy.over_miss || []).length)
       res.errors.push("Shopify：海外向けの商品リスト「"
@@ -12806,7 +12981,7 @@ async function jobSubAuto(env, opt) {
           size_cm3: x.size_cm3, size_long: x.size_long, size_wid: x.size_wid,
           size_hei: x.size_hei, ship_way: x.ship_way };
         const r = await shopPut(env, run, rdy, item,
-          subShopOpt(st, cfg, x.shop_at || ""));
+          subShopOptQ(subShopOpt(st, cfg, x.shop_at || ""), cfg, x.jan, sentBy));
         if (r.ok) {
           t.ok = true;
           res.shop.made++;
@@ -12838,6 +13013,13 @@ async function jobSubAuto(env, opt) {
                 .bind(x.jan, r.g, r.ov).run();
             } catch (e) { /* 控えが書けなくても止めない */ }
           }
+          /* 8.83 入れた「お一人の上限」のタグの控え。 */
+          if (qtyCol) {
+            try {
+              await env.DB.prepare(`UPDATE mw_sub SET shop_q=?2 WHERE jan=?1`)
+                .bind(x.jan, String(r.q || "")).run();
+            } catch (e) { /* 控えが書けなくても止めない */ }
+          }
           continue;
         }
         err = r;
@@ -12867,8 +13049,10 @@ async function jobSubAuto(env, opt) {
        ⚙ subBoxOn のあいだ、重さ（箱ものは送料用の重さ）と海外のリストを
        少しずつ直す（1回 SUB_BOX_AUTO_MAX 件まで。送り方を手で直した品も
        ここで入れ替わる）。 */
-    res.box = { on: cfg.boxOn, todo: 0, done: 0, fail: 0 };
-    if (cfg.boxOn) {
+    res.box = { on: cfg.boxOn, qty_on: cfg.qtyOn, todo: 0, done: 0, fail: 0 };
+    /* 8.83 ⚙「お一人の上限を Shopify の商品にも入れる」のあいだは、
+       上限のタグもここでそろえる（カードの数が変わった品も入れ替わる）。 */
+    if (cfg.boxOn || cfg.qtyOn) {
       try {
         const bp = await subBoxPlan(env, cfg, st, rdy);
         res.box.todo = bp.rows.length;
@@ -14872,6 +15056,16 @@ async function memHook(env, request) {
   const topic = String(request.headers.get("X-Shopify-Topic") || "");
   if (!(await memHmacOk(env, raw, sig)))
     return { status: 401, body: { error: "bad_signature" } };
+  /* 8.83（カジの依頼）上限を超えた数量の注文を運営に知らせる。
+     会員の期限の表（mem）が無くても見る。失敗しても webhook は落とさない。 */
+  let overQ = null;
+  if (["orders/paid", "orders/create"].indexOf(topic) >= 0) {
+    try {
+      const run2 = newRun("sub-overq");
+      overQ = await subOverHook(env, run2, JSON.parse(raw));
+      if (overQ.n) await saveRun(env, run2);
+    } catch (e) { overQ = null; }
+  }
   if (!(await memOk(env)))
     return { status: 200, body: { ok: false, error: "no_table",
       detail: "mem がありません（migrate-0065-mem.sql）" } };
@@ -14887,6 +15081,7 @@ async function memHook(env, request) {
   if (r.ok && !r.same && r.cust && cfg.on)
     r.sync = await jobMemSync(env, { cust: r.cust, cfg: cfg });
   await saveRun(env, run);
+  if (overQ && overQ.n) r.over_qty = overQ.n;
   return { status: 200, body: r };
 }
 /* ===== 8.46（カジの依頼）会員チャンネルの「今週の一覧（目次）」=====
@@ -15926,6 +16121,8 @@ function subOrderRows(text) {
      Shopify の注文CSV は、2行目以降（同じ注文の別の品）では
      注文ごとの欄が空なので、注文番号ごとに**最後に見えた値**を使う。 */
   const iTag = at(["Tags", "タグ"]);
+  /* 8.83 商品名（上限を超えた注文の知らせに出す。人の名前ではない）。 */
+  const iName = at(["Lineitem name", "商品名"]);
   if (iNo < 0 || iSku < 0 || iQty < 0)
     return { ok: false, error: "no_column", rows: [],
              detail: "注文番号（Name）・SKU（Lineitem sku）・数量"
@@ -15944,6 +16141,7 @@ function subOrderRows(text) {
     out.push({ order_no: no, sku: sku, jan: jan, qty: q,
                price: (iPx >= 0) ? Math.round(Number(r[iPx]) || 0) : 0,
                at: (iAt >= 0) ? String(r[iAt] || "").trim() : "",
+               title: (iName >= 0) ? String(r[iName] || "").trim().slice(0, 60) : "",
                tags: (iTag >= 0) ? String(r[iTag] || "").trim() : "" });
   }
   /* 注文番号ごとのタグ（空でない行から拾って、ぜんぶの行に配る）。 */
@@ -16032,6 +16230,20 @@ async function jobSubOrders(env, body) {
         }
       } catch (e) {
         run.notes.push("off-plan: " + String((e && e.message) || e));
+      }
+      /* 8.83 上限を超えた数量の注文（運営に知らせる）。買った人のプランは
+         注文のタグ（Flow が写した grade-◯◯）から。無ければ「分からない」
+         として、どのプランでも超える数量だけ知らせる。 */
+      try {
+        const tagBy = {};
+        for (const r of p.rows) if (r.tags) tagBy[r.order_no] = r.tags;
+        const ov = await subOverQty(env, run, p.rows.map((r) => ({
+          order_no: r.order_no, jan: r.jan, qty: r.qty, title: r.title })),
+          (no) => (tagBy[no] ? MGATE.tags(tagBy[no]) : null), {});
+        res.over_qty = ov.n;
+        res.over_qty_rows = ov.rows;
+      } catch (e) {
+        run.notes.push("over-qty: " + String((e && e.message) || e));
       }
       /* MW の在庫が足りない商品（返金が必要）。 */
       res.short = await subShort(env, Object.keys(touched));
@@ -20259,6 +20471,8 @@ const SCHEMA_FIX = [
   /* 8.81 箱ものの「送料用の重さ」（Shopify に入れた重さの控え）。 */
   /* 8.82 カードに書いてある「お一人◯点まで」。 */
   ["max_q", "migrate-0069-sub-maxq.sql"],
+  /* 8.83 Shopify に入れた「お一人の上限」のタグの控え。 */
+  ["shop_q", "migrate-0070-sub-qty.sql"],
   ["shop_g", "migrate-0068-sub-box.sql"],
   ["shop_ov", "migrate-0068-sub-box.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
@@ -21802,4 +22016,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   jobSubBox, subBoxPlan, subShipInfo, subSettings, shopOverNames,
   /* 8.82 プランの上限と、出ているカードの「お一人◯点まで」。 */
   subQOver, subQOf, subQShown, subPlanBuild,
+  /* 8.83 お一人の上限のタグと、上限を超えた注文の知らせ。 */
+  subQtyBy, subOverQty, subOverHook, SUB_OVERQ_KEY,
   unparsedInfo, mwDropInfo, putListings };

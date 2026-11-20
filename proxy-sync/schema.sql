@@ -880,6 +880,9 @@ CREATE TABLE IF NOT EXISTS mw_sub (
      shop_ov … 1＝海外向けの商品リストから外した */
   shop_g       INTEGER,
   shop_ov      INTEGER,
+  /* 8.83（migrate-0070）最後に Shopify に入れた「お一人の上限」のタグ
+     （例 'light-1,standard-2,premium-5'。空は付けていない）。 */
+  shop_q       TEXT,
   at         TEXT,
   created_at TEXT
 );

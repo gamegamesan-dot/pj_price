@@ -115,7 +115,64 @@
   };
   function whyJa(why) { return WHY_JA[s(why)] || s(why); }
 
+  /* ===== 8.83（カジの依頼）お一人の上限（テーマで数量を抑える）=====
+     判定は Shopify のテーマ（shopify/snippets/member-qty.liquid）で動く。
+     pj 側にも**同じ順**で置いて、pj が付けるタグ（qty-<プラン>-<点数>）で
+     思ったとおりの上限になるかを機械で確かめる（tests/qtylim.mjs）。
+     pj-sync の「上限を超えた注文の知らせ」も、この判定を使う。
+
+     決まり（上から順に見る。Liquid も同じ順）
+       ① 商品に member-list が無い → 上限なし（0）
+          （海外向けの os-・Omakase Ship のサービス商品はここ。触らない）
+       ② 商品に qty-◯◯ のタグが1つも無い → 上限なし（0）
+       ③ 顧客に member-staff がある → 上限なし（社内の確認用）
+       ④ 顧客の grade-◯◯ と合う qty-◯◯ のうち、**いちばん大きい数**
+       ⑤ 1つも合わない（ログインしていない・プランのタグが無い・
+          プランが合わない）→ 商品の qty-◯◯ のうち**いちばん小さい数**
+          （本当は鍵で商品ページに入れない人。カートに直接入れられた
+            ときのために、いちばんきびしい数にしておく）
+     返すもの … { max（0＝上限なし）, why, plan（④で当たったプラン） }
+       why … 'not-member-item'／'no-limit'／'staff'／'plan'／'fallback'
+     opt.unknown === 'max' … ⑤でいちばん大きい数にする（注文CSV に
+       買った人のプランが入っていないときの知らせ用。確実に超えた分だけ） */
+  var QTY_PRE = "qty-";
+  /* 商品のタグから { プラン: 点数 } を読む（qty-light-1 → light:1）。 */
+  function qtyMap(pTags) {
+    var a = tags(pTags), out = {}, n = 0;
+    for (var i = 0; i < a.length; i++) {
+      var t = a[i].toLowerCase();
+      if (t.slice(0, QTY_PRE.length) !== QTY_PRE) continue;
+      var parts = t.split("-");
+      if (parts.length !== 3) continue;
+      var q = Math.round(Number(parts[2]));
+      if (!(q > 0)) continue;
+      out[parts[1]] = q; n++;
+    }
+    return n ? out : null;
+  }
+  function qtyOf(pTags, cTags, opt) {
+    if (!isMemberItem(pTags)) return { max: 0, why: "not-member-item", plan: "" };
+    var m = qtyMap(pTags);
+    if (!m) return { max: 0, why: "no-limit", plan: "" };
+    if (cTags !== null && cTags !== undefined && has(cTags, TAG_STAFF))
+      return { max: 0, why: "staff", plan: "" };
+    var mine = (cTags === null || cTags === undefined) ? [] : gradesOf(cTags);
+    var best = 0, plan = "", lo = 0, hi = 0, k;
+    for (k in m) {
+      if (!Object.prototype.hasOwnProperty.call(m, k)) continue;
+      if (!lo || m[k] < lo) lo = m[k];
+      if (m[k] > hi) hi = m[k];
+      if (mine.indexOf(GRADE_PRE + k) >= 0 && m[k] > best) {
+        best = m[k]; plan = k;
+      }
+    }
+    if (best) return { max: best, why: "plan", plan: plan };
+    return { max: ((opt || {}).unknown === "max") ? hi : lo,
+             why: "fallback", plan: "" };
+  }
+
   var API = {
+    QTY_PRE: QTY_PRE, qtyMap: qtyMap, qtyOf: qtyOf,
     TAG_MEMBER: TAG_MEMBER, TAG_STAFF: TAG_STAFF, GRADE_PRE: GRADE_PRE,
     PAGE_NG: PAGE_NG, LOGIN: LOGIN, WHY_JA: WHY_JA,
     tags: tags, has: has, gradesOf: gradesOf, isMemberItem: isMemberItem,
