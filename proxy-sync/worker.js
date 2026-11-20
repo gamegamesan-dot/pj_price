@@ -12134,7 +12134,7 @@ async function subBoxColsOk(env) {
 
    subBoxPlan … 直す必要がある行（配信できる商品＝印あり＋読み込み済み）
    subBoxRun  … 上から順に直す（持ち時間と件数の上限つき） */
-async function subBoxPlan(env, cfg, st) {
+async function subBoxPlan(env, cfg, st, rdy) {
   const out = { on: !!cfg.boxOn, cols: await subBoxColsOk(env), rows: [],
                 all: 0, box_n: 0 };
   if (!out.on || !out.cols) return out;
@@ -12146,7 +12146,11 @@ async function subBoxPlan(env, cfg, st) {
         AND COALESCE(loaded_at,'') <> ''`).all();
   const by = {};
   for (const r of ((q && q.results) || [])) by[String(r.jan)] = r;
-  const wantOv = shopOverNames(st).length > 0;
+  /* 海外向けの商品リストが Shopify に見つからないときは、「外していない」
+     だけを理由に直しに行かない（外せないので、毎回同じ品を直し続けて
+     しまう）。見つからないことは別に運営へ知らせている。 */
+  const wantOv = shopOverNames(st).length > 0
+    && !(rdy && rdy.ok && !(rdy.over || []).length);
   for (const r of rows) {
     const o = subShopOpt(st, cfg, "");
     const g = Math.round(SHOPCSV.weightOf(r, o));
@@ -12225,7 +12229,7 @@ async function jobSubBox(env, opt) {
     res.why = rdy.ok ? "" : shopWhyJa(rdy);
     res.over = { want: shopOverNames(st), found: (rdy.over || []).length,
                  miss: rdy.over_miss || [] };
-    const plan = await subBoxPlan(env, cfg, st);
+    const plan = await subBoxPlan(env, cfg, st, rdy);
     res.all = plan.all; res.box_n = plan.box_n;
     res.todo = plan.rows.length;
     res.items = plan.rows.slice(0, 40).map((t) => ({ jan: t.r.jan,
@@ -12782,7 +12786,7 @@ async function jobSubAuto(env, opt) {
     res.box = { on: cfg.boxOn, todo: 0, done: 0, fail: 0 };
     if (cfg.boxOn) {
       try {
-        const bp = await subBoxPlan(env, cfg, st);
+        const bp = await subBoxPlan(env, cfg, st, rdy);
         res.box.todo = bp.rows.length;
         if (!dry && bp.rows.length && rdy.ok) {
           const bz = await subBoxRun(env, run, rdy, cfg, st, bp.rows, dlShop,

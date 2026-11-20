@@ -430,6 +430,23 @@ console.log('\n=== ⑧ いまある会員用の商品を直す ===');
      &&x.v.input.handle==='sub-'+big.jan)[0]
      .v.input.variants[0].inventoryItem.measurement.weight.value===6000,
      '★★自動配信の回でも、送り方が変わった品を直す');
+  /* 海外向けの商品リストが見つからない店：外せないことだけを理由に、
+     同じ品を毎回直しに行かない（箱ものは作らないので、直す品にも残る）。 */
+  {
+    reset();
+    pubs=[{ id:'gid://shopify/Publication/9', supportsFuturePublishing:true,
+            catalog:{ title:'Online Store' } }];
+    const e5=env0(); await setCfg(e5,{});
+    await item(e5,game,{ price:9000, fee:1200 }); await sub(e5,game.jan);
+    const a=(await api(e5,'/sub/box/sync',{ approve:true })).body;
+    reset();
+    pubs=[{ id:'gid://shopify/Publication/9', supportsFuturePublishing:true,
+            catalog:{ title:'Online Store' } }];
+    const b=(await api(e5,'/sub/box/sync',{ approve:true })).body;
+    ok(a.done===1&&a.over.miss.join()==='Overseas products'
+       &&b.todo===0&&shop.filter((x)=>x.kind==='pjSet').length===0,
+       '★★海外向けの商品リストが見つからない店で、薄物を毎回直し続けない');
+  }
   /* オフのときは直さない。 */
   const env2=env0(); await setCfg(env2,{ subBoxOn:false });
   await item(env2,fig); await sub(env2,fig.jan);
