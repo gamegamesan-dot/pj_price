@@ -46,7 +46,7 @@ const setCfg=(env,o)=>env.DB.prepare(
    ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
   .bind(JSON.stringify({ at:new Date().toISOString(),
     settings:Object.assign({ subOn:true, subOnMonitor:false,
-      subOnLight:true, subChLight:LI, subChMonitor:MO, subNLight:50,
+      subOnLight:true, subChLight:LI, subChMonitor:MO, subLimNLight:50,
       subDomain:'omakase-ship.myshopify.com' },o||{}) }),
     new Date().toISOString()).run();
 const jan=(i)=>'490237055'+String(2000+i);
@@ -271,7 +271,7 @@ console.log('\n=== ⑦ 一覧は「いま買えるカードぜんぶ」（8.53�
      一覧は **sub_post（出したカード）**を起点にして、判定はやり直さない。 */
   const PR='4444444444';
   const e7=env0();
-  await setCfg(e7,{ subOnPremium:true, subChPremium:PR, subNLight:1 });
+  await setCfg(e7,{ subOnPremium:true, subChPremium:PR, subLimNLight:1 });
   const at=new Date().toISOString();
   /* プレミアムのチャンネルに、無在庫の品のカードを7枚出してある。 */
   for(let i=0;i<7;i++){

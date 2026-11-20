@@ -2334,23 +2334,29 @@ body.staff #syncOnHandFix{display:none !important}
              この欄のそばに出す（黙って失敗しない）。 -->
         <div class="note2" id="subCfgNote" style="margin:0 0 6px"></div>
         <div class="note2" style="margin:8px 0 2px"><b>プランごとの配信</b>　いまは<b>モニターだけ</b>動かし、ほかは設定だけ持って止めてあります。チャンネルIDは Discord でチャンネルを右クリック→「IDをコピー」。</div>
+        <!-- 8.82（カジの依頼）プランの上限（料金表の見直し）。
+             数字の元は shared/subplan.js の PLANS の1か所（この欄の既定と同じ）。
+             欄の名前を変えたので、前に保存してあった数（ライト 2点など）は
+             引き継がず、新しい上限から始まる。 -->
+        <div class="note2" id="subLimNote" style="margin:0 0 6px">8.82：<b>プランの上限</b>は下の欄で変えられます（既定：モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点／プレミアム 50件・5点）。件数が上限を超えるときは、<b>今の並びのまま上から</b>上限までを出します。今日の配信の案・予定・カード・自動配信が<b>同じ数</b>を使います。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subQFix"><label for="subQFix" style="flex:1"><b>出ているカードの「お一人◯点まで」も、新しい上限に書き換える</b>（既定オフ：出ているカードは前の数のまま・新しく出すカードだけ新しい上限）</label></div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <!-- 8.53（カジの確認）モニターの「1回に新しく出す件数」の箱は、
              上の「モニターだけは別の選び方です」の囲みに**1つだけ**にした
              （ここにも同じ名前の箱があり、どちらが効くのか分からなかった）。 -->
-        <div class="row cfgprice"><label for="subQMonitor">　1商品の数（1回の件数は上の<b>モニターの決まり</b>で入れます）</label><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">点</span></div>
+        <div class="row cfgprice"><label for="subQMonitor">　1商品で買える数（お一人）（1回の件数は上の<b>モニターの決まり</b>で入れます）</label><input type="number" id="subQMonitor" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnMonitor" checked><label for="subOnMonitor" style="flex:1">モニターに配信する（ゲームソフト通常版のみ・<span id="subOnTxtMonitor">配信中</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipMonitor">　モニターの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipMonitor" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChLight">ライト：チャンネルID</label><input type="text" id="subChLight" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNLight">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNLight" value="5" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQLight" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subLimNLight">　1回のリストの件数（上限）／1商品で買える数（お一人）</label><input type="number" id="subLimNLight" value="5" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subLimQLight" value="1" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnLight"><label for="subOnLight" style="flex:1">ライトに配信する（<span id="subOnTxtLight">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipLight">　ライトの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipLight" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChStandard">スタンダード：チャンネルID</label><input type="text" id="subChStandard" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNStandard">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNStandard" value="8" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQStandard" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subLimNStandard">　1回のリストの件数（上限）／1商品で買える数（お一人）</label><input type="number" id="subLimNStandard" value="20" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subLimQStandard" value="2" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnStandard"><label for="subOnStandard" style="flex:1">スタンダードに配信する（<span id="subOnTxtStandard">いまは止めています</span>）</label></div>
         <div class="rowv cfgprice"><label for="subShipStandard">　スタンダードの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipStandard" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="row cfgprice"><label for="subChPremium">プレミアム：チャンネルID</label><input type="text" id="subChPremium" value="" inputmode="numeric" style="flex:1"></div>
-        <div class="row cfgprice"><label for="subNPremium">　1回に新しく出す件数／1商品の数</label><input type="number" id="subNPremium" value="10" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
+        <div class="row cfgprice"><label for="subLimNPremium">　1回のリストの件数（上限）／1商品で買える数（お一人）</label><input type="number" id="subLimNPremium" value="50" step="1" min="1" max="200" inputmode="numeric"><input type="number" id="subLimQPremium" value="5" step="1" min="1" max="99" inputmode="numeric"><span class="unit">件／点</span></div>
         <div class="chk cfgprice"><input type="checkbox" id="subOnPremium"><label for="subOnPremium" style="flex:1">プレミアムに配信する（<span id="subOnTxtPremium">いまは止めています</span>・1点ものの先行）</label></div>
         <div class="rowv cfgprice"><label for="subShipPremium">　プレミアムの送料の文（空なら重さから・薄物だけ）</label><input type="text" id="subShipPremium" value="" placeholder="クリックポスト（1〜2本 ¥200／3本 ¥300／4本以上 ¥600）" inputmode="text"></div>
         <div class="note2" style="margin:0 0 6px">8.27：プランごとの「送料の文」は<b>薄物（クリックポストに入る商品）だけ</b>に使います。フィギュアや限定版の箱には、下の<b>送り方（送料の区分）</b>から出した文を出します（箱に「クリックポスト」と出ないように）。</div>
@@ -3796,9 +3802,10 @@ var ADV_AMZCALC=['mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
 var ADV_SUB=['subHour','subDomain',
              /* 8.53 モニターの件数は subMonNew の1か所（subNMonitor は廃止）。 */
              'subChMonitor','subQMonitor',
-             'subChLight','subNLight','subQLight',
-             'subChStandard','subNStandard','subQStandard',
-             'subChPremium','subNPremium','subQPremium',
+             /* 8.82 プランの上限（欄の名前を変えた。読み方は SUBPLAN.limIds）。 */
+             'subChLight','subLimNLight','subLimQLight',
+             'subChStandard','subLimNStandard','subLimQStandard',
+             'subChPremium','subLimNPremium','subLimQPremium',
              /* 8.17 カードの「送料」の文（プランごと・Worker が読む）。 */
              'subShipMonitor','subShipLight','subShipStandard','subShipPremium',
              /* 8.18 今日の配信の案（振り分けの決まり）。
@@ -3861,6 +3868,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subAutoOn','subAutoWeekend','subAutoPic',
                 /* 8.81 箱ものは送料用の重さで実額を取る（既定オフ）。 */
                 'subBoxOn',
+                /* 8.82 出ているカードの「お一人◯点まで」も書き換える（既定オフ）。 */
+                'subQFix',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -7674,9 +7683,10 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subHour','subDomain',
                  /* 8.53 モニターの件数は subMonNew の1か所。 */
                  'subQMonitor','subChMonitor',
-                 'subNLight','subQLight','subChLight',
-                 'subNStandard','subQStandard','subChStandard',
-                 'subNPremium','subQPremium','subChPremium',
+                 /* 8.82 プランの上限。 */
+                 'subLimNLight','subLimQLight','subChLight',
+                 'subLimNStandard','subLimQStandard','subChStandard',
+                 'subLimNPremium','subLimQPremium','subChPremium',
                  /* 8.17 カードの「送料」の文（プランごと）。 */
                  'subShipMonitor','subShipLight','subShipStandard',
                  'subShipPremium',
@@ -18472,10 +18482,17 @@ function subCfgAll(){
   ['Monitor','Light','Standard','Premium'].forEach(function(U){
     var c=$('subOn'+U);
     if(c)o['subOn'+U]=!!c.checked;
-    ['subN','subQ','subCh','subShip'].forEach(function(k){
+    ['subCh','subShip'].forEach(function(k){
       var el=$(k+U); if(el)o[k+U]=el.value;
     });
+    /* 8.82 プランの上限（件数・お一人◯点）。欄の名前は
+       shared/subplan.js の limIds の1か所（pj-sync も同じ名前で読む）。 */
+    var ids=SUBPLAN.limIds(U.toLowerCase());
+    [ids.n,ids.q].forEach(function(id){
+      var el=$(id); if(el)o[id]=el.value;
+    });
   });
+  o.subQFix=!!($('subQFix')||{}).checked;
   return o;
 }
 /* 案に当てる行（候補1件ぶん）。 */
@@ -19477,7 +19494,9 @@ function subAxRender(){
       +'時）に走ったとしたときの中身です。⚙の時刻：'
       +esc(SUBAUTO.hoursText(d.hours||[])||'なし')
       +(d.on?'':'　<b style="color:var(--bad)">自動配信はオフです</b>'
-        +'（オンにすると、この中身が配信されます）')+'</span></div>');
+        +'（オンにすると、この中身が配信されます）')+'</span>'
+    /* 8.82 この回が使うプランの上限と、上限より多い数が出ているカード。 */
+    +subLimHtml(d,'subAx',d.limits||[])+'</div>');
   /* Shopify の用意（作れない行は配信しないので、先に大きく出す）。 */
   var sh=d.shop||{};
   if(+sh.need>0||+sh.zero>0||+sh.back>0||!sh.ready){
@@ -20008,6 +20027,47 @@ function subPlanGo(quiet){
     if(!quiet)subNote('✓ 予定を出しました。');
   })['catch'](function(e){ subNote('⚠ 予定を出せませんでした：'+e.message,1); });
 }
+/* 8.82（カジの依頼）プランの上限と、いま出ているカードのうち
+   「お一人◯点まで」が新しい上限より多いものの件数。
+   予定（/sub/plan）が返す plans（n・q）と q_over をそのまま出す
+   （数えるのは pj-sync。ここでは何も書き換えない）。 */
+function subLimHtml(d,pre,list){
+  var ps=list||(d&&d.plans)||[];
+  if(!ps.length)return '';
+  var ID=(pre||'sub');
+  var a=ps.map(function(p){
+    return esc(String(p.name||p.key))+' '+mwN(+p.n||0)+'件・'
+      +mwN(+p.q||0)+'点'+((p.on||list)?'':'（止めています）');
+  });
+  var h='<div class="note2" id="'+ID+'LimLine" style="margin:6px 0 0">'
+    +'<b>プランの上限</b>（1回のリスト・お一人で買える数）　'+a.join('／')+'</div>';
+  var o=d.q_over;
+  if(!o)return h;
+  /* 列（migrate-0069）がまだ無い D1：カードごとの数を控えられないので、
+     新しく出すカードも前の数のままにしている（pj-sync の subQOf）。 */
+  if(o.col===false)
+    h+='<div class="note2" id="'+ID+'QColLine" style="margin:2px 0 0;'
+      +'color:var(--bad)">⚠ D1 に <b>migrate-0069</b> がまだ当たっていません。'
+      +'当てるまでは、新しく出すカードの「お一人◯点まで」も<b>前の数のまま</b>です'
+      +'（1回のリストの件数は新しい上限で動いています）。</div>';
+  var open='<div class="note2" id="'+ID+'QOverLine" style="margin:2px 0 0';
+  if(!(+o.total>0))
+    return h+open+'">'
+      +'出ているカードで、「お一人◯点まで」が上限より多いものは <b>0件</b>です。</div>';
+  var b=(o.plans||[]).filter(function(r){ return +r.n>0; }).map(function(r){
+    var by=Object.keys(r.by||{}).sort(function(x,y){ return (+y)-(+x); })
+      .map(function(k){ return k+'点まで '+mwN(+r.by[k])+'件'; }).join('・');
+    return esc(String(r.name||r.key))+' '+mwN(+r.n)+'件（いまの上限 '
+      +mwN(+r.now||0)+'点／カードは '+by+'）';
+  });
+  return h+open+';color:var(--bad)">出ているカードで、「お一人◯点まで」が上限より多いもの：'
+    +'<b>'+mwN(+o.total)+'件</b>　'+b.join('／')
+    +'<br>'+(o.fix
+      ? '⚙「出ているカードも書き換える」がオンです。次の配信で新しい上限に書き換えます。'
+      : 'いまは<b>前の数のまま</b>にしています。直すときは ⚙「出ているカードの'
+        +'「お一人◯点まで」も、新しい上限に書き換える」をオンにして配信してください。')
+    +'</div>';
+}
 /* 予定の中身を出す（8.23 タブを選び直したときにも、ここだけ出し直す）。 */
 function subPlanRender(){
   var d=subPlanData; if(!d)return;
@@ -20069,7 +20129,7 @@ function subPlanRender(){
           +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
           +mwN(+p.edit||0)+'）</button>');
     });
-    $('subPlanList').innerHTML=subAutoHtml()+bar+(rows.length?rows.join('')
+    $('subPlanList').innerHTML=subAutoHtml()+subLimHtml(d)+bar+(rows.length?rows.join('')
       :('<div class="note2" style="margin-top:4px">'
         +((tab==='all')
           ? '送る商品がありません（「Shopify に読み込みました」の印が'
@@ -30738,7 +30798,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v330';   // sw.js の const V と必ず同じ値にする
+var APP_V='v331';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

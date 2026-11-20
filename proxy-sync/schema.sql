@@ -920,6 +920,10 @@ CREATE TABLE IF NOT EXISTS sub_post (
   /* 8.31（migrate-0062）リストから外れた商品のカードを「受付終了」に
      書き換えた日時。⚙で日数を入れていれば、ここから数えて消す。 */
   off_at     TEXT,
+  /* 8.82（migrate-0069）そのカードに書いてある「お一人◯点まで」。
+     空（NULL）は 8.82 より前に出したカード（前の既定の数が書いてある）。
+     上限を下げても、カジが決めるまでこの数のまま書き換える。 */
+  max_q      INTEGER,
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_post_one ON sub_post(jan, ch);

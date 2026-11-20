@@ -165,7 +165,7 @@ const sentJans=async(env,ch)=>((await env.DB.prepare(
   const env=env0();
   /* ライトもプレミアムも「新しく出すのは1件」にして、
      どちらの品が選ばれるかを見る。 */
-  await setCfg(env,{ subNLight:1, subNStandard:1 });
+  await setCfg(env,{ subLimNLight:1, subLimNStandard:1 });
   /* 1番：順位 800（早い）・Amazon ¥6,000（手残り小）
      2番：順位 45,000（遅い）・Amazon ¥20,000（手残り大） */
   await add(env,1,800,6000);
@@ -181,7 +181,7 @@ const sentJans=async(env,ch)=>((await env.DB.prepare(
 {
   /* 同じ2件を**スタンダード向け**（印）にして、上のプランの順を見る。 */
   const env=env0();
-  await setCfg(env,{ subNStandard:1 });
+  await setCfg(env,{ subLimNStandard:1 });
   await add(env,1,800,6000,'standard');
   await add(env,2,45000,20000,'standard');
   dc=[];
@@ -194,7 +194,7 @@ const sentJans=async(env,ch)=>((await env.DB.prepare(
 console.log('\n=== ⑥ 並べ替えても「新しく出す件数」は変わらない ===');
 {
   const env=env0();
-  await setCfg(env,{ subNLight:2 });
+  await setCfg(env,{ subLimNLight:2 });
   await add(env,1,800,6000);
   await add(env,2,45000,20000);
   await add(env,3,2000,9000);

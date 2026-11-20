@@ -292,8 +292,8 @@ console.log('\n=== ④ 積み上げ型と、1回の配信件数の上限 ===');
 {
   reset();
   const env=env0();
-  await setCfg(env,{ subChLight:CH_L, subOnLight:true, subNLight:4,
-                     subChStandard:CH_S, subOnStandard:true, subNStandard:4,
+  await setCfg(env,{ subChLight:CH_L, subOnLight:true, subLimNLight:4,
+                     subChStandard:CH_S, subOnStandard:true, subLimNStandard:4,
                      subAutoMax:6 });
   /* 通常版のゲーム（モニターから）・限定版のゲーム（ライトから）・
      フィギュア（スタンダードから）を混ぜる。 */

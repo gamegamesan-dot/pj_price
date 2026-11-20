@@ -25,7 +25,13 @@
   "use strict";
   /* 8.45（段②・カジの依頼）n は **1回に「新しく出す」件数**。
      すでに出してあるカードは数に入れない（値段と残り数の書き換えだけ）。
-     たたき台：モニター5／ライト5／スタンダード8／プレミアム10。 */
+
+     8.82（カジの依頼・料金表の見直し）**上限の数字はこの表の1か所**。
+       モニター     … 1回のリスト 5件まで／1商品 1点まで（今のまま）
+       ライト       … 5件まで／1点まで
+       スタンダード … 20件まで／2点まで
+       プレミアム   … 50件まで／5点まで
+     ⚙で変えられる（下の limIds の名前）。月額の金額は pj に持たせない。 */
   var PLANS = [
     { key: "monitor",  name: "モニター",     kinds: "game", n: 5, q: 1,
       /* 8.21（【1】）normal … **通常版だけ**のプラン（限定版・特装版などを外す）。
@@ -33,11 +39,11 @@
       normal: true,
       on: true,  note: "通常版のゲーム（⚙でクリックポストの品まで）"
         + "・1回に新しく5件・1商品1点まで" },
-    { key: "light",    name: "ライト",       kinds: "game", n: 5, q: 2,
+    { key: "light",    name: "ライト",       kinds: "game", n: 5, q: 1,
       on: false, note: "ゲームソフト全件（いまは止めています）" },
-    { key: "standard", name: "スタンダード", kinds: "all",  n: 8, q: 5,
+    { key: "standard", name: "スタンダード", kinds: "all",  n: 20, q: 2,
       on: false, note: "全部（いまは止めています）" },
-    { key: "premium",  name: "プレミアム",   kinds: "one",  n: 10, q: 5,
+    { key: "premium",  name: "プレミアム",   kinds: "one",  n: 50, q: 5,
       on: false, note: "全部＋1点もの（先行）（いまは止めています）" }
   ];
   /* ===== 8.21（【1】）通常版かどうか =====
@@ -61,6 +67,9 @@
     "プレミアムエディション", "アニバーサリーエディション", "特別版",
     "ツインパック", "ダブルパック", "トリプルパック"
   ];
+  /* 8.82 より前に出したカードに書いてある「お一人◯点まで」（前の既定）。
+     出ているカードの数字は、カジが決めるまで書き換えない（下の keepQ）。 */
+  var LEGACY_Q = { monitor: 1, light: 2, standard: 5, premium: 5 };
   var N_MAX = 200;                 // 1回に送れる件数の上限の上限
   var Q_MAX = 99;                  // 1商品あたりの数の上限
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
@@ -126,9 +135,13 @@
          ⚙ subMonNew（モニターの決まりの囲み）の**1か所だけ**。
          プランの表の箱（subNMonitor）は見ない（同じ名前の箱が2つあって、
          どちらが効くのか分からなくなっていた）。 */
+      /* 8.82 ⚙の名前は limIds の1か所。ライト・スタンダード・プレミアムは
+         **新しい名前**（subLimN◯／subLimQ◯）で読む。前の名前（subN◯／subQ◯）に
+         残っている値は使わない（料金表を見直したので、新しい上限から始める）。 */
+      var ids = limIds(p.key);
       var n = (p.key === "monitor") ? num(pickOpt(o).monNew)
-                                    : num(o["subN" + U]);
-      var q = num(o["subQ" + U]);
+                                    : num(o[ids.n]);
+      var q = num(o[ids.q]);
       return { key: p.key, name: p.name, kinds: p.kinds, note: p.note,
                on: (on === undefined || on === null || on === "")
                  ? p.on : !!(on === true || on === 1 || on === "1"),
@@ -140,6 +153,33 @@
                normal: !!p.normal, ng: ngWords(o),
                ch: s(o["subCh" + U]).replace(/\D/g, "") };
     });
+  }
+  /* 8.82 上限の⚙の名前（画面・pj-sync・テストが同じものを読む）。
+       n … 1回のリストの件数（1回に新しく出す件数）
+       q … 1商品で買える数（お一人◯点まで）
+     モニターは今までの名前のまま（件数は subMonNew・点数は subQMonitor）。 */
+  function limIds(key) {
+    var U = keyUp(key);
+    if (s(key) === "monitor") return { n: "subMonNew", q: "subQMonitor" };
+    return { n: "subLimN" + U, q: "subLimQ" + U };
+  }
+  /* 8.82 より前に出したカードに書いてある「お一人◯点まで」。
+     前の⚙（subQ◯）に値が残っていればそれ、無ければ前の既定。 */
+  function legacyQ(cfg, key) {
+    var v = Math.round(num((cfg || {})["subQ" + keyUp(key)]));
+    if (v > 0) return Math.min(Q_MAX, v);
+    return LEGACY_Q[s(key)] || 0;
+  }
+  /* 出ているカードの「お一人◯点まで」を決める。**ここ1か所**。
+       nowQ  … いまの上限（⚙）
+       shown … そのカードにいま書いてある数（出していなければ 0）
+       fix   … ⚙「出ているカードも新しい上限に書き換える」
+     新しい上限のほうが小さいときは、カジが決める（fix）まで前の数のまま。
+     上限を増やしたとき・新しく出すカードは、いまの上限。 */
+  function keepQ(nowQ, shown, fix) {
+    var a = Math.round(num(nowQ)), b = Math.round(num(shown));
+    if (!fix && b > a) return b;
+    return a;
   }
   /* いま配信するプラン（動かす印があり、チャンネルIDが入っているもの）。 */
   function active(cfg) {
@@ -842,6 +882,9 @@
     oneGrades: oneGrades, oneList: oneList, oneWhy: oneWhy,
     oneFits: oneFits, oneWhyNone: oneWhyNone,
               keyUp: keyUp, PICK: PICK, pickOpt: pickOpt, qtyOf: qtyOf,
+              /* 8.82 上限の⚙の名前・前の数・出ているカードの数の決め方。 */
+              limIds: limIds, LEGACY_Q: LEGACY_Q, legacyQ: legacyQ,
+              keepQ: keepQ,
               scoreOf: scoreOf, whyNot: whyNot, draft: draft,
               sortPick: sortPick,
               SPEED_MIN: SPEED_MIN };

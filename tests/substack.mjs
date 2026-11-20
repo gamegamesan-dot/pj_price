@@ -99,12 +99,14 @@ console.log('=== ③ 1人あたりの数・1回の件数はプランごと ===')
   const l=S.list({});
   const q=l.map((p)=>p.key+':'+p.q+'点/'+p.n+'件').join(' ');
   console.log('   '+q);
-  ok(pl('monitor').q===1&&pl('light').q===2&&pl('standard').q===5
+  /* 8.82（カジの依頼）料金表の見直しで上限を変えた
+     （モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点／
+       プレミアム 50件・5点）。 */
+  ok(pl('monitor').q===1&&pl('light').q===1&&pl('standard').q===2
      &&pl('premium').q===5,
      '★★★お一人◯点まではプランごと（積み上げても変わらない）');
-  /* 8.45（段②）件数は「1回に新しく出す件数」（モニター5／ライト5／
-     スタンダード8／プレミアム10）。 */
-  ok(pl('monitor').n===5&&pl('standard').n===8&&pl('premium').n===10,
+  ok(pl('monitor').n===5&&pl('light').n===5&&pl('standard').n===20
+     &&pl('premium').n===50,
      '★★1回に新しく出す件数もプランごと');
 }
 

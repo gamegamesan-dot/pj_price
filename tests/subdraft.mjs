@@ -82,7 +82,7 @@ console.log('\n=== ③ 並び順（会員の粗利 × 売れる速さ）===');
      '★★★在庫処分・再入荷なしは優先（点数を上げる）');
   ok(SUBPLAN.scoreOf(row({ gross:900, speed:0 }))===900*SUBPLAN.SPEED_MIN,
      '★★売れる速さが出せない行は 1日0.3点とみなす');
-  const few=SUBPLAN.draft(rows,SUBPLAN.list({ subOnLight:1, subNLight:2 })
+  const few=SUBPLAN.draft(rows,SUBPLAN.list({ subOnLight:1, subLimNLight:2 })
     .filter((p)=>p.key==='light'),{}).plans[0];
   ok(few.items.length===2&&few.over===2,
      '★★★1回の件数の上限で切り、あと何件かも返す');

@@ -64,8 +64,8 @@ console.log('=== ① 配信の⚙が pj-sync に送られる（いちばんの�
 {
   const t=await p.evaluate(()=>({
     sub:ADV_SUB.indexOf('subDomain')>=0&&ADV_SUB.indexOf('subChMonitor')>=0
-        &&ADV_SUB.indexOf('subHour')>=0&&ADV_SUB.indexOf('subNLight')>=0
-        &&ADV_SUB.indexOf('subQPremium')>=0,
+        &&ADV_SUB.indexOf('subHour')>=0&&ADV_SUB.indexOf('subLimNLight')>=0
+        &&ADV_SUB.indexOf('subLimQPremium')>=0,
     chk:ADV_SUBCHK.indexOf('subOn')>=0&&ADV_SUBCHK.indexOf('subPre')>=0
         &&ADV_SUBCHK.indexOf('subOnMonitor')>=0,
     inCsv:advCsvCfg().indexOf('subDomain')>=0,

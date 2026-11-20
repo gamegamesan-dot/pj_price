@@ -11061,6 +11061,21 @@ async function subSettings(env) {
     guide: gdOf(st),
     plans: SUBPLAN.list(st),
     active: SUBPLAN.active(st),
+    /* 8.82（カジの依頼）上限を下げたとき、**出ているカードの「お一人◯点まで」は
+       カジが決めるまで書き換えない**。
+       ・qFix    … ⚙「出ているカードも新しい上限に書き換える」（既定オフ）
+       ・legacyQ … 8.82 より前に出したカードに書いてある数（プランごと） */
+    qFix: !!st.subQFix,
+    /* カードごとの数を控える列（migrate-0069）があるか。
+       無いあいだは、どのカードに何点と書いたかを覚えられないので、
+       **新しく出すカードも前の数のまま**にする（数字が行ったり来たり
+       しないように。予定の画面に「migrate-0069 がまだ」と出す）。 */
+    qCol: await subQColOk(env),
+    legacyQ: (() => {
+      const o = {};
+      for (const pl of SUBPLAN.PLANS) o[pl.key] = SUBPLAN.legacyQ(st, pl.key);
+      return o;
+    })(),
     /* 8.43（カジの依頼1）モニターの決まり（新しく◯件・人数・期限・
        速さの下限）。読み方は shared/subplan.js の pickOpt の1か所だけ。 */
     pick: SUBPLAN.pickOpt(st),
@@ -11351,9 +11366,12 @@ async function subPosts(env, ch) {
   /* 8.43 受付終了（off_at）のカードは、もう商品カードに戻さない。
      列が無い D1 でも落とさないよう、あるときだけ読む。 */
   const oCol = (await colOk(env, "sub_post", "off_at")) ? ", off_at" : "";
+  /* 8.82 そのカードに書いてある「お一人◯点まで」（migrate-0069）。
+     空（NULL）は 8.82 より前に出したカード。 */
+  const qCol = (await subQColOk(env)) ? ", max_q" : "";
   const q = await env.DB.prepare(
     `SELECT jan, ch, plan, msg_id, price, qty, sold, sold_out, at,
-            edited_at${hCol}${oCol}
+            edited_at${hCol}${oCol}${qCol}
        FROM sub_post WHERE ch = ?1`).bind(String(ch || "")).all();
   const m = {};
   for (const r of ((q && q.results) || [])) m[String(r.jan)] = r;
@@ -11422,6 +11440,62 @@ function subSpdDay(x, cfg) {
     Object.assign({}, x, { genre: MWFEE.genreOf(x) }),
     (cfg || {}).rank_spd || null);
   return Number(e.day) || 0;
+}
+/* ===== 8.82（カジの依頼）出ているカードの「お一人◯点まで」=====
+   上限を下げても（ライト 2→1点・スタンダード 5→2点）、**もう出ているカードの
+   数字は、カジが決めるまで書き換えない**。新しく出すカードはいまの上限。
+   ・そのカードにいま書いてある数 … sub_post.max_q（空なら前の既定）
+   ・決め方は shared/subplan.js の keepQ の1か所 */
+async function subQColOk(env) { return await colOk(env, "sub_post", "max_q"); }
+/* そのカードにいま書いてある数（出していなければ 0）。 */
+function subQShown(p, was, cfg) {
+  if (!was || !String(was.msg_id || "")) return 0;
+  if (was.max_q !== null && was.max_q !== undefined)
+    return Math.max(0, Math.round(Number(was.max_q) || 0));
+  return Math.max(0, Math.round(Number(((cfg || {}).legacyQ || {})[p.key]) || 0));
+}
+/* カードに出す数。
+   列（migrate-0069）が無いあいだは、新しく出すカードも前の数にそろえる
+   （控えが無いのに数を変えると、あとで書き換えのたびに数字が動くため）。 */
+function subQOf(p, was, cfg) {
+  const c = cfg || {};
+  const shown = (c.qCol === false && !(was && String(was.msg_id || "")))
+    ? Math.max(0, Math.round(Number((c.legacyQ || {})[p.key]) || 0))
+    : subQShown(p, was, c);
+  return SUBPLAN.keepQ(p.q, shown, !!c.qFix);
+}
+/* 出した・書き換えたカードの数を控える（列があるときだけ）。 */
+async function subQSave(env, jan, ch, q) {
+  if (!(await subQColOk(env))) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE sub_post SET max_q=?3 WHERE jan=?1 AND ch=?2`)
+      .bind(String(jan), String(ch), Math.round(Number(q) || 0)).run();
+  } catch (e) { /* 控えが書けなくても配信は止めない */ }
+}
+/* いま出ているカードのうち、書いてある数が新しい上限より多いもの。
+   数えるだけ（何も書き換えない）。完売・受付終了のカードは数えない
+   （「お一人◯点まで」が出ていないため）。1点ものも数えない。 */
+async function subQOver(env, cfg) {
+  const out = { total: 0, fix: !!(cfg || {}).qFix,
+                col: (cfg || {}).qCol !== false, plans: [] };
+  for (const p of ((cfg || {}).plans || [])) {
+    if (!p.ch) continue;
+    const sent = await subPosts(env, p.ch);
+    const r = { key: p.key, name: p.name, now: p.q, n: 0, cards: 0, by: {} };
+    for (const j of Object.keys(sent)) {
+      const y = sent[j];
+      if (!/^[0-9]{8,}$/.test(j)) continue;
+      if (!String(y.msg_id || "") || String(y.off_at || "")
+          || Number(y.sold_out)) continue;
+      r.cards++;
+      const shown = subQShown(p, y, cfg);
+      if (shown > p.q) { r.n++; r.by[shown] = (r.by[shown] || 0) + 1; }
+    }
+    out.total += r.n;
+    out.plans.push(r);
+  }
+  return out;
 }
 /* 8.80（カジの依頼）MW で在庫が切れた品か（自動配信を使うあいだだけ見る）。
    当たった品は、出してあるカードを**完売**に書き換え、新しくは出さない。
@@ -11496,6 +11570,8 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
     const left = mwOut ? 0 : Math.max(0, (Number(r.qty) || 0) - sold);
     const x = Object.assign({}, r, {
       sent: !!old, msg_id: mid, mw_out: mwOut,
+      /* 8.82 カードに出す「お一人◯点まで」（出ているカードは前の数のまま）。 */
+      card_q: subQOf(plan, old, cfg),
       /* 8.38 前のカードが消えていたので出し直す行（画面に理由を出す）。 */
       gone_card: goneCard,
       sold: sold, left: left,
@@ -11619,6 +11695,10 @@ async function subPlanBuild(env) {
       off_days: cfg.offDays,
     };
   }
+  /* 8.82（カジの依頼）いま出ているカードで、「お一人◯点まで」が新しい
+     上限より多いものの件数（数えるだけ・直すかどうかはカジが決める）。 */
+  try { out.q_over = await subQOver(env, cfg); }
+  catch (e) { out.q_over = null; }
   /* 8.22（【2】）1点もの（#目玉商品-先行／#目玉商品）も同じ形で足す。 */
   try {
     if (await oneOk(env)) {
@@ -11646,7 +11726,11 @@ function subCardOf(x, p, cfg, note) {
      ・大きさが分からない行は区分を名乗らず「お会計で表示」と出す
      ・プランごとの⚙（subShip<Key>）は**薄物だけ**に使う
      決まりは shared/shopcsv.js の1か所だけ（CSV のタグも同じ）。 */
-  return SUBCARD.card(x, { domain: cfg.domain, maxQty: p.q, note: note,
+  return SUBCARD.card(x, { domain: cfg.domain,
+                           /* 8.82 呼ぶ側が決めた数（出ているカードは前の数）。
+                              無ければいまの上限。 */
+                           maxQty: (x && x.card_q) ? x.card_q : p.q,
+                           note: note,
                            shipText: p.ship, gameG: cfg.gameG,
                            addG: cfg.addG, thinKishu: cfg.thinKishu,
                            tiers: cfg.tiers,
@@ -12914,6 +12998,13 @@ async function jobSubAuto(env, opt) {
         .map((x) => subAutoView(x, { shop_err: x.shop_err || "" }));
     }
 
+    /* 8.82（カジの依頼）この回が使ったプランの上限と、出ているカードで
+       「お一人◯点まで」が上限より多いものの件数（数えるだけ）。 */
+    res.limits = plans.map((p) => ({ key: p.key, name: p.name,
+                                     n: p.n, q: p.q }));
+    try { res.q_over = await subQOver(env, cfg); }
+    catch (e) { res.q_over = null; }
+
     /* ---- ⑦ 控えと報告 ---- */
     if (!dry) {
       try { await subStopSync(env, act); }
@@ -13581,6 +13672,7 @@ async function jobSubSend(env, opt) {
             `UPDATE sub_post SET price=?3, qty=?4, sold=?5, sold_out=?6,
                edited_at=?7${hSet} WHERE jan=?1 AND ch=?2`)
             .bind(...subPostBind(x, p, at, hasH)).run();
+          await subQSave(env, x.jan, p.ch, x.card_q || p.q);
           r.edit++; res.edited++; gap = true;
           /* 8.80 MW の在庫切れで、売っていたカードを完売に書き換えた。 */
           if (x.mw_out && !Number(((sent || {})[x.jan] || {}).sold_out)
@@ -13609,6 +13701,7 @@ async function jobSubSend(env, opt) {
                qty=excluded.qty, sold=excluded.sold, sold_out=excluded.sold_out,
                edited_at=excluded.at${hSet2}`)
             .bind(...subPostIns(x, p, id, at, hasH)).run();
+          await subQSave(env, x.jan, p.ch, x.card_q || p.q);
           r.add++; res.sent++; gap = true;
         }
       }
@@ -16041,10 +16134,12 @@ async function subEditLeft(env, run, jans) {
   } catch (e) { /* 表が無くても止めない */ }
   const step = d1Step(1);
   const posts = [];
+  /* 8.82 そのカードに書いてある「お一人◯点まで」（列があるときだけ）。 */
+  const qColE = (await subQColOk(env)) ? ", max_q" : "";
   for (let i = 0; i < list.length; i += step) {
     const part = list.slice(i, i + step);
     const q = await env.DB.prepare(
-      `SELECT jan, ch, plan, msg_id, price, qty, sold FROM sub_post
+      `SELECT jan, ch, plan, msg_id, price, qty, sold${qColE} FROM sub_post
         WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
     for (const y of ((q && q.results) || [])) posts.push(y);
   }
@@ -16069,6 +16164,9 @@ async function subEditLeft(env, run, jans) {
        ここだけ素の SUBCARD.card を呼んでいたので、注文を取り込むたびに
        送料の文（⚙）やゲームソフトの重さが抜けたカードに戻っていた。 */
     const x = Object.assign({}, r, { qty: qty, sold: sold, left: left });
+    /* 8.82 注文を取り込んで書き換えるときも、出ているカードの
+       「お一人◯点まで」は前の数のまま（カジが決めるまで）。 */
+    if (!x.one_id) x.card_q = subQOf(p, y, cfg);
     /* 8.22（【2】）1点ものは専用のカード（状態・メモ・写真）。 */
     let pic = null;
     if (x.one_id && x.pic) {
@@ -16093,6 +16191,7 @@ async function subEditLeft(env, run, jans) {
     }
     if (!e.ok) continue;
     out.edited++;
+    if (!x.one_id && x.card_q) await subQSave(env, y.jan, y.ch, x.card_q);
     if (!left) out.sold_out++;
     const bind = [String(y.jan), String(y.ch), sold, left ? 0 : 1, nowIso()];
     if (hasH) bind.push(subCardHash(card));
@@ -20158,6 +20257,8 @@ const SCHEMA_FIX = [
   ["shop_zero_at", "migrate-0067-sub-auto.sql"],
   ["auto_at", "migrate-0067-sub-auto.sql"],
   /* 8.81 箱ものの「送料用の重さ」（Shopify に入れた重さの控え）。 */
+  /* 8.82 カードに書いてある「お一人◯点まで」。 */
+  ["max_q", "migrate-0069-sub-maxq.sql"],
   ["shop_g", "migrate-0068-sub-box.sql"],
   ["shop_ov", "migrate-0068-sub-box.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
@@ -21699,4 +21800,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   SUB_AUTO_SLOT, SUB_AUTO_LAST, SUB_ROWS_MAX,
   /* 8.81 箱ものの送料用の重さ（tests/boxship.mjs が読む）。 */
   jobSubBox, subBoxPlan, subShipInfo, subSettings, shopOverNames,
+  /* 8.82 プランの上限と、出ているカードの「お一人◯点まで」。 */
+  subQOver, subQOf, subQShown, subPlanBuild,
   unparsedInfo, mwDropInfo, putListings };

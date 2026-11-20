@@ -51,7 +51,7 @@ const setCfg=(env,o)=>env.DB.prepare(
          「今週の一覧」は出さない（一覧そのものは
          tests/subindexw.mjs・subindex.mjs で見る）。 */
       gdIdxOn:false,
-      subChMonitor:CH1, subChLight:CH2, subMonNew:10, subNLight:10,
+      subChMonitor:CH1, subChLight:CH2, subMonNew:10, subLimNLight:10,
       subDomain:'omakase-ship.myshopify.com' },o||{}) }),now()).run();
 const JAN1='4902370550467', JAN2='4902370550468';
 const stock=(env,jan)=>env.DB.prepare(
