@@ -220,7 +220,28 @@
       + "＋上乗せ ¥" + yen(x.add) + "＋決済手数料 ¥" + yen(x.fee)
       + "（" + (Math.round(num(x.rate) * 10000) / 100) + "%）";
   }
+  /* 8.80 ⚙（設定の名前そのまま）→ この式に渡す形。**ここ1か所だけ**。
+     画面は⚙の欄の値を、pj-sync は D1 の設定を、同じ名前で渡す。
+     空（未設定）の欄は既定を使う（0 と入れたときは 0 のまま）。
+     カード決済手数料だけは 0 を既定に戻す（0% の決済は無いため）。 */
+  function optOf(st) {
+    var o = st || {};
+    var v = function (k, d) {
+      var x = o[k];
+      if (x === undefined || x === null || x === "") return d;
+      return Number(x) || 0;
+    };
+    return { ship: v("mwSubShip", SHIP_YEN),
+             cardFee: Number(o.mwSubCardFee) || CARD_FEE * 100,
+             pack: v("mwSubPack", PACK_YEN),
+             addMin: v("mwSubAddMin", ADD_MIN),
+             addMax: v("mwSubAddMax", ADD_MAX),
+             grossMin: v("mwSubGrossMin", GROSS_MIN),
+             rateMin: v("mwSubRateMin", RATE_MIN * 100),
+             grossFloor: v("mwSubGrossFloor", GROSS_FLOOR) };
+  }
   var API = { costOf: costOf, whOf: whOf, feeRate: feeRate, packOf: packOf,
+              optOf: optOf,
               shipOf: shipOf, addRange: addRange, addOf: addOf,
               avoidOf: avoidOf, priceOf: priceOf, inBand: inBand,
               grossOf: grossOf, rateOf: rateOf, rateMin: rateMin,

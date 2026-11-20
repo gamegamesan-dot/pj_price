@@ -2308,6 +2308,28 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="chk cfgprice"><input type="checkbox" id="subPre" checked><label for="subPre" style="flex:1">前日に「明日 ○時に配信します」の予告を出す</label></div>
         <div class="row cfgprice"><label for="subDomain">Shopify のドメイン</label><input type="text" id="subDomain" value="" placeholder="omakase-ship.myshopify.com" style="flex:1"></div>
         <div class="note2" style="margin:0 0 6px">購入リンクは <code>https://&lt;ここ&gt;/products/sub-&lt;JAN&gt;</code> になります。独自ドメインにしたらここを書き換えてください。<b>鍵（SHOPLOCK）がかかっているので、ログインしていない人はログイン画面に飛びます</b>（そのままでよいです）。<br><code>https://</code> や末尾の <code>/</code> が付いていても受け付けます（入れたあとに整えます）。</div>
+        <!-- 8.80（カジの依頼）自動配信。PC を開いていなくても pj-sync が
+             定時に 選ぶ → チェック → Shopify に作る → カードを出す → 報告 まで行う。
+             時刻・夜中の止め・チェックの決まりは shared/subauto.js の1か所。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>自動配信</b>（PC を開いていなくても pj-sync が配信します）</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subAutoOn"><label for="subAutoOn" style="flex:1"><b>自動配信を使う</b>（<span id="subAutoTxt">いまは止めています</span>）</label></div>
+        <div class="note2" style="margin:0 0 4px">オンにすると、pj-sync が決まった時刻に <b>候補を選ぶ → 配信前のチェック → Shopify に会員用の商品（非公開）を作る → カードを出す → 運営に報告</b> までを自分でやります。<br>オンのあいだは、上の「<b>平日の朝の配信</b>」と前日の予告は出しません（こちらがまとめて受け持ちます）。MW で在庫が切れた品のカードは「<b>完売</b>」に書き換え、Shopify の在庫も 0 にします。</div>
+        <div class="row cfgprice"><label for="subAutoHours">配信の時刻（日本時間）</label><input type="text" id="subAutoHours" value="12,20" placeholder="12,20" inputmode="text" style="flex:1"><span class="unit">時</span></div>
+        <div class="note2" style="margin:0 0 4px">カンマで区切って入れます（1日 6回まで）。毎時07分の回で見るので、12 と入れたら <b>12:07 ごろ</b>に出ます。<b>0時〜8時（夜中）は配信しません</b>（0〜7 を入れても使いません）。MW の在庫CSV が新しくなったぶんは、<b>次の時刻にまとめて</b>配信します。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subAutoWeekend" checked><label for="subAutoWeekend" style="flex:1">土日も配信する</label></div>
+        <div class="row cfgprice"><label for="subAutoMax">1回に新しく出す商品の上限</label><input type="number" id="subAutoMax" value="20" step="1" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
+        <div class="note2" style="margin:0 0 4px">同じ商品が複数のプランに出ても <b>1件</b>と数えます。プランごとの「1回に新しく出す件数」と、モニターの「<b>週に◯件</b>」はそのまま効きます（モニターは週の件数を超えて出しません）。</div>
+        <div class="chk cfgprice"><input type="checkbox" id="subAutoPic"><label for="subAutoPic" style="flex:1">写真（MW が許した写真）が無い品は配信しない</label></div>
+        <div class="note2" style="margin:0 0 4px"><b>既定はオフ</b>です。会員のカードと Shopify の会員用商品には<b>写真を載せていない</b>ので、オンにすると写真を取り込んでいない品がぜんぶ止まります。</div>
+        <div class="row cfgprice"><label for="subShopAdmin">Shopify の管理用ドメイン</label><input type="text" id="subShopAdmin" value="" placeholder="○○.myshopify.com" style="flex:1"></div>
+        <div class="note2" style="margin:0 0 4px">会員用の商品を作る先です。上の「Shopify のドメイン」が <code>○○.myshopify.com</code> なら<b>空のまま</b>で使えます（独自ドメインにしているときだけ入れます）。<br><b>鍵</b>は pj-sync（Worker）に <code>SHOPIFY_CLIENT_ID</code>／<code>SHOPIFY_CLIENT_SECRET</code> として登録します（⚙や画面には入れません）。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="subAutoTryBtn" onclick="subAxTry();return false" style="flex:1">試しに配信内容を作る（投稿しない）</button>
+        </div>
+        <div class="note2" style="margin:2px 0 0">次の回に<b>何が出て・何を止めるか</b>をこの画面で見ます。<b>Discord にも Shopify にも何も送りません</b>（自動配信がオフでも押せます）。</div>
+        <div class="note2" id="subAutoNote" style="margin-top:2px"></div>
+        <div id="subAutoStat"></div>
+        <div id="subAutoBox"></div>
         <!-- 8.16（【1】）入れたらすぐ保存し、できたか・できなかったかを
              この欄のそばに出す（黙って失敗しない）。 -->
         <div class="note2" id="subCfgNote" style="margin:0 0 6px"></div>
@@ -2989,6 +3011,9 @@ body.staff #syncOnHandFix{display:none !important}
 <!-- 8.49 採寸が無い品の送り方と重さの目安（種類の表はここ1か所）。
      shopcsv.js を使うので**あと**に読む。pj-sync も同じこれを読む。 -->
 <script src="./shared/shipguess.js"></script>
+<!-- 8.80 会員向けの自動配信（時刻・配信前のチェック・報告の文はここ1か所）。
+     pj-sync も同じこれを読む。 -->
+<script src="./shared/subauto.js"></script>
 <!-- 海外向け Shopify の商品CSV（6.193・os-）。pj-sync も同じこれを読む。 -->
 <script src="./shared/osscsv.js"></script>
 <script>
@@ -3049,6 +3074,10 @@ var RANKSPD=PJ_RANKSPD;
 if(typeof PJ_SHIPGUESS==='undefined')
   throw new Error('shared/shipguess.js が読み込めていません（送り方の目安）');
 var SHIPGUESS=PJ_SHIPGUESS;
+/* 8.80 会員向けの自動配信の決まり。pj-sync も同じこれを読む。 */
+if(typeof PJ_SUBAUTO==='undefined')
+  throw new Error('shared/subauto.js が読み込めていません（自動配信）');
+var SUBAUTO=PJ_SUBAUTO;
 var SUBPLAN=PJ_SUBPLAN, SUBCARD=PJ_SUBCARD, SUBGUIDE=PJ_SUBGUIDE;
 /* 6.193 海外の一般のお客さん向け Shopify の商品CSV（os-）。
    pj-sync（在庫・値段の追従）も同じこれを読む。 */
@@ -3763,6 +3792,8 @@ var ADV_SUB=['subHour','subDomain',
              'subChPre','subChHot','subPreHours','subOneOpenGrades',
              /* 8.31 受付終了の扱いと「今週のねらい目」。 */
              'subOffDays','subHotDow','subHotN',
+             /* 8.80 自動配信（時刻・1回の上限・Shopify の管理用ドメイン）。 */
+             'subAutoHours','subAutoMax','subShopAdmin',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
              'subCutWay','subCutNet','subCutRate',
@@ -3808,6 +3839,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subPickNoAmz','subPickSkipBuy',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
+                /* 8.80 自動配信（使うか・土日も出すか・写真が無い品を止めるか）。 */
+                'subAutoOn','subAutoWeekend','subAutoPic',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -7634,6 +7667,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subChPre','subChHot','subPreHours','subOneOpenGrades',
                  /* 8.31 受付終了の扱いと「今週のねらい目」。 */
                  'subOffDays','subHotDow','subHotN',
+                 /* 8.80 自動配信（この端末にも覚える）。 */
+                 'subAutoHours','subAutoMax','subShopAdmin',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
                  'subCutWay','subCutNet','subCutRate',
@@ -17787,25 +17822,17 @@ function mwSubOn(jan){ return !!((mwSubOf(jan)||{}).on); }
      カード決済手数料ぶん割り戻した額。10円単位の切り上げはしない。
    式は shared/subprice.js の1か所だけ（pj-sync・Discord も同じものを読む）。 */
 function mwSubPxOpt(){
-  return { /* 6.187（【1】）会員価格に含める MW 送料（既定 ¥0）。
-              仕入れタブの「カジの利益」が引く mwShipFee（¥176）とは別。 */
-           ship:(($('mwSubShip')||{}).value===''
-                 ?SUBPX.SHIP_YEN:+(($('mwSubShip')||{}).value)||0),
-           cardFee:+(($('mwSubCardFee')||{}).value)||SUBPX.CARD_FEE*100,
-           pack:(($('mwSubPack')||{}).value===''
-                 ?SUBPX.PACK_YEN:+(($('mwSubPack')||{}).value)||0),
-           addMin:(($('mwSubAddMin')||{}).value===''
-                   ?SUBPX.ADD_MIN:+(($('mwSubAddMin')||{}).value)||0),
-           addMax:(($('mwSubAddMax')||{}).value===''
-                   ?SUBPX.ADD_MAX:+(($('mwSubAddMax')||{}).value)||0),
-           grossMin:(($('mwSubGrossMin')||{}).value===''
-                     ?SUBPX.GROSS_MIN:+(($('mwSubGrossMin')||{}).value)||0),
-           /* 6.188（【2】）利益率で通す道。 */
-           rateMin:(($('mwSubRateMin')||{}).value===''
-                    ?SUBPX.RATE_MIN*100:+(($('mwSubRateMin')||{}).value)||0),
-           grossFloor:(($('mwSubGrossFloor')||{}).value===''
-                       ?SUBPX.GROSS_FLOOR
-                       :+(($('mwSubGrossFloor')||{}).value)||0) };
+  /* 8.80 ⚙の読み方は shared/subprice.js の optOf の1か所
+     （pj-sync の自動配信も同じ読み方で会員価格を出す）。
+     ・mwSubShip … 6.187（【1】）会員価格に含める MW 送料（既定 ¥0）。
+       仕入れタブの「カジの利益」が引く mwShipFee（¥176）とは別
+     ・mwSubRateMin／mwSubGrossFloor … 6.188（【2】）利益率で通す道 */
+  var o={};
+  ['mwSubShip','mwSubCardFee','mwSubPack','mwSubAddMin','mwSubAddMax',
+   'mwSubGrossMin','mwSubRateMin','mwSubGrossFloor'].forEach(function(id){
+    var el=$(id); o[id]=el?el.value:'';
+  });
+  return SUBPX.optOf(o);
 }
 /* おすすめの販売価格（税込）。上乗せが乱数なので呼ぶたびに変わるが、
    **一覧の行は書き直すたびに値段が動くと落ち着かない**ので、
@@ -19067,6 +19094,12 @@ function subOnTxt(){
     t.textContent=c.checked?'配信中':'いまは止めています';
     t.style.color=c.checked?'var(--good)':'';
   });
+  /* 8.80 自動配信（既定オフ）。 */
+  var au=$('subAutoOn'), at=$('subAutoTxt');
+  if(au&&at){
+    at.textContent=au.checked?'動かしています':'いまは止めています';
+    at.style.color=au.checked?'var(--good)':'';
+  }
   /* 8.31 今週のねらい目（既定オフ）。 */
   var h=$('subHotOn'), ht=$('subHotTxt');
   if(h&&ht){
@@ -19097,6 +19130,243 @@ function subHotGo(){
       +((r.plans||[]).length?('（'+(r.plans||[]).map(function(p){
         return esc(p.name)+' '+mwN(+p.n||0)+'件'; }).join('　')+'）'):''));
   })['catch'](function(e){ say('⚠ 出せませんでした：'+esc(e.message),1); });
+}
+/* ===== 8.80（カジの依頼）自動配信：試しに配信内容を作る =====
+   pj-sync が定時にやる「選ぶ → 配信前のチェック → プランに振り分け」を
+   **投稿せずに**走らせて、次の回に何が出て・何を止めるかを見る。
+     POST /sub/auto/try … 試し（Discord にも Shopify にも D1 にも書かない）
+     GET  /sub/auto     … いまの設定・次の回・最後の回のまとめ
+   ・止めた理由の言い方と件数の並びは shared/subauto.js の1か所
+   ・**CSV では出さない**（リストの流出を避ける・カジの方針）
+   ・鍵や宛先は pj-sync が返さない（登録してあるかどうかだけ出す） */
+var subAxData=null;                    // いちばん最後の試しの結果
+var SUB_AX_ROWS=60;                    // 止めた行を1回に出す数
+function subAxNote(t,bad){
+  var el=$('subAutoNote'); if(!el)return;
+  el.innerHTML=t||'';
+  el.style.color=bad?'var(--bad)':'';
+}
+function subAxTry(){
+  if(roleDenyPrice('subAutoNote'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    subAxNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return; }
+  var btn=$('subAutoTryBtn');
+  if(btn)btn.disabled=true;
+  subAxNote('配信内容を作っています…（何も投稿しません）');
+  return mwPost('/sub/auto/try',{})
+    .then(function(d){
+      subAxData=d||{};
+      subAxNote('');
+      subAxRender();
+      return mwGet('/sub/auto')['catch'](function(){ return null; });
+    })
+    .then(function(s){ subAxStat(s); })
+    ['catch'](function(e){
+      subAxNote('⚠ 作れませんでした：'+esc(String((e&&e.message)||e))
+        +'（pj-sync をデプロイしたか確かめてください）',1);
+    })
+    .then(function(){ if(btn)btn.disabled=false; });
+}
+/* いまの設定と最後の回（試しのあとに1回だけ読む）。 */
+function subAxStat(s){
+  var el=$('subAutoStat'); if(!el)return;
+  if(!s||!s.ok){ el.innerHTML=''; return; }
+  var dowJa=['日','月','火','水','木','金','土'];
+  var nx=s.next;
+  var L=[];
+  L.push('<b>自動配信：'+(s.on?'<span style="color:var(--good)">動かしています</span>'
+    :'止めています')+'</b>　時刻 '+esc(s.hours_text||'なし')
+    +(s.weekend?'':'（平日だけ）')+'・1回の上限 '+mwN(+s.max||0)+'件');
+  if((s.night||[]).length)
+    L.push('<span style="color:var(--bad)">夜中なので使わない時刻：'
+      +esc(s.night.join('・'))+'時</span>');
+  if((s.bad||[]).length)
+    L.push('<span style="color:var(--bad)">読めなかった時刻：'
+      +esc(s.bad.join('・'))+'</span>');
+  if(!(s.hours||[]).length)
+    L.push('<b style="color:var(--bad)">配信する時刻がありません</b>'
+      +'（8〜23 の数を入れてください）');
+  else if(nx)
+    L.push('次の回：'+(nx.add===0?'今日':(nx.add===1?'明日':(esc(dowJa[+nx.dow||0])+'曜')))
+      +' '+(+nx.hour)+':07 ごろ'+(s.on?'':'（オンにすると動きます）'));
+  var sh=s.shop||{};
+  L.push('Shopify の鍵：'+(sh.key?'登録済み':'<b style="color:var(--bad)">未登録</b>')
+    +'／管理用ドメイン：'+(sh.host?'入っています'
+      :'<b style="color:var(--bad)">入っていません</b>')
+    +'／D1（migrate-0067）：'+(sh.cols?'済み'
+      :'<b style="color:var(--bad)">まだ</b>')
+    +'／ボットの鍵：'+(s.bot?'登録済み':'<b style="color:var(--bad)">未登録</b>')
+    +'／運営への報告：'+(s.ops?(s.ops_own?'専用のチャンネル':'社内用のチャンネル')
+      :'<b style="color:var(--bad)">宛先がありません</b>'));
+  var la=s.last;
+  if(la&&la.at){
+    L.push('最後の回（'+esc(la.at_jst||la.at)+'）：配信 <b>'+mwN(+la.sent||0)
+      +'件</b>・止めた '+mwN(+la.stop_n||0)+'件・売り切れ '
+      +mwN(+la.sold_out||0)+'件'
+      +(((la.errors||[]).length)?('　<span style="color:var(--bad)">失敗 '
+        +mwN(la.errors.length)+'件：'+esc(String(la.errors[0]).slice(0,80))
+        +'</span>'):''));
+  }else L.push('最後の回：まだ1回も走っていません');
+  el.innerHTML='<div class="note2" style="margin:4px 0 0;padding:6px;'
+    +'border:1px solid var(--line);border-radius:6px;background:#fbfbff">'
+    +L.join('<br>')+'</div>';
+}
+/* 止めた行のうち、いま選んでいる理由のぶん。'' ならぜんぶ。 */
+function subAxStops(code){
+  var all=((subAxData||{}).stops_all)||[];
+  if(!code)return all;
+  return all.filter(function(x){ return (x.why||[]).indexOf(code)>=0; });
+}
+function subAxPick(code){
+  var el=$('subAxStopBox'); if(!el)return;
+  el.setAttribute('data-why',String(code||''));
+  el.setAttribute('data-n',String(SUB_AX_ROWS));
+  subAxStopRender();
+}
+function subAxMore(){
+  var el=$('subAxStopBox'); if(!el)return;
+  el.setAttribute('data-n',String((+el.getAttribute('data-n')||SUB_AX_ROWS)
+    +SUB_AX_ROWS));
+  subAxStopRender();
+}
+function subAxStopRender(){
+  var el=$('subAxStopBox'); if(!el)return;
+  var code=String(el.getAttribute('data-why')||'');
+  var n=+el.getAttribute('data-n')||SUB_AX_ROWS;
+  var list=subAxStops(code);
+  if(!list.length){ el.innerHTML='<div class="note2">当てはまる行はありません。</div>'; return; }
+  el.innerHTML='<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'
+    +'<tr><th style="text-align:left">商品（JAN）</th>'
+    +'<th style="text-align:left">止めた理由</th>'
+    +'<th style="text-align:right">手残り</th></tr>'
+    +list.slice(0,n).map(function(x){
+      return '<tr data-stop="'+esc(String(x.jan))+'"><td>'+esc(String(x.name||''))
+        +'<br><span class="note2" style="margin:0">'+esc(String(x.jan))
+        +(x.on?'・出している品':'')+'</span></td>'
+        +'<td>'+esc(String(x.why_ja||''))
+        +(x.shop_err?('<br><span class="note2" style="margin:0">'
+          +esc(String(x.shop_err))+'</span>'):'')+'</td>'
+        +'<td style="text-align:right">'
+        +((x.net===null||x.net===undefined)?'—':yen(+x.net))+'</td></tr>';
+    }).join('')+'</table></div>'
+    +(list.length>n?('<div style="margin-top:4px"><a href="#" id="subAxMoreBtn" '
+      +'onclick="subAxMore();return false">あと '+mwN(list.length-n)
+      +'件を出す</a></div>'):'');
+}
+function subAxRender(){
+  var box=$('subAutoBox'); if(!box)return;
+  var d=subAxData||{};
+  if(d.error){
+    box.innerHTML='<div class="okbox" style="border-color:var(--bad)">'
+      +'<b style="color:var(--bad)">⚠ 作れませんでした</b>　'
+      +esc(String(d.detail||d.error))+'</div>';
+    return;
+  }
+  var plans=d.plans||[];
+  var H=[];
+  var sl=String(d.slot||'').replace('@',' ');
+  H.push('<div class="okbox"><b>次の配信内容（試し・何も投稿していません）</b>'
+    +'<br>候補 '+mwN(+d.cand_n||0)+'件 → チェックを通った <b>'
+    +mwN(+d.ok_n||0)+'件</b> → 新しく出すカード <b>'+mwN(+d.sent||0)+'枚</b>'
+    +'・書き換え '+mwN(+d.edited||0)+'枚・売り切れにする商品 <b>'
+    +mwN(+d.sold_out||0)+'件</b>'
+    +(+d.cut?('<br>1回の上限（'+mwN(+d.max||0)+'件）で <b>'+mwN(+d.cut)
+      +'件</b>を次の回に回しました'):'')
+    /* 出しておく商品は pj-sync の上限まで。超えるぶんは古い順に片づける。 */
+    +(+d.trim?('<br>出しておく商品の上限（'+mwN(+d.keep_max||0)+'件）を超えるので、'
+      +'<b>古い順に '+mwN(+d.trim)+'件</b>を受付終了にします'
+      +'（印を外し、Shopify の在庫を 0 にします）'):'')
+    +'<br><span class="note2" style="margin:0">いまの時刻（'+esc(sl)
+      +'時）に走ったとしたときの中身です。⚙の時刻：'
+      +esc(SUBAUTO.hoursText(d.hours||[])||'なし')
+      +(d.on?'':'　<b style="color:var(--bad)">自動配信はオフです</b>'
+        +'（オンにすると、この中身が配信されます）')+'</span></div>');
+  /* Shopify の用意（作れない行は配信しないので、先に大きく出す）。 */
+  var sh=d.shop||{};
+  if(+sh.need>0||+sh.zero>0||+sh.back>0||!sh.ready){
+    H.push('<div class="note2" style="margin:4px 0;padding:6px;border:1px solid '
+      +(sh.ready?'var(--line)':'var(--bad)')+';border-radius:6px">'
+      +'<b>Shopify</b>　'
+      +(sh.ready?('<span style="color:var(--good)">つながります</span>'
+          +'　会員用の商品を作る・直す '+mwN(+sh.need||0)+'件'
+          +'／在庫を0にする '+mwN(+sh.zero||0)+'件'
+          +'／在庫を戻す '+mwN(+sh.back||0)+'件')
+        :('<b style="color:var(--bad)">まだ使えません</b>：'
+          +esc(String(sh.why||''))
+          +'<br>このままだと、<b>新しい商品は配信されません</b>'
+          +'（Shopify に商品を作れなかった行は配信しない決まりです）。'))
+      +'</div>');
+  }
+  /* プランごと。 */
+  if(!plans.length)
+    H.push('<div class="note2" style="color:var(--bad)">配信するプランが'
+      +'ありません（⚙の「◯◯に配信する」とチャンネルIDを入れてください）。</div>');
+  plans.forEach(function(p){
+    var it=p.items||[];
+    H.push('<div class="note2" style="margin:8px 0 2px" data-axplan="'
+      +esc(String(p.key))+'"><b>'+esc(String(p.name||p.key))+'</b>　新しく出す <b>'
+      +mwN(it.length)+'件</b>・書き換え '+mwN(+p.edit||0)+'件'
+      +(+p.out?('・完売にする '+mwN(+p.out)+'件'):'')+'</div>');
+    if(it.length)
+      H.push('<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'
+        +'<tr><th style="text-align:left">商品（JAN）</th>'
+        +'<th style="text-align:right">会員価格</th>'
+        +'<th style="text-align:right">出せる数</th>'
+        +'<th style="text-align:right">手残り</th>'
+        +'<th style="text-align:left">送り方</th></tr>'
+        +it.map(function(x){
+          return '<tr data-axitem="'+esc(String(x.jan))+'"><td>'
+            +esc(String(x.name||''))+'<br><span class="note2" style="margin:0">'
+            +esc(String(x.jan))
+            +(x.is_new?'・<b>Shopify に新しく作る</b>':'・もう出している品')
+            +'</span></td>'
+            +'<td style="text-align:right">'+yen(+x.price||0)+'</td>'
+            +'<td style="text-align:right">'+mwN(+x.left||+x.qty||0)+'</td>'
+            +'<td style="text-align:right">'
+            +((x.net===null||x.net===undefined)?'—':yen(+x.net))+'</td>'
+            +'<td>'+esc(String(x.ship||''))+'</td></tr>';
+        }).join('')+'</table></div>');
+    var oi=p.out_items||[];
+    if(oi.length)
+      H.push('<div class="note2" style="margin:2px 0">完売にするカード：'
+        +oi.slice(0,10).map(function(x){
+          return esc(String(x.name||x.jan))+'（'+esc(String(x.jan))+'）';
+        }).join('／')+(oi.length>10?(' …ほか '+mwN(oi.length-10)+'件'):'')
+        +'</div>');
+  });
+  /* 止めた理由（件数）。押すと、その理由の行だけ下に出す。 */
+  var t=d.tally||{};
+  var cells=SUBAUTO.WHY.filter(function(w){ return +t[w.code]>0; });
+  H.push('<div class="note2" style="margin:10px 0 2px"><b>配信前のチェックで'
+    +'止めた行</b>　<b>'+mwN(+d.stop_n||0)+'件</b>'
+    +'（1つでも当たった行は配信しません。1行に理由が2つあれば両方に数えます）</div>');
+  if(cells.length){
+    H.push('<div class="tabrow">'
+      +'<button type="button" class="tabbtn" data-axwhy="" '
+      +'onclick="subAxPick(\'\');return false">すべて</button>'
+      +cells.map(function(w){
+        return '<button type="button" class="tabbtn" data-axwhy="'+esc(w.code)
+          +'" onclick="subAxPick(\''+esc(w.code)+'\');return false">'
+          +esc(w.ja)+' '+mwN(+t[w.code])+'</button>';
+      }).join('')+'</div>');
+    H.push('<div class="note2" style="margin:2px 0">利益は足りているのに'
+      +'止めた行（採寸・写真・商品名など、<b>手を打てば出せる行</b>）は <b>'
+      +mwN(+d.act_n||0)+'件</b>で、下の表の<b>先頭</b>に並べています。'
+      +(((d.stops_all||[]).length<(+d.stop_n||0))
+        ?('（画面に出すのは '+mwN((d.stops_all||[]).length)+'件まで）'):'')
+      +'</div>');
+    H.push('<div id="subAxStopBox" data-why="" data-n="'+SUB_AX_ROWS+'"></div>');
+  }else H.push('<div class="note2">止めた行はありません。</div>');
+  /* 振り分けの決まり（shared/subplan.js）で対象外にした件数。 */
+  var sk=d.skip||{};
+  var ks=Object.keys(sk).filter(function(k){ return +sk[k]>0; });
+  if(ks.length)
+    H.push('<div class="note2" style="margin:8px 0 2px"><b>振り分けの決まりで'
+      +'対象外</b>　'+ks.map(function(k){
+        return esc(k)+' '+mwN(+sk[k])+'件'; }).join('／')+'</div>');
+  box.innerHTML=H.join('');
+  subAxStopRender();
 }
 /* 8.31（カジの依頼5）自動の回で何が起きるか（1行）。
    予定（/sub/plan）が返す auto をそのまま出す。 */
@@ -30272,7 +30542,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v328';   // sw.js の const V と必ず同じ値にする
+var APP_V='v329';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

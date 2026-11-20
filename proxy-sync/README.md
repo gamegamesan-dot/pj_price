@@ -152,7 +152,24 @@ npx wrangler secret put DISCORD_WEBHOOK_URL      # keepa-hunter とは別チャ�
 npx wrangler secret put STAFF_KEY                # 作業者用のキー（7.40・無くても動く）
 npx wrangler secret put SP_SELLER_ID             # 出品者トークン（7.78・出品の可否で必須）
 npx wrangler secret put DISCORD_BOT_TOKEN       # 会員向けの配信（8.11・無くても動く）
+npx wrangler secret put SHOPIFY_CLIENT_ID        # 会員向けの自動配信（8.80・Shopify に会員用の商品を作る）
+npx wrangler secret put SHOPIFY_CLIENT_SECRET    # 同上（SHOPIFY_WEBHOOK_SECRET と同じアプリなら省ける）
+npx wrangler secret put DISCORD_OPS_WEBHOOK_URL  # 自動配信の報告の宛先（8.80・無ければ DISCORD_WEBHOOK_URL に出す）
 ```
+
+#### 値を画面に出さずに登録する（PowerShell・8.80）
+
+`wrangler secret put` は値を聞いてくるが、貼った値を**画面にも履歴にも残さない**
+ために、`Read-Host -AsSecureString` で受けてそのまま渡す。
+
+```powershell
+cd C:\dev\pj-price\proxy-sync
+$s = Read-Host "SHOPIFY_CLIENT_ID を貼って Enter" -AsSecureString
+[Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)) | npx wrangler secret put SHOPIFY_CLIENT_ID
+Remove-Variable s
+```
+
+名前（2か所）を変えれば、ほかの鍵も同じ形で登録できる。
 
 ### 1-6. スマホから鍵を入れ直す（GitHub Actions・8.11）
 
@@ -171,8 +188,9 @@ Actions から Worker に移す**。値はどこにも表示されない。
 3. 「✅ pj-sync のデプロイ」の知らせに
    「鍵の登録：オン（値は出しません）」と出れば終わり
 
-> ・いま入れ直せるのは **`DISCORD_BOT_TOKEN`** と
->   **`SHOPIFY_WEBHOOK_SECRET`** の2つ。
+> ・いま入れ直せるのは **`DISCORD_BOT_TOKEN`**・**`SHOPIFY_WEBHOOK_SECRET`**
+>   と、8.80（会員向けの自動配信）の **`SHOPIFY_CLIENT_ID`**・
+>   **`SHOPIFY_CLIENT_SECRET`**・**`DISCORD_OPS_WEBHOOK_URL`**。
 > ・Actions の記録に出るのは**名前と文字数だけ**（値は出ない）。
 > ・GitHub の Secrets が空の鍵は**飛ばす**（消したいときは
 >   Cloudflare の画面で消す）。

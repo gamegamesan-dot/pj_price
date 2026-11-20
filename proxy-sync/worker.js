@@ -20,6 +20,12 @@
  *   LWA_CLIENT_ID / LWA_CLIENT_SECRET / SPAPI_REFRESH_TOKEN_FE
  *   EBAY_CLIENT_ID / EBAY_CLIENT_SECRET / EBAY_USER_REFRESH_TOKEN
  *   DISCORD_WEBHOOK_URL
+ *   DISCORD_OPS_WEBHOOK_URL  … 会員向けの自動配信の報告の送り先（8.80・無ければ上と同じ）
+ *   SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET … Shopify の管理 API（8.80・
+ *                              会員用の商品を作る。Dev Dashboard のアプリ。
+ *                              SECRET が無ければ SHOPIFY_WEBHOOK_SECRET を使う
+ *                              ＝同じアプリの client secret）
+ *   SHOPIFY_ADMIN_TOKEN      … 上の代わり（前からある管理画面のカスタムアプリの鍵）
  *   D1 DB / KV SYNC_CACHE
  *
  * エンドポイント（読み取りとpj_priceからの登録のみ）:
@@ -63,6 +69,9 @@ import SHIPGUESS from "../shared/shipguess.js";
    率・送料・梱包材は⚙。式と表はこの1か所だけ。 */
 import SELLWAY from "../shared/sellway.js";
 import RANKSPD from "../shared/rankspd.js";
+/* 8.80（カジの依頼）会員向けの自動配信。配信の時刻・配信前のチェック・
+   運営への報告の文はこの1か所だけ（画面の「試しに作る」も同じものを読む）。 */
+import SUBAUTO from "../shared/subauto.js";
 
 const ALLOW_ORIGIN = "https://gamegamesan-dot.github.io";
 const MP_FE = "A1VC38T7YXB528";                      // amazon.co.jp
@@ -311,6 +320,16 @@ const ALLOWED = [
      ここに1本だけ書いてある。⚙に別の URL を入れても assertReadOnly が止める。 */
   { m: "HEAD", re: /^https:\/\/matchingworld\.asia\/stocks\.csv$/ },
   { m: "GET",  re: /^https:\/\/matchingworld\.asia\/stocks\.csv$/ },
+  /* 8.80（カジの依頼）Shopify の管理 API。会員用の商品（非公開）を作り、
+     MW で在庫が切れた商品の在庫を 0 にする。
+     ・鍵の交換（client credentials）… 自分の店の *.myshopify.com だけ
+     ・GraphQL … **版を固定**（SHOP_API_V）。読むのも書くのも同じ口なので、
+       呼ぶ側はいつも write:true を付ける（付けない呼び出しは通らない）
+     触るのは会員用の商品（handle が sub-<JAN>）だけ。注文・顧客は見ない。 */
+  { m: "POST",
+    re: /^https:\/\/[a-z0-9][a-z0-9-]*\.myshopify\.com\/admin\/oauth\/access_token$/ },
+  { m: "POST", write: true,
+    re: /^https:\/\/[a-z0-9][a-z0-9-]*\.myshopify\.com\/admin\/api\/2026-10\/graphql\.json$/ },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1247,7 +1266,12 @@ async function ebayActive(env, run) {
    7.125：**埋め込み（embeds）も送れる**ようにした。
    文だけの知らせは今までどおり notify(env, run, text)。 */
 async function notifyRaw(env, run, text, embeds, opt) {
-  if (!env.DISCORD_WEBHOOK_URL) return false;
+  /* 8.80 会員向けの自動配信の報告は、**運営専用のチャンネル**に出す
+     （opt.ops）。専用の宛先（DISCORD_OPS_WEBHOOK_URL）があればそこへ、
+     無ければ今までの社内用の宛先へ出す。宛先はログにも文にも出さない。 */
+  const base = ((opt && opt.ops) ? env.DISCORD_OPS_WEBHOOK_URL : "")
+    || env.DISCORD_WEBHOOK_URL;
+  if (!base) return false;
   const list = (embeds || []).filter(Boolean);
   if (!String(text || "") && !list.length) return false;
   /* 時刻は日本時間で出す（7.58）。D1 に入れるのは今までどおり UTC。 */
@@ -1259,7 +1283,7 @@ async function notifyRaw(env, run, text, embeds, opt) {
      そのスレッドへ送る（#一般 は1通目の要約だけになる）。
      ※ ふつうの Webhook は**スレッドを自分で作れない**ので、
        スレッドは人が1回だけ作って ID を入れる（8.9 に手順）。 */
-  let url = env.DISCORD_WEBHOOK_URL;
+  let url = base;
   const th = String((opt && opt.thread) || "").replace(/\D/g, "");
   if (th) url += (url.indexOf("?") >= 0 ? "&" : "?") + "thread_id=" + th;
   /* 7.126（【T】）通数が増えたので、混み合ったとき（429）は
@@ -11069,6 +11093,21 @@ async function subSettings(env) {
     /* 8.31（カジの依頼3）受付が終わったカードを消すまでの日数
        （0＝消さない。既定は消さない）。 */
     offDays: Math.max(0, Math.round(Number(st.subOffDays) || 0)),
+    /* 8.80（カジの依頼）自動配信。読み方は shared/subauto.js の1か所。
+       ・autoOn      … 自動配信を使うか（既定オフ）
+       ・autoHours   … 配信の時刻（既定 12時と20時・0〜7時は使わない）
+       ・autoWeekend … 土日も配信するか（既定オン）
+       ・autoMax     … 1回に新しく出す商品の上限（既定 20）
+       ・autoPic     … 写真が無い品を止めるか（既定オフ。会員のカードには
+                       写真を載せていないので、入れると写真待ちの品が止まる）
+       ・stockOut    … MW で在庫が切れた品のカードを「完売」にするか
+                       （自動配信を使うあいだだけ。手の配信の動きは変えない） */
+    autoOn: !!st.subAutoOn,
+    autoHours: SUBAUTO.hoursOf(st.subAutoHours).hours,
+    autoWeekend: st.subAutoWeekend === undefined ? true : !!st.subAutoWeekend,
+    autoMax: SUBAUTO.maxOf(st.subAutoMax),
+    autoPic: !!st.subAutoPic,
+    stockOut: !!st.subAutoOn,
     /* 8.31（カジの依頼4）週1回の「今週のねらい目」（既定オフ）。 */
     hotOn: !!st.subHotOn,
     hotDow: (() => {
@@ -11210,9 +11249,16 @@ async function subRows(env, cfg) {
         AND COALESCE(b.price,0) > 0
         AND COALESCE(b.max_qty,0) > 0
       ORDER BY b.at DESC, b.jan ASC LIMIT ${SUB_ROWS_MAX}`).all();
+  return ((q && q.results) || []).map((r) => subRowMap(r, cfg))
+    .filter((r) => !r.ng_kind);
+}
+/* 8.80 D1 の1行 → 配信で使う形（カード・送料・目安が読む項目）。
+   自動配信の候補（mw_stock から引く行）も**同じこの形**に直すので、
+   ここ1か所に置く。列の名前は subRows の SELECT と同じにそろえる。 */
+function subRowMap(r, cfg) {
   const sgOpt = ((cfg || {}).ship_guess) || null;
   const ngOf = (nm) => sgOpt ? SHIPGUESS.ngOf(nm, sgOpt) : "";
-  return ((q && q.results) || []).map((r) => ({
+  return {
     jan: String(r.jan || ""),
     name: String(r.amz_name || r.mw_name || ""),
     asin: String(r.asin || ""),
@@ -11287,7 +11333,7 @@ async function subRows(env, cfg) {
       size_cm3: Number(r.size_cm3) || 0,
       size_g: Number(r.size_g) || 0,
     }, { thinKishu: (cfg || {}).thinKishu, gameG: (cfg || {}).gameG }),
-  })).filter((r) => !r.ng_kind);
+  };
 }
 /* 送ったカードの控え（JAN → 行）。 */
 async function subPosts(env, ch) {
@@ -11344,6 +11390,12 @@ function subPostIns(x, p, id, at, hasH) {
    送り方が決まらない行は「送料は別」として見る（外さない）。
    取れないときは 0（当てずっぽうは出さない）。 */
 function subNetYen(x, cfg) {
+  const v = subNetOf(x, cfg);
+  return v === null ? 0 : v;
+}
+/* 8.80 手残り（取れないときは **null**）。自動配信の「利益がマイナス／
+   下限を下回る」は、取れない行を 0 円と混ぜないためにこちらで見る。 */
+function subNetOf(x, cfg) {
   const o = cfg || {};
   const sh = subShipInfo(x, o);
   const gs = sh.sure ? null
@@ -11353,7 +11405,7 @@ function subNetYen(x, cfg) {
   const opt = Object.assign({}, o.guide || {},
     { shipKey: key, shipName: name, shipSure: !!key });
   const n = SELLWAY.netWay(String(o.cutWay || "mercari"), x, opt);
-  return (n && n.ok) ? (Number(n.net) || 0) : 0;
+  return (n && n.ok) ? (Number(n.net) || 0) : null;
 }
 /* 8.52 並べ替えに使う**速さ**（点/日）。pj-sync には MW の在庫の減りが
    無いので、**Amazon の順位からの推定**で見る（shared/rankspd.js）。 */
@@ -11363,8 +11415,22 @@ function subSpdDay(x, cfg) {
     (cfg || {}).rank_spd || null);
   return Number(e.day) || 0;
 }
-function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
+/* 8.80（カジの依頼）MW で在庫が切れた品か（自動配信を使うあいだだけ見る）。
+   当たった品は、出してあるカードを**完売**に書き換え、新しくは出さない。
+   MW に在庫が戻れば、次の回でカードも元に戻る（中身の指紋が変わるため）。 */
+function subMwOut(r, cfg) {
+  return !!((cfg || {}).stockOut
+    && (Number((r || {}).gone) || !(Number((r || {}).stock) > 0)));
+}
+/* ex（8.80・自動配信が渡す）
+     hold   … { JAN: 理由 } 配信前のチェックで止めた行。**新しくは出さない**
+              （出してあるカードの書き換えは今までどおり）
+     out    … { JAN: 1 } 完売として出す行（Shopify の在庫を戻せなかった品）
+     newMax … { プラン: 件数 } そのプランに新しく出す件数の上限
+              （モニターの「週に◯件」の残り。0 なら新しく出さない） */
+function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
   const out = [];
+  const e = ex || {};
   /* 8.43（カジの依頼1）モニターは「**1回に新しく出すのは monNew 件**」。
      すでに出しているカードは件数に数えず、値段や残り数の書き換えだけする。 */
   const mon = String(plan.key || "") === "monitor";
@@ -11373,8 +11439,11 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
   /* 8.45（段②）**どのプランも「1回に新しく出す件数」**。
      すでに出してあるカードは件数に数えず、書き換えだけする
      （8.43 でモニターだけこうしていたのを、全プランに揃えた）。 */
-  const want = mon ? monNew
+  const want0 = mon ? monNew
     : Math.max(1, Math.round(Number(plan.n) || 0));
+  const nm = (e.newMax || {})[String(plan.key || "")];
+  const want = (nm === undefined || nm === null) ? want0
+    : Math.max(0, Math.min(want0, Math.round(Number(nm) || 0)));
   let newN = 0;
   /* 8.52 まず出せる行を**ぜんぶ**集めて、並べ替えてから件数を数える。 */
   const cand = [];
@@ -11407,13 +11476,18 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt) {
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
     const goneCard = !!(was && !mid);
+    /* 8.80 MW で在庫が切れた品・Shopify の在庫を戻せなかった品は完売。 */
+    const mwOut = subMwOut(r, cfg) || !!((e.out || {})[String(r.jan)]);
+    /* 8.80 まだ出していない品のうち、配信前のチェックで止めた行と
+       在庫が切れている行は**新しく出さない**。 */
+    if (!old && (mwOut || (e.hold || {})[String(r.jan)])) continue;
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった。 */
     const sold = Math.max(0, Number(r.sold) || 0);
-    const left = Math.max(0, (Number(r.qty) || 0) - sold);
+    const left = mwOut ? 0 : Math.max(0, (Number(r.qty) || 0) - sold);
     const x = Object.assign({}, r, {
-      sent: !!old, msg_id: mid,
+      sent: !!old, msg_id: mid, mw_out: mwOut,
       /* 8.38 前のカードが消えていたので出し直す行（画面に理由を出す）。 */
       gone_card: goneCard,
       sold: sold, left: left,
@@ -11645,6 +11719,1000 @@ function subShipInfo(x, cfg) {
            short: !!(w.sure && w.name && !w.thin && sh.short),
            short_ja: sh.short ? sh.ja : "", short_gap: sh.gap,
            text: SHOPCSV.shipLine(x, o) };
+}
+/* =====================================================================
+   8.80（カジの依頼）会員向けの**自動配信**
+   =====================================================================
+   v328 まで、自動だったのは「印の付いた品を平日の朝に送る」所だけで、
+     候補を選ぶ → 印を付ける → Shopify に会員用の商品を作る
+   の3つは PC の画面（ブラウザ）で人がやっていた。ここを pj-sync に移す。
+
+   1回の流れ（jobSubAuto）
+     ① 候補を D1 から引く（MW の在庫 × Amazon の値段・手数料・採寸）
+     ② 1行ずつ会員価格・手残りを出し、**配信前のチェック**に掛ける
+        （shared/subauto.js の gate。1つでも当たった行は配信しない）
+     ③ 通った行をプランに振り分ける（shared/subplan.js・画面の案と同じ決まり）
+        ・積み上げ型／良い品ほど上のプランから先／モニターは週◯件・ランダム
+        ・1回に新しく出す商品は ⚙ subAutoMax まで
+     ④ MW で在庫が切れた品は、Shopify の在庫を 0 にする
+     ⑤ 選んだ品を Shopify に**非公開（UNLISTED）**で作る。作れた行だけ
+        印（mw_sub）を付ける＝**作れなかった行は配信しない**
+     ⑥ カードを送る（jobSubSend）。在庫切れのカードは「完売」に書き換わる
+     ⑦ 運営専用のチャンネルに報告する（件数・止めた理由・失敗）
+   dry:true（画面の「試しに配信内容を作る」）は ①〜③ と⑥の見立てだけで、
+   **Discord にも Shopify にも D1 にも何も書かない**。
+
+   守ること
+     ・Shopify の鍵は env（SHOPIFY_CLIENT_ID／SHOPIFY_CLIENT_SECRET または
+       SHOPIFY_ADMIN_TOKEN）。コード・ログ・知らせ・画面に出さない。
+       交換した鍵（24時間）は**この実行の中だけ**で持ち、D1 にも KV にも置かない
+     ・Shopify に送るのは shared/shopcsv.js の apiOf が作る中身だけ
+       （画像・卸値・社・MW の商品番号・MW の URL は入れない）
+     ・@everyone・@here は使わない（カードは今までの作りのまま） */
+const SUB_AUTO_SLOT = "sub.auto.slot";     // 最後に走った回（JST の日＋時）
+const SUB_AUTO_LAST = "sub.auto.last";     // 最後の回のまとめ（画面に出す）
+const SUB_AUTO_PAGE = 1500;                // 候補を1回に読む行
+const SUB_AUTO_ROWS = 15000;               // 候補の上限
+const SUB_AUTO_SEND_MS = 240000;           // 定時の回でカードを送る持ち時間
+const SUB_AUTO_SHOP_MS = 150000;           // Shopify を呼ぶ持ち時間
+const SUB_AUTO_STOP_MAX = 1000;            // 画面に返す「止めた行」の上限
+const SUB_AUTO_TRIM_MAX = 60;              // 1回に受付終了にする古い品の上限
+const SUB_STOP_MAX = 5000;                 // D1 に控える「止めた行」の上限
+const SHOP_API_V = "2026-10";              // Shopify の管理 API の版（固定）
+
+/* ---- Shopify の管理 API ---- */
+/* 管理 API の宛先（○○.myshopify.com）。⚙「Shopify の管理用ドメイン」が
+   空なら、カードのリンクに使う「Shopify のドメイン」が myshopify.com の
+   ときだけそれを使う（独自ドメインでは管理 API を呼べないため）。 */
+function shopHostOf(st) {
+  const a = SUBCARD.domainOf((st || {}).subShopAdmin || "")
+    || SUBCARD.domainOf((st || {}).subDomain || "");
+  return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(a) ? a : "";
+}
+/* アプリの client secret。会員の月額課金（8.56）で登録した
+   SHOPIFY_WEBHOOK_SECRET は**同じアプリの client secret**なので、
+   専用の SHOPIFY_CLIENT_SECRET が無ければそれを使う（同じ値を二度
+   登録しなくてよいように）。値は返すだけで、どこにも出さない。 */
+function shopSecretOf(env) {
+  return String(env.SHOPIFY_CLIENT_SECRET || env.SHOPIFY_WEBHOOK_SECRET || "");
+}
+/* 鍵がどちらの形で登録されているか（'' なら未登録）。値は返さない。 */
+function shopKeyKind(env) {
+  if (env.SHOPIFY_ADMIN_TOKEN) return "token";
+  if (env.SHOPIFY_CLIENT_ID && shopSecretOf(env)) return "client";
+  return "";
+}
+/* 交換した鍵と、店の決まった値（置き場所・販売チャネル）の控え。
+   **この実行の中だけ**（Worker の変数）。D1・KV・ログには置かない。 */
+const SHOP_MEM = { host: "", token: "", exp: 0, ready: null, readyAt: 0 };
+function shopReset() {
+  SHOP_MEM.host = ""; SHOP_MEM.token = ""; SHOP_MEM.exp = 0;
+  SHOP_MEM.ready = null; SHOP_MEM.readyAt = 0;
+}
+async function shopToken(env, run, host) {
+  if (env.SHOPIFY_ADMIN_TOKEN)
+    return { ok: true, token: String(env.SHOPIFY_ADMIN_TOKEN) };
+  if (!(env.SHOPIFY_CLIENT_ID && shopSecretOf(env)))
+    return { ok: false, why: "no_key" };
+  if (SHOP_MEM.host === host && SHOP_MEM.token && Date.now() < SHOP_MEM.exp)
+    return { ok: true, token: SHOP_MEM.token };
+  /* client credentials。scope は送らない（Shopify が無視するため）。 */
+  const body = "grant_type=client_credentials"
+    + "&client_id=" + encodeURIComponent(String(env.SHOPIFY_CLIENT_ID))
+    + "&client_secret=" + encodeURIComponent(shopSecretOf(env));
+  const resp = await net(run, "https://" + host + "/admin/oauth/access_token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body,
+  });
+  if (!resp.ok) {
+    /* 本文は出さない（鍵にかかわる返事なので、番号だけ）。 */
+    run.errors++; run.notes.push("shopify(token) -> " + resp.status);
+    return { ok: false, why: "token", status: resp.status };
+  }
+  let d = null;
+  try { d = await resp.json(); } catch (e) { d = null; }
+  const tk = String((d && d.access_token) || "");
+  if (!tk) return { ok: false, why: "token", status: resp.status };
+  SHOP_MEM.host = host; SHOP_MEM.token = tk;
+  /* 期限（24時間）の5分前に切り替える。 */
+  SHOP_MEM.exp = Date.now()
+    + Math.max(60, (Number(d.expires_in) || 3600) - 300) * 1000;
+  return { ok: true, token: tk };
+}
+async function shopGql(env, run, host, query, variables) {
+  if (!host) return { ok: false, why: "no_host" };
+  const tk = await shopToken(env, run, host);
+  if (!tk.ok) return { ok: false, why: tk.why, status: tk.status || 0 };
+  const url = "https://" + host + "/admin/api/" + SHOP_API_V + "/graphql.json";
+  for (let i = 0; i < 3; i++) {
+    const resp = await net(run, url, {
+      method: "POST",
+      headers: { "content-type": "application/json",
+                 "x-shopify-access-token": tk.token },
+      body: JSON.stringify({ query: query, variables: variables || {} }),
+      write: true,
+    });
+    if (resp.status === 429 && i < 2) { await sleep(1000 * (i + 1)); continue; }
+    if (!resp.ok) {
+      run.errors++; run.notes.push("shopify -> " + resp.status);
+      /* 鍵が古くなっていたら、次の呼び出しで取り直す。 */
+      if (resp.status === 401) { SHOP_MEM.token = ""; SHOP_MEM.exp = 0; }
+      return { ok: false, why: "http", status: resp.status };
+    }
+    let d = null;
+    try { d = await resp.json(); } catch (e) { d = null; }
+    const errs = (d && Array.isArray(d.errors)) ? d.errors : [];
+    if (errs.length) {
+      const thr = errs.some((e) => String(((e || {}).extensions || {}).code
+        || "") === "THROTTLED");
+      if (thr && i < 2) { await sleep(1500 * (i + 1)); continue; }
+      run.errors++; run.notes.push("shopify(graphql) エラー " + errs.length + "件");
+      return { ok: false, why: "gql", status: resp.status,
+               msg: errs.map((e) => String((e || {}).message || ""))
+                 .filter(Boolean).join(" / ").slice(0, 300) };
+    }
+    return { ok: true, data: (d && d.data) || {} };
+  }
+  return { ok: false, why: "throttled" };
+}
+/* Shopify の失敗を、運営に出す言い方にする（鍵・宛先は出さない）。 */
+function shopWhyJa(r) {
+  const x = r || {};
+  const w = String(x.why || "");
+  if (w === "no_host")
+    return "⚙の「Shopify の管理用ドメイン」（○○.myshopify.com）が入っていません";
+  if (w === "no_key")
+    return "Shopify の鍵が pj-sync に登録されていません"
+      + "（SHOPIFY_CLIENT_ID／SHOPIFY_CLIENT_SECRET）";
+  if (w === "no_cols")
+    return "D1 に migrate-0067-sub-auto.sql が流れていません";
+  if (w === "token")
+    return "Shopify の鍵の交換に失敗しました（HTTP " + (x.status || 0) + "）";
+  if (w === "http") return "Shopify の返事が HTTP " + (x.status || 0) + " でした";
+  if (w === "throttled") return "Shopify が混み合っていて呼べませんでした";
+  if (w === "gql") return "Shopify の返事：" + String(x.msg || "").slice(0, 200);
+  if (w === "user")
+    return "Shopify が受け付けませんでした：" + String(x.msg || "").slice(0, 200);
+  if (w === "loc")
+    return "Shopify のロケーションが2つ以上あり、⚙「ロケーション名」と"
+      + "合うものがありません";
+  if (w === "no_loc") return "Shopify のロケーションが見つかりません";
+  if (w === "pub")
+    return "Shopify の販売チャネル「オンラインストア」が見つかりません";
+  if (w === "publish")
+    return "オンラインストアに公開できませんでした："
+      + String(x.msg || "").slice(0, 200);
+  if (w === "none") return "Shopify にその商品がありません";
+  if (w === "late") return "時間切れ（次の回に回します）";
+  return w || "分かりません";
+}
+/* 店の決まった値（在庫の置き場所・オンラインストアの販売チャネル）。
+   呼ぶのは1回だけで、あとは控えを使う（10分）。 */
+const SHOP_Q_READY = `query pjReady {
+  shop { name }
+  locations(first: 20) { nodes { id name } }
+  publications(first: 50) {
+    nodes { id supportsFuturePublishing catalog { title } }
+  }
+}`;
+async function shopReady(env, run, st) {
+  const host = shopHostOf(st);
+  if (!host) return { ok: false, why: "no_host", host: "" };
+  if (!shopKeyKind(env)) return { ok: false, why: "no_key", host: host };
+  if (SHOP_MEM.ready && SHOP_MEM.ready.host === host
+      && Date.now() - SHOP_MEM.readyAt < 600000) return SHOP_MEM.ready;
+  const r = await shopGql(env, run, host, SHOP_Q_READY, {});
+  if (!r.ok) return Object.assign({ host: host }, r, { ok: false });
+  const locs = (((r.data || {}).locations || {}).nodes || [])
+    .filter((x) => x && x.id);
+  let loc = "";
+  if (locs.length === 1) loc = String(locs[0].id);
+  else if (locs.length > 1) {
+    /* 2つ以上あるときは、⚙「ロケーション名」（在庫CSV と同じ欄）で決める。 */
+    const want = String((st || {}).mwSubLoc || "").trim();
+    const hit = want ? locs.filter((x) => String(x.name || "").trim() === want)
+                     : [];
+    if (hit.length === 1) loc = String(hit[0].id);
+    else return { ok: false, why: "loc", host: host };
+  } else return { ok: false, why: "no_loc", host: host };
+  /* オンラインストア。**先の日付で公開できるのはオンラインストアだけ**
+     なので、まずその印で見分ける（店の言語に左右されない）。
+     決まらないときだけ名前で見る。 */
+  const pubs = (((r.data || {}).publications || {}).nodes || [])
+    .filter((x) => x && x.id);
+  let pub = "";
+  const fut = pubs.filter((x) => x.supportsFuturePublishing === true);
+  if (fut.length === 1) pub = String(fut[0].id);
+  else {
+    const byName = pubs.filter((x) => /^(online store|オンラインストア)$/i
+      .test(String(((x.catalog || {}).title) || "").trim()));
+    if (byName.length === 1) pub = String(byName[0].id);
+  }
+  if (!pub) return { ok: false, why: "pub", host: host };
+  const out = { ok: true, host: host, loc: loc, pub: pub };
+  SHOP_MEM.ready = out; SHOP_MEM.readyAt = Date.now();
+  return out;
+}
+/* 会員用の商品を作る（あれば直す）。handle（sub-<JAN>）で突き合わせるので、
+   何度呼んでも同じ商品が1つだけできる。作ったあとオンラインストアに
+   公開する（非公開＝UNLISTED でも、リンクで開くには公開が要る）。 */
+const SHOP_M_SET = `mutation pjSet($input: ProductSetInput!, $identifier: ProductSetIdentifiers) {
+  productSet(synchronous: true, input: $input, identifier: $identifier) {
+    product { id handle status
+      variants(first: 1) { nodes { id inventoryItem { id } } } }
+    userErrors { code field message }
+  }
+}`;
+const SHOP_M_PUB = `mutation pjPub($id: ID!, $pub: ID!) {
+  publishablePublish(id: $id, input: [{ publicationId: $pub }]) {
+    userErrors { field message }
+  }
+}`;
+function shopUserErr(list) {
+  return (list || []).map((e) => String((e || {}).message || ""))
+    .filter(Boolean).join(" / ").slice(0, 300);
+}
+async function shopPut(env, run, rdy, item, opt) {
+  const a = SHOPCSV.apiOf(item, Object.assign({}, opt || {},
+    { locationId: rdy.loc }));
+  const r = await shopGql(env, run, rdy.host, SHOP_M_SET,
+    { input: a.input, identifier: { handle: a.handle } });
+  if (!r.ok) return r;
+  const ps = (r.data || {}).productSet || {};
+  const ue = ps.userErrors || [];
+  const pid = String(((ps.product || {}).id) || "");
+  if (ue.length || !pid)
+    return { ok: false, why: "user", msg: shopUserErr(ue) || "商品が返りませんでした" };
+  const v = ((((ps.product || {}).variants || {}).nodes) || [])[0] || {};
+  const iid = String(((v.inventoryItem || {}).id) || "");
+  const p = await shopGql(env, run, rdy.host, SHOP_M_PUB,
+    { id: pid, pub: rdy.pub });
+  if (!p.ok) return Object.assign({}, p, { why: "publish",
+    msg: shopWhyJa(p), pid: pid, iid: iid });
+  const pe = (((p.data || {}).publishablePublish || {}).userErrors) || [];
+  if (pe.length)
+    return { ok: false, why: "publish", msg: shopUserErr(pe), pid: pid, iid: iid };
+  return { ok: true, pid: pid, iid: iid,
+           status: String(((ps.product || {}).status) || "") };
+}
+/* 在庫の数を入れる（MW で在庫が切れたら 0・戻ったら残りの数）。
+   在庫の品目ID（iid）が控えに無い商品（前に CSV で入れた商品）は、
+   handle で1回だけ引く。 */
+const SHOP_Q_ONE = `query pjOne($identifier: ProductIdentifierInput!) {
+  productByIdentifier(identifier: $identifier) {
+    id variants(first: 1) { nodes { id inventoryItem { id } } }
+  }
+}`;
+const SHOP_M_INV = `mutation pjInv($input: InventorySetQuantitiesInput!, $key: String!) {
+  inventorySetQuantities(input: $input) @idempotent(key: $key) {
+    userErrors { code field message }
+  }
+}`;
+async function shopQty(env, run, rdy, jan, iid0, qty) {
+  let iid = String(iid0 || "");
+  if (!iid) {
+    const q = await shopGql(env, run, rdy.host, SHOP_Q_ONE,
+      { identifier: { handle: SHOPCSV.handleOf(jan) } });
+    if (!q.ok) return q;
+    const pr = (q.data || {}).productByIdentifier;
+    if (!pr) return { ok: false, why: "none" };
+    iid = String((((((pr.variants || {}).nodes) || [])[0] || {})
+      .inventoryItem || {}).id || "");
+    if (!iid) return { ok: false, why: "none" };
+  }
+  const n = Math.max(0, Math.round(Number(qty) || 0));
+  const r = await shopGql(env, run, rdy.host, SHOP_M_INV, {
+    input: { name: "available", reason: "correction",
+             /* pj が在庫の元なので、Shopify の今の数とは突き合わせない
+                （changeFromQuantity は null を明示する決まり）。 */
+             quantities: [{ inventoryItemId: iid, locationId: rdy.loc,
+                            quantity: n, changeFromQuantity: null }] },
+    key: crypto.randomUUID(),
+  });
+  if (!r.ok) return Object.assign({}, r, { iid: iid });
+  const ue = (((r.data || {}).inventorySetQuantities || {}).userErrors) || [];
+  if (ue.length) return { ok: false, why: "user", msg: shopUserErr(ue), iid: iid };
+  return { ok: true, iid: iid, qty: n };
+}
+/* Shopify に渡す設定（商品CSV と同じ⚙を読む）。 */
+function subShopOpt(st, cfg, date) {
+  const o = st || {};
+  return { vendor: String(o.mwSubVendor || "").trim(),
+           /* 画面の欄の既定（ゲームソフト）と同じ。空にしたときは空。 */
+           type: (o.mwSubType === undefined || o.mwSubType === null)
+             ? "ゲームソフト" : String(o.mwSubType).trim(),
+           gameG: (cfg || {}).gameG, addG: (cfg || {}).addG,
+           thinKishu: (cfg || {}).thinKishu,
+           date: date ? new Date(date) : new Date() };
+}
+/* migrate-0067 の列（Shopify の控え）があるか。 */
+async function subShopColsOk(env) {
+  return (await colOk(env, "mw_sub", "shop_iid"))
+    && (await colOk(env, "mw_sub", "shop_zero_at"))
+    && (await colOk(env, "mw_sub", "auto_at"));
+}
+
+/* ---- ① 候補を引く ----
+   条件は「Amazon 刈取」の⚙（機種・新品・出荷日数・MW在庫の下限・備考の
+   NG 語）と同じ（毎時37分の取り直しが見ている行と同じ集まり）。
+   画面の案は「いま一覧に出ている行」だったが、pj-sync は端末の絞り込みを
+   知らないので、**条件に合う行ぜんぶ**から選ぶ。 */
+async function subAutoCands(env, cfg, st) {
+  const q0 = mwWhere(amzPickOpt(st));
+  const w = q0.w.replace(
+    /\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
+  const mvq = await mwStatSql(env, "s");
+  const wayCol = (await colOk(env, "mw_sub", "ship_way"))
+    ? "COALESCE(u.ship_way,'')" : "''";
+  const handCol = (await colOk(env, "mw_sub", "px_hand"))
+    ? "COALESCE(u.px_hand,0)" : "0";
+  const widCol = (await colOk(env, "mw_amz", "size_wid")) ? "a.size_wid" : "0";
+  const heiCol = (await colOk(env, "mw_amz", "size_hei")) ? "a.size_hei" : "0";
+  const pxCol = (await pxOk(env))
+    ? "a.px_min AS px_min, a.px_sum AS px_sum, a.px_n AS px_n, a.px_from AS px_from,"
+    : "0 AS px_min, 0 AS px_sum, 0 AS px_n, '' AS px_from,";
+  const rkCol = (await rkOk(env))
+    ? "a.rk_sum AS rk_sum, a.rk_n AS rk_n," : "0 AS rk_sum, 0 AS rk_n,";
+  const shopCol = (await subShopColsOk(env))
+    ? "u.auto_at AS auto_at, u.shop_at AS shop_at,"
+    : "'' AS auto_at, '' AS shop_at,";
+  const out = [], seen = {};
+  for (let off = 0; off < SUB_AUTO_ROWS; off += SUB_AUTO_PAGE) {
+    const q = await env.DB.prepare(
+      `SELECT s.jan AS jan, COALESCE(u.on_sale,0) AS sub_on,
+              u.max_qty AS max_qty, u.price AS price,
+              ${wayCol} AS ship_way, ${handCol} AS px_hand,
+              COALESCE(u.grades,'') AS grades, u.loaded_at AS loaded_at,
+              u.put_at AS put_at, ${shopCol}
+              s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+              s.gone_at AS gone_at, s.wholesale AS wholesale, s.note AS note,
+              a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
+              a.fee_total AS fee_total, a.size_tier AS size_tier,
+              a.size_g AS size_g, a.size_cm3 AS size_cm3,
+              a.size_long AS size_long, ${widCol} AS size_wid,
+              ${heiCol} AS size_hei,
+              a.basis AS basis, a.price_at AS price_at, a.low AS amz_low,
+              a.rank AS rank, a.rank_cat AS rank_cat, a.new_n AS new_n,
+              a.amz AS amz, a.fba_n AS fba_n, a.fee_ref AS fee_ref,
+              a.fee_fba AS fee_fba, a.fee_tax AS fee_tax,
+              ${pxCol} ${rkCol}
+              (SELECT COALESCE(SUM(o.qty),0) FROM sub_order o
+                WHERE o.jan = s.jan) AS sold,
+              COALESCE(i.ok_n,0) AS pics_ok, COALESCE(b.qty,0) AS buy_qty,
+              r.state AS rst${mvq.cols}
+         FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+              LEFT JOIN mw_sub u ON u.jan = s.jan
+              LEFT JOIN mw_buy b ON b.jan = s.jan
+              LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
+              LEFT JOIN (SELECT jan,
+                           SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) AS ok_n
+                           FROM mw_img GROUP BY jan) i ON i.jan = s.jan${mvq.join}
+        WHERE ${w} AND COALESCE(a.asin,'') <> ''
+        ORDER BY s.jan ASC
+        LIMIT ${SUB_AUTO_PAGE} OFFSET ${off}`).bind(...q0.bind).all();
+    const list = (q && q.results) || [];
+    for (const r of list) {
+      const j = String(r.jan || "");
+      if (!j || seen[j]) continue;
+      seen[j] = 1;
+      out.push(r);
+    }
+    if (list.length < SUB_AUTO_PAGE) break;
+  }
+  return out;
+}
+/* ---- ② 1行ぶんの計算 ----
+   画面の「今日の配信の案」（subDraftRows）と同じ決まりを、同じ共有の式で
+   当てる（会員価格 subprice.js／手残り sellway.js／速さ mwstat.js・
+   rankspd.js／送り方 shopcsv.js／出せる数 subplan.js）。
+   ctx … { px, day, pick, netOn, cutNet, rateOn, cutRate, sale, needPic } */
+function subAutoRow(r, cfg, ctx) {
+  const onSale = Number(r.sub_on) === 1;
+  const byAuto = !!String(r.auto_at || "");
+  const wh = { wholesale: Number(r.wholesale) || 0 };
+  /* 会員価格。**いちど決めた値段は動かさない**（配信のたびにカードの値段が
+     変わらないように）。決め直すのは次のときだけ。
+       ・まだ値段が無い
+       ・自動で決めた値段が、いまの卸値から出る幅の外に出た（卸値が変わった）
+     手で直した値段（px_hand）と、カジが印を付けた行の値段はそのまま使う。 */
+  const stored = Math.round(Number(r.price) || 0);
+  const keep = stored > 0 && (Number(r.px_hand) === 1
+    || (onSale && !byAuto) || SUBPX.inBand(stored, wh, ctx.px));
+  let price = stored;
+  if (!keep) {
+    price = SUBPX.priceOf(wh, Object.assign({}, ctx.px,
+      { rnd: () => SUBAUTO.seedRnd(r.jan, ctx.day) })).price;
+  }
+  const x = subRowMap(Object.assign({}, r, {
+    price: price,
+    /* 自動で付けたプランは回ごとに見直す（狭めはしない・下で広げるだけ）。 */
+    grades: (onSale && !byAuto) ? String(r.grades || "") : "",
+  }), cfg);
+  x.on = onSale;
+  x.by_auto = byAuto;
+  x.grades0 = onSale ? String(r.grades || "") : "";
+  x.repriced = onSale && stored > 0 && price !== stored;
+  x.cost = SUBPX.costOf(wh, ctx.px);
+  x.shop_at = String(r.shop_at || "");
+  x.pics_ok = Number(r.pics_ok) || 0;
+  x.rst = String(r.rst || "");
+  x.buy_qty = Number(r.buy_qty) || 0;
+  /* 売れる速さ（MW の在庫の減り。無ければ Amazon の順位からの推定）。 */
+  const stt = MWSTAT.calc(Object.assign({}, r, { stock: x.stock }),
+    { saleWords: ctx.sale }) || {};
+  const speed = (Number(stt.speed) > 0) ? Number(stt.speed) : 0;
+  const rkN = Number(r.rk_n) || 0;
+  const genre = MWFEE.genreOf(x);
+  const es = RANKSPD.estOf({ speed: speed, speed_ok: !!stt.speedSrc,
+    rank: x.rank, rank_n: rkN,
+    rank_avg: rkN > 0 ? Math.round((Number(r.rk_sum) || 0) / rkN) : 0,
+    genre: genre }, cfg.rank_spd || null);
+  x.speed = speed;
+  x.speed_ok = !!stt.speedSrc;
+  x.est = (es.src === "amz") ? (Number(es.day) || 0) : 0;
+  x.is_game = genre === "ゲーム";
+  x.no_back = !!stt.noBack;
+  /* 出せる数。印のある行は控えた上限、無い行はおすすめ値。 */
+  if (!(onSale && x.qty > 0))
+    x.qty = SUBPLAN.qtyOf({ stock: x.stock, speed: speed }, null, ctx.pick);
+  /* 送り方（採寸・機種・手の上書き）。決まらない行は「採寸がない」。 */
+  const sh = subShipInfo(x, cfg);
+  x.ship = sh.name;
+  x.ship_sure = !!sh.sure;
+  x.ship_short = sh.short ? String(sh.short_ja || "不足") : "";
+  x.buy_ship = (cfg.netBuyShip === false) ? 0
+    : Math.max(0, Math.round(Number(sh.yen1) || 0));
+  /* 会員向きか。手残り（⚙の売り方）で見る（⚙で切ると粗利と率）。 */
+  const amzPx = Number(r.amz_price) || 0;
+  const fit = SUBPX.fitOf(amzPx, x.fee_total, price, ctx.px);
+  x.gross = fit.gross;
+  x.rate = fit.pct;
+  x.net = null; x.net_min = 0; x.net_unknown = false;
+  if (ctx.netOn) {
+    const nt = (amzPx > 0 && x.fee_total > 0 && price > 0)
+      ? subNetOf(x, cfg) : null;
+    x.net = nt;
+    x.net_min = ctx.cutNet;
+    x.net_unknown = (nt === null);
+    const okRate = !ctx.rateOn || (fit.pct !== null && fit.pct !== undefined
+      && fit.pct >= ctx.cutRate);
+    x.fit = nt !== null && nt >= ctx.cutNet && okRate;
+  } else {
+    x.fit = !!fit.ok;
+  }
+  x.why = SUBAUTO.gate(Object.assign({}, x, { amz_price: amzPx }),
+    { needPic: ctx.needPic });
+  return x;
+}
+/* 画面と報告に出す1行（会員に見せない項目もあるので**運営だけ**）。 */
+function subAutoView(x, extra) {
+  return Object.assign({
+    jan: x.jan, name: String(x.name || "").slice(0, 60),
+    price: x.price, qty: x.qty, gross: x.gross, net: x.net,
+    rate: x.rate, ship: x.ship, on: !!x.on,
+    why: (x.why || []).slice(),
+    why_ja: SUBAUTO.whyText(x.why || [], x) }, extra || {});
+}
+/* 止めた行を D1 に控える（migrate-0067 の sub_stop）。
+   「採寸がない」などで止めた行を、あとで配信できるようにするための控え。
+   変わった行だけ書く（同じ理由のままの行は触らない）。
+   止まらなくなった行は消さずに off_at を入れる（いつまで止まっていたか）。 */
+async function subStopSync(env, list) {
+  const out = { ok: false, put: 0, off: 0 };
+  if (!(await colOk(env, "sub_stop", "why"))) return out;
+  const q = await env.DB.prepare(
+    `SELECT jan, why, COALESCE(off_at,'') AS off_at FROM sub_stop`).all();
+  const cur = {};
+  for (const r of ((q && q.results) || [])) cur[String(r.jan)] = r;
+  const at = nowIso();
+  const stmts = [], seen = {};
+  for (const x of (list || []).slice(0, SUB_STOP_MAX)) {
+    const j = String(x.jan || "");
+    if (!j || seen[j]) continue;
+    seen[j] = 1;
+    const why = (x.why || []).join(",");
+    const was = cur[j];
+    if (was && String(was.why || "") === why && !String(was.off_at || ""))
+      continue;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO sub_stop (jan,why,name,at,first_at,n,created_at)
+       VALUES (?1,?2,?3,?4,?4,1,?4)
+       ON CONFLICT(jan) DO UPDATE SET why=excluded.why, name=excluded.name,
+         at=excluded.at, off_at=NULL, n=COALESCE(sub_stop.n,0)+1`)
+      .bind(j, why, String(x.name || "").slice(0, 120), at));
+    out.put++;
+  }
+  for (const j of Object.keys(cur)) {
+    if (seen[j] || String(cur[j].off_at || "")) continue;
+    stmts.push(env.DB.prepare(
+      `UPDATE sub_stop SET off_at=?2 WHERE jan=?1`).bind(j, at));
+    out.off++;
+  }
+  for (let i = 0; i < stmts.length; i += 50)
+    await env.DB.batch(stmts.slice(i, i + 50));
+  out.ok = true;
+  return out;
+}
+/* ⚙の数（空・未設定なら既定）。 */
+function subNumDef(v, d) {
+  if (v === undefined || v === null || v === "") return d;
+  const n = Number(v);
+  return isFinite(n) ? n : d;
+}
+/* ---- 本体 ----
+   opt.dry   … true＝試し（何も書かない・送らない）
+   opt.force … true＝時刻と「もう走った回」の印を見ない（テスト用）
+   opt.now   … いまの時刻（ISO。テストで固定する） */
+async function jobSubAuto(env, opt) {
+  const o = opt || {};
+  const dry = o.dry === true;
+  const run = newRun(dry ? "sub-auto-try" : "sub-auto");
+  const res = { ok: false, dry: dry, ran: false, why: "", slot: "",
+                sent: 0, edited: 0, stop_n: 0, sold_out: 0, cand_n: 0,
+                ok_n: 0, cut: 0, left: 0,
+                plans: [], tally: {}, skip: {}, stops: [], errors: [],
+                shop: { ready: false, why: "", made: 0, fail: 0, zero: 0,
+                        back: 0, need: 0 } };
+  const fin = async () => Object.assign(await saveRun(env, run), res);
+  try {
+    const cfg = await subSettings(env);
+    const nowMs = o.now ? Date.parse(String(o.now)) : Date.now();
+    const jt = subJst(o.now);
+    const day = jt.day;
+    res.on = cfg.autoOn; res.hours = cfg.autoHours;
+    res.weekend = cfg.autoWeekend; res.max = cfg.autoMax; res.pic = cfg.autoPic;
+    res.slot = SUBAUTO.slotOf(day, jt.hour);
+    if (!(await subPostOk(env))) {
+      res.error = "no_table";
+      res.detail = "sub_post がありません（migrate-0053-sub-post.sql）";
+      return await fin();
+    }
+    if (!dry) {
+      /* 動かしてよいか。時刻でない回は**記録も残さない**（毎時の空振りで
+         実行の記録を埋めないため）。 */
+      if (!cfg.autoOn) { res.ok = true; res.why = "⚙で自動配信をオフにしています"; return res; }
+      if (!o.force) {
+        if (!SUBAUTO.dueOf(cfg.autoHours, jt, cfg.autoWeekend)) {
+          res.ok = true; res.why = "配信の時刻ではありません"; return res;
+        }
+        const last = String(await stateGet(env, SUB_AUTO_SLOT) || "");
+        if (last === res.slot) {
+          res.ok = true; res.why = "この回はもう走っています"; return res;
+        }
+      }
+      let skipDay = "";
+      try { skipDay = String(await stateGet(env, SUB_SKIP_KEY) || ""); }
+      catch (e) { skipDay = ""; }
+      if (skipDay === day) {
+        res.ok = true; res.why = "今日は送らない印が付いています";
+        return await fin();
+      }
+      /* 先に印を付ける（途中で落ちても同じ回を二度走らせない）。 */
+      await stateSet(env, SUB_AUTO_SLOT, res.slot).run();
+      if (!env.DISCORD_BOT_TOKEN) {
+        res.error = "no_token";
+        res.detail = "DISCORD_BOT_TOKEN が登録されていません";
+        res.errors.push("Discord：ボットの鍵（DISCORD_BOT_TOKEN）が"
+          + "登録されていないので配信できません");
+        await subAutoTell(env, run, res);
+        return await fin();
+      }
+    }
+    res.ran = true;
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+
+    /* ---- Shopify が使えるか（読むだけの1回）---- */
+    const shopCols = await subShopColsOk(env);
+    let rdy = await shopReady(env, run, st);
+    if (rdy.ok && !shopCols) rdy = { ok: false, why: "no_cols", host: rdy.host };
+    res.shop.ready = !!rdy.ok;
+    res.shop.why = rdy.ok ? "" : shopWhyJa(rdy);
+    res.shop.key = !!shopKeyKind(env);
+    res.shop.cols = shopCols;
+
+    /* ---- ①② 候補とチェック ---- */
+    const ctx = {
+      px: SUBPX.optOf(st), day: day, pick: cfg.pick,
+      netOn: st.subNetOn === undefined ? true : !!st.subNetOn,
+      cutNet: Math.round(subNumDef(st.subCutNet, SUBAUTO.CUT_NET_DEF)),
+      rateOn: !!st.subCutRateOn,
+      cutRate: Math.round(subNumDef(st.subCutRate, SUBAUTO.CUT_RATE_DEF)),
+      sale: mwSaleWords(st), needPic: cfg.autoPic,
+    };
+    const raw = await subAutoCands(env, cfg, st);
+    const rows = raw.map((r) => subAutoRow(r, cfg, ctx));
+    res.cand_n = rows.length;
+    const okRows = rows.filter((x) => !x.why.length);
+    const stopped = rows.filter((x) => x.why.length);
+    res.ok_n = okRows.length;
+    /* 振り分けの決まり（shared/subplan.js の whyNot）で対象外になる行。
+       止めた行とは別に、件数だけ報告する。 */
+    for (const x of okRows) {
+      const w = SUBPLAN.whyNot(x, cfg.pick)
+        || (!(Number(x.qty) > 0) ? "出せる数がありません" : "");
+      if (!w) continue;
+      const k = w.replace(/（.*$/, "");
+      res.skip[k] = (res.skip[k] || 0) + 1;
+    }
+
+    /* ---- ③ プランごとの案 ---- */
+    const plans = cfg.active;
+    const sentBy = {};
+    for (const p of plans) sentBy[p.key] = await subPosts(env, p.ch);
+    const picks = [];
+    let monLeft = null;
+    for (const p of plans) {
+      const sent = sentBy[p.key] || {};
+      const live = (j) => !!(sent[j] && (String(sent[j].msg_id || "")
+        || String(sent[j].off_at || "")));
+      if (p.key === "monitor") {
+        /* モニターは「週に monNew 件」。今週もう出した数を引き、
+           前の週までに出した品は選ばない（8.43 の決まりのまま）。 */
+        const po = cfg.pick;
+        const wk = SUBPLAN.monWeek(nowMs, po.monFrom);
+        const t0 = SUBPLAN.monFromMs(po.monFrom);
+        const before = [];
+        let thisN = 0;
+        for (const j of Object.keys(sent)) {
+          if (!/^[0-9]{8,}$/.test(j)) continue;        // 1点ものは数えない
+          const t = Date.parse(String(sent[j].at || ""));
+          if (!isFinite(t)) continue;
+          if (t0 !== null && t < t0) continue;         // 開始日より前（テスト）
+          if (SUBPLAN.monWeek(t, po.monFrom) === wk) thisN++;
+          else before.push(j);
+        }
+        monLeft = Math.max(0, Math.round(Number(po.monNew) || 0) - thisN);
+        const mp = SUBPLAN.monPick(okRows, p, po, before, nowMs);
+        picks.push({ key: p.key, name: p.name,
+          items: mp.items.filter((x) => !live(x.jan)).slice(0, monLeft),
+          mon: { week_n: thisN, left: monLeft, short: mp.short } });
+        continue;
+      }
+      /* ほかのプランは、そのチャンネルにまだ出していない品から上位 n 件。 */
+      const d = SUBPLAN.draft(okRows.filter((x) => !live(x.jan)), [p], st, [],
+                              nowMs);
+      picks.push({ key: p.key, name: p.name,
+                   items: ((d.plans || [])[0] || {}).items || [] });
+    }
+    /* 1回の上限（商品の数）。プランを順に1件ずつ取る。 */
+    const cap = SUBAUTO.capPick(picks, cfg.autoMax);
+    res.cut = cap.cut;
+    /* 同じ商品はいちばん下のプランに寄せ、そこから上を全部付ける。 */
+    const todo = [];
+    const inTodo = {};
+    for (const z of SUBAUTO.lowest(cap.plans, SUBPLAN.ORDER)) {
+      const x = z.item;
+      let grades = SUBPLAN.gradesOf(z.plan);
+      if (x.on) {
+        /* もう出している品は、**広げるだけ**（狭めない）。 */
+        const g0 = String(x.grades0 || "");
+        const l0 = SUBPLAN.lowestOf(g0);
+        if (g0 === "" || (l0 && SUBPLAN.rankOf(l0) <= SUBPLAN.rankOf(z.plan)))
+          grades = g0;
+      }
+      const need = !x.on || !String(x.loaded_at || "")
+        || grades !== String(x.grades0 || "") || x.repriced;
+      todo.push({ jan: x.jan, x: x, plan: z.plan, grades: grades,
+                  need: need, pick: true });
+      inTodo[x.jan] = 1;
+    }
+    /* 配信済みで値段を決め直した行（卸値が変わった）も Shopify を直す。 */
+    for (const x of rows) {
+      if (inTodo[x.jan] || !x.on || !x.repriced
+          || !String(x.loaded_at || "")) continue;
+      todo.push({ jan: x.jan, x: x, plan: "", grades: String(x.grades0 || ""),
+                  need: true, pick: false });
+    }
+    res.shop.need = todo.filter((t) => t.need).length;
+
+    /* 新しく出さない行（配信前のチェックで止めた行）。出してあるカードは
+       今までどおり書き換える。 */
+    const hold = {};
+    for (const x of stopped) hold[x.jan] = x.why[0];
+    const out = {};                    // 完売として出す行
+    const failed = [];                 // Shopify に作れなかった行
+
+    /* ---- ④ MW で在庫が切れた品（Shopify の在庫を 0 に）---- */
+    const liveRows = await subRows(env, cfg);
+    const cfgOut = Object.assign({}, cfg, { stockOut: true });
+    const shopMap = {};
+    if (shopCols) {
+      const q = await env.DB.prepare(
+        `SELECT jan, COALESCE(shop_iid,'') AS shop_iid,
+                COALESCE(shop_zero_at,'') AS shop_zero_at
+           FROM mw_sub WHERE COALESCE(on_sale,0)=1
+            AND COALESCE(loaded_at,'') <> ''`).all();
+      for (const r of ((q && q.results) || [])) shopMap[String(r.jan)] = r;
+    }
+    const dlShop = Date.now() + SUB_AUTO_SHOP_MS;
+    let shopDown = "";                 // Shopify が使えない理由（1回だけ報告）
+    for (const r of liveRows) {
+      const m = shopMap[r.jan] || {};
+      const isOut = subMwOut(r, cfgOut);
+      const zeroed = !!String(m.shop_zero_at || "");
+      if (isOut && !zeroed) {
+        if (dry) { res.shop.zero++; continue; }
+        if (!shopCols) continue;
+        if (!rdy.ok) { shopDown = shopDown || res.shop.why; continue; }
+        if (Date.now() > dlShop) continue;
+        const z = await shopQty(env, run, rdy, r.jan, m.shop_iid, 0);
+        if (z.ok || z.why === "none") {
+          /* Shopify に商品が無いときも、もう売れないので印を付ける。 */
+          await env.DB.prepare(
+            `UPDATE mw_sub SET shop_zero_at=?2, shop_iid=COALESCE(NULLIF(?3,''),
+                    shop_iid) WHERE jan=?1`)
+            .bind(r.jan, nowIso(), String(z.iid || "")).run();
+          if (z.ok) res.shop.zero++;
+        } else {
+          res.errors.push("Shopify：在庫を0にできませんでした（" + r.jan + "）"
+            + shopWhyJa(z));
+        }
+      } else if (!isOut && zeroed) {
+        /* MW に在庫が戻った。Shopify の在庫を残りの数に戻す。
+           戻せなかったら、カードは完売のままにする（買えないカードを
+           出さないため）。 */
+        const left = Math.max(0, (Number(r.qty) || 0)
+          - Math.max(0, Number(r.sold) || 0));
+        if (dry) { res.shop.back++; continue; }
+        let ok = false;
+        if (rdy.ok && Date.now() <= dlShop) {
+          const z = await shopQty(env, run, rdy, r.jan, m.shop_iid, left);
+          ok = !!z.ok;
+          if (!ok) res.errors.push("Shopify：在庫を戻せませんでした（" + r.jan
+            + "）" + shopWhyJa(z));
+        } else if (!rdy.ok) shopDown = shopDown || res.shop.why;
+        if (ok) {
+          await env.DB.prepare(
+            `UPDATE mw_sub SET shop_zero_at=NULL WHERE jan=?1`)
+            .bind(r.jan).run();
+          res.shop.back++;
+        } else out[r.jan] = 1;
+      }
+    }
+
+    /* ---- ⑤ Shopify に会員用の商品を作る → 作れた行だけ印を付ける ---- */
+    for (const t of todo) {
+      const x = t.x;
+      if (!t.need) { t.ok = true; continue; }
+      let err = null;
+      if (!rdy.ok) { err = rdy; shopDown = shopDown || res.shop.why; }
+      else if (dry) { t.ok = true; continue; }
+      else if (Date.now() > dlShop) err = { why: "late" };
+      else {
+        const item = { jan: x.jan, name: x.name, asin: x.asin, kishu: x.kishu,
+          price: x.price, max_qty: x.qty, sold: x.sold, grades: t.grades,
+          cost: x.cost, size_tier: x.size_tier, size_g: x.size_g,
+          size_cm3: x.size_cm3, size_long: x.size_long, size_wid: x.size_wid,
+          size_hei: x.size_hei, ship_way: x.ship_way };
+        const r = await shopPut(env, run, rdy, item,
+          subShopOpt(st, cfg, x.shop_at || ""));
+        if (r.ok) {
+          t.ok = true;
+          res.shop.made++;
+          const at = nowIso();
+          await env.DB.prepare(
+            `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,
+               created_at,put_at,loaded_at,auto_at,shop_pid,shop_iid,shop_at,
+               shop_err)
+             VALUES (?1,1,?2,?3,?4,'auto',?5,?5,?5,?5,?6,?7,?8,?5,'')
+             ON CONFLICT(jan) DO UPDATE SET
+               on_sale=1, max_qty=excluded.max_qty, price=excluded.price,
+               grades=excluded.grades, at=excluded.at, put_at=excluded.put_at,
+               loaded_at=excluded.loaded_at,
+               auto_at=COALESCE(NULLIF(mw_sub.auto_at,''), excluded.auto_at),
+               shop_pid=excluded.shop_pid, shop_iid=excluded.shop_iid,
+               shop_at=COALESCE(NULLIF(mw_sub.shop_at,''), excluded.shop_at),
+               shop_err=''`)
+            .bind(x.jan, x.qty, x.price, t.grades, at,
+                  /* カジが印を付けた行は「自動で選んだ」印を付けない。 */
+                  (x.on && !x.by_auto) ? "" : at,
+                  String(r.pid || ""), String(r.iid || "")).run();
+          continue;
+        }
+        err = r;
+      }
+      t.ok = false;
+      t.err = shopWhyJa(err);
+      res.shop.fail++;
+      /* 作れなかった行は配信しない（新しい品は印が付かないので出ない。
+         もう出している品も、新しいチャンネルには出さない）。 */
+      hold[x.jan] = "shop";
+      if (t.pick) failed.push(Object.assign({}, x, { why: ["shop"],
+                                                    shop_err: t.err }));
+      if (!dry && shopCols && x.on) {
+        try {
+          await env.DB.prepare(`UPDATE mw_sub SET shop_err=?2 WHERE jan=?1`)
+            .bind(x.jan, String(t.err || "").slice(0, 300)).run();
+        } catch (e) { /* 控えが書けなくても止めない */ }
+      }
+    }
+    if (shopDown) res.errors.push("Shopify：" + shopDown);
+    const failWhy = {};
+    for (const t of todo) if (t.ok === false && t.err) failWhy[t.err] = (failWhy[t.err] || 0) + 1;
+    for (const k of Object.keys(failWhy).slice(0, 5))
+      if (k !== shopDown) res.errors.push("Shopify：" + k + "（" + failWhy[k] + "件）");
+
+    /* ---- 出しておく商品は SUB_ROWS_MAX 件まで ----
+       配信（subRows）が見るのは**新しい順に SUB_ROWS_MAX 件**まで。v328 までも
+       それを超えた古い品のカードは「受付終了」に書き換わっていたが、
+       印（mw_sub）と Shopify の商品は残ったままだった。自動配信は商品が
+       増え続けるので、ここで**はっきり片づける**：古い順に
+         Shopify の在庫を 0 → 印を外す（カードはこのあとの配信で受付終了）
+       Shopify を呼べなかった品は印を残し、次の回にもう一度やる。 */
+    res.trim = 0;
+    res.keep_max = SUB_ROWS_MAX;
+    {
+      const made = dry ? todo.filter((t) => t.pick && !t.x.on
+        && t.ok !== false).length : 0;
+      const q = await env.DB.prepare(
+        `SELECT b.jan AS jan${shopCols ? ", COALESCE(b.shop_iid,'') AS shop_iid" : ""}
+           FROM mw_sub b
+          WHERE COALESCE(b.on_sale,0)=1 AND COALESCE(b.loaded_at,'') <> ''
+            AND COALESCE(b.price,0) > 0 AND COALESCE(b.max_qty,0) > 0
+          ORDER BY b.at DESC, b.jan ASC
+          LIMIT ${SUB_AUTO_TRIM_MAX} OFFSET ${Math.max(0, SUB_ROWS_MAX - made)}`)
+        .all();
+      for (const r of ((q && q.results) || [])) {
+        if (dry) { res.trim++; continue; }
+        let okZero = true;
+        if (rdy.ok && Date.now() <= dlShop) {
+          const z = await shopQty(env, run, rdy, r.jan, r.shop_iid, 0);
+          okZero = !!z.ok || z.why === "none";
+          if (!okZero)
+            res.errors.push("Shopify：在庫を0にできませんでした（" + r.jan + "）"
+              + shopWhyJa(z));
+        } else if (shopKeyKind(env)) okZero = false;   // 鍵はあるのに呼べない
+        if (!okZero) continue;
+        const sql = shopCols
+          ? `UPDATE mw_sub SET on_sale=0, at=?2, shop_zero_at=?2 WHERE jan=?1`
+          : `UPDATE mw_sub SET on_sale=0, at=?2 WHERE jan=?1`;
+        await env.DB.prepare(sql).bind(String(r.jan), nowIso()).run();
+        res.trim++;
+      }
+    }
+
+    /* ---- 止めた行のまとめ ---- */
+    const allStop = stopped.concat(failed);
+    res.stop_n = allStop.length;
+    res.tally = SUBAUTO.tally(allStop);
+    /* 利益は足りているのに止めた行（運営が手を打てる行）を先に並べる。 */
+    const pxKind = (c) => ((SUBAUTO.whyOf(c) || {}).kind === "px"
+      || c === "no_px");
+    const act = allStop.filter((x) => !x.why.some(pxKind));
+    act.sort((a, b) => (Number(b.net) || 0) - (Number(a.net) || 0));
+    res.stops = act.slice(0, SUBAUTO.LIST_MAX).map((x) => subAutoView(x));
+    res.act_n = act.length;
+
+    /* ---- ⑥ カードを送る ---- */
+    const newMax = (monLeft === null) ? null : { monitor: monLeft };
+    if (!dry) {
+      const sr = await jobSubSend(env, { approve: true, auto: true,
+        auto2: true, hold: hold, out: out, newMax: newMax,
+        budget_ms: SUB_AUTO_SEND_MS });
+      res.sent = Number(sr.sent) || 0;
+      res.edited = Number(sr.edited) || 0;
+      res.sold_out = Number(sr.sold_out) || 0;
+      res.left = Number(sr.left) || 0;
+      res.plans = (sr.plans || []).filter((p) => !p.one).map((p) => ({
+        key: p.key, name: p.name, add: p.add, edit: p.edit, fail: p.fail,
+        left: p.left }));
+      if (sr.error)
+        res.errors.push("Discord：" + String(sr.detail || sr.error));
+      else if (sr.stopped === "fail")
+        res.errors.push("Discord：" + String(sr.stop_plan || "") + " で止まりました"
+          + "（HTTP " + (Number(sr.stop_status) || 0) + "）。次の回に続きを出します");
+      if (res.left > 0)
+        res.errors.push("Discord：時間が足りず " + res.left
+          + "件を次の回に回しました");
+    } else {
+      /* 試し：送らずに、送る回と**同じ選び方**（subPick）で見立てる。
+         新しく選んだ品は「Shopify に作れた」つもりで足す（Shopify が
+         使えないときは hold に入っているので出ない）。 */
+      const sim = {};
+      for (const r of liveRows) sim[r.jan] = r;
+      for (const t of todo) {
+        if (!t.pick || t.ok === false) continue;
+        sim[t.jan] = Object.assign({}, sim[t.jan] || {}, t.x, {
+          grades: t.grades, loaded_at: t.x.loaded_at || "試し",
+          put_at: t.x.put_at || "" });
+      }
+      const simRows = Object.keys(sim).map((j) => sim[j]);
+      const byJan = {};
+      for (const t of todo) byJan[t.jan] = t;
+      const outSeen = {};
+      for (const p of plans) {
+        const sent = sentBy[p.key] || {};
+        const pick = subPick(simRows, p, sent, false, cfgOut, null, "",
+          { hold: hold, out: out, newMax: newMax });
+        const add = pick.filter((x) => !x.sent);
+        const edit = pick.filter((x) => x.sent && !x.same);
+        const gone = edit.filter((x) => x.mw_out
+          && !Number((sent[x.jan] || {}).sold_out));
+        for (const x of gone) outSeen[x.jan] = 1;
+        res.plans.push({ key: p.key, name: p.name, add: add.length,
+          edit: edit.length, out: gone.length,
+          items: add.map((x) => subAutoView(byJan[x.jan] ? byJan[x.jan].x : x, {
+            plan_from: byJan[x.jan] ? byJan[x.jan].plan : "",
+            is_new: !(byJan[x.jan] && byJan[x.jan].x.on),
+            left: x.left })),
+          out_items: gone.map((x) => ({ jan: x.jan,
+            name: String(x.name || "").slice(0, 60) })) });
+        res.sent += add.length;
+        res.edited += edit.length;
+      }
+      res.sold_out = Object.keys(outSeen).length;
+      /* 画面には止めた行をぜんぶ返す（上限つき・手を打てる行が先）。 */
+      const rest = allStop.filter((x) => x.why.some(pxKind));
+      res.stops_all = act.concat(rest).slice(0, SUB_AUTO_STOP_MAX)
+        .map((x) => subAutoView(x, { shop_err: x.shop_err || "" }));
+    }
+
+    /* ---- ⑦ 控えと報告 ---- */
+    if (!dry) {
+      try { await subStopSync(env, act); }
+      catch (e) { run.notes.push("sub-stop: " + String((e && e.message) || e)); }
+      await subAutoTell(env, run, res);
+      try {
+        await stateSet(env, SUB_AUTO_LAST, JSON.stringify({
+          at: nowIso(), slot: res.slot, sent: res.sent, edited: res.edited,
+          stop_n: res.stop_n, act_n: res.act_n, sold_out: res.sold_out,
+          cand_n: res.cand_n, ok_n: res.ok_n, cut: res.cut, trim: res.trim,
+          tally: res.tally, skip: res.skip, plans: res.plans,
+          shop: res.shop, errors: res.errors.slice(0, 10),
+          stops: res.stops })).run();
+      } catch (e) { /* 控えが書けなくても止めない */ }
+      run.notes.push("自動配信：新しく " + res.sent + "件・書き換え "
+        + res.edited + "件・止めた " + res.stop_n + "件・売り切れ "
+        + res.sold_out + "件"
+        + (res.shop.made ? ("・Shopify に作った " + res.shop.made + "件") : "")
+        + (res.shop.fail ? ("・作れなかった " + res.shop.fail + "件") : ""));
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-auto: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+    if (!dry) {
+      res.errors.push("自動配信が途中で止まりました：" + res.error.slice(0, 160));
+      try { await subAutoTell(env, run, res); } catch (e2) { /* 止めない */ }
+    }
+  }
+  return await fin();
+}
+/* 運営専用のチャンネルに報告する（会員のチャンネルには出さない）。
+   文は shared/subauto.js の report の1か所。@everyone・@here は使わない。 */
+async function subAutoTell(env, run, res) {
+  const rep = SUBAUTO.report(res);
+  try { return await notifyBlocks(env, run, rep.head, rep.blocks, { ops: true }); }
+  catch (e) {
+    run.notes.push("sub-auto-tell: " + String((e && e.message) || e));
+    return 0;
+  }
+}
+/* GET /sub/auto … いまの設定・次の回・最後の回のまとめ（画面に出す）。
+   鍵や宛先は返さない（登録してあるかどうかだけ）。 */
+async function subAutoStatus(env) {
+  const cfg = await subSettings(env);
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const h = SUBAUTO.hoursOf(st.subAutoHours);
+  const jt = subJst();
+  let last = null;
+  try { last = JSON.parse(String(await stateGet(env, SUB_AUTO_LAST) || "null")); }
+  catch (e) { last = null; }
+  if (last && last.at) last.at_jst = jstText(last.at);
+  return { ok: true, on: cfg.autoOn, hours: h.hours, night: h.night,
+           bad: h.bad, hours_text: SUBAUTO.hoursText(h.hours),
+           weekend: cfg.autoWeekend, max: cfg.autoMax, pic: cfg.autoPic,
+           next: SUBAUTO.nextOf(h.hours, jt, cfg.autoWeekend),
+           now_hour: jt.hour, last: last,
+           shop: { key: !!shopKeyKind(env), host: !!shopHostOf(st),
+                   cols: await subShopColsOk(env) },
+           bot: !!env.DISCORD_BOT_TOKEN,
+           ops: !!(env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL),
+           ops_own: !!env.DISCORD_OPS_WEBHOOK_URL,
+           table_ok: await subPostOk(env) };
 }
 /* ===== 8.22（【2】）1点もの（秋葉原などで仕入れた商品）=====
    カジが手で登録した商品を、会員向けに配信する。MW の無在庫とは別の表。
@@ -12129,7 +13197,9 @@ async function jobSubSend(env, opt) {
     const cfg = await subSettings(env);
     const rows = await subRows(env, cfg);
     const day = subJst().day;
-    if (o.auto) {
+    /* 8.80 自動配信（jobSubAuto）から呼ぶ回は、呼ぶ側が「今日は送らない」と
+       オンオフを先に見ている（o.auto2）。ここでは見直さない。 */
+    if (o.auto && !o.auto2) {
       let skip = "";
       try { skip = String(await stateGet(env, SUB_SKIP_KEY) || ""); } catch (e) {}
       if (skip === day) { res.why = "今日は送らない印が付いています"; res.ok = true;
@@ -12184,9 +13254,17 @@ async function jobSubSend(env, opt) {
       skip[String(j)] = 1;
     res.skip_n = Object.keys(skip).length;
     /* 8.28 持ち時間。超えたらそこで止めて、残りを返す（続きは次の回）。 */
-    const dl = Date.now() + SUB_SEND_BUDGET_MS;
+    /* 8.80 定時の回（Cron）は画面からの呼び出しより長く使える。 */
+    const dl = Date.now()
+      + Math.max(5000, Number(o.budget_ms) || SUB_SEND_BUDGET_MS);
     res.left = 0;
     res.fail = 0;
+    /* 8.80 自動配信が渡す「止めた行」「完売の行」「新しく出す件数の上限」。 */
+    const ex = { hold: o.hold || null, out: o.out || null,
+                 newMax: o.newMax || null };
+    /* 8.80 MW の在庫切れで**完売に書き換えた**商品（JAN）。 */
+    const outJan = {};
+    res.sold_out = 0;
     /* 8.28（カジの依頼1）**途中で失敗したらそこで止める**。
        どこまで出たかを返すので、画面は「もう一度押すと続きから」と出せる
        （指紋と msg_id で見ているので、二重には出ない）。 */
@@ -12195,7 +13273,7 @@ async function jobSubSend(env, opt) {
       if (stop) break;
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt);
+      const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt, ex);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
                   /* 8.38 Discord から消えていたカード（控えを片づけた数）。 */
                   gone: 0,
@@ -12239,6 +13317,9 @@ async function jobSubSend(env, opt) {
                edited_at=?7${hSet} WHERE jan=?1 AND ch=?2`)
             .bind(...subPostBind(x, p, at, hasH)).run();
           r.edit++; res.edited++; gap = true;
+          /* 8.80 MW の在庫切れで、売っていたカードを完売に書き換えた。 */
+          if (x.mw_out && !Number(((sent || {})[x.jan] || {}).sold_out)
+              && !outJan[x.jan]) { outJan[x.jan] = 1; res.sold_out++; }
         } else {
           /* ===== 8.39（カジの確認）書き直しでは新しいカードを出さない =====
              v297 まで、「送ったカードをすべて今の形で書き直す」でも
@@ -14715,7 +15796,8 @@ async function subEditLeft(env, run, jans) {
        新しいチャンネルに無いので、注文のほうから出す。 */
     const qty = Number(r.qty) || Number(y.qty) || 0;
     const sold = Math.max(0, Number(r.sold) || 0);
-    const left = Math.max(0, qty - sold);
+    /* 8.80 MW で在庫が切れている品は、注文を取り込んでも完売のまま。 */
+    const left = (!r.one_id && subMwOut(r, cfg)) ? 0 : Math.max(0, qty - sold);
     const p = cfg.plans.filter((z) => z.key === String(y.plan))[0]
       || { q: 0, key: String(y.plan) };
     /* 8.19（不具合2）カードは**配信と同じ作り方**で作る（subCardOf）。
@@ -19308,8 +20390,11 @@ export default {
        （プランと期限が見え、Discord のロールが動くため）。 */
     if (role !== "admin" && url.pathname.indexOf("/mem") === 0)
       return forbidStaff("会員の月額課金は管理者用のキーが必要です", [], origin);
+    /* 8.80 /sub/auto（自動配信の様子）も管理者だけ。止めた行の商品名と
+       手残りが出るため、見るだけの口でも作業者には返さない。 */
     if (role !== "admin"
-        && (request.method === "POST" || url.pathname === "/sub/draft")
+        && (request.method === "POST" || url.pathname === "/sub/draft"
+            || url.pathname === "/sub/auto")
         && url.pathname.indexOf("/sub/") === 0)
       return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
     /* 8.22（【2】）1点ものは管理者だけ（仕入原価・販売価格が出るため）。 */
@@ -19584,6 +20669,14 @@ export default {
          画面の「今日の配信の案」が、同じ品を選ばないために使う。 */
       if (request.method === "GET" && url.pathname === "/sub/mon")
         return json(await subMonSent(env), 200, origin);
+      /* 8.80（カジの依頼）自動配信。
+           GET  /sub/auto     … いまの設定・次の回・最後の回のまとめ
+           POST /sub/auto/try … 試しに配信内容を作る（**何も書かない・
+                                送らない**。Shopify は読むだけの確認を1回） */
+      if (request.method === "GET" && url.pathname === "/sub/auto")
+        return json(await subAutoStatus(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/sub/auto/try")
+        return json(await jobSubAuto(env, { dry: true }), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/send") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubSend(env, { approve: b && b.approve === true,
@@ -20067,10 +21160,15 @@ export default {
         const jt = subJst();
         const weekday = (jt.dow >= 1 && jt.dow <= 5);
         if (sc.on && jt.hour === sc.hour) {
-          if (weekday) await jobSubSend(env, { approve: true, auto: true });
+          /* 8.80 自動配信（⚙ subAutoOn）を使うあいだは、平日の朝の回と
+             その予告は出さない（配信はいちばん下の jobSubAuto がまとめて
+             受け持つ。1日に何回も出すので「明日 ○時」の予告は合わない）。 */
+          if (weekday && !sc.autoOn)
+            await jobSubSend(env, { approve: true, auto: true });
           /* 予告は「明日が平日」の日に出す（金曜の夜は出さない）。 */
           const tomo = (jt.dow + 1) % 7;
-          if (sc.pre && tomo >= 1 && tomo <= 5) await jobSubPre(env, {});
+          if (sc.pre && !sc.autoOn && tomo >= 1 && tomo <= 5)
+            await jobSubPre(env, {});
           /* 8.31（カジの依頼4）週1回の「今週のねらい目」（既定オフ）。 */
           if (sc.hotOn && jt.dow === sc.hotDow) await jobSubHot(env, {});
         }
@@ -20107,6 +21205,16 @@ export default {
          （日本時間の月曜9時台に1回だけ。jobMwWeek が自分で見張る）。 */
       try { await jobMwWeek(env, { src: "auto" }); }
       catch (e) { /* まとめが失敗しても本体は止めない */ }
+      /* 8.80（カジの依頼）会員向けの**自動配信**（⚙ subAutoOn・既定オフ）。
+         ⚙の時刻（既定 12時と20時。0〜8時は配信しない）の回だけ走る。
+         **MW の在庫CSV の取り込み（上の jobMwCsv）より後**に置いてあるので、
+         その回に入った新しい在庫も同じ回でまとめて配信に乗る。
+         落ちても本体は止めない（失敗は jobSubAuto が運営に知らせる）。 */
+      try {
+        const sa = await subSettings(env);
+        if (sa.autoOn && SUBAUTO.dueOf(sa.autoHours, subJst(), sa.autoWeekend))
+          await jobSubAuto(env, {});
+      } catch (e) { /* 自動配信で落ちても本体は止めない */ }
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
         await jobDaily(env);
         /* 自動値下げは最後に回す。直前の取り込みで売値・数量・売れた日時が
@@ -20303,4 +21411,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwUsedPct, mwPickPrice, mwPutPrice, mwFeeAt, mwNeedPrice, mwFeeRows,
   mwPriceSave, mwSkuPrice, mwPatchBody, mwJanOfAsins, yenText,
   MW_USED_PCT, MW_PATCH_MAX,
+  /* 8.80 会員向けの自動配信（tests/subauto*.mjs が読む）。 */
+  jobSubAuto, subAutoRow, subAutoCands, subAutoStatus, subStopSync,
+  shopHostOf, shopKeyKind, shopReady, shopPut, shopQty, shopReset,
+  shopWhyJa, subShopOpt, subMwOut, subNetOf, subRowMap, SHOP_API_V,
+  SUB_AUTO_SLOT, SUB_AUTO_LAST, SUB_ROWS_MAX,
   unparsedInfo, mwDropInfo, putListings };

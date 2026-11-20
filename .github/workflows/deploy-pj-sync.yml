@@ -184,6 +184,12 @@ jobs:
           # 8.56（カジの依頼）会員の月額課金：Shopify の webhook の署名を
           # 確かめる秘密。GitHub の Secrets が空なら飛ばす（値は出さない）。
           SHOPIFY_WEBHOOK_SECRET: ${{ secrets.SHOPIFY_WEBHOOK_SECRET }}
+          # 8.80（カジの依頼）会員向けの自動配信：Shopify の管理 API の鍵
+          # （会員用の商品を作る）と、運営専用チャンネルの宛先。
+          # どれも GitHub の Secrets が空なら飛ばす（値は出さない）。
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          DISCORD_OPS_WEBHOOK_URL: ${{ secrets.DISCORD_OPS_WEBHOOK_URL }}
         run: |
           set -o pipefail
           put() {
@@ -201,6 +207,9 @@ jobs:
           }
           put DISCORD_BOT_TOKEN
           put SHOPIFY_WEBHOOK_SECRET
+          put SHOPIFY_CLIENT_ID
+          put SHOPIFY_CLIENT_SECRET
+          put DISCORD_OPS_WEBHOOK_URL
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run

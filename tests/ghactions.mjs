@@ -481,6 +481,11 @@ console.log('\n=== 鍵を Worker に登録し直す（8.11／8.56）===');
      '★★★DISCORD_BOT_TOKEN を登録する');
   ok(puts.indexOf('SHOPIFY_WEBHOOK_SECRET')>=0,
      '★★★SHOPIFY_WEBHOOK_SECRET も登録する（8.56）');
+  /* 8.80（会員向けの自動配信）Shopify の管理 API の鍵と、運営専用の宛先。 */
+  ok(puts.indexOf('SHOPIFY_CLIENT_ID')>=0&&puts.indexOf('SHOPIFY_CLIENT_SECRET')>=0,
+     '★★★Shopify の管理 API の鍵も登録できる（8.80）');
+  ok(puts.indexOf('DISCORD_OPS_WEBHOOK_URL')>=0,
+     '★★運営専用チャンネルの宛先も登録できる（8.80）');
   puts.forEach(function(n){
     ok(new RegExp('^ *'+n+': \\$\\{\\{ secrets\\.'+n+' \\}\\}$','m')
       .test(y),'★★'+n+' は env で Secrets から読む');

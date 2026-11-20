@@ -697,6 +697,54 @@
     row["Collection"] = s(o.collection);
     return row;
   }
+  /* ===== 8.80 Shopify の管理 API（productSet）に渡す形 =====
+     pj-sync が会員用の商品を**自動で作る**ときに使う。中身は上の rowOf
+     （商品CSV の1行）と**同じ**にする（名前・説明・タグ・SKU・値段・
+     重さ・在庫・仕入原価）。違うのは次の2つだけ。
+       ・status は **UNLISTED**（非公開）。CSV では入れられなかった（8.41）
+       ・在庫の置き場所（locationId）は pj-sync が Shopify に聞いて入れる
+     **画像は入れない**（MW・Amazon の画像は使わない）。
+     MW の商品番号・卸値・社・MW在庫・備考も入れない。
+     返り { handle, input }。input.variants[0].inventoryQuantities は
+     opt.locationId があるときだけ入れる。 */
+  var API_STATUS = "UNLISTED";
+  function apiOf(it, opt) {
+    var o = opt || {};
+    var r = it || {};
+    var jan = digits(r.jan);
+    var o1 = o.option1 || OPT1;
+    var g = weightOf(r, o);
+    var inv = { tracked: true, requiresShipping: true };
+    var cost = costOf(r);
+    if (cost) inv.cost = cost;
+    if (g > 0) inv.measurement = { weight: { unit: "GRAMS", value: g } };
+    var v = {
+      optionValues: [{ optionName: s(o1.name), name: s(o1.value) }],
+      sku: skuOf(jan, o.date),
+      barcode: jan,
+      price: String(Math.round(num(r.price))),
+      taxable: true,
+      inventoryPolicy: "DENY",
+      inventoryItem: inv
+    };
+    if (s(o.locationId))
+      v.inventoryQuantities = [{ locationId: s(o.locationId),
+                                 name: "available", quantity: leftOf(r) }];
+    var input = {
+      handle: handleOf(jan),
+      title: titleOf(r.name),
+      descriptionHtml: bodyOf(r, o),
+      productType: s(r.type || o.type),
+      tags: tagsOf(r, o),
+      status: API_STATUS,
+      seo: { title: titleOf(r.name, 70) },
+      productOptions: [{ name: s(o1.name), values: [{ name: s(o1.value) }] }],
+      variants: [v]
+    };
+    /* 空で上書きしない（CSV の Vendor と同じ扱い：入れたときだけ送る）。 */
+    if (s(o.vendor)) input.vendor = s(o.vendor);
+    return { handle: handleOf(jan), input: input };
+  }
   /* 仕入原価。式は shared/subprice.js（画面が cost を入れて渡す）。 */
   function costOf(r) {
     var c = Math.round(num((r || {}).cost));
@@ -1016,6 +1064,8 @@
     handleOf: handleOf, skuOf: skuOf, ymdOf: ymdOf, titleOf: titleOf,
     bodyOf: bodyOf, amzUrl: amzUrl, shipTag: shipTag, gradeTags: gradeTags,
     tagsOf: tagsOf, rowOf: rowOf, rowsOf: rowsOf, toCsv: toCsv, build: build,
+    /* 8.80 Shopify の管理 API に渡す形（自動配信）。 */
+    apiOf: apiOf, API_STATUS: API_STATUS, costOf: costOf,
     bigGame: bigGame, THIN_G: THIN_G,
     maxOf: maxOf, leftOf: leftOf, whyNot: whyNot, split: split,
     seoCol: seoCol, seoAdd: seoAdd,

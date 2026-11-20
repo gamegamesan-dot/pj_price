@@ -859,10 +859,40 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   /* 8.27（migrate-0060）送り方の手の上書き（空＝自動で決める）。
      'cp'/'letter'/'compact'/'box60'/'box80'/'box'。表は shared/shopcsv.js。 */
   ship_way   TEXT,
+  /* 8.80（migrate-0067）会員向けの自動配信。
+     auto_at      … 自動配信が選んで印を付けた日時（空＝カジが付けた印）
+     shop_pid     … Shopify の商品（管理 API の ID）
+     shop_iid     … Shopify の在庫の品目（在庫を 0 にするのに使う）
+     shop_at      … 管理 API ではじめて作った日時（SKU の日付に使う）
+     shop_err     … 最後に作れなかった理由（作れたら空に戻す）
+     shop_zero_at … MW の在庫切れで Shopify の在庫を 0 にした日時
+                    （MW に在庫が戻ったら残りの数に戻して空にする） */
+  auto_at      TEXT,
+  shop_pid     TEXT,
+  shop_iid     TEXT,
+  shop_at      TEXT,
+  shop_err     TEXT,
+  shop_zero_at TEXT,
   at         TEXT,
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mw_sub_on_sale ON mw_sub(on_sale, at);
+
+/* 8.80（migrate-0067）自動配信で**止めた行**の控え。
+   利益は足りているのに「採寸がない」「写真がない」などで止めた行を、
+   あとで配信できるようにするために残す（1商品1行・いまの理由）。
+   止まらなくなった行は消さずに off_at を入れる。 */
+CREATE TABLE IF NOT EXISTS sub_stop (
+  jan        TEXT PRIMARY KEY,
+  why        TEXT,               -- 理由の記号（カンマ区切り・shared/subauto.js）
+  name       TEXT,
+  at         TEXT,               -- 最後に理由が変わった日時
+  first_at   TEXT,               -- はじめて止めた日時
+  off_at     TEXT,               -- 止まらなくなった日時（空＝いまも止めている）
+  n          INTEGER,            -- 理由が変わった回数
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sub_stop_at ON sub_stop(at);
 
 /* ===== 8.11（【Y】）会員向け Discord の配信と Shopify の注文 ===== */
 /* 送ったカード。同じ商品を同じチャンネルに二重に送らないための控えで、
