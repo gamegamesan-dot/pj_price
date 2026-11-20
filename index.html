@@ -840,6 +840,13 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvOsFix" style="width:100%;margin-top:6px">Shopify の直しCSVを作る</button>
         <div class="note2" style="margin-top:2px" id="csvOsFixNote"></div>
       </div>
+      <!-- 8.78：出品済みの行の横長の写真を正方形にして、Revise 用の CSV を作る。 -->
+      <div id="csvPicSqBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
+        <div class="note2" style="margin:0 0 4px"><b>横長の写真を正方形にする</b>　eBay の一覧のサムネは正方形なので、横長の写真（例 600×338）は小さく見えます。<b>横÷縦が 1.2 を超える写真だけ</b>、上下に白を足して正方形にします（拡大・トリミングはしません）。<b>これから取り込む MW の写真は自動で正方形になります</b>。ここは<b>すでに出品した行</b>の写真を直すところです。</div>
+        <button class="btn" id="csvPicSqFind" style="width:100%">横長の写真の出品を探す</button>
+        <button class="btn" id="csvPicSqRun" style="width:100%;margin-top:6px">写真を正方形にして Revise 用 CSV を書き出す</button>
+        <div class="note2" style="margin-top:2px" id="csvPicSqNote">「探す」のあと、絞り込み「写真が横長の出品」で一覧に出せます。行を選んでいればその行だけ、選んでいなければ横長の出品ぜんぶを書き出します。CSV に入れるのは <b>ItemID と PicURL だけ</b>です。</div>
+      </div>
       <!-- 選んだ行の売値の決め方をまとめて入れ替える（6.54） -->
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" id="csvSoldOn" style="flex:1 1 0;min-width:0;padding:9px 4px">選んだ行を相場で出す</button>
@@ -9350,6 +9357,9 @@ var CSV_FILTERS=[
     f:function(r){ return csvFixed(r); } },
   { v:'pick',   label:'選択した行だけ',
     f:function(r){ return !!csvPick[r.id]; } },
+  /* 8.78 出品済みで、横長の写真がある行（正方形にして Revise できる）。 */
+  { v:'picwide', label:'写真が横長の出品（正方形にできる）',
+    f:function(r){ return picSqWide(r); } },
   { v:'ng',     label:'不備がある行だけ',
     f:function(r){ return csvIssues(r).length>0; } },
   { v:'origin', label:'原産国：既定値の行だけ',
@@ -21935,7 +21945,11 @@ function mwImgSizeHtml(rows){
         +'<td style="text-align:right"'+(bad?' style="color:var(--bad)"':'')+'>'
         +(x.long?(x.long+'px'):'—')+'</td>'
         +'<td'+(bad?' style="color:var(--bad)"':'')+'>'
-        +(x.ok?'使えます':('<b>使えません</b>　'+esc(x.err||'')))+'</td></tr>';
+        +(x.ok?'使えます':('<b>使えません</b>　'+esc(x.err||'')))
+        /* 8.78 正方形にした画像は、元の大きさと一緒に出す。 */
+        +(x.sq?('　<b>'+esc(picSqText({ sq:true, w:x.sq.w, h:x.sq.h, side:x.sq.side }))
+                +'</b>'):'')
+        +'</td></tr>';
     }).join('')+'</table>';
 }
 /* 大きさだけ調べる（取り込まない）。写真の方針を決めるための下見。 */
@@ -22013,7 +22027,13 @@ function mwImgTake(jan,ids,out){
         return chain.then(function(){
           var bin=atob(x.b64), a=new Uint8Array(bin.length);
           for(var i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);
-          return csvPicUpload(new Blob([a],{type:x.ct||'image/jpeg'}))
+          /* 8.78 横長（横÷縦が 1.2 超）の画像は、上下に白を足して正方形に
+             してから上げる。縦長・正方形はそのまま。結果は表に出す。 */
+          return picSqBlob(new Blob([a],{type:x.ct||'image/jpeg'}))
+            .then(function(q){
+              x.sq=q.sq?{ w:q.w, h:q.h, side:q.side }:null;
+              return csvPicUpload(q.blob);
+            })
             .then(function(d){ if(d&&d.url)saved.push({ pos:x.pos, url:d.url }); });
         });
       },Promise.resolve()).then(function(){
@@ -23263,6 +23283,233 @@ $('csvTitleRedo').onclick=function(){
    特定キーは ItemID のみ。SKU（CustomLabel）管理で出品していないため、
    CustomLabel を渡しても更新先を特定できない。ItemID が空の行は対象外。 */
 var CSV_ACT_COL=CSV_HEAD['139973'].split(',')[0];   // *Action(...) の列名。3本とも同じ
+/* ================= 8.78 横長の写真を正方形にする（カジの依頼）=================
+   MW の画像には横長のもの（例 600×338）があり、eBay の一覧のサムネ（正方形の
+   枠）で小さく見える。**横÷縦が 1.2 を超える横長だけ**、上下に白（#FFFFFF）の
+   余白を足して正方形にする。
+   ・長辺はそのまま（拡大もトリミングもしない）。縦長・正方形はいまのまま
+   ・対象は **MW が使ってよいとした画像だけ**（Amazon の画像は使わない＝今までどおり）
+   ・正方形にしたものを pj-img（R2）に上げるので、出品CSV の PicURL も、
+     出品後の eBay 保管（EPS）への切り替えも、正方形のほうが使われる */
+var PIC_SQ_RATIO=1.2;
+/* 縦横から、正方形にするかどうかと置き場所を決める（計算はここ1か所）。 */
+function picSqPlan(w,h){
+  w=Math.round(+w||0); h=Math.round(+h||0);
+  if(!(w>0&&h>0)||!(w/h>PIC_SQ_RATIO))return { sq:false, w:w, h:h };
+  return { sq:true, w:w, h:h, side:w, x:0, y:Math.round((w-h)/2) };
+}
+/* 「正方形にしました（600×338 → 600×600）」の文。 */
+function picSqText(q){
+  return (q&&q.sq)?('正方形にしました（'+q.w+'×'+q.h+' → '+q.side+'×'+q.side+'）'):'';
+}
+/* 画像を読む。返り：{ img（描けるもの）, w, h, done() } */
+function picSqLoad(blob){
+  if(typeof createImageBitmap==='function')
+    return createImageBitmap(blob).then(function(bm){
+      return { img:bm, w:bm.width, h:bm.height,
+               done:function(){ try{ bm.close(); }catch(e){} } };
+    });
+  return new Promise(function(res,rej){
+    var u=URL.createObjectURL(blob), im=new Image();
+    im.onload=function(){ res({ img:im, w:im.naturalWidth, h:im.naturalHeight,
+      done:function(){ try{ URL.revokeObjectURL(u); }catch(e){} } }); };
+    im.onerror=function(){ try{ URL.revokeObjectURL(u); }catch(e){}
+      rej(new Error('画像を読めませんでした')); };
+    im.src=u;
+  });
+}
+/* Blob → 正方形にした Blob。横長でなければ**元の Blob をそのまま**返す。
+   返り：{ blob, sq, w, h, side }。読めない画像は sq:false で元のまま返す
+   （取り込みそのものは止めない）。 */
+function picSqBlob(blob){
+  return picSqLoad(blob).then(function(L){
+    var q=picSqPlan(L.w,L.h);
+    if(!q.sq){ L.done(); return { blob:blob, sq:false, w:L.w, h:L.h }; }
+    var cv=document.createElement('canvas');
+    cv.width=q.side; cv.height=q.side;
+    var cx=cv.getContext('2d');
+    cx.fillStyle='#FFFFFF';
+    cx.fillRect(0,0,q.side,q.side);
+    cx.drawImage(L.img,q.x,q.y,q.w,q.h);       // 大きさは変えずに真ん中へ
+    L.done();
+    return new Promise(function(res){
+      cv.toBlob(function(b){
+        if(!b){ res({ blob:blob, sq:false, w:q.w, h:q.h, err:'書き出せませんでした' }); return; }
+        res({ blob:b, sq:true, w:q.w, h:q.h, side:q.side });
+      },'image/jpeg',0.92);
+    });
+  })['catch'](function(e){
+    return { blob:blob, sq:false, w:0, h:0, err:(e&&e.message)||'読めませんでした' };
+  });
+}
+/* ---- 出品済みの行の写真を調べる（横長かどうか）----
+   行の写真（pj-img）を読み込んで縦横を見る。横長の枚数を行に控える
+   （picWide）。調べた印（picWideAt）も残して、絞り込みに使う。 */
+function picSqMeasure(url){
+  return new Promise(function(res){
+    var im=new Image();
+    im.onload=function(){ res({ w:im.naturalWidth, h:im.naturalHeight }); };
+    im.onerror=function(){ res({ w:0, h:0, err:1 }); };
+    im.src=url;
+  });
+}
+function picSqRows(){
+  /* 出品済み（ItemID がある）で、写真（pj-img）が残っている行。 */
+  return csvList.filter(function(r){
+    return !!String(r.itemId||'').trim()&&picsUrlsOf(r).length>0; });
+}
+function picSqWide(r){ return (+((r||{}).picWide)||0)>0&&!!String((r||{}).itemId||'').trim(); }
+function picSqSay(msg,bad){
+  var el=$('csvPicSqNote'); if(!el)return;
+  el.innerHTML=msg||''; el.style.color=bad?'var(--bad)':'';
+}
+var picSqBusy=false;
+function picSqFind(){
+  if(picSqBusy)return;
+  var rows=picSqRows();
+  if(!rows.length){ picSqSay('出品済みで写真が残っている行がありません。'); return; }
+  picSqBusy=true;
+  var i=0, wide=0, pics=0, ng=0;
+  function step(){
+    if(i>=rows.length){
+      picSqBusy=false;
+      csvSaveList(); csvFilterOpts(); csvRender();
+      picSqSay('調べました：出品済み <b>'+rows.length+'件</b>（写真 '+pics+'枚）のうち、'
+        +'<b>横長の写真がある出品 '+wide+'件</b>'
+        +(ng?('　読めなかった写真 '+ng+'枚'):'')
+        +(wide?'<br>絞り込み「写真が横長の出品」で一覧に出せます。':''));
+      return;
+    }
+    var r=rows[i++], urls=picsUrlsOf(r);
+    picSqSay('写真の大きさを調べています… '+i+'/'+rows.length);
+    Promise.all(urls.map(picSqMeasure)).then(function(a){
+      var n=0;
+      a.forEach(function(x){
+        pics++;
+        if(x.err){ ng++; return; }
+        if(picSqPlan(x.w,x.h).sq)n++;
+      });
+      r.picWide=n; r.picWideAt=jstToday();
+      if(n)wide++;
+      step();
+    });
+  }
+  step();
+}
+/* pj-sync で、写真1枚を eBay 保管（EPS）に預けて、その URL をもらう。 */
+function picSqEps(url){
+  return new Promise(function(res,rej){
+    syncJsonPost('/eps/test',{ url:url },function(d){
+      if(d&&d.ok&&d.eps_url)res(String(d.eps_url));
+      else rej(new Error((d&&d.error)||'eBay に預けられませんでした'));
+    },function(why){ rej(new Error(String(why||'eBay に預けられませんでした'))); });
+  });
+}
+/* 1行ぶん：横長の写真を正方形にして上げ直し、ぜんぶの写真を EPS に預ける。
+   返り：{ row, urls（pj-img・新しい並び）, eps（EPS の URL）, sq（正方形にした枚数）, notes } */
+function picSqRowDo(r){
+  var urls=picsUrlsOf(r), outUrl=[], eps=[], sq=0, notes=[];
+  return urls.reduce(function(chain,u){
+    return chain.then(function(){
+      return fetch(u).then(function(res){
+        if(!res.ok)throw new Error('写真を取れませんでした（'+res.status+'）');
+        return res.blob();
+      }).then(picSqBlob).then(function(q){
+        if(!q.sq){ outUrl.push(u); return u; }
+        sq++; notes.push(picSqText(q));
+        return csvPicUpload(q.blob).then(function(d){ outUrl.push(d.url); return d.url; });
+      }).then(function(use){
+        return picSqEps(use).then(function(e){ eps.push(e); });
+      });
+    });
+  },Promise.resolve()).then(function(){
+    return { row:r, urls:outUrl, eps:eps, sq:sq, notes:notes };
+  });
+}
+/* Revise 用 CSV（ItemID と PicURL だけ）。ほかの項目は1つも入れない
+   （値段・数量・題名を間違って書き換えないため）。 */
+function picSqCsv(list){
+  var head=[CSV_ACT_COL,'ItemID','PicURL'];
+  var out=[CSV_INFO,csvLine(head)];
+  list.forEach(function(x){
+    out.push(csvLine(['Revise',String(x.row.itemId||'').trim(),x.eps.join('|')]));
+  });
+  return out.join('\r\n')+'\r\n';
+}
+function picSqRun(){
+  if(picSqBusy)return;
+  csvSecretFill();
+  if(isStaff()||!syncUrl()||!syncApiKey()){
+    picSqSay('管理者用のキーが要ります（eBay に写真を預けるため）。',1); return; }
+  if(!csvImgBase()||!csvImgToken()){
+    picSqSay('⚙設定の「画像サーバーURL」と「アップロードトークン」を入れてください。',1);
+    return;
+  }
+  /* 選んだ行があればその行、無ければ「横長の写真がある出品」ぜんぶ。 */
+  var ids=csvPickIds();
+  var rows=(ids.length?ids.map(csvRowById).filter(Boolean):csvList)
+    .filter(function(r){ return picSqWide(r)&&picsUrlsOf(r).length>0; });
+  if(!rows.length){
+    picSqSay(ids.length
+      ? '選んだ行に、横長の写真がある出品がありません（先に「横長の写真の出品を探す」を押してください）。'
+      : '横長の写真がある出品がありません（先に「横長の写真の出品を探す」を押してください）。');
+    return;
+  }
+  if(!confirm('横長の写真を正方形にして、Revise 用の CSV を作ります：'+rows.length+'件\n'
+    +'・正方形にした写真を上げ直し、eBay（EPS）に預けます\n'
+    +'・CSV に入れるのは ItemID と PicURL だけです（値段・数量は変えません）\n'
+    +'よろしいですか？'))return;
+  picSqBusy=true;
+  var i=0, done=[], bad=[];
+  function step(){
+    if(i>=rows.length){
+      picSqBusy=false;
+      if(!done.length){
+        picSqSay('書き出せる行がありませんでした：'
+          +esc(bad.slice(0,3).map(function(x){ return x.why; }).join('／')),1);
+        return;
+      }
+      var name='ebay-pic-revise-'+OSS.ymd(new Date())+'-'+done.length+'.csv';
+      var okDl=csvDownload(name,picSqCsv(done));
+      var at=jstToday(), sqN=0;
+      done.forEach(function(x){
+        var r=x.row;
+        sqN+=x.sq;
+        /* 行の写真も正方形のほうに入れ替える（次からはこちらを使う）。
+           元の並びは picsOrig に控える。 */
+        if(!r.picsOrig)r.picsOrig=(r.pics||[]).slice();
+        r.pics=x.urls.map(function(u){
+          var m=/\/i\/(\d{8}\/[0-9a-f-]{36}\.(?:jpg|png|webp))$/.exec(u);
+          return { url:u, key:m?m[1]:'' };
+        });
+        r.picWide=0; r.picSqAt=at;
+      });
+      csvSaveList(); csvFilterOpts(); csvRender();
+      picSqSay((okDl?('<b>書き出しました</b>：'+esc(name)):'書き出しに失敗しました（ブラウザのダウンロードを許可してください）')
+        +'（'+done.length+'件・正方形にした写真 '+sqN+'枚）'
+        +(bad.length?('<br><span style="color:var(--bad)">できなかった '+bad.length+'件：'
+          +esc(bad.slice(0,3).map(function(x){
+            return (x.row.titleJa||x.row.sku||x.row.itemId)+'（'+x.why+'）'; }).join('／'))
+          +'</span>'):'')
+        +'<br>このファイルを File Exchange に上げると、写真だけが入れ替わります。',!okDl);
+      return;
+    }
+    var r=rows[i++];
+    picSqSay('正方形にして eBay に預けています… '+i+'/'+rows.length);
+    picSqRowDo(r).then(function(x){
+      if(!x.eps.length||x.eps.length!==x.urls.length)
+        bad.push({ row:r, why:'写真を預けられませんでした' });
+      else done.push(x);
+      step();
+    })['catch'](function(e){
+      bad.push({ row:r, why:String((e&&e.message)||'失敗').slice(0,80) });
+      step();
+    });
+  }
+  step();
+}
+if($('csvPicSqFind'))$('csvPicSqFind').onclick=picSqFind;
+if($('csvPicSqRun'))$('csvPicSqRun').onclick=picSqRun;
 function csvReviseBuild(rows,opt){
   var head=[CSV_ACT_COL,'ItemID'];
   if(opt.qty)head.push('*Quantity');
@@ -29829,7 +30076,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v326';   // sw.js の const V と必ず同じ値にする
+var APP_V='v327';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
