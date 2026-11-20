@@ -396,6 +396,15 @@
   function shipLine(it, opt) {
     var r = it || {}, o = opt || {};
     var w = shipWay(r, o);
+    /* 8.81 箱もの（送料用の重さの行）は、**送り方と実額**をそのまま出す
+       （例「宅配便（60サイズ） ¥800（実費）」）。プランごとの送料の特典は
+       クリックポストの品だけの話なので、箱ものは全プラン同じ文になる。 */
+    var bw = boxWayOf(r, o);
+    if (bw) {
+      var bt = tierOf(boxG(bw.key), o.tiers);
+      return bw.name + " \u00a5" + Math.round(num(bt.yen))
+        .toLocaleString("en-US") + "（実費）";
+    }
     var g = Math.round(num(o.grams) || weightOf(r, o));
     if (!w.sure || !w.name || !(g > 0)) return SHIP_UNSURE;
     var st = shipSteps(g, { free: o.free, tiers: o.tiers,
@@ -542,7 +551,104 @@
     var F = feeMod();
     return !!F && F.genreOf(r || {}) === "ゲーム";
   }
+  /* ===== 8.81（カジの依頼）箱ものの「送料用の重さ」=====
+     会員便（Shopify：マーケット → 日本 → 配送）は**重さの段**で送料が決まる。
+     実際の重さのままだと、宅配便やレターパックプラスで送る箱ものが
+     クリックポストの段（¥200〜）に入ってしまい、送料が足りなかった。
+     段を上げるだけでは、ゲームソフトをまとめ買いしたときまで高くなる。
+
+     そこで、**箱ものだけ**は実際の重さの代わりに「送料用の重さ」を
+     Shopify に入れる（送り方ごとに決めた重さ）。会員便の段を上に足せば、
+       ・ゲームソフト（100g）の送料は今のまま
+       ・箱もの1点は、その送り方の実額ちょうど
+       ・箱ものが複数あれば**合計の重さ**で段が決まる（1点ずつ足し上げない）
+       ・ゲームソフト＋箱ものでも、箱ものの段に収まる（足し上げにならない）
+     **実際の重さは pj が持ったまま**（D1 の採寸は書き換えない・realG で出す）。
+     表はこの1か所だけ（カード・CSV・管理 API・足りない品の判定が同じものを読む）。
+       g … Shopify に入れる重さ。次の段の手前までがその送り方の料金になる */
+  var BOX_FROM = 2000;             // ここから上が箱ものの段（薄物は 1,999g まで）
+  var BOX_G = [
+    { key: "compact", g: 2000 },   // 宅急便コンパクト
+    { key: "letter", g: 3000 },    // レターパックプラス
+    { key: "box60", g: 4000 },     // 宅配便（60サイズ）
+    { key: "box80", g: 6000 },     // 宅配便（80サイズ）
+    { key: "box", g: 9000 }        // 宅配便（100サイズ以上）
+  ];
+  function boxG(key) {
+    for (var i = 0; i < BOX_G.length; i++)
+      if (BOX_G[i].key === s(key)) return BOX_G[i].g;
+    return 0;
+  }
+  /* その行が「送料用の重さ」になるか。なるなら送り方（shipWay の返り）。
+     ⚙（opt.boxOn）がオンで、送り方が決まっていて、薄物でない行だけ。
+     送り方が決まらない行（採寸がない）は今までどおり実際の重さ。 */
+  function boxWayOf(it, opt) {
+    var o = opt || {};
+    if (!o.boxOn) return null;
+    var w = shipWay(it, o);
+    if (!w.sure || w.thin || !boxG(w.key)) return null;
+    return w;
+  }
+  /* 会員便の段（⚙）に、箱ものの段を足した表。
+       tiers … 薄物の段（tiersOf の返り）。2,000g より下の段だけ使う
+       costs … 送り方ごとの実額（円）{ compact, letter, box60, box80, box }
+               （⚙ gdShip*・shared/sellway.js の boxCosts）
+     Shopify の「マーケット → 日本 → 配送」の会員便も**この表と同じ**にする。 */
+  function tiersBox(tiers, costs) {
+    var a = (tiers && tiers.length) ? tiers : SHIP_TIERS, c = costs || {};
+    var out = [], cap = null, i;
+    for (i = 0; i < a.length; i++) {
+      if (a[i].g && a[i].g < BOX_FROM) {
+        out.push({ g: a[i].g, yen: a[i].yen, name: a[i].name });
+        cap = a[i];
+      } else { cap = a[i]; break; }
+    }
+    /* 薄物のいちばん上の段は 1,999g で切る（そこから上は箱ものの段）。 */
+    if (!out.length || out[out.length - 1].g !== BOX_FROM - 1)
+      out.push({ g: BOX_FROM - 1, yen: cap ? cap.yen : SHIP_TIERS[2].yen,
+                 name: cap ? cap.name : "" });
+    /* 名前は表の区分キーで**そのまま**引く（wayOf は 1点ものの言い方も
+       受けるので、"box" が宅配便60サイズに読み替えられてしまう）。 */
+    var byKey = function (k) {
+      for (var j = 0; j < SHIP_WAYS.length; j++)
+        if (SHIP_WAYS[j].key === k) return SHIP_WAYS[j];
+      return null;
+    };
+    for (i = 0; i < BOX_G.length; i++) {
+      var w = byKey(BOX_G[i].key);
+      out.push({ g: (i + 1 < BOX_G.length) ? (BOX_G[i + 1].g - 1) : 0,
+                 yen: Math.max(0, Math.round(num(c[BOX_G[i].key]))),
+                 name: w ? w.name : BOX_G[i].key, box: BOX_G[i].key,
+                 from: BOX_G[i].g });
+    }
+    return out;
+  }
+  /* 段の表を⚙の書き方（250:200／…／0:1200）に戻す。 */
+  function tiersText(tiers) {
+    return (tiers || []).map(function (t) {
+      return Math.round(num(t.g)) + ":" + Math.round(num(t.yen));
+    }).join("\uff0f");
+  }
+  /* 段の表を「◯g から ◯g まで ¥◯」の行にする（画面と報告に出す）。 */
+  function tiersRows(tiers) {
+    var out = [], from = 0;
+    (tiers || []).forEach(function (t) {
+      out.push({ from: from, to: Math.round(num(t.g)),
+                 yen: Math.round(num(t.yen)), name: s(t.name),
+                 box: s(t.box) });
+      from = Math.round(num(t.g)) + 1;
+    });
+    return out;
+  }
+  /* Shopify に入れる重さ。箱もの（⚙オン）は「送料用の重さ」、
+     それ以外は今までどおり（realG）。 */
   function weightOf(r, opt) {
+    var b = boxWayOf(r, opt);
+    if (b) return boxG(b.key);
+    return realG(r, opt);
+  }
+  /* **実際の重さ**（8.81 より前の weightOf）。 */
+  function realG(r, opt) {
     var o = opt || {};
     /* 6.183：**ゲームソフトは一律の重さ**（⚙ mwSubGameG・既定 100g）。
        Shopify の送料は本数ではなく**合計の重さ**で段が変わるので、
@@ -1049,6 +1155,10 @@
 
   var API = {
     isGame: isGame, weightOf: weightOf,
+    /* 8.81 箱ものの「送料用の重さ」と、会員便の段に足す箱ものの段。 */
+    BOX_G: BOX_G, BOX_FROM: BOX_FROM, boxG: boxG, boxWayOf: boxWayOf,
+    realG: realG, tiersBox: tiersBox, tiersText: tiersText,
+    tiersRows: tiersRows,
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,

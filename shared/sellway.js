@@ -105,6 +105,15 @@
     if (!k) return 0;
     return Math.max(0, Math.round(val(opt, k)));
   }
+  /* 8.81 箱ものの送り方ごとの実額（円）。会員便の段に足す箱ものの段
+     （shared/shopcsv.js の tiersBox）に渡す。⚙は gdShip* の1か所のまま。 */
+  function boxCosts(opt) {
+    var out = {};
+    for (var k in SHIP_KEY)
+      if (Object.prototype.hasOwnProperty.call(SHIP_KEY, k) && k !== "cp")
+        out[k] = shipOf(k, opt);
+    return out;
+  }
   /* 8.57（カジの依頼）**会員から受け取る送料が、実際の送料より安いか**。
        wayKey … 送り方の区分（shared/shopcsv.js の shipWay().key）
        got    … 会員から受け取る額（会員便の段の1点ぶん・shipSteps の yen1）
@@ -282,7 +291,7 @@
       + "（送り方が分からない商品は送料を入れていません）。"
       + "メルカリ・ヤフオクの相場は見ていません";
   }
-  var API = { shortOf: shortOf, WAYS: WAYS, D: D, SHIP_KEY: SHIP_KEY, wayOf: wayOf,
+  var API = { shortOf: shortOf, boxCosts: boxCosts, WAYS: WAYS, D: D, SHIP_KEY: SHIP_KEY, wayOf: wayOf,
               listOf: listOf, shipOf: shipOf, floorOf: floorOf,
               linesOf: linesOf, pinJa: pinJa, val: val, pct: pct,
               /* 8.50 売り方ごとの手残り（足切りと試算に使う）。 */

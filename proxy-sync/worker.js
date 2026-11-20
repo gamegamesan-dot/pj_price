@@ -11046,7 +11046,15 @@ async function subSettings(env) {
     addG: subAddG(st),
     thinKishu: String(st.mwSubThinKishu || ""),
     tiersText: String(st.mwSubTiers || ""),
-    tiers: SHOPCSV.tiersOf(st.mwSubTiers || ""),
+    /* 8.81（カジの依頼）箱ものは「送料用の重さ」で実額を取る（⚙ subBoxOn・
+       既定オフ）。オンのあいだは、会員便の段（⚙）の 2,000g より下に、
+       箱ものの段（送り方ごとの実額＝⚙ gdShip*）を足した表を使う。
+       表の作り方は shared/shopcsv.js の tiersBox の1か所（画面も同じ）。 */
+    boxOn: !!st.subBoxOn,
+    tiers: st.subBoxOn
+      ? SHOPCSV.tiersBox(SHOPCSV.tiersOf(st.mwSubTiers || ""),
+                         SELLWAY.boxCosts(gdOf(st)))
+      : SHOPCSV.tiersOf(st.mwSubTiers || ""),
     boxMin: subBoxMin(st),
     /* 8.29（カジの依頼）買うかどうかの目安の⚙（しきい値・出し方・項目）。
        名前が gd… の欄をそのまま渡す（読み方は shared/subguide.js）。 */
@@ -11642,6 +11650,9 @@ function subCardOf(x, p, cfg, note) {
                            shipText: p.ship, gameG: cfg.gameG,
                            addG: cfg.addG, thinKishu: cfg.thinKishu,
                            tiers: cfg.tiers,
+                           /* 8.81 箱ものは送り方と実額をそのまま出す
+                              （プランの送料の文は薄物だけ）。 */
+                           boxOn: cfg.boxOn,
                            /* 8.29（カジの依頼）買うかどうかの目安。
                               プランごとに出す項目が変わる。 */
                            guide: cfg.guide, planKey: p.key });
@@ -11694,8 +11705,11 @@ async function dcChInfo(env, run, ch, cache) {
    配る前にカジが気づけるように、区分・決め方・足りない段を返す。 */
 function subShipInfo(x, cfg) {
   const o = { gameG: cfg.gameG, addG: cfg.addG, thinKishu: cfg.thinKishu,
-              tiers: cfg.tiers };
+              tiers: cfg.tiers, boxOn: cfg.boxOn };
   const w = SHOPCSV.shipWay(x, o);
+  /* 8.81 g は **Shopify に入れる重さ**（箱ものは送料用の重さ）。
+     実際の重さは real_g に別に持つ（pj の採寸は書き換えない）。 */
+  const boxed = !!SHOPCSV.boxWayOf(x, o);
   const g = Math.round(SHOPCSV.weightOf(x, o));
   const st = g > 0 ? SHOPCSV.shipSteps(g, { tiers: cfg.tiers,
                                             unit: SHOPCSV.shipUnit(x, o) })
@@ -11709,10 +11723,15 @@ function subShipInfo(x, cfg) {
      8.57 まずは**実額との差**で知らせ、⚙ mwSubBoxMin（下限）も今までどおり。 */
   const warn = (w.sure && w.name && !w.thin && yen1 && sh.short)
     ? ("送料が足りません（" + sh.ja + "）")
-    : ((w.sure && w.name && !w.thin && yen1 && yen1 < cfg.boxMin)
+    /* 8.81 送料用の重さで実額を取っている行は、下限（⚙）では見ない
+       （宅急便コンパクト ¥520 のように、実額が下限より安い送り方がある）。 */
+    : ((w.sure && w.name && !w.thin && yen1 && !boxed && yen1 < cfg.boxMin)
       ? ("会員便の段が ¥" + yen1 + "（" + w.name + "には足りません）") : "");
   return { key: w.key, name: w.name, sure: !!w.sure, why: w.why,
            grams: g, yen1: yen1, warn: warn,
+           /* 8.81 箱もの（送料用の重さ）か・実際の重さ・実額。 */
+           box: boxed, real_g: Math.round(SHOPCSV.realG(x, o)),
+           cost: Number(sh.cost) || 0,
            /* 8.58（カジの依頼）機種がゲームなのに採寸が箱＝限定版とみなす。 */
            big: SHOPCSV.bigGame(x, o),
            /* 送料が足りない品（⚙で自動の配信から外せる）。 */
@@ -11883,6 +11902,12 @@ function shopWhyJa(r) {
   if (w === "publish")
     return "オンラインストアに公開できませんでした："
       + String(x.msg || "").slice(0, 200);
+  if (w === "no_overseas")
+    return "海外向けの商品リスト「" + String(x.msg || "") + "」が Shopify に"
+      + "見つからないので、送料用の重さの品は作りません（⚙の名前を確かめてください）";
+  if (w === "overseas")
+    return "海外向けの商品リストから外せませんでした："
+      + String(x.msg || "").slice(0, 200);
   if (w === "none") return "Shopify にその商品がありません";
   if (w === "late") return "時間切れ（次の回に回します）";
   return w || "分かりません";
@@ -11896,11 +11921,24 @@ const SHOP_Q_READY = `query pjReady {
     nodes { id supportsFuturePublishing catalog { title } }
   }
 }`;
+/* 8.81（カジの依頼）会員用の商品を**海外向けの商品リストから外す**。
+   箱ものには実際と違う「送料用の重さ」を入れるので、海外向けのリスト
+   （既定の名前 Overseas products）に入ったままだと、その重さで国際送料が
+   計算されてしまう。⚙ subShopOverseas に名前を入れる（カンマ区切りで複数）。
+   空にすると外さない。 */
+const SHOP_OVERSEAS_DEF = "Overseas products";
+function shopOverNames(st) {
+  const v = (st || {}).subShopOverseas;
+  const t = (v === undefined || v === null) ? SHOP_OVERSEAS_DEF : String(v);
+  return t.split(/[,、\n]+/).map((x) => x.trim()).filter(Boolean);
+}
 async function shopReady(env, run, st) {
   const host = shopHostOf(st);
   if (!host) return { ok: false, why: "no_host", host: "" };
   if (!shopKeyKind(env)) return { ok: false, why: "no_key", host: host };
+  const overWant = shopOverNames(st);
   if (SHOP_MEM.ready && SHOP_MEM.ready.host === host
+      && SHOP_MEM.ready.over_key === overWant.join("|")
       && Date.now() - SHOP_MEM.readyAt < 600000) return SHOP_MEM.ready;
   const r = await shopGql(env, run, host, SHOP_Q_READY, {});
   if (!r.ok) return Object.assign({ host: host }, r, { ok: false });
@@ -11930,7 +11968,17 @@ async function shopReady(env, run, st) {
     if (byName.length === 1) pub = String(byName[0].id);
   }
   if (!pub) return { ok: false, why: "pub", host: host };
-  const out = { ok: true, host: host, loc: loc, pub: pub };
+  /* 海外向けの商品リスト（名前で探す。大文字小文字は見ない）。 */
+  const over = [], overMiss = [];
+  for (const nm of overWant) {
+    const hit = pubs.filter((x) => String(((x.catalog || {}).title) || "")
+      .trim().toLowerCase() === nm.toLowerCase() && String(x.id) !== pub);
+    if (hit.length) for (const h of hit) over.push(String(h.id));
+    else overMiss.push(nm);
+  }
+  const out = { ok: true, host: host, loc: loc, pub: pub,
+                over: over, over_miss: overMiss,
+                over_key: overWant.join("|") };
   SHOP_MEM.ready = out; SHOP_MEM.readyAt = Date.now();
   return out;
 }
@@ -11946,6 +11994,11 @@ const SHOP_M_SET = `mutation pjSet($input: ProductSetInput!, $identifier: Produc
 }`;
 const SHOP_M_PUB = `mutation pjPub($id: ID!, $pub: ID!) {
   publishablePublish(id: $id, input: [{ publicationId: $pub }]) {
+    userErrors { field message }
+  }
+}`;
+const SHOP_M_UNPUB = `mutation pjUnpub($id: ID!, $pub: ID!) {
+  publishableUnpublish(id: $id, input: [{ publicationId: $pub }]) {
     userErrors { field message }
   }
 }`;
@@ -11973,7 +12026,36 @@ async function shopPut(env, run, rdy, item, opt) {
   const pe = (((p.data || {}).publishablePublish || {}).userErrors) || [];
   if (pe.length)
     return { ok: false, why: "publish", msg: shopUserErr(pe), pid: pid, iid: iid };
+  /* 8.81 海外向けの商品リストから外す。
+     ・「送料用の重さ」を入れた品（箱もの）は、外せなければ**作れなかった扱い**
+       （にせの重さで国際送料が出るのを防ぐ）
+     ・リストが見つからないときも、箱ものは作らない（薄物は実際の重さ
+       なので通す。見つからなかったことは呼ぶ側が運営に知らせる） */
+  const boxed = !!SHOPCSV.boxWayOf(item, opt || {});
+  if (boxed && (rdy.over_miss || []).length)
+    return { ok: false, why: "no_overseas", pid: pid, iid: iid,
+             msg: (rdy.over_miss || []).join("・") };
+  let ov = 0;
+  for (const id of (rdy.over || [])) {
+    const u = await shopGql(env, run, rdy.host, SHOP_M_UNPUB,
+      { id: pid, pub: id });
+    const ue2 = u.ok
+      ? ((((u.data || {}).publishableUnpublish || {}).userErrors) || []) : [];
+    if (!u.ok || ue2.length) {
+      if (boxed)
+        return { ok: false, why: "overseas", pid: pid, iid: iid,
+                 msg: u.ok ? shopUserErr(ue2) : shopWhyJa(u) };
+      continue;                          // 薄物は止めない（次に直すときにまた外す）
+    }
+    ov++;
+  }
+  const wv = (((a.input.variants[0] || {}).inventoryItem || {}).measurement
+    || {}).weight || {};
   return { ok: true, pid: pid, iid: iid,
+           /* Shopify に入れた重さと、海外のリストから外せたか（控えに残す）。 */
+           g: Math.round(Number(wv.value) || 0),
+           ov: (ov === (rdy.over || []).length && !(rdy.over_miss || []).length)
+             ? 1 : 0,
            status: String(((ps.product || {}).status) || "") };
 }
 /* 在庫の数を入れる（MW で在庫が切れたら 0・戻ったら残りの数）。
@@ -12024,6 +12106,8 @@ function subShopOpt(st, cfg, date) {
              ? "ゲームソフト" : String(o.mwSubType).trim(),
            gameG: (cfg || {}).gameG, addG: (cfg || {}).addG,
            thinKishu: (cfg || {}).thinKishu,
+           /* 8.81 箱ものは「送料用の重さ」を Shopify に入れる。 */
+           boxOn: !!(cfg || {}).boxOn,
            date: date ? new Date(date) : new Date() };
 }
 /* migrate-0067 の列（Shopify の控え）があるか。 */
@@ -12031,6 +12115,147 @@ async function subShopColsOk(env) {
   return (await colOk(env, "mw_sub", "shop_iid"))
     && (await colOk(env, "mw_sub", "shop_zero_at"))
     && (await colOk(env, "mw_sub", "auto_at"));
+}
+
+/* migrate-0068 の列（Shopify に入れた重さ・海外のリストから外した印）。 */
+async function subBoxColsOk(env) {
+  return (await colOk(env, "mw_sub", "shop_g"))
+    && (await colOk(env, "mw_sub", "shop_ov"));
+}
+/* ===== 8.81（カジの依頼）いまある会員用の商品を直す =====
+   ⚙「箱ものは送料用の重さで実額を取る」（subBoxOn）を入れたあと、
+   もう Shopify にある会員用の商品を、いまの決まりにそろえる。
+     ・箱もの（クリックポスト以外）… 重さを「送料用の重さ」に
+     ・クリックポストの品 … 実際の重さ（ゲームソフトは一律の重さ）に戻す
+     ・どちらも海外向けの商品リストから外す
+   送り方を手で直した品は重さが変わるので、次の回にここで入れ替わる。
+   **D1 の採寸（実際の重さ）は書き換えない。**
+   直すのは Shopify だけ（productSet で会員用の商品を今の中身にそろえる）。
+
+   subBoxPlan … 直す必要がある行（配信できる商品＝印あり＋読み込み済み）
+   subBoxRun  … 上から順に直す（持ち時間と件数の上限つき） */
+async function subBoxPlan(env, cfg, st) {
+  const out = { on: !!cfg.boxOn, cols: await subBoxColsOk(env), rows: [],
+                all: 0, box_n: 0 };
+  if (!out.on || !out.cols) return out;
+  const rows = await subRows(env, cfg);
+  const q = await env.DB.prepare(
+    `SELECT jan, shop_g, COALESCE(shop_ov,0) AS shop_ov,
+            COALESCE(shop_at,'') AS shop_at
+       FROM mw_sub WHERE COALESCE(on_sale,0)=1
+        AND COALESCE(loaded_at,'') <> ''`).all();
+  const by = {};
+  for (const r of ((q && q.results) || [])) by[String(r.jan)] = r;
+  const wantOv = shopOverNames(st).length > 0;
+  for (const r of rows) {
+    const o = subShopOpt(st, cfg, "");
+    const g = Math.round(SHOPCSV.weightOf(r, o));
+    const boxed = !!SHOPCSV.boxWayOf(r, o);
+    const m = by[r.jan] || {};
+    out.all++;
+    if (boxed) out.box_n++;
+    const gOk = m.shop_g !== null && m.shop_g !== undefined
+      && Math.round(Number(m.shop_g)) === g;
+    const ovOk = !wantOv || Number(m.shop_ov) === 1;
+    if (gOk && ovOk) continue;
+    out.rows.push({ r: r, g: g, real_g: Math.round(SHOPCSV.realG(r, o)),
+                    box: boxed, shop_at: String(m.shop_at || ""),
+                    why: !gOk ? "重さ" : "海外のリスト" });
+  }
+  return out;
+}
+async function subBoxRun(env, run, rdy, cfg, st, list, deadline, max) {
+  const res = { done: 0, fail: 0, left: 0, errors: [] };
+  const lim = Math.max(1, Math.round(Number(max) || 0) || 9999);
+  let n = 0;
+  const why = {};
+  for (const t of (list || [])) {
+    if (n >= lim || Date.now() > deadline) { res.left++; continue; }
+    n++;
+    const r = t.r;
+    const item = { jan: r.jan, name: r.name, asin: r.asin, kishu: r.kishu,
+      price: r.price, max_qty: r.qty, sold: r.sold, grades: r.grades,
+      size_tier: r.size_tier, size_g: r.size_g, size_cm3: r.size_cm3,
+      size_long: r.size_long, size_wid: r.size_wid, size_hei: r.size_hei,
+      ship_way: r.ship_way };
+    const z = await shopPut(env, run, rdy, item, subShopOpt(st, cfg, t.shop_at));
+    if (!z.ok) {
+      res.fail++;
+      const k = shopWhyJa(z);
+      why[k] = (why[k] || 0) + 1;
+      continue;
+    }
+    const at = nowIso();
+    await env.DB.prepare(
+      `UPDATE mw_sub SET shop_g=?2, shop_ov=?3, shop_pid=?4, shop_iid=?5,
+              shop_at=COALESCE(NULLIF(shop_at,''), ?6), shop_err=''
+        WHERE jan=?1`)
+      .bind(String(r.jan), z.g, z.ov, String(z.pid || ""), String(z.iid || ""),
+            at).run();
+    res.done++;
+  }
+  for (const k of Object.keys(why).slice(0, 5))
+    res.errors.push("Shopify：" + k + "（" + why[k] + "件）");
+  return res;
+}
+/* POST /sub/box/sync … { approve }。approve でないときは数えるだけ
+   （Shopify は読むだけの確認を1回）。1回 40秒で区切り、残りを返す
+   （画面が続きを頼む）。 */
+const SUB_BOX_MS = 40000;
+const SUB_BOX_AUTO_MAX = 30;            // 定時の回で1回に直す数
+async function jobSubBox(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-box");
+  const res = { ok: false, approve: o.approve === true, on: false, todo: 0,
+                done: 0, fail: 0, left: 0, errors: [], items: [] };
+  try {
+    const cfg = await subSettings(env);
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    res.on = cfg.boxOn;
+    /* 会員便の段（Shopify に入れる表）。オフでも「入れたらこうなる」を返す。 */
+    const tb = SHOPCSV.tiersBox(SHOPCSV.tiersOf(st.mwSubTiers || ""),
+                                SELLWAY.boxCosts(gdOf(st)));
+    res.tiers_text = SHOPCSV.tiersText(tb);
+    res.tiers = SHOPCSV.tiersRows(tb);
+    res.box_g = SHOPCSV.BOX_G;
+    res.cols = await subBoxColsOk(env);
+    const rdy = await shopReady(env, run, st);
+    res.ready = !!rdy.ok;
+    res.why = rdy.ok ? "" : shopWhyJa(rdy);
+    res.over = { want: shopOverNames(st), found: (rdy.over || []).length,
+                 miss: rdy.over_miss || [] };
+    const plan = await subBoxPlan(env, cfg, st);
+    res.all = plan.all; res.box_n = plan.box_n;
+    res.todo = plan.rows.length;
+    res.items = plan.rows.slice(0, 40).map((t) => ({ jan: t.r.jan,
+      name: String(t.r.name || "").slice(0, 50), g: t.g, real_g: t.real_g,
+      box: t.box, why: t.why,
+      ship: SHOPCSV.shipWay(t.r, subShopOpt(st, cfg, "")).name }));
+    if (!res.approve || !plan.rows.length) { res.ok = true;
+      res.left = res.approve ? 0 : res.todo;
+      return Object.assign(await saveRun(env, run), res); }
+    if (!cfg.boxOn) { res.error = "off";
+      res.detail = "⚙「箱ものは送料用の重さで実額を取る」が入っていません";
+      return Object.assign(await saveRun(env, run), res); }
+    if (!res.cols) { res.error = "no_cols";
+      res.detail = "D1 に migrate-0068-sub-box.sql が流れていません";
+      return Object.assign(await saveRun(env, run), res); }
+    if (!rdy.ok) { res.error = "shop"; res.detail = res.why;
+      return Object.assign(await saveRun(env, run), res); }
+    const z = await subBoxRun(env, run, rdy, cfg, st, plan.rows,
+      Date.now() + SUB_BOX_MS, 0);
+    res.done = z.done; res.fail = z.fail; res.left = z.left;
+    res.errors = z.errors;
+    run.notes.push("会員用の商品を直しました：" + z.done + "件"
+      + (z.fail ? ("・直せなかった " + z.fail + "件") : "")
+      + (z.left ? ("・残り " + z.left + "件") : ""));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-box: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 
 /* ---- ① 候補を引く ----
@@ -12428,6 +12653,12 @@ async function jobSubAuto(env, opt) {
     }
     const dlShop = Date.now() + SUB_AUTO_SHOP_MS;
     let shopDown = "";                 // Shopify が使えない理由（1回だけ報告）
+    const boxCols = await subBoxColsOk(env);
+    /* 8.81 海外向けの商品リストが見つからない（会員用の商品を外せない）。 */
+    if (rdy.ok && (rdy.over_miss || []).length)
+      res.errors.push("Shopify：海外向けの商品リスト「"
+        + rdy.over_miss.join("・") + "」が見つかりません（会員用の商品を"
+        + "外せていません。⚙の名前を確かめてください）");
     for (const r of liveRows) {
       const m = shopMap[r.jan] || {};
       const isOut = subMwOut(r, cfgOut);
@@ -12492,6 +12723,7 @@ async function jobSubAuto(env, opt) {
           t.ok = true;
           res.shop.made++;
           const at = nowIso();
+
           await env.DB.prepare(
             `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,by_role,at,
                created_at,put_at,loaded_at,auto_at,shop_pid,shop_iid,shop_at,
@@ -12509,6 +12741,15 @@ async function jobSubAuto(env, opt) {
                   /* カジが印を付けた行は「自動で選んだ」印を付けない。 */
                   (x.on && !x.by_auto) ? "" : at,
                   String(r.pid || ""), String(r.iid || "")).run();
+          /* 8.81 Shopify に入れた重さと、海外のリストから外した印
+             （印を付けた**あと**に控える）。 */
+          if (boxCols) {
+            try {
+              await env.DB.prepare(
+                `UPDATE mw_sub SET shop_g=?2, shop_ov=?3 WHERE jan=?1`)
+                .bind(x.jan, r.g, r.ov).run();
+            } catch (e) { /* 控えが書けなくても止めない */ }
+          }
           continue;
         }
         err = r;
@@ -12533,6 +12774,26 @@ async function jobSubAuto(env, opt) {
     for (const t of todo) if (t.ok === false && t.err) failWhy[t.err] = (failWhy[t.err] || 0) + 1;
     for (const k of Object.keys(failWhy).slice(0, 5))
       if (k !== shopDown) res.errors.push("Shopify：" + k + "（" + failWhy[k] + "件）");
+
+    /* ---- 8.81 いまある会員用の商品を、いまの送り方にそろえる ----
+       ⚙ subBoxOn のあいだ、重さ（箱ものは送料用の重さ）と海外のリストを
+       少しずつ直す（1回 SUB_BOX_AUTO_MAX 件まで。送り方を手で直した品も
+       ここで入れ替わる）。 */
+    res.box = { on: cfg.boxOn, todo: 0, done: 0, fail: 0 };
+    if (cfg.boxOn) {
+      try {
+        const bp = await subBoxPlan(env, cfg, st);
+        res.box.todo = bp.rows.length;
+        if (!dry && bp.rows.length && rdy.ok) {
+          const bz = await subBoxRun(env, run, rdy, cfg, st, bp.rows, dlShop,
+                                     SUB_BOX_AUTO_MAX);
+          res.box.done = bz.done; res.box.fail = bz.fail;
+          for (const e of bz.errors) res.errors.push(e);
+        }
+      } catch (e) {
+        run.notes.push("sub-box: " + String((e && e.message) || e));
+      }
+    }
 
     /* ---- 出しておく商品は SUB_ROWS_MAX 件まで ----
        配信（subRows）が見るのは**新しい順に SUB_ROWS_MAX 件**まで。v328 までも
@@ -12660,7 +12921,7 @@ async function jobSubAuto(env, opt) {
           stop_n: res.stop_n, act_n: res.act_n, sold_out: res.sold_out,
           cand_n: res.cand_n, ok_n: res.ok_n, cut: res.cut, trim: res.trim,
           tally: res.tally, skip: res.skip, plans: res.plans,
-          shop: res.shop, errors: res.errors.slice(0, 10),
+          shop: res.shop, box: res.box, errors: res.errors.slice(0, 10),
           stops: res.stops })).run();
       } catch (e) { /* 控えが書けなくても止めない */ }
       run.notes.push("自動配信：新しく " + res.sent + "件・書き換え "
@@ -19892,6 +20153,9 @@ const SCHEMA_FIX = [
   ["shop_iid", "migrate-0067-sub-auto.sql"],
   ["shop_zero_at", "migrate-0067-sub-auto.sql"],
   ["auto_at", "migrate-0067-sub-auto.sql"],
+  /* 8.81 箱ものの「送料用の重さ」（Shopify に入れた重さの控え）。 */
+  ["shop_g", "migrate-0068-sub-box.sql"],
+  ["shop_ov", "migrate-0068-sub-box.sql"],
   ["wipe_n", "migrate-0055-mw-wipe.sql"],
   ["wipe_qty", "migrate-0055-mw-wipe.sql"],
   ["px_hand", "migrate-0054-sub-hand.sql"],
@@ -20680,6 +20944,14 @@ export default {
                                 送らない**。Shopify は読むだけの確認を1回） */
       if (request.method === "GET" && url.pathname === "/sub/auto")
         return json(await subAutoStatus(env), 200, origin);
+      /* 8.81（カジの依頼）いまある会員用の商品を、送り方に合わせて直す
+         （箱ものは送料用の重さ・海外向けの商品リストから外す）。
+           POST /sub/box/sync { approve } … approve でなければ数えるだけ */
+      if (request.method === "POST" && url.pathname === "/sub/box/sync") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubBox(env, { approve: b && b.approve === true }),
+                    200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/sub/auto/try")
         return json(await jobSubAuto(env, { dry: true }), 200, origin);
       if (request.method === "POST" && url.pathname === "/sub/send") {
@@ -21421,4 +21693,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   shopHostOf, shopKeyKind, shopReady, shopPut, shopQty, shopReset,
   shopWhyJa, subShopOpt, subMwOut, subNetOf, subRowMap, SHOP_API_V,
   SUB_AUTO_SLOT, SUB_AUTO_LAST, SUB_ROWS_MAX,
+  /* 8.81 箱ものの送料用の重さ（tests/boxship.mjs が読む）。 */
+  jobSubBox, subBoxPlan, subShipInfo, subSettings, shopOverNames,
   unparsedInfo, mwDropInfo, putListings };

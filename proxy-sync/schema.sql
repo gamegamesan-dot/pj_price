@@ -873,6 +873,13 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   shop_at      TEXT,
   shop_err     TEXT,
   shop_zero_at TEXT,
+  /* 8.81（migrate-0068）箱ものの「送料用の重さ」。
+     shop_g  … 最後に Shopify に入れた重さ（g）。箱ものは送り方ごとに決めた
+               重さ（shared/shopcsv.js の BOX_G）で、**実際の重さではない**
+               （実際の重さは mw_amz.size_g のまま）
+     shop_ov … 1＝海外向けの商品リストから外した */
+  shop_g       INTEGER,
+  shop_ov      INTEGER,
   at         TEXT,
   created_at TEXT
 );

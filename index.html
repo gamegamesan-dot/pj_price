@@ -2383,6 +2383,22 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv cfgprice"><label for="mwSubThinKishu">薄物とみなす機種（足す分）</label><input type="text" id="mwSubThinKishu" value="" placeholder="NS,NS2,PS5" inputmode="text"></div>
         <div class="note2" style="margin:0 0 6px">クリックポスト（34×25cm・厚さ3cm・1kg まで）に入る商品の<b>機種</b>をカンマ区切りで足せます。空なら<b>機種の表のとおり</b>（ゲーム機の記号は薄物、フィギュア・プラモデルは箱）。<br>機種の前に <code>-</code> を付けると薄物から外します（例 <code>-NS2</code>）。<br><b>採寸（3辺）が取れている行は採寸が優先です</b>（機種がゲームでも、限定版の大きな箱は宅配便になります）。</div>
         <div class="row cfgprice"><label for="mwSubBoxMin">箱ものの送料の下限</label><input type="number" id="mwSubBoxMin" value="600" step="50" min="0" max="5000" inputmode="numeric"><span class="unit">円</span></div>
+        <!-- 8.81（カジの依頼）箱ものの「送料用の重さ」。会員便（重さの段）は
+             そのまま使い、箱ものだけ送り方ごとに決めた重さを Shopify に入れて
+             実額の段に乗せる。表と重さは shared/shopcsv.js の1か所。 -->
+        <div class="note2" style="margin:10px 0 2px"><b>箱ものの送料（送料用の重さ）</b></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subBoxOn"><label for="subBoxOn" style="flex:1"><b>箱ものは「送料用の重さ」で実額を取る</b>（会員便に段を足す）</label></div>
+        <div class="note2" style="margin:0 0 4px">クリックポスト<b>以外</b>で送る品（宅急便コンパクト・レターパックプラス・宅配便）は、実際の重さの代わりに<b>送り方ごとに決めた重さ</b>を Shopify に入れます。会員便の段を下の表のとおりに足せば、<b>箱もの1点は実額ちょうど</b>・複数は<b>合計の重さ</b>で段が決まり・ゲームソフトと一緒でも<b>足し上げになりません</b>。<b>ゲームソフトの送料は今のまま</b>です。<br><b>実際の重さは pj が持ったまま</b>です（Amazon の採寸は書き換えません）。<br><b>入れる前に</b>、Shopify の「マーケット → 日本 → 配送」の会員便を<b>下の表と同じ段</b>にしてください（先に pj だけ入れると、箱ものがいちばん上の段の料金になります）。箱ものの料金は、下の「売り方ごとの送料（実額）」の欄から取ります。</div>
+        <div id="subBoxTbl"></div>
+        <div class="row cfgprice"><label for="subShopOverseas">海外向けの商品リストの名前</label><input type="text" id="subShopOverseas" value="Overseas products" style="flex:1"></div>
+        <div class="note2" style="margin:0 0 4px">会員用の商品を作る・直すときに、Shopify のこの名前の商品リスト（カタログ）から<b>外します</b>（送料用の重さで国際送料が計算されないように）。カンマ区切りで複数入れられます。<b>見つからないときは、送料用の重さの品は作りません</b>（空にすると外しません）。</div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="subBoxChkBtn" onclick="subBoxGo(false);return false" style="flex:1">確かめる（何も変えない）</button>
+          <button class="btn cfgprice" id="subBoxGoBtn" onclick="subBoxGo(true);return false" style="flex:1">いまある会員用の商品を直す</button>
+        </div>
+        <div class="note2" style="margin:2px 0 0">「いまある会員用の商品を直す」は、もう Shopify にある会員用の商品（印あり・読み込み済み）の<b>重さ</b>を送り方に合わせ、海外向けの商品リストから外します。送り方を手で直したあとも、これで入れ替わります（自動配信を使っていれば、定時の回でも少しずつ直します）。</div>
+        <div class="note2" id="subBoxNote" style="margin-top:2px"></div>
+        <div id="subBoxBox"></div>
         <!-- 8.57（カジの依頼）会員から受け取る額が実際の送料より安い品の扱い。
              既定オフ（いまの段では箱ものがほぼ全部当たるので、
              まず件数を見てから決める）。 -->
@@ -3794,6 +3810,8 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.80 自動配信（時刻・1回の上限・Shopify の管理用ドメイン）。 */
              'subAutoHours','subAutoMax','subShopAdmin',
+             /* 8.81 会員用の商品を外す、海外向けの商品リストの名前。 */
+             'subShopOverseas',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
              'subCutWay','subCutNet','subCutRate',
@@ -3841,6 +3859,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subHotOn',
                 /* 8.80 自動配信（使うか・土日も出すか・写真が無い品を止めるか）。 */
                 'subAutoOn','subAutoWeekend','subAutoPic',
+                /* 8.81 箱ものは送料用の重さで実額を取る（既定オフ）。 */
+                'subBoxOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -7669,6 +7689,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.80 自動配信（この端末にも覚える）。 */
                  'subAutoHours','subAutoMax','subShopAdmin',
+                 /* 8.81 海外向けの商品リストの名前。 */
+                 'subShopOverseas',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
                  'subCutWay','subCutNet','subCutRate',
@@ -18070,9 +18092,161 @@ function mwSubWayChange(jan){
    pj-sync の予定が、ぜんぶ同じものを読む）。ここは**出し方だけ**。 */
 function mwShipOpt(){
   var v=function(id){ var el=$(id); return el?el.value:''; };
+  /* 8.81 ⚙「箱ものは送料用の重さで実額を取る」のあいだは、会員便の段に
+     箱ものの段（送り方ごとの実額）を足した表を使う（pj-sync と同じ作り方）。 */
+  var on=subBoxOn();
   return { gameG:mwSubGameG(), addG:mwSubAddG(),
-           thinKishu:v('mwSubThinKishu'),
-           tiers:PJ_SHOPCSV.tiersOf(v('mwSubTiers')) };
+           thinKishu:v('mwSubThinKishu'), boxOn:on,
+           tiers:on?subBoxTiers():PJ_SHOPCSV.tiersOf(v('mwSubTiers')) };
+}
+/* ===== 8.81（カジの依頼）箱ものの「送料用の重さ」=====
+   重さの表・段の作り方は shared/shopcsv.js の1か所（pj-sync も同じ）。
+   箱ものの料金は⚙「売り方ごとの送料（実額）」（gdShip*）から取る。 */
+function subBoxOn(){ return !!($('subBoxOn')||{}).checked; }
+function subBoxTiers(){
+  return PJ_SHOPCSV.tiersBox(
+    PJ_SHOPCSV.tiersOf(($('mwSubTiers')||{}).value||''),
+    SELLWAY.boxCosts(gdCfg()));
+}
+/* ⚙に出す「Shopify の会員便に入れる段」の表。 */
+function subBoxRender(){
+  var el=$('subBoxTbl'); if(!el)return;
+  var tb=subBoxTiers();
+  var rows=PJ_SHOPCSV.tiersRows(tb);
+  var gOf={};
+  PJ_SHOPCSV.BOX_G.forEach(function(b){ gOf[b.key]=b.g; });
+  el.innerHTML='<div class="note2" style="margin:4px 0 2px"><b>Shopify の'
+    +'会員便に入れる段</b>（マーケット → 日本 → 配送）'
+    +(subBoxOn()?'':'　<span style="color:var(--bad)">いまはオフ'
+      +'（オンにすると pj がこの表で計算します）</span>')+'</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;font-size:12px;'
+    +'border-collapse:collapse">'
+    +'<tr><th style="text-align:left">重さ</th>'
+    +'<th style="text-align:right">送料</th>'
+    +'<th style="text-align:left">中身</th></tr>'
+    +rows.map(function(r){
+      var w=r.to?(mwN(r.from)+'〜'+mwN(r.to)+'g'):(mwN(r.from)+'g〜');
+      return '<tr data-boxtier="'+esc(String(r.box||'thin'))+'"><td>'+w+'</td>'
+        +'<td style="text-align:right">'+yen(r.yen)+'</td><td>'
+        +(r.box?('<b>'+esc(r.name)+'</b>（送料用の重さ '+mwN(gOf[r.box]||0)+'g）')
+               :'薄物（実際の重さ・ゲームソフトなど）')+'</td></tr>';
+    }).join('')+'</table></div>'
+    +'<div class="note2" style="margin:2px 0 6px">同じ内容を1行で書くと：'
+    +'<code id="subBoxTxt">'+esc(PJ_SHOPCSV.tiersText(tb))+'</code></div>';
+}
+/* 段の表に効く⚙（オンオフ・会員便の段・送り方ごとの実額）が変わったら、
+   その場で表を出し直す。見張りを付けるのは1回だけ。 */
+var subBoxWatched=false;
+function subBoxWatch(){
+  if(subBoxWatched)return;
+  subBoxWatched=true;
+  ['subBoxOn','mwSubTiers','gdShipLetter','gdShipCompact','gdShipBox60',
+   'gdShipBox80','gdShipBox'].forEach(function(id){
+    var el=$(id); if(!el)return;
+    ['input','change'].forEach(function(ev){
+      el.addEventListener(ev,function(){ try{ subBoxRender(); }catch(e){} });
+    });
+  });
+}
+function subBoxNote(t,bad){
+  var el=$('subBoxNote'); if(!el)return;
+  el.innerHTML=t||'';
+  el.style.color=bad?'var(--bad)':'';
+}
+/* 確かめる（approve=false）／いまある会員用の商品を直す（approve=true）。
+   直すほうは1回 40秒で区切られるので、残りが無くなるまで続きを頼む。 */
+var SUB_BOX_LOOP=40;                   // 続きを頼む回数の上限
+function subBoxGo(approve){
+  if(roleDenyPrice('subBoxNote'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    subBoxNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return; }
+  if(approve&&!subBoxOn()){
+    subBoxNote('先に「箱ものは送料用の重さで実額を取る」を入れてください。',1);
+    return; }
+  if(approve&&!confirm('いまある会員用の商品を直します。\n\n'
+    +'・箱もの（クリックポスト以外）の重さを「送料用の重さ」にします\n'
+    +'・クリックポストの品は実際の重さのままです\n'
+    +'・海外向けの商品リストから外します\n'
+    +'・値段・在庫・非公開の設定は pj の今の中身にそろえます\n\n'
+    +'※ Shopify の会員便の段を、⚙の表のとおりにしてありますか？\n'
+    +'\nよろしいですか？')){
+    subBoxNote('✋ やめました（何も変えていません）。'); return; }
+  var b1=$('subBoxChkBtn'), b2=$('subBoxGoBtn');
+  if(b1)b1.disabled=true; if(b2)b2.disabled=true;
+  var sum={ done:0, fail:0, errors:[] }, n=0, last=null;
+  subBoxNote(approve?'直しています…':'確かめています…（何も変えません）');
+  var step=function(){
+    return mwPost('/sub/box/sync',{ approve:!!approve }).then(function(d){
+      last=d||{}; n++;
+      sum.done+=(+last.done||0); sum.fail+=(+last.fail||0);
+      (last.errors||[]).forEach(function(e){
+        if(sum.errors.indexOf(e)<0)sum.errors.push(e); });
+      if(approve&&last.ok&&(+last.left>0)&&(+last.done>0)&&n<SUB_BOX_LOOP){
+        subBoxNote('直しています…（済み '+mwN(sum.done)+'件・残り '
+          +mwN(+last.left)+'件）');
+        return step();
+      }
+      return last;
+    });
+  };
+  return step().then(function(){ subBoxShow(last,sum,!!approve); })
+    ['catch'](function(e){
+      subBoxNote('⚠ できませんでした：'+esc(String((e&&e.message)||e))
+        +'（pj-sync をデプロイしたか確かめてください）',1);
+    })
+    .then(function(){ if(b1)b1.disabled=false; if(b2)b2.disabled=false; });
+}
+function subBoxShow(d,sum,approve){
+  var box=$('subBoxBox'); if(!box)return;
+  var x=d||{};
+  if(x.error){
+    subBoxNote('⚠ '+esc(String(x.detail||x.error)),1);
+  }else subBoxNote('');
+  var ov=x.over||{};
+  var H=[];
+  H.push('<div class="okbox"><b>'+(approve?'いまある会員用の商品を直しました'
+    :'確かめました（何も変えていません）')+'</b><br>'
+    +'会員用の商品 '+mwN(+x.all||0)+'件（うち箱もの '+mwN(+x.box_n||0)+'件）'
+    +(approve?('　直した <b>'+mwN(sum.done)+'件</b>'
+        +(sum.fail?('・<span style="color:var(--bad)">直せなかった '
+          +mwN(sum.fail)+'件</span>'):'')
+        +(+x.left?('・残り '+mwN(+x.left)+'件（もう一度押すと続きから）'):''))
+      :('　直す必要がある <b>'+mwN(+x.todo||0)+'件</b>'))
+    +'<br>Shopify：'+(x.ready?'<span style="color:var(--good)">つながります</span>'
+      :('<b style="color:var(--bad)">まだ使えません</b>：'+esc(String(x.why||''))))
+    +'／D1（migrate-0068）：'+(x.cols?'済み':'<b style="color:var(--bad)">まだ</b>')
+    +'<br>海外向けの商品リスト：'
+    +(!(ov.want||[]).length?'外しません（⚙が空です）'
+      :(((ov.miss||[]).length)
+        ?('<b style="color:var(--bad)">「'+esc((ov.miss||[]).join('・'))
+          +'」が見つかりません</b>（送料用の重さの品は作りません・直しません）')
+        :('見つかりました（'+mwN(+ov.found||0)+'件・会員用の商品を外します）')))
+    +(x.on?'':'<br><b style="color:var(--bad)">⚙「箱ものは送料用の重さで'
+      +'実額を取る」がオフです</b>（オンにすると直せます）')
+    +'</div>');
+  if(sum.errors.length)
+    H.push('<div class="note2" style="color:var(--bad)">'
+      +sum.errors.map(function(e){ return esc(e); }).join('<br>')+'</div>');
+  var it=x.items||[];
+  if(it.length)
+    H.push('<div class="note2" style="margin:6px 0 2px"><b>'
+      +(approve?'まだ直っていない品':'直す品')+'</b>（先頭 '+mwN(it.length)
+      +'件）</div><div style="overflow-x:auto"><table style="width:100%;'
+      +'font-size:12px;border-collapse:collapse">'
+      +'<tr><th style="text-align:left">商品（JAN）</th>'
+      +'<th style="text-align:left">送り方</th>'
+      +'<th style="text-align:right">Shopify に入れる重さ</th>'
+      +'<th style="text-align:right">実際の重さ</th></tr>'
+      +it.map(function(r){
+        return '<tr data-boxitem="'+esc(String(r.jan))+'"><td>'
+          +esc(String(r.name||''))+'<br><span class="note2" style="margin:0">'
+          +esc(String(r.jan))+'</span></td><td>'+esc(String(r.ship||'（未確認）'))
+          +'</td><td style="text-align:right">'+mwN(+r.g||0)+'g'
+          +(r.box?'（送料用）':'')+'</td><td style="text-align:right">'
+          +mwN(+r.real_g||0)+'g</td></tr>';
+      }).join('')+'</table></div>');
+  box.innerHTML=H.join('');
 }
 /* 箱ものの送料の下限（⚙・既定 600円）。0 なら知らせない。 */
 function mwShipBoxMin(){
@@ -18096,12 +18270,16 @@ function mwShipInfo(r){
     Object.assign({},gdCfg(),{ shipName:w.name }));
   var box=!!(w.sure&&w.name&&!w.thin&&yen1);
   var short=!!(box&&sh.short);
+  /* 8.81 送料用の重さで実額を取っている行は、下限（⚙）では見ない。 */
+  var boxed=!!PJ_SHOPCSV.boxWayOf(row,o);
   var warn=short?('送料が足りません（'+sh.ja+'）')
-    :((box&&min&&yen1<min)
+    :((box&&min&&!boxed&&yen1<min)
       ?('送料が足りません（会員便の段 '+yen(yen1)+'／'+w.name+'）'):'');
   if(!g)warn=warn||'重さ未取得（送料の段がずれます）';
   return { key:w.key, name:w.name, sure:!!w.sure, why:w.why, grams:g,
            yen1:yen1, warn:warn,
+           /* 8.81 箱もの（送料用の重さ）か・実際の重さ。 */
+           box:boxed, real_g:Math.round(PJ_SHOPCSV.realG(row,o)),
            /* 8.58（カジの依頼）機種がゲームなのに採寸が箱＝限定版とみなす。 */
            big:PJ_SHOPCSV.bigGame(row,o),
            /* 送料が足りない品（⚙で自動の配信から外せる）。 */
@@ -18224,6 +18402,8 @@ function mwSubOpt(){
            /* 8.27：薄物とみなす機種（⚙）。送料の区分のタグと、
               「採寸で箱と分かった行は一律にしない」の判定に使う。 */
            thinKishu:String(($('mwSubThinKishu')||{}).value||''),
+           /* 8.81 箱ものは「送料用の重さ」を出す（管理 API と同じ重さ）。 */
+           boxOn:subBoxOn(),
            /* 6.176：列名の形（既定はストアの書き出しに合わせる）。 */
            style:mwSubColStyle(),
            /* 8.24：検索・サイトマップから隠す（seo.hidden）の列名。
@@ -18376,6 +18556,8 @@ function subDraftRows(){
     }
     row.ship=sh.name; row.ship_sure=sh.sure; row.ship_why=sh.why;
     row.ship_text=sh.text; row.ship_warn=sh.warn; row.ship_g=sh.grams;
+    /* 8.81 箱もの（送料用の重さ）の印と、実際の重さ。 */
+    row.ship_box=!!sh.box; row.ship_real_g=+sh.real_g||0;
     /* 8.58（カジの依頼）採寸から限定版とみなす品（モニターから外れる）。 */
     row.big_box=!!sh.big;
     /* 8.57（カジの依頼）会員便の送料が足りない品の印（文は1か所から）。 */
@@ -18794,7 +18976,11 @@ function subBigHtml(rows){
    ⚙を入れていなければ**出します**（件数を見て決められるように）。 */
 function subShortHtml(rows){
   var list=(rows||[]).filter(function(r){ return !!r.ship_short; });
-  if(!list.length)return '';
+  /* 8.81 送料用の重さで実額を取っているときは、0件でも一言出す。 */
+  if(!list.length)return subBoxOn()
+    ?('<br><b>会員便の送料が足りない品 0件</b>（箱もの '
+      +mwN((rows||[]).filter(function(r){ return !!r.ship_box; }).length)
+      +'件は送料用の重さで実額を受け取ります）'):'';
   var by={}, gap=0;
   list.forEach(function(r){
     var k=String(r.ship||'（分かりません）');
@@ -18841,7 +19027,15 @@ function subShortHtml(rows){
       +'受け取れません）'):'')
     +'<br>　<span class="note2">足りない額の合計は1点ずつで '+yen(gap)
     +'（会員便の段は Shopify の「マーケット → 日本 → 配送」で決まります。'
-    +'段を箱ものまで伸ばすか、送り方を手で直すと消えます）。</span>';
+    +'段を箱ものまで伸ばすか、送り方を手で直すと消えます）。</span>'
+    /* 8.81 残っている理由と直し方。 */
+    +(subBoxOn()
+      ?'<br>　<b>⚙「箱ものは送料用の重さで実額を取る」はオンです。</b>'
+        +'それでも残るのは、<b>クリックポストの品</b>で会員便の段が実額より'
+        +'安いときです（⚙「会員便の段」か「売り方ごとの送料」を見てください）。'
+      :'<br>　<b>⚙「箱ものは送料用の重さで実額を取る」を入れると</b>、'
+        +'箱ものは送り方ごとの実額を受け取るようになります'
+        +'（Shopify の会員便に段を足してから入れてください）。');
 }
 /* ===== 8.49（カジの③）採寸が無い品の内訳 =====
    ・外れている件数と理由（まだ調べていない／3辺そろっていない／
@@ -19094,6 +19288,8 @@ function subOnTxt(){
     t.textContent=c.checked?'配信中':'いまは止めています';
     t.style.color=c.checked?'var(--good)':'';
   });
+  /* 8.81 箱ものの段の表（⚙が変わったら出し直す）。 */
+  try{ subBoxRender(); subBoxWatch(); }catch(e){}
   /* 8.80 自動配信（既定オフ）。 */
   var au=$('subAutoOn'), at=$('subAutoTxt');
   if(au&&at){
@@ -30542,7 +30738,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v329';   // sw.js の const V と必ず同じ値にする
+var APP_V='v330';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
