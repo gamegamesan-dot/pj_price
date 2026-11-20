@@ -174,6 +174,7 @@
     + "are in Japanese.";
   var BODY_SHIP = "Ships from Japan with tracking. Delivery options and costs "
     + "are shown at checkout.";
+  var BODY_COST = "Delivery options and costs are shown at checkout.";
   var BODY_HELP = "If anything arrives damaged or not as described, contact us "
     + "first and it will be put right.";
   function shopBody(it) {
@@ -200,7 +201,14 @@
       if (!n || /\bebay\b|\bshopify\b/i.test(n)) continue;
       h += "<p>" + esc(n) + "</p>";
     }
-    h += "<p>" + BODY_SHIP + "</p><p>" + BODY_HELP + "</p>";
+    /* 8.79 入れ物の文（封筒／段ボール）は eBay の出品文と**同じ文**を出す。
+       画面が行ごとに決めて渡す（文そのものは shared/shopcsv.js の PACK_TXT）。 */
+    var pk = s(r.packText).trim();
+    if (pk && !/\bebay\b|\bshopify\b/i.test(pk))
+      h += "<p>Ships from Japan. " + esc(pk) + " " + BODY_COST + "</p>";
+    else
+      h += "<p>" + BODY_SHIP + "</p>";
+    h += "<p>" + BODY_HELP + "</p>";
     return h;
   }
   function bodyOf(it, opt) {

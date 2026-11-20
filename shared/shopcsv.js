@@ -284,6 +284,24 @@
     if (w.hei && cm[2] > w.hei) return false;
     return true;
   }
+  /* ---- クリックポストに入る大きさか（8.79・出品文の「Shipping」の出し分け）----
+     決まりは上の表（SHIP_WAYS の cp：34×25cm・厚さ3cm・1kg）の1か所。
+     3辺そろっていないときは null（分からない＝呼ぶ側が種類で決める）。
+     g が 0（分からない）のときは重さを見ない。 */
+  function cpFits(dims, g) {
+    var a = (dims || []).map(num).filter(function (x) { return x > 0; })
+      .sort(function (x, y) { return y - x; });
+    if (a.length < 3) return null;
+    return wayFits(SHIP_WAYS[0], a.slice(0, 3), num(g));
+  }
+  /* 出品文に書く「入れ物」の文（eBay の出品文と海外向け Shopify の説明で同じ文）。
+     env … 緩衝材＋封筒（クリックポストに入る大きさ）／ box … 段ボール */
+  var PACK_TXT = {
+    env: "Tracking is included on every parcel. Each item is wrapped in "
+       + "protective cushioning and shipped in a padded envelope.",
+    box: "Tracking is included on every parcel, and each item is cushioned "
+       + "and boxed inside a separate shipping carton."
+  };
   /* 採寸から、入るいちばん小さい送り方。 */
   function fitWay(cm, g) {
     for (var i = 0; i < SHIP_WAYS.length; i++)
@@ -990,6 +1008,7 @@
     tiersOf: tiersOf, SHIP_WAYS: SHIP_WAYS, SHIP_UNSURE: SHIP_UNSURE,
     wayOf: wayOf, dimsOf: dimsOf, wayFits: wayFits, fitWay: fitWay,
     thinKishu: thinKishu, isThinKind: isThinKind, shipWay: shipWay,
+    cpFits: cpFits, PACK_TXT: PACK_TXT,
     shipUnit: shipUnit, shipLine: shipLine,
     CP: CP, NOTE_JA: NOTE_JA, kishuJa: kishuJa,
     NAME_NG: NAME_NG, PLAT_NG: PLAT_NG, TOKU_RE: TOKU_RE,

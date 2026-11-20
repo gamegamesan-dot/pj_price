@@ -699,6 +699,8 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 8.67：無在庫（MW）の行かどうか。手で押す欄ではないので出さない。
            出品文を作るときに行の値（buySource）から入れる。 -->
       <input type="checkbox" id="bDrop" style="display:none">
+      <!-- 8.79：封筒（クリックポストに入る大きさ）で送る行かどうか。行の値から入れる。 -->
+      <input type="checkbox" id="bEnv" style="display:none">
       <button class="btn primary" id="copyPlain" style="width:100%;margin-top:4px">説明文をコピー（アプリ用・文字だけ）</button><button class="btn" id="copyDesc" style="width:100%;margin-top:8px">HTML版をコピー（PC・ブラウザ用）</button>
       <div class="note2" id="descNote">スマホのeBayアプリはHTMLを使えません。上のボタンを使ってください。HTML版はPCブラウザの出品画面で「コードを表示」に切り替えてから貼ります。</div>
     </div>
@@ -839,6 +841,13 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvPickNew" style="width:100%;margin-top:6px">まだ書き出していない行だけ選ぶ</button>
         <button class="btn" id="csvOsFix" style="width:100%;margin-top:6px">Shopify の直しCSVを作る</button>
         <div class="note2" style="margin-top:2px" id="csvOsFixNote"></div>
+      </div>
+      <!-- 8.79：出品済みの行の出品文の「Shipping」の文を直す Revise 用の CSV。 -->
+      <div id="csvPackBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
+        <div class="note2" style="margin:0 0 4px"><b>出品文の発送の文を直す</b>　出品文の「Shipping」の文を、行ごとの入れ物（<b>封筒（クリックポスト）／段ボール</b>）で出し分けます。入れ物は行のカードの「発送：…」で確かめて、手で切り替えられます。<b>これから作る出品文は自動で合います</b>。ここは<b>すでに出品した行</b>の出品文を直すところです。</div>
+        <button class="btn" id="csvPackFind" style="width:100%">発送の文が食い違う出品を数える</button>
+        <button class="btn" id="csvPackRun" style="width:100%;margin-top:6px">発送の文を直す Revise 用 CSV を書き出す</button>
+        <div class="note2" style="margin-top:2px" id="csvPackNote">行を選んでいればその行だけ、選んでいなければ食い違っている出品ぜんぶを書き出します。CSV に入れるのは <b>ItemID と Description だけ</b>です（値段・数量・題名・<b>写真には触れません</b>）。</div>
       </div>
       <!-- 8.78：出品済みの行の横長の写真を正方形にして、Revise 用の CSV を作る。 -->
       <div id="csvPicSqBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
@@ -5806,7 +5815,7 @@ function descHTML(){
   }
 
   S+=h2('Shipping')+'<ul style="margin:0 0 22px;padding-left:22px;">';
-  S+='<li>'+pick(V_PACK)+'</li>';
+  S+='<li>'+packPick()+'</li>';
   S+='<li>Delivery speed and carrier options are shown in the Shipping and payments section of this listing.</li></ul>';
 
   S+=h2('Import duties');
@@ -6432,6 +6441,11 @@ var V_ABOUT_MW=[
  'We are a Tokyo-registered second-hand dealer with thirteen years in the Japanese collectors market, handling games, figures and hobby goods from Japan. Feel free to ask anything through eBay messages.',
  'Based in Tokyo and licensed as a second-hand dealer, we handle games, figures and hobby goods from Japan. Thirteen years in this market. Questions are always welcome via eBay messages.'
 ];
+/* 8.79 「Shipping」の入れ物の文もここ1か所で選ぶ。封筒の行は封筒の文、
+   段ボールの行は今までどおり（3通りのどれか）。 */
+function packPick(){
+  return ($('bEnv')&&$('bEnv').checked)?PJ_SHOPCSV.PACK_TXT.env:pick(V_PACK);
+}
 // 「About」の文はここ1か所で選ぶ（HTML版も文字だけの版も同じ）
 function aboutPick(){
   return pick(($('bDrop')&&$('bDrop').checked)?V_ABOUT_MW:V_ABOUT);
@@ -6484,7 +6498,7 @@ function descPlain(){
     L.push('');
   }
   L.push('\u25A0 SHIPPING');
-  L.push('- '+pick(V_PACK));
+  L.push('- '+packPick());
   L.push('- Delivery speed and carrier options are shown in the Shipping and payments section of this listing.');
   L.push('');
   L.push('\u25A0 IMPORT DUTIES');
@@ -9360,6 +9374,9 @@ var CSV_FILTERS=[
   /* 8.78 出品済みで、横長の写真がある行（正方形にして Revise できる）。 */
   { v:'picwide', label:'写真が横長の出品（正方形にできる）',
     f:function(r){ return picSqWide(r); } },
+  /* 8.79 出品済みで、出品文の発送の文がいまの判定と食い違っている行。 */
+  { v:'packoff', label:'発送の文が食い違う出品',
+    f:function(r){ return csvPackOff(r); } },
   { v:'ng',     label:'不備がある行だけ',
     f:function(r){ return csvIssues(r).length>0; } },
   { v:'origin', label:'原産国：既定値の行だけ',
@@ -10226,6 +10243,7 @@ function csvRender(){
        取り違えたときに戻せない（自動でゲームに確定した行があるため）。 */
     /* カテゴリと原産国は同じ形のプルダウンで並べる（6.56）。 */
     btns+=csvCatSelect(r)+csvOriginSelect(r)+csvCatSugBtns(r)+csvSpecSyncBtn(r);
+    btns+=csvPackBtn(r);                 // 8.79 発送：封筒（クリックポスト）／段ボール
     if(v==='amazon')
       btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -10412,6 +10430,8 @@ $('csvList').addEventListener('click',function(e){
   }
   if(t.hasAttribute('data-catuse')){ csvCatSugUse(t.getAttribute('data-catuse')); return; }
   if(t.hasAttribute('data-catkeep')){ csvCatSugKeep(t.getAttribute('data-catkeep')); return; }
+  /* 8.79 発送の入れ物を手で切り替える。 */
+  if(t.hasAttribute('data-pack')){ csvPackToggle(t.getAttribute('data-pack')); return; }
   /* 8.69 specs を英題に合わせる。 */
   if(t.hasAttribute('data-spsync')){ csvSpecSync(t.getAttribute('data-spsync')); return; }
   var id=t.getAttribute('data-del')
@@ -12576,6 +12596,7 @@ function csvOsItem(r){
     cond:(r.condId===1000)?'new':'used',
     stockPhoto:(String(r.buySource||'')==='mw'),
     notes:osNotesOf(r),
+    packText:csvPackText(r),             // 8.79 入れ物の文（eBay と同じ文）
     usd:csvStartPrice(r), qty:+r.qty||0, grams:+r.weight||0,
     cost:csvCostOf(r), pics:r.pics||[],
     wholesale:+r.mwWholesale||0, stock:+r.mwStock||0 };
@@ -14462,6 +14483,8 @@ function mwListRow(r,pics,n){
     wRaw:rec?rec.weight:0, weight:rec?rec.weight:0, wManual:true, rows:1,
     /* 6.152：重さの出どころ（Amazon の梱包重量／既定値／手で入れた値）と、
        仕入れ基準（MW／Amazon）をカードの計算の詳細に出すために持つ。 */
+    /* 8.79 商品の大きさ（Amazon の採寸・cm と g）。封筒で送れるかを見る。 */
+    dimL:+r.size_long||0, dimW:+r.size_wid||0, dimH:+r.size_hei||0, dimG:+r.size_g||0,
     wSrc:rec?rec.wSrc:'def', wBase:rec?rec.wBase:0, wPack:rec?rec.wPack:0,
     wPkg:rec?rec.wPkg:'', wText:rec?rec.wText:'',
     costSrc:rec?rec.costSrc:'', costMw:rec?rec.costMw:0,
@@ -23510,6 +23533,172 @@ function picSqRun(){
 }
 if($('csvPicSqFind'))$('csvPicSqFind').onclick=picSqFind;
 if($('csvPicSqRun'))$('csvPicSqRun').onclick=picSqRun;
+/* ================= 8.79 発送の入れ物（封筒／段ボール）=================
+   出品文の「Shipping」の文は、いままで全部「段ボールに入れて送る」だった。
+   実際は、通常版のゲームソフトなど**クリックポストに入る大きさ**の商品は、
+   緩衝材＋封筒で送っている。行ごとに入れ物を決めて、文を出し分ける。
+
+   決め方（上が優先）
+     1) 行で手で切り替えた値（packHand）
+     2) 箱なしで出す行（カートリッジのみ・フィギュアのみ）は封筒
+        （出品文にもう「封筒で送る」と書いている）
+     3) 大きさ（3辺）が分かる行 … 34×25cm・厚さ3cm・1kg 以内なら封筒
+        （決まりは shared/shopcsv.js の cpFits＝会員便と同じ1か所）
+     4) 大きさが分からない行 … ゲームソフト（139973）の通常版は封筒。
+        それ以外は段ボール
+   文そのものは shared/shopcsv.js の PACK_TXT（eBay と Shopify で同じ文）。 */
+var PACK_NAME={ env:'封筒（クリックポスト）', box:'段ボール' };
+/* 行の大きさ（cm・g）。行が持っていなければ、MW の一覧（Amazon の採寸）から引く。 */
+function csvDimsOf(r){
+  var x=r||{};
+  var d=[+x.dimL||0,+x.dimW||0,+x.dimH||0], g=+x.dimG||0;
+  if(!(d[0]>0&&d[1]>0&&d[2]>0)){
+    var j=String(x.jan||'').replace(/\D/g,''), hit=null;
+    if(j)[mwRows,mwAmzRows,mwBuyRows].forEach(function(list){
+      try{
+        (list||[]).forEach(function(m){
+          if(hit||String(m.jan||'')!==j)return;
+          if((+m.size_long>0)&&(+m.size_wid>0)&&(+m.size_hei>0))hit=m;
+        });
+      }catch(e){}
+    });
+    if(hit){ d=[+hit.size_long,+hit.size_wid,+hit.size_hei]; g=g||(+hit.size_g||0); }
+  }
+  var ok=(d[0]>0&&d[1]>0&&d[2]>0);
+  return { ok:ok, cm:ok?d.slice().sort(function(a,b){ return b-a; }):[], g:g };
+}
+/* その行の入れ物。{ kind:'env'|'box', why, hand, auto } */
+function csvPackOf(r){
+  var x=r||{}, auto='box', why='';
+  var dm=csvDimsOf(x);
+  if(x.cartOnly||x.looseOnly){ auto='env'; why='箱なしで出す行'; }
+  else if(dm.ok){
+    var fit=PJ_SHOPCSV.cpFits(dm.cm,dm.g);
+    auto=fit?'env':'box';
+    why='大きさから（'+dm.cm.join('×')+'cm'+(dm.g?('・'+dm.g+'g'):'')+'）';
+  }else if(String(x.cat||'')==='139973'){
+    /* 大きさが分からないゲームソフト。通常版は封筒、限定版などの箱は段ボール。 */
+    var nm=SUBPLAN.normalOf(String(x.titleJa||''));
+    if(nm.ok){ auto='env'; why='ゲームソフト（大きさは分かりません）'; }
+    else { auto='box'; why='ゲームソフトですが「'+nm.hit+'」のため'; }
+  }else{
+    auto='box'; why='大きさが分かりません';
+  }
+  var hand=(x.packHand==='env'||x.packHand==='box')?x.packHand:'';
+  return { kind:hand||auto, auto:auto, hand:!!hand, why:hand?'手で切り替えました':why };
+}
+function csvPackText(r){ return PJ_SHOPCSV.PACK_TXT[csvPackOf(r).kind]; }
+/* カードのボタン。押すと封筒⇔段ボールを入れ替える（手で変えた値を優先）。 */
+function csvPackBtn(r){
+  var p=csvPackOf(r);
+  var off=csvPackOff(r);
+  return '<button class="btn" data-pack="'+r.id+'" title="'+esc(p.why)
+    +'" style="padding:5px 8px;font-size:12px'
+    +(p.hand?';background:#8a4f00;color:#fff;border-color:#8a4f00':'')
+    +'">発送：'+PACK_NAME[p.kind]+(p.hand?'（手）':'')
+    /* 出品済みで、eBay に出ている文と食い違っている行。 */
+    +(off?'　⚠出品文と違う':'')+'</button>';
+}
+function csvPackToggle(id){
+  var r=csvRowById(id); if(!r)return;
+  var p=csvPackOf(r), next=(p.kind==='env')?'box':'env';
+  /* 自動の判定と同じになったら、手の印を外す（自動に戻る）。 */
+  r.packHand=(next===p.auto)?'':next;
+  /* まだ出品していない行は、出品文の文もその場で合わせる。
+     出品済みの行は書き換えない（「発送の文を直す Revise 用 CSV」で直す）。 */
+  if(!String(r.itemId||'').trim())csvDescShipFix(r);
+  csvSaveList(); csvRender();
+  if(csvPackOff(r))
+    csvPackSay('この出品は、出品文の発送の文がいまの入れ物と食い違っています。'
+      +'「発送の文を直す Revise 用 CSV を書き出す」で eBay の出品文を直してください。');
+}
+/* ---- 出品文の中の「入れ物」の文 ----
+   どちらの文が入っているかを読む（'env'／'box'／''＝どちらも無い）。
+   段ボールの文は、これまでの3通り（V_PACK）のどれでも段ボールと読む。 */
+function csvDescPackKind(html){
+  var d=String(html||'');
+  if(!d)return '';
+  if(d.indexOf(PJ_SHOPCSV.PACK_TXT.env)>=0)return 'env';
+  for(var i=0;i<V_PACK.length;i++)if(d.indexOf(V_PACK[i])>=0)return 'box';
+  return '';
+}
+/* 出品文の入れ物の文を、いまの判定に合わせる（その文だけ入れ替える）。
+   直したら true。入れ物の文が無い出品文は触らない。 */
+function csvDescShipFix(r){
+  var d=String((r||{}).descHtml||''); if(!d)return false;
+  var now=csvDescPackKind(d); if(!now)return false;
+  var want=csvPackOf(r).kind;
+  if(now===want)return false;
+  var to=PJ_SHOPCSV.PACK_TXT[want];
+  [PJ_SHOPCSV.PACK_TXT.env].concat(V_PACK).forEach(function(t){
+    if(d.indexOf(t)>=0)d=d.split(t).join(to);
+  });
+  r.descHtml=d;
+  return true;
+}
+/* 出品済みで、出品文の入れ物の文がいまの判定と食い違っている行。 */
+function csvPackOff(r){
+  if(!String((r||{}).itemId||'').trim())return false;
+  var now=csvDescPackKind(r.descHtml);
+  return !!now&&now!==csvPackOf(r).kind;
+}
+/* ---- Revise 用 CSV（Action・ItemID・Description だけ）----
+   値段・数量・題名・**写真（PicURL）には触れない**。写真を手で差し替えた
+   出品があるので、PicURL の列は入れない（入れると pj の記録の写真に戻る）。 */
+function csvPackCsv(rows){
+  var head=[CSV_ACT_COL,'ItemID','*Description'];
+  var out=[CSV_INFO,csvLine(head)];
+  rows.forEach(function(r){
+    out.push(csvLine(['Revise',String(r.itemId||'').trim(),String(r.descHtml||'')]));
+  });
+  return out.join('\r\n')+'\r\n';
+}
+function csvPackSay(msg,bad){
+  var el=$('csvPackNote'); if(!el)return;
+  el.innerHTML=msg||''; el.style.color=bad?'var(--bad)':'';
+}
+function csvPackCount(){
+  var all=csvList.filter(function(r){ return !!String(r.itemId||'').trim(); });
+  var off=all.filter(csvPackOff);
+  var env=off.filter(function(r){ return csvPackOf(r).kind==='env'; }).length;
+  csvPackSay('出品済み <b>'+all.length+'件</b>のうち、発送の文が食い違っている出品 <b>'
+    +off.length+'件</b>'
+    +(off.length?('（封筒の文に直す '+env+'件・段ボールの文に直す '+(off.length-env)+'件）'
+                 +'<br>絞り込み「発送の文が食い違う出品」で一覧に出せます。'):''));
+  try{ csvFilterOpts(); }catch(e){}
+  return off.length;
+}
+function csvPackRun(){
+  /* 選んだ行があればその行、無ければ食い違っている出品ぜんぶ。 */
+  var ids=csvPickIds();
+  var rows=(ids.length?ids.map(csvRowById).filter(Boolean):csvList).filter(csvPackOff);
+  if(!rows.length){
+    csvPackSay(ids.length?'選んだ行に、発送の文が食い違っている出品がありません。'
+                         :'発送の文が食い違っている出品はありません。');
+    return;
+  }
+  var env=rows.filter(function(r){ return csvPackOf(r).kind==='env'; }).length;
+  if(!confirm('出品文の「Shipping」の文を直す Revise 用の CSV を作ります：'+rows.length+'件\n'
+    +'（封筒の文に直す '+env+'件・段ボールの文に直す '+(rows.length-env)+'件）\n'
+    +'・CSV に入れるのは ItemID と Description だけです\n'
+    +'・値段・数量・題名・写真は変えません（PicURL の列は入れません）\n'
+    +'・eBay の画面で出品文を手で直した出品は、pj の出品文で上書きされます\n'
+    +'よろしいですか？'))return;
+  /* 入れ物の文を入れ替える（題名・無在庫の言い方の直しも一緒に通す）。 */
+  rows.forEach(function(r){ csvDescFix(r); csvDescShipFix(r); });
+  var name='ebay-desc-revise-'+OSS.ymd(new Date())+'-'+rows.length+'.csv';
+  var okDl=csvDownload(name,csvPackCsv(rows));
+  var at=jstToday();
+  rows.forEach(function(r){ r.packFixAt=at; });
+  csvSaveList(); csvFilterOpts(); csvRender();
+  csvPackSay((okDl?('<b>書き出しました</b>：'+esc(name))
+      :'書き出しに失敗しました（ブラウザのダウンロードを許可してください）')
+    +'（'+rows.length+'件・封筒 '+env+'件／段ボール '+(rows.length-env)+'件）'
+    +'<br>このファイルを File Exchange に上げると、出品文だけが入れ替わります'
+    +'（写真・値段・数量はそのままです）。',!okDl);
+}
+if($('csvPackFind'))$('csvPackFind').onclick=function(){ csvPackCount(); };
+if($('csvPackRun'))$('csvPackRun').onclick=csvPackRun;
 function csvReviseBuild(rows,opt){
   var head=[CSV_ACT_COL,'ItemID'];
   if(opt.qty)head.push('*Quantity');
@@ -23618,7 +23807,7 @@ var CSV_DESC_FIELDS=['cat','brand','series','chara','variant','line','cond','ori
                      'gPlat','gPlatFree','gTitle','gPub','gCond',
                      'aMaker','aMakerFree','aModel','aKind','aColor','aSize','aCond',
                      'extra','title'];
-var CSV_DESC_CHECKS=['bPrize','bJP','bCart','bLoose','bDrop'];
+var CSV_DESC_CHECKS=['bPrize','bJP','bCart','bLoose','bDrop','bEnv'];
 /* ---- 出品文の小さな直し（8.67）----
    作り直さずに、食い違っているところだけ入れ替える。
    どちらも直したら true を返す（呼ぶ側で保存する）。 */
@@ -23655,7 +23844,11 @@ function csvDescMwFix(r){
 // 書き出し・表示の前に通す（2つまとめて）
 function csvDescFix(r){
   var a=csvDescTitleFix(r), b=csvDescMwFix(r);
-  return a||b;
+  /* 8.79 入れ物の文。**まだ出品していない行だけ**ここで合わせる。
+     出品済みの行は、控えの出品文を黙って書き換えない（eBay に出ている文と
+     食い違ったことが分からなくなる）。出品済みの行は Revise 用 CSV で直す。 */
+  var c=String((r||{}).itemId||'').trim()?false:csvDescShipFix(r);
+  return a||b||c;
 }
 function csvDescFor(r){
   var save={}, savec={};
@@ -23671,6 +23864,8 @@ function csvDescFor(r){
     /* 8.67 無在庫（MW）の行は、状態の説明文を手で検品しない言い方にする。
        写真も「届く1点を撮ったもの」とは書かない。 */
     $('bDrop').checked=(String(r.buySource||'')==='mw');
+    /* 8.79 入れ物（封筒／段ボール）で「Shipping」の文を出し分ける。 */
+    $('bEnv').checked=(csvPackOf(r).kind==='env');
     if(g)$('gCond').value=csvCondToSel(r.condId,true);
     else $('cond').value=csvCondToSel(r.condId,false);
     if(g){
@@ -29844,6 +30039,7 @@ function csvEditOpen(id){
   /* 8.67 無在庫（MW）の行かどうか。ここで入れておかないと、
      「書き戻す」で手で検品した言い方の出品文に戻ってしまう。 */
   $('bDrop').checked=(String(r.buySource||'')==='mw');
+  $('bEnv').checked=(csvPackOf(r).kind==='env');     // 8.79 入れ物の文
   // 英題があれば戻す。無ければ既存の自動生成に任せる。
   titleEdited=!!String(r.titleEn||'').trim();
   if(titleEdited)$('title').value=r.titleEn;
@@ -30076,7 +30272,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v327';   // sw.js の const V と必ず同じ値にする
+var APP_V='v328';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
