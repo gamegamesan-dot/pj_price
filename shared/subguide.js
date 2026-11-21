@@ -80,6 +80,15 @@
   var LIMIT_JA = "出品できるかは**アカウントごとに違います**。"
     + "買う前にセラーセントラルで確かめてください。";
   var NOTE_JA = "目安です。利益を保証するものではありません";
+  /* 8.86（カジの依頼）カードの「見込みの Amazon 粗利」の説明。**この1か所**。
+     v334 まではすべてのカードに毎回入れていた（カードが長くなる）。
+     #はじめに の「カードの読み方」に1回だけ載せ、カードからは外せる
+     （⚙ subCardSlim。外すのは shared/subcard.js）。 */
+  var GROSS_JA = "**Amazon FBA で売った場合**・Amazon の手数料を"
+    + "引いたあと・送料と倉庫までの送料は別";
+  function grossNote() { return "\n（" + GROSS_JA + "）"; }
+  /* チャンネルの説明文（トピック）のうしろに付ける文。 */
+  var TOPIC_TAIL = "書き込みはできません（質問は #質問 へ）。";
 
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function s(v) { return (v === null || v === undefined) ? "" : String(v); }
@@ -409,6 +418,14 @@
           ? SW.pinJa(o)
           : "この値段以上で売れれば赤字になりません（**送料は別**）"));
     }
+    /* 8.86 カードに毎回入れていた説明は、ここに1回だけ載せる。 */
+    L.push("");
+    L.push("**カードの読み方**");
+    L.push("・**仕入れ価格（税込・送料別）** … 当店からお買い求めいただく"
+      + "値段です（送料は別にかかります）");
+    L.push("・**見込みの Amazon 粗利** … " + GROSS_JA.replace("・", "の見込みです（")
+      + "）。**利益率**は 粗利 ÷ 仕入れ価格 です");
+    L.push("・**今週の一覧**（各リストのピン留め）の「仕入れ」「粗利」も同じ意味です");
     if (it.length) {
       L.push("");
       L.push("**カードの項目**");
@@ -462,9 +479,44 @@
     }
     /* 8.34 「出品できるか」はカードから外したので、ここで指しておく
        （行は増やさない。短い文は2〜3行のまま）。 */
-    L.push("読み方と**出品できるかの注意**は " + pinRef(o)
+    /* 8.86 粗利の説明はカードから外せるので、短く書いて #はじめに を指す。 */
+    L.push("カードと一覧の**粗利**は **Amazon FBA で売った場合**の見込みです。"
+      + "読み方と**出品できるかの注意**は " + pinRef(o)
       + " をご覧ください。**" + NOTE_JA + "。**");
     return L.join("\n");
+  }
+  /* ---- 8.86「今週の一覧」（ボットがピン留めする1通）に添える短い説明 ----
+     各リストのチャンネルのピン留めに、説明と #はじめに へのリンクを1つ置く。 */
+  function idxNote(opt) {
+    return "**仕入れ**＝当店からの仕入れ価格（税込・送料別）／"
+      + "**粗利**＝Amazon FBA で売った場合の見込み。"
+      + "カードの読み方は " + pinRef(opt) + " をご覧ください。";
+  }
+  /* ---- 8.86 チャンネルの説明文（トピック）----
+     数字は shared/subplan.js の上限（SUBPLAN.list の n・q）から作る。
+     上限を変えると文が変わり、pj-sync がチャンネルに入れ直す。
+       plans … そのチャンネルに出すプラン（1つ。同じチャンネルを2つの
+               プランで使うときは2つ）
+     モニターは「1回◯件」ではなく「毎週 新しく◯件」（8.43）。 */
+  function limitJa(p) {
+    var x = p || {}, a = [];
+    if (num(x.q) > 0) a.push("お一人" + Math.round(num(x.q)) + "点まで");
+    if (num(x.n) > 0)
+      a.push(s(x.key) === "monitor"
+        ? ("毎週 新しく" + Math.round(num(x.n)) + "件")
+        : ("1回" + Math.round(num(x.n)) + "件まで"));
+    return a.join("／");
+  }
+  function topicOf(plans) {
+    var a = (plans || []).filter(function (p) { return p && s(p.key); });
+    if (!a.length) return "";
+    var nm = function (p) { return s(p.name) || PLAN_JA[s(p.key)] || s(p.key); };
+    var lim = a.map(function (p) {
+      var t = limitJa(p);
+      return t ? ((a.length > 1 ? (nm(p) + "：") : "") + t) : "";
+    }).filter(Boolean);
+    return (a.map(nm).join("・") + "の商品リスト。"
+      + (lim.length ? (lim.join("　") + "。") : "") + TOPIC_TAIL).slice(0, 1000);
   }
   /* Discord の1通（2,000字）に入るように、行の切れ目で分ける。 */
   function pinSplit(text) {
@@ -504,6 +556,9 @@
               /* 8.30 固定メッセージ（共通＋チャンネルごと）。 */
               PIN_MAX: PIN_MAX, DAYS: DAYS, PLAN_ORDER: PLAN_ORDER,
               PLAN_JA: PLAN_JA, dayJa: dayJa, planFirst: planFirst,
+              /* 8.86 粗利の説明（1か所）・一覧に添える文・トピック。 */
+              GROSS_JA: GROSS_JA, grossNote: grossNote, idxNote: idxNote,
+              TOPIC_TAIL: TOPIC_TAIL, limitJa: limitJa, topicOf: topicOf,
               planNote: planNote, pinRef: pinRef, pinCommon: pinCommon,
               pinPlan: pinPlan, pinSplit: pinSplit, hashOf: hashOf };
   if (typeof module !== "undefined" && module.exports) module.exports = API;

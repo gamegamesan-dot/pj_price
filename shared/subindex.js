@@ -35,6 +35,11 @@
   var MSG_MAX = 5500;            // 1通の合計（6,000字から余白を取る）
   var EMBED_N = 10;              // 1通の embed の数
   var NAME_MAX = 28;             // 商品名の字数（⚙ gdIdxName）
+  /* 8.86 1行の長さの上限（カードへのリンクも入れた字数）。超えるときは
+     **商品名のほうを切る**（金額・残り・リンクは切らない）。 */
+  var LINE_MAX = 200;
+  var NAME_MIN = 6;              // 商品名はここまでしか切らない
+  var WEEK_MAX = 1900;           // 「今週の新着」1通（Discord は 2,000字）
 
   /* カテゴリ（見出し）。順は⚙ gdIdxCats で変えられる。
      ジャンルは**機種から**決まる（shared/mwfee.js の genreOf。
@@ -66,12 +71,18 @@
     };
   }
   /* 商品名を短くする（会員に出す名前の作り方は subcard.js の1か所）。 */
-  function nameOf(row, opt) {
+  /* 8.86 切った印の「…」は**1つだけ**。元の名前の終わりの「…」「...」や
+     続いた「…」は1つにまとめる（「… …」「……」にしない）。 */
+  function cut(t, max) {
+    var x = s(t).replace(/(\s*(…|\.{3,}))+/g, "…").trim();
+    var m = Math.max(1, Math.round(num(max)));
+    if (x.length <= m) return x;
+    return x.slice(0, m - 1).replace(/[\s…・／、,]+$/, "") + "…";
+  }
+  function nameOf(row, opt, max) {
     var C = card_();
     var t = s((C && C.nameJa) ? C.nameJa(s(row.name)) : s(row.name)).trim();
-    var max = (opt || {}).name || NAME_MAX;
-    if (t.length > max) t = t.slice(0, max - 1) + "…";
-    return t;
+    return cut(t, max || (opt || {}).name || NAME_MAX);
   }
   function catOf(row) {
     var r = row || {};
@@ -97,21 +108,34 @@
     if (!s(r.msg_id)) return false;
     return num(r.left) > 0;
   }
-  /* 1品1行。 */
-  function lineOf(row, opt, ch) {
-    var r = row || {}, o = optOf(opt);
-    var L = [];
-    if (s(r.mark)) L.push(s(r.mark));
-    L.push("**" + nameOf(r, o) + "**");
+  /* 1品1行。
+     8.86（カジの報告）v334 までは「◎ **商品名…** … ¥5,210／粗利 ¥2,186／…」で、
+     ・商品名を切った「…」のすぐあとに区切りの「…」が続き、途中が欠けたように見えた
+     ・¥5,210 にラベルが無く、何の金額か分からなかった
+     「◎ **商品名**／仕入れ ¥5,210／粗利 ¥2,186／残り3／カード」の形にする。
+     ・金額には必ずラベルを付ける（仕入れ・粗利）
+     ・長すぎるときは**商品名を切る**（金額・残り・リンクは切らない）
+     ・「…」は商品名の終わりに1つだけ */
+  function tailOf(row, opt, ch) {
+    var r = row || {}, o = opt;
     var t = [];
     if (o.yen) {
-      t.push(yen(r.price));
+      if (num(r.price) > 0) t.push("仕入れ " + yen(r.price));
       if (num(r.gross) > 0) t.push("粗利 " + yen(r.gross));
     }
     t.push("残り" + Math.round(num(r.left)));
     var u = jump(o.guild, ch || r.ch, r.msg_id);
     if (u) t.push("[カード](" + u + ")");
-    return L.join(" ") + " … " + t.join("／");
+    return t.join("／");
+  }
+  function lineOf(row, opt, ch) {
+    var r = row || {}, o = optOf(opt);
+    var head = s(r.mark) ? (s(r.mark) + " ") : "";
+    var tail = "／" + tailOf(r, o, ch);
+    /* 商品名に使える字数（太字の ** 4字を引く）。 */
+    var room = LINE_MAX - head.length - tail.length - 4;
+    var max = Math.max(NAME_MIN, Math.min(o.name, room));
+    return head + "**" + nameOf(r, o, max) + "**" + tail;
   }
   /* カテゴリごとにまとめて並べる（札の良い順 → 粗利の大きい順）。 */
   function groupsOf(rows, opt) {
@@ -181,9 +205,15 @@
     if (cur.length) pages.push(cur);
     var n = 0;
     gs.forEach(function (g) { n += g.rows.length; });
+    /* 8.86 1ページめ（ピン留めする通）に、金額の見方と #はじめに への
+       リンクを1つ添える（文は shared/subguide.js の idxNote）。 */
+    var G = guide_();
+    var note = (o.yen && G && typeof G.idxNote === "function")
+      ? G.idxNote(opt || {}) : "";
     return pages.map(function (es, i) {
       return { title: "今週の一覧" + (pages.length > 1
                  ? "（" + (i + 1) + "/" + pages.length + "）" : ""),
+               note: (i === 0) ? note : "",
                embeds: es, n: n, pages: pages.length };
     });
   }
@@ -202,13 +232,20 @@
       return liveOf(r) && r.is_new; });
     var L = [];
     L.push("**今週の新着 " + live.length + "件**");
-    sortRows(live).slice(0, n).forEach(function (r) {
-      L.push("・" + lineOf(r, o, ch));
-    });
-    if (live.length > n) L.push("・ほか " + (live.length - n) + "件");
     var u = jump(o.guild, ch, idxMsg);
-    if (u) L.push("ぜんぶの一覧 → " + u);
-    return L.join("\n").slice(0, 1900);
+    var foot = u ? ("ぜんぶの一覧 → " + u) : "";
+    /* 8.86 1通（2,000字）に入らないときは、**行の途中で切らず**、入る行まで
+       出して残りは「ほか ◯件」にする（ぜんぶの一覧へのリンクは必ず残す）。 */
+    var rows2 = sortRows(live).slice(0, n), shown = 0;
+    var len = L[0].length + (foot ? foot.length + 1 : 0) + 20;
+    for (var i = 0; i < rows2.length; i++) {
+      var t = "・" + lineOf(rows2[i], o, ch);
+      if (len + t.length + 1 > WEEK_MAX) break;
+      L.push(t); len += t.length + 1; shown++;
+    }
+    if (live.length > shown) L.push("・ほか " + (live.length - shown) + "件");
+    if (foot) L.push(foot);
+    return L.join("\n");
   }
   /* 文の指紋（同じなら書き換えない。8.19 と同じやり方）。 */
   function hashOf(v) {
@@ -222,6 +259,8 @@
   }
   var API = { EMBED_MAX: EMBED_MAX, MSG_MAX: MSG_MAX, EMBED_N: EMBED_N,
               NAME_MAX: NAME_MAX, CATS: CATS, ONE_JA: ONE_JA,
+              LINE_MAX: LINE_MAX, NAME_MIN: NAME_MIN, WEEK_MAX: WEEK_MAX,
+              cut: cut, tailOf: tailOf,
               optOf: optOf, nameOf: nameOf, catOf: catOf, jump: jump,
               liveOf: liveOf, lineOf: lineOf, groupsOf: groupsOf,
               sortRows: sortRows, markRank: markRank, pagesOf: pagesOf,

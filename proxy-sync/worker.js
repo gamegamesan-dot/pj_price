@@ -308,6 +308,13 @@ const ALLOWED = [
      メッセージ（/messages）・メンバー・ほかのチャンネルは読まない。 */
   { m: "GET",
     re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+$/ },
+  /* 8.86（カジの依頼）会員のリストのチャンネルの**説明文（トピック）**を、
+     プランの上限（shared/subplan.js）から作った文に合わせる。
+     ・送るのは topic の1項目だけ（名前・権限・並びは送らない）
+     ・⚙に入れたプランのチャンネルだけ
+     ・チャンネルを作る・消すことはしない（POST／DELETE は許していない） */
+  { m: "PATCH", write: true,
+    re: /^https:\/\/discord(app)?\.com\/api\/v10\/channels\/\d+$/ },
   /* MW（マッチングワールド）の商品画像（6.1）。**読み取りの1本だけ**。
      画像URLはログインなしで見られる。会員サイト（/buy/?q=）は見に行かない。
      MW が利用を許諾した画像だけを使い、Amazon の画像は使わない。 */
@@ -11069,6 +11076,12 @@ async function subSettings(env) {
        ・qFix    … ⚙「出ているカードも新しい上限に書き換える」（既定オフ）
        ・legacyQ … 8.82 より前に出したカードに書いてある数（プランごと） */
     qFix: !!st.subQFix,
+    /* 8.86（カジの依頼）カードに毎回入れていた共通の説明（粗利の「Amazon FBA
+       で売った場合〜」）を外す。既定オフ（出ているカードを書き換える前に、
+       何件が対象かを予定の画面で見てから入れる）。 */
+    cardSlim: !!st.subCardSlim,
+    /* 8.86 チャンネルの説明文（トピック）を上限に合わせる（既定オン）。 */
+    topicOn: st.subTopicOn === undefined ? true : !!st.subTopicOn,
     /* 8.83（カジの依頼）お一人の上限を Shopify の商品にも入れる
        （タグ qty-<プラン>-<点数>。テーマのスニペットが数量を抑える）。 */
     qtyOn: !!st.subShopQtyOn,
@@ -11830,6 +11843,31 @@ async function subPlanBuild(env) {
       keep: pick.filter((x) => x.same).length,
     });
   }
+  /* 8.86（カジの依頼）カードの共通の説明を外すと、**出ているカードが何枚
+     書き換わるか**（数えるだけ）。⚙がオフのあいだ、オンにしたつもりで
+     もう一度カードを作り、いまのカードと中身が変わる枚数を数える。
+     いまも書き換わる予定のカード（値段が変わったなど）は数えない。 */
+  try {
+    out.slim = { on: !!cfg.cardSlim, total: 0, plans: [] };
+    if (!cfg.cardSlim) {
+      const cfg2 = Object.assign({}, cfg, { cardSlim: true });
+      for (const p of cfg.plans) {
+        if (!p.ch || !p.on) continue;
+        const sent = await subPosts(env, p.ch);
+        const now0 = {};
+        for (const x of subPick(rows, p, sent, false, cfg))
+          if (x.sent && !x.same) now0[x.jan] = 1;
+        let n = 0;
+        for (const x of subPick(rows, p, sent, false, cfg2))
+          if (x.sent && !x.same && !now0[x.jan]) n++;
+        out.slim.plans.push({ key: p.key, name: p.name, n: n });
+        out.slim.total += n;
+      }
+    }
+  } catch (e) { out.slim = null; }
+  /* 8.86 チャンネルの説明文（トピック）の予定（読むだけ）。 */
+  try { out.topic = await subTopicPlan(env, planRun, cfg); }
+  catch (e) { out.topic = null; }
   /* 8.31（カジの依頼5）**自動の回で何が起きるか**を返す（画面に出す）。
      ・新しく出る／書き換えるカードの数
      ・予告を出すか（**新しく出るカードがある日だけ**出す）
@@ -11892,6 +11930,8 @@ function subCardOf(x, p, cfg, note) {
                            /* 8.81 箱ものは送り方と実額をそのまま出す
                               （プランの送料の文は薄物だけ）。 */
                            boxOn: cfg.boxOn,
+                           /* 8.86 共通の説明をカードから外す（⚙）。 */
+                           slim: !!cfg.cardSlim,
                            /* 8.29（カジの依頼）買うかどうかの目安。
                               プランごとに出す項目が変わる。 */
                            guide: cfg.guide, planKey: p.key });
@@ -14026,6 +14066,10 @@ async function jobSubSend(env, opt) {
           run.notes.push("sub-index: " + String((e && e.message) || e));
         }
       }
+      /* 8.86（カジの依頼）チャンネルの説明文（トピック）を上限に合わせる
+         （文が変わったときだけ Discord を呼ぶ）。 */
+      try { res.topic = await subTopicSync(env, run, cfg, {}); }
+      catch (e) { run.notes.push("sub-topic: " + String((e && e.message) || e)); }
       /* 8.43（カジの依頼3）モニターのチャンネルに「今週の配信」を1通。
          **商品名・JAN・価格は出さない**。@everyone・@here も使わない。 */
       try { await subMonNote(env, run, cfg, res, day); } catch (e) {}
@@ -15263,7 +15307,9 @@ async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
               pin_fail: 0, pin_why: "", pinned: 0 };
   if (!ch) return r;
   const info = await dcChInfo(env, run, ch);
-  const opt = Object.assign({}, (cfg || {}).idx || {}, { guild: info.guild });
+  const opt = Object.assign({}, (cfg || {}).idx || {}, { guild: info.guild,
+    /* 8.86 1ページめに添える「#はじめに」へのリンク（⚙ gdPinCh）。 */
+    gdPinCh: ((cfg || {}).guide || {}).gdPinCh });
   const items = await subIdxRows(env, cfg, plan, rows, ones);
   const pages = SUBINDEX.pagesOf(items, opt, ch).slice(0, SUB_IDX_MAX);
   r.n = items.filter((x) => SUBINDEX.liveOf(x)).length;
@@ -15274,7 +15320,10 @@ async function subIdxOne(env, run, cfg, plan, rows, ones, res) {
   const out = [];
   for (let i = 0; i < Math.max(pages.length, was.length); i++) {
     const pg = pages[i] || SUBINDEX.emptyPage(i, Math.max(1, pages.length));
-    const body = { content: pg.title,
+    /* 8.86 1ページめ（ピン留めする通）には、金額の見方と #はじめに への
+       リンクを添える（文は shared/subguide.js の idxNote）。 */
+    const body = { content: (String(pg.title || "")
+                     + (pg.note ? ("\n" + String(pg.note)) : "")).slice(0, 1900),
                    embeds: (pg.embeds || []).map((e) => ({
                      title: String(e.title || "").slice(0, 250),
                      description: String(e.description || "")
@@ -15364,6 +15413,135 @@ async function subNoteOnce(env, run, ch, text, key) {
   if (!m.ok) return 0;
   await save(String(((m.data || {}).id) || ""));
   return 1;
+}
+/* ===== 8.86（カジの依頼）チャンネルの説明文（トピック）を上限に合わせる =====
+   プレミアムのトピックが「お一人5点まで／1回 100件まで」のままだった。
+   トピックは人が手で入れていて、上限（8.82）を変えても変わらなかった。
+   **文は shared/subguide.js の topicOf**（数字は shared/subplan.js の上限）。
+   上限を変えると文が変わり、次の配信の回にチャンネルへ入れ直す。
+   ・⚙に入れたプランのチャンネルだけ（同じチャンネルを2つのプランで
+     使っているときは、1つの文に両方を書く）
+   ・送るのは topic だけ。名前・権限は触らない。チャンネルは作らない・消さない
+   ・Discord はトピックの書き換えを 10分に2回までしか受けないので、
+     **文が変わったときだけ**書き換える（控え sync_state の sub.topic.<ID>）
+   ・ボットに「チャンネルの管理」が無いと書き換えられない（理由を返す） */
+const SUB_TOPIC_KEY = "sub.topic.";     // + チャンネルID
+const SUB_TOPIC_RETRY_MS = 6 * 3600000; // 失敗したあと、もう一度ためすまで
+function subTopicWhy(e) {
+  const o = e || {};
+  const code = Number(o.code) || 0, st = Number(o.status) || 0;
+  if (String(o.err || "") === "no_token" || st === 0)
+    return "DISCORD_BOT_TOKEN が登録されていません";
+  if (code === 50013 || st === 403)
+    return "権限がありません（ボットに「チャンネルの管理」が要ります）";
+  if (code === 50001) return "チャンネルを見る権限がありません";
+  if (st === 404) return "そのチャンネルが見つかりません（⚙のチャンネルID）";
+  if (st === 429) return "Discord の回数の上限です（10分ほどあとにもう一度）";
+  return "Discord が " + st + (code ? ("/" + code) : "") + " を返しました";
+}
+/* チャンネルごとの「入れる文」。 */
+function subTopicWant(cfg) {
+  const by = {}, order = [];
+  for (const p of ((cfg || {}).plans || [])) {
+    const ch = String(p.ch || "").replace(/\D/g, "");
+    if (!ch) continue;
+    if (!by[ch]) { by[ch] = []; order.push(ch); }
+    by[ch].push(p);
+  }
+  return order.map((ch) => ({ ch: ch, plans: by[ch].map((p) => p.key),
+    names: by[ch].map((p) => p.name).join("・"),
+    want: SUBGUIDE.topicOf(by[ch]) }));
+}
+/* 予定（読むだけ）。いまのトピックを Discord から読んで比べる。 */
+async function subTopicPlan(env, run, cfg) {
+  const out = { on: !!(cfg || {}).topicOn, n: 0, diff: 0, rows: [] };
+  if (!env.DISCORD_BOT_TOKEN) { out.why = "DISCORD_BOT_TOKEN が登録されていません";
+    return out; }
+  for (const t of subTopicWant(cfg)) {
+    const r = await dcApi(env, null, "GET", "/channels/" + t.ch);
+    const was = r.ok ? String(((r.data || {}).topic) || "") : "";
+    const row = { ch: t.ch, names: t.names, want: t.want, was: was,
+                  same: r.ok && was === t.want,
+                  why: r.ok ? "" : subTopicWhy(r) };
+    out.n++;
+    if (!row.same) out.diff++;
+    out.rows.push(row);
+  }
+  return out;
+}
+/* 合わせる。force でないときは、控え（前に入れた文の指紋）と同じなら
+   Discord を呼ばない（配信のたびに呼ばないため）。 */
+async function subTopicSync(env, run, cfg, opt) {
+  const o = opt || {};
+  const res = { on: !!(cfg || {}).topicOn, n: 0, edit: 0, same: 0, skip: 0,
+                fail: 0, why: "", rows: [] };
+  if (!res.on && !o.force) return res;
+  if (!env.DISCORD_BOT_TOKEN) { res.why = "DISCORD_BOT_TOKEN が登録されていません";
+    return res; }
+  for (const t of subTopicWant(cfg)) {
+    res.n++;
+    const h = SUBINDEX.hashOf(t.want);
+    const key = SUB_TOPIC_KEY + t.ch;
+    let was = "";
+    try { was = String((await stateGet(env, key)) || ""); } catch (e) { was = ""; }
+    const a = was.split("|");
+    if (!o.force) {
+      if (a[0] === "ok" && a[1] === h) { res.skip++; continue; }
+      /* 前に失敗した文は、しばらく置いてからもう一度ためす。 */
+      if (a[0] === "ng" && a[1] === h
+          && Date.now() - (Date.parse(a[2] || "") || 0) < SUB_TOPIC_RETRY_MS) {
+        res.skip++; continue;
+      }
+    }
+    const row = { ch: t.ch, names: t.names, want: t.want, was: "", ok: false,
+                  why: "" };
+    const g = await dcApi(env, null, "GET", "/channels/" + t.ch);
+    let done = false, bad = null;
+    if (!g.ok) bad = g;
+    else {
+      row.was = String(((g.data || {}).topic) || "");
+      if (row.was === t.want) { done = true; res.same++; row.ok = true; }
+      else {
+        const e = await dcApi(env, run, "PATCH", "/channels/" + t.ch,
+                              { topic: t.want });
+        if (e.ok) { done = true; res.edit++; row.ok = true; row.edit = true; }
+        else bad = e;
+      }
+    }
+    if (bad) {
+      res.fail++;
+      row.why = subTopicWhy(bad);
+      if (!res.why) res.why = row.why;
+    }
+    try {
+      await stateSet(env, key, (done ? "ok" : "ng") + "|" + h + "|" + nowIso())
+        .run();
+    } catch (e) { /* 控えが書けなくても止めない */ }
+    res.rows.push(row);
+  }
+  if (run && (res.edit || res.fail))
+    run.notes.push("チャンネルの説明文：書き換え " + res.edit + "・失敗 "
+      + res.fail + (res.why ? ("（" + res.why + "）") : ""));
+  return res;
+}
+/* GET /sub/topic … 予定（読むだけ）／POST /sub/topic { approve } … 合わせる。 */
+async function jobSubTopic(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-topic");
+  const res = { ok: false, approve: o.approve === true };
+  try {
+    const cfg = await subSettings(env);
+    if (!res.approve) Object.assign(res, await subTopicPlan(env, run, cfg));
+    else {
+      const z = await subTopicSync(env, run, cfg, { force: true });
+      Object.assign(res, z, { diff: z.fail });
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-topic: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
 }
 /* プランぜんぶの一覧を書き換える（配信のあとにも回す）。 */
 async function subIndexAll(env, run, cfg, rows, plan) {
@@ -21396,6 +21574,14 @@ export default {
       }
       /* 8.46（カジの依頼）会員チャンネルの「今週の一覧」を書き換える。
          押しただけで分かるように、GET は**予定**（何ページ・何件）を返す。 */
+      /* 8.86 チャンネルの説明文（トピック）。GET は読むだけ。 */
+      if (request.method === "GET" && url.pathname === "/sub/topic")
+        return json(await jobSubTopic(env, { approve: false }), 200, origin);
+      if (request.method === "POST" && url.pathname === "/sub/topic") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubTopic(env, { approve: b.approve === true }),
+                    200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/sub/index") {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubIndex(env, { plan: b && b.plan }), 200, origin);
@@ -22063,4 +22249,6 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subQOver, subQOf, subQShown, subPlanBuild,
   /* 8.83 お一人の上限のタグと、上限を超えた注文の知らせ。 */
   subQtyBy, subOverQty, subOverHook, SUB_OVERQ_KEY,
+  /* 8.86 チャンネルの説明文（トピック）。 */
+  subTopicWant, subTopicPlan, subTopicSync, jobSubTopic, SUB_TOPIC_KEY,
   unparsedInfo, mwDropInfo, putListings };

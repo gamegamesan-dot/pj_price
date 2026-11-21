@@ -240,6 +240,8 @@
     if (num(x.amz_price) > 0)
       f.push({ name: "Amazon の販売価格",
                value: yen(x.amz_price) + amzWhen(x), inline: true });
+    /* 8.29 目安の決まり（shared/subguide.js）。粗利の説明の文もここから。 */
+    var G = guideMod();
     if (x.gross !== null && x.gross !== undefined) {
       /* 8.17 利益率＝見込みの粗利 ÷ 仕入れ価格。 */
       var pct = (num(x.price) > 0)
@@ -252,14 +254,19 @@
                     8.37（v296・カジの依頼3）**どの売り方の計算か**を書く。
                     Amazon が返す手数料は FBA の見積もり（IsAmazonFulfilled）
                     なので、FBA で売った場合の粗利になる。 */
-                 + "\n（**Amazon FBA で売った場合**・Amazon の手数料を"
-                 + "引いたあと・送料と倉庫までの送料は別）",
+                 /* 8.86（カジの依頼）この説明は全カード共通なので、
+                    #はじめに の「カードの読み方」に移せる（opt.slim）。
+                    数字はそのまま残す。文は shared/subguide.js の1か所。 */
+                 + (opt.slim ? ""
+                    : ((G && typeof G.grossNote === "function")
+                       ? G.grossNote()
+                       : "\n（**Amazon FBA で売った場合**・Amazon の手数料を"
+                         + "引いたあと・送料と倉庫までの送料は別）")),
                inline: true });
     }
     /* 8.29（カジの依頼）買うかどうかの目安（1項目1行）。
        プランごとに出す項目を⚙で選べる。取れていない項目は出さない。
        決まりは shared/subguide.js の1か所だけ。 */
-    var G = guideMod();
     /* 8.37（v296）「赤字にならない売値」は**送料**も引くので、
        その商品の送り方の区分を目安に渡す（決めるのは shopcsv.js）。 */
     var gopt = opt.guide || {};

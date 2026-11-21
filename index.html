@@ -2349,6 +2349,20 @@ body.staff #syncOnHandFix{display:none !important}
              （shopify/snippets/member-qty-guard.liquid）が数量を抑える。 -->
         <div class="chk cfgprice"><input type="checkbox" id="subShopQtyOn"><label for="subShopQtyOn" style="flex:1"><b>お一人の上限を Shopify の商品にも入れる</b>（テーマで数量を抑える・既定オフ）</label></div>
         <div class="note2" id="subShopQtyNote" style="margin:0 0 6px">オンにすると、会員用の商品に<b>プランごとの上限のタグ</b>（例 <code>qty-light-1</code>）を付けます。数は、そのプランのチャンネルに<b>出ているカードに書いてある数</b>（出ていなければ上の欄の数）です。テーマにスニペットを貼ってあると、商品ページとカートの数量が上限までになります（貼り方は「Shopify会員用の鍵」の手順書 §14）。オンにしたあと、下の<b>「いまある会員用の商品を直す」</b>で、もうある商品にも付けます。<b>会員用でない商品（海外向け・サービス商品）には付けません。</b>上限を超えた注文が入ったときは、この欄に関係なく運営のチャンネルに知らせます。</div>
+        <!-- 8.86（カジの依頼）カードに毎回入っている共通の説明（粗利の
+             「Amazon FBA で売った場合〜」）を、#はじめに の「カードの読み方」に移す。
+             出ているカードが書き換わるので既定オフ（件数を見てから入れる）。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subCardSlim"><label for="subCardSlim" style="flex:1"><b>カードの共通の説明文を外す</b>（粗利の「Amazon FBA で売った場合〜」。数字は残します・既定オフ）</label></div>
+        <div class="note2" id="subCardSlimNote" style="margin:0 0 6px">同じ説明は <b>#はじめに の「カードの読み方」</b>に1回だけ載せます（下の「読み方の固定メッセージの文を作る」で作って貼ります）。各リストのピン留め「今週の一覧」にも、短い説明と #はじめに へのリンクが自動で入ります。<b>オンにすると、出ているカードを次の配信で書き換えます</b>（通知は鳴りません）。何枚書き換わるかは「今日の配信の予定を見る」に出ます。</div>
+        <!-- 8.86 チャンネルの説明文（トピック）を、プランの上限から作った文に合わせる。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subTopicOn" checked><label for="subTopicOn" style="flex:1"><b>チャンネルの説明文（トピック）を上限に合わせる</b>（配信の回に自動・既定オン）</label></div>
+        <div class="note2" id="subTopicCfgNote" style="margin:0 0 4px">プランのチャンネルの説明文を「◯◯の商品リスト。お一人◯点まで／1回◯件まで。…」にします。数字は上の<b>プランの上限</b>から作るので、上限を変えると次の配信で説明文も変わります。ボットに<b>「チャンネルの管理」</b>の権限が要ります。</div>
+        <div style="display:flex;gap:6px;margin:0 0 4px">
+          <button class="btn cfgprice" id="subTopicChkBtn" onclick="subTopicGo(false);return false" style="flex:1">説明文を確かめる（何も変えない）</button>
+          <button class="btn cfgprice" id="subTopicGoBtn" onclick="subTopicGo(true);return false" style="flex:1">説明文をいま合わせる</button>
+        </div>
+        <div class="note2" id="subTopicNote" style="margin:0 0 2px"></div>
+        <div id="subTopicBox" style="margin:0 0 6px"></div>
         <div class="row cfgprice"><label for="subChMonitor">モニター：チャンネルID</label><input type="text" id="subChMonitor" value="" inputmode="numeric" style="flex:1"></div>
         <!-- 8.53（カジの確認）モニターの「1回に新しく出す件数」の箱は、
              上の「モニターだけは別の選び方です」の囲みに**1つだけ**にした
@@ -3881,6 +3895,9 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subQFix',
                 /* 8.83 お一人の上限を Shopify の商品にも入れる（既定オフ）。 */
                 'subShopQtyOn',
+                /* 8.86 カードの共通の説明を外す（既定オフ）／トピックを
+                   上限に合わせる（既定オン）。 */
+                'subCardSlim','subTopicOn',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -20331,6 +20348,78 @@ function subLimHtml(d,pre,list){
         +'「お一人◯点まで」も、新しい上限に書き換える」をオンにして配信してください。')
     +'</div>';
 }
+/* ===== 8.86（カジの依頼）カードの共通の説明／チャンネルの説明文 =====
+   どちらも pj-sync が数えた・読んだ結果をそのまま出す（ここでは変えない）。 */
+function subSlimHtml(d){
+  var o=d&&d.slim;
+  if(!o)return '';
+  if(o.on)
+    return '<div class="note2" id="subSlimLine" style="margin:2px 0 0">'
+      +'カードの共通の説明文（粗利の「Amazon FBA で売った場合〜」）は'
+      +'<b>外してあります</b>（#はじめに の「カードの読み方」に載せています）。</div>';
+  var b=(o.plans||[]).filter(function(r){ return +r.n>0; }).map(function(r){
+    return esc(String(r.name||r.key))+'：'+mwN(+r.n)+'枚'; });
+  return '<div class="note2" id="subSlimLine" style="margin:2px 0 0">'
+    +'⚙「カードの共通の説明文を外す」をオンにすると、出ているカードが '
+    +'<b>'+mwN(+o.total||0)+'枚</b> 書き換わります'
+    +(b.length?('（'+b.join('／')+'）'):'')
+    +'。<span style="opacity:.8">先に #はじめに の「カードの読み方」を'
+    +'貼り替えてから、オンにして配信してください。</span></div>';
+}
+function subTopicRows(o){
+  return (o.rows||[]).map(function(r){
+    return '<div class="note2" data-topic="'+esc(String(r.ch))+'" style="margin:2px 0 0">'
+      +'<b>'+esc(String(r.names||''))+'</b>　'
+      +(r.why?('<span style="color:var(--bad)">⚠ '+esc(String(r.why))+'</span>')
+        :((r.same||(r.ok&&!r.edit))?'<span style="color:var(--good)">合っています</span>'
+          :(r.edit?'<b style="color:var(--good)">書き換えました</b>'
+            :'<b style="color:var(--bad)">食い違っています</b>')))
+      +'<br><span style="opacity:.8">入れる文：'+esc(String(r.want||''))+'</span>'
+      +((r.was!==undefined&&String(r.was)!==String(r.want)&&!r.edit)
+        ?('<br><span style="opacity:.8">いまの文：'
+          +esc(String(r.was||'（空）'))+'</span>'):'')
+      +'</div>';
+  }).join('');
+}
+function subTopicHtml(d){
+  var o=d&&d.topic;
+  if(!o||!(o.rows||[]).length)return '';
+  return '<div class="note2" id="subTopicLine" style="margin:2px 0 0">'
+    +'<b>チャンネルの説明文（トピック）</b>　'+mwN(+o.n||0)+'か所のうち '
+    +(+o.diff?('<b style="color:var(--bad)">'+mwN(+o.diff)+'か所</b>が食い違っています'
+        +(o.on?'（次の配信で合わせます）'
+              :'（⚙「チャンネルの説明文を上限に合わせる」がオフです）'))
+      :'ぜんぶ合っています')
+    +'</div>';
+}
+/* 説明文を確かめる（approve=false・読むだけ）／いま合わせる（approve=true）。 */
+function subTopicGo(approve){
+  if(roleDenyPrice('subTopicNote'))return;
+  var note=$('subTopicNote'), box=$('subTopicBox');
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return; }
+  note.textContent=approve?'合わせています…':'確かめています…（何も変えません）';
+  var b1=$('subTopicChkBtn'), b2=$('subTopicGoBtn');
+  if(b1)b1.disabled=true; if(b2)b2.disabled=true;
+  var q=approve?mwPost('/sub/topic',{ approve:true }):mwGet('/sub/topic');
+  return q.then(function(d){
+    var x=d||{};
+    if(x.error){ note.textContent='⚠ できませんでした：'+String(x.detail||x.error); return; }
+    note.innerHTML=approve
+      ?('✓ 書き換え <b>'+mwN(+x.edit||0)+'か所</b>・合っていた '+mwN(+x.same||0)
+        +'か所'+(+x.fail?('・<b style="color:var(--bad)">できなかった '
+          +mwN(+x.fail)+'か所</b>：'+esc(String(x.why||''))):''))
+      :('確かめました（何も変えていません）：'+mwN(+x.n||0)+'か所のうち '
+        +(+x.diff?('<b style="color:var(--bad)">'+mwN(+x.diff)
+          +'か所</b>が食い違っています'):'ぜんぶ合っています')
+        +(x.why?('　⚠ '+esc(String(x.why))):''));
+    if(box)box.innerHTML=subTopicRows(x);
+  })['catch'](function(e){
+    note.textContent='⚠ できませんでした：'+String((e&&e.message)||e)
+      +'（pj-sync をデプロイしたか確かめてください）';
+  }).then(function(){ if(b1)b1.disabled=false; if(b2)b2.disabled=false; });
+}
 /* 予定の中身を出す（8.23 タブを選び直したときにも、ここだけ出し直す）。 */
 function subPlanRender(){
   var d=subPlanData; if(!d)return;
@@ -20392,7 +20481,7 @@ function subPlanRender(){
           +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
           +mwN(+p.edit||0)+'）</button>');
     });
-    $('subPlanList').innerHTML=subAutoHtml()+subLimHtml(d)+bar+(rows.length?rows.join('')
+    $('subPlanList').innerHTML=subAutoHtml()+subLimHtml(d)+subSlimHtml(d)+subTopicHtml(d)+bar+(rows.length?rows.join('')
       :('<div class="note2" style="margin-top:4px">'
         +((tab==='all')
           ? '送る商品がありません（「Shopify に読み込みました」の印が'
@@ -31111,7 +31200,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v334';   // sw.js の const V と必ず同じ値にする
+var APP_V='v335';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
