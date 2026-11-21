@@ -221,6 +221,12 @@ console.log('\n=== ③ テーマのスニペットに同じ決まりが入って
      g.replace(/\(add\|change\|update\|clear\)/,'')),
      '★カートは数量を減らすだけ（空にしない）');
   ok(!/https?:\/\//.test(g),'★外のサーバーには何も送らない');
+  /* 手順書（コピペ用）の中身が、ファイルと同じ。 */
+  const man=read('pj_price_追加仕様_Shopify会員用の鍵.md');
+  ok(man.indexOf(q.trim())>0&&man.indexOf(g.trim())>0,
+     '★★★手順書に貼ってある中身が、スニペットのファイルと同じ');
+  ok(/\{%- render 'member-qty-guard' -%\}/.test(man)&&/<\/body>/.test(man),
+     '★★手順書に、貼る場所（</body> のすぐ上）と1行が書いてある');
 }
 
 console.log('\n=== ④ ⚙がオフなら今までどおり ===');
@@ -416,6 +422,16 @@ console.log('\n=== ⑧ 上限を超えた注文の知らせ（webhook）===');
   ok(ops.length===3&&/プラン：プランのタグなし/.test(ops[2])
      &&/数量 2点／上限 1点/.test(ops[2]),
      '★★★プランのタグが無い人は、いちばん小さい上限で比べる');
+  /* 顧客のタグの欄そのものが無い注文は「分からない」。どのプランでも
+     超える数量（プレミアムの 5点より多い）だけ知らせる。 */
+  await hook(env,order({ id:'9020', name:'#2020', customer:{ id:'8' },
+    line_items:[{ sku:'SUB-'+jan(2)+'-20261120', quantity:4, title:'x' }] }));
+  ok(ops.length===3,'★★顧客のタグが付いてこない注文は、4点では知らせない（プレミアムなら買える）');
+  await hook(env,order({ id:'9021', name:'#2021', customer:{ id:'8' },
+    line_items:[{ sku:'SUB-'+jan(2)+'-20261120', quantity:6, title:'x' }] }));
+  ok(ops.length===4&&/プラン：分かりません/.test(ops[3])&&/数量 6点／上限 5点/.test(ops[3]),
+     '★★6点なら知らせる（プランは「分かりません」）');
+  ops.pop();
   /* 社内の確認（member-staff）は知らせない。 */
   await hook(env,order({ id:'9006', name:'#2006',
     customer:{ id:'9', tags:'member-staff' } }));

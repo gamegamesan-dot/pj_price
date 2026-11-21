@@ -11641,7 +11641,12 @@ async function subOverHook(env, run, order) {
                  title: String((li || {}).title || "") });
   }
   if (!lines.length) return { n: 0, rows: [], told: false };
-  const tags = MGATE.tags(String(((o.customer || {}).tags) || ""));
+  /* 顧客のタグが注文に付いてこないとき（欄そのものが無い）は、プランが
+     「分からない」として扱う（どのプランでも超える数量だけ知らせる）。
+     欄があって空のときは「プランのタグなし」。 */
+  const ct = (o.customer || {}).tags;
+  const tags = (ct === undefined || ct === null) ? null
+    : MGATE.tags(Array.isArray(ct) ? ct : String(ct));
   return await subOverQty(env, run, lines, () => tags, {});
 }
 /* 8.80（カジの依頼）MW で在庫が切れた品か（自動配信を使うあいだだけ見る）。

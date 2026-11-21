@@ -866,3 +866,473 @@ CSV で作った直後の商品は **`active`（公開）**です。
   会員は Discord のカードから入るので運用は変わりません
 - `seo.hidden` と §3-2 の `member-can-see` は**そのまま残して**ください
   （非公開にし忘れた商品の受け皿）
+
+## 14. お一人の上限（「お一人◯点まで」）をテーマで抑える（8.83・カジの依頼）
+
+対象：Omakase Ship（テーマ Rise）。**まず複製テーマで試し、公開はカジが決めます。**
+
+### 14-1. 何をするか
+
+Discord のカードに出している「お一人◯点まで」を、Shopify の**商品ページ**と
+**カート**でも効かせます。
+
+| だれが | 何をするか |
+| --- | --- |
+| pj（pj-sync） | 会員用の商品に、プランごとの上限の**タグ**を付ける（例 `qty-light-1`・`qty-standard-2`・`qty-premium-5`）。数は、そのプランのチャンネルに**出ているカードに書いてある数** |
+| テーマ（貼るスニペット） | 買う人のプランのタグ（`grade-◯◯`）と突き合わせて、**数量の欄とカートを上限までに抑える** |
+| pj（pj-sync） | それでも上限を超えた注文が入ったら、**運営のチャンネルに知らせる**（すり抜けへの備え） |
+
+**かからない商品**：`member-list` のタグが無い商品には何もしません。
+海外向けの商品（`os-`）と Omakase Ship のサービス商品は今までどおりです。
+
+### 14-2. 上限の決まり（上から順に見る）
+
+pj の `shared/mgate.js`（`qtyOf`）と `snippets/member-qty.liquid` に**同じ順**で
+書いてあります（`tests/qtylim.mjs` で突き合わせ）。
+
+| 順 | 条件 | 上限 |
+| --- | --- | --- |
+| ① | 商品に `member-list` が無い（海外向け・サービス商品） | **なし** |
+| ② | 商品に `qty-◯◯-数` のタグが無い | **なし** |
+| ③ | 顧客に `member-staff`（社内の確認用） | **なし** |
+| ④ | 顧客の `grade-◯◯` と合う `qty-◯◯` がある | **合うものの、いちばん大きい数** |
+| ⑤ | 1つも合わない（下の表） | **商品の `qty-◯◯` の、いちばん小さい数** |
+
+**プランのタグが無い人・ログインしていない人の動き**
+
+| 人 | 会員用の商品を開いたとき | カートに直接入れたとき（すり抜け） |
+| --- | --- | --- |
+| ログインしていない人 | 鍵（§1 の②）で**ログインの画面へ**。商品ページは出ないので買えない | ⑤ いちばん小さい上限で数量を抑える。注文が入れば運営に知らせる |
+| ログイン済み・会員でない人（`member-list` なし） | 鍵（④）で `/pages/members-only` へ | 同上 |
+| 会員だが `grade-◯◯` が付いていない人 | 鍵（⑤）で `/pages/members-only?why=plan` へ（会員用の商品にはどれも `grade-◯◯` が付いているため） | 同上（知らせには「プランのタグなし」と出る） |
+| プランが合わない人（例：スタンダードからの商品にライト会員） | 鍵（⑤）で `/pages/members-only?why=plan` へ | 同上 |
+| プランを2つ持つ人 | 見られる | ④ 大きいほうの数 |
+| 社内（`member-staff`） | 見られる | 上限なし（知らせも出さない） |
+
+商品ページを開けるのは「プランが合う会員」だけなので、ふつうの会員には
+④ の数（自分のプランの上限）が効きます。⑤ は、鍵をすり抜けてカートに
+入れられたときの受け皿です。
+
+### 14-3. 貼る手順（複製テーマで）
+
+貼るのは **スニペット2つ**と、**`layout/theme.liquid` の1行**です。
+この1行で、**商品ページ**と**カート**（カートのページ・横から出るカート）の
+両方に効きます（商品ページ用・カート用に分けて貼る必要はありません）。
+
+**手順 0.** オンラインストア → テーマ → 複製テーマの「…」→ **ZIP をダウンロード**
+（戻せるように）→「…」→ **コードを編集**
+
+**手順 1.** 左の一覧の **スニペット** →「新しいスニペットを追加」→ 名前
+`member-qty` → 中身をぜんぶ消して下を貼り、**保存**
+
+{% raw %}
+```liquid
+{%- comment -%}
+  会員用商品の「お一人◯点まで」（pj_price 8.83）
+  Shopify ストア：Omakase Ship ／ テーマ：Rise
+
+  これは「この人は、この商品を何点まで買えるか」を**数字で出すだけ**の
+  部品です（0 は上限なし）。数量を抑える動きは member-qty-guard.liquid が
+  します。貼るだけで、ここを直接どこかに差し込む必要はありません。
+
+  使い方（member-qty-guard.liquid の中で使っています）
+    {%- capture q -%}{%- render 'member-qty', product: product -%}{%- endcapture -%}
+    {%- assign q = q | strip | plus: 0 -%}
+
+  決まり（上から順に見る。pj の shared/mgate.js の qtyOf と同じ順）
+    ① 商品に member-list が無い → 0（上限なし）
+       海外向けの商品（os-）や Omakase Ship のサービス商品はここ。触りません
+    ② 商品に qty-◯◯-数 のタグが1つも無い → 0（上限なし）
+       タグは pj が付けます（例 qty-light-1／qty-standard-2／qty-premium-5）
+    ③ 顧客に member-staff → 0（社内の確認用）
+    ④ 顧客の grade-◯◯ と合う qty-◯◯ のうち、いちばん大きい数
+    ⑤ 1つも合わない（ログインしていない・プランのタグが無い・
+       プランが合わない）→ 商品の qty-◯◯ のうち、いちばん小さい数
+       （本当は鍵で商品ページに入れない人です。カートに直接入れられた
+         ときのために、いちばんきびしい数にしておきます）
+{%- endcomment -%}
+{%- liquid
+  assign qmax = 0
+  assign qmin = 0
+  assign p = product
+  if p != blank and p.tags contains 'member-list'
+    for t in p.tags
+      assign head = t | slice: 0, 4
+      if head == 'qty-'
+        assign parts = t | split: '-'
+        if parts.size == 3
+          assign n = parts[2] | plus: 0
+          if n > 0
+            if qmin == 0 or n < qmin
+              assign qmin = n
+            endif
+            assign g = 'grade-' | append: parts[1]
+            if customer != blank and customer.tags contains g
+              if n > qmax
+                assign qmax = n
+              endif
+            endif
+          endif
+        endif
+      endif
+    endfor
+    if qmax == 0
+      assign qmax = qmin
+    endif
+    if customer != blank and customer.tags contains 'member-staff'
+      assign qmax = 0
+    endif
+  endif
+-%}{{ qmax }}
+```
+{% endraw %}
+
+**手順 2.** 同じように、名前 `member-qty-guard` のスニペットを作り、下を貼って**保存**
+
+{% raw %}
+```liquid
+{%- comment -%}
+  会員用商品の数量を「お一人◯点まで」に抑える（pj_price 8.83）
+  Shopify ストア：Omakase Ship ／ テーマ：Rise
+
+  使い方（layout/theme.liquid の </body> のすぐ上に1行）
+    {%- render 'member-qty-guard' -%}
+  この1か所で、**商品ページ**と**カート**（カートのページ・横から出る
+  カート）の両方に効きます。
+
+  すること
+    ・商品ページ：数量の欄を上限までにする（カートに入っている数も数える）。
+      上限を超える「カートに入れる」は止めて、理由を出す
+    ・カート：上限を超えていたら、数量を上限まで減らして知らせる。
+      超えたまま「ご購入手続きへ」は押せない
+  しないこと
+    ・会員用でない商品（member-list のタグが無い商品）には何もしない
+      （海外向けの os-・Omakase Ship のサービス商品はそのまま）
+    ・顧客の名前・メールなどは読まない（見るのはタグだけ）
+
+  数の決まりは member-qty.liquid（pj の shared/mgate.js の qtyOf と同じ）。
+  これは**画面の上での上限**です。カートの URL を直接組まれると
+  すり抜けられます（そのときは pj-sync が注文を見て運営に知らせます）。
+{%- endcomment -%}
+{%- liquid
+  assign pj_q_page = 0
+  if template.name == 'product' and product != blank
+    capture pj_q_cap
+      render 'member-qty', product: product
+    endcapture
+    assign pj_q_page = pj_q_cap | strip | plus: 0
+  endif
+-%}
+<script type="application/json" id="pj-qty-data">
+{"product":{%- if pj_q_page > 0 -%}{"id":{{ product.id | json }},"max":{{ pj_q_page }}}{%- else -%}null{%- endif -%},
+"cart":[
+{%- for item in cart.items -%}
+  {%- capture pj_q_cap -%}{%- render 'member-qty', product: item.product -%}{%- endcapture -%}
+  {%- assign pj_q_n = pj_q_cap | strip | plus: 0 -%}
+  {"key":{{ item.key | json }},"pid":{{ item.product_id | json }},"qty":{{ item.quantity | json }},"max":{{ pj_q_n }}}{%- unless forloop.last -%},{%- endunless -%}
+{%- endfor -%}
+]}
+</script>
+<script>
+/* pj-qty-guard:start */
+(function () {
+  var el = document.getElementById('pj-qty-data');
+  if (!el || !window.fetch) return;
+  var D;
+  try { D = JSON.parse(el.textContent || '{}'); } catch (e) { return; }
+  var P = (D.product && D.product.max > 0) ? D.product : null;
+  var MAX = {};                       /* 商品ID → 上限（会員用の商品だけ） */
+  var any = false;
+  if (P) { MAX[P.id] = P.max; any = true; }
+  (D.cart || []).forEach(function (x) {
+    if (x.max > 0) { MAX[x.pid] = x.max; any = true; }
+  });
+  if (!any) return;                   /* 会員用の商品が無いページでは何もしない */
+
+  var ROOT = (window.Shopify && window.Shopify.routes
+    && window.Shopify.routes.root) || '/';
+  var KEY = 'pj-qty-fixed';
+  var fetch0 = window.fetch.bind(window);
+  var T_FIXED = 'カートの数量を、お一人の上限に合わせて直しました。';
+  var T_OVER = 'お一人の上限を超えている商品があります。カートの数量を減らしてください。';
+  function tItem(n, inCart) {
+    return 'この商品はお一人 ' + n + '点までです。'
+      + (inCart > 0 ? '（カートに ' + inCart + '点 入っています）' : '');
+  }
+  function say(text, bad) {
+    var b = document.getElementById('pj-qty-msg');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'pj-qty-msg';
+      b.setAttribute('role', 'alert');
+      b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);'
+        + 'z-index:2147483000;max-width:92%;padding:10px 14px;border-radius:8px;'
+        + 'font-size:14px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.25);'
+        + 'color:#fff;text-align:center';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.style.background = bad ? '#b3261e' : '#1b5e20';
+    b.textContent = text;
+    clearTimeout(say.t);
+    say.t = setTimeout(function () {
+      if (b.parentNode) b.parentNode.removeChild(b); }, 8000);
+  }
+  /* カートの行を、商品ごとに足す（会員用の商品だけ）。 */
+  function sums(items) {
+    var by = {};
+    (items || []).forEach(function (x) {
+      var pid = (x.pid !== undefined) ? x.pid : x.product_id;
+      if (!MAX[pid]) return;
+      var q = Number((x.qty !== undefined) ? x.qty : x.quantity) || 0;
+      var o = by[pid] || (by[pid] = { sum: 0, lines: [] });
+      o.sum += q;
+      o.lines.push({ key: x.key, qty: q });
+    });
+    return by;
+  }
+  var NOW = sums(D.cart);
+  /* 上限を超えているぶんを、後ろの行から減らす。 */
+  function overList(by) {
+    var fix = [];
+    Object.keys(by).forEach(function (pid) {
+      var over = by[pid].sum - MAX[pid];
+      for (var i = by[pid].lines.length - 1; i >= 0 && over > 0; i--) {
+        var l = by[pid].lines[i], cut = Math.min(l.qty, over);
+        fix.push({ id: l.key, quantity: l.qty - cut });
+        over -= cut;
+      }
+    });
+    return fix;
+  }
+  function fixedAt() {
+    try { return Number(window.sessionStorage.getItem(KEY)) || 0; }
+    catch (e) { return 0; }
+  }
+  var fixing = false;
+  function fixCart(by) {
+    var fix = overList(by);
+    if (!fix.length) return false;
+    /* 直したばかりなのにまだ超えている：くり返さず、知らせるだけにする。 */
+    if (Date.now() - fixedAt() < 15000) { say(T_OVER, true); return true; }
+    if (fixing) return true;
+    fixing = true;
+    var i = 0;
+    (function next() {
+      if (i >= fix.length) {
+        try { window.sessionStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+        window.location.reload();
+        return;
+      }
+      var f = fix[i++];
+      fetch0(ROOT + 'cart/change.js', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(f) }).then(next, next);
+    })();
+    return true;
+  }
+  function refresh() {
+    return fetch0(ROOT + 'cart.js', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (c) { NOW = sums((c || {}).items); paint(); fixCart(NOW); })
+      ['catch'](function () {});
+  }
+  /* テーマがカートを書き換えたら（追加・数量の変更）、数え直す。 */
+  window.fetch = function (u) {
+    var p = fetch0.apply(null, arguments);
+    try {
+      var url = String((u && u.url) || u || '');
+      if (/\/cart\/(add|change|update|clear)/.test(url))
+        p.then(function () { setTimeout(refresh, 300); }, function () {});
+    } catch (e) {}
+    return p;
+  };
+
+  /* ---- 商品ページ ---- */
+  function inCart() { return P ? ((NOW[P.id] || { sum: 0 }).sum) : 0; }
+  function remain() { return P ? Math.max(0, P.max - inCart()) : 0; }
+  function isAdd(f) {
+    return !!(f && f.getAttribute && /\/cart\/add/.test(f.getAttribute('action') || ''));
+  }
+  /* このページの商品のフォームか（おすすめ商品などの別の商品は触らない）。 */
+  function mine(f) {
+    var h = f.querySelector ? f.querySelector('input[name="product-id"]') : null;
+    return !h || String(h.value) === String(P.id);
+  }
+  function paint() {
+    if (!P) return;
+    var r = remain(), cap = Math.max(1, r), first = null;
+    var ins = document.querySelectorAll('input[name="quantity"]');
+    for (var i = 0; i < ins.length; i++) {
+      var f = ins[i].form;
+      if (f && (!isAdd(f) || !mine(f))) continue;
+      ins[i].setAttribute('max', String(cap));
+      if (Number(ins[i].value) > cap) ins[i].value = String(cap);
+    }
+    var fs = document.querySelectorAll('form[action*="/cart/add"]');
+    for (var j = 0; j < fs.length && !first; j++) if (mine(fs[j])) first = fs[j];
+    if (!first) return;
+    var note = document.getElementById('pj-qty-note');
+    if (!note) {
+      note = document.createElement('p');
+      note.id = 'pj-qty-note';
+      note.style.cssText = 'margin:8px 0 0;font-size:13px';
+      first.parentNode.insertBefore(note, first.nextSibling);
+    }
+    var n = inCart();
+    note.textContent = 'お一人 ' + P.max + '点まで'
+      + (n > 0 ? ('（カートに ' + n + '点 入っています・'
+          + (r > 0 ? ('あと ' + r + '点') : 'これ以上は入れられません') + '）') : '');
+  }
+  document.addEventListener('submit', function (ev) {
+    if (!P) return;
+    var f = ev.target;
+    if (!isAdd(f) || !mine(f)) return;
+    var q = 1;
+    try { q = parseInt(new FormData(f).get('quantity'), 10) || 1; } catch (e) {}
+    if (q > remain()) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      say(tItem(P.max, inCart()), true);
+      return;
+    }
+    (NOW[P.id] || (NOW[P.id] = { sum: 0, lines: [] })).sum += q;
+    paint();
+    setTimeout(refresh, 1500);
+  }, true);
+  ['input', 'change'].forEach(function (name) {
+    document.addEventListener(name, function (ev) {
+      var t = ev.target;
+      if (P && t && t.name === 'quantity') paint();
+    }, true);
+  });
+
+  /* ---- カート ---- */
+  /* カートのページの数量の欄（updates[]）は、カートの行と同じ並び。
+     まだ送っていない数量も見て、超えていたら上限に戻す。 */
+  function typedOver() {
+    var ins = document.querySelectorAll('input[name="updates[]"]');
+    var cart = D.cart || [];
+    if (!ins.length || ins.length !== cart.length) return false;
+    var by = {}, hit = false, i;
+    for (i = 0; i < cart.length; i++) {
+      if (!MAX[cart[i].pid]) continue;
+      by[cart[i].pid] = (by[cart[i].pid] || 0) + (Number(ins[i].value) || 0);
+    }
+    for (i = cart.length - 1; i >= 0; i--) {
+      var pid = cart[i].pid;
+      if (!MAX[pid] || !(by[pid] > MAX[pid])) continue;
+      var cut = Math.min(Number(ins[i].value) || 0, by[pid] - MAX[pid]);
+      ins[i].value = String((Number(ins[i].value) || 0) - cut);
+      by[pid] -= cut;
+      hit = true;
+    }
+    return hit;
+  }
+  document.addEventListener('click', function (ev) {
+    var t = (ev.target && ev.target.closest)
+      ? ev.target.closest('[name="checkout"], a[href*="/checkout"]') : null;
+    if (!t) return;
+    var over = overList(NOW).length > 0;
+    var typed = typedOver();
+    if (!over && !typed) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    if (over) fixCart(NOW); else say(T_OVER, true);
+  }, true);
+
+  /* ---- 開いたとき ---- */
+  function start() {
+    paint();
+    if (!fixCart(NOW) && Date.now() - fixedAt() < 15000) say(T_FIXED, false);
+  }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+/* pj-qty-guard:end */
+</script>
+```
+{% endraw %}
+
+**手順 3.** `layout/theme.liquid` を開き、**`</body>` を検索**して、
+その**すぐ上**に次の1行を足して**保存**
+
+{% raw %}
+```liquid
+  {%- render 'member-qty-guard' -%}
+```
+{% endraw %}
+
+> `</body>` はファイルのいちばん下の近くに1つだけあります。
+> §3-1 で足した鍵の行（`member-gate`）はそのままにしてください。
+
+**手順 4.（pj の側）**
+
+1. pj-sync をデプロイ（Actions「deploy-pj-sync」：`dry_run` オフ・
+   `run_migrations` オン・`deploy` オン）。D1 に `migrate-0070-sub-qty.sql` が入る
+2. pj を開き直し（v332）、⚙「会員向けの配信」→
+   **「お一人の上限を Shopify の商品にも入れる」をオン**
+3. その下の **「確かめる（何も変えない）」** → 「お一人の上限のタグ：付けます
+   直す必要がある ◯件」を見る
+4. **「いまある会員用の商品を直す」** → もうある会員用の商品にタグが付く
+   （これから作る商品には、自動配信が作るときに付けます）
+
+### 14-4. 確かめ方（複製テーマのプレビューで）
+
+| やること | 期待 |
+| --- | --- |
+| ライト会員（`grade-light`）で会員用の商品を開く | 「お一人 1点まで」と出て、数量の欄が 1 より増えない |
+| そのままカートに入れ、もう一度「カートに入れる」 | 止まって「この商品はお一人 1点までです。（カートに 1点 入っています）」と出る |
+| スタンダード会員で同じ商品 | 2点まで入る。3点目は止まる |
+| カートの数量を上限より多くする（横から出るカートの「＋」・カートのページ） | 上限まで戻り、「カートの数量を、お一人の上限に合わせて直しました。」と出る |
+| 海外向けの商品（`os-`）・サービス商品 | **今までどおり**（数量の欄もカートも変わらない） |
+| 社内のアカウント（`member-staff`） | 上限なし |
+| Shopify 管理画面で会員用の商品を開く | タグに `qty-light-1` などが付いている |
+
+### 14-5. これで止められないこと（すり抜け）と備え
+
+これは**画面の上での上限**です。Shopify 本体のお会計は止めません
+（お会計で止める仕組みは、カスタムアプリでは Plus が要ります・§6-1）。
+
+| 抜け道 | 備え |
+| --- | --- |
+| カートの URL を直接組む（`/cart/バリアントID:数量`） | **注文が入ったら運営のチャンネルに知らせる**（下） |
+| 注文を何回かに分けて買う | 止められません・知らせも出ません（pj は顧客を追わず、**1つの注文の中の数量**だけを見るため） |
+| 「今すぐ購入」などの速いお会計のボタン | 数量の欄の上限は効きます。カートに入っている分とは合算されません（別の注文になるため） |
+
+**上限を超えた注文の知らせ**（pj-sync・⚙のオン／オフに関係なく動きます）
+
+- 知らせる先：運営専用の宛先（`DISCORD_OPS_WEBHOOK_URL`）。無ければ今までの社内用の宛先
+- 出すもの：**注文番号・会員のプラン・商品（名前と JAN）・数量・上限**だけ
+- **氏名・住所・メール・電話は読みません・保存しません・出しません**
+  （同じ注文を二度知らせないために、知らせた**注文番号と JAN** だけを 200件まで控えます）
+- いつ：Shopify の webhook（`orders/create`・`orders/paid`）が pj-sync の
+  `/mem/hook` に届いたとき（その場で）。webhook を登録していないあいだは、
+  **注文CSV を取り込んだとき**
+- 買った人のプラン：webhook では注文に付いてくる顧客のタグから。注文CSV では
+  注文のタグ（Flow が写した `grade-◯◯`・§6-2）から。CSV にタグが無い注文は
+  「分かりません」として、**どのプランでも超える数量**のときだけ知らせます
+- 対応（返金・連絡）はカジが手でします。pj は注文を止めたり直したりしません
+
+知らせの例：
+
+```
+⚠️ 上限を超えた数量の注文 … 1件
+・注文 #2001　プラン：ライト　商品：◯◯◯（4902370551000）　数量 3点／上限 1点
+```
+
+### 14-6. 元に戻し方
+
+| 戻したいもの | やること |
+| --- | --- |
+| テーマの上限をやめる | `layout/theme.liquid` の `render 'member-qty-guard'` の1行を消す（スニペット2つは残っていても動きません） |
+| 商品のタグを外す | ⚙「お一人の上限を Shopify の商品にも入れる」を**オフ** →「いまある会員用の商品を直す」（付けたタグを外します） |
+
+### 14-7. 確かめたこと・確かめられなかったこと
+
+| こと | どうか |
+| --- | --- |
+| スニペットの判定が pj の決まり（`shared/mgate.js`）と同じ結果になる | 本物の Liquid エンジン（liquidjs）で 63通りを突き合わせて一致（2026-11-20） |
+| スクリプトの動き（数量の欄・カートの直し・くり返さない・会員用でない商品は触らない） | 作り物の店のページで確認（`tests/qtylimui.js`） |
+| Rise の実物の商品ページ・横から出るカートで思ったとおりに動くか | **この環境では確かめられません**（複製テーマのプレビューで §14-4 を見てください） |
+| webhook の注文に顧客のタグが付いてくるか | Shopify の注文の webhook には顧客の欄（タグを含む）が入る仕様ですが、**実物では未確認**。タグの欄が付いてこない注文は「分かりません」として、**どのプランでも超える数量**のときだけ知らせます（まちがった知らせを出さないため） |
