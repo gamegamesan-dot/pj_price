@@ -902,6 +902,47 @@
      ・タグは member-list と grade-*（先行のあいだは grade-premium だけ）
      ・**画像は入れない**（カジが Shopify の商品ページで入れる）
      ・仕入原価は Cost per item（管理画面だけ・客には見えない） */
+  /* ===== 8.87（カジの依頼）1点ものの写真を複数枚 =====
+     写真はカジが撮った実物の写真だけ（Amazon・メーカーの画像は入れない）。
+     画面が縮めて（長辺 1600px・JPEG）、横長は正方形にしてから pj-img（R2）に
+     上げ、その公開 URL を並べて持つ。**1枚目がメイン**（Discord のカードと
+     Shopify の商品の最初の写真）。
+       pics … [{ url, key, w, h }]（並べた順のまま）
+     Shopify の CSV は、2枚目から**同じ Handle の行**に Image Src と
+     Image Position（1, 2, 3…）を並べる（Shopify の決まり）。 */
+  var ONE_PICS_MAX = 10;
+  var ONE_PIC_MIN = 500;          // 長辺がこれ未満の写真は付けるときに注意を出す
+  var PIC_URL_RE = /^https:\/\/[A-Za-z0-9.-]+\/i\/\d{8}\/[0-9a-f-]{36}\.(jpg|png|webp)$/;
+  /* pj-img に上げた写真の URL か（ほかの URL は持たない・CSV に出さない）。 */
+  function onePicOk(u) { return PIC_URL_RE.test(s(u).trim()); }
+  /* 写真の並びを読む（配列でも JSON の文字でも）。おかしな行は落とす。 */
+  function onePicsOf(v) {
+    var a = v;
+    if (typeof a === "string") {
+      try { a = a ? JSON.parse(a) : []; } catch (e) { a = []; }
+    }
+    var out = [], seen = {};
+    for (var i = 0; i < (Array.isArray(a) ? a : []).length; i++) {
+      var p = a[i] || {};
+      var u = s(typeof p === "string" ? p : p.url).trim();
+      if (!onePicOk(u) || seen[u]) continue;
+      seen[u] = 1;
+      out.push({ url: u, key: s(p.key).slice(0, 120),
+                 w: Math.max(0, Math.round(num(p.w))),
+                 h: Math.max(0, Math.round(num(p.h))) });
+      if (out.length >= ONE_PICS_MAX) break;
+    }
+    return out;
+  }
+  /* 長辺が ONE_PIC_MIN 未満と分かっている写真か（大きさが分からなければ false）。 */
+  function onePicSmall(p) {
+    var lg = Math.max(num((p || {}).w), num((p || {}).h));
+    return lg > 0 && lg < ONE_PIC_MIN;
+  }
+  /* 並びの指紋（いまの写真と、Shopify に読み込んだときの写真を比べる）。 */
+  function onePicsSig(pics) {
+    return onePicsOf(pics).map(function (p) { return p.url; }).join("|");
+  }
   function oneHandleOf(id) { return "one-" + digits(id); }
   function oneSkuOf(id, d) { return "ONE-" + digits(id) + "-" + ymdOf(d); }
   function isOne(h) { return s(h).toLowerCase().indexOf("one-") === 0; }
@@ -995,7 +1036,46 @@
     row["SEO description"] = "";
     row["Cost per item"] = costOf(r);
     row["Collection"] = s(o.collection);
+    /* 8.87 写真の1枚目は商品の行に入れる（opt.images のときだけ）。 */
+    if (o.images) {
+      var ps = onePicsOf(r.pics);
+      row["Product image URL"] = ps.length ? ps[0].url : "";
+      row["Image position"] = ps.length ? "1" : "";
+    }
     return row;
+  }
+  /* 8.87 2枚目からの写真の行（同じ Handle・写真の列だけ）。 */
+  function oneImgRows(it) {
+    var r = it || {}, ps = onePicsOf(r.pics), out = [];
+    for (var i = 1; i < ps.length; i++)
+      out.push({ "URL handle": oneHandleOf(r.id),
+                 "Product image URL": ps[i].url,
+                 "Image position": String(i + 1), _img: true });
+    return out;
+  }
+  var IMG_COLS = ["Product image URL", "Image position"];
+  /* 写真の列を足した列の並び（Gift card のうしろ）。 */
+  function imgColsAdd(cols) {
+    var c = cols.slice(), at = c.indexOf("Gift card");
+    if (at < 0) return c.concat(IMG_COLS);
+    return c.slice(0, at + 1).concat(IMG_COLS).concat(c.slice(at + 1));
+  }
+  /* 8.87 写真だけの直しCSV（Handle と写真の列だけ）。もう Shopify にある
+     1点ものの写真を、いまの並びに置き換えるときに使う（カジが決めて作る）。
+     写真が1枚も無い品は入れない（写真の列を空で読み込むと、Shopify の
+     写真が消えるかどうかが公式の説明から読み切れないため）。 */
+  function oneImgCsv(items, opt) {
+    var o = opt || {}, rows = [], seen = {};
+    for (var i = 0; i < (items || []).length; i++) {
+      var r = items[i] || {}, ps = onePicsOf(r.pics);
+      var h = oneHandleOf(r.id);
+      if (!digits(r.id) || !ps.length || seen[h]) continue;
+      seen[h] = 1;
+      for (var j = 0; j < ps.length; j++)
+        rows.push({ "URL handle": h, "Product image URL": ps[j].url,
+                    "Image position": String(j + 1) });
+    }
+    return toCsv(["URL handle"].concat(IMG_COLS), rows, o.style);
   }
   function oneSplit(items, opt) {
     var go = [], no = [], seen = {};
@@ -1013,15 +1093,21 @@
   }
   function oneRowsOf(items, opt) {
     var go = oneSplit(items, opt).go, out = [];
-    for (var i = 0; i < go.length; i++) out.push(oneRowOf(go[i], opt));
+    for (var i = 0; i < go.length; i++) {
+      out.push(oneRowOf(go[i], opt));
+      if ((opt || {}).images) out = out.concat(oneImgRows(go[i]));
+    }
     return out;
   }
+  /* opt.images … 写真の列を出すか。出さないときは列ごと出さない
+     （列が無ければ、Shopify にある写真はそのまま残る＝公式の説明）。 */
   function oneBuild(items, opt) {
     var o = opt || {};
     var cols = COLS.slice();
     if (!s(o.collection)) cols = cols.filter(function (c) {
       return c !== "Collection";
     });
+    if (o.images) cols = imgColsAdd(cols);
     var rows = oneRowsOf(items, o);
     cols = seoAdd(cols, rows, o);
     return toCsv(cols, rows, o.style);
@@ -1055,6 +1141,7 @@
     if (!c) return cols;
     for (var i = 0; i < (rows || []).length; i++) {
       /* 画像だけの行（Handle だけの行）には入れない。 */
+      if (rows[i] && rows[i]._img) continue;
       if (rows[i] && (rows[i]["Title"] !== undefined
                       || rows[i]["URL handle"] !== undefined
                       || rows[i]["Handle"] !== undefined)) rows[i][c] = "1";
@@ -1221,6 +1308,10 @@
     oneLeftOf: oneLeftOf, oneWhyNot: oneWhyNot, oneBodyOf: oneBodyOf,
     oneRowOf: oneRowOf, oneSplit: oneSplit, oneRowsOf: oneRowsOf,
     oneBuild: oneBuild,
+    /* 8.87 1点ものの写真（複数枚）。 */
+    ONE_PICS_MAX: ONE_PICS_MAX, ONE_PIC_MIN: ONE_PIC_MIN, onePicOk: onePicOk,
+    onePicsOf: onePicsOf, onePicSmall: onePicSmall, onePicsSig: onePicsSig,
+    oneImgRows: oneImgRows, oneImgCsv: oneImgCsv, IMG_COLS: IMG_COLS,
     invCsv: invCsv, splitCsv: splitCsv, transFill: transFill,
     weightOf: weightOf,
     TR_DEF: TR_DEF, TR_OUT: TR_OUT

@@ -194,9 +194,12 @@ await p.waitForTimeout(500);
      '★★★先行のあいだは premium だけ');
   ok(/grade-standard/.test(rows[2][col('Tags')]),
      '★★★先行があいた商品は ⚙ のプランも足す');
-  ok(t.text.indexOf('Image Src')<0,'★★★写真は CSV に入れない');
+  /* 8.87（カジの依頼）写真は CSV に入れる（まだ読み込んでいない品だけ）。
+     この2件は写真が無いので、写真の列は空。 */
+  ok(t.text.indexOf('Image Src')>0&&rows.slice(1).every((r)=>r[col('Image Src')]===''),
+     '★★★写真の列はあり、写真が無い品は空（8.87）');
   ok(/書き出した 2件/.test(t.note),'★★まとめを出す');
-  ok(/Shopify の商品ページ/.test(t.note),'★写真の入れ方を案内する');
+  ok(/写真 0枚を CSV に入れました/.test(t.note),'★写真を何枚入れたかを出す（8.87）');
 }
 
 console.log('=== ⑤ 配信の予定（#目玉商品-先行／#目玉商品）===');

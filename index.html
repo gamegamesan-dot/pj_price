@@ -1308,9 +1308,11 @@ body.staff #syncOnHandFix{display:none !important}
             MW の無在庫とは別の商品です（Handle は <code>one-&lt;連番&gt;</code>）。<br>
             JAN か ASIN を入れると、<b>Amazon の販売価格・手数料・見込みの粗利</b>を
             自動で出します（無くても登録できます）。<br>
-            <b>写真はカジが撮った写真だけ</b>を入れてください
-            （Amazon・MW の画像は使いません）。写真は会員のカードに出ます。
-            Shopify の商品ページの写真は、読み込んだあとに Shopify で入れてください。<br>
+            <b>写真はカジが撮った実物の写真だけ</b>を入れてください
+            （Amazon・メーカー・MW の画像は使いません）。<b>10枚まで</b>付けられ、
+            <b>1枚目がメイン</b>です（会員のカードには1枚目だけ出ます。Shopify 用 CSV には
+            並べた順にぜんぶ入ります）。写真は長辺 1600px に縮め、横長は正方形にしてから
+            画像サーバーに上げます（⚙「画像サーバーURL」「アップロードトークン」が要ります）。<br>
             配信は <b>#目玉商品-先行（プレミアム）</b>に先に出し、
             ⚙の時間（既定 24時間）のあと <b>#目玉商品（スタンダード以上）</b>に出します。
           </div>
@@ -1325,10 +1327,15 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row cfgprice"><label for="oneQty">数量</label><input type="number" id="oneQty" value="1" step="1" min="0" max="999" inputmode="numeric"><span class="unit">点</span></div>
         <div class="row cfgprice"><label for="oneShip">送料の区分</label><select id="oneShip"><option value="small">クリックポスト</option><option value="letter">レターパックプラス</option><option value="box" selected>宅配便</option></select></div>
         <div class="row cfgprice"><label for="oneNote">メモ（カードに出る）</label><input type="text" id="oneNote" value="" style="flex:1" placeholder="例：開封済み・説明書あり"></div>
-        <div class="stackrow cfgprice" style="margin-top:6px">
-          <input type="file" id="onePicFile" accept="image/*">
+        <!-- 8.87（カジの依頼）写真を複数枚（10枚まで）。一度に何枚でも選べる
+             （スマホはカメラと写真ライブラリのどちらからでも）。選ぶたびに足す。 -->
+        <div class="note2 cfgprice" style="margin:6px 0 2px"><b>写真</b>（<span id="onePicCount">0</span>／10枚・1枚目がメイン）</div>
+        <div class="stackrow cfgprice">
+          <input type="file" id="onePicFile" accept="image/*" multiple onchange="onePicPick(this)">
           <button class="btn" id="oneAmzBtn" onclick="oneAmzGo();return false">Amazon の値段を取る</button>
         </div>
+        <div id="onePicBox" class="cfgprice"></div>
+        <div class="note2" id="onePicNote" style="margin-top:2px"></div>
         <div class="note2" style="margin-top:0" id="oneAmzNote"></div>
         <button class="btn primary cfgprice" id="oneSaveBtn" style="width:100%;margin-top:6px" onclick="oneSaveGo();return false">この1点ものを登録する</button>
         <button class="btn cfgprice" id="oneClearBtn" style="width:100%;margin-top:4px" onclick="oneFormClear();return false">欄を空にする（新しく登録する）</button>
@@ -1337,6 +1344,9 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn cfgprice" id="oneListBtn" style="flex:1" onclick="oneListGo();return false">1点ものの一覧</button>
           <button class="btn cfgprice" id="oneCsvBtn" style="flex:1" onclick="oneCsvGo();return false">Shopify 用 CSV</button>
         </div>
+        <!-- 8.87 読み込んだあとに写真を変えた1点ものの「写真の直しCSV」。
+             自動では作らない（作るかどうかはカジが決める）。 -->
+        <button class="btn cfgprice" id="oneImgCsvBtn" style="width:100%;margin-top:6px" onclick="oneImgCsvGo();return false">写真の直しCSV（読み込んだあとに写真を変えた1点もの）</button>
         <div id="oneList"></div>
       </details>
       <!-- 注文CSV の取り込み（8.13） -->
@@ -21999,6 +22009,143 @@ function mwSubItems(noRoll){
 var oneEditId=0;          // 直している1点ものの番号（0＝新しく登録）
 var oneRowsData=[];       // いちばん最後に読んだ一覧
 var onePicB64='', onePicType='', onePicName2='';
+/* ===== 8.87（カジの依頼）1点ものの写真（複数枚）=====
+   onePics … いま付いている写真（並べた順・1枚目がメイン）
+     { url, key, w, h }            … 画像サーバー（pj-img）に上げた写真
+       fresh:true                   … この画面で上げて、まだ保存していない
+     { old:true, b64, type }       … 前の形の写真（pj-sync の KV の1枚）。
+                                      保存するときに pj-img に上げ直す
+   写真は eBay の写真と同じ口で縮めて上げる（csvShrink・csvPicUpload）。
+   横長は正方形にする（picSqBlob・8.78 と同じ）。決まり（10枚・長辺 500px）は
+   shared/shopcsv.js の1か所。 */
+var onePics=[], onePicsDirty=false, onePicBusy=false;
+function onePicMax(){ return PJ_SHOPCSV.ONE_PICS_MAX; }
+function onePicSay(html,bad){
+  var el=$('onePicNote'); if(!el)return;
+  el.innerHTML=html||''; el.style.color=bad?'var(--bad)':'';
+}
+function onePicSrc(p){
+  return p.old?('data:'+(p.type||'image/jpeg')+';base64,'+p.b64):String(p.url||'');
+}
+function onePicRender(){
+  var box=$('onePicBox'); if(!box)return;
+  if($('onePicCount'))$('onePicCount').textContent=String(onePics.length);
+  if(!onePics.length){ box.innerHTML=''; return; }
+  var btn='style="min-width:34px;min-height:34px;padding:2px 6px;font-size:15px"';
+  box.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">'
+    +onePics.map(function(p,i){
+      var small=PJ_SHOPCSV.onePicSmall(p);
+      return '<div data-onepic="'+i+'" style="width:104px;border:1px solid var(--line);'
+        +'border-radius:4px;padding:3px;text-align:center'
+        +(i===0?';outline:2px solid var(--good)':'')+'">'
+        +'<img src="'+esc(onePicSrc(p))+'" alt="" style="width:96px;height:96px;'
+        +'object-fit:cover;display:block;margin:0 auto">'
+        +'<div class="note2" style="margin:2px 0;font-size:11px">'
+        +(i===0?'<b style="color:var(--good)">1 メイン</b>':String(i+1))
+        +(p.old?'・前の写真':'')
+        +(small?'<br><b style="color:var(--bad)">長辺 '+Math.max(+p.w||0,+p.h||0)+'px</b>':'')
+        +'</div>'
+        +'<div style="display:flex;gap:2px;justify-content:center">'
+        +'<button class="btn" '+btn+' data-onepicmv="'+i+':-1" aria-label="前へ"'
+        +(i===0?' disabled':'')+' onclick="onePicMove('+i+',-1);return false">←</button>'
+        +'<button class="btn" '+btn+' data-onepicdel="'+i+'" aria-label="消す"'
+        +' onclick="onePicDel('+i+');return false">×</button>'
+        +'<button class="btn" '+btn+' data-onepicmv="'+i+':1" aria-label="うしろへ"'
+        +(i===onePics.length-1?' disabled':'')+' onclick="onePicMove('+i+',1);return false">→</button>'
+        +'</div></div>';
+    }).join('')+'</div>';
+}
+/* 並べ替え（←→）。1枚目にした写真がメインになる。 */
+function onePicMove(i,d){
+  var j=i+d;
+  if(onePicBusy||i<0||j<0||i>=onePics.length||j>=onePics.length)return;
+  var t=onePics[i]; onePics[i]=onePics[j]; onePics[j]=t;
+  onePicsDirty=true;
+  onePicRender();
+  onePicSay(j===0?'この写真をメインにしました（保存すると変わります）。':'並べ替えました（保存すると変わります）。');
+}
+/* 消す（×）。この画面で上げてまだ保存していない写真だけ、画像サーバーからも消す。
+   保存した写真は画像サーバーに残す（Shopify の商品は自動では直さない）。 */
+function onePicDel(i){
+  if(onePicBusy||i<0||i>=onePics.length)return;
+  var p=onePics.splice(i,1)[0];
+  onePicsDirty=true;
+  if(p&&p.fresh&&p.key)csvPicDelete(p.key);
+  onePicRender();
+  onePicSay('写真を外しました（保存すると変わります）。'
+    +(oneEditId?'<br>もう Shopify に出ている商品の写真は、自動では変えません。':''));
+}
+/* 1枚を縮める → 横長は正方形 → 画像サーバーに上げる。返り {url,key,w,h,sq} */
+function onePicUp(blob){
+  return csvShrink(blob).then(function(x){
+    return picSqBlob(x.blob).then(function(q){
+      var w=q.sq?q.side:x.w, h=q.sq?q.side:x.h;
+      return csvPicUpload(q.blob).then(function(d){
+        return { url:d.url, key:d.key||'', w:w, h:h, sq:!!q.sq };
+      });
+    });
+  });
+}
+/* 選んだ写真を**今ある写真に足す**（置き換えない）。10枚を超えるぶんは足さない。 */
+function onePicPick(el){
+  var files=Array.prototype.slice.call((el&&el.files)||[]);
+  if(el)el.value='';
+  return onePicAdd(files);
+}
+function onePicAdd(files){
+  if(!files||!files.length)return Promise.resolve();
+  if(onePicBusy){ onePicSay('いま写真を上げています。終わってからもう一度選んでください。',1);
+    return Promise.resolve(); }
+  if(!csvImgBase()||!csvImgToken()){
+    onePicSay('⚙の「画像サーバーURL」と「アップロードトークン」を入れてください。',1);
+    return Promise.resolve();
+  }
+  var room=onePicMax()-onePics.length;
+  if(room<=0){ onePicSay('写真は '+onePicMax()+'枚までです。',1); return Promise.resolve(); }
+  var list=files.slice(0,room), over=files.length-list.length;
+  var ok=0, ng=0, small=0, sq=0;
+  onePicBusy=true;
+  return list.reduce(function(chain,f,k){
+    return chain.then(function(){
+      onePicSay((k+1)+'/'+list.length+' を上げています…');
+      return onePicUp(f).then(function(p){
+        p.fresh=true;
+        onePics.push(p); onePicsDirty=true; ok++;
+        if(p.sq)sq++;
+        if(PJ_SHOPCSV.onePicSmall(p))small++;
+        onePicRender();
+      })['catch'](function(){ ng++; });
+    });
+  },Promise.resolve()).then(function(){
+    onePicBusy=false;
+    onePicRender();
+    onePicSay('<b>'+ok+'枚</b>を足しました（いま '+onePics.length+'／'+onePicMax()+'枚）。'
+      +(sq?('　横長の '+sq+'枚は正方形にしました。'):'')
+      +(small?('<br><b style="color:var(--bad)">⚠ 長辺 '+PJ_SHOPCSV.ONE_PIC_MIN
+        +'px 未満の写真が '+small+'枚あります</b>（小さく見えます。撮り直しをおすすめします）。'):'')
+      +(ng?('<br><b style="color:var(--bad)">'+ng+'枚は上げられませんでした</b>（選び直してください）。'):'')
+      +(over?('<br>'+onePicMax()+'枚を超える '+over+'枚は足していません。'):'')
+      +'<br>「この1点ものを登録する／直す」を押すと保存します。',
+      !!(ng||small));
+  });
+}
+/* 保存する前に、前の形の写真（KV）を画像サーバーに上げ直す。 */
+function onePicsReady(){
+  var need=onePics.filter(function(p){ return p.old; });
+  if(!need.length)return Promise.resolve();
+  if(!csvImgBase()||!csvImgToken())
+    return Promise.reject(new Error('⚙の「画像サーバーURL」と「アップロードトークン」を入れてください'));
+  return onePics.reduce(function(chain,p,i){
+    if(!p.old)return chain;
+    return chain.then(function(){
+      var bin=atob(p.b64), a=new Uint8Array(bin.length);
+      for(var k=0;k<bin.length;k++)a[k]=bin.charCodeAt(k);
+      return onePicUp(new Blob([a],{ type:p.type||'image/jpeg' })).then(function(q){
+        q.fresh=true; onePics[i]=q;
+      });
+    });
+  },Promise.resolve());
+}
 function oneNote(html,bad){
   var el=$('oneNote2'); if(!el)return;
   el.innerHTML=html||'';
@@ -22021,6 +22168,7 @@ function oneFormClear(){
   if($('oneShip'))$('oneShip').value='box';
   if($('onePicFile'))$('onePicFile').value='';
   onePicB64=''; onePicType=''; onePicName2='';
+  onePics=[]; onePicsDirty=false; onePicRender(); onePicSay('');
   $('oneAmzNote').textContent='';
   oneNote('新しく登録します。');
   $('oneSaveBtn').textContent='この1点ものを登録する';
@@ -22056,10 +22204,14 @@ function oneSaveGo(){
   var f=oneForm();
   if(!f.name){ oneNote('商品名を入れてください。',1); return; }
   if(!(f.price>0)){ oneNote('販売価格を入れてください。',1); return; }
+  if(onePicBusy){ oneNote('写真を上げています。終わってから押してください。',1); return; }
   oneNote('登録しています…');
-  return onePicRead().then(function(pic){
+  /* 8.87 写真の並びは、変えたときだけ送る（前の写真のままの品はそのまま）。 */
+  var sendPics=onePicsDirty||(!oneEditId&&onePics.length>0);
+  return (sendPics?onePicsReady():Promise.resolve()).then(function(){
     var body=Object.assign({},f);
-    if(pic){ body.pic=pic.b64; body.pic_type=pic.type; body.pic_name=pic.name; }
+    if(sendPics)body.pics=onePics.map(function(p){
+      return { url:p.url, key:p.key||'', w:+p.w||0, h:+p.h||0 }; });
     return mwPost('/one',body);
   }).then(function(r){
     if(!r||r.ok!==true){
@@ -22154,7 +22306,10 @@ function oneRowHtml(x){
     +'border:1px solid var(--line);border-radius:4px'
     +(x.off?';opacity:.55':'')+'">'
     +'<b>'+esc(PJ_SHOPCSV.titleOf(x.name).slice(0,40)||String(x.handle))+'</b>'
-    +(x.pic?'<span class="badge" style="background:#1c6fb4">写真</span>':'')
+    +(x.pic?'<span class="badge" style="background:#1c6fb4">写真 '+(+x.pic_n||1)+'枚</span>':'')
+    /* 8.87 読み込んだあとに写真を変えた（Shopify は前のまま）。 */
+    +(x.pics_changed?'<span class="badge" style="background:#b06000" data-onepicchg="1">'
+      +'写真を変えた（Shopify は前のまま）</span>':'')
     +(x.off?'<span class="badge" style="background:#8a8a8a">取り下げ</span>':'')
     +(x.loaded_at?'<span class="badge" style="background:#1f7a4d">読み込み済み</span>'
                  :'<span class="badge" style="background:#b00020">未読み込み</span>')
@@ -22166,7 +22321,7 @@ function oneRowHtml(x){
     +(x.open_at?('　みんな '+esc(String(x.open_at_jst||''))):'')
     +'<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">'
     +'<button class="btn" style="padding:4px 8px;font-size:12px" '
-    +'onclick="oneEdit('+(+x.one_id||0)+');return false">直す</button>'
+    +'onclick="oneEdit('+(+x.one_id||0)+');return false">直す・写真</button>'
     +'<button class="btn" style="padding:4px 8px;font-size:12px" '
     +'onclick="oneMarkGo('+(+x.one_id||0)+',\'loaded\','
     +(x.loaded_at?'0':'1')+');return false">'
@@ -22192,10 +22347,27 @@ function oneEdit(id){
   $('oneNote').value=x.note||'';
   if($('onePicFile'))$('onePicFile').value='';
   onePicB64=''; onePicType=''; onePicName2='';
+  /* 8.87 いまの写真を並べる（足す・消す・並べ替えができる）。 */
+  onePics=PJ_SHOPCSV.onePicsOf(x.pics).map(function(p){ return Object.assign({},p); });
+  onePicsDirty=false;
+  onePicRender(); onePicSay('');
+  if(x.pic_old&&!onePics.length)oneOldPicLoad(+id||0);
   $('oneSaveBtn').textContent='one-'+oneEditId+' を直す';
   oneNote('<b>one-'+oneEditId+'</b> を直しています。'
-    +'写真を選ばなければ、いまの写真はそのままです。');
+    +'写真は下で足す・消す・並べ替えができます（保存するまで変わりません）。'
+    +(x.loaded_at?'<br>もう Shopify に出ている商品の写真は、自動では変えません'
+      +'（変えたあとに「写真の直しCSV」を作るかは、カジが決めます）。':''));
   try{ $('oneName').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+}
+/* 前の形の写真（KV の1枚）を読んで、並びの1枚目に置く。 */
+function oneOldPicLoad(id){
+  return mwGet('/one/pic?id='+(+id||0)).then(function(d){
+    if(oneEditId!==id||!d||!d.ok||!d.b64)return;
+    onePics.unshift({ old:true, b64:String(d.b64), type:String(d.type||'image/jpeg') });
+    onePicRender();
+    onePicSay('前の写真（1枚）を出しました。写真を足したり並べ替えたりして保存すると、'
+      +'前の写真も画像サーバーに上げ直します。');
+  })['catch'](function(){});
 }
 function oneMarkGo(id,kind,on){
   if(roleDenyPrice('oneNote2'))return;
@@ -22211,6 +22383,40 @@ function oneMarkGo(id,kind,on){
     return oneListGo();
   })['catch'](function(e){ oneNote('⚠ 印を付けられませんでした：'
     +esc(e.message),1); });
+}
+/* 8.87 写真の直しCSV。Shopify に読み込んだあとに写真を変えた1点ものだけを、
+   Handle と写真の列（Image Src・Image Position）だけで出す。
+   自動では作らない（カジがこのボタンを押したときだけ）。 */
+function oneImgCsvGo(){
+  if(roleDenyPrice('oneNote2'))return;
+  csvSecretFill();
+  oneNote('調べています…');
+  return mwGet('/one?all=1').then(function(d){
+    if(!d||d.ok!==true){
+      oneNote('⚠ 読めませんでした：'+esc(String((d&&(d.detail||d.error))||'')),1); return;
+    }
+    oneRowsData=d.rows||[];
+    var chg=oneRowsData.filter(function(x){ return x.pics_changed&&!x.off; });
+    var go=chg.filter(function(x){ return PJ_SHOPCSV.onePicsOf(x.pics).length>0; });
+    var none=chg.filter(function(x){ return !PJ_SHOPCSV.onePicsOf(x.pics).length; });
+    if(!chg.length){ oneNote('読み込んだあとに写真を変えた1点ものはありません。'); return oneListGo(); }
+    if(go.length){
+      var o=mwSubOpt();
+      dl('shopify-one-pics-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',
+         PJ_SHOPCSV.oneImgCsv(go.map(function(x){ return Object.assign({},x,{ id:x.one_id }); }),o));
+      mwPost('/one/mark',{ ids:go.map(function(x){ return +x.one_id||0; }), pics_put:1 })
+        ['catch'](function(){});
+    }
+    oneNote('<div class="okbox"><b>写真の直しCSV</b>：'+mwN(go.length)+'件'
+      +'（Handle と Image Src・Image Position だけ）</div>'
+      +(go.length?('Shopify の <b>商品 → インポート</b>で'
+        +'<b>「Overwrite products with matching handles」にチェック</b>して読み込むと、'
+        +'その商品の写真がいまの並びに置き換わります。<br>'):'')
+      +(none.length?('<b style="color:var(--bad)">写真を全部外した '+mwN(none.length)+'件</b>は'
+        +' CSV に入れていません（'+esc(none.map(function(x){ return x.handle; }).join('・'))
+        +'）。Shopify の商品ページで写真を消してください。'):''));
+    return oneListGo();
+  })['catch'](function(e){ oneNote('⚠ 作れませんでした：'+esc(e.message),1); });
 }
 /* 1点ものの Shopify 用 CSV。
    先行のあいだは grade-premium だけ、先行があいた商品は ⚙ のプランも足す。 */
@@ -22240,16 +22446,34 @@ function oneCsvGo(){
       oneNote('出せる1点ものがありません。'+mwSubWhyHtml(sp.no),1); return;
     }
     var o=mwSubOpt();
-    var text=PJ_SHOPCSV.oneBuild(items,o);
-    dl('shopify-one-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
+    /* 8.87 写真の列は、**まだ Shopify に読み込んでいない品だけ**の CSV に入れる。
+       読み込み済みの品は写真の列を出さない CSV に分ける（列が無ければ、
+       Shopify にある写真はそのまま＝写真を消しても自動では反映しない）。 */
+    var fresh=sp.go.filter(function(x){ return !x.loaded_at; });
+    var done=sp.go.filter(function(x){ return !!x.loaded_at; });
+    var ymd=PJ_SHOPCSV.ymdOf(o.date);
+    if(fresh.length)
+      dl('shopify-one-'+ymd+(done.length?'-new':'')+'.csv',
+         PJ_SHOPCSV.oneBuild(fresh,Object.assign({},o,{ images:true })));
+    if(done.length)
+      dl('shopify-one-'+ymd+(fresh.length?'-loaded':'')+'.csv',
+         PJ_SHOPCSV.oneBuild(done,o));
+    var picN=fresh.reduce(function(a,x){ return a+PJ_SHOPCSV.onePicsOf(x.pics).length; },0);
+    var oldN=fresh.filter(function(x){ return x.pic_old&&!PJ_SHOPCSV.onePicsOf(x.pics).length; }).length;
     var openN=sp.go.filter(function(x){ return /standard/.test(x.grades); }).length;
     oneNote('<div class="okbox"><b>書き出した '+mwN(sp.go.length)+'件'
-      +'・外した '+mwN(sp.no.length)+'件</b></div>'
+      +'・外した '+mwN(sp.no.length)+'件</b>'
+      +((fresh.length&&done.length)?'（ファイルを2つに分けました）':'')+'</div>'
       +mwSubWhyHtml(sp.no)
+      +(fresh.length?('<br>まだ読み込んでいない <b>'+mwN(fresh.length)+'件</b>：写真 <b>'
+        +mwN(picN)+'枚</b>を CSV に入れました（Image Src・Image Position。1枚目がメイン）。'
+        +(oldN?('<br><b style="color:var(--bad)">前の形の写真の品 '+mwN(oldN)
+          +'件</b>は写真を CSV に入れられません（「直す・写真」で開いて保存すると入ります）。'):'')):'')
+      +(done.length?('<br>読み込み済みの <b>'+mwN(done.length)+'件</b>は、写真の列を入れていません'
+        +'（Shopify の写真はそのまま残ります）。'):'')
       +'<br>Shopify の <b>商品 → インポート</b>で読み込み、'
       +'<b>「Overwrite products with matching handles」にチェック</b>'
-      +'してください。<br>写真は読み込んだあとに <b>Shopify の商品ページ</b>で'
-      +'入れてください（CSV には入れていません）。'
+      +'してください。'
       +(openN?('<br>先行があいた '+mwN(openN)+'件は、'
         +'<b>'+esc(oneGrades.open)+'</b> にも見えるタグで出しました。'):'')
       +'<br>読み込んだら、一覧で「<b>Shopify に読み込みました</b>」を'
@@ -31200,7 +31424,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v335';   // sw.js の const V と必ず同じ値にする
+var APP_V='v336';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

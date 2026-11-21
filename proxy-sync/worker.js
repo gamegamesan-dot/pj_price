@@ -13315,12 +13315,54 @@ const ONE_PIC_MAX = 2 * 1024 * 1024;    // 写真（base64 の長さ）
 const ONE_PIC_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 async function oneOk(env) { return await colOk(env, "one_item", "handle"); }
 function onePicKey(id) { return "one:pic:" + Math.round(Number(id) || 0); }
+/* 添付の名前。
+   ・8.87 の写真（pj-img の並び）… 1枚目の URL の指紋を入れる（pic-<8桁>.jpg）。
+     メインの写真を入れ替えると名前が変わる＝カードの中身が変わるので、
+     次の配信でカードの写真も入れ替わる
+   ・前の形（KV の写真1枚）… 今までどおり pic.<拡張子>（出ているカードを
+     書き換えないため） */
 function onePicName(r) {
-  const t = String((r || {}).pic_type || "image/jpeg");
+  const x = r || {};
+  const ps = SHOPCSV.onePicsOf(x.pics);
+  if (ps.length) {
+    const u = ps[0].url;
+    const ext = /\.png$/.test(u) ? "png" : (/\.webp$/.test(u) ? "webp" : "jpg");
+    return "pic-" + SUBINDEX.hashOf(u) + "." + ext;
+  }
+  const t = String(x.pic_type || "image/jpeg");
   const ext = t.indexOf("png") >= 0 ? "png"
     : (t.indexOf("webp") >= 0 ? "webp" : (t.indexOf("gif") >= 0 ? "gif" : "jpg"));
   return "pic." + ext;
 }
+/* 8.87 カードに添付するメインの写真（1枚目だけ）。
+   pj-img の写真はサービスバインディング（IMG_SVC）で読む。読めなければ null。
+   会員のカードには pj-img の URL を出さない（Discord に添付して送るので、
+   会員に見えるのは Discord の画像だけ）。 */
+const ONE_PIC_BYTES = 8 * 1024 * 1024;   // Discord に添付できる大きさの目安
+async function oneMainPic(env, run, x) {
+  const ps = SHOPCSV.onePicsOf((x || {}).pics);
+  if (ps.length) {
+    try {
+      const u = ps[0].url;
+      const svc = (env && env.IMG_SVC && /\/i\/\d{8}\//.test(u)) ? env.IMG_SVC : null;
+      const resp = await net(run, u, { method: "GET", fetcher: svc });
+      if (!resp.ok) return null;
+      const buf = await resp.arrayBuffer();
+      if (!buf.byteLength || buf.byteLength > ONE_PIC_BYTES) return null;
+      const ct = String(resp.headers.get("content-type") || "image/jpeg");
+      return { bytes: new Uint8Array(buf), name: onePicName(x),
+               type: /^image\//.test(ct) ? ct : "image/jpeg" };
+    } catch (e) { return null; }
+  }
+  if (x && x.pic_key) {
+    const b64 = await onePicGet(env, x.one_id);
+    if (b64) return { b64: b64, name: onePicName(x),
+                      type: x.pic_type || "image/jpeg" };
+  }
+  return null;
+}
+/* 8.87 写真の並びの列（migrate-0071）があるか。 */
+async function onePicsColOk(env) { return await colOk(env, "one_item", "pics"); }
 /* 写真を KV に置く（base64 のまま）。空なら消す。 */
 async function onePicPut(env, id, b64, type) {
   const key = onePicKey(id);
@@ -13396,8 +13438,35 @@ async function onePut(env, body) {
     await env.DB.prepare(`UPDATE one_item SET handle=?2 WHERE id=?1`)
       .bind(rowId, "one-" + rowId).run();
   }
+  /* 8.87 写真の並び（pj-img に上げた写真の URL・1枚目がメイン・10枚まで）。
+     並びを送ってきたら、前の形の写真（KV の1枚）は使わなくなるので消す
+     （画面が前の写真も pj-img に上げ直して、この並びに入れてくる）。 */
+  if (Array.isArray(o.pics)) {
+    if (!(await onePicsColOk(env))) {
+      res.error = "no_cols";
+      res.detail = "D1 に migrate-0071-one-pics.sql が流れていません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (o.pics.length > SHOPCSV.ONE_PICS_MAX) {
+      res.error = "pics_many";
+      res.detail = "写真は " + SHOPCSV.ONE_PICS_MAX + "枚までです";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const ps = SHOPCSV.onePicsOf(o.pics);
+    if (ps.length !== o.pics.length) {
+      res.error = "pics_url";
+      res.detail = "写真の URL が違います（画像サーバーに上げた写真だけ使えます）";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    await env.DB.prepare(
+      `UPDATE one_item SET pics=?2, pic_key='', pic_name='', pic_type='',
+         updated_at=?3 WHERE id=?1`)
+      .bind(rowId, JSON.stringify(ps), at).run();
+    try { await onePicPut(env, rowId, "", ""); } catch (e) { /* 無ければよい */ }
+    res.pics = ps.length;
+  }
   /* 写真（カジが撮った写真だけ）。'' を送ると消す。 */
-  if (o.pic !== undefined && o.pic !== null) {
+  if (!Array.isArray(o.pics) && o.pic !== undefined && o.pic !== null) {
     const b64 = String(o.pic || "").replace(/^data:[^;]*;base64,/, "");
     const type = String(o.pic_type || "image/jpeg").toLowerCase();
     if (b64 && b64.length > ONE_PIC_MAX) {
@@ -13433,12 +13502,17 @@ async function oneRows(env, opt) {
   const soldSel = ordOk
     ? "(SELECT COALESCE(SUM(s.qty),0) FROM sub_order s WHERE s.jan = b.handle)"
     : "0";
+  /* 8.87 写真の並び（migrate-0071）。列が無い D1 では空。 */
+  const picsSel = (await onePicsColOk(env))
+    ? "b.pics AS pics, b.pics_put AS pics_put,"
+    : "'' AS pics, '' AS pics_put,";
   const q = await env.DB.prepare(
     `SELECT b.id AS id, b.handle AS handle, b.name AS name, b.jan AS jan,
             b.asin AS asin, b.cond AS cond, b.cond_note AS cond_note,
             b.cost AS cost, b.price AS price, b.qty AS qty,
             b.ship_kind AS ship_kind, b.note AS note,
             b.pic_key AS pic_key, b.pic_type AS pic_type,
+            ${picsSel}
             b.amz_price AS amz_price, b.amz_fee AS amz_fee,
             b.amz_basis AS amz_basis, b.amz_at AS amz_at, b.gross AS gross,
             b.pre_at AS pre_at, b.open_at AS open_at,
@@ -13466,7 +13540,18 @@ async function oneRows(env, opt) {
       qty: qty, sold: sold, left: Math.max(0, qty - sold),
       ship_kind: String(r.ship_kind || ""),
       note: String(r.note || ""),
-      pic: !!String(r.pic_key || ""), pic_type: String(r.pic_type || ""),
+      /* 8.87 写真の並び（1枚目がメイン）。前の形の写真（KV）も pic に数える。 */
+      pics: SHOPCSV.onePicsOf(r.pics),
+      pic_key: String(r.pic_key || ""),
+      pic: !!String(r.pic_key || "") || SHOPCSV.onePicsOf(r.pics).length > 0,
+      pic_n: SHOPCSV.onePicsOf(r.pics).length
+        || (String(r.pic_key || "") ? 1 : 0),
+      pic_old: !!String(r.pic_key || ""),
+      /* Shopify に読み込んだあとに写真を変えたか（自動では直さない・
+         直しの CSV を作るかはカジが決める）。 */
+      pics_changed: !!String(r.loaded_at || "")
+        && SHOPCSV.onePicsSig(r.pics) !== SHOPCSV.onePicsSig(r.pics_put),
+      pic_type: String(r.pic_type || ""),
       amz_price: Number(r.amz_price) || 0,
       amz_fee: Number(r.amz_fee) || 0,
       basis: String(r.amz_basis || ""),
@@ -13481,6 +13566,22 @@ async function oneRows(env, opt) {
       at: String(r.at || ""), at_jst: jstText(r.at),
     };
   });
+}
+/* GET /one/pic?id= … 前の形の写真（KV の1枚）を返す（管理者だけ）。
+   8.87 で写真を複数枚にしたので、画面が前の写真を読んで pj-img に上げ直し、
+   新しい並びに入れるために使う。 */
+async function onePicOld(env, url) {
+  const res = { ok: false, b64: "", type: "" };
+  const id = Math.round(Number(((url && url.searchParams) ? url.searchParams.get("id") : 0)) || 0);
+  if (!(id > 0) || !(await oneOk(env))) { res.error = "bad_id"; return res; }
+  const r = await env.DB.prepare(
+    `SELECT pic_key, pic_type FROM one_item WHERE id=?1`).bind(id).first();
+  if (!r || !String(r.pic_key || "")) { res.ok = true; return res; }
+  const b64 = await onePicGet(env, id);
+  res.b64 = String(b64 || "");
+  res.type = res.b64 ? String(r.pic_type || "image/jpeg") : "";
+  res.ok = true;
+  return res;
 }
 /* GET /one … 一覧（管理者だけ）。 */
 async function oneList(env, url) {
@@ -13522,10 +13623,15 @@ async function oneMark(env, body) {
   const at = nowIso();
   const sets = [], binds = [];
   let n = 2;
+  const picsCol = await onePicsColOk(env);
   if (o.loaded !== undefined) {
     sets.push("loaded_at=?" + n);
     binds.push(o.loaded ? at : null); n++;
+    /* 8.87 読み込んだときの写真の並びを控える（あとで変えたかを見る）。 */
+    if (o.loaded && picsCol) sets.push("pics_put=pics");
   }
+  /* 8.87 写真の直しCSV を作った（Shopify の写真をいまの並びにした）。 */
+  if (o.pics_put && picsCol) sets.push("pics_put=pics");
   if (o.put !== undefined) {
     sets.push("put_at=?" + n);
     binds.push(o.put ? at : null); n++;
@@ -13663,11 +13769,14 @@ function oneCardOf(x, cfg, picUrl, planKey) {
 }
 /* Discord に送る（写真があれば添付として一緒に送る）。
    msgId があれば書き換え（PATCH）。 */
-async function dcCard(env, run, ch, card, pic, msgId) {
-  if (!pic || !pic.b64) {
+/* 8.87 clear … 写真が1枚も無くなった1点もののカードを書き換えるときは、
+   前の添付も外す（外さないと、カードの下に前の写真だけが残る）。 */
+async function dcCard(env, run, ch, card, pic, msgId, clear) {
+  if (!pic || !(pic.b64 || pic.bytes)) {
     return msgId
       ? await dcApi(env, run, "PATCH",
-          "/channels/" + ch + "/messages/" + msgId, { embeds: [card] })
+          "/channels/" + ch + "/messages/" + msgId,
+          clear ? { embeds: [card], attachments: [] } : { embeds: [card] })
       : await dcApi(env, run, "POST",
           "/channels/" + ch + "/messages", { embeds: [card] });
   }
@@ -13678,7 +13787,7 @@ async function dcCard(env, run, ch, card, pic, msgId) {
   const payload = { embeds: [card] };
   if (msgId) payload.attachments = [{ id: 0, filename: pic.name }];
   fd.append("payload_json", JSON.stringify(payload));
-  fd.append("files[0]", new Blob([b64Bytes(pic.b64)],
+  fd.append("files[0]", new Blob([pic.bytes || b64Bytes(pic.b64)],
     { type: pic.type || "image/jpeg" }), pic.name);
   const path = msgId ? ("/channels/" + ch + "/messages/" + msgId)
                      : ("/channels/" + ch + "/messages");
@@ -13974,16 +14083,18 @@ async function jobSubSend(env, opt) {
             /* 8.39 書き直しでは新しいカードを出さない（通知が鳴るため）。 */
             if (redo && !(x.sent && x.msg_id)) { r.wait++; res.wait++; continue; }
             const at = nowIso();
-            let pic = null;
-            if (x.pic) {
-              const b64 = await onePicGet(env, x.one_id);
-              if (b64) pic = { b64: b64, name: onePicName(x),
-                               type: x.pic_type || "image/jpeg" };
+            /* 8.87 メインの写真（1枚目）だけを添付する。読めなかったときは
+               このカードを今回は送らない（写真の無いカードにしないため）。 */
+            const pic = x.pic ? await oneMainPic(env, run, x) : null;
+            if (x.pic && !pic) {
+              r.keep++; res.skipped++;
+              run.notes.push("1点もの " + x.jan + "：写真を読めなかったので次の回に回しました");
+              continue;
             }
             const card = x.card || oneCardOf(x, cfg,
               pic ? ("attachment://" + onePicName(x)) : "", g.key);
             const m = await dcCard(env, run, g.ch, card, pic,
-                                   x.sent ? x.msg_id : "");
+                                   x.sent ? x.msg_id : "", !x.pic);
             /* 8.38 そのカードだけが消えていたら、控えを消して次へ。 */
             if (!m.ok && x.sent && x.msg_id && dcMsgGone(m)) {
               await env.DB.prepare(
@@ -16593,17 +16704,13 @@ async function subEditLeft(env, run, jans) {
        「お一人◯点まで」は前の数のまま（カジが決めるまで）。 */
     if (!x.one_id) x.card_q = subQOf(p, y, cfg);
     /* 8.22（【2】）1点ものは専用のカード（状態・メモ・写真）。 */
-    let pic = null;
-    if (x.one_id && x.pic) {
-      const b64 = await onePicGet(env, x.one_id);
-      if (b64) pic = { b64: b64, name: onePicName(x),
-                       type: x.pic_type || "image/jpeg" };
-    }
+    /* 8.87 メインの写真（1枚目）だけ。読めなければ前の添付をそのまま残す。 */
+    const pic = (x.one_id && x.pic) ? await oneMainPic(env, run, x) : null;
     const card = x.one_id
-      ? oneCardOf(x, cfg, pic ? ("attachment://" + onePicName(x)) : "")
+      ? oneCardOf(x, cfg, (x.pic) ? ("attachment://" + onePicName(x)) : "")
       : subCardOf(x, p, cfg);
     const e = x.one_id
-      ? await dcCard(env, run, y.ch, card, pic, String(y.msg_id))
+      ? await dcCard(env, run, y.ch, card, pic, String(y.msg_id), !x.pic)
       : await dcApi(env, run, "PATCH",
           "/channels/" + y.ch + "/messages/" + y.msg_id, { embeds: [card] });
     /* 8.38 そのカードが消えていたら、控え（msg_id）を片づけて次へ。 */
@@ -20683,6 +20790,9 @@ const SCHEMA_FIX = [
   ["size_wid", "migrate-0060-ship-way.sql"],
   ["size_hei", "migrate-0060-ship-way.sql"],
   ["one_item", "migrate-0059-one-item.sql"],
+  /* 8.87 1点ものの写真の並び。 */
+  ["pics", "migrate-0071-one-pics.sql"],
+  ["pics_put", "migrate-0071-one-pics.sql"],
   ["pic_key", "migrate-0059-one-item.sql"],
   ["os_item", "migrate-0058-os-item.sql"],
   ["fix_why", "migrate-0058-os-item.sql"],
@@ -21624,6 +21734,9 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/one")
         return json(await oneList(env, url), 200, origin);
+      /* 8.87 前の形の写真（KV の1枚）を読む（写真を複数枚にするとき）。 */
+      if (request.method === "GET" && url.pathname === "/one/pic")
+        return json(await onePicOld(env, url), 200, origin);
       if (request.method === "POST" && url.pathname === "/one/mark") {
         const b = await request.json().catch(() => ({}));
         return json(await oneMark(env, b), 200, origin);
@@ -22173,6 +22286,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   subOffPlan,
   onePut, oneList, oneMark, oneAmz, oneAmzPut, oneRows, oneOk, oneCardOf,
   onePlanBuild, dcCard, onePicKey, onePicName, b64Bytes,
+  /* 8.87 1点ものの写真（複数枚）。 */
+  oneMainPic, onePicOld, onePut, oneRows, oneMark,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
   OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,

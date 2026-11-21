@@ -1126,6 +1126,11 @@ CREATE TABLE IF NOT EXISTS one_item (
   pic_key    TEXT,                               -- 写真の置き場（KV）
   pic_name   TEXT,
   pic_type   TEXT,
+  /* 8.87（migrate-0071）写真の並び（JSON：[{url,key,w,h}]・1枚目がメイン・
+     10枚まで）。pj-img に上げた実物の写真だけ。pics_put は Shopify に
+     読み込んだとき（または写真の直しCSV を作ったとき）の並び。 */
+  pics       TEXT,
+  pics_put   TEXT,
   amz_price  INTEGER,                            -- Amazon の販売価格
   amz_fee    INTEGER,                            -- 手数料
   amz_basis  TEXT,                               -- カート／最安
