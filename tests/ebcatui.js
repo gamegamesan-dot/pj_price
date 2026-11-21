@@ -17,6 +17,10 @@ const CSV=['SKU,商品名,ASIN,JAN,出品コンディション,仕入価格,数�
 
 (async()=>{
 const p=await T.open();
+/* 8.84 用意してある3つ（ヘッドセットなど）の自動登録は tests/ebcatpreset.js で
+   確かめる。ここは「足す」そのものの確かめなので、済みの印を付けて止めておく。 */
+await p.evaluate(()=>{ lsSet(EB_CAT_PRESET_LS,
+  JSON.stringify({ '171821':1, '117042':1, '69528':1 })); });
 await p.click('#tabD');
 
 // pj-sync の返事を画面の中で差し替える（通信はしない）

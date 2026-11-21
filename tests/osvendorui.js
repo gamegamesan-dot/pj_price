@@ -1,4 +1,4 @@
-/* 画面：海外向け Shopify（os-）の販売元（Vendor）と直しCSV（8.84）
+/* 画面：海外向け Shopify（os-）の販売元（Vendor）と直しCSV（8.85）
 
    カジの依頼（2026-11-21）
      1. 販売元は eBay 用に入れている Brand（ゲームなら発売元）。分からなければ空欄
@@ -12,7 +12,7 @@
      ⑤ 「販売元（Vendor）の直しCSVを作る」：対象の件数と CSV の中身
      ⑥ 会員用（sub-）の CSV の販売元は変わらない・作業者は押せない */
 const { harness } = require('./lib');
-const T = harness('画面：海外向け Shopify の販売元と直しCSV（8.84）');
+const T = harness('画面：海外向け Shopify の販売元と直しCSV（8.85）');
 const ok = T.ok;
 (async()=>{
 const p=await T.open();

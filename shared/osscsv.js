@@ -185,7 +185,7 @@
       if (t) li.push("<li>" + esc(k) + ": " + esc(t) + "</li>");
     };
     if (s(r.cond).toLowerCase() === "new") li.push("<li>Condition: Brand new</li>");
-    /* 8.84 説明の Brand は今までどおり「その行のブランド」。販売元（Vendor）の
+    /* 8.85 説明の Brand は今までどおり「その行のブランド」。販売元（Vendor）の
        決め方を変えても、説明の文は変えない（画面が brand を別に渡す）。 */
     add("Brand", (r.brand !== undefined) ? r.brand : r.vendor);
     add("Type", r.type);
@@ -225,7 +225,7 @@
      （⚙の Vendor／Type に会員プランのバリアント番号が入っていて、
        それがそのまま CSV に出ていた）。
 
-     8.84（カジの依頼）**販売元（Vendor）は、eBay 用に入れている Brand
+     8.85（カジの依頼）**販売元（Vendor）は、eBay 用に入れている Brand
      （ゲームは発売元＝Publisher）**。それも分からない行は**空欄**にする。
      v332 までは、行のブランドが空のとき⚙の Vendor（店の名前）を入れていた。
      ゲームは eBay では Brand ではなく Publisher に入れるので、ゲームの行は
@@ -472,7 +472,7 @@
   }
   function updCsv(items, opt) { return toCsv(UPD_COLS, updRowsOf(items, opt)); }
 
-  /* ---- 8.84 販売元（Vendor）だけを直す CSV ----
+  /* ---- 8.85 販売元（Vendor）だけを直す CSV ----
      もう Shopify に出ている os- の商品のうち、販売元が店の名前に
      なっているものを直す。**Handle と Vendor の2列だけ**なので、
      ほかの項目（説明・値段・在庫・画像・タグ）は上書きされない。
@@ -505,7 +505,7 @@
     kishuJa: kishuJa, kishuEn: kishuEn, titleOf: titleOf,
     bodyOf: bodyOf, shopBody: shopBody, word: word,
     vendorOf: vendorOf, typeOf: typeOf, liveOf: liveOf,
-    /* 8.84 販売元の決め方と、販売元だけを直す CSV。 */
+    /* 8.85 販売元の決め方と、販売元だけを直す CSV。 */
     BRAND_NG: BRAND_NG, brandWord: brandWord, vendorPick: vendorPick,
     VEND_COLS: VEND_COLS, vendRowsOf: vendRowsOf, vendCsv: vendCsv,
     vendName: vendName,

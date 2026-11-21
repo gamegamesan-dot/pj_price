@@ -1,4 +1,4 @@
-/* 決まり・Worker：海外向け Shopify（os-）の販売元（Vendor）（8.84）
+/* 決まり・Worker：海外向け Shopify（os-）の販売元（Vendor）（8.85）
 
    カジの依頼（2026-11-21）「販売元（Vendor）が空のときに『Omakase Ship』が
    入っています」
@@ -19,7 +19,7 @@ import fs from 'node:fs';
 const require=createRequire(import.meta.url);
 const OSS=require('../shared/osscsv.js');
 const SHOPCSV=require('../shared/shopcsv.js');
-const T=harness('決まり・Worker：海外向け Shopify の販売元（8.84）');
+const T=harness('決まり・Worker：海外向け Shopify の販売元（8.85）');
 const ok=T.ok;
 const { worker }=await loadWorker('osvendor');
 const read=(p)=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8');

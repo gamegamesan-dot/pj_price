@@ -9395,8 +9395,8 @@ Status だけ。**説明・画像・タグの列は出さない**＝空で上書
 | Type | 空 | Shopify の `Type` |
 
 `osPricePct` / `osFixPct` / `osVendor` / `osType` は **pj-sync にも送る**
-（v333・8.84：`osVendor`＝販売元の代わりの名前の欄はやめた。販売元は eBay 用の
-Brand／発売元から決め、分からなければ空欄。会員向けDiscord の仕様書 §8.84）
+（v334・8.85：`osVendor`＝販売元の代わりの名前の欄はやめた。販売元は eBay 用の
+Brand／発売元から決め、分からなければ空欄。会員向けDiscord の仕様書 §8.85）
 （`osFixPct` は Worker が読む）。
 
 ### テスト

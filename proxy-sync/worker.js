@@ -5885,7 +5885,10 @@ function picErrClear(env, itemId, at) {
 const MW_CHUNK = 400;                  // 画面が1回に送ってくる行数の上限
 const MW_SHIP_OK = 4;                  // 無在庫に使える出荷の営業日数
 const MW_DROP_WARN = 0.30;             // 行数がこれ以上減ったら取得ミスとみなす
-const MW_LIST_MAX = 500;               // 候補一覧で返す行数の上限
+const MW_LIST_MAX = 500;               // 候補一覧で**1回に**返す行数の上限
+                                       // 8.84：500件より先は offset で続きを読む
+                                       // （1回の返事を大きくしすぎないため、
+                                       //  1回ぶんの上限は 500 のままにする）
 const MW_STOCK_MIN = 5;                // MW在庫の下限の既定（7.74）
 /* ---- eBay の相場（4章の6・7.62）---- */
 const MW_MKT_MAX = 120;                // 1回に調べる JAN の数（＝Browse の呼び出し回数）
@@ -15992,7 +15995,7 @@ async function osCheck(env, run, opt) {
   res.ok = true;
   return res;
 }
-/* GET /os/list … Shopify 用CSV を書き出した os- の商品の控え（8.84）。
+/* GET /os/list … Shopify 用CSV を書き出した os- の商品の控え（8.85）。
    画面が「販売元（Vendor）の直しCSV」を作るのに使う（読むだけ・管理者だけ）。
    返すのは JAN・Handle・名前・書き出した日時だけ（卸値などは返さない）。 */
 const OS_LIST_MAX = 5000;
@@ -18824,6 +18827,14 @@ async function mwList(env, url) {
                        ship_max: p.get("ship_max"), stock_min: p.get("stock_min"),
                        note_ng: p.get("note_ng"), note_all: p.get("note_all") });
   const limit = Math.max(1, Math.min(MW_LIST_MAX, mwNum(p.get("limit")) || 200));
+  /* 8.84（カジの依頼）500件より先の候補も読めるようにする。
+     ・offset … 何件目から返すか（0 が先頭。今までの呼び方は 0 のまま）
+     ・lite=1 … 続きのページ用。行と件数だけ返し、相場の進み具合・前回の
+                取り込み・自動取り込みの様子は数え直さない（1ページ目で返している）
+     並びは今までどおり卸値の安い順。同じ卸値の行がページの境目で入れ替わると
+     抜け・重なりが出るので、JAN と行の番号で順番を固定する。 */
+  const offset = Math.max(0, mwNum(p.get("offset")) || 0);
+  const lite = p.get("lite") === "1";
   const w = q0.w.replace(/\b(gone_at|pick|kishu|cond|ship_days|stock|note)\b/g, "s.$1");
   const bind = q0.bind;
   /* 7.126（【T】）在庫の動きの目安も返す（表が無ければ空）。 */
@@ -18848,9 +18859,13 @@ async function mwList(env, url) {
        LEFT JOIN mw_market m ON m.jan = s.jan
        LEFT JOIN mw_amz a ON a.jan = s.jan${mvq.join}
       WHERE ${w}
-      ORDER BY COALESCE(s.wholesale,0) ASC LIMIT ${limit}`).bind(...bind).all();
+      ORDER BY COALESCE(s.wholesale,0) ASC, s.jan ASC, s.sha ASC, s.idx ASC
+      LIMIT ${limit} OFFSET ${offset}`).bind(...bind).all();
   const n = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM mw_stock s WHERE ${w}`).bind(...bind).first();
+  if (lite)
+    return { ok: true, n: Number((n && n.n) || 0), rows: (q && q.results) || [],
+             limit: limit, offset: offset, lite: true };
   /* 相場の進み具合（調べ終わった件数・残り）。 */
   const mk = await env.DB.prepare(
     `SELECT COUNT(m.jan) AS seen,
@@ -18905,7 +18920,7 @@ async function mwList(env, url) {
            picked: Number((pick && pick.n) || 0),
            last: last ? Object.assign({}, last, { at_jst: jstText(last.at) }) : null,
            csv: csv,
-           limit: limit };
+           limit: limit, offset: offset };
 }
 /* ===== MW の商品画像（6.1 の①・7.63）=====
    貼られた「MW の商品ID」または「画像URL」から画像を取り、**大きさだけ測る**。
@@ -21435,7 +21450,7 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/os/diff")
         return json(await osDiff(env, url), 200, origin);
-      /* 8.84 書き出した os- の商品の控え（販売元の直しCSV 用）。 */
+      /* 8.85 書き出した os- の商品の控え（販売元の直しCSV 用）。 */
       if (request.method === "GET" && url.pathname === "/os/list")
         return json(await osList(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/os/done") {
