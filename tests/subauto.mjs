@@ -76,6 +76,11 @@ globalThis.fetch=async(u,i)=>{
     return new Response(null,{status:204});
   }
   if(/discord\.com\/api/.test(url)){
+    /* 8.86 チャンネルそのもの（名前・説明文）の読み書きはメッセージでは
+       ないので、送ったカードの数には入れない。 */
+    if(/\/channels\/\d+$/.test(url))
+      return new Response(JSON.stringify({ id:'0' }),
+        {status:200,headers:{'content-type':'application/json'}});
     const m=/\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(url)||[];
     const b=JSON.parse(String(o.body||'{}'));
     dc.push({ method:String(o.method||'GET'), ch:(m[1]||''), msg:m[2]||'', body:b });

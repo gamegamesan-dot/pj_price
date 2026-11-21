@@ -14068,7 +14068,7 @@ async function jobSubSend(env, opt) {
       }
       /* 8.86（カジの依頼）チャンネルの説明文（トピック）を上限に合わせる
          （文が変わったときだけ Discord を呼ぶ）。 */
-      try { res.topic = await subTopicSync(env, run, cfg, {}); }
+      try { res.topic = await subTopicSync(env, run, cfg, { plan: only }); }
       catch (e) { run.notes.push("sub-topic: " + String((e && e.message) || e)); }
       /* 8.43（カジの依頼3）モニターのチャンネルに「今週の配信」を1通。
          **商品名・JAN・価格は出さない**。@everyone・@here も使わない。 */
@@ -15479,7 +15479,11 @@ async function subTopicSync(env, run, cfg, opt) {
   if (!res.on && !o.force) return res;
   if (!env.DISCORD_BOT_TOKEN) { res.why = "DISCORD_BOT_TOKEN が登録されていません";
     return res; }
+  /* 1つのプランだけ送る回（plan を指定した配信）は、そのプランの
+     チャンネルだけを見る（ほかのチャンネルには何も頼まない）。 */
+  const only = String(o.plan || "").trim();
   for (const t of subTopicWant(cfg)) {
+    if (only && t.plans.indexOf(only) < 0) continue;
     res.n++;
     const h = SUBINDEX.hashOf(t.want);
     const key = SUB_TOPIC_KEY + t.ch;

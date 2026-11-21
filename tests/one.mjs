@@ -19,6 +19,11 @@ let dc=[];
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/discord\.com\/api\/v/.test(url)&&/\/channels\//.test(url)){
+    /* 8.86 チャンネルそのもの（名前・説明文）の読み書きはメッセージでは
+       ないので、送ったカードの数には入れない。 */
+    if(/\/channels\/\d+$/.test(url))
+      return new Response(JSON.stringify({ id:'0' }),
+        {status:200,headers:{'content-type':'application/json'}});
     const m=/\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(url)||[];
     const body=o.body;
     const form=(typeof FormData!=='undefined'&&body instanceof FormData);
