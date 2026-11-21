@@ -15458,7 +15458,8 @@ async function subTopicPlan(env, run, cfg) {
   if (!env.DISCORD_BOT_TOKEN) { out.why = "DISCORD_BOT_TOKEN が登録されていません";
     return out; }
   for (const t of subTopicWant(cfg)) {
-    const r = await dcApi(env, null, "GET", "/channels/" + t.ch);
+    /* 読むだけの呼び出しは、失敗を run の数に入れない（別の控えに取る）。 */
+    const r = await dcApi(env, newRun("sub-topic-get"), "GET", "/channels/" + t.ch);
     const was = r.ok ? String(((r.data || {}).topic) || "") : "";
     const row = { ch: t.ch, names: t.names, want: t.want, was: was,
                   same: r.ok && was === t.want,
@@ -15495,7 +15496,7 @@ async function subTopicSync(env, run, cfg, opt) {
     }
     const row = { ch: t.ch, names: t.names, want: t.want, was: "", ok: false,
                   why: "" };
-    const g = await dcApi(env, null, "GET", "/channels/" + t.ch);
+    const g = await dcApi(env, newRun("sub-topic-get"), "GET", "/channels/" + t.ch);
     let done = false, bad = null;
     if (!g.ok) bad = g;
     else {
