@@ -68,6 +68,45 @@ console.log('=== ① pj の⚙・CSV のタグ・「商品を直す」の結果 
   ok(/migrate-0070/.test(t.line2),'★D1 に migrate-0070 がまだなら、そのことを出す');
   ok(/会員用でない商品/.test(t.note)&&/運営のチャンネルに知らせます/.test(t.note),
      '★欄の説明に、会員用の商品だけ・超えた注文は知らせる、と書いてある');
+  /* 「いまある会員用の商品を直す」を押せるとき。 */
+  const u=await p.evaluate(async()=>{
+    $('syncApi').value='https://sync.example'; $('syncKey').value='k';
+    syncRole='admin'; roleApply();
+    const calls=[]; const real=window.fetch;
+    window.fetch=async(x,i)=>{
+      const url=String(x);
+      if(/\/sub\/box\/sync/.test(url)){
+        calls.push(JSON.parse(String((i||{}).body||'{}')).approve?'go':'chk');
+        return new Response(JSON.stringify({ ok:true, on:false, cols:true,
+          ready:true, all:3, box_n:0, todo:0, done:0, left:0, qty_on:false,
+          qcol:true, qty_n:0, over:{ want:[], found:0, miss:[] }, items:[] }),
+          {status:200});
+      }
+      return real(x,i);
+    };
+    const out={};
+    /* 両方オフ・外すタグも分かっていない → 直さない。 */
+    $('subBoxOn').checked=false; $('subShopQtyOn').checked=false;
+    subBoxLast=null;
+    await subBoxGo(true);
+    out.off={ n:calls.length, note:$('subBoxNote').textContent };
+    /* 上限の⚙だけオン → 進める。 */
+    $('subShopQtyOn').checked=true;
+    await subBoxGo(true);
+    out.on=calls.slice();
+    /* 両方オフでも、外すタグが残っていると分かったあとは進める。 */
+    $('subShopQtyOn').checked=false; calls.length=0;
+    subBoxLast={ qty_n:2 };
+    await subBoxGo(true);
+    out.rm=calls.slice();
+    window.fetch=real;
+    return out;
+  });
+  ok(u.off.n===0&&/先に「箱ものは送料用の重さで実額を取る」を入れてください/.test(u.off.note)
+     &&/お一人の上限を Shopify の商品にも/.test(u.off.note),
+     '★★★⚙が両方オフのときは直さない（何を入れればよいかを言う）');
+  ok(u.on.join()==='go','★★★上限の⚙だけオンでも「直す」を押せる');
+  ok(u.rm.join()==='go','★★オフに戻したあと、外すタグが残っていれば「直す」を押せる');
 }
 
 /* ---- テーマに貼るスクリプトを、作り物の店で動かす ---- */

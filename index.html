@@ -18186,8 +18186,16 @@ function subBoxGo(approve){
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){
     subBoxNote('pj-sync のURLとキーを⚙設定に入れてください。',1); return; }
-  /* 8.83 上限のタグだけを直すこともできる（どちらかがオンなら進む。
-     両方オフでも、前に付けたタグを外すぶんは pj-sync が見つけて直す）。 */
+  /* 8.83 上限のタグだけを直すこともできる（どちらかの⚙がオンなら進む）。
+     両方オフのときは今までどおり直さない。ただし、前に付けた上限のタグを
+     外すぶんが残っていると「確かめる」で分かったあとは進める。 */
+  if(approve&&!subBoxOn()&&!subShopQtyOn()
+     &&!(subBoxLast&&+subBoxLast.qty_n>0)){
+    subBoxNote('先に「箱ものは送料用の重さで実額を取る」を入れてください。'
+      +'（お一人の上限のタグを付けるときは「お一人の上限を Shopify の商品にも'
+      +'入れる」を入れます。付けたタグを外すときは、先に「確かめる」を押して'
+      +'ください）',1);
+    return; }
   if(approve&&!confirm('いまある会員用の商品を直します。\n\n'
     +(subBoxOn()
       ? ('・箱もの（クリックポスト以外）の重さを「送料用の重さ」にします\n'
@@ -18226,9 +18234,11 @@ function subBoxGo(approve){
     })
     .then(function(){ if(b1)b1.disabled=false; if(b2)b2.disabled=false; });
 }
+var subBoxLast=null;                   // 最後に pj-sync が返した結果
 function subBoxShow(d,sum,approve){
   var box=$('subBoxBox'); if(!box)return;
   var x=d||{};
+  subBoxLast=x;
   if(x.error){
     subBoxNote('⚠ '+esc(String(x.detail||x.error)),1);
   }else subBoxNote('');
