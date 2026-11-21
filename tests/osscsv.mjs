@@ -79,7 +79,8 @@ ok(cell(csv,1,'Published')==='false'&&cell(csv,1,'Status')==='draft',
   ok(cell(live,1,'Published')==='true'&&cell(live,1,'Status')==='active',
      '★⚙で「公開」にすると公開で出す');
 }
-ok(cell(csv,1,'Vendor')==='Play Japan','★Vendor は⚙の値');
+/* 8.84（カジの依頼）行にブランドが無ければ空欄（⚙の名前は入れない）。 */
+ok(cell(csv,1,'Vendor')==='','★Vendor は行のブランド（無ければ空欄・⚙の値は使わない）');
 ok(cell(csv,1,'Variant Requires Shipping')==='true','★送るものとして出す');
 
 console.log('=== 値段（eBay の売値 × 為替 × ⚙%）===');

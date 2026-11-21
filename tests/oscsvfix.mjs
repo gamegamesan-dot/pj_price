@@ -32,8 +32,10 @@ console.log('=== Vendor と Type ===');
   ok(r2['Vendor']===''&&r2['Type']==='',
      '★★★行に無くても、⚙の**数字だけの値**（ID の取り違え）は出さない');
   const r3=OSS.rowOf(item({vendor:'',type:''}),{fx:150,pct:100,vendor:'Play Japan',type:'Toy'});
-  ok(r3['Vendor']==='Play Japan'&&r3['Type']==='Toy',
-     '★★行に無いときだけ⚙の値（言葉）を使う');
+  /* 8.84（カジの依頼）販売元は、行に無ければ**空欄**（⚙の代わりの名前は
+     もう使わない）。Type は今までどおり⚙の値を使う。 */
+  ok(r3['Vendor']===''&&r3['Type']==='Toy',
+     '★★行に無いとき：Type は⚙の値（言葉）・Vendor は空欄（8.84）');
   ok(OSS.word('67979822694563')===''&&OSS.word('30MM')==='30MM'&&OSS.word('2024')==='2024',
      '★★数字だけの長い値だけを捨てる（30MM・2024 は残す）');
 }

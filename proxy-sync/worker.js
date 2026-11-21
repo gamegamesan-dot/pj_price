@@ -15992,6 +15992,28 @@ async function osCheck(env, run, opt) {
   res.ok = true;
   return res;
 }
+/* GET /os/list … Shopify 用CSV を書き出した os- の商品の控え（8.84）。
+   画面が「販売元（Vendor）の直しCSV」を作るのに使う（読むだけ・管理者だけ）。
+   返すのは JAN・Handle・名前・書き出した日時だけ（卸値などは返さない）。 */
+const OS_LIST_MAX = 5000;
+async function osList(env) {
+  const res = { ok: false, rows: [], n: 0, table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const q = await env.DB.prepare(
+    `SELECT jan, handle, name, at FROM os_item
+      ORDER BY at DESC, jan ASC LIMIT ${OS_LIST_MAX}`).all();
+  for (const r of ((q && q.results) || []))
+    res.rows.push({ jan: String(r.jan), handle: String(r.handle || ""),
+                    name: String(r.name || ""), at: String(r.at || "") });
+  res.n = res.rows.length;
+  res.ok = true;
+  return res;
+}
 /* GET /os/diff … 直しが要る行（画面が「直しCSV」を作るのに使う）。 */
 async function osDiff(env, url) {
   const res = { ok: false, rows: [], n: 0, table_ok: true };
@@ -21413,6 +21435,9 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/os/diff")
         return json(await osDiff(env, url), 200, origin);
+      /* 8.84 書き出した os- の商品の控え（販売元の直しCSV 用）。 */
+      if (request.method === "GET" && url.pathname === "/os/list")
+        return json(await osList(env), 200, origin);
       if (request.method === "POST" && url.pathname === "/os/done") {
         const b = await request.json().catch(() => ({}));
         return json(await osDone(env, b), 200, origin);

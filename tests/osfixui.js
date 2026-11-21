@@ -44,19 +44,20 @@ await openCsvBoxes(p);
 console.log('=== ① ⚙：数字だけの Vendor／Type は使わない・既定は下書き ===');
 const one=await p.evaluate(()=>{
   /* カジの⚙に入っていた値（会員プランのバリアント番号）。 */
-  $('osVendor').value='67979822694563'; $('osType').value='67979822727331';
-  var before={ v:osVendor(), t:osTypeV() };
+  /* 8.84 ⚙の Vendor（販売元の代わりの名前）の欄はやめた。Type だけ残る。 */
+  $('osType').value='67979822727331';
+  var before={ v:(osOpt().vendor===undefined?'':String(osOpt().vendor)), t:osTypeV() };
   var n=osCfgClean();
-  return { before:before, n:n, v:$('osVendor').value, t:$('osType').value,
+  return { before:before, n:n, v:($('osVendor')?'x':''), t:$('osType').value,
            st:osStatusV(), opt:osOpt().status,
            saved:CSV_CFG_IDS.indexOf('osStatus')>=0&&advCsvCfg().indexOf('osStatus')>=0,
            note:$('osCfgNote').textContent,
-           ac:document.getElementById('osVendor').getAttribute('autocomplete'),
+           ac:document.getElementById('osType').getAttribute('autocomplete'),
            acAny:document.getElementById('baseProfit').getAttribute('autocomplete'),
            acKey:document.getElementById('syncKey').getAttribute('autocomplete') };
 });
 ok(one.before.v===''&&one.before.t==='','★★★数字だけの値は読まない（Vendor／Type に出さない）');
-ok(one.n===2&&one.v===''&&one.t==='','★★★⚙の欄からも消す（2か所）');
+ok(one.n===1&&one.v===''&&one.t==='','★★★⚙の欄からも消す（Type。Vendor の欄は 8.84 でやめた）');
 ok(/数字だけの値が入っていたので空にしました/.test(one.note),'★★消したことを⚙に出す');
 ok(one.st==='draft'&&one.opt==='draft','★★★「Shopify に出すときの状態」の既定は下書き');
 ok(one.saved,'★★⚙の値として保存され、pj-sync にも送られる');

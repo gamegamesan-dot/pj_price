@@ -185,7 +185,9 @@
       if (t) li.push("<li>" + esc(k) + ": " + esc(t) + "</li>");
     };
     if (s(r.cond).toLowerCase() === "new") li.push("<li>Condition: Brand new</li>");
-    add("Brand", r.vendor);
+    /* 8.84 説明の Brand は今までどおり「その行のブランド」。販売元（Vendor）の
+       決め方を変えても、説明の文は変えない（画面が brand を別に渡す）。 */
+    add("Brand", (r.brand !== undefined) ? r.brand : r.vendor);
     add("Type", r.type);
     add("Platform", r.platform);
     add("Model number", r.mpn);
@@ -219,11 +221,32 @@
   }
   /* ---- Vendor と Type（8.73）----
      Vendor ＝ その行のブランド。Type ＝ その行の商品の種類。
-     行に無いときだけ⚙の値を使う。**数字だけの値は出さない**
+     **数字だけの値は出さない**
      （⚙の Vendor／Type に会員プランのバリアント番号が入っていて、
-       それがそのまま CSV に出ていた）。 */
-  function vendorOf(it, opt) {
-    return word((it || {}).vendor) || word((opt || {}).vendor);
+       それがそのまま CSV に出ていた）。
+
+     8.84（カジの依頼）**販売元（Vendor）は、eBay 用に入れている Brand
+     （ゲームは発売元＝Publisher）**。それも分からない行は**空欄**にする。
+     v332 までは、行のブランドが空のとき⚙の Vendor（店の名前）を入れていた。
+     ゲームは eBay では Brand ではなく Publisher に入れるので、ゲームの行は
+     ほとんどが店の名前になっていた。⚙の代わりの値はもう使わない
+     （opt.vendor は読まない）。
+       brandWord … 「分からない」を表す eBay の決まり文句は空として扱う
+       vendorPick … { game, publisher, brand } から販売元を決める
+                    ゲーム：発売元 → ブランド／ほか：ブランド → 発売元 */
+  var BRAND_NG = ["does not apply", "doesnotapply", "n/a", "na", "none",
+                  "unknown", "unbranded", "not applicable", "-", "—"];
+  function brandWord(v) {
+    var t = word(v);
+    return (BRAND_NG.indexOf(t.toLowerCase()) >= 0) ? "" : t;
+  }
+  function vendorPick(x) {
+    var o = x || {};
+    var pub = brandWord(o.publisher), br = brandWord(o.brand);
+    return o.game ? (pub || br) : (br || pub);
+  }
+  function vendorOf(it) {
+    return brandWord((it || {}).vendor);
   }
   function typeOf(it, opt) {
     return word((it || {}).type) || word((opt || {}).type);
@@ -449,6 +472,27 @@
   }
   function updCsv(items, opt) { return toCsv(UPD_COLS, updRowsOf(items, opt)); }
 
+  /* ---- 8.84 販売元（Vendor）だけを直す CSV ----
+     もう Shopify に出ている os- の商品のうち、販売元が店の名前に
+     なっているものを直す。**Handle と Vendor の2列だけ**なので、
+     ほかの項目（説明・値段・在庫・画像・タグ）は上書きされない。
+     会員向け（sub-・one-）は混ぜない。 */
+  var VEND_COLS = ["Handle", "Vendor"];
+  function vendRowsOf(items) {
+    var out = [], seen = {};
+    for (var i = 0; i < (items || []).length; i++) {
+      var r = items[i] || {};
+      if (!janOk(r.jan) || memberish(r)) continue;
+      var h = handleOf(digits(r.jan));
+      if (seen[h]) continue;
+      seen[h] = 1;
+      out.push({ "Handle": h, "Vendor": vendorOf(r) });
+    }
+    return out;
+  }
+  function vendCsv(items) { return toCsv(VEND_COLS, vendRowsOf(items)); }
+  function vendName(d, seq, n) { return fileName("shopify-os-vendor", d, seq, n); }
+
   var API = {
     COLS: COLS, UPD_COLS: UPD_COLS, OPT1: OPT1,
     HANDLE_PRE: HANDLE_PRE, SUB_PRE: SUB_PRE, ONE_PRE: ONE_PRE,
@@ -461,6 +505,10 @@
     kishuJa: kishuJa, kishuEn: kishuEn, titleOf: titleOf,
     bodyOf: bodyOf, shopBody: shopBody, word: word,
     vendorOf: vendorOf, typeOf: typeOf, liveOf: liveOf,
+    /* 8.84 販売元の決め方と、販売元だけを直す CSV。 */
+    BRAND_NG: BRAND_NG, brandWord: brandWord, vendorPick: vendorPick,
+    VEND_COLS: VEND_COLS, vendRowsOf: vendRowsOf, vendCsv: vendCsv,
+    vendName: vendName,
     pctOf: pctOf, yenOf: yenOf, priceOf: priceOf, gramsOf: gramsOf,
     qtyOf: qtyOf, costOf: costOf, picOk: picOk, picsOf: picsOf,
     tagNg: tagNg, tagsOf: tagsOf, whyNot: whyNot,

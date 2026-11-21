@@ -841,6 +841,10 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvPickNew" style="width:100%;margin-top:6px">まだ書き出していない行だけ選ぶ</button>
         <button class="btn" id="csvOsFix" style="width:100%;margin-top:6px">Shopify の直しCSVを作る</button>
         <div class="note2" style="margin-top:2px" id="csvOsFixNote"></div>
+        <!-- 8.84（カジの依頼）もう Shopify に出ている os- の商品のうち、販売元が
+             店の名前になっているものを直す CSV（Handle と Vendor の2列だけ）。 -->
+        <button class="btn" id="csvOsVend" style="width:100%;margin-top:6px">販売元（Vendor）の直しCSVを作る</button>
+        <div class="note2" style="margin-top:2px" id="csvOsVendNote"></div>
       </div>
       <!-- 8.79：出品済みの行の出品文の「Shipping」の文を直す Revise 用の CSV。 -->
       <div id="csvPackBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
@@ -2667,9 +2671,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" style="margin-top:0">MW の卸値がこの割合より大きく変わったら、pj-sync が「Shopify に読み込んでください」と社内用の Discord に知らせます。</div>
       <div class="row"><label for="osStatus">Shopify に出すときの状態</label><select id="osStatus" style="flex:1"><option value="draft" selected>下書き（非公開）</option><option value="active">公開</option></select></div>
       <div class="note2" style="margin-top:0">既定は<b>下書き・非公開</b>（Status=draft／Published=false）です。Shopify で中身を確かめてから公開してください。「公開」にすると active／true で書き出します。<b>直しCSV も、ここが「下書き」のあいだは公開にしません</b>（在庫が戻った商品を勝手に公開しないため）。</div>
-      <div class="row"><label for="osVendor">Vendor（ブランドが空の行にだけ使う）</label><input type="text" id="osVendor" value="" style="flex:1" autocomplete="off"></div>
       <div class="row"><label for="osType">Type（種類が決まらない行にだけ使う）</label><input type="text" id="osType" value="" style="flex:1" autocomplete="off"></div>
-      <div class="note2" style="margin-top:0" id="osCfgNote">Vendor は<b>その行のブランド</b>、Type は<b>その行の商品の種類</b>（Video Game／Video Game Accessory／Figure／Model Kit など。eBay のカテゴリから決めます）を出します。ここの2つは、行から決まらないときの代わりです（空のままでかまいません）。<b>数字だけの値は使いません</b>。</div>
+      <div class="note2" style="margin-top:0" id="osCfgNote">Type は<b>その行の商品の種類</b>（Video Game／Video Game Accessory／Figure／Model Kit など。eBay のカテゴリから決めます）を出します。ここの Type は、行から決まらないときの代わりです（空のままでかまいません）。<b>数字だけの値は使いません</b>。<br>8.84：<b>販売元（Vendor）</b>は、eBay 用に入れている <b>Brand</b>（ゲームは<b>発売元＝Publisher</b>）を出します。分からない行は<b>空欄</b>です（⚙で代わりの名前を入れる欄はやめました）。</div>
       <hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
       <div class="cfgsub">判定のしきい値</div>
       <div class="row"><label>eBay優先マージン率</label><input type="number" id="csvPriority" value="20" step="1" inputmode="decimal"><span class="unit">%</span></div>
@@ -3862,7 +3865,8 @@ var ADV_SUB=['subHour','subDomain',
              'memGrace','memMonDays',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
-             'osPricePct','osFixPct','osVendor','osType','osStatus'];
+             /* 8.84 osVendor（販売元の代わりの名前）はやめた。 */
+             'osPricePct','osFixPct','osType','osStatus'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -7742,7 +7746,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.24：検索から隠す列（seo.hidden）の列名。 */
                  'mwSubSeoHidden',
                  /* 6.193 海外向け Shopify（os-）。 */
-                 'osPricePct','osFixPct','osVendor','osType','osStatus',
+                 'osPricePct','osFixPct','osType','osStatus',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
                  'syncPxMax','syncHotMax'];
 
@@ -12589,20 +12593,21 @@ function osPricePct(){
 /* 8.73 ⚙の Vendor／Type は「行から決まらないとき」の代わり。
    **数字だけの値は使わない**（会員プランのバリアント番号が入っていて、
    それがそのまま Shopify 用CSV の Vendor／Type に出ていた）。 */
-function osVendor(){ return OSS.word(($('osVendor')&&$('osVendor').value)||''); }
+/* 8.84 ⚙の Vendor（販売元の代わりの名前）はやめた。販売元は行から決め、
+   分からなければ空欄（csvOsVendorOf）。 */
 function osTypeV(){ return OSS.word(($('osType')&&$('osType').value)||''); }
 function osStatusV(){
   return (String(($('osStatus')&&$('osStatus').value)||'')==='active')?'active':'draft';
 }
 function osOpt(){
   return { fx:+$('fx').value||0, pct:osPricePct(),
-           vendor:osVendor(), type:osTypeV(), status:osStatusV() };
+           type:osTypeV(), status:osStatusV() };
 }
 /* ⚙の Vendor／Type に数字だけの値（ID の取り違え）が入っていたら空にする。
    pj-sync に残っている値も消す（空にした印を付けて送る）。 */
 function osCfgClean(){
   var n=0;
-  ['osVendor','osType'].forEach(function(id){
+  ['osType'].forEach(function(id){
     var el=$(id); if(!el)return;
     var v=String(el.value||'').trim();
     if(!v||OSS.word(v))return;
@@ -12614,7 +12619,7 @@ function osCfgClean(){
     try{ advTouch(); }catch(e){}
     var nt=$('osCfgNote');
     if(nt&&!/数字だけの値が入っていたので/.test(nt.innerHTML))
-      nt.innerHTML+='<br><b style="color:var(--bad)">⚙の Vendor／Type に'
+      nt.innerHTML+='<br><b style="color:var(--bad)">⚙の Type に'
         +'数字だけの値が入っていたので空にしました（'+n+'か所）。</b>';
   }
   return n;
@@ -12655,6 +12660,101 @@ function csvCatSlug(cat){ return (String(cat)==='139973')?'game':'fig'; }
 /* 印を付けられるのは **MW 無在庫の行だけ**（仕入れ先が MW の行）。 */
 function csvOsCan(r){ return csvIsDrop(r); }
 function csvOsOn(r){ return !!(r&&r.osOn&&csvOsCan(r)); }
+/* ===== 8.84（カジの依頼）海外向け Shopify の販売元（Vendor）=====
+   **eBay 用の CSV に入れている値をそのまま使う**（csvRowFor と同じ所を読む）。
+     ・ゲームソフト（139973）… C:Publisher（発売元）
+     ・pj-sync に登録したカテゴリ … 項目に Brand があればその値。
+       Brand が無く Publisher がある（ゲームの）カテゴリは発売元
+     ・フィギュアなど … C:Brand
+   分からない行は ''（空欄で出す。店の名前は入れない）。
+   決め方は shared/osscsv.js の vendorPick の1か所。
+   csvOsBrandOld … v332 までの決め方（その行のブランド）。空だった行が、
+   Shopify で販売元が店の名前になっている行。説明の「Brand」にも使う。 */
+function csvOsBrandOld(r){
+  var sp=(r||{}).specs||{};
+  return String(sp.brand||(sp.aspects||{}).Brand||'').trim();
+}
+function csvOsVendorOf(r){
+  var x=r||{}, sp=x.specs||{}, av=sp.aspects||{};
+  var cat=String(x.cat||'');
+  var cd=(cat!=='139973')?csvCatD1(cat):null;
+  var names=cd?(cd.need||[]).concat(cd.opt||[]):[];
+  var hasBrand=names.indexOf('Brand')>=0;
+  var hasPub=names.indexOf('Publisher')>=0;
+  /* eBay の Publisher の列に入れている値（ゲーム）。 */
+  var pub=(cat==='139973')?String(sp.publisher||'')
+    :(hasPub?csvAspectVal(x,'Publisher'):String(av.Publisher||sp.publisher||''));
+  /* eBay の Brand の列に入れている値。 */
+  var br=cd?(hasBrand?csvAspectVal(x,'Brand'):csvOsBrandOld(x))
+    :String(sp.brand||av.Brand||'');
+  return OSS.vendorPick({ game:(cat==='139973')||(!!cd&&!hasBrand&&hasPub),
+                          publisher:pub, brand:br });
+}
+/* 販売元（Vendor）の直しCSV。もう Shopify に出ている os- の商品
+   （pj-sync の控え os_item）のうち、**販売元が店の名前になっている行**
+   （v332 までの決め方でブランドが空だった行）だけを、Handle と Vendor の
+   2列で書き出す。ほかの項目は上書きしない。何も書き換えない（CSV を作るだけ）。 */
+function csvOsVendPlan(list){
+  var out={ all:0, kept:[], go:[], blank:[], gone:[] };
+  (list||[]).forEach(function(x){
+    var jan=String((x||{}).jan||'');
+    if(!OSS.janOk(jan))return;
+    out.all++;
+    var r=csvRowByJan(jan);
+    if(!r){ out.gone.push({ jan:jan, name:String(x.name||'') }); return; }
+    /* 前からブランドが入っていた行は、Shopify でも販売元がブランドのはず。 */
+    if(OSS.brandWord(csvOsBrandOld(r))){ out.kept.push(jan); return; }
+    var v=csvOsVendorOf(r);
+    (v?out.go:out.blank).push({ jan:jan, vendor:v,
+      name:String(r.titleEn||r.titleJa||x.name||'') });
+  });
+  return out;
+}
+function csvOsVendGo(){
+  var note=$('csvOsVendNote');
+  if(roleDenyPrice('csvOsVendNote'))return;
+  note.textContent='pj-sync に聞いています…';
+  return fetch(syncUrl()+'/os/list',{ headers:{'X-PJ-Key':syncApiKey()} })
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(d){
+      if(!d||!d.ok){
+        note.innerHTML='<b>読めませんでした</b>'
+          +(d&&d.detail?('（'+esc(String(d.detail))+'）'):'')
+          +'。pj-sync のデプロイが要ります。';
+        return;
+      }
+      var pl=csvOsVendPlan(d.rows||[]);
+      var items=pl.go.concat(pl.blank);
+      var head='書き出した os- の商品 <b>'+mwN(pl.all)+'件</b>　'
+        +'直す対象（販売元が店の名前の行） <b>'+mwN(items.length)+'件</b>'
+        +'（Brand／発売元を入れる <b>'+mwN(pl.go.length)+'件</b>・'
+        +'分からないので空欄にする <b>'+mwN(pl.blank.length)+'件</b>）'
+        +'<br>前からブランドが入っている '+mwN(pl.kept.length)+'件は対象外'
+        +(pl.gone.length?('　／　<b>'+mwN(pl.gone.length)+'件</b>は出品リストに'
+          +'無いので分かりません（直しCSV に入れていません）'):'');
+      if(!items.length){
+        note.innerHTML='<div class="okbox" id="csvOsVendBox">'+head
+          +'<br><b>直すものはありません。</b></div>';
+        return;
+      }
+      var name=OSS.vendName(new Date(),osSeqNext(),items.length);
+      var text=OSS.vendCsv(items);
+      csvLastFiles=[{ name:name, text:text,
+                      label:'販売元の直し（'+items.length+'件）' }];
+      csvExportFilesUI();
+      var okd=csvDownload(name,text);
+      note.innerHTML='<div class="okbox" id="csvOsVendBox">'+(okd?'✓ ':'')+head
+        +'<br><b>'+esc(name)+'</b> を作りました（<b>Handle と Vendor の2列だけ</b>。'
+        +'説明・値段・在庫・画像・タグは変えません）。'
+        +'<br>Shopify の <b>商品 → インポート</b>で'
+        +'「Overwrite products with matching handles」にチェックして読み込んでください。'
+        +'<br><span class="note2" style="margin:0">例：'
+        +esc(items.slice(0,3).map(function(x){
+          return OSS.handleOf(x.jan)+' → '+(x.vendor||'（空欄）'); }).join('／'))
+        +'</span></div>';
+    })
+    ['catch'](function(){ note.textContent='pj-sync につながりませんでした。'; });
+}
 /* 出品リストの行 → 海外向け Shopify の品物。
    重さは **eBay の送料計算に使っている重さ**、仕入原価は行の仕入値。 */
 function csvOsItem(r){
@@ -12662,8 +12762,11 @@ function csvOsItem(r){
   var plat=csvPlatSpecOf(r);
   return { jan:r.jan, titleEn:r.titleEn, descHtml:r.descHtml,
     kishu:String(r.mwKishu||''),
-    /* 8.73 Vendor＝ブランド、Type＝商品の種類（行ごと）。 */
-    vendor:String(sp.brand||(sp.aspects||{}).Brand||'').trim(),
+    /* 8.73 Vendor＝ブランド、Type＝商品の種類（行ごと）。
+       8.84 販売元は eBay 用の Brand（ゲームは発売元）。説明の「Brand」の行は
+       今までどおりその行のブランド（brand）。 */
+    vendor:csvOsVendorOf(r),
+    brand:csvOsBrandOld(r),
     type:osTypeOf(r),
     platform:plat,
     mpn:String(sp.mpn||'').trim(),
@@ -12995,6 +13098,7 @@ $('csvPickNew').onclick=function(){ csvPickNewGo(); };
 $('csvOsOnly').onclick=function(){ csvOsOnlyRun(); };
 $('csvOsReset').onclick=function(){ csvOsResetRun(); };
 $('csvOsFix').onclick=function(){ csvOsFixGo(); };
+$('csvOsVend').onclick=function(){ csvOsVendGo(); };
 $('csvExportPick').onclick=function(){
   var ids=csvPickIds();
   if(!ids.length){
@@ -30841,7 +30945,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v332';   // sw.js の const V と必ず同じ値にする
+var APP_V='v333';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
