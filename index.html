@@ -2688,7 +2688,7 @@ body.staff #syncOnHandFix{display:none !important}
            （v324 までの「原産国の既定値（China）」はこの表にまとめた）。 -->
       <div class="rowv"><label>ジャンルごとの原産国の既定</label><textarea id="csvGenreOrigin" rows="4" placeholder="ゲーム,Japan" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8">ゲーム,Japan
 プラモデル,Japan
-フィギュア・ホビー,China</textarea><div class="note2" style="margin-top:2px">1行に「<b>ジャンル名,原産国,見分ける言葉（省略可）</b>」。Amazon のカタログから原産国が取れなかった行に、そのジャンルの値を入れます。入れた行には「<b>原産国：ジャンルの既定</b>」と出し、一覧の絞り込みでその行だけ選べます（書き出しは止めません。<b>発送のときに実物で確かめてください</b>）。<br>ジャンルは eBay のカテゴリで見分けます（ゲーム 139973 と Video Games &amp; Consoles の下＝ゲーム／フィギュア 261055・261068 と Toys &amp; Hobbies・Collectibles の下＝フィギュア・ホビー）。足したジャンルは3列目の「見分ける言葉」（カテゴリ番号・カテゴリの道筋の言葉・MW の機種の言葉）で見分けます。<b>どのジャンルにも当てはまらない行は入れずに「原産国なし」で止めます</b>（推測で入れません）。手で確定した値・Amazon から取れた値・⚙「メーカーごとの原産国」のほうが優先です。</div></div>
+フィギュア・ホビー,China</textarea><div class="note2" style="margin-top:2px">1行に「<b>ジャンル名,原産国,見分ける言葉（省略可）</b>」。Amazon のカタログから原産国が取れなかった行に、そのジャンルの値を入れます。入れた行には「<b>原産国：ジャンルの既定</b>」と出し、一覧の絞り込みでその行だけ選べます（書き出しは止めません。<b>発送のときに実物で確かめてください</b>）。<br>ジャンルは eBay のカテゴリで見分けます（ゲーム 139973 と Video Games &amp; Consoles の下＝ゲーム／フィギュア 261055・261068 と Toys &amp; Hobbies・Collectibles の下＝フィギュア・ホビー）。<b>ヘッドセット（171821）・コントローラー（117042）は China、アニメグッズ（69528）は Japan</b> をはじめから入れてあります（変えるときは「ヘッドセット・コントローラー,Vietnam」「アニメグッズ,China」のように書きます）。足したジャンルは3列目の「見分ける言葉」（カテゴリ番号・カテゴリの道筋の言葉・MW の機種の言葉）で見分けます。<b>どのジャンルにも当てはまらない行は入れずに「原産国なし」で止めます</b>（推測で入れません）。手で確定した値・Amazon から取れた値・⚙「メーカーごとの原産国」のほうが優先です。</div></div>
       <div class="rowv"><label>よく使うeBayカテゴリ</label><textarea id="csvCatCustom" rows="3" placeholder="183454,その他ホビー,fig" style="width:100%;box-sizing:border-box;padding:6px;font-size:13px;line-height:1.4;border:1px solid var(--line);border-radius:2px;background:#fcfbf8"></textarea><div class="note2" style="margin-top:2px">1行に「カテゴリID,表示名,act または fig」。行ごとのカテゴリ選択と、eBayタブの「出品文」の「eBayカテゴリ」に出ます。3列目は列ヘッダとItem Specificsに使うテンプレートで、act は可動（261068）、fig または省略は非可動（261055）のものを使います。</div></div>
       <!-- 8.65：出品に使う eBayカテゴリ。表は pj-sync（D1 の ebay_cat）が持つので、
            新しい種類の商品を出すときもコードを直さずにここから足せる。 -->
@@ -6641,6 +6641,84 @@ function ebCatKnown(code){
   return !!c&&(!!CSV_CAT[c]||!!ebCatOf(c)||!!csvCatOf(c));
 }
 function ebCatSay(msg){ var el=$('ebCatNote'); if(el)el.textContent=msg||''; }
+/* ================= 8.84（カジの依頼）はじめから用意するカテゴリ =================
+   ヘッドセット・コントローラー・アニメグッズの3つを、⚙で探さなくても
+   登録されるようにする。**登録の仕方は今までの「足す」と同じ**（pj-sync の
+   POST /ebay/cat/add）で、必須の Item specifics は eBay から取る
+   （コードに書き写さない＝eBay が項目を変えても「足す」し直せば追いつく）。
+   ・一覧を読んだときに、まだ無いものだけを1回足す（管理者のキーのとき）
+   ・足せたら端末の覚え書きに印を付け、あとで「外す」で外したものを
+     勝手に戻さない（戻すときは⚙で番号を入れて「足す」）
+   ・origin … 原産国の既定（8.72 のジャンルの既定より先に見る）
+   ・slug   … カテゴリごとの書き出しのファイル名に入れる短い名前
+   既定の3つ（CSV_CAT）と、登録済みのカテゴリ（171831・262324 など）の
+   動きは変えない。 */
+var EB_CAT_PRESET=[
+  { code:'171821', name:'Headsets', ja:'ヘッドセット', origin:'China', slug:'headset',
+    path:'Video Games & Consoles > Video Game Accessories > Headsets' },
+  { code:'117042', name:'Controllers & Attachments', ja:'コントローラー',
+    origin:'China', slug:'controller',
+    path:'Video Games & Consoles > Video Game Accessories > Controllers & Attachments' },
+  { code:'69528', name:'Other Animation Merchandise', ja:'アニメグッズ',
+    origin:'Japan', slug:'anime',
+    path:'Collectibles > Animation Art & Merchandise > Animation Merchandise'
+        +' > Other Animation Merchandise' }
+];
+var EB_CAT_PRESET_LS='pj:ebcat:preset:v1';
+var ebCatPresetBusy=false;
+function ebCatPresetOf(code){
+  var c=String(code||'');
+  for(var i=0;i<EB_CAT_PRESET.length;i++)
+    if(EB_CAT_PRESET[i].code===c)return EB_CAT_PRESET[i];
+  return null;
+}
+function ebCatPresetDone(){
+  var o={}; try{ o=JSON.parse(lsGet(EB_CAT_PRESET_LS)||'{}')||{}; }catch(e){ o={}; }
+  return o;
+}
+/* まだ無いものを足す。足したら一覧を読み直す。足せなかったものは印を
+   付けないので、次に一覧を読んだときにもう一度試す。loud は「一覧を取り直す」
+   を人が押したとき（足せなかった理由を出す）。 */
+function ebCatPresetAdd(loud){
+  if(ebCatPresetBusy)return Promise.resolve(0);
+  var done=ebCatPresetDone();
+  var todo=EB_CAT_PRESET.filter(function(c){
+    return !ebCatOf(c.code)&&!done[c.code]; });
+  if(!todo.length||!syncUrl()||!syncApiKey())return Promise.resolve(0);
+  ebCatPresetBusy=true;
+  var added=[], why='';
+  var step=function(i){
+    if(i>=todo.length)return Promise.resolve();
+    var c=todo[i];
+    return fetch(syncUrl()+'/ebay/cat/add',{method:'POST',
+      headers:{'content-type':'application/json','X-PJ-Key':syncApiKey()},
+      body:JSON.stringify({ code:c.code, name:c.name, path:c.path, ja:c.ja,
+                            tpl:'261055' })})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d&&d.ok===true){
+          added.push(c.ja+'（'+c.code+'）必須：'
+            +((d.need||[]).length?d.need.join('／'):'なし'));
+          done[c.code]=1;
+        }else if(!why)why=ebCatWhy(d);
+      })['catch'](function(e){ if(!why)why=ebCatWhy(null,e); })
+      .then(function(){ return step(i+1); });
+  };
+  return step(0).then(function(){
+    try{ lsSet(EB_CAT_PRESET_LS,JSON.stringify(done)); }catch(e){}
+    if(!added.length){
+      ebCatPresetBusy=false;
+      if(why&&loud)ebCatSay('⚠ ヘッドセットなどのカテゴリを足せませんでした：'+why);
+      return 0;
+    }
+    return ebCatPull(true).then(function(){
+      ebCatPresetBusy=false;
+      ebCatSay('カテゴリを足しました。'+added.join('　')
+        +(why?('　⚠ 足せなかったものがあります：'+why):''));
+      return added.length;
+    });
+  });
+}
 function ebCatWhy(d,e){
   if(e&&e.message)return e.message;
   return (d&&(d.detail||d.error))||'pj-sync が受け取りませんでした';
@@ -6671,6 +6749,8 @@ function ebCatPull(quiet){
       if(!quiet)ebCatSay('登録してあるカテゴリ '+ebCats.length+'件');
       ebCatRender(); csvAddCatOpts();
       try{ csvRender(); }catch(e){}
+      /* 8.84 用意してある3つ（ヘッドセットなど）がまだ無ければ足す。 */
+      try{ ebCatPresetAdd(!quiet); }catch(e){}
       return true;
     })['catch'](function(e){
       if(!quiet)ebCatSay('⚠ 読めませんでした：'+ebCatWhy(null,e));
@@ -6979,7 +7059,15 @@ var CSV_GENRES=[
   { key:'model', ja:'プラモデル', origin:'Japan',
     alias:['プラモ','模型','model','model kit','plastic model'] },
   { key:'fig', ja:'フィギュア・ホビー', origin:'China',
-    alias:['フィギュア','ホビー','フィギュア・ホビー関連','fig','hobby'] }
+    alias:['フィギュア','ホビー','フィギュア・ホビー関連','fig','hobby'] },
+  /* 8.84（カジの依頼）カテゴリで決まる既定。道筋で見るとヘッドセット・
+     コントローラーは「ゲーム＝Japan」、アニメグッズは「フィギュア・ホビー＝
+     China」になってしまうので、**カテゴリ番号で先に**見る（cats）。 */
+  { key:'gacc', ja:'ヘッドセット・コントローラー', origin:'China',
+    cats:['171821','117042'],
+    alias:['ヘッドセット','コントローラー','headset','controller'] },
+  { key:'anime', ja:'アニメグッズ', origin:'Japan', cats:['69528'],
+    alias:['アニメ','アニメ関連グッズ','anime','animation merchandise'] }
 ];
 /* eBay のカテゴリの道筋で見分ける（登録したカテゴリ）。
    上から順に見るので、ゲームを先に置く。 */
@@ -7046,6 +7134,11 @@ function csvGenreOf(r){
     if(path&&path.toLowerCase().indexOf(w)>=0){ hit=x.key; return; }
     if(kishu&&kishu.toLowerCase().indexOf(w)>=0){ hit=x.key; return; }
   });
+  if(hit)return hit;
+  /* 8.84 カテゴリ番号で決まるジャンル（ヘッドセット・コントローラー・
+     アニメグッズ）。道筋より先に見る。 */
+  CSV_GENRES.forEach(function(g){
+    if(!hit&&g.cats&&g.cats.indexOf(cat)>=0)hit=g.key; });
   if(hit)return hit;
   if(path){
     Object.keys(GENRE_PATH).forEach(function(k){
@@ -7486,7 +7579,23 @@ function csvCodeOf(r){
 function csvCatApply(r,cat,manual){
   var wasGame=(String(r.cat||'')==='139973'), now=String(cat||'');
   var g=(now==='139973');
+  var was=String(r.cat||'');
   r.cat=now; r.catDone=true;
+  /* 8.84 ヘッドセット・コントローラー・アニメグッズへ（から）切り替えた行は、
+     **ジャンルの既定で入っていた原産国**を新しいカテゴリの既定に入れ直す
+     （フィギュアの China のままアニメグッズ＝Japan に出ていかないように）。
+     手で確定した値・Amazon から取れた値・メーカーの既定は触らない。
+     ほかのカテゴリどうしの切り替えは今までどおり（入れ直さない）。 */
+  if(was!==now&&(ebCatPresetOf(was)||ebCatPresetOf(now))){
+    var so=r.specs=r.specs||{};
+    var defd=!so.originManual&&!so.originMaker
+      &&(!!so.originGenre||(!!so.originDefault&&!!String(so.origin||'').trim()));
+    if(defd||(!so.originManual&&!String(so.origin||'').trim())){
+      so.origin=''; so.originGenre=false; so.originDefault=false;
+      so.originGenreJa='';
+      if(now!=='139973')csvOriginFill(r);
+    }
+  }
   if(manual)r.catManual=true;
   var code=csvCodeOf(r);
   // ゲームとフィギュアで状態の表が違う。区分が変わった行だけ引き直す
@@ -12651,7 +12760,14 @@ function osSeqNext(){
   return n;
 }
 /* ファイル名に入れるカテゴリの短い名前（2つ以上のときだけ付ける）。 */
-function csvCatSlug(cat){ return (String(cat)==='139973')?'game':'fig'; }
+function csvCatSlug(cat){
+  /* 8.84 用意してある3つは自分の名前で出す（headset／controller／anime）。
+     どれも「fig」だと、ZIP の中で同じ名前のファイルが重なるため。
+     ほかのカテゴリは今までどおり（ゲーム＝game・それ以外＝fig）。 */
+  var ps=ebCatPresetOf(cat);
+  if(ps)return ps.slug;
+  return (String(cat)==='139973')?'game':'fig';
+}
 /* 印を付けられるのは **MW 無在庫の行だけ**（仕入れ先が MW の行）。 */
 function csvOsCan(r){ return csvIsDrop(r); }
 function csvOsOn(r){ return !!(r&&r.osOn&&csvOsCan(r)); }
@@ -22346,6 +22462,21 @@ function mwMktHtml(r,rec){
     +(r.mkt_url?('　<a href="'+esc(r.mkt_url)+'" target="_blank" rel="noopener">eBayで見る</a>'):'')
     +'</div>';
 }
+/* 8.84（カジの依頼）候補一覧を 500件より先まで読む。
+   pj-sync は1回に 500件まで返す（MW_LIST_MAX）。続きは offset で順に読み、
+   画面でつなぐ。相場の調査（/mw/market）は今までどおり**候補ぜんぶ**から
+   未調査・7日より古いものを 120件ずつ拾うので、ここで読めるようになった
+   行も「未調査」として順に進む。
+   ・MW_LIST_PAGE … 1回に読む行数（pj-sync の上限と同じ）
+   ・MW_LIST_ALL  … 画面に持つ行数の上限（3,000件＝読むのは最大6回）。
+                    一覧は条件や検索を変えるたびに全部の行の売値を計算し直す
+                    ので、行数に比例して重くなる（PC で 5,000件 約0.85秒・
+                    3,000件 約0.5秒。スマホはその数倍）。スマホでも待てる
+                    ところで止めた。超えたぶんは「うち◯件を表示」と出す
+   古い pj-sync（offset を知らない版）は同じ 500件を返すので、新しい行が
+   1つも増えなかったらそこでやめる（今までと同じ 500件で止まる）。 */
+var MW_LIST_PAGE=500, MW_LIST_ALL=3000;
+var mwListSeq=0;
 function mwListRun(){
   var note=$('csvMwListNote');
   csvSecretFill();
@@ -22356,26 +22487,61 @@ function mwListRun(){
     +'&new_only='+(mwNewOnly()?'1':'0')
     +'&ship_max='+mwShipMax()+'&stock_min='+mwStockMin()
     +'&note_ng='+encodeURIComponent(mwNoteNgList().join(','))
-    +'&note_all='+(mwNoteAll()?'1':'0')+'&limit=500';
+    +'&note_all='+(mwNoteAll()?'1':'0')+'&limit='+MW_LIST_PAGE;
   note.textContent='候補一覧を取り込んでいます…';
-  fetch(syncUrl()+'/mw/list'+q,{headers:{'X-PJ-Key':syncKeyReady()}})
-    .then(function(res){
-      if(res.ok)return res.json();
-      return res.text().then(function(t){
-        var b=null; try{ b=JSON.parse(t); }catch(e){}
-        throw new Error(syncPostWhy(res.status,b,t)); });
-    })
-    .then(function(d){
-      mwRows=d.rows||[]; mwLast=d.last||null; mwMkt=d.mkt||null;
+  var my=++mwListSeq;          // 続けて押されたときは、あとから押したほうだけ生かす
+  var one=function(offset){
+    return fetch(syncUrl()+'/mw/list'+q+(offset?('&offset='+offset+'&lite=1'):''),
+                 {headers:{'X-PJ-Key':syncKeyReady()}})
+      .then(function(res){
+        if(res.ok)return res.json();
+        return res.text().then(function(t){
+          var b=null; try{ b=JSON.parse(t); }catch(e){}
+          throw new Error(syncPostWhy(res.status,b,t)); });
+      });
+  };
+  var rowKey=function(r){ return [r.jan,r.sha,r.idx].join('|'); };
+  var first=null, rows=[], seen={}, partErr='';
+  var add=function(list){
+    var n=0;
+    (list||[]).forEach(function(r){
+      var k=rowKey(r);
+      if(seen[k]||rows.length>=MW_LIST_ALL)return;
+      seen[k]=1; rows.push(r); n++;
+    });
+    return n;
+  };
+  var next=function(d){
+    if(my!==mwListSeq)return null;
+    var got=(d.rows||[]).length, fresh=add(d.rows);
+    var total=+((first||d).n)||0;
+    /* 続きがあるのは「1回ぶんいっぱいに返ってきた」「まだ全部ではない」
+       「新しい行が増えた」「画面の上限に届いていない」のすべてが真のとき。 */
+    if(got<MW_LIST_PAGE||rows.length>=total||!fresh||rows.length>=MW_LIST_ALL)
+      return null;
+    note.textContent='候補一覧を取り込んでいます…（'+rows.length+'／'+total+'件）';
+    /* 続きが読めなかったときは、読めたところまでを出す（全部を捨てない）。 */
+    return one(rows.length).then(next,function(e){ partErr=e.message; return null; });
+  };
+  one(0)
+    .then(function(d){ first=d; return next(d); })
+    .then(function(){
+      if(my!==mwListSeq)return;
+      var d=first;
+      mwRows=rows; mwLast=d.last||null; mwMkt=d.mkt||null;
       note.textContent='候補 '+(d.n||0)+'件'
         +(d.n>mwRows.length?('（うち '+mwRows.length+'件を表示）'):'')
         +'　／　MW の生きている行 '+(d.alive||0)+'　JANごとの代表 '+(d.picked||0)
         +(mwLast?('　／　前回の取り込み '+esc(mwLast.at_jst||'')
           +'（足した '+mwLast.added+'／変わった '+mwLast.changed
-          +'／今回 新しく欠品 '+mwLast.gone+'行）'):'');
+          +'／今回 新しく欠品 '+mwLast.gone+'行）'):'')
+        +(partErr?('　⚠ 続きを読めませんでした（'+partErr
+          +'）。もう一度押してください'):'');
       mwListRender();
     })
-    ['catch'](function(e){ note.textContent='⚠ 取り込めませんでした：'+e.message; });
+    ['catch'](function(e){
+      if(my!==mwListSeq)return;
+      note.textContent='⚠ 取り込めませんでした：'+e.message; });
 }
 /* ===== MW の写真の半自動（6.129）=====
    **会員サイトの自動取得は作らない**方針のまま、人が見ているページから送る。
@@ -30841,7 +31007,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v332';   // sw.js の const V と必ず同じ値にする
+var APP_V='v333';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
