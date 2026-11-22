@@ -148,11 +148,12 @@ await p.waitForTimeout(500);
   ok(cellOf(csv,1,'Handle')==='os-4902370550001','★★★Handle は os-<JAN>');
   ok(cellOf(csv,1,'Variant SKU')==='W-4902370550001',
      '★★★SKU は eBay と同じ W-<JAN>');
-  /* 8.94 卸値 3,000 → 税込 3,300・目標利益 ¥1,000＋30%＝1,990・3.6% →
-     (3,300＋1,990)÷0.964＝5,487.5… → ¥5,488（国際送料・eBay の手数料は入れない）。 */
+  /* 8.94／8.95 卸値 3,000 → 税込 3,300・MW 仕入れ送料 176・梱包材 50・
+     目標利益 ¥1,000＋30%＝1,990・3.6% → (3,300＋176＋50＋1,990)÷0.964
+     ＝5,721.9… → ¥5,722（国際送料・eBay の手数料は入れない）。 */
   const px=await p.evaluate(()=>OSS.priceOf({ wholesale:csvRowById('w1').mwWholesale },osOpt()));
-  ok(cellOf(csv,1,'Variant Price')===String(px)&&px===5488,
-     '★★★値段は卸値（税込）＋目標利益＋決済手数料（¥5,488・為替と送料は使わない）');
+  ok(cellOf(csv,1,'Variant Price')===String(px)&&px===5722,
+     '★★★値段は卸値（税込）＋MW 仕入れ送料＋梱包材＋目標利益＋決済手数料（¥5,722・為替と国際送料は使わない）');
   ok(cellOf(csv,1,'Variant Grams')==='210',
      '★★★重さは eBay の送料計算に使っている重さ');
   ok(cellOf(csv,1,'Variant Inventory Policy')==='deny','★★Inventory policy は deny');

@@ -259,13 +259,23 @@
      ストアは重さ別のエアメール送料を**チェックアウトで別に**もらっている。
      v341 までの「eBay の売値（送料込み・USD）× 為替 × ◯%」だと、送料が二重に
      かかり、eBay の手数料・広告費の分も上乗せされて高すぎた。
-       値段 ＝ （卸値（税込）＋ 目標利益）÷（1 − Shopify 決済手数料率）
+       値段 ＝ （卸値（税込）＋ MW 仕入れ送料 ＋ 梱包材 ＋ 目標利益）
+              ÷（1 − Shopify 決済手数料率）
        卸値（税込）＝ MW の卸値 × 1.1（円で直接。為替は使わない）
+       MW 仕入れ送料・梱包材 ＝ ⚙（既定 ¥176・¥50。8.95）
        目標利益   ＝ ⚙ 目標利益（円）＋ 卸値（税込）× ⚙ ◯%
        決済手数料 ＝ 値段 × ⚙ 決済手数料率（既定 3.6%）
      国際送料・eBay の手数料・広告費は入れない。1円単位で切り上げる。 */
   var PAY_DEF = 3.6;               // Shopify 決済手数料（%）の既定
   var TAX = 1.1;                   // 卸値は税抜（MW）。税込にする
+  var SHIP_DEF = 176;              // 8.95 MW の仕入れ送料（1点・円）の既定
+  var PACK_DEF = 50;               // 8.95 梱包材（1点・円）の既定
+  /* ⚙ の円の欄（空なら既定・0 は 0）。 */
+  function yenCfg(v, d) {
+    if (v === undefined || v === null || s(v).trim() === "") return d;
+    var n = num(v);
+    return (n >= 0) ? Math.round(n) : d;
+  }
   function payOf(opt) {
     var v = (opt || {}).pay;
     if (v === undefined || v === null || s(v).trim() === "") return PAY_DEF;
@@ -281,16 +291,18 @@
     var v = num(o.profitBase) + num(cost) * (num(o.profitRate) / 100);
     return v > 0 ? Math.round(v) : 0;
   }
-  /* 内訳つき。{ wholesale, cost（税込）, profit, pay（%）, fee, price } */
+  /* 内訳つき。{ wholesale, cost（税込）, ship（MW 仕入れ送料）, pack（梱包材）,
+     profit, pay（%）, fee, price } */
   function pxOf(it, opt) {
     var o = opt || {};
     var cost = taxCostOf(it);
     var out = { wholesale: Math.round(num((it || {}).wholesale)), cost: cost,
+                ship: yenCfg(o.ship, SHIP_DEF), pack: yenCfg(o.pack, PACK_DEF),
                 profit: 0, pay: payOf(o), fee: 0, price: 0 };
     if (!(cost > 0)) return out;
     out.profit = profitOf(cost, o);
-    out.price = Math.ceil((cost + out.profit) / (1 - out.pay / 100));
-    out.fee = out.price - cost - out.profit;
+    out.price = Math.ceil((cost + out.ship + out.pack + out.profit) / (1 - out.pay / 100));
+    out.fee = out.price - cost - out.ship - out.pack - out.profit;
     return out;
   }
   function priceOf(it, opt) { return pxOf(it, opt).price; }
@@ -573,7 +585,7 @@
     vendName: vendName,
     pctOf: pctOf, yenOf: yenOf, priceOf: priceOf, gramsOf: gramsOf,
     /* 8.94 卸値（税込）＋目標利益＋決済手数料。 */
-    PAY_DEF: PAY_DEF, payOf: payOf, taxCostOf: taxCostOf, profitOf: profitOf,
+    PAY_DEF: PAY_DEF, SHIP_DEF: SHIP_DEF, PACK_DEF: PACK_DEF, payOf: payOf, taxCostOf: taxCostOf, profitOf: profitOf,
     pxOf: pxOf, PX_COLS: PX_COLS, pxRowsOf: pxRowsOf, pxCsv: pxCsv, pxName: pxName,
     qtyOf: qtyOf, costOf: costOf, picOk: picOk, picsOf: picsOf,
     tagNg: tagNg, tagsOf: tagsOf, whyNot: whyNot,

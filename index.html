@@ -2711,9 +2711,12 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="cfgsub">海外向け Shopify（os-）</div>
       <!-- 8.94（カジの依頼・v342）os- の値段は卸値（税込）＋目標利益＋決済手数料。
            国際送料はチェックアウトで別にもらうので入れない。為替は使わない。 -->
-      <div class="note2" style="margin:0 0 4px"><b>海外向けの値段</b>＝（卸値（税込）＋目標利益）÷（1 − 決済手数料率）。<b>国際送料は入れません</b>（チェックアウトで重さ別に別にもらうため）。eBay の手数料・広告費も入れません。<b>為替は使いません</b>（円で直接）。</div>
+      <div class="note2" style="margin:0 0 4px"><b>海外向けの値段</b>＝（卸値（税込）＋MW 仕入れ送料＋梱包材＋目標利益）÷（1 − 決済手数料率）。<b>国際送料は入れません</b>（チェックアウトで重さ別に別にもらうため）。eBay の手数料・広告費も入れません。<b>為替は使いません</b>（円で直接）。</div>
       <div class="chk"><input type="checkbox" id="osProfitEbay" checked><label for="osProfitEbay" style="flex:1"><b>目標利益は eBay と同じにする</b>（下限利益＋仕入値×連動率。既定オン）</label></div>
       <div class="row"><label for="osProfitBase">目標利益（オフのとき）</label><input type="number" id="osProfitBase" value="1000" step="100" min="0" inputmode="numeric"><span class="unit">円 ＋</span><input type="number" id="osProfitRate" value="15" step="1" min="0" max="200" inputmode="decimal" style="max-width:70px"><span class="unit">% × 卸値（税込）</span></div>
+      <!-- 8.95（カジの依頼）MW の仕入れ送料と梱包材も値段に足す。 -->
+      <div class="row"><label for="osShipFee">MW の仕入れ送料（1点）</label><input type="number" id="osShipFee" value="176" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label for="osPackFee">梱包材（1点）</label><input type="number" id="osPackFee" value="50" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
       <div class="row"><label for="osPayPct">Shopify の決済手数料</label><input type="number" id="osPayPct" value="3.6" step="0.1" min="0" max="20" inputmode="decimal"><span class="unit">%</span></div>
       <div class="note2" style="margin-top:0" id="osPxCfgNote"></div>
       <details style="margin:2px 0 6px"><summary class="note2" style="margin:0;cursor:pointer">変更前と変更後の値段を比べる（出品リストの os- の行）</summary><div id="osPxCmp" class="note2" style="margin:4px 0"></div></details>
@@ -3919,7 +3922,9 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.85 osVendor（販売元の代わりの名前）はやめた。 */
              'osPricePct','osFixPct','osType','osStatus',
              /* 8.94 os- の値段（目標利益・決済手数料）。 */
-             'osProfitBase','osProfitRate','osPayPct'];
+             'osProfitBase','osProfitRate','osPayPct',
+             /* 8.95 MW の仕入れ送料・梱包材（os- の値段に足す）。 */
+             'osShipFee','osPackFee'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -7916,7 +7921,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubSeoHidden',
                  /* 6.193 海外向け Shopify（os-）。 */
                  'osPricePct','osFixPct','osType','osStatus',
-                 'osProfitBase','osProfitRate','osPayPct',
+                 'osProfitBase','osProfitRate','osPayPct','osShipFee','osPackFee',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
                  'syncPxMax','syncHotMax'];
 
@@ -12844,18 +12849,23 @@ function osPxOpt(){
   return { ebay:ebay,
            profitBase:ebay?num('baseProfit',0):num('osProfitBase',1000),
            profitRate:ebay?num('linkRate',0):num('osProfitRate',15),
-           pay:num('osPayPct',OSS.PAY_DEF) };
+           pay:num('osPayPct',OSS.PAY_DEF),
+           /* 8.95 MW の仕入れ送料・梱包材（1点）。 */
+           ship:num('osShipFee',OSS.SHIP_DEF), pack:num('osPackFee',OSS.PACK_DEF) };
 }
 function osOpt(){
   var px=osPxOpt();
   return { fx:+$('fx').value||0, pct:osPricePct(),
            profitBase:px.profitBase, profitRate:px.profitRate, pay:px.pay,
+           ship:px.ship, pack:px.pack,
            type:osTypeV(), status:osStatusV() };
 }
 /* 内訳の1行（pj の画面だけに出す。卸値は Shopify の CSV には入れない）。 */
 function osPxText(z){
   if(!z||!(z.price>0))return '値段が出せません（MW の卸値がありません）';
-  return '卸値（税込）'+yen(z.cost)+'（卸値 '+yen(z.wholesale)+' × 1.1）＋ 目標利益 '+yen(z.profit)
+  return '卸値（税込）'+yen(z.cost)+'（卸値 '+yen(z.wholesale)+' × 1.1）'
+    +'＋ MW 仕入れ送料 '+yen(z.ship)+' ＋ 梱包材 '+yen(z.pack)
+    +' ＋ 目標利益 '+yen(z.profit)
     +' ＋ 決済手数料 '+yen(z.fee)+'（'+z.pay+'%）＝ <b>'+yen(z.price)+'</b>';
 }
 /* ⚙の説明と、変更前と変更後の値段の比べ（出品リストの os- の行・20件まで）。 */
@@ -12863,7 +12873,8 @@ function osPxCfgRender(){
   var px=osPxOpt(), o=osOpt();
   var nt=$('osPxCfgNote');
   if(nt)nt.innerHTML='いまの目標利益：'+yen(px.profitBase)+' ＋ 卸値（税込）× '+px.profitRate+'%'
-    +(px.ebay?'（eBay と同じ）':'')+'・決済手数料 '+px.pay+'%'
+    +(px.ebay?'（eBay と同じ）':'')+'・MW 仕入れ送料 '+yen(px.ship)+'・梱包材 '+yen(px.pack)
+    +'・決済手数料 '+px.pay+'%'
     +'<br>例：卸値 ¥5,000 → '+osPxText(OSS.pxOf({ wholesale:5000 },o));
   var box=$('osPxCmp'); if(!box)return;
   var rows=(typeof csvList!=='undefined'?csvList:[]).filter(function(r){
@@ -13440,7 +13451,7 @@ $('csvOsReset').onclick=function(){ csvOsResetRun(); };
 $('csvOsFix').onclick=function(){ csvOsFixGo(); };
 $('csvOsVend').onclick=function(){ csvOsVendGo(); };
 $('csvOsPx').onclick=function(){ csvOsPxGo(); };
-['osProfitEbay','osProfitBase','osProfitRate','osPayPct','baseProfit','linkRate','fx','osPricePct']
+['osProfitEbay','osProfitBase','osProfitRate','osPayPct','osShipFee','osPackFee','baseProfit','linkRate','fx','osPricePct']
   .forEach(function(id){ var el=$(id); if(!el)return;
     el.addEventListener(el.type==='checkbox'?'change':'input',function(){ try{ osPxCfgRender(); }catch(e){} }); });
 $('csvExportPick').onclick=function(){
@@ -32031,7 +32042,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v342';   // sw.js の const V と必ず同じ値にする
+var APP_V='v343';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

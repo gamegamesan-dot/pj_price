@@ -18,15 +18,16 @@ const OPT={ profitBase:1000, profitRate:30, pay:3.6 };
 console.log('=== ① 式（shared/osscsv.js の pxOf の1か所）===');
 {
   const rows=[2000,3500,5000,7000,10000].map((w)=>OSS.pxOf({ wholesale:w },OPT));
-  rows.forEach((z)=>console.log('   卸値 '+z.wholesale+' → 税込 '+z.cost+' ＋ 利益 '+z.profit
+  rows.forEach((z)=>console.log('   卸値 '+z.wholesale+' → 税込 '+z.cost+' ＋ 送料 '+z.ship+' ＋ 梱包 '+z.pack+' ＋ 利益 '+z.profit
     +' ＋ 手数料 '+z.fee+' ＝ '+z.price));
-  ok(rows.every((z)=>z.price===Math.ceil((z.cost+z.profit)/0.964)),'★★★（卸値（税込）＋目標利益）÷（1 − 3.6%）を切り上げ');
+  ok(rows.every((z)=>z.price===Math.ceil((z.cost+176+50+z.profit)/0.964)),
+     '★★★（卸値（税込）＋MW 仕入れ送料 176＋梱包材 50＋目標利益）÷（1 − 3.6%）を切り上げ');
   ok(rows.every((z)=>z.cost===Math.round(z.wholesale*1.1)),'★★★卸値は税込（×1.1）');
-  ok(rows.every((z)=>z.price===z.cost+z.profit+z.fee),'★★内訳の合計が値段');
+  ok(rows.every((z)=>z.price===z.cost+z.ship+z.pack+z.profit+z.fee),'★★内訳の合計が値段');
   ok(rows.every((z)=>z.fee>=Math.floor(z.price*0.036)&&z.fee<=Math.ceil(z.price*0.036)+1),
      '★★決済手数料は値段の 3.6%（手数料を引いても目標利益が残る）');
   const a=OSS.pxOf({ wholesale:5000, usd:80 },Object.assign({ fx:150, pct:100 },OPT));
-  ok(a.price===8455,'★★★卸値 ¥5,000 → ¥8,455（為替・eBay の売値は使わない）');
+  ok(a.price===8689,'★★★卸値 ¥5,000 → ¥8,689（為替・eBay の売値は使わない）');
 }
 
 const env0=()=>makeEnv({ STAFF_KEY:'staff-key-123', WORKER_KEY:'worker-key-999' });

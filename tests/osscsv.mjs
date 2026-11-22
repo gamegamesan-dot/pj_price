@@ -85,14 +85,19 @@ ok(cell(csv,1,'Vendor')==='','★Vendor は行のブランド（無ければ空�
 ok(cell(csv,1,'Variant Requires Shipping')==='true','★送るものとして出す');
 
 console.log('=== 値段（8.94：卸値（税込）＋目標利益＋決済手数料）===');
-/* 卸値 3,500 → 税込 3,850。目標利益 1,000＋3,850×30%＝2,155。
-   (3,850＋2,155)÷(1−0.036)＝6,229.25… → 切り上げ ¥6,230。手数料 225。 */
-ok(cell(csv,1,'Variant Price')==='6230','★★★(3,850＋2,155)÷0.964 ＝ ¥6,230（国際送料・eBay の手数料は入れない）');
+/* 卸値 3,500 → 税込 3,850。MW 仕入れ送料 176・梱包材 50（8.95・既定）。
+   目標利益 1,000＋3,850×30%＝2,155。(3,850＋176＋50＋2,155)÷(1−0.036)
+   ＝6,463.6… → 切り上げ ¥6,464。手数料 233。 */
+ok(cell(csv,1,'Variant Price')==='6464','★★★(3,850＋176＋50＋2,155)÷0.964 ＝ ¥6,464（国際送料・eBay の手数料は入れない）');
 const z=A.pxOf({wholesale:3500},OPT);
-ok(z.cost===3850&&z.profit===2155&&z.fee===225&&z.price===6230&&z.pay===3.6,
-   '★★★内訳：卸値（税込）3,850・目標利益 2,155・決済手数料 225');
-ok(A.pxOf({wholesale:3500},{...OPT,fx:999,pct:300}).price===6230,'★★★為替・v341 の割合は使わない');
-ok(A.pxOf({wholesale:3500},{profitBase:1000,profitRate:0,pay:0}).price===4850,'★★目標利益と決済手数料を⚙で変えられる');
+ok(z.cost===3850&&z.ship===176&&z.pack===50&&z.profit===2155&&z.fee===233&&z.price===6464&&z.pay===3.6,
+   '★★★内訳：卸値（税込）3,850・MW 仕入れ送料 176・梱包材 50・目標利益 2,155・決済手数料 233');
+ok(A.SHIP_DEF===176&&A.PACK_DEF===50,'★★MW 仕入れ送料・梱包材の既定は ¥176・¥50（8.95）');
+ok(A.pxOf({wholesale:3500},{...OPT,ship:0,pack:0}).price===6230
+   &&A.pxOf({wholesale:3500},{...OPT,ship:300,pack:100}).price===Math.ceil((3850+300+100+2155)/0.964),
+   '★★★MW 仕入れ送料・梱包材を⚙で変えられる（0 も入れられる）');
+ok(A.pxOf({wholesale:3500},{...OPT,fx:999,pct:300}).price===6464,'★★★為替・v341 の割合は使わない');
+ok(A.pxOf({wholesale:3500},{profitBase:1000,profitRate:0,pay:0}).price===5076,'★★目標利益と決済手数料を⚙で変えられる');
 ok(A.payOf({})===3.6&&A.PAY_DEF===3.6&&A.payOf({pay:''})===3.6&&A.payOf({pay:0})===0,'★★決済手数料の既定は 3.6%（0 も入れられる）');
 ok(A.pxOf({},OPT).price===0&&A.pxOf({wholesale:0},OPT).price===0,'★卸値が無ければ0（出さない行になる）');
 /* v341 までの式（比べるためだけ）。 */
@@ -193,7 +198,7 @@ ok(cell(upd,2,'Variant Inventory Qty')==='2'&&cell(upd,2,'Status')==='draft',
   ok(cell(updA,1,'Status')==='draft'&&cell(updA,2,'Status')==='active',
      '★★⚙が「公開」なら、在庫があれば公開・品切れは下書き');
 }
-ok(cell(upd,2,'Variant Price')==='6230','★★★値段も直す（卸値から新しい式で）');
+ok(cell(upd,2,'Variant Price')==='6464','★★★値段も直す（卸値から新しい式で）');
 ok(cell(upd,1,'Handle')==='os-4902370550467'&&cell(upd,1,'Variant SKU')==='W-4902370550467',
    '★★Handle と SKU で突き合わせる');
 ok(A.updRowsOf([{...IT,member:true}],OPT).length===0,
