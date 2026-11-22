@@ -6671,3 +6671,97 @@ URL から写真を取り込むか）と、iPhone の実機での「ファイル
 | D1 | **要ります**（`migrate-0071-one-pics.sql`。`one_item` に列を2つ足すだけ） |
 | 鍵・権限 | 要りません（⚙の画像サーバーURL・アップロードトークンは eBay の写真と同じもの） |
 | proxy-img（pj-img） | 要りません（今の `/upload` をそのまま使う） |
+
+---
+
+## 8.88 会員用（sub-）・1点もの（one-）の Status を draft で出し、API で非公開にそろえる（v337・カジの依頼）
+
+### 依頼
+
+one- と sub- の Shopify 用 CSV で Status が active になっていて、取り込むと
+一般のストアの一覧・検索・海外向けカタログに出てしまった。
+
+1. one-・sub- の商品の Status は unlisted（非公開・直接リンクのみ）で書き出す。
+2. 「Shopify に読み込みました」を押す前の案内に「取り込んだあと、Shopify で
+   ステータスが『非公開』になっているか確かめる」を1行足す。
+3. 海外向けの os- は今までどおり active のまま変えない。
+
+### 原因
+
+- pj の CSV（sub-・one-）には **Status の列そのものが無かった**（8.41：上書きで
+  非公開が解けないように外していた）。
+- Shopify は **Status の列が無いと、新しい商品を active で入れる**。8.41 の考えは
+  「もう非公開にした商品を上書きする」ときには正しいが、**新しい商品**は active に
+  なり、オンラインストア（Published＝true）と海外向けカタログに出た。
+  非公開にするのは手作業（管理画面で一括）頼みだった。
+
+### 1 の「unlisted」について（カジの決定）
+
+Shopify の商品CSV の説明では、Status に入れられる値は **active・draft・archived の
+3つだけ**で、unlisted は載っていない（「列があるなら値が要る」とも書いてある）。
+unlisted と書くと、その行か取り込みそのものが失敗するおそれがあるので、
+カジに確かめて **CSV は draft で出し、取り込んだあと pj-sync が管理 API で
+UNLISTED にする**ことにした（管理 API の ProductStatus には UNLISTED がある）。
+
+### 直したこと
+
+**CSV の Status**（決まりは `shared/shopcsv.js` の `MEMBER_STATUS`・`statusOf` の1か所）
+
+| 商品 | Status |
+| --- | --- |
+| sub-・one-（まだ Shopify に入れていない） | **draft** |
+| sub-・one-（「Shopify に読み込みました」の印あり） | **列なし**（別のファイル `…-loaded.csv`） |
+| os-（海外向け） | 今までどおり（⚙ が「公開」なら **active**・既定は draft） |
+
+- 両方あるときは `shopify-products-<日付>-new.csv`／`-loaded.csv`
+  （1点ものは `shopify-one-<日付>-new.csv`／`-loaded.csv`）の2つに分ける。
+- CSV に入れられない値（unlisted など）は書かない（`statusOf` が落とす）。
+- 1点ものの写真だけの行には Status を入れない（商品の行だけ）。
+- 在庫CSV は今までどおり Status を触らない。
+
+**非公開（Unlisted）にそろえる**（新しいボタン。会員用・1点ものの両方）
+
+- `POST /shop/unlist { kind:'sub'|'one'|'all', approve, from }`（管理者だけ）
+- 対象：sub- は「会員に出す」印があって CSV に出した（または読み込んだ）商品、
+  one- は取り下げていない商品。**Handle が sub-・one- のものだけ**（os- は見ない）。
+- 1回目は**確かめるだけ**（状態ごとの件数・海外向けカタログに入っている件数・
+  直す必要がある件数）。確認のあとに直す：
+  - ACTIVE・DRAFT → **UNLISTED**（`productUpdate` で status だけ送る）
+  - オンラインストアに公開（非公開でもリンクで開くために要る）
+  - 海外向けの商品リスト（⚙ subShopOverseas）から外す
+  - ARCHIVED と Shopify に無い商品は触らない（数だけ出す）
+- 40秒ずつ区切り、画面が続きを頼む（`from`・`next`・`left`）。
+
+**案内**：会員用の「Shopify に読み込みました」の上、1点ものの写真の直しCSV の下、
+両方の CSV の書き出しの結果、「非公開にそろえる」の結果に
+「**✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。**」
+を出す。前の手作業の手順（商品を未掲載にする）はボタンに置き換えた。
+
+### 気をつけること
+
+- 値段を変えて「読み込みました」の印が外れた sub- の商品は「まだ」の扱いになり、
+  CSV では draft で入る（上書きで一度下書きになる）。取り込んだら
+  「非公開にそろえる」を押せば戻る（押すまでは会員もカードから買えない）。
+- Shopify の管理 API の鍵（8.80）が無いと、ボタンは「Shopify がまだ使えません」と
+  理由を出す（そのときは管理画面で非公開にする・手順書 §13）。
+
+### 確かめ方
+
+| 試験 | 件数 | 見ること |
+| --- | --- | --- |
+| `tests/memstatus.mjs` | 33 | CSV の Status（まだ＝draft・読み込み済み＝列なし・unlisted は書かない・写真の行は空・在庫CSV は触らない）／os- は今までどおり／非公開にそろえる（確かめるだけ・active と draft を UNLISTED・オンラインストアに公開・海外向けカタログから外す・アーカイブと Shopify に無い商品と os- は触らない・送るのは status だけ・続きから・できなかった理由・作業者は使えない・鍵が無いとき） |
+| `tests/memstatusui.js` | 21 | sub-・one- の CSV を分けて Status＝draft／列なし／案内の1行（ボタンと「読み込みました」の前）／確かめる→確認→直す（続きも頼む）・確認でやめると何も変えない／作業者は押せない |
+
+`tests/unlisted.mjs`（8.41）はそのまま通る（Status の指定が無いときは今までどおり列を出さない）。
+
+**この環境で確かめられなかったこと**：本物の Shopify での取り込みと、管理 API で
+UNLISTED にしたあとの表示（一覧・検索・海外向けカタログから消えるか）。
+
+### デプロイ
+
+| | |
+| --- | --- |
+| 画面 | push すれば GitHub Pages が自動（版は **v337**） |
+| pj-sync | **要ります**（`POST /shop/unlist`） |
+| D1 | 要りません |
+| 鍵・権限 | 新しいものは要りません（8.80 の Shopify の管理 API の鍵・`write_products`・`write_publications`） |

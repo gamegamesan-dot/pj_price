@@ -1200,7 +1200,12 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.41（カジの依頼）会員用の商品は Shopify で「非公開（Unlisted）」にする。
              CSV の Status には unlisted を入れられない（active／draft／archived だけ）ので、
              pj は Status の列ごと出さない（上書きで非公開が解けないように）。 -->
-        <div class="note2" style="margin:2px 0 0">読み込んだら、<b>会員用の商品を Shopify で「非公開（Unlisted）」に</b>してください。<b>商品 → タグ <code>member-list</code> で絞り込み → 全選択（「すべての結果を選択」も押す）→「…」→「商品の掲載を解除」→「商品を未掲載にする」</b>。<b>すでに非公開の商品が混ざっていても大丈夫</b>なので、毎回これを押すだけです。<br><b>一覧・検索・<code>/products.json</code> に出なくなり、カードのリンクからは今までどおり買えます。</b>CSV は<b>ステータスの欄を出していない</b>ので、<b>上書きしても非公開は解けません</b>（手順書 §13）。</div>
+        <!-- 8.88（カジの依頼）CSV の Status は draft（まだ入れていない商品だけ）。
+             取り込んだら、下のボタンで管理 API から「非公開（Unlisted）」にする。 -->
+        <div class="note2" style="margin:2px 0 0">CSV は、<b>まだ Shopify に入れていない商品を Status＝draft</b>（下書き・どこにも出ない）で書き出します。読み込んだら、下の<b>「非公開（Unlisted）にそろえる」</b>を押してください（会員がカードのリンクから買えるようになり、一覧・検索・海外向けカタログには出ません）。もう読み込んだ商品は Status の列を出さない別のファイルにするので、いまの非公開は崩れません。</div>
+        <div class="note2" id="subUnlistCheck" style="margin:2px 0 0"><b>✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。</b>（商品 → タグ <code>member-list</code> で絞り込み、ステータスの列）</div>
+        <button class="btn cfgprice" id="subUnlistBtn" style="width:100%;margin-top:6px" onclick="shopUnlistGo('sub','subUnlistNote');return false">非公開（Unlisted）にそろえる（会員用 sub-）</button>
+        <div class="note2" id="subUnlistNote" style="margin-top:2px"></div>
         <button class="btn cfgprice" id="subLoaded" style="width:100%;margin-top:6px" onclick="subLoadedGo();return false">Shopify に読み込みました</button>
         <div id="subLoadedBox"></div>
         <!-- 6.194（【5】）Shopify の商品CSV（エクスポート）と突き合わせる -->
@@ -1347,6 +1352,10 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.87 読み込んだあとに写真を変えた1点ものの「写真の直しCSV」。
              自動では作らない（作るかどうかはカジが決める）。 -->
         <button class="btn cfgprice" id="oneImgCsvBtn" style="width:100%;margin-top:6px" onclick="oneImgCsvGo();return false">写真の直しCSV（読み込んだあとに写真を変えた1点もの）</button>
+        <!-- 8.88（カジの依頼）1点ものも、取り込んだら非公開（Unlisted）にそろえる。 -->
+        <div class="note2" id="oneUnlistCheck" style="margin:4px 0 0">読み込んだら<b>「非公開（Unlisted）にそろえる」</b>を押してから、一覧で「Shopify に読み込みました」を押してください。<br><b>✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。</b></div>
+        <button class="btn cfgprice" id="oneUnlistBtn" style="width:100%;margin-top:4px" onclick="shopUnlistGo('one','oneUnlistNote');return false">非公開（Unlisted）にそろえる（1点もの one-）</button>
+        <div class="note2" id="oneUnlistNote" style="margin-top:2px"></div>
         <div id="oneList"></div>
       </details>
       <!-- 注文CSV の取り込み（8.13） -->
@@ -21982,7 +21991,9 @@ function mwSubItems(noRoll){
               px_hand:+x.px_hand||0,
               /* 6.194（【4】）取り込んだ注文の点数。CSV の在庫は
                  「上限 − 注文の点数」にする（pj の残りと Shopify を合わせる）。 */
-              sold:+x.sold||0 };
+              sold:+x.sold||0,
+              /* 8.88 Shopify に読み込んだ印（CSV の Status を分けるのに使う）。 */
+              loaded_at:String(x.loaded_at||'') };
       if(r.px_hand&&r.price>0)hand++;
       /* 6.178（【2】）**上乗せは出し直すたびに決め直す**。
          6.185（【1】）ただし**手で直した値（px_hand）は引き直さない**。
@@ -22418,6 +22429,83 @@ function oneImgCsvGo(){
     return oneListGo();
   })['catch'](function(e){ oneNote('⚠ 作れませんでした：'+esc(e.message),1); });
 }
+/* ===== 8.88（カジの依頼）会員用（sub-）・1点もの（one-）を非公開（Unlisted）に =====
+   1回目は確かめるだけ（何も変えない）→ 件数を見せて、よければ直す。
+   直すほうは 40秒ずつ区切られるので、残りが無くなるまで続きを頼む。
+   海外向けの os- の商品は触らない（pj-sync が sub-・one- の Handle だけを見る）。 */
+var SHOP_UNLIST_LOOP=20;
+function shopUnlistGo(kind,noteId){
+  if(roleDenyPrice(noteId))return;
+  csvSecretFill();
+  var note=$(noteId);
+  if(!syncUrl()||!syncApiKey()){
+    note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return; }
+  var name=(kind==='one')?'1点もの（one-）':'会員用（sub-）';
+  var sum=function(a,b){
+    ['checked','unlisted','active','draft','archived','missing','over_in','need','done','fail']
+      .forEach(function(k){ a[k]=(+a[k]||0)+(+b[k]||0); });
+    a.items=(a.items||[]).concat(b.items||[]).slice(0,40);
+    a.errors=(a.errors||[]).concat(b.errors||[]).slice(0,5);
+    a.all=+b.all||a.all||0; a.left=+b.left||0; a.over_miss=b.over_miss||a.over_miss;
+    return a;
+  };
+  var run=function(approve){
+    var acc={}, n=0;
+    var step=function(from){
+      return mwPost('/shop/unlist',{ kind:kind, approve:approve, from:from }).then(function(d){
+        if(!d||d.ok!==true)throw new Error(String((d&&(d.detail||d.error))||'できませんでした'));
+        sum(acc,d); n++;
+        if(+d.left>0&&n<SHOP_UNLIST_LOOP){
+          note.textContent=(approve?'非公開にしています…':'確かめています…')
+            +'（'+mwN(+d.next||0)+'／'+mwN(+d.all||0)+'件）';
+          return step(+d.next||0);
+        }
+        return acc;
+      });
+    };
+    return step(0);
+  };
+  var say=function(a,approve){
+    var need=+a.need||0;
+    return '<div class="okbox"><b>'+esc(name)+'</b>　'
+      +(approve?'<b>非公開（Unlisted）にそろえました</b>':'確かめました（何も変えていません）')
+      +'<br>pj が知っている商品 '+mwN(+a.all||0)+'件：'
+      +'非公開 <b>'+mwN(+a.unlisted||0)+'</b>・公開（active） <b>'+mwN(+a.active||0)+'</b>'
+      +'・下書き（draft） <b>'+mwN(+a.draft||0)+'</b>'
+      +(+a.archived?('・アーカイブ '+mwN(+a.archived)+'（触りません）'):'')
+      +'・Shopify に無い '+mwN(+a.missing||0)
+      +(+a.over_in?('<br>海外向けカタログに入っている <b>'+mwN(+a.over_in)+'件</b>'):'')
+      +(approve?('<br>直した <b>'+mwN(+a.done||0)+'件</b>'
+        +(+a.fail?('・<b style="color:var(--bad)">できなかった '+mwN(+a.fail)+'件</b>'):'')
+        +(+a.left?('・残り '+mwN(+a.left)+'件（もう一度押すと続きから）'):''))
+        :('<br>直す必要がある <b>'+mwN(need)+'件</b>'))
+      +((a.over_miss||[]).length?('<br><span style="color:var(--bad)">⚠ 海外向けの商品リスト「'
+        +esc((a.over_miss||[]).join('・'))+'」が見つかりません（⚙の名前を確かめてください）</span>'):'')
+      +((a.errors||[]).length?('<br><span style="color:var(--bad)">'
+        +a.errors.map(esc).join('<br>')+'</span>'):'')
+      +((a.items||[]).length&&!approve?('<br><span style="opacity:.8">'
+        +a.items.slice(0,10).map(function(x){ return esc(x.handle)+'（'+esc(x.status)
+          +(x.over?'・海外向け':'')+'）'; }).join('　')
+        +((a.items.length>10)?'　…':'')+'</span>'):'')
+      +'<br><b>✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。</b></div>';
+  };
+  note.textContent='確かめています…（何も変えません）';
+  return run(false).then(function(a){
+    var need=+a.need||0;
+    note.innerHTML=say(a,false);
+    if(!need)return;
+    if(!confirm(name+'の商品を「非公開（Unlisted）」にそろえます。\n\n'
+      +'・公開（active）'+(+a.active||0)+'件・下書き（draft）'+(+a.draft||0)+'件 → 非公開\n'
+      +'・海外向けカタログに入っている商品は外します\n'
+      +'・カードのリンクからは買えるようになります（一覧・検索には出ません）\n'
+      +'・海外向けの os- の商品は触りません\n\nよろしいですか？'))return;
+    note.textContent='非公開にしています…';
+    return run(true).then(function(b){ note.innerHTML=say(b,true); });
+  })['catch'](function(e){
+    note.innerHTML='<span style="color:var(--bad)">⚠ できませんでした：'+esc(e.message)
+      +'（Shopify の管理 API の鍵と、pj-sync のデプロイを確かめてください）</span>';
+  });
+}
 /* 1点ものの Shopify 用 CSV。
    先行のあいだは grade-premium だけ、先行があいた商品は ⚙ のプランも足す。 */
 function oneCsvGo(){
@@ -22452,9 +22540,11 @@ function oneCsvGo(){
     var fresh=sp.go.filter(function(x){ return !x.loaded_at; });
     var done=sp.go.filter(function(x){ return !!x.loaded_at; });
     var ymd=PJ_SHOPCSV.ymdOf(o.date);
+    /* 8.88 まだ入れていない品は Status＝draft（取り込んだら非公開にそろえる）。 */
     if(fresh.length)
       dl('shopify-one-'+ymd+(done.length?'-new':'')+'.csv',
-         PJ_SHOPCSV.oneBuild(fresh,Object.assign({},o,{ images:true })));
+         PJ_SHOPCSV.oneBuild(fresh,Object.assign({},o,{ images:true,
+           status:PJ_SHOPCSV.MEMBER_STATUS })));
     if(done.length)
       dl('shopify-one-'+ymd+(fresh.length?'-loaded':'')+'.csv',
          PJ_SHOPCSV.oneBuild(done,o));
@@ -22465,7 +22555,8 @@ function oneCsvGo(){
       +'・外した '+mwN(sp.no.length)+'件</b>'
       +((fresh.length&&done.length)?'（ファイルを2つに分けました）':'')+'</div>'
       +mwSubWhyHtml(sp.no)
-      +(fresh.length?('<br>まだ読み込んでいない <b>'+mwN(fresh.length)+'件</b>：写真 <b>'
+      +(fresh.length?('<br>まだ読み込んでいない <b>'+mwN(fresh.length)+'件</b>：'
+        +'<b>Status＝draft</b>（下書き・どこにも出ない）・写真 <b>'
         +mwN(picN)+'枚</b>を CSV に入れました（Image Src・Image Position。1枚目がメイン）。'
         +(oldN?('<br><b style="color:var(--bad)">前の形の写真の品 '+mwN(oldN)
           +'件</b>は写真を CSV に入れられません（「直す・写真」で開いて保存すると入ります）。'):'')):'')
@@ -22476,8 +22567,9 @@ function oneCsvGo(){
       +'してください。'
       +(openN?('<br>先行があいた '+mwN(openN)+'件は、'
         +'<b>'+esc(oneGrades.open)+'</b> にも見えるタグで出しました。'):'')
-      +'<br>読み込んだら、一覧で「<b>Shopify に読み込みました</b>」を'
-      +'押してください。');
+      +'<br>読み込んだら、<b>「非公開（Unlisted）にそろえる」</b>を押してから、'
+      +'一覧で「<b>Shopify に読み込みました</b>」を押してください。'
+      +'<br><b>✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。</b>');
     return oneListGo();
   })['catch'](function(e){ oneNote('⚠ 書き出せませんでした：'
     +esc(e.message),1); });
@@ -22555,18 +22647,35 @@ function mwSubCsvGo(){
         +mwSubWhyHtml(sp.no);
       return;
     }
-    var text=PJ_SHOPCSV.build(d.rows,o);
+    /* 8.88（カジの依頼）まだ Shopify に入れていない商品は Status＝draft で出す
+       （列が無いと Shopify は active にして、一覧・検索・海外向けカタログに
+       出してしまう）。もう読み込んだ商品は Status の列を出さない別のファイル
+       （いまの非公開を崩さない）。 */
+    var fresh=d.rows.filter(function(x){ return !x.loaded_at; });
+    var done=d.rows.filter(function(x){ return !!x.loaded_at; });
+    var spF=PJ_SHOPCSV.split(fresh,o), spD=PJ_SHOPCSV.split(done,o);
     /* 6.194（【5】）この CSV に入った商品を控える。
        「Shopify に読み込みました」の既定の対象はこれだけにする。 */
     subLastCsvSave(sp.go);
-    dl('shopify-products-'+PJ_SHOPCSV.ymdOf(o.date)+'.csv',text);
+    var ymd=PJ_SHOPCSV.ymdOf(o.date);
+    var two=spF.go.length&&spD.go.length;
+    if(spF.go.length)
+      dl('shopify-products-'+ymd+(two?'-new':'')+'.csv',
+         PJ_SHOPCSV.build(fresh,Object.assign({},o,{ status:PJ_SHOPCSV.MEMBER_STATUS })));
+    if(spD.go.length)
+      dl('shopify-products-'+ymd+(two?'-loaded':'')+'.csv',PJ_SHOPCSV.build(done,o));
     /* 6.171：重さの無い行は送料の段がずれるので、件数を出して知らせる。 */
     var noG=d.rows.filter(mwSubNoG).length;
     /* 6.194（【4】）注文のぶんだけ在庫を減らした件数。 */
     var cut=sp.go.filter(function(x){ return (+x.sold||0)>0; });
     n.innerHTML='<div class="okbox"><b>書き出した '+mwN(rows.length)+'件'
-      +'・外した '+mwN(sp.no.length)+'件</b></div>'
+      +'・外した '+mwN(sp.no.length)+'件</b>'
+      +(two?'（ファイルを2つに分けました）':'')+'</div>'
       +mwSubWhyHtml(sp.no)
+      +(spF.go.length?('<br>まだ入れていない <b>'+mwN(spF.go.length)+'件</b>：'
+        +'<b>Status＝draft</b>（下書き・どこにも出ない）'):'')
+      +(spD.go.length?('<br>読み込み済みの <b>'+mwN(spD.go.length)+'件</b>：'
+        +'Status の列なし（いまのステータスのまま）'):'')
       +(cut.length?('<br>注文のぶんを引いた行 <b>'+mwN(cut.length)+'件</b>：'
         +cut.slice(0,5).map(function(x){
           return esc(PJ_SHOPCSV.titleOf(x.name).slice(0,24))
@@ -22589,8 +22698,10 @@ function mwSubCsvGo(){
       +(d.hand?('<br>手で直した販売価格の '+mwN(d.hand)
         +'件は<b>そのまま出しました</b>（引き直していません）。'):'')
       /* 8.11（【Y】）Shopify に読み込んだら印を付けてもらう。 */
-      +'<br><b>Shopify に読み込んだら、下の「Shopify に読み込みました」を'
-      +'押してください</b>（印が付いた商品だけが会員向けの配信に載ります）。';
+      +'<br><b>Shopify に読み込んだら、下の「非公開（Unlisted）にそろえる」と'
+      +'「Shopify に読み込みました」を押してください</b>'
+      +'（印が付いた商品だけが会員向けの配信に載ります）。'
+      +'<br><b>✔ 取り込んだあと、Shopify でステータスが「非公開」になっているか確かめてください。</b>';
     /* 6.185（【1】）出した印（SKU の日付に使う）と、決め直した販売価格を
        **必ず pj に控え、画面の欄も書き直す**。ここを控え損なうと
        「CSV の値段」と「pj の欄・会員のカードの値段」が食い違うので、
@@ -31424,7 +31535,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v336';   // sw.js の const V と必ず同じ値にする
+var APP_V='v337';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

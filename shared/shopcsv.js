@@ -123,6 +123,30 @@
        Shopify のエクスポートに合わせて Title / Default Title を既定にし、
        設定（opt.option1）で変えられるようにしてある。 */
   var OPT1 = { name: "Title", value: "Default Title" };
+  /* ===== 8.88（カジの依頼）会員用・1点ものの Status =====
+     8.41 では Status の列を出さなかった（上書きで非公開が解けないように）。
+     ところが Shopify は **Status の列が無いと新しい商品を active にする**ので、
+     取り込んだ商品がストアの一覧・検索・海外向けカタログに出てしまった。
+     CSV の Status に入れられるのは active／draft／archived だけ（unlisted は
+     入れられない・Shopify の説明）なので、**まだ Shopify に入れていない商品は
+     draft** で出す（取り込んだ直後から、どこにも出ない）。取り込んだあと、
+     pj の「非公開（Unlisted）にそろえる」で管理 API から UNLISTED にする。
+     もう読み込んだ商品は Status の列を出さない別のファイルにする（いまの
+     非公開を CSV で崩さない）。
+     opt.status … 出す値（'draft'）。空なら列ごと出さない。 */
+  var MEMBER_STATUS = "draft";
+  var STATUS_OK = ["active", "draft", "archived"];
+  function statusOf(opt) {
+    var v = s((opt || {}).status).trim().toLowerCase();
+    return STATUS_OK.indexOf(v) >= 0 ? v : "";
+  }
+  /* Status の列を足した列の並び（Published on online store のうしろ）。 */
+  function statusColsAdd(cols, opt) {
+    if (!statusOf(opt) || cols.indexOf("Status") >= 0) return cols;
+    var c = cols.slice(), at = c.indexOf("Published on online store");
+    if (at < 0) return c.concat(["Status"]);
+    return c.slice(0, at + 1).concat(["Status"]).concat(c.slice(at + 1));
+  }
 
   var TAG_MEMBER = "member-list";
   var GRADES = ["monitor", "light", "standard", "premium"];
@@ -812,7 +836,9 @@
     row["Tags"] = tagsOf(r, o).join(", ");
     /* 販売チャネルはオンラインストアだけ。CSV でほかのチャネルは触れない。 */
     row["Published on online store"] = "true";
-    /* 8.41 Status は出さない（上の COLS のところに理由）。 */
+    /* 8.41 Status は出さない（上の COLS のところに理由）。
+       8.88 ただし opt.status（まだ入れていない商品＝draft）のときだけ出す。 */
+    if (statusOf(o)) row["Status"] = statusOf(o);
     row["Option1 name"] = s(o1.name);
     row["Option1 value"] = s(o1.value);
     row["SKU"] = skuOf(jan, o.date);
@@ -1017,7 +1043,9 @@
     /* タグ。grades は「先行のあいだは premium だけ」を入れて渡す。 */
     row["Tags"] = [TAG_MEMBER].concat(gradeTags(r.grades)).join(", ");
     row["Published on online store"] = "true";
-    /* 8.41 Status は出さない（1点ものも同じ・上の COLS のところに理由）。 */
+    /* 8.41 Status は出さない（1点ものも同じ・上の COLS のところに理由）。
+       8.88 opt.status（まだ入れていない商品＝draft）のときだけ出す。 */
+    if (statusOf(o)) row["Status"] = statusOf(o);
     row["Option1 name"] = s(o1.name);
     row["Option1 value"] = s(o1.value);
     row["SKU"] = oneSkuOf(r.id, o.date);
@@ -1108,6 +1136,7 @@
       return c !== "Collection";
     });
     if (o.images) cols = imgColsAdd(cols);
+    cols = statusColsAdd(cols, o);
     var rows = oneRowsOf(items, o);
     cols = seoAdd(cols, rows, o);
     return toCsv(cols, rows, o.style);
@@ -1155,6 +1184,7 @@
     if (!s(o.collection)) cols = cols.filter(function (c) {
       return c !== "Collection";
     });
+    cols = statusColsAdd(cols, o);
     var rows = rowsOf(items, o);
     cols = seoAdd(cols, rows, o);
     return toCsv(cols, rows, o.style);
@@ -1308,6 +1338,8 @@
     oneLeftOf: oneLeftOf, oneWhyNot: oneWhyNot, oneBodyOf: oneBodyOf,
     oneRowOf: oneRowOf, oneSplit: oneSplit, oneRowsOf: oneRowsOf,
     oneBuild: oneBuild,
+    /* 8.88 会員用・1点ものの Status（まだ入れていない商品は draft）。 */
+    MEMBER_STATUS: MEMBER_STATUS, statusOf: statusOf, statusColsAdd: statusColsAdd,
     /* 8.87 1点ものの写真（複数枚）。 */
     ONE_PICS_MAX: ONE_PICS_MAX, ONE_PIC_MIN: ONE_PIC_MIN, onePicOk: onePicOk,
     onePicsOf: onePicsOf, onePicSmall: onePicSmall, onePicsSig: onePicsSig,

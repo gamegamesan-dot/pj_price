@@ -12281,6 +12281,138 @@ const SHOP_M_UNPUB = `mutation pjUnpub($id: ID!, $pub: ID!) {
     userErrors { field message }
   }
 }`;
+/* ===== 8.88（カジの依頼）会員用（sub-）・1点もの（one-）を「非公開（Unlisted）」に =====
+   CSV で取り込んだ商品は、Status の列が無いと **active（公開）** になり、
+   ストアの一覧・検索・海外向けカタログに出てしまった。CSV の Status に
+   入れられるのは active／draft／archived だけ（Shopify の説明）なので、
+   CSV は draft で出し、取り込んだあとにここで管理 API から UNLISTED にする。
+   ・Handle（sub-<JAN>／one-<番号>）で商品を探す。見つからない商品は飛ばす
+   ・ACTIVE／DRAFT → UNLISTED。ARCHIVED は触らない
+   ・非公開でもリンクで開くにはオンラインストアへの公開が要るので、公開する
+   ・海外向けの商品リスト（⚙ subShopOverseas）からは外す
+   ・海外向けの os- の商品は触らない（sub-・one- の Handle だけ）
+   読むだけ（approve でない）ときは、何も変えずに数えるだけ。 */
+const SHOP_M_UNLIST = `mutation pjUnlist($product: ProductUpdateInput!) {
+  productUpdate(product: $product) {
+    product { id status }
+    userErrors { field message }
+  }
+}`;
+function shopQStat(n) {
+  const vars = ["$identifier: ProductIdentifierInput!"];
+  const fl = [];
+  for (let i = 0; i < n; i++) {
+    vars.push("$o" + i + ": ID!");
+    fl.push("ov" + i + ": publishedOnPublication(publicationId: $o" + i + ")");
+  }
+  return "query pjStat(" + vars.join(", ") + ") {\n"
+    + "  productByIdentifier(identifier: $identifier) { id handle status "
+    + fl.join(" ") + " }\n}";
+}
+const SHOP_UNLIST_MS = 40000;
+const SHOP_UNLIST_MAX = 400;
+/* sub-・one- の Handle（pj が知っている会員用の商品だけ）。 */
+async function shopUnlistHandles(env, kind) {
+  const out = [];
+  const k = String(kind || "all");
+  if ((k === "all" || k === "sub") && await mwSubOk(env)) {
+    const q = await env.DB.prepare(
+      `SELECT jan FROM mw_sub WHERE COALESCE(on_sale,0)=1
+         AND (COALESCE(loaded_at,'')<>'' OR COALESCE(put_at,'')<>'')
+       ORDER BY jan`).all();
+    for (const r of ((q && q.results) || []))
+      if (/^\d{8,14}$/.test(String(r.jan || ""))) out.push(SHOPCSV.handleOf(r.jan));
+  }
+  if ((k === "all" || k === "one") && await oneOk(env)) {
+    const q = await env.DB.prepare(
+      `SELECT id FROM one_item WHERE COALESCE(off,0)=0 ORDER BY id`).all();
+    for (const r of ((q && q.results) || []))
+      if (Number(r.id) > 0) out.push(SHOPCSV.oneHandleOf(r.id));
+  }
+  return out.filter((h) => /^(sub|one)-\d+$/.test(h)).slice(0, SHOP_UNLIST_MAX);
+}
+/* POST /shop/unlist … { kind:'sub'|'one'|'all', approve, from } */
+async function jobShopUnlist(env, opt) {
+  const o = opt || {};
+  const run = newRun("shop-unlist");
+  const res = { ok: false, approve: o.approve === true, kind: String(o.kind || "all"),
+                all: 0, checked: 0, unlisted: 0, active: 0, draft: 0, archived: 0,
+                missing: 0, over_in: 0, need: 0, done: 0, fail: 0, next: 0, left: 0,
+                items: [], errors: [] };
+  try {
+    let st = {};
+    try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+    const rdy = await shopReady(env, run, st);
+    if (!rdy.ok) { res.error = "shop"; res.detail = shopWhyJa(rdy);
+      return Object.assign(await saveRun(env, run), res); }
+    const handles = await shopUnlistHandles(env, res.kind);
+    res.all = handles.length;
+    const from = Math.max(0, Math.round(Number(o.from) || 0));
+    const over = rdy.over || [];
+    res.over_miss = rdy.over_miss || [];
+    const q = shopQStat(over.length);
+    const dl = Date.now() + SHOP_UNLIST_MS;
+    let i = from;
+    for (; i < handles.length; i++) {
+      if (Date.now() > dl) break;
+      const h = handles[i];
+      const vars = { identifier: { handle: h } };
+      over.forEach((id, k) => { vars["o" + k] = id; });
+      const r = await shopGql(env, run, rdy.host, q, vars);
+      res.checked++;
+      if (!r.ok) { res.fail++; if (res.errors.length < 5)
+        res.errors.push(h + "：" + shopWhyJa(r)); continue; }
+      const pr = (r.data || {}).productByIdentifier;
+      if (!pr || !pr.id) { res.missing++; continue; }
+      const stt = String(pr.status || "").toUpperCase();
+      const inOver = over.map((id, k) => pr["ov" + k] === true ? id : "")
+        .filter(Boolean);
+      if (stt === "ARCHIVED") { res.archived++; continue; }
+      if (stt === "UNLISTED") res.unlisted++;
+      else if (stt === "DRAFT") res.draft++;
+      else res.active++;
+      if (inOver.length) res.over_in++;
+      const need = stt !== "UNLISTED" || inOver.length > 0;
+      if (!need) continue;
+      res.need++;
+      if (res.items.length < 40)
+        res.items.push({ handle: h, status: stt, over: inOver.length > 0 });
+      if (!res.approve) continue;
+      let bad = "";
+      if (stt !== "UNLISTED") {
+        const u = await shopGql(env, run, rdy.host, SHOP_M_UNLIST,
+          { product: { id: pr.id, status: "UNLISTED" } });
+        const ue = u.ok ? ((((u.data || {}).productUpdate || {}).userErrors) || []) : [];
+        if (!u.ok || ue.length) bad = u.ok ? shopUserErr(ue) : shopWhyJa(u);
+        else {
+          /* リンクで開けるように、オンラインストアには公開しておく。 */
+          const pb = await shopGql(env, run, rdy.host, SHOP_M_PUB,
+            { id: pr.id, pub: rdy.pub });
+          const pe = pb.ok ? ((((pb.data || {}).publishablePublish || {}).userErrors) || []) : [];
+          if (!pb.ok || pe.length) bad = pb.ok ? shopUserErr(pe) : shopWhyJa(pb);
+        }
+      }
+      for (const id of inOver) {
+        if (bad) break;
+        const un = await shopGql(env, run, rdy.host, SHOP_M_UNPUB, { id: pr.id, pub: id });
+        const ue2 = un.ok ? ((((un.data || {}).publishableUnpublish || {}).userErrors) || []) : [];
+        if (!un.ok || ue2.length) bad = un.ok ? shopUserErr(ue2) : shopWhyJa(un);
+      }
+      if (bad) { res.fail++; if (res.errors.length < 5) res.errors.push(h + "：" + bad); }
+      else res.done++;
+    }
+    res.next = i;
+    res.left = Math.max(0, handles.length - i);
+    if (res.approve)
+      run.notes.push("非公開にそろえた：" + res.done + "件・できなかった " + res.fail
+        + "件・Shopify に無い " + res.missing + "件" + (res.left ? ("・残り " + res.left + "件") : ""));
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("shop-unlist: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
 function shopUserErr(list) {
   return (list || []).map((e) => String((e || {}).message || ""))
     .filter(Boolean).join(" / ").slice(0, 300);
@@ -21324,6 +21456,9 @@ export default {
     if (role !== "admin"
         && (url.pathname === "/one" || url.pathname.indexOf("/one/") === 0))
       return forbidStaff("1点ものの窓口は管理者用のキーが必要です", [], origin);
+    /* 8.88 Shopify の商品を非公開にそろえる口は管理者だけ（店の商品を書き換えるため）。 */
+    if (role !== "admin" && url.pathname.indexOf("/shop/") === 0)
+      return forbidStaff("Shopify の商品を書き換える窓口は管理者用のキーが必要です", [], origin);
     /* 6.193／7.143：海外向け Shopify（os-）の控えと直しは管理者だけ。
        値段・仕入原価・MW の卸値が出るため、見るのも管理者だけにする。 */
     if (role !== "admin" && url.pathname.indexOf("/os/") === 0)
@@ -21734,6 +21869,11 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/one")
         return json(await oneList(env, url), 200, origin);
+      /* 8.88 会員用（sub-）・1点もの（one-）を非公開（Unlisted）にそろえる。 */
+      if (request.method === "POST" && url.pathname === "/shop/unlist") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobShopUnlist(env, b), 200, origin);
+      }
       /* 8.87 前の形の写真（KV の1枚）を読む（写真を複数枚にするとき）。 */
       if (request.method === "GET" && url.pathname === "/one/pic")
         return json(await onePicOld(env, url), 200, origin);
@@ -22288,6 +22428,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   onePlanBuild, dcCard, onePicKey, onePicName, b64Bytes,
   /* 8.87 1点ものの写真（複数枚）。 */
   oneMainPic, onePicOld, onePut, oneRows, oneMark,
+  /* 8.88 非公開（Unlisted）にそろえる。 */
+  jobShopUnlist, shopUnlistHandles, shopQStat,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
   OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,
