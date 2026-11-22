@@ -215,6 +215,24 @@ await p.waitForTimeout(700);
      '★★管理画面の商品へのリンク（見比べられるように）');
   ok(!/shpat|secret/i.test(t.note),'★鍵は出さない');
 }
+/* 8.92 直したあとに読み直した状態を出す。 */
+await setup({ ones:[ONE({ shop_vis:'ok' })],
+  extra:{ over_n:1, look:[{ handle:'one-1', pid:'8800123', status:'UNLISTED', on:true, over:false,
+    after:true, vis:'ok', before:{ status:'UNLISTED', on:true, over:true }, same:[] }] } });
+await p.evaluate(()=>oneListGo());
+await p.waitForTimeout(300);
+await p.evaluate(()=>{ window.__q=[]; document.querySelector('#oneList [data-onevisgo="1"]').click(); });
+await p.waitForTimeout(700);
+{
+  const t=await p.evaluate(()=>({ note:($('oneNote2').textContent||'').replace(/\s+/g,' '),
+    before:(document.querySelector('#oneNote2 [data-lookbefore]')||{}).textContent||'' }));
+  console.log('   '+t.note.slice(0,300));
+  ok(/直したあとに読み直した状態/.test(t.note)&&/状態 UNLISTED・オンラインストア 公開・海外向け 入っていない/.test(t.note),
+     '★★★直したあとに読み直した状態（海外向け：入っていない）を出す');
+  ok(/直す前：UNLISTED・オンラインストア 公開・海外向け 入っている/.test(t.before),
+     '★★直す前の状態は小さく添える');
+  ok(/非公開を確かめました：1件/.test(t.note),'★確かめた結果');
+}
 
 await T.done();
 })();

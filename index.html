@@ -22579,13 +22579,21 @@ function shopLookHtml(a){
         +(c.pub?'・商品の一覧あり':'・商品の一覧なし')+'）'; }).join('　')+'</span>';
   var look=(a.look||[]);
   if(look.length)
-    h+='<br><span class="note2" style="margin:0" id="shopLook">pj が Shopify で読んだ商品：'
+    h+='<br><span class="note2" style="margin:0" id="shopLook">pj が Shopify で読んだ商品'
+      +(look.some(function(x){ return x.after; })?'（<b>直したあとに読み直した状態</b>）':'')+'：'
       +look.slice(0,10).map(function(x){
         if(!x.pid)return '<br>・'+esc(x.handle)+' → Shopify にこの Handle の商品がありません';
+        /* 8.92 直したあとに読み直した状態を出す。直す前は小さく添える。 */
+        var ovTxt=function(v){ return v?'<b>入っている</b>':((+a.over_n||0)>0?'入っていない':'確かめられない'); };
+        var b=x.before||null;
         return '<br>・'+esc(x.handle)+' → '+link(x.pid,'商品 ID '+x.pid)
           +'・状態 <b>'+esc(x.status||'')+'</b>'
           +'・オンラインストア '+(x.on?'公開':'<b>未公開</b>')
-          +'・海外向け '+(x.over?'<b>入っている</b>':((+a.over_n||0)>0?'入っていない':'確かめられない'))
+          +'・海外向け '+ovTxt(x.over)
+          +(x.read_err?'（<b style="color:var(--bad)">直したあとに読み直せませんでした</b>）':'')
+          +(b?('<span data-lookbefore="1" style="opacity:.75">（直す前：'+esc(b.status||'')
+            +'・オンラインストア '+(b.on?'公開':'未公開')+'・海外向け '
+            +(b.over?'入っている':((+a.over_n||0)>0?'入っていない':'確かめられない'))+'）</span>'):'')
           +((x.same||[]).length?('<br>　<b>同じ名前の別の商品</b>：'+x.same.map(function(y){
             return link(y.pid,esc(y.handle)+'（'+y.status+'・ID '+y.pid+'）'); }).join('　')):'');
       }).join('')
@@ -31831,7 +31839,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v339';   // sw.js の const V と必ず同じ値にする
+var APP_V='v340';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

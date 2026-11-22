@@ -12697,6 +12697,21 @@ async function jobShopUnlist(env, opt) {
       const r2 = await shopGql(env, run, rdy.host, q, vars);
       const v2 = r2.ok ? shopVisOf((r2.data || {}).productByIdentifier, rdy, over.length)
                        : "err";
+      /* 8.92（カジの報告）結果の「pj が Shopify で読んだ商品」は、直したあとに
+         読み直した状態を出す（直す前の状態は before に残す）。 */
+      const lk = res.look.filter((y) => y.handle === h)[0];
+      if (lk) {
+        const p2 = r2.ok ? ((r2.data || {}).productByIdentifier || null) : null;
+        lk.before = { status: lk.status, on: lk.on, over: lk.over };
+        lk.after = true;
+        if (p2 && p2.id) {
+          lk.pid = String(p2.id).replace(/^.*\//, "");
+          lk.status = String(p2.status || "").toUpperCase();
+          lk.on = p2.on !== false;
+          lk.over = over.some((id, k) => p2["ov" + k] === true);
+        } else { lk.read_err = !r2.ok; lk.status = r2.ok ? "" : lk.status; }
+        lk.vis = v2;
+      }
       res.vis[h] = v2;
       await shopVisSave(env, h, v2);
       if (v2 === "ok") res.ok_n = (Number(res.ok_n) || 0) + 1;

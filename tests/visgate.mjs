@@ -364,12 +364,19 @@ console.log('\n=== ⑦ 直し：海外向けカタログがマーケットのカ
      '★★★販売チャネルの一覧に無ければ、カタログの一覧から「Overseas products」を引く');
   ok(c.need===1&&c.over_in===1&&c.vis['one-'+r.id]==='over',
      '★★★one-1 が海外向けカタログに入っていることが分かる（ok にしない）');
+  ok(!c.look[0].after&&!c.look[0].before,'★確かめるだけのときは読んだ状態そのまま（直したあとの印は付けない）');
   ok(c.look[0].handle==='one-'+r.id&&c.look[0].pid==='one-'+r.id&&c.look[0].status==='UNLISTED'
      &&c.look[0].over===true,'★★★pj が読んだ商品（ID・状態・海外向け）を返す');
   const u=await api(env,'/shop/unlist',{ kind:'one', approve:true, handles:['one-'+r.id] });
   ok(u.done===1&&u.ok_all===1&&prods['one-'+r.id].over===false
      &&gql.some((x)=>x.name==='pjUnpub'&&x.v.pub===OVER),
      '★★★カタログの publication から外して、もう一度読んで「確かめ済み」');
+  console.log('   直したあと：'+JSON.stringify(u.look));
+  ok(u.look[0].after===true&&u.look[0].over===false&&u.look[0].status==='UNLISTED'
+     &&u.look[0].on===true&&u.look[0].vis==='ok',
+     '★★★結果の「読んだ商品」は直したあとに読み直した状態（海外向け：入っていない）');
+  ok(u.look[0].before&&u.look[0].before.over===true&&u.look[0].before.status==='UNLISTED',
+     '★★直す前の状態は before に残す');
   const l=(await api(env,'/one')).rows[0];
   ok(l.shop_vis==='ok','★★★1点ものの一覧も「非公開を確かめ済み」');
 
