@@ -45,6 +45,9 @@ globalThis.fetch=async(u,i)=>{
       publications:{ nodes:[
         { id:'gid://shopify/Publication/9', supportsFuturePublishing:true,
           catalog:{ title:'オンラインストア' } },
+        /* 8.89 海外向けの商品リスト（外せたかを確かめるので、あるものとする）。 */
+        { id:'gid://shopify/Publication/3', supportsFuturePublishing:false,
+          catalog:{ title:'Overseas products' } },
         { id:'gid://shopify/Publication/8', supportsFuturePublishing:false,
           catalog:{ title:'POS' } }] } } });
     if(name==='pjSet'){

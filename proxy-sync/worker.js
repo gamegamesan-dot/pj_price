@@ -11080,6 +11080,9 @@ async function subSettings(env) {
        で売った場合〜」）を外す。既定オフ（出ているカードを書き換える前に、
        何件が対象かを予定の画面で見てから入れる）。 */
     cardSlim: !!st.subCardSlim,
+    /* 8.89（カジの依頼）Shopify で「非公開・海外向けカタログに無い」を
+       管理 API で確かめた品だけを、新しく配信する（既定オン）。 */
+    visGate: st.subVisGate === undefined ? true : !!st.subVisGate,
     /* 8.86 チャンネルの説明文（トピック）を上限に合わせる（既定オン）。 */
     topicOn: st.subTopicOn === undefined ? true : !!st.subTopicOn,
     /* 8.83（カジの依頼）お一人の上限を Shopify の商品にも入れる
@@ -11165,6 +11168,14 @@ async function subSettings(env) {
     one_hours: SUBPLAN.oneHours(st),
     one_grades_pre: SUBPLAN.oneGrades(st, false),
     one_grades_open: SUBPLAN.oneGrades(st, true),
+    /* 8.89 非公開を確かめた品だけ配るか（⚙ visGate・Shopify の鍵・列が
+       そろっているときだけ効く。そろっていなければ止めない）。 */
+    visOn: (st.subVisGate === undefined ? true : !!st.subVisGate)
+      && !!shopKeyKind(env) && !!shopHostOf(st)
+      && await shopVisColOk(env, "mw_sub"),
+    visWhy: !(st.subVisGate === undefined ? true : !!st.subVisGate) ? "off"
+      : (!shopKeyKind(env) ? "no_key" : (!shopHostOf(st) ? "no_host"
+        : ((await shopVisColOk(env, "mw_sub")) ? "" : "no_cols"))),
   };
 }
 /* Discord のボットの口。トークンが無ければ何もしない（false を返す）。 */
@@ -11241,6 +11252,9 @@ async function subRows(env, cfg) {
      列が無い D1 でも落とさない。 */
   const wayCol = (await colOk(env, "mw_sub", "ship_way"))
     ? "COALESCE(b.ship_way,'')" : "''";
+  /* 8.89 Shopify で非公開を確かめた結果（migrate-0072）。 */
+  const visCol = (await shopVisColOk(env, "mw_sub"))
+    ? "COALESCE(b.shop_vis,'')" : "''";
   /* 8.27（カジの依頼1）採寸（3辺）。migrate-0060 で短辺・厚さを足した。
      古い D1 では長辺と容積だけで「目安」になる。 */
   const widCol = (await colOk(env, "mw_amz", "size_wid"))
@@ -11258,7 +11272,7 @@ async function subRows(env, cfg) {
             a.size_cm3 AS size_cm3, a.size_long AS size_long,
             ${widCol} AS size_wid, ${heiCol} AS size_hei,
             COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
-            b.put_at AS put_at,
+            b.put_at AS put_at, ${visCol} AS shop_vis,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
             /* 8.28（カジの依頼1）配る前の見落としを拾うため、
                MW の欠品（CSV から消えた行）も返す。 */
@@ -11309,6 +11323,8 @@ function subRowMap(r, cfg) {
     qty: Number(r.max_qty) || 0,
     grades: String(r.grades || ""),
     loaded_at: String(r.loaded_at || ""),
+    /* 8.89 Shopify で非公開を確かめた結果。 */
+    shop_vis: String(r.shop_vis || ""),
     /* 8.28（カジの依頼1）「CSV に出したのに Shopify へ読み込み直していない」
        を見つけるのに使う（送っても Shopify に無い＝買えないカードになる）。 */
     put_at: String(r.put_at || ""),
@@ -11731,6 +11747,9 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
     /* 8.80 まだ出していない品のうち、配信前のチェックで止めた行と
        在庫が切れている行は**新しく出さない**。 */
     if (!old && (mwOut || (e.hold || {})[String(r.jan)])) continue;
+    /* 8.89（カジの依頼）Shopify で非公開を確かめていない品は、新しく出さない
+       （出ているカードの書き換えは今までどおり）。 */
+    if (!old && shopVisBlock(r, cfg)) continue;
     /* 8.19（不具合1）**残り数は「上限 − 取り込んだ注文の点数」**。
        送ったカードの控え（sub_post.sold）は、チャンネルを入れ替えると
        新しいチャンネルに控えが無く 0 のままだった。 */
@@ -11843,6 +11862,27 @@ async function subPlanBuild(env) {
       keep: pick.filter((x) => x.same).length,
     });
   }
+  /* 8.89（カジの依頼）Shopify で非公開を確かめていないので、新しく配らない品。
+     どのプランにもまだ出していない品だけ（出ているカードは今までどおり書き換える）。 */
+  try {
+    out.vis = { on: !!cfg.visOn, why: cfg.visWhy || "", n: 0, rows: [] };
+    if (cfg.visOn) {
+      const sentAny = {};
+      for (const p of cfg.plans) {
+        if (!p.ch) continue;
+        const sp = await subPosts(env, p.ch);
+        for (const j of Object.keys(sp)) if (String(sp[j].msg_id || "")) sentAny[j] = 1;
+      }
+      for (const r of rows) {
+        if (sentAny[r.jan] || !shopVisBlock(r, cfg)) continue;
+        out.vis.n++;
+        if (out.vis.rows.length < 50)
+          out.vis.rows.push({ jan: r.jan, handle: SHOPCSV.handleOf(r.jan),
+            name: String(r.name || "").slice(0, 60), vis: String(r.shop_vis || ""),
+            why: shopVisJa(r.shop_vis) });
+      }
+    }
+  } catch (e) { out.vis = null; }
   /* 8.86（カジの依頼）カードの共通の説明を外すと、**出ているカードが何枚
      書き換わるか**（数えるだけ）。⚙がオフのあいだ、オンにしたつもりで
      もう一度カードを作り、いまのカードと中身が変わる枚数を数える。
@@ -12292,6 +12332,71 @@ const SHOP_M_UNPUB = `mutation pjUnpub($id: ID!, $pub: ID!) {
    ・海外向けの商品リスト（⚙ subShopOverseas）からは外す
    ・海外向けの os- の商品は触らない（sub-・one- の Handle だけ）
    読むだけ（approve でない）ときは、何も変えずに数えるだけ。 */
+/* ===== 8.89（カジの依頼）非公開になったことを API で確かめてから配る =====
+   shop_vis（mw_sub・one_item・migrate-0072）
+     ok       … UNLISTED・オンラインストアに公開・海外向けカタログに無い
+     active／draft／archived … そのステータスのまま
+     over     … 海外向けカタログ（Overseas products）に入っている
+     online   … オンラインストアに公開されていない（リンクで開けない）
+     over_miss… 海外向けの商品リストが Shopify に見つからない（確かめられない）
+     missing  … Shopify に無い
+     err      … 確かめられなかった
+   配信は ok の品だけを新しく出す（cfg.visGate・既定オン）。Shopify の管理 API の
+   鍵が無いときや列が無い D1 では確かめようがないので、止めない（画面に出す）。 */
+const SHOP_VIS_JA = {
+  ok: "非公開を確かめました",
+  active: "Shopify で公開（active）のままです",
+  draft: "Shopify で下書き（draft）のままです",
+  archived: "Shopify でアーカイブされています",
+  over: "海外向けカタログ（Overseas products）に入っています",
+  online: "オンラインストアに公開されていません（リンクで開けません）",
+  over_miss: "海外向けの商品リストが Shopify に見つかりません",
+  missing: "Shopify にありません（まだ取り込んでいない）",
+  err: "Shopify に確かめられませんでした",
+  "": "まだ Shopify で非公開を確かめていません",
+};
+function shopVisJa(v) {
+  const k = String(v || "");
+  return SHOP_VIS_JA[k] !== undefined ? SHOP_VIS_JA[k] : k;
+}
+async function shopVisColOk(env, table) {
+  return await colOk(env, table, "shop_vis");
+}
+/* その行を「まだ確かめていないので新しく出さない」にするか。
+   cfg.visOn … visGate がオンで、Shopify の鍵と列があるとき（subSettings が決める）。 */
+function shopVisBlock(r, cfg) {
+  const c = cfg || {};
+  if (!c.visOn) return false;
+  return String((r || {}).shop_vis || "") !== "ok";
+}
+/* 確かめた結果を控える（Handle が sub-／one- のどちらか）。 */
+async function shopVisSave(env, handle, vis) {
+  const h = String(handle || "");
+  const at = nowIso();
+  try {
+    if (/^sub-\d{8,14}$/.test(h) && await shopVisColOk(env, "mw_sub"))
+      await env.DB.prepare(
+        `UPDATE mw_sub SET shop_vis=?2, shop_vis_at=?3 WHERE jan=?1`)
+        .bind(h.slice(4), String(vis || ""), at).run();
+    else if (/^one-\d+$/.test(h) && await shopVisColOk(env, "one_item"))
+      await env.DB.prepare(
+        `UPDATE one_item SET shop_vis=?2, shop_vis_at=?3 WHERE id=?1`)
+        .bind(Number(h.slice(4)), String(vis || ""), at).run();
+  } catch (e) { /* 控えが書けなくても止めない */ }
+}
+/* 商品1つの状態から shop_vis を決める。 */
+function shopVisOf(pr, rdy, nOver) {
+  if (!pr || !pr.id) return "missing";
+  const stt = String(pr.status || "").toUpperCase();
+  if (stt === "ARCHIVED") return "archived";
+  if (stt === "ACTIVE") return "active";
+  if (stt === "DRAFT") return "draft";
+  if (stt !== "UNLISTED") return "err";
+  for (let k = 0; k < nOver; k++) if (pr["ov" + k] === true) return "over";
+  if (pr.on === false) return "online";
+  if ((rdy && rdy.over_miss || []).length) return "over_miss";
+  return "ok";
+}
 const SHOP_M_UNLIST = `mutation pjUnlist($product: ProductUpdateInput!) {
   productUpdate(product: $product) {
     product { id status }
@@ -12299,8 +12404,8 @@ const SHOP_M_UNLIST = `mutation pjUnlist($product: ProductUpdateInput!) {
   }
 }`;
 function shopQStat(n) {
-  const vars = ["$identifier: ProductIdentifierInput!"];
-  const fl = [];
+  const vars = ["$identifier: ProductIdentifierInput!", "$on: ID!"];
+  const fl = ["on: publishedOnPublication(publicationId: $on)"];
   for (let i = 0; i < n; i++) {
     vars.push("$o" + i + ": ID!");
     fl.push("ov" + i + ": publishedOnPublication(publicationId: $o" + i + ")");
@@ -12345,8 +12450,16 @@ async function jobShopUnlist(env, opt) {
     const rdy = await shopReady(env, run, st);
     if (!rdy.ok) { res.error = "shop"; res.detail = shopWhyJa(rdy);
       return Object.assign(await saveRun(env, run), res); }
-    const handles = await shopUnlistHandles(env, res.kind);
+    let handles = await shopUnlistHandles(env, res.kind);
+    /* 8.89 「Shopify に読み込みました」を押した品だけ（handles）。
+       pj が知っている sub-・one- だけに絞る（os- は入らない）。 */
+    if (Array.isArray(o.handles)) {
+      const want = {};
+      for (const h of o.handles) want[String(h || "").trim().toLowerCase()] = 1;
+      handles = handles.filter((h) => want[h]);
+    }
     res.all = handles.length;
+    res.vis = {};
     const from = Math.max(0, Math.round(Number(o.from) || 0));
     const over = rdy.over || [];
     res.over_miss = rdy.over_miss || [];
@@ -12356,29 +12469,43 @@ async function jobShopUnlist(env, opt) {
     for (; i < handles.length; i++) {
       if (Date.now() > dl) break;
       const h = handles[i];
-      const vars = { identifier: { handle: h } };
+      const vars = { identifier: { handle: h }, on: rdy.pub };
       over.forEach((id, k) => { vars["o" + k] = id; });
       const r = await shopGql(env, run, rdy.host, q, vars);
       res.checked++;
       if (!r.ok) { res.fail++; if (res.errors.length < 5)
-        res.errors.push(h + "：" + shopWhyJa(r)); continue; }
+        res.errors.push(h + "：" + shopWhyJa(r));
+        res.vis[h] = "err"; await shopVisSave(env, h, "err"); continue; }
       const pr = (r.data || {}).productByIdentifier;
-      if (!pr || !pr.id) { res.missing++; continue; }
+      if (!pr || !pr.id) { res.missing++; res.vis[h] = "missing";
+        await shopVisSave(env, h, "missing"); continue; }
       const stt = String(pr.status || "").toUpperCase();
       const inOver = over.map((id, k) => pr["ov" + k] === true ? id : "")
         .filter(Boolean);
-      if (stt === "ARCHIVED") { res.archived++; continue; }
+      if (stt === "ARCHIVED") { res.archived++; res.vis[h] = "archived";
+        await shopVisSave(env, h, "archived"); continue; }
       if (stt === "UNLISTED") res.unlisted++;
       else if (stt === "DRAFT") res.draft++;
       else res.active++;
       if (inOver.length) res.over_in++;
-      const need = stt !== "UNLISTED" || inOver.length > 0;
+      const need = stt !== "UNLISTED" || inOver.length > 0 || pr.on === false;
+      if (!need || !res.approve) {
+        /* 読んだ状態をそのまま控える（確かめるだけのときも）。 */
+        const v0 = shopVisOf(pr, rdy, over.length);
+        res.vis[h] = v0; await shopVisSave(env, h, v0);
+      }
       if (!need) continue;
       res.need++;
       if (res.items.length < 40)
         res.items.push({ handle: h, status: stt, over: inOver.length > 0 });
       if (!res.approve) continue;
       let bad = "";
+      if (stt === "UNLISTED" && pr.on === false) {
+        const pb0 = await shopGql(env, run, rdy.host, SHOP_M_PUB,
+          { id: pr.id, pub: rdy.pub });
+        const pe0 = pb0.ok ? ((((pb0.data || {}).publishablePublish || {}).userErrors) || []) : [];
+        if (!pb0.ok || pe0.length) bad = pb0.ok ? shopUserErr(pe0) : shopWhyJa(pb0);
+      }
       if (stt !== "UNLISTED") {
         const u = await shopGql(env, run, rdy.host, SHOP_M_UNLIST,
           { product: { id: pr.id, status: "UNLISTED" } });
@@ -12400,7 +12527,18 @@ async function jobShopUnlist(env, opt) {
       }
       if (bad) { res.fail++; if (res.errors.length < 5) res.errors.push(h + "：" + bad); }
       else res.done++;
+      /* 8.89 直したあと、もう一度読んで**確かめる**（非公開・オンラインストア・
+         海外向けカタログ）。確かめた結果だけを控え、配信はこれを見る。 */
+      const r2 = await shopGql(env, run, rdy.host, q, vars);
+      const v2 = r2.ok ? shopVisOf((r2.data || {}).productByIdentifier, rdy, over.length)
+                       : "err";
+      res.vis[h] = v2;
+      await shopVisSave(env, h, v2);
+      if (v2 === "ok") res.ok_n = (Number(res.ok_n) || 0) + 1;
+      else if (!bad) { res.fail++; res.done--;
+        if (res.errors.length < 5) res.errors.push(h + "：" + shopVisJa(v2)); }
     }
+    res.ok_all = Object.keys(res.vis).filter((k) => res.vis[k] === "ok").length;
     res.next = i;
     res.left = Math.max(0, handles.length - i);
     if (res.approve)
@@ -12724,6 +12862,9 @@ async function subAutoCands(env, cfg, st) {
   const shopCol = (await subShopColsOk(env))
     ? "u.auto_at AS auto_at, u.shop_at AS shop_at,"
     : "'' AS auto_at, '' AS shop_at,";
+  /* 8.89 Shopify で非公開を確かめた結果（確かめ済みの品を毎回確かめ直さない）。 */
+  const visCol = (await shopVisColOk(env, "mw_sub"))
+    ? "COALESCE(u.shop_vis,'') AS shop_vis," : "'' AS shop_vis,";
   const out = [], seen = {};
   for (let off = 0; off < SUB_AUTO_ROWS; off += SUB_AUTO_PAGE) {
     const q = await env.DB.prepare(
@@ -12731,7 +12872,7 @@ async function subAutoCands(env, cfg, st) {
               u.max_qty AS max_qty, u.price AS price,
               ${wayCol} AS ship_way, ${handCol} AS px_hand,
               COALESCE(u.grades,'') AS grades, u.loaded_at AS loaded_at,
-              u.put_at AS put_at, ${shopCol}
+              u.put_at AS put_at, ${shopCol} ${visCol}
               s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
               s.gone_at AS gone_at, s.wholesale AS wholesale, s.note AS note,
               a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
@@ -13193,6 +13334,13 @@ async function jobSubAuto(env, opt) {
                 .bind(x.jan, r.g, r.ov).run();
             } catch (e) { /* 控えが書けなくても止めない */ }
           }
+          /* 8.89 作った商品は UNLISTED で、海外向けカタログから外せたか。 */
+          await shopVisSave(env, SHOPCSV.handleOf(x.jan),
+            (String(r.status || "").toUpperCase() === "UNLISTED"
+             && (r.ov === 1 || !shopOverNames(st).length)) ? "ok"
+              : (String(r.status || "").toUpperCase() === "UNLISTED"
+                 ? (((rdy.over_miss || []).length) ? "over_miss" : "over")
+                 : String(r.status || "err").toLowerCase()));
           /* 8.83 入れた「お一人の上限」のタグの控え。 */
           if (qtyCol) {
             try {
@@ -13298,6 +13446,27 @@ async function jobSubAuto(env, opt) {
     res.stops = act.slice(0, SUBAUTO.LIST_MAX).map((x) => subAutoView(x));
     res.act_n = act.length;
 
+    /* ---- 8.89 配る前に、Shopify で非公開を確かめる ----
+       この回に選んだ品のうち、まだ確かめていない品（前から印がある品など）は、
+       ここで非公開にそろえて確かめる。確かめられなかった品は配らない。 */
+    if (!dry && cfg.visOn) {
+      const want = [];
+      for (const t of todo) {
+        if (!t.pick || t.ok === false || t.need) continue;   // 作った品は確かめ済み
+        if (String(t.x.shop_vis || "") === "ok") continue;
+        want.push(SHOPCSV.handleOf(t.jan));
+      }
+      if (want.length) {
+        try {
+          const vz = await jobShopUnlist(env, { kind: "sub", approve: true,
+                                                handles: want.slice(0, 60) });
+          res.vis = { checked: Number(vz.checked) || 0, ok: Number(vz.ok_all) || 0,
+                      fail: Number(vz.fail) || 0 };
+        } catch (e) {
+          run.notes.push("sub-vis: " + String((e && e.message) || e));
+        }
+      }
+    }
     /* ---- ⑥ カードを送る ---- */
     const newMax = (monLeft === null) ? null : { monitor: monLeft };
     if (!dry) {
@@ -13329,7 +13498,9 @@ async function jobSubAuto(env, opt) {
         if (!t.pick || t.ok === false) continue;
         sim[t.jan] = Object.assign({}, sim[t.jan] || {}, t.x, {
           grades: t.grades, loaded_at: t.x.loaded_at || "試し",
-          put_at: t.x.put_at || "" });
+          put_at: t.x.put_at || "",
+          /* 8.89 本番では作る・確かめるので、試しでは「確かめた」とみなす。 */
+          shop_vis: "ok" });
       }
       const simRows = Object.keys(sim).map((j) => sim[j]);
       const byJan = {};
@@ -13635,9 +13806,13 @@ async function oneRows(env, opt) {
     ? "(SELECT COALESCE(SUM(s.qty),0) FROM sub_order s WHERE s.jan = b.handle)"
     : "0";
   /* 8.87 写真の並び（migrate-0071）。列が無い D1 では空。 */
-  const picsSel = (await onePicsColOk(env))
+  const picsSel = ((await onePicsColOk(env))
     ? "b.pics AS pics, b.pics_put AS pics_put,"
-    : "'' AS pics, '' AS pics_put,";
+    : "'' AS pics, '' AS pics_put,")
+    /* 8.89 Shopify で非公開を確かめた結果（migrate-0072）。 */
+    + ((await shopVisColOk(env, "one_item"))
+      ? " COALESCE(b.shop_vis,'') AS shop_vis, b.shop_vis_at AS shop_vis_at,"
+      : " '' AS shop_vis, '' AS shop_vis_at,");
   const q = await env.DB.prepare(
     `SELECT b.id AS id, b.handle AS handle, b.name AS name, b.jan AS jan,
             b.asin AS asin, b.cond AS cond, b.cond_note AS cond_note,
@@ -13684,6 +13859,8 @@ async function oneRows(env, opt) {
       pics_changed: !!String(r.loaded_at || "")
         && SHOPCSV.onePicsSig(r.pics) !== SHOPCSV.onePicsSig(r.pics_put),
       pic_type: String(r.pic_type || ""),
+      shop_vis: String(r.shop_vis || ""), shop_vis_ja: shopVisJa(r.shop_vis),
+      shop_vis_at: String(r.shop_vis_at || ""), shop_vis_jst: jstText(r.shop_vis_at),
       amz_price: Number(r.amz_price) || 0,
       amz_fee: Number(r.amz_fee) || 0,
       basis: String(r.amz_basis || ""),
@@ -13734,6 +13911,9 @@ async function oneList(env, url) {
   res.pre_grades = SUBPLAN.oneGrades(st, false);
   res.open_grades = SUBPLAN.oneGrades(st, true);
   res.hours = SUBPLAN.oneHours(st);
+  /* 8.89 非公開を確かめた品だけ配るか（画面の印の言い方を変える）。 */
+  res.vis_on = (st.subVisGate === undefined ? true : !!st.subVisGate)
+    && !!shopKeyKind(env) && !!shopHostOf(st) && await shopVisColOk(env, "one_item");
   res.ok = true;
   return res;
 }
@@ -13955,6 +14135,7 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
   for (const p of cfg.one) {
     const posts = p.ch ? (sent[p.ch] || {}) : {};
     const pick = [];
+    const hold = [];
     for (const r of rows) {
       if (!p.ch) break;
       if (SUBPLAN.oneWhy(p, r, now)) continue;
@@ -13962,6 +14143,12 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
       const was1 = posts[r.jan];
       const mid1 = was1 ? String(was1.msg_id || "") : "";
       const old = (was1 && mid1) ? was1 : null;
+      /* 8.89 Shopify で非公開を確かめていない品は、新しく出さない。 */
+      if (!old && shopVisBlock(r, cfg)) {
+        hold.push({ jan: r.jan, handle: r.handle, name: r.name,
+                    vis: String(r.shop_vis || ""), why: shopVisJa(r.shop_vis) });
+        continue;
+      }
       const x = Object.assign({}, r, {
         sent: !!old, msg_id: mid1, gone_card: !!(was1 && !mid1),
       });
@@ -13981,7 +14168,11 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
       ch_name: (names && p.on && p.ch)
         ? await dcChName(env, planRun, p.ch, chCache) : "",
       n: pick.length, q: 0, kinds: "one",
-      why: pick.length ? "" : SUBPLAN.oneWhyNone(p, rows, now),
+      why: pick.length ? "" : (hold.length
+        ? ("Shopify で非公開を確かめていない品が " + hold.length + "件あります")
+        : SUBPLAN.oneWhyNone(p, rows, now)),
+      /* 8.89 非公開を確かめていないので配らない品（理由つき）。 */
+      vis_hold: hold.slice(0, 50),
       items: pick.map((x) => ({
         jan: x.jan, one_id: x.one_id, name: x.name, price: x.price,
         qty: x.qty, left: x.left, gross: x.gross, sent: x.sent,
@@ -19460,6 +19651,20 @@ async function mwImgRun(env, body) {
     }
     await runBatch(env, run, stmts);
     res.n = res.rows.length;
+    /* 8.90（カジの依頼）取り込み（probe でない）で使える写真が1枚も無かった
+       JAN を7日間覚える（出品候補の先頭に来ないようにする）。使える写真が
+       取れたら記録を消す。 */
+    if (!probe) {
+      try {
+        if (res.good > 0) await mwPicNgDel(env, jan);
+        else {
+          const longs = res.rows.map((x) => Number(x.long) || 0).filter((x) => x > 0);
+          await mwPicNgPut(env, jan, longs.length ? "small" : "none",
+                           longs.length ? Math.max(...longs) : 0, res.n);
+          res.pic_ng = longs.length ? "small" : "none";
+        }
+      } catch (e) { /* 記録が書けなくても取り込みは止めない */ }
+    }
     res.ok = true;
     run.notes.push("MW画像：" + jan + " の " + res.n + "枚を測りました（使える "
       + res.good + "／使えない " + res.bad + "）");
@@ -19468,6 +19673,103 @@ async function mwImgRun(env, body) {
     res.error = String((e && e.message) || e);
   }
   return Object.assign(await saveRun(env, run), res);
+}
+/* ===== 8.90（カジの依頼）写真が使えなかった JAN を7日間覚える =====
+   「JAN:番号」で写真を取り込んだとき、
+     small … 長辺 500px 未満で、使える写真が1枚も無かった
+     none  … MW に写真が無かった（番号が無い・404 など）
+   の JAN を mw_pic_ng（migrate-0072）に控える。7日たったら消す（MW の写真が
+   差し替わっていることがあるため）。出品候補の画面は、記録のある JAN を
+   「写真なし」の区分にして、①②の後ろに回す。 */
+const MW_PIC_NG_DAYS = 7;
+const MW_PIC_NG_BACKFILL = "mw.picng.backfill";
+async function mwPicNgOk(env) { return await colOk(env, "mw_pic_ng", "jan"); }
+async function mwPicNgPut(env, jan, why, long, n) {
+  if (!(await mwPicNgOk(env))) return;
+  const at = nowIso();
+  await env.DB.prepare(
+    `INSERT INTO mw_pic_ng (jan,why,long_px,n,at,created_at) VALUES (?1,?2,?3,?4,?5,?5)
+     ON CONFLICT(jan) DO UPDATE SET why=excluded.why, long_px=excluded.long_px,
+       n=excluded.n, at=excluded.at`)
+    .bind(String(jan), String(why), Math.round(Number(long) || 0),
+          Math.round(Number(n) || 0), at).run();
+}
+async function mwPicNgDel(env, jan) {
+  if (!(await mwPicNgOk(env))) return;
+  await env.DB.prepare(`DELETE FROM mw_pic_ng WHERE jan=?1`).bind(String(jan)).run();
+}
+function mwPicNgCut(now) {
+  return new Date((now || Date.now()) - MW_PIC_NG_DAYS * 86400000).toISOString();
+}
+/* はじめて開いたときに1回だけ、これまでの取り込みの控え（mw_img）から
+   7日以内に「使える写真が1枚も無かった」JAN を記録に入れる。 */
+async function mwPicNgBackfill(env) {
+  let done = "";
+  try { done = String((await stateGet(env, MW_PIC_NG_BACKFILL)) || ""); } catch (e) {}
+  if (done) return 0;
+  const cut = mwPicNgCut();
+  const q = await env.DB.prepare(
+    `SELECT jan, MAX(COALESCE(long_px,0)) AS lg, COUNT(*) AS n, MAX(at) AS at
+       FROM mw_img GROUP BY jan
+     HAVING MAX(COALESCE(ok,0))=0 AND MAX(at) >= ?1`).bind(cut).all();
+  let n = 0;
+  for (const r of ((q && q.results) || [])) {
+    if (!/^\d{13}$/.test(String(r.jan || ""))) continue;
+    await env.DB.prepare(
+      `INSERT INTO mw_pic_ng (jan,why,long_px,n,at,created_at) VALUES (?1,?2,?3,?4,?5,?6)
+       ON CONFLICT(jan) DO NOTHING`)
+      .bind(String(r.jan), Number(r.lg) > 0 ? "small" : "none", Number(r.lg) || 0,
+            Number(r.n) || 0, String(r.at), nowIso()).run();
+    n++;
+  }
+  try { await stateSet(env, MW_PIC_NG_BACKFILL, nowIso()).run(); } catch (e) {}
+  return n;
+}
+/* GET /mw/picng … 記録の一覧と件数（7日を過ぎた記録は消してから返す）。 */
+async function mwPicNgList(env) {
+  const res = { ok: false, n: 0, rows: [], days: MW_PIC_NG_DAYS, table_ok: true };
+  if (!(await mwPicNgOk(env))) {
+    res.table_ok = false; res.error = "no_table";
+    res.detail = "mw_pic_ng がありません（migrate-0072）"; return res;
+  }
+  res.backfill = await mwPicNgBackfill(env);
+  const cut = mwPicNgCut();
+  const del = await env.DB.prepare(`DELETE FROM mw_pic_ng WHERE at < ?1`).bind(cut).run();
+  res.expired = Number(((del || {}).meta || {}).changes) || 0;
+  const q = await env.DB.prepare(
+    `SELECT p.jan AS jan, p.why AS why, p.long_px AS long_px, p.n AS n, p.at AS at,
+            (SELECT s.name FROM mw_stock s WHERE s.jan=p.jan ORDER BY s.id LIMIT 1) AS name
+       FROM mw_pic_ng p ORDER BY p.at DESC LIMIT 1000`).all();
+  for (const r of ((q && q.results) || [])) {
+    const until = new Date(Date.parse(String(r.at)) + MW_PIC_NG_DAYS * 86400000).toISOString();
+    res.rows.push({ jan: String(r.jan), why: String(r.why || ""),
+      long: Number(r.long_px) || 0, n: Number(r.n) || 0,
+      name: String(r.name || "").slice(0, 80),
+      at: String(r.at || ""), at_jst: jstText(r.at),
+      until: until, until_jst: jstText(until) });
+  }
+  res.n = res.rows.length;
+  res.ok = true;
+  return res;
+}
+/* POST /mw/picng { jans:[…] } … 「JAN:」だけで番号が無かった JAN（MW に写真が
+   無かった）を記録する（画面のまとめ貼りから）。 */
+async function mwPicNgNone(env, body) {
+  const res = { ok: false, n: 0 };
+  if (!(await mwPicNgOk(env))) { res.error = "no_table"; return res; }
+  const list = (Array.isArray((body || {}).jans) ? body.jans : []).slice(0, 200);
+  for (const j0 of list) {
+    const j = String(j0 || "").replace(/\D/g, "");
+    if (j.length !== 13) continue;
+    /* もう使える写真を控えてある JAN は記録しない。 */
+    const has = await env.DB.prepare(
+      `SELECT 1 AS x FROM mw_img WHERE jan=?1 AND COALESCE(ok,0)=1 LIMIT 1`).bind(j).first();
+    if (has) continue;
+    await mwPicNgPut(env, j, "none", 0, 0);
+    res.n++;
+  }
+  res.ok = true;
+  return res;
 }
 /* GET /mw/img?jan=… 控えてある画像（貼り直さなくて済むように返す） */
 /* ===== 写真の控えを外す（7.119・F3）=====
@@ -20877,7 +21179,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
+  "mw_notify", "mw_pic_ng", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
   "ebay_cat",
   "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
@@ -20924,6 +21226,10 @@ const SCHEMA_FIX = [
   ["one_item", "migrate-0059-one-item.sql"],
   /* 8.87 1点ものの写真の並び。 */
   ["pics", "migrate-0071-one-pics.sql"],
+  /* 8.89 Shopify で非公開を確かめた結果・8.90 写真が使えなかった JAN。 */
+  ["shop_vis", "migrate-0072-vis-picng.sql"],
+  ["shop_vis_at", "migrate-0072-vis-picng.sql"],
+  ["mw_pic_ng", "migrate-0072-vis-picng.sql"],
   ["pics_put", "migrate-0071-one-pics.sql"],
   ["pic_key", "migrate-0059-one-item.sql"],
   ["os_item", "migrate-0058-os-item.sql"],
@@ -22058,6 +22364,13 @@ export default {
         if (ctx && ctx.waitUntil) ctx.waitUntil(pr);
         return json(await pr, 200, origin);
       }
+      /* 8.90 写真が使えなかった JAN の記録（7日間）。 */
+      if (request.method === "GET" && url.pathname === "/mw/picng")
+        return json(await mwPicNgList(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/mw/picng") {
+        const b = await request.json().catch(() => ({}));
+        return json(await mwPicNgNone(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mw/img") {
         const b = await request.json().catch(() => ({}));
         return json(await mwImgRun(env, b), 200, origin);
@@ -22430,6 +22743,9 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   oneMainPic, onePicOld, onePut, oneRows, oneMark,
   /* 8.88 非公開（Unlisted）にそろえる。 */
   jobShopUnlist, shopUnlistHandles, shopQStat,
+  /* 8.89 非公開を確かめてから配る・8.90 写真が使えなかった JAN。 */
+  shopVisOf, shopVisJa, shopVisBlock, shopVisSave, mwPicNgList, mwPicNgNone,
+  mwPicNgPut, MW_PIC_NG_DAYS,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
   OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,

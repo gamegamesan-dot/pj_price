@@ -44,7 +44,10 @@ globalThis.fetch=async(u,i)=>{
       locations:{ nodes:[{ id:'gid://shopify/Location/1', name:'本店' }] },
       publications:{ nodes:[
         { id:'gid://shopify/Publication/9', supportsFuturePublishing:true,
-          catalog:{ title:'オンラインストア' } }] } } });
+          catalog:{ title:'オンラインストア' } },
+        /* 8.89 海外向けの商品リスト（外せたかを確かめるので、あるものとする）。 */
+        { id:'gid://shopify/Publication/3', supportsFuturePublishing:false,
+          catalog:{ title:'Overseas products' } }] } } });
     if(name==='pjSet'){
       const h=b.variables.input.handle;
       sets.push({ handle:h, tags:b.variables.input.tags||[] });
@@ -98,7 +101,7 @@ const setCfg=(env,o)=>env.DB.prepare(
       subDomain:'omakase-ship.myshopify.com' },o||{}) }),
     new Date().toISOString()).run();
 const jan=(i)=>'490237055'+String(1000+i);
-/* 会員用の印が付いた品（もう Shopify にある）。 */
+/* 会員用の印が付いた品（もう Shopify にある・8.89 非公開を確かめ済み）。 */
 const add=async(env,i,o)=>{
   const x=o||{}, j=jan(i);
   await env.DB.prepare(
@@ -112,8 +115,8 @@ const add=async(env,i,o)=>{
     .bind(j,'テストのゲームソフト その'+i,NOW,100+i*10).run();
   await env.DB.prepare(
     `INSERT INTO mw_sub (jan,on_sale,max_qty,price,grades,put_at,loaded_at,
-       at,created_at,shop_pid,shop_iid,shop_at)
-     VALUES (?1,1,10,3645,?2,?3,?3,?3,?3,'gid://p','gid://i',?3)`)
+       at,created_at,shop_pid,shop_iid,shop_at,shop_vis)
+     VALUES (?1,1,10,3645,?2,?3,?3,?3,?3,'gid://p','gid://i',?3,'ok')`)
     .bind(j,x.grades===undefined?'light,standard,premium':x.grades,NOW).run();
   return j;
 };

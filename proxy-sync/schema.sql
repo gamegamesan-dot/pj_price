@@ -883,6 +883,9 @@ CREATE TABLE IF NOT EXISTS mw_sub (
   /* 8.83（migrate-0070）最後に Shopify に入れた「お一人の上限」のタグ
      （例 'light-1,standard-2,premium-5'。空は付けていない）。 */
   shop_q       TEXT,
+  /* 8.89（migrate-0072）Shopify で非公開を確かめた結果と、その時刻。 */
+  shop_vis     TEXT,
+  shop_vis_at  TEXT,
   at         TEXT,
   created_at TEXT
 );
@@ -1131,6 +1134,10 @@ CREATE TABLE IF NOT EXISTS one_item (
      読み込んだとき（または写真の直しCSV を作ったとき）の並び。 */
   pics       TEXT,
   pics_put   TEXT,
+  /* 8.89（migrate-0072）Shopify で非公開を確かめた結果（ok／active／draft／
+     over／online／missing／…）と、その時刻。ok の品だけ新しく配る。 */
+  shop_vis   TEXT,
+  shop_vis_at TEXT,
   amz_price  INTEGER,                            -- Amazon の販売価格
   amz_fee    INTEGER,                            -- 手数料
   amz_basis  TEXT,                               -- カート／最安
@@ -1220,3 +1227,17 @@ INSERT INTO ebay_cat (code,name,ja,path,need,aspects,tpl,at,created_at)
           'Toys & Hobbies > Action Figures & Accessories > Action Figures',
           'Type','','261068','','seed')
   ON CONFLICT(code) DO NOTHING;
+
+/* ===== 8.90（カジの依頼）写真が使えなかった JAN（7日間）=====
+   「JAN:番号」で取り込んで、使える写真が1枚も無かった JAN。
+   why … small（長辺 500px 未満）／none（MW に写真が無かった）
+   at から7日たったら消す（MW の写真が差し替わっていることがあるため）。 */
+CREATE TABLE IF NOT EXISTS mw_pic_ng (
+  jan        TEXT PRIMARY KEY,
+  why        TEXT NOT NULL,
+  long_px    INTEGER,
+  n          INTEGER,
+  at         TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mw_pic_ng_at ON mw_pic_ng(at);

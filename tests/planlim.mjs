@@ -41,7 +41,10 @@ globalThis.fetch=async(u,i)=>{
       locations:{ nodes:[{ id:'gid://shopify/Location/1', name:'本店' }] },
       publications:{ nodes:[
         { id:'gid://shopify/Publication/9', supportsFuturePublishing:true,
-          catalog:{ title:'オンラインストア' } }] } } });
+          catalog:{ title:'オンラインストア' } },
+        /* 8.89 海外向けの商品リスト（外せたかを確かめるので、あるものとする）。 */
+        { id:'gid://shopify/Publication/3', supportsFuturePublishing:false,
+          catalog:{ title:'Overseas products' } }] } } });
     if(name==='pjSet'){
       const h=b.variables.input.handle;
       return J({ data:{ productSet:{ product:{ id:'gid://shopify/Product/'+h,

@@ -2363,6 +2363,9 @@ body.staff #syncOnHandFix{display:none !important}
              引き継がず、新しい上限から始まる。 -->
         <div class="note2" id="subLimNote" style="margin:0 0 6px">8.82：<b>プランの上限</b>は下の欄で変えられます（既定：モニター 5件・1点／ライト 5件・1点／スタンダード 20件・2点／プレミアム 50件・5点）。件数が上限を超えるときは、<b>今の並びのまま上から</b>上限までを出します。今日の配信の案・予定・カード・自動配信が<b>同じ数</b>を使います。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subQFix"><label for="subQFix" style="flex:1"><b>出ているカードの「お一人◯点まで」も、新しい上限に書き換える</b>（既定オフ：出ているカードは前の数のまま・新しく出すカードだけ新しい上限）</label></div>
+        <!-- 8.89（カジの依頼）Shopify で非公開・海外向けカタログに無いことを
+             管理 API で確かめた品だけを、新しく配る（既定オン）。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subVisGate" checked><label for="subVisGate" style="flex:1"><b>Shopify で非公開を確かめた品だけを配る</b>（非公開・オンラインストアに公開・海外向けカタログに無い、を管理 API で確かめる・既定オン）</label></div>
         <!-- 8.83（カジの依頼）お一人の上限を Shopify でも抑える。pj が会員用の
              商品に上限のタグ（qty-プラン-点数）を付け、テーマのスニペット
              （shopify/snippets/member-qty-guard.liquid）が数量を抑える。 -->
@@ -3917,6 +3920,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 /* 8.86 カードの共通の説明を外す（既定オフ）／トピックを
                    上限に合わせる（既定オン）。 */
                 'subCardSlim','subTopicOn',
+                /* 8.89 非公開を確かめた品だけ配る（既定オン）。 */
+                'subVisGate',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -14491,6 +14496,10 @@ function mwReadNote(d,fi){
 }
 /* ---- 候補一覧（5章の式で推奨売値と利益を出す）---- */
 var mwRows=[], mwLast=null, mwMkt=null;
+/* 8.90（カジの依頼）写真が使えなかった JAN（7日間）。{ JAN: 記録 } */
+var mwPicNg={}, mwPicNgList=[], mwPicNgDays=7;
+/* 候補がまだ読めていないときに貼られた「JAN:」だけの行（読めたら記録する）。 */
+var mwPicEmptyWait='';
 /* MW の仕入値（円・税込＋1点あたりの送料）。 */
 function mwCost(r){
   var w=+((r||{}).wholesale)||0;
@@ -20439,6 +20448,31 @@ function subTopicGo(approve){
       +'（pj-sync をデプロイしたか確かめてください）';
   }).then(function(){ if(b1)b1.disabled=false; if(b2)b2.disabled=false; });
 }
+/* 8.89 Shopify で非公開を確かめていないので、新しく配らない品（理由つき）。 */
+function subVisHtml(d){
+  var o=d&&d.vis;
+  if(!o)return '';
+  if(!o.on){
+    var w={ off:'⚙「Shopify で非公開を確かめた品だけを配る」がオフです',
+            no_key:'Shopify の管理 API の鍵が無いので、非公開を確かめていません',
+            no_host:'⚙に Shopify の管理用ドメインが無いので、非公開を確かめていません',
+            no_cols:'D1 に migrate-0072 がまだなので、非公開を確かめていません' }[o.why]||'';
+    return w?('<div class="note2" id="subVisLine" style="margin:2px 0 0;color:var(--bad)">⚠ '
+      +esc(w)+'</div>'):'';
+  }
+  var ones=[];
+  ((d.plans)||[]).forEach(function(p){ (p.vis_hold||[]).forEach(function(x){ ones.push(x); }); });
+  var all=(o.rows||[]).concat(ones), n=(+o.n||0)+ones.length;
+  if(!n)return '<div class="note2" id="subVisLine" style="margin:2px 0 0">'
+    +'Shopify で非公開を確かめていない品はありません。</div>';
+  return '<div class="note2" id="subVisLine" style="margin:2px 0 0;color:var(--bad)">'
+    +'<b>Shopify で非公開を確かめていないので配らない品 '+mwN(n)+'件</b>'
+    +'（「非公開（Unlisted）にそろえる」を押すと、そろえて確かめます）'
+    +all.slice(0,20).map(function(x){
+      return '<br>・'+esc(String(x.handle||x.jan))+'　'+esc(String(x.name||'').slice(0,30))
+        +'　<b>'+esc(String(x.why||''))+'</b>'; }).join('')
+    +(all.length>20?('<br>…ほか '+mwN(all.length-20)+'件'):'')+'</div>';
+}
 /* 予定の中身を出す（8.23 タブを選び直したときにも、ここだけ出し直す）。 */
 function subPlanRender(){
   var d=subPlanData; if(!d)return;
@@ -20500,7 +20534,7 @@ function subPlanRender(){
           +esc(p.name)+'だけ送る（新しく '+mwN(+p.add||0)+'・書き換え '
           +mwN(+p.edit||0)+'）</button>');
     });
-    $('subPlanList').innerHTML=subAutoHtml()+subLimHtml(d)+subSlimHtml(d)+subTopicHtml(d)+bar+(rows.length?rows.join('')
+    $('subPlanList').innerHTML=subAutoHtml()+subLimHtml(d)+subSlimHtml(d)+subTopicHtml(d)+subVisHtml(d)+bar+(rows.length?rows.join('')
       :('<div class="note2" style="margin-top:4px">'
         +((tab==='all')
           ? '送る商品がありません（「Shopify に読み込みました」の印が'
@@ -21764,7 +21798,11 @@ function subLoadedPut(){
     var msg='✓ '+mwN(+r.n||0)
       +'件に「Shopify に読み込みました」の印を付けました。';
     subStepDone('loaded');         // 8.36 ②の段に「✓ 済」を出す
-    return Promise.resolve(subPlanGo(true))['catch'](function(){ })
+    /* 8.89 続けて非公開にそろえ、API で確かめる（確かめた品だけ配る）。 */
+    subNote(msg+'<br>Shopify で非公開にそろえて確かめています…');
+    return shopUnlistAuto('sub',jans.map(function(j){ return 'sub-'+j; }))
+      .then(function(z){ msg+=shopVisSayHtml(z); })
+      .then(function(){ return Promise.resolve(subPlanGo(true))['catch'](function(){ }); })
       .then(function(){ subNote(msg); });
   })['catch'](function(e){
     if(n)n.innerHTML='<span style="color:var(--bad)">⚠ 印を付けられませんでした：'
@@ -22280,6 +22318,7 @@ function oneAmzGo(){
 }
 var oneAmzLast=null;
 /* 一覧。 */
+var oneVisOn=true;
 function oneListGo(){
   if(roleDenyPrice('oneNote2'))return;
   csvSecretFill();
@@ -22295,6 +22334,7 @@ function oneListGo(){
       return;
     }
     oneRowsData=d.rows||[];
+    oneVisOn=(d.vis_on!==false);   // 8.89 確かめた品だけ配る（鍵が無い・⚙ オフなら止めない）
     oneGrades={ pre:String(d.pre_grades||'premium'),
                 open:String(d.open_grades||'standard,premium'),
                 hours:+d.hours||24 };
@@ -22324,6 +22364,14 @@ function oneRowHtml(x){
     +(x.off?'<span class="badge" style="background:#8a8a8a">取り下げ</span>':'')
     +(x.loaded_at?'<span class="badge" style="background:#1f7a4d">読み込み済み</span>'
                  :'<span class="badge" style="background:#b00020">未読み込み</span>')
+    /* 8.89 Shopify で非公開を確かめたか（確かめた品だけ配る）。 */
+    +(x.loaded_at?(x.shop_vis==='ok'
+      ?'<span class="badge" style="background:#1f7a4d" data-onevis="ok">非公開を確かめ済み</span>'
+      :(oneVisOn
+        ?('<span class="badge" style="background:#b00020" data-onevis="'+esc(String(x.shop_vis||''))+'">'
+          +'配信しません：'+esc(shopVisJa(x.shop_vis))+'</span>')
+        :('<span class="badge" style="background:#8a8a8a" data-onevis="'+esc(String(x.shop_vis||''))+'">'
+          +esc(shopVisJa(x.shop_vis))+'（配信は止めません）</span>'))):'')
     +'<br>'+esc(String(x.handle))+'　'+yen(x.price)
     +'　残り '+left+'／'+(+x.qty||0)+'点'
     +(x.cond?('　'+esc(String(x.cond))):'')
@@ -22390,6 +22438,15 @@ function oneMarkGo(id,kind,on){
       oneNote('⚠ 印を付けられませんでした：'
         +esc(String((r&&(r.detail||r.error))||'')),1); return;
     }
+    if(kind==='loaded'&&on){
+      /* 8.89 続けて非公開にそろえ、API で確かめる（確かめた品だけ配る）。 */
+      oneNote('✓ 印を付けました。Shopify で非公開にそろえて確かめています…');
+      return shopUnlistAuto('one',['one-'+(+id||0)]).then(function(z){
+        oneNote('✓ 「Shopify に読み込みました」の印を付けました。'+shopVisSayHtml(z),
+                z.bad.length>0);
+        return oneListGo();
+      });
+    }
     oneNote('✓ 印を変えました。');
     return oneListGo();
   })['catch'](function(e){ oneNote('⚠ 印を付けられませんでした：'
@@ -22434,6 +22491,59 @@ function oneImgCsvGo(){
    直すほうは 40秒ずつ区切られるので、残りが無くなるまで続きを頼む。
    海外向けの os- の商品は触らない（pj-sync が sub-・one- の Handle だけを見る）。 */
 var SHOP_UNLIST_LOOP=20;
+/* 8.89 確かめた結果の日本語（pj-sync の SHOP_VIS_JA と同じ言葉）。 */
+var SHOP_VIS_JA={ ok:'非公開を確かめました', active:'Shopify で公開（active）のままです',
+  draft:'Shopify で下書き（draft）のままです', archived:'Shopify でアーカイブされています',
+  over:'海外向けカタログ（Overseas products）に入っています',
+  online:'オンラインストアに公開されていません（リンクで開けません）',
+  over_miss:'海外向けの商品リストが Shopify に見つかりません',
+  missing:'Shopify にありません（まだ取り込んでいない）',
+  err:'Shopify に確かめられませんでした', '':'まだ Shopify で非公開を確かめていません' };
+function shopVisJa(v){ var k=String(v||''); return SHOP_VIS_JA[k]!==undefined?SHOP_VIS_JA[k]:k; }
+/* 8.89（カジの依頼）「Shopify に読み込みました」を押したら、その品だけ
+   **続けて非公開にそろえ、API で確かめる**（ボタンを2回押さなくて済むように）。
+   返り：{ ok_n, bad:[{handle, why}], err } */
+function shopUnlistAuto(kind,handles){
+  var acc={ vis:{}, errors:[] }, n=0;
+  var step=function(from){
+    return mwPost('/shop/unlist',{ kind:kind, approve:true, handles:handles, from:from })
+      .then(function(d){
+        if(!d||d.ok!==true)throw new Error(String((d&&(d.detail||d.error))||'確かめられませんでした'));
+        Object.keys(d.vis||{}).forEach(function(h){ acc.vis[h]=d.vis[h]; });
+        acc.errors=acc.errors.concat(d.errors||[]).slice(0,5);
+        n++;
+        if(+d.left>0&&n<SHOP_UNLIST_LOOP)return step(+d.next||0);
+        return acc;
+      });
+  };
+  return step(0).then(function(a){
+    var ok=0, bad=[];
+    handles.forEach(function(h){
+      var v=a.vis[h];
+      if(v==='ok')ok++; else bad.push({ handle:h, vis:v||'', why:shopVisJa(v) });
+    });
+    return { ok_n:ok, bad:bad, errors:a.errors };
+  })['catch'](function(e){
+    return { ok_n:0, bad:handles.map(function(h){ return { handle:h, vis:'err', why:shopVisJa('err') }; }),
+             err:e.message };
+  });
+}
+function shopVisSayHtml(z){
+  /* ⚙ でオフのとき・Shopify の鍵が無いとき（確かめられないとき）は、
+     pj-sync は配信を止めない。「配信しません」と言い切らない。 */
+  var off=!!($('subVisGate')&&!$('subVisGate').checked);
+  if(z.err)return '<br><span style="color:var(--bad)">⚠ Shopify で非公開を確かめられませんでした：'
+    +esc(z.err)+'</span><br><span class="note2" style="margin:0">Shopify の管理 API の鍵が'
+    +'無いあいだは、配信は止めません（今までどおり）。Shopify の画面で、ステータスが'
+    +'「非公開」になっているか確かめてください。</span>';
+  return '<br><b>Shopify で非公開を確かめました：'+mwN(z.ok_n)+'件</b>'
+    +(z.bad.length?('<br><span style="color:var(--bad)"><b>確かめられなかった '+mwN(z.bad.length)
+      +'件'+(off?'':'（配信しません）')+'</b>：'+z.bad.slice(0,10).map(function(x){
+        return esc(x.handle)+'（'+esc(x.why)+'）'; }).join('　')
+      +(z.bad.length>10?'　…':'')+'</span>'
+      +(off?'<br><span class="note2" style="margin:0">⚙「Shopify で非公開を確かめた品だけを配る」'
+        +'がオフなので、配信は止めません。</span>':'')):'');
+}
 function shopUnlistGo(kind,noteId){
   if(roleDenyPrice(noteId))return;
   csvSecretFill();
@@ -22442,7 +22552,7 @@ function shopUnlistGo(kind,noteId){
     note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return; }
   var name=(kind==='one')?'1点もの（one-）':'会員用（sub-）';
   var sum=function(a,b){
-    ['checked','unlisted','active','draft','archived','missing','over_in','need','done','fail']
+    ['checked','unlisted','active','draft','archived','missing','over_in','need','done','fail','ok_all']
       .forEach(function(k){ a[k]=(+a[k]||0)+(+b[k]||0); });
     a.items=(a.items||[]).concat(b.items||[]).slice(0,40);
     a.errors=(a.errors||[]).concat(b.errors||[]).slice(0,5);
@@ -22476,6 +22586,7 @@ function shopUnlistGo(kind,noteId){
       +'・Shopify に無い '+mwN(+a.missing||0)
       +(+a.over_in?('<br>海外向けカタログに入っている <b>'+mwN(+a.over_in)+'件</b>'):'')
       +(approve?('<br>直した <b>'+mwN(+a.done||0)+'件</b>'
+        +'・<b>非公開を確かめた '+mwN(+a.ok_all||0)+'件</b>（この品だけ配ります）'
         +(+a.fail?('・<b style="color:var(--bad)">できなかった '+mwN(+a.fail)+'件</b>'):'')
         +(+a.left?('・残り '+mwN(+a.left)+'件（もう一度押すと続きから）'):''))
         :('<br>直す必要がある <b>'+mwN(need)+'件</b>'))
@@ -23057,6 +23168,8 @@ function mwListRun(){
       if(my!==mwListSeq)return;
       var d=first;
       mwRows=rows; mwLast=d.last||null; mwMkt=d.mkt||null;
+      mwPicNgLoad();               // 8.90 写真が使えなかった JAN（あとから描き直す）
+      if(mwPicEmptyWait)mwPicEmptyPut(mwPicEmptyWait);
       note.textContent='候補 '+(d.n||0)+'件'
         +(d.n>mwRows.length?('（うち '+mwRows.length+'件を表示）'):'')
         +'　／　MW の生きている行 '+(d.alive||0)+'　JANごとの代表 '+(d.picked||0)
@@ -23303,7 +23416,12 @@ function mwImgTake(jan,ids,out){
   return mwPost('/mw/img',{ jan:jan, ids:ids })
     .then(function(d){
       if(!d||d.ok!==true)throw new Error((d&&d.error)||'取れませんでした');
+      /* 8.90 使える写真が1枚も無ければ「写真なし（7日間）」の記録に入る。 */
+      if(+d.good>0){ delete mwPicNg[String(jan)]; }
+      else if(d.pic_ng)mwPicNgLoad(true);
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'+d.n+'枚を取りました'
+        +(+d.good?'':('<br><b style="color:var(--bad)">使える写真がありませんでした。'
+          +mwPicNgDays+'日間は出品候補の後ろに回します</b>'))
         +'（使える '+d.good+'／使えない '+d.bad+'）　R2 に控えています…</div>'
         +mwImgSizeHtml(d.rows);
       /* 使える画像だけを、今までの口で pj-img に上げる。 */
@@ -23323,9 +23441,10 @@ function mwImgTake(jan,ids,out){
             .then(function(d){ if(d&&d.url)saved.push({ pos:x.pos, url:d.url }); });
         });
       },Promise.resolve()).then(function(){
-        if(!saved.length)return { rows:d.rows, saved:saved };
+        var ng0=!(+d.good>0);                 // 8.90 写真なし（7日間は後ろ）
+        if(!saved.length)return { rows:d.rows, saved:saved, ng:ng0 };
         return mwPost('/mw/img',{ jan:jan, saved:saved })
-          .then(function(){ return { rows:d.rows, saved:saved }; });
+          .then(function(){ return { rows:d.rows, saved:saved, ng:ng0 }; });
       });
     })
     .then(function(z){
@@ -23342,6 +23461,8 @@ function mwImgTake(jan,ids,out){
       out.innerHTML='<div class="note2" style="margin:0 0 4px">'
         +'<b>'+z.saved.length+'枚</b>を控えました'
         +(first?'（1枚目をメインにします）':'（メインに使える画像がありません）')
+        +(z.ng?('<br><b style="color:var(--bad)">使える写真がありませんでした。'
+          +mwPicNgDays+'日間は出品候補の後ろに回します（「写真なし」の区分）</b>'):'')
         +'</div>'+mwImgSizeHtml(z.rows)
         +(z.saved.length?('<div class="note2" style="margin:4px 0 0">'
           +z.saved.map(function(x){ return '<a href="'+esc(x.url)
@@ -23564,6 +23685,8 @@ function mwPicQNote(){
 /* 貼り付けた中身を取り込む（押したときの入り口）。 */
 function mwPicPasteGo(){
   if(mwPicRun){ mwPicStop=true; return; }      // 2回目の押下は「止める」
+  /* 8.90 「JAN:」だけで番号が無い JAN（MW に写真が無い）を記録する。 */
+  mwPicEmptyPut(($('mwPicIn')||{}).value||'');
   var got=mwPicInNote();
   if(!got.length)return;
   if(!syncUrl()||!syncApiKey()){
@@ -23626,6 +23749,8 @@ function mwPicWork(list){
   };
   step().then(function(){
     mwPicRun=false;
+    /* 8.90 使える写真が無かった JAN は pj-sync が記録した。一覧を読み直す。 */
+    try{ mwPicNgLoad(); }catch(e){}
     /* 6.156：F2 の4つの件数。
        取り込んだ＝写真が入った JAN／候補外＝捨てた JAN／
        すでに写真あり＝触らなかった JAN／失敗＝写真が入らなかった JAN */
@@ -23763,6 +23888,9 @@ function mwPicResCap(){
   listReg('mwpicres',mwPicResCap);
 }
 function mwPicHash(){
+  /* 8.90 「JAN:」だけで番号が無い JAN（MW に写真が無い）を記録する。 */
+  try{ var mh=/(?:^|[&#])mwpic=([^&#]+)/.exec(String(location.hash||'').replace(/^#?/,''));
+       if(mh)mwPicEmptyPut(decodeURIComponent(mh[1])); }catch(e){}
   var got=mwPicParse(location.hash);
   if(!got.length)return false;
   mwPicGot=got;
@@ -23816,6 +23944,7 @@ function mwPicGo(){
       });
     });
   },Promise.resolve()).then(function(){
+    try{ mwPicNgLoad(); }catch(e){}     // 8.90 使える写真が無かった JAN の記録を読み直す
     $('mwPicText').innerHTML='<b>取り込みました</b>：'+done+'件の JAN'
       +'　控えた写真 <b>'+ok+'枚</b>'+(ng?('　入らなかった '+ng+'件'):'');
     btn.textContent='閉じる';
@@ -23823,6 +23952,90 @@ function mwPicGo(){
     btn.onclick=mwPicBarHide;
     try{ if(typeof mwListRender==='function'&&mwRows.length)mwListRender(); }catch(e){}
   });
+}
+/* ===== 8.90（カジの依頼）写真が使えなかった JAN =====
+   「JAN:番号」で取り込んで、長辺 500px 未満で使えなかった JAN と、MW に写真が
+   無かった JAN を pj-sync が7日間覚える。出品候補（①②）の先頭に来ないよう、
+   「写真なし（7日間）」の区分にして後ろに回す。7日たったら pj-sync が消すので、
+   また候補に戻る（MW の写真が差し替わっていることがあるため）。 */
+function mwPicNgLoad(quiet){
+  if(!syncUrl()||!syncApiKey())return Promise.resolve();
+  return mwGet('/mw/picng').then(function(d){
+    if(!d||d.ok!==true)return;
+    mwPicNgDays=+d.days||7;
+    mwPicNgList=d.rows||[];
+    mwPicNg={};
+    mwPicNgList.forEach(function(x){ mwPicNg[String(x.jan)]=x; });
+    /* quiet … 1件の取り込みの直後は描き直さない（その行の結果の表示を消さない）。
+       次に一覧を描くときに「写真なし」の区分に入る。 */
+    if(!quiet){ try{ if(mwRows.length)mwListRender(); }catch(e){} }
+  })['catch'](function(){});
+}
+/* その行が「写真なし（7日間）」か（使える写真が控えてある行は外す）。 */
+function mwPicNgOf(r){
+  var x=mwPicNg[String((r||{}).jan||'')];
+  if(!x||(+((r||{}).pics_ok)||0)>0)return null;
+  if(Date.parse(String(x.until||''))<Date.now())return null;
+  return x;
+}
+function mwPicNgWhy(x){
+  return (x&&x.why==='small')?('長辺 '+(+x.long||0)+'px（500px 未満）')
+                             :'MW に写真がありません';
+}
+/* 記録の一覧（出品候補の画面の上）。 */
+function mwPicNgHtml(){
+  var list=mwPicNgList.filter(function(x){ return Date.parse(String(x.until||''))>=Date.now(); });
+  return '<details data-box="1" id="mwPicNgBox" style="margin:0 0 6px">'
+    +'<summary class="note2" style="margin:0;cursor:pointer">'
+    +'<b>写真が使えなかった JAN（'+mwPicNgDays+'日間） '+mwN(list.length)+'件</b>'
+    +'（出品候補の後ろに回しています）</summary>'
+    +(list.length?('<div style="overflow-x:auto"><table style="width:100%;font-size:12px;'
+      +'border-collapse:collapse"><tr><th style="text-align:left">JAN</th>'
+      +'<th style="text-align:left">商品</th><th style="text-align:left">理由</th>'
+      +'<th style="text-align:left">記録した日</th><th style="text-align:left">戻る日</th></tr>'
+      +list.map(function(x){
+        return '<tr data-picng="'+esc(String(x.jan))+'"><td>'+esc(String(x.jan))+'</td>'
+          +'<td>'+esc(String(x.name||'').slice(0,30))+'</td>'
+          +'<td>'+esc(mwPicNgWhy(x))+'</td>'
+          +'<td>'+esc(String(x.at_jst||''))+'</td>'
+          +'<td>'+esc(String(x.until_jst||''))+'</td></tr>';
+      }).join('')+'</table></div>')
+      :'<div class="note2" style="margin:4px 0">いまはありません。</div>')
+    +'<div class="note2" style="margin:4px 0 0;opacity:.85">「JAN:番号」で取り込んで、'
+    +'使える写真が1枚も無かった JAN です。'+mwPicNgDays+'日たつと記録を消して、'
+    +'また候補に戻します（MW の写真が差し替わっていることがあるため）。'
+    +'写真が取れれば、その場で記録を消します。</div></details>';
+}
+/* 「JAN:」だけで番号が無かった JAN（MW に写真が無かった）を記録する。 */
+function mwPicEmptyOf(text){
+  var out=[], seen={};
+  String(text||'').split(/[|\r\n]+/).forEach(function(part){
+    var raw=String(part), hi=raw.indexOf('#');
+    if(hi>=0)raw=raw.slice(0,hi);
+    var nums=raw.match(/\d{4,14}/g)||[];
+    var jan=nums.filter(function(n){ return n.length===13; })[0]||'';
+    if(!jan||seen[jan])return;
+    if(nums.some(function(n){ return n!==jan&&n.length>=4&&n.length<=12; }))return;
+    if(!/:/.test(raw))return;                     // 「JAN:」の形だけ
+    seen[jan]=1; out.push(jan);
+  });
+  return out;
+}
+function mwPicEmptyPut(text){
+  var jans=mwPicEmptyOf(text);
+  /* 貼るのは MW の一覧（100件）なので、記録するのは pj の候補（①②・
+     「仕入れる」の印）の JAN だけ。写真がもうある JAN は記録しない。
+     候補がまだ読めていないときは、読めたあとで記録する（関係の無い JAN を入れない）。 */
+  var cand=null;
+  try{ cand=mwPicCand(); }catch(e){ cand=null; }
+  if(!jans.length)return Promise.resolve(0);
+  if(!cand||!cand.n){ mwPicEmptyWait=String(text||'').slice(0,200000); return Promise.resolve(0); }
+  mwPicEmptyWait='';
+  jans=jans.filter(function(j){ return cand.ok[j]&&!cand.has[j]; });
+  if(!jans.length||!syncUrl()||!syncApiKey())return Promise.resolve(0);
+  return mwPost('/mw/picng',{ jans:jans }).then(function(d){
+    return mwPicNgLoad().then(function(){ return +(d&&d.n)||0; });
+  })['catch'](function(){ return 0; });
 }
 function mwListRender(){
   var el=$('csvMwList');
@@ -23838,11 +24051,13 @@ function mwListRender(){
      ①〜④のどの区分にあっても見つかるように、**分ける前に**絞る。 */
   var hit=mwRows.filter(findMatchMw);
   findNoteRender('mwl',hit.length,mwRows.length);
-  var g={ ok:[], nomkt:[], high:[], none:[] }, ng=[];
+  var g={ ok:[], nomkt:[], high:[], none:[], picng:[] }, ng=[];
   hit.forEach(function(r){
     var rec=mwRec(r);
-    var o={ r:r, rec:rec, j:mwMktJudge(r,rec), ng:mwNoteHit(r) };
+    var o={ r:r, rec:rec, j:mwMktJudge(r,rec), ng:mwNoteHit(r), pn:mwPicNgOf(r) };
     if(!rec){ ng.push(o); return; }
+    /* 8.90 写真が使えなかった JAN は、①②（ok でも）に入れず後ろに回す。 */
+    if(o.pn&&(o.j.k==='ok'||o.j.k==='nomkt')){ g.picng.push(o); return; }
     if(o.j.k==='ok')g.ok.push(o);
     else if(o.j.k==='nomkt')g.nomkt.push(o);
     else if(o.j.k==='high')g.high.push(o);
@@ -23851,7 +24066,7 @@ function mwListRender(){
   /* 出品候補は「相場に対して安い順」＝写真を貼る作業の順番（仕様4章の6）。
      それ以外は売値が低い順。 */
   g.ok.sort(function(a,b){ return (a.j.pct||999)-(b.j.pct||999); });
-  [g.nomkt,g.high,g.none,ng].forEach(function(l){
+  [g.nomkt,g.high,g.none,ng,g.picng].forEach(function(l){
     l.sort(function(a,b){ return ((a.rec&&a.rec.price)||0)-((b.rec&&b.rec.price)||0); }); });
   var line=function(o){
     var r=o.r, rec=o.rec, jan=String(r.jan||'');
@@ -23860,6 +24075,8 @@ function mwListRender(){
       +'<b>'+esc(String(r.name||'').slice(0,60))+'</b>'
       +(o.j.k==='ok'?(' <span class="badge" style="background:var(--good)">'
         +o.j.pct+'%</span>'):'')
+      +(o.pn?(' <span class="badge" style="background:#8a8a8a" data-picngrow="1">写真なし（'
+        +esc(mwPicNgWhy(o.pn))+'・'+esc(String(o.pn.until_jst||''))+' まで）</span>'):'')
       +(o.ng.length?(' <span class="badge" style="background:var(--bad)">状態に注意</span>'):'')
       +'<div class="note2" style="margin:2px 0 0">JAN '+esc(jan)
       +'　社 '+esc(r.sha)+'　'+esc(r.kishu||'')+'　'+esc(r.cond||'')
@@ -23932,7 +24149,9 @@ function mwListRender(){
     +(+$('linkRate').value||0)+'%・広告料率 '+(+$('autoAdRate').value||6)+'%）</div>'
     +'<div class="note2" style="margin:0 0 6px">相場を調べ終わった '
     +(mk.seen||0)+'件／<b>まだ '+(mk.left||0)+'件</b>'
-    +(mk.left?'（「eBayの相場を調べる」を押すと進みます）':'')+'</div>';
+    +(mk.left?'（「eBayの相場を調べる」を押すと進みます）':'')+'</div>'
+    /* 8.90 写真が使えなかった JAN の一覧と件数。 */
+    +mwPicNgHtml();
   var sect=function(id,title,color,note,list){
     if(!list.length)return '';
     return '<div class="note2" style="margin:10px 0 4px'
@@ -23958,6 +24177,14 @@ function mwListRender(){
       +'売れなければ自動値下げで下げます</b>（下限は '
       +'下限利益 '+yen(+$('baseProfit').value||0)+' の売値）。',
       g.nomkt)
+    /* 8.90 写真が使えなかった JAN（①②に当たる行）。7日間は後ろに回す。 */
+    +(g.picng.length?('<details data-box="1" id="mwPicNgSect" style="margin-top:10px">'
+      +'<summary class="note2" style="margin:0;cursor:pointer">'
+      +'写真なし（'+mwPicNgDays+'日間は後ろ） '+g.picng.length+'件</summary>'
+      +'<div class="note2" style="margin:4px 0">相場では出品候補ですが、写真が使えなかった'
+      +'（長辺 500px 未満・MW に写真が無い）ので、'+mwPicNgDays+'日間は後ろに回しています。'
+      +'写真が取れれば元の区分に戻ります。</div>'
+      +listMoreHtml('mwpicng',g.picng.map(line),'',10)+'</details>'):'')
     +(g.high.length?('<details data-box="1" style="margin-top:10px">'
       +'<summary class="note2" style="margin:0;cursor:pointer">'
       +'③ 後回し（相場の115%超） '+g.high.length+'件</summary>'
@@ -31535,7 +31762,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v337';   // sw.js の const V と必ず同じ値にする
+var APP_V='v338';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
