@@ -220,7 +220,8 @@ const five=await p.evaluate(()=>{
       pics:[{url:'https://img.test/i/20261118/'+id+'.jpg'}],
       descHtml:'<div><p>Returns… message us through eBay first.</p></div>',
       specs:{ origin:'Japan', brand:'Keys Factory', platform:'Nintendo Switch 2' },
-      buySource:'mw', dropship:true, mwKishu:'NS2H', mwSha:'MC02', osOn:true, osAt:'',
+      /* 8.94 os- の値段は MW の卸値から出す（MW の行は必ず持っている）。 */
+      buySource:'mw', dropship:true, mwKishu:'NS2H', mwSha:'MC02', osOn:true, osAt:'', mwWholesale:1000,
       zeroAct:'hold', fba:false, oneOff:false, itemId:'', sold:'', price:30,
       titleStatus:'', titleCands:[], titleNote:'', titleManual:false },x||{});
   };

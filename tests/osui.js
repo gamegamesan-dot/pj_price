@@ -122,7 +122,7 @@ await p.waitForTimeout(500);
     files:csvLastFiles.map((f)=>f.name),
     note:($('csvExportNote').textContent||'').replace(/\s+/g,' '),
     q:window.__q.filter((x)=>x.u==='osput').length,
-    px:Math.round(csvStartPrice(csvRowById('w1'))*160),
+    px:OSS.priceOf({ wholesale:csvRowById('w1').mwWholesale },osOpt()),
     put:(window.__q.filter((x)=>x.u==='osput')[0]||{}).b }));
   console.log('   ファイル：'+t.files.join(' / '));
   console.log('   まとめ：'+t.note);
@@ -140,7 +140,7 @@ await p.waitForTimeout(500);
   ok(t.q===1&&(t.put.items||[]).length===3,
      '★★★書き出した商品を pj-sync に控える（在庫・値段の追従のため）');
   ok((t.put.items||[])[0].price===t.px&&t.px>0,
-     '★★控える値段は eBay の売値 × 為替 × ⚙%');
+     '★★控える値段は新しい式（卸値（税込）＋目標利益＋決済手数料・8.94）');
 }
 {
   const csv=await p.evaluate(()=>csvLastFiles[1].text);
@@ -148,9 +148,11 @@ await p.waitForTimeout(500);
   ok(cellOf(csv,1,'Handle')==='os-4902370550001','★★★Handle は os-<JAN>');
   ok(cellOf(csv,1,'Variant SKU')==='W-4902370550001',
      '★★★SKU は eBay と同じ W-<JAN>');
-  const px=await p.evaluate(()=>Math.round(csvStartPrice(csvRowById('w1'))*160));
-  ok(cellOf(csv,1,'Variant Price')===String(px)&&px>0,
-     '★★★値段は eBay の売値を⚙の為替と割合で円にした額（送料込み）');
+  /* 8.94 卸値 3,000 → 税込 3,300・目標利益 ¥1,000＋30%＝1,990・3.6% →
+     (3,300＋1,990)÷0.964＝5,487.5… → ¥5,488（国際送料・eBay の手数料は入れない）。 */
+  const px=await p.evaluate(()=>OSS.priceOf({ wholesale:csvRowById('w1').mwWholesale },osOpt()));
+  ok(cellOf(csv,1,'Variant Price')===String(px)&&px===5488,
+     '★★★値段は卸値（税込）＋目標利益＋決済手数料（¥5,488・為替と送料は使わない）');
   ok(cellOf(csv,1,'Variant Grams')==='210',
      '★★★重さは eBay の送料計算に使っている重さ');
   ok(cellOf(csv,1,'Variant Inventory Policy')==='deny','★★Inventory policy は deny');
@@ -250,9 +252,10 @@ await p.waitForTimeout(500);
      '★★★品切れは数量0・下書きに落とす');
   ok(cellOf(t.text,2,'Variant Inventory Qty')==='1',
      '★★在庫がある行は数量そのまま');
-  const px2=await p.evaluate(()=>Math.round(csvStartPrice(csvRowById('w2'))*160));
+  /* 8.94 いまの MW の卸値（now_px 3,400）から出し直す。 */
+  const px2=await p.evaluate(()=>OSS.priceOf({ wholesale:3400 },osOpt()));
   ok(cellOf(t.text,2,'Variant Price')===String(px2)&&px2>0,
-     '★★★値段が変わった行は今の売値で出し直す');
+     '★★★値段が変わった行は、いまの卸値から新しい式で出し直す');
   ok(String(t.text).indexOf('Body (HTML)')<0&&String(t.text).indexOf('Tags')<0,
      '★★★説明・タグの列は出さない（空で上書きしない）');
   ok((t.done.items||[]).length===2,'★★読み込み済みを pj-sync に伝える');

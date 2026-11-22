@@ -255,10 +255,48 @@
      既定は**下書き・非公開**。⚙で「公開」にしたときだけ active／true。 */
   function liveOf(opt) { return s((opt || {}).status).toLowerCase() === "active"; }
 
-  /* ---- 値段（円）----
-     eBay の売値（USD・送料込みの総額）を ⚙ の為替で円に直し、
-     ⚙「海外向け価格 ＝ eBay の売値 × ◯%」（既定 100%）を掛ける。
-     Shopify 側も**送料込みの値段**にする（送料無料の配送オプションを使う）。 */
+  /* ---- 値段（円）・8.94（カジの依頼・v342）----
+     ストアは重さ別のエアメール送料を**チェックアウトで別に**もらっている。
+     v341 までの「eBay の売値（送料込み・USD）× 為替 × ◯%」だと、送料が二重に
+     かかり、eBay の手数料・広告費の分も上乗せされて高すぎた。
+       値段 ＝ （卸値（税込）＋ 目標利益）÷（1 − Shopify 決済手数料率）
+       卸値（税込）＝ MW の卸値 × 1.1（円で直接。為替は使わない）
+       目標利益   ＝ ⚙ 目標利益（円）＋ 卸値（税込）× ⚙ ◯%
+       決済手数料 ＝ 値段 × ⚙ 決済手数料率（既定 3.6%）
+     国際送料・eBay の手数料・広告費は入れない。1円単位で切り上げる。 */
+  var PAY_DEF = 3.6;               // Shopify 決済手数料（%）の既定
+  var TAX = 1.1;                   // 卸値は税抜（MW）。税込にする
+  function payOf(opt) {
+    var v = (opt || {}).pay;
+    if (v === undefined || v === null || s(v).trim() === "") return PAY_DEF;
+    var p = num(v);
+    return (p >= 0 && p < 50) ? p : PAY_DEF;
+  }
+  function taxCostOf(it) {
+    var w = num((it || {}).wholesale);
+    return w > 0 ? Math.round(w * TAX) : 0;
+  }
+  function profitOf(cost, opt) {
+    var o = opt || {};
+    var v = num(o.profitBase) + num(cost) * (num(o.profitRate) / 100);
+    return v > 0 ? Math.round(v) : 0;
+  }
+  /* 内訳つき。{ wholesale, cost（税込）, profit, pay（%）, fee, price } */
+  function pxOf(it, opt) {
+    var o = opt || {};
+    var cost = taxCostOf(it);
+    var out = { wholesale: Math.round(num((it || {}).wholesale)), cost: cost,
+                profit: 0, pay: payOf(o), fee: 0, price: 0 };
+    if (!(cost > 0)) return out;
+    out.profit = profitOf(cost, o);
+    out.price = Math.ceil((cost + out.profit) / (1 - out.pay / 100));
+    out.fee = out.price - cost - out.profit;
+    return out;
+  }
+  function priceOf(it, opt) { return pxOf(it, opt).price; }
+
+  /* ---- v341 までの式（比べるためだけに残す）----
+     eBay の売値（USD・送料込みの総額）× ⚙ の為替 × ⚙ ◯%。 */
   function pctOf(opt) {
     var p = num((opt || {}).pct);
     return (p > 0) ? p : PCT_DEF;
@@ -269,7 +307,6 @@
     var v = num(usd) * fx * (pctOf(o) / 100);
     return (v > 0) ? Math.round(v) : 0;
   }
-  function priceOf(it, opt) { return yenOf((it || {}).usd, opt); }
 
   /* ---- 重さ ----
      eBay の送料計算に使っている重さ（梱包マージン込み）をそのまま使う。 */
@@ -342,7 +379,7 @@
     /* 会員向けの行は海外向けに混ぜない（【4】）。 */
     if (memberish(r)) return "会員向けの行です";
     if (!titleOf(r)) return "英題がありません";
-    if (priceOf(r, opt) <= 0) return "値段が出せません（eBay の売値か為替が0）";
+    if (priceOf(r, opt) <= 0) return "値段が出せません（MW の卸値がありません）";
     if (qtyOf(r) <= 0) return "数量が0です";
     if (!picsOf(r, opt).length) return "MW の画像がありません";
     return "";
@@ -447,8 +484,8 @@
     row["Variant Inventory Qty"] = String(qty);
     row["Variant Inventory Policy"] = "deny";
     /* 直しの CSV は、**値段がすでに分かっている行**（品切れなど値段を
-       変えない行）は price をそのまま使う。eBay の売値（usd）から
-       出し直す行だけ、⚙の為替と割合で計算する。 */
+       変えない行）は price をそのまま使う。値段を出し直す行だけ、
+       卸値から計算する（8.94）。 */
     row["Variant Price"] = String(updPxOf(r, o));
     /* 品切れは下書きに落とす（買えない商品を公開のままにしない）。
        8.73：在庫があるときは**⚙の状態**にする。⚙が「下書き」のあいだは
@@ -471,6 +508,31 @@
     return out;
   }
   function updCsv(items, opt) { return toCsv(UPD_COLS, updRowsOf(items, opt)); }
+
+  /* ---- 8.94 値段だけを直す CSV ----
+     もう Shopify に出ている os- の商品の値段を、新しい式に直す。
+     Handle・バリアントを見分ける列（Option1・SKU）・Variant Price だけなので、
+     ほかの項目（説明・在庫・状態・画像・タグ）は上書きされない。
+     会員向け（sub-・one-）は混ぜない。卸値・仕入れ先は入れない。 */
+  var PX_COLS = ["Handle", "Option1 Name", "Option1 Value", "Variant SKU",
+                 "Variant Price"];
+  function pxRowsOf(items, opt) {
+    var o = opt || {}, o1 = o.option1 || OPT1;
+    var out = [], seen = {};
+    for (var i = 0; i < (items || []).length; i++) {
+      var r = items[i] || {};
+      if (!janOk(r.jan) || memberish(r)) continue;
+      var jan = digits(r.jan), h = handleOf(jan);
+      var p = Math.round(num(r.price));
+      if (seen[h] || !(p > 0)) continue;
+      seen[h] = 1;
+      out.push({ "Handle": h, "Option1 Name": s(o1.name), "Option1 Value": s(o1.value),
+                 "Variant SKU": skuOf(jan), "Variant Price": String(p) });
+    }
+    return out;
+  }
+  function pxCsv(items, opt) { return toCsv(PX_COLS, pxRowsOf(items, opt)); }
+  function pxName(d, seq, n) { return fileName("shopify-os-price", d, seq, n); }
 
   /* ---- 8.85 販売元（Vendor）だけを直す CSV ----
      もう Shopify に出ている os- の商品のうち、販売元が店の名前に
@@ -510,6 +572,9 @@
     VEND_COLS: VEND_COLS, vendRowsOf: vendRowsOf, vendCsv: vendCsv,
     vendName: vendName,
     pctOf: pctOf, yenOf: yenOf, priceOf: priceOf, gramsOf: gramsOf,
+    /* 8.94 卸値（税込）＋目標利益＋決済手数料。 */
+    PAY_DEF: PAY_DEF, payOf: payOf, taxCostOf: taxCostOf, profitOf: profitOf,
+    pxOf: pxOf, PX_COLS: PX_COLS, pxRowsOf: pxRowsOf, pxCsv: pxCsv, pxName: pxName,
     qtyOf: qtyOf, costOf: costOf, picOk: picOk, picsOf: picsOf,
     tagNg: tagNg, tagsOf: tagsOf, whyNot: whyNot,
     rowOf: rowOf, picRows: picRows, rowsOf: rowsOf, split: split,

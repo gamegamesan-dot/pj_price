@@ -845,6 +845,10 @@ body.staff #syncOnHandFix{display:none !important}
              店の名前になっているものを直す CSV（Handle と Vendor の2列だけ）。 -->
         <button class="btn" id="csvOsVend" style="width:100%;margin-top:6px">販売元（Vendor）の直しCSVを作る</button>
         <div class="note2" style="margin-top:2px" id="csvOsVendNote"></div>
+        <!-- 8.94（カジの依頼）もう Shopify に出ている os- の商品の値段だけを、
+             新しい式（卸値（税込）＋目標利益＋決済手数料）に直す CSV。 -->
+        <button class="btn" id="csvOsPx" style="width:100%;margin-top:6px">値段の直しCSVを作る（新しい式）</button>
+        <div class="note2" style="margin-top:2px" id="csvOsPxNote"></div>
       </div>
       <!-- 8.79：出品済みの行の出品文の「Shipping」の文を直す Revise 用の CSV。 -->
       <div id="csvPackBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
@@ -2705,8 +2709,15 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 6.193 海外の一般のお客さん向け Shopify（os-）。eBay の出品CSVと
            一緒に書き出す商品CSVの決まり。会員向け（sub-）とは別の商品。 -->
       <div class="cfgsub">海外向け Shopify（os-）</div>
-      <div class="row"><label for="osPricePct">海外向けの値段＝eBay の売値 ×</label><input type="number" id="osPricePct" value="100" step="5" min="10" max="300" inputmode="numeric"><span class="unit">%</span></div>
-      <div class="note2" style="margin-top:0">eBay の売値（総額$）を<b>⚙の為替</b>で円に直し、この割合を掛けた額を Shopify の値段にします（<b>送料込み</b>）。</div>
+      <!-- 8.94（カジの依頼・v342）os- の値段は卸値（税込）＋目標利益＋決済手数料。
+           国際送料はチェックアウトで別にもらうので入れない。為替は使わない。 -->
+      <div class="note2" style="margin:0 0 4px"><b>海外向けの値段</b>＝（卸値（税込）＋目標利益）÷（1 − 決済手数料率）。<b>国際送料は入れません</b>（チェックアウトで重さ別に別にもらうため）。eBay の手数料・広告費も入れません。<b>為替は使いません</b>（円で直接）。</div>
+      <div class="chk"><input type="checkbox" id="osProfitEbay" checked><label for="osProfitEbay" style="flex:1"><b>目標利益は eBay と同じにする</b>（下限利益＋仕入値×連動率。既定オン）</label></div>
+      <div class="row"><label for="osProfitBase">目標利益（オフのとき）</label><input type="number" id="osProfitBase" value="1000" step="100" min="0" inputmode="numeric"><span class="unit">円 ＋</span><input type="number" id="osProfitRate" value="15" step="1" min="0" max="200" inputmode="decimal" style="max-width:70px"><span class="unit">% × 卸値（税込）</span></div>
+      <div class="row"><label for="osPayPct">Shopify の決済手数料</label><input type="number" id="osPayPct" value="3.6" step="0.1" min="0" max="20" inputmode="decimal"><span class="unit">%</span></div>
+      <div class="note2" style="margin-top:0" id="osPxCfgNote"></div>
+      <details style="margin:2px 0 6px"><summary class="note2" style="margin:0;cursor:pointer">変更前と変更後の値段を比べる（出品リストの os- の行）</summary><div id="osPxCmp" class="note2" style="margin:4px 0"></div></details>
+      <div class="row"><label for="osPricePct">（比べるだけ）v341 までの式：eBay の売値 ×</label><input type="number" id="osPricePct" value="100" step="5" min="10" max="300" inputmode="numeric"><span class="unit">%</span></div>
       <div class="row"><label for="osFixPct">値段が変わったとみなす割合</label><input type="number" id="osFixPct" value="1" step="0.5" min="0.1" max="50" inputmode="decimal"><span class="unit">%</span></div>
       <div class="note2" style="margin-top:0">MW の卸値がこの割合より大きく変わったら、pj-sync が「Shopify に読み込んでください」と社内用の Discord に知らせます。</div>
       <div class="row"><label for="osStatus">Shopify に出すときの状態</label><select id="osStatus" style="flex:1"><option value="draft" selected>下書き（非公開）</option><option value="active">公開</option></select></div>
@@ -3906,7 +3917,9 @@ var ADV_SUB=['subHour','subDomain',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              /* 8.85 osVendor（販売元の代わりの名前）はやめた。 */
-             'osPricePct','osFixPct','osType','osStatus'];
+             'osPricePct','osFixPct','osType','osStatus',
+             /* 8.94 os- の値段（目標利益・決済手数料）。 */
+             'osProfitBase','osProfitRate','osPayPct'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -3926,6 +3939,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subCardSlim','subTopicOn',
                 /* 8.89 非公開を確かめた品だけ配る（既定オン）。 */
                 'subVisGate',
+                /* 8.94 os- の目標利益は eBay と同じ（既定オン）。 */
+                'osProfitEbay',
                 /* 8.43 モニターへの「今週の配信」（既定オン）。 */
                 'subMonNote','subMonWide','rsOn','sgOn',
                 /* 8.52 手残りで判定する・率も重ねる・会員への送料も引く。 */
@@ -7901,6 +7916,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSubSeoHidden',
                  /* 6.193 海外向け Shopify（os-）。 */
                  'osPricePct','osFixPct','osType','osStatus',
+                 'osProfitBase','osProfitRate','osPayPct',
                  /* 6.177（【Z】）まとめて直す上限（Worker の pxSettings が読む）。 */
                  'syncPxMax','syncHotMax'];
 
@@ -10396,6 +10412,7 @@ function csvRender(){
      仕入値と重量から csvPriceFor で出すだけなので、何度呼んでも同じ結果になる。 */
   csvList.forEach(csvRecalc);
   csvGroupsRender();   // 畳んである欄の見出しとボタンの件数
+  try{ osPxCfgRender(); }catch(e){}   // 8.94 os- の値段の比べ
   var chL=csvList.map(csvPriceReview).filter(Boolean);
   var upN=chL.filter(function(x){ return x.up===true; }).length;
   var dnN=chL.filter(function(x){ return x.up===false; }).length;
@@ -10435,6 +10452,10 @@ function csvRender(){
       +'<div class="note2" data-judge="'+r.id+'" style="margin-top:2px">'+esc(judge)+'</div>'
       /* 6.152：重さがどこから来たか・どちらを仕入れ基準にしたか（無在庫の行）。 */
       +csvWhereHtml(r)
+      /* 8.94 海外向け Shopify（os-）の値段の内訳（pj の画面だけ）。 */
+      +((csvOsCan(r)&&(+r.mwWholesale||0)>0)?('<div class="note2" data-ospx="'+r.id+'" style="margin-top:2px">'
+        +'Shopify（海外向け）の値段：'+osPxText(OSS.pxOf({ wholesale:+r.mwWholesale },osOpt()))
+        +'（国際送料はチェックアウトで別）</div>'):'')
       +'<div style="display:flex;gap:6px;align-items:center;margin-top:4px">'
       +'<span class="note2" style="margin:0;flex:0 0 auto">数量</span>'
       +'<input type="number" min="0" step="1" inputmode="numeric" data-qty="'+r.id+'" value="'
@@ -12815,9 +12836,51 @@ function osTypeV(){ return OSS.word(($('osType')&&$('osType').value)||''); }
 function osStatusV(){
   return (String(($('osStatus')&&$('osStatus').value)||'')==='active')?'active':'draft';
 }
+/* 8.94 os- の値段の決め（目標利益・決済手数料）。式は OSS.pxOf の1か所。 */
+function osPxOpt(){
+  var ebay=!!($('osProfitEbay')&&$('osProfitEbay').checked);
+  var num=function(id,d){ var el=$(id); var v=el?String(el.value).trim():'';
+    var n=+v; return (v!==''&&isFinite(n)&&n>=0)?n:d; };
+  return { ebay:ebay,
+           profitBase:ebay?num('baseProfit',0):num('osProfitBase',1000),
+           profitRate:ebay?num('linkRate',0):num('osProfitRate',15),
+           pay:num('osPayPct',OSS.PAY_DEF) };
+}
 function osOpt(){
+  var px=osPxOpt();
   return { fx:+$('fx').value||0, pct:osPricePct(),
+           profitBase:px.profitBase, profitRate:px.profitRate, pay:px.pay,
            type:osTypeV(), status:osStatusV() };
+}
+/* 内訳の1行（pj の画面だけに出す。卸値は Shopify の CSV には入れない）。 */
+function osPxText(z){
+  if(!z||!(z.price>0))return '値段が出せません（MW の卸値がありません）';
+  return '卸値（税込）'+yen(z.cost)+'（卸値 '+yen(z.wholesale)+' × 1.1）＋ 目標利益 '+yen(z.profit)
+    +' ＋ 決済手数料 '+yen(z.fee)+'（'+z.pay+'%）＝ <b>'+yen(z.price)+'</b>';
+}
+/* ⚙の説明と、変更前と変更後の値段の比べ（出品リストの os- の行・20件まで）。 */
+function osPxCfgRender(){
+  var px=osPxOpt(), o=osOpt();
+  var nt=$('osPxCfgNote');
+  if(nt)nt.innerHTML='いまの目標利益：'+yen(px.profitBase)+' ＋ 卸値（税込）× '+px.profitRate+'%'
+    +(px.ebay?'（eBay と同じ）':'')+'・決済手数料 '+px.pay+'%'
+    +'<br>例：卸値 ¥5,000 → '+osPxText(OSS.pxOf({ wholesale:5000 },o));
+  var box=$('osPxCmp'); if(!box)return;
+  var rows=(typeof csvList!=='undefined'?csvList:[]).filter(function(r){
+    return csvOsCan(r)&&(+r.mwWholesale||0)>0; }).slice(0,20);
+  if(!rows.length){ box.textContent='出品リストに MW 無在庫の行がありません。'; return; }
+  box.innerHTML='<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'
+    +'<tr><th style="text-align:left">商品</th><th>変更前</th><th>変更後</th><th>差</th>'
+    +'<th style="text-align:left">内訳</th></tr>'
+    +rows.map(function(r){
+      var it=csvOsItem(r), was=OSS.yenOf(it.usd,o), z=OSS.pxOf(it,o);
+      return '<tr data-oscmp="'+esc(String(r.jan||''))+'"><td>'+esc(String(r.titleJa||r.titleEn||'').slice(0,24))+'</td>'
+        +'<td style="text-align:right">'+yen(was)+'</td>'
+        +'<td style="text-align:right"><b>'+yen(z.price)+'</b></td>'
+        +'<td style="text-align:right">'+(z.price-was>=0?'+':'−')+yen(Math.abs(z.price-was))+'</td>'
+        +'<td>'+osPxText(z)+'</td></tr>';
+    }).join('')+'</table></div>'
+    +'<div style="opacity:.8">変更前＝eBay の売値（送料込み）× 為替 '+(+$('fx').value||0)+' × '+osPricePct()+'%</div>';
 }
 /* ⚙の Vendor／Type に数字だけの値（ID の取り違え）が入っていたら空にする。
    pj-sync に残っている値も消す（空にした印を付けて送る）。 */
@@ -13180,8 +13243,10 @@ function csvOsFixGo(){
         }
         var r=csvRowByJan(x.jan);
         if(!r){ skip.push(x); return; }
+        /* 8.94 値段は卸値（いまの MW の卸値）から出す。 */
+        var wh=(+x.now_px||0)>0?+x.now_px:(+r.mwWholesale||0);
         go.push({ jan:x.jan, qty:+r.qty||0,
-                  price:OSS.yenOf(csvStartPrice(r),o), why:'値段' });
+                  price:OSS.priceOf({ wholesale:wh },o), why:'値段' });
       });
       if(!go.length){
         note.innerHTML='<b>直せる行がありません。</b>値段が変わった '
@@ -13210,6 +13275,54 @@ function csvOsFixGo(){
         +(skip.length?('<br><b>'+skip.length+'件</b>は出品リストに無いので'
           +'直せませんでした（印はそのまま残しています）。'):'')
         +'</div>';
+    })
+    ['catch'](function(){ note.textContent='pj-sync につながりませんでした。'; });
+}
+/* ===== 8.94（カジの依頼）値段だけを直す CSV =====
+   pj-sync に控えてある os- の商品（Shopify に出したもの）を、いまの MW の
+   卸値から新しい式で出し直し、値段が変わる商品だけを CSV にする
+   （Handle・Option1・SKU・Variant Price だけ。卸値・仕入れ先は入れない）。 */
+function csvOsPxGo(){
+  var note=$('csvOsPxNote');
+  if(!syncUrl()||!syncApiKey()){ note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return; }
+  note.textContent='pj-sync に聞いています…';
+  return fetch(syncUrl()+'/os/px',{ headers:{'X-PJ-Key':syncApiKey()} })
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(d){
+      if(!d||!d.ok){
+        note.innerHTML='<b>読めませんでした</b>'+(d&&d.detail?('（'+esc(String(d.detail))+'）'):'')
+          +'。pj-sync のデプロイが要ります。';
+        return;
+      }
+      var o=osOpt(), go=[], same=0, none=[];
+      (d.rows||[]).forEach(function(x){
+        var wh=(+x.now_px||0)>0?+x.now_px:(+x.wholesale||0);
+        var z=OSS.pxOf({ wholesale:wh },o);
+        if(!(z.price>0)){ none.push(x); return; }
+        if(z.price===(+x.price||0)){ same++; return; }
+        go.push({ jan:x.jan, name:x.name, was:+x.price||0, price:z.price, wholesale:wh, z:z });
+      });
+      if(!go.length){
+        note.innerHTML='値段が変わる商品はありません（同じ '+same+'件'
+          +(none.length?('・卸値が分からない '+none.length+'件'):'')+'）。';
+        return;
+      }
+      var name=OSS.pxName(new Date(),osSeqNext(),go.length);
+      var text=OSS.pxCsv(go,o);
+      csvLastFiles=[{ name:name, text:text, label:'Shopify の値段の直し（'+go.length+'件）' }];
+      csvExportFilesUI();
+      var okd=csvDownload(name,text);
+      fetch(syncUrl()+'/os/px',{ method:'POST',
+        headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
+        body:JSON.stringify({ items:go.map(function(x){
+          return { jan:x.jan, price:x.price, wholesale:x.wholesale }; }) }) })['catch'](function(){});
+      note.innerHTML='<div class="okbox">'+(okd?'✓ ':'')+'<b>'+go.length+'件</b>の値段の直しCSVを作りました'
+        +'（変わらない '+same+'件'+(none.length?('・卸値が分からない '+none.length+'件'):'')+'）。'
+        +'<br>Shopify の <b>商品 → インポート</b>で「Overwrite products with matching handles」に'
+        +'チェックして読み込んでください（値段だけが変わります）。'
+        +'<br>'+go.slice(0,10).map(function(x){
+          return esc(String(x.name||x.jan).slice(0,24))+'：'+yen(x.was)+' → <b>'+yen(x.price)+'</b>'; }).join('<br>')
+        +(go.length>10?('<br>…ほか '+(go.length-10)+'件'):'')+'</div>';
     })
     ['catch'](function(){ note.textContent='pj-sync につながりませんでした。'; });
 }
@@ -13326,6 +13439,10 @@ $('csvOsOnly').onclick=function(){ csvOsOnlyRun(); };
 $('csvOsReset').onclick=function(){ csvOsResetRun(); };
 $('csvOsFix').onclick=function(){ csvOsFixGo(); };
 $('csvOsVend').onclick=function(){ csvOsVendGo(); };
+$('csvOsPx').onclick=function(){ csvOsPxGo(); };
+['osProfitEbay','osProfitBase','osProfitRate','osPayPct','baseProfit','linkRate','fx','osPricePct']
+  .forEach(function(id){ var el=$(id); if(!el)return;
+    el.addEventListener(el.type==='checkbox'?'change':'input',function(){ try{ osPxCfgRender(); }catch(e){} }); });
 $('csvExportPick').onclick=function(){
   var ids=csvPickIds();
   if(!ids.length){
@@ -31914,7 +32031,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v341';   // sw.js の const V と必ず同じ値にする
+var APP_V='v342';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

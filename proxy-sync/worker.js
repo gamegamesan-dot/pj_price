@@ -16644,8 +16644,9 @@ async function subDraftLog(env, url) {
    ・値段   … MW の卸値が ⚙ の割合より大きく変わった → 値段を直す
    どちらも os_item に印（fix_at・fix_why）を付け、社内用の Discord に
    「Shopify に読み込んでください ◯件」と1通だけ知らせる。
-   値段そのもの（円）は eBay の売値から出すので、**画面が直しの CSV を
-   作るときに計算する**（式を2か所に持たない）。
+   値段そのもの（円）は**画面が直しの CSV を作るときに計算する**
+   （8.94 から卸値（税込）＋目標利益＋決済手数料。式は shared/osscsv.js の
+   pxOf の1か所。pj-sync は卸値の動きを見張るだけ）。
 
    会員向け（sub-）はここに入れない。混ざらないことはテストで見ている。 */
 const OS_MAX = 400;                 // 1回に控える行の上限
@@ -16815,6 +16816,70 @@ async function osList(env) {
   res.n = res.rows.length;
   res.ok = true;
   return res;
+}
+/* ===== 8.94（カジの依頼）os- の値段だけを直す =====
+   GET /os/px … Shopify に出した os- の商品の、いまの MW の卸値（画面が
+   新しい式で値段を出し直して「値段の直しCSV」を作る。管理者だけ）。
+   卸値は pj の画面にだけ返す（Shopify の CSV には入れない）。 */
+async function osPxList(env) {
+  const res = { ok: false, rows: [], n: 0, table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false;
+    res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const q = await env.DB.prepare(
+    `SELECT o.jan AS jan, o.handle AS handle, o.name AS name, o.price AS price,
+            o.qty AS qty, o.wholesale AS wholesale, o.fix_why AS fix_why,
+            (SELECT s.wholesale FROM mw_stock s
+              WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL
+              LIMIT 1) AS now_px
+       FROM os_item o
+      ORDER BY o.at DESC, o.jan ASC LIMIT ${OS_LIST_MAX}`).all();
+  for (const r of ((q && q.results) || []))
+    res.rows.push({ jan: String(r.jan), handle: String(r.handle || ""),
+      name: String(r.name || ""), price: Math.round(Number(r.price) || 0),
+      qty: Math.round(Number(r.qty) || 0),
+      wholesale: Math.round(Number(r.wholesale) || 0),
+      now_px: Math.round(Number(r.now_px) || 0),
+      why: String(r.fix_why || "") });
+  res.n = res.rows.length;
+  res.ok = true;
+  return res;
+}
+/* POST /os/px { at, items:[{ jan, price, wholesale }] } … 値段の直しCSV を
+   作った（値段と、そのときの卸値を控える）。数量・品切れの印は触らない
+   （値段の印だけ消す）。 */
+async function osPxDone(env, body) {
+  const res = { ok: false, n: 0, table_ok: true };
+  if (!(await osOk(env))) {
+    res.table_ok = false; res.error = "no_table";
+    res.detail = "os_item がありません（migrate-0058-os-item.sql）";
+    return res;
+  }
+  const o = body || {};
+  const at = String(o.at || "").trim() || nowIso();
+  const list = Array.isArray(o.items) ? o.items.slice(0, OS_LIST_MAX) : [];
+  const run = newRun("os-px");
+  const stmts = [];
+  for (const x of list) {
+    const jan = String((x && x.jan) || "").replace(/\D/g, "");
+    const pr = osNumOrNull(x && x.price);
+    if (!janOk(jan) || !(pr > 0)) continue;
+    stmts.push(env.DB.prepare(
+      `UPDATE os_item
+          SET price=?1, wholesale=COALESCE(?2,wholesale),
+              fix_at=CASE WHEN fix_why='price' THEN NULL ELSE fix_at END,
+              fix_why=CASE WHEN fix_why='price' THEN NULL ELSE fix_why END,
+              updated_at=?3
+        WHERE jan=?4`).bind(pr, osNumOrNull(x && x.wholesale), at, jan));
+    res.n++;
+  }
+  if (stmts.length) await runBatch(env, run, stmts);
+  run.notes.push("Shopify（海外向け）：値段を " + res.n + "件控えました");
+  res.ok = true;
+  return Object.assign(await saveRun(env, run), res);
 }
 /* GET /os/diff … 直しが要る行（画面が「直しCSV」を作るのに使う）。 */
 async function osDiff(env, url) {
@@ -22385,6 +22450,13 @@ export default {
       /* 8.85 書き出した os- の商品の控え（販売元の直しCSV 用）。 */
       if (request.method === "GET" && url.pathname === "/os/list")
         return json(await osList(env), 200, origin);
+      /* 8.94 値段だけを直す（いまの卸値を読む・作った値段を控える）。 */
+      if (request.method === "GET" && url.pathname === "/os/px")
+        return json(await osPxList(env), 200, origin);
+      if (request.method === "POST" && url.pathname === "/os/px") {
+        const b = await request.json().catch(() => ({}));
+        return json(await osPxDone(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/os/done") {
         const b = await request.json().catch(() => ({}));
         return json(await osDone(env, b), 200, origin);
@@ -22930,7 +23002,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwPicNgPut, MW_PIC_NG_DAYS,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
-  OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF,
+  OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF, osPxList, osPxDone,
   subCardHash, subPostBind, subPostIns,
   /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,

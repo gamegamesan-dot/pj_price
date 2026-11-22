@@ -29,9 +29,10 @@ const DESC='<div><h1><!--TITLE-->Super Mario Party Jamboree<!--/TITLE--></h1>'
   +'<div><h2>About Play Japan</h2><p>We ship from Tokyo.</p></div></div>';
 
 const IT={ jan:'4902370550467', titleEn:'Super Mario Party Jamboree Nintendo Switch Japan',
-  descHtml:DESC, kishu:'NS', usd:49.99, qty:1, grams:210, cost:4200,
+  descHtml:DESC, kishu:'NS', usd:49.99, qty:1, grams:210, cost:4200, wholesale:3500,
   pics:[{url:'https://img.example.jp/a.jpg'},{url:'https://img.example.jp/b.jpg'}] };
-const OPT={ fx:160, pct:100, vendor:'Play Japan' };
+/* 8.94 値段は卸値（税込）＋目標利益＋決済手数料（eBay と同じ ¥1,000＋30%・3.6%）。 */
+const OPT={ fx:160, pct:100, vendor:'Play Japan', profitBase:1000, profitRate:30, pay:3.6 };
 const DAY=new Date('2026-11-13T09:00:00+09:00');
 
 const cells=(text)=>S.splitCsv(text);
@@ -83,12 +84,19 @@ ok(cell(csv,1,'Published')==='false'&&cell(csv,1,'Status')==='draft',
 ok(cell(csv,1,'Vendor')==='','★Vendor は行のブランド（無ければ空欄・⚙の値は使わない）');
 ok(cell(csv,1,'Variant Requires Shipping')==='true','★送るものとして出す');
 
-console.log('=== 値段（eBay の売値 × 為替 × ⚙%）===');
-ok(cell(csv,1,'Variant Price')==='7998','★★★49.99 × 160 × 100% ＝ ¥7,998');
-ok(A.yenOf(49.99,{fx:160,pct:120})===9598,'★★★⚙ 120% で ¥9,598');
-ok(A.yenOf(49.99,{fx:160,pct:80})===6399,'★★80% で ¥6,399');
-ok(A.pctOf({})===100&&A.PCT_DEF===100,'★★⚙ の既定は 100%');
-ok(A.yenOf(49.99,{fx:0})===0,'★為替が0なら0（出さない行になる）');
+console.log('=== 値段（8.94：卸値（税込）＋目標利益＋決済手数料）===');
+/* 卸値 3,500 → 税込 3,850。目標利益 1,000＋3,850×30%＝2,155。
+   (3,850＋2,155)÷(1−0.036)＝6,229.25… → 切り上げ ¥6,230。手数料 225。 */
+ok(cell(csv,1,'Variant Price')==='6230','★★★(3,850＋2,155)÷0.964 ＝ ¥6,230（国際送料・eBay の手数料は入れない）');
+const z=A.pxOf({wholesale:3500},OPT);
+ok(z.cost===3850&&z.profit===2155&&z.fee===225&&z.price===6230&&z.pay===3.6,
+   '★★★内訳：卸値（税込）3,850・目標利益 2,155・決済手数料 225');
+ok(A.pxOf({wholesale:3500},{...OPT,fx:999,pct:300}).price===6230,'★★★為替・v341 の割合は使わない');
+ok(A.pxOf({wholesale:3500},{profitBase:1000,profitRate:0,pay:0}).price===4850,'★★目標利益と決済手数料を⚙で変えられる');
+ok(A.payOf({})===3.6&&A.PAY_DEF===3.6&&A.payOf({pay:''})===3.6&&A.payOf({pay:0})===0,'★★決済手数料の既定は 3.6%（0 も入れられる）');
+ok(A.pxOf({},OPT).price===0&&A.pxOf({wholesale:0},OPT).price===0,'★卸値が無ければ0（出さない行になる）');
+/* v341 までの式（比べるためだけ）。 */
+ok(A.yenOf(49.99,{fx:160,pct:100})===7998&&A.pctOf({})===100,'★v341 までの式は比べるために残す');
 
 console.log('=== Tags（会員の印は絶対に付けない）===');
 const tags=cell(csv,1,'Tags');
@@ -152,7 +160,8 @@ ok(A.whyNot({...IT,jan:''},OPT)==='JAN がありません','★理由：JAN');
 ok(A.whyNot({...IT,titleEn:''},OPT)==='英題がありません','★★理由：英題');
 ok(A.whyNot({...IT,qty:0},OPT)==='数量が0です','★理由：数量0');
 ok(A.whyNot({...IT,pics:[]},OPT)==='MW の画像がありません','★★理由：画像なし');
-ok(A.whyNot({...IT,usd:0},OPT).indexOf('値段')>=0,'★理由：値段');
+ok(A.whyNot({...IT,wholesale:0},OPT)==='値段が出せません（MW の卸値がありません）','★理由：値段（卸値が無い）');
+ok(A.whyNot({...IT,usd:0},OPT)==='','★★eBay の売値が無くても出せる（値段は卸値から）');
 ok(A.whyNot(IT,OPT)==='','★出せる行は理由なし');
 
 console.log('=== 会員用と取り違えない（【4】）===');
@@ -184,11 +193,24 @@ ok(cell(upd,2,'Variant Inventory Qty')==='2'&&cell(upd,2,'Status')==='draft',
   ok(cell(updA,1,'Status')==='draft'&&cell(updA,2,'Status')==='active',
      '★★⚙が「公開」なら、在庫があれば公開・品切れは下書き');
 }
-ok(cell(upd,2,'Variant Price')==='9598','★★★値段も直す（59.99 × 160）');
+ok(cell(upd,2,'Variant Price')==='6230','★★★値段も直す（卸値から新しい式で）');
 ok(cell(upd,1,'Handle')==='os-4902370550467'&&cell(upd,1,'Variant SKU')==='W-4902370550467',
    '★★Handle と SKU で突き合わせる');
 ok(A.updRowsOf([{...IT,member:true}],OPT).length===0,
    '★★★会員向けの行は在庫・値段の直しにも混ぜない');
+
+console.log('=== 8.94 値段だけを直す CSV ===');
+{
+  const px=A.pxCsv([{jan:'4902370550467',price:6230},{jan:'4902370550474',price:0},
+    {jan:'4902370550467',price:9999},{jan:'4902370550481',price:5000,member:true}],OPT);
+  console.log('   '+px.split('\n').join(' | '));
+  ok(cells(px)[0].join()==='Handle,Option1 Name,Option1 Value,Variant SKU,Variant Price',
+     '★★★列は Handle・Option1・SKU・Variant Price だけ（在庫・状態・説明は上書きしない）');
+  ok(cells(px).length===2&&cell(px,1,'Handle')==='os-4902370550467'&&cell(px,1,'Variant Price')==='6230'
+     &&cell(px,1,'Variant SKU')==='W-4902370550467','★★値段が出せない行・同じ Handle・会員向けは入れない');
+  ok(!/3500|3850|wholesale|いろは/.test(px),'★★★卸値・仕入れ先は入れない');
+  ok(A.pxName(DAY,1,5)==='shopify-os-price-20261113-01-5.csv','★ファイル名');
+}
 
 console.log('=== ファイル名（【7】日付・通し番号・件数）===');
 ok(A.ebayName(DAY,1,100)==='ebay-mw-20261113-01-100.csv','★★★eBay 用の名前');
