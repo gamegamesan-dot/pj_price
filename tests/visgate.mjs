@@ -19,13 +19,16 @@ const { worker, T:W }=await loadWorker('visgate');
 
 /* ---- 作り物の Shopify と Discord ---- */
 let gql=[], prods={}, dc=[], noOver=false, stuckOver={};
+/* 8.89 直し：マーケットのカタログ（publications に出てこない店のため）。 */
+let cats=null, catsErr='', catById={}, same=[], tokN=0;
 const OVER='gid://shopify/Publication/3', ONLINE='gid://shopify/Publication/9';
 const J=(v,st)=>new Response(JSON.stringify(v),{status:st||200,
   headers:{'content-type':'application/json'}});
 globalThis.fetch=async(u,i)=>{
   const url=String(u), o=i||{};
   if(/myshopify\.com\/admin\/oauth\/access_token/.test(url))
-    return J({ access_token:'shpat-SECRET', expires_in:86399, scope:'x' });
+    { tokN++; return J({ access_token:'shpat-SECRET', expires_in:86399,
+      scope:'write_products,read_products,write_publications,read_publications' }); }
   if(/myshopify\.com\/admin\/api\//.test(url)){
     const b=JSON.parse(String(o.body||'{}'));
     const name=(/(?:query|mutation)\s+(\w+)/.exec(b.query)||[])[1]||'';
@@ -36,6 +39,15 @@ globalThis.fetch=async(u,i)=>{
         { id:ONLINE, supportsFuturePublishing:true, catalog:{ title:'オンラインストア' } }]
         .concat(noOver?[]:[{ id:OVER, supportsFuturePublishing:false,
                              catalog:{ title:'Overseas products' } }]) } } });
+    if(name==='pjCats'){
+      if(catsErr)return J({ errors:[{ message:catsErr }] });
+      return J({ data:{ catalogs:{ nodes:cats||[] } } });
+    }
+    if(name==='pjCatId'){
+      const c=catById[b.variables.c]||null, pp=catById[b.variables.p]||null;
+      return J({ data:{ c:c, p:pp } });
+    }
+    if(name==='pjSame')return J({ data:{ products:{ nodes:same } } });
     if(name==='pjStat'){
       const h=b.variables.identifier.handle, p=prods[h];
       if(!p)return J({ data:{ productByIdentifier:null } });
@@ -80,7 +92,8 @@ globalThis.fetch=async(u,i)=>{
   }
   return J({});
 };
-const reset=()=>{ gql=[]; prods={}; dc=[]; noOver=false; stuckOver={}; W.shopReset(); };
+const reset=()=>{ gql=[]; prods={}; dc=[]; noOver=false; stuckOver={};
+  cats=null; catsErr=''; catById={}; same=[]; tokN=0; W.shopReset(); };
 const NOW=new Date().toISOString();
 const CH='1234567890', CH_PRE='777', CH_HOT='888';
 const env0=(extra)=>makeEnv(Object.assign({ STAFF_KEY:'staff-key-123',
@@ -330,6 +343,95 @@ console.log('\n=== ⑥ ⚙ でオフ・鍵が無い・海外向けリストが�
     return q; })(),makeEnv({ STAFF_KEY:'staff-key-123', WORKER_KEY:'worker-key-999',
     SHOPIFY_CLIENT_ID:'cid', SHOPIFY_CLIENT_SECRET:'csec-SECRET' }),{}));
   ok(w.status===401||w.status===403||(w.body&&w.body.ok===false),'★★★作業者のキーでは使えない');
+}
+
+console.log('\n=== ⑦ 直し：海外向けカタログがマーケットのカタログのとき ===');
+{
+  /* publications の一覧に Overseas products が出てこない（カジの店）。
+     カタログ（type: MARKET）の側から引いて、結び付いた publication で外す。 */
+  reset(); noOver=true;
+  cats=[{ id:'gid://shopify/MarketCatalog/133353570467', title:'Overseas products',
+          status:'ACTIVE', publication:{ id:OVER } },
+        { id:'gid://shopify/MarketCatalog/5', title:'Japan', status:'ACTIVE', publication:null }];
+  const env=env0(); await setCfg(env,{});
+  const r=await api(env,'/one',{ name:'血界戦線 & BEYOND Vol.3', price:4800, qty:1, ship_kind:'small' });
+  await api(env,'/one/mark',{ ids:[r.id], loaded:1 });
+  prods['one-'+r.id]={ status:'UNLISTED', over:true };
+  const c=await api(env,'/shop/unlist',{ kind:'one', approve:false, handles:['one-'+r.id] });
+  console.log('   確かめる：'+JSON.stringify({ over_n:c.over_n, over_miss:c.over_miss, vis:c.vis,
+    look:c.look }));
+  ok(c.over_n===1&&c.over_miss.length===0&&gql.some((x)=>x.name==='pjCats'),
+     '★★★販売チャネルの一覧に無ければ、カタログの一覧から「Overseas products」を引く');
+  ok(c.need===1&&c.over_in===1&&c.vis['one-'+r.id]==='over',
+     '★★★one-1 が海外向けカタログに入っていることが分かる（ok にしない）');
+  ok(c.look[0].handle==='one-'+r.id&&c.look[0].pid==='one-'+r.id&&c.look[0].status==='UNLISTED'
+     &&c.look[0].over===true,'★★★pj が読んだ商品（ID・状態・海外向け）を返す');
+  const u=await api(env,'/shop/unlist',{ kind:'one', approve:true, handles:['one-'+r.id] });
+  ok(u.done===1&&u.ok_all===1&&prods['one-'+r.id].over===false
+     &&gql.some((x)=>x.name==='pjUnpub'&&x.v.pub===OVER),
+     '★★★カタログの publication から外して、もう一度読んで「確かめ済み」');
+  const l=(await api(env,'/one')).rows[0];
+  ok(l.shop_vis==='ok','★★★1点ものの一覧も「非公開を確かめ済み」');
+
+  console.log('\n=== ⑦ カタログに商品の一覧（publication）が無い ===');
+  reset(); noOver=true;
+  cats=[{ id:'gid://shopify/MarketCatalog/133353570467', title:'Overseas products',
+          status:'ACTIVE', publication:null }];
+  prods['one-'+r.id]={ status:'UNLISTED', over:false };
+  const n=await api(env,'/shop/unlist',{ kind:'one', approve:true, handles:['one-'+r.id] });
+  console.log('   '+n.over_ja);
+  ok(n.vis['one-'+r.id]==='over_miss'&&/商品の一覧（publication）が結び付いていない/.test(n.over_ja)
+     &&n.over_cats[0].pub==='','★★「カタログはあるが商品の一覧が無い」と理由を返す（ok にしない）');
+
+  console.log('\n=== ⑦ 権限が足りない ===');
+  reset(); noOver=true;
+  catsErr='Access denied for catalogs field. Required access: `read_markets` access scope.';
+  const d=await api(env,'/shop/unlist',{ kind:'one', approve:false, handles:['one-'+r.id] });
+  console.log('   '+d.over_ja);
+  ok(d.over_scopes.join()==='read_markets'&&/read_markets/.test(d.over_ja)
+     &&/問い合わせられませんでした/.test(d.over_ja),'★★★足りない権限の名前を返す');
+  ok(d.scopes.indexOf('read_publications')>=0&&!/shpat-SECRET|csec-SECRET/.test(JSON.stringify(d)),
+     '★★いまの鍵の権限の名前は返す（鍵の値は返さない）');
+  const t0=tokN;
+  catsErr='';
+  cats=[{ id:'gid://shopify/MarketCatalog/133353570467', title:'Overseas products',
+          status:'ACTIVE', publication:{ id:OVER } }];
+  const d2=await api(env,'/shop/unlist',{ kind:'one', approve:false, handles:['one-'+r.id] });
+  ok(d2.over_n===1&&!d2.over_ja&&tokN>t0,
+     '★★★権限を足したら、控えを使い回さずにすぐ効く（鍵も取り直す）');
+
+  console.log('\n=== ⑦ ⚙ にカタログの ID ===');
+  reset(); noOver=true;
+  catById['gid://shopify/MarketCatalog/133353570467']={ id:'gid://shopify/MarketCatalog/133353570467',
+    title:'Overseas products', status:'ACTIVE', publication:{ id:OVER } };
+  await setCfg(env,{ subShopOverseasId:'133353570467', subShopOverseas:'違う名前' });
+  prods['one-'+r.id]={ status:'UNLISTED', over:true };
+  const g=await api(env,'/shop/unlist',{ kind:'one', approve:true, handles:['one-'+r.id] });
+  ok(g.over_n===1&&g.ok_all===1&&!gql.some((x)=>x.name==='pjCats')
+     &&gql.some((x)=>x.name==='pjCatId'&&x.v.c==='gid://shopify/MarketCatalog/133353570467'),
+     '★★★⚙ の ID で引く（名前より先・名前が違っていても見つかる）');
+  await setCfg(env,{ subShopOverseasId:'999' });
+  W.shopReset();
+  const g2=await api(env,'/shop/unlist',{ kind:'one', approve:false, handles:['one-'+r.id] });
+  ok(g2.over_miss.join()==='ID 999'&&/ID 999」が Shopify に見つかりません/.test(g2.over_ja),
+     '★★ID が違えば「見つかりません」と ID を出す');
+  ok(W.shopOverIds({ subShopOverseasId:'gid://shopify/MarketCatalog/12345, 678 x' })
+       .map((x)=>x.kind+':'+x.n).join()==='MarketCatalog:12345,:678','★ID の読み方（gid・数字）');
+
+  console.log('\n=== ⑦ one- を active と読んだとき：読んだ商品と同じ名前の商品 ===');
+  reset();
+  await setCfg(env,{});
+  prods['one-'+r.id]={ status:'ACTIVE', over:false };
+  same=[{ id:'gid://shopify/Product/one-'+r.id, handle:'one-'+r.id, status:'ACTIVE' },
+        { id:'gid://shopify/Product/777', handle:'one-'+r.id+'-1', status:'UNLISTED' }];
+  const a=await api(env,'/shop/unlist',{ kind:'one', approve:false, handles:['one-'+r.id] });
+  console.log('   '+JSON.stringify(a.look));
+  ok(a.look[0].status==='ACTIVE'&&a.look[0].same.length===1&&a.look[0].same[0].handle==='one-'+r.id+'-1'
+     &&a.look[0].same[0].pid==='777'&&a.look[0].same[0].status==='UNLISTED',
+     '★★★同じ名前の別の商品（Handle がずれた商品）を見つけて返す');
+  const sq=gql.filter((x)=>x.name==='pjSame')[0];
+  ok(sq&&/^title:"血界戦線 & BEYOND Vol\.3"$/.test(sq.v.q),'★★名前（Shopify のタイトル）で探す');
+  ok(!/いろは商会|cost|wholesale/.test(JSON.stringify(a.look)),'★仕入れの情報は返さない');
 }
 
 T.done();

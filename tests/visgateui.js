@@ -34,8 +34,9 @@ const setup=async(o)=>await p.evaluate((o)=>{
       if(o.unlistErr)return res({ ok:false, error:'shop', detail:o.unlistErr });
       const vis={};
       (body.handles||[]).forEach((h)=>{ vis[h]=(o.vis||{})[h]||'ok'; });
-      return res({ ok:true, approve:true, all:(body.handles||[]).length, vis:vis,
-        ok_all:Object.keys(vis).filter((h)=>vis[h]==='ok').length, left:0, next:0, errors:[] });
+      return res(Object.assign({ ok:true, approve:true, all:(body.handles||[]).length, vis:vis,
+        ok_all:Object.keys(vis).filter((h)=>vis[h]==='ok').length, left:0, next:0, errors:[] },
+        o.extra||{}));
     }
     if(/\/sub\/loaded/.test(url)){
       window.__q.push({ u:'loaded', b:body });
@@ -175,6 +176,44 @@ console.log('\n=== ④ 配信の案の上に、配らない品と理由 ===');
   ok(/非公開（Unlisted）にそろえる/.test(t.a),'★★何を押せばよいかを書く');
   ok(/確かめていない品はありません/.test(t.b),'★0件ならそう出す');
   ok(/鍵が無い/.test(t.c)&&/オフ/.test(t.d)&&t.e==='','★★確かめが効いていない理由を出す');
+}
+
+console.log('\n=== 直し：⚙ のカタログ ID・確かめ直す・pj が読んだ商品 ===');
+await setup({ ones:[ONE({ shop_vis:'over_miss', shop_vis_jst:'11/22 13:05' })],
+  vis:{ 'one-1':'over_miss' },
+  extra:{ over_n:0, scopes:['read_products','write_publications'],
+    over_ja:'「Overseas products」を Shopify に問い合わせられませんでした（Shopify の返事：Access denied）。足りない権限：read_markets',
+    look:[{ handle:'one-1', pid:'8800123', status:'ACTIVE', on:true, over:false, title:'',
+      same:[{ handle:'one-1-1', pid:'8800999', status:'UNLISTED' }] }] } });
+await p.evaluate(()=>{ $('subShopAdmin').value='omakase-ship.myshopify.com'; });
+await p.evaluate(()=>oneListGo());
+await p.waitForTimeout(400);
+{
+  const t=await p.evaluate(()=>({ id:!!$('subShopOverseasId'),
+    adv:ADV_SUB.indexOf('subShopOverseasId')>=0&&CSV_CFG_IDS.indexOf('subShopOverseasId')>=0,
+    btn:!!document.querySelector('#oneList [data-onevisgo="1"]'),
+    badge:(document.querySelector('#oneList [data-onevis]')||{}).textContent||'' }));
+  ok(t.id&&t.adv,'★★★⚙「海外向けカタログの ID」があり、pj-sync に保存する設定に入っている');
+  ok(t.btn,'★★★読み込み済みの1点ものに「Shopify で確かめ直す」');
+  ok(/11\/22 13:05 に確かめた/.test(t.badge),'★★いつ確かめた値かを出す（古い値か分かる）');
+}
+await p.evaluate(()=>{ window.__q=[]; document.querySelector('#oneList [data-onevisgo="1"]').click(); });
+await p.waitForTimeout(700);
+{
+  const t=await p.evaluate(()=>({ un:(window.__q.filter((x)=>x.u==='unlist')[0]||{}).b,
+    note:($('oneNote2').textContent||'').replace(/\s+/g,' '),
+    links:Array.prototype.map.call(document.querySelectorAll('#oneNote2 a'),(a)=>a.href) }));
+  console.log('   '+t.note.slice(0,400));
+  ok(t.un&&t.un.approve===true&&JSON.stringify(t.un.handles)==='["one-1"]',
+     '★★★その1点だけを、そろえて確かめ直す');
+  ok(/商品 ID 8800123/.test(t.note)&&/状態 ACTIVE/.test(t.note),'★★★pj が読んだ商品の ID と状態を出す');
+  ok(/同じ名前の別の商品/.test(t.note)&&/one-1-1（UNLISTED・ID 8800999）/.test(t.note),
+     '★★★同じ名前の別の商品（Handle のずれ）を出す');
+  ok(/read_markets/.test(t.note)&&/いまの鍵の権限：read_products・write_publications/.test(t.note),
+     '★★★海外向けカタログが引けない理由と、足りない権限・いまの権限を出す');
+  ok(t.links.some((h)=>h==='https://omakase-ship.myshopify.com/admin/products/8800123'),
+     '★★管理画面の商品へのリンク（見比べられるように）');
+  ok(!/shpat|secret/i.test(t.note),'★鍵は出さない');
 }
 
 await T.done();

@@ -153,7 +153,7 @@ console.log('\n=== ③ 非公開（Unlisted）にそろえる ===');
   ok(r.all===5&&r.active===2&&r.draft===1&&r.unlisted===1&&r.archived===1&&r.missing===0,
      '★★★sub-（印あり・CSV に出したもの）と one-（取り下げ以外）の状態を数える');
   ok(r.need===3&&r.over_in===3,'★★★直す必要がある 3件（active 2・draft 1）・海外向けカタログに 3件');
-  ok(gql.every((x)=>/^(pjReady|pjStat)$/.test(x.name)),'★★★確かめるときは読むだけ（何も変えない）');
+  ok(gql.every((x)=>/^(pjReady|pjStat|pjCats|pjCatId|pjSame)$/.test(x.name)),'★★★確かめるときは読むだけ（何も変えない）');
   ok(gql.filter((x)=>x.name==='pjStat').every((x)=>/^(sub|one)-\d+$/.test(x.v.identifier.handle)),
      '★★★見るのは sub-・one- の Handle だけ（os- は見ない）');
   ok(prods['sub-4902370550467'].status==='ACTIVE','★まだ何も変わっていない');

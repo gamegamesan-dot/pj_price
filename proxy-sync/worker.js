@@ -12122,10 +12122,11 @@ function shopKeyKind(env) {
 }
 /* 交換した鍵と、店の決まった値（置き場所・販売チャネル）の控え。
    **この実行の中だけ**（Worker の変数）。D1・KV・ログには置かない。 */
-const SHOP_MEM = { host: "", token: "", exp: 0, ready: null, readyAt: 0 };
+const SHOP_MEM = { host: "", token: "", exp: 0, ready: null, readyAt: 0, scope: "",
+                   redo: false };
 function shopReset() {
   SHOP_MEM.host = ""; SHOP_MEM.token = ""; SHOP_MEM.exp = 0;
-  SHOP_MEM.ready = null; SHOP_MEM.readyAt = 0;
+  SHOP_MEM.ready = null; SHOP_MEM.readyAt = 0; SHOP_MEM.redo = false; SHOP_MEM.scope = "";
 }
 async function shopToken(env, run, host) {
   if (env.SHOPIFY_ADMIN_TOKEN)
@@ -12153,6 +12154,9 @@ async function shopToken(env, run, host) {
   const tk = String((d && d.access_token) || "");
   if (!tk) return { ok: false, why: "token", status: resp.status };
   SHOP_MEM.host = host; SHOP_MEM.token = tk;
+  /* 8.89 直し：いまの鍵に付いている権限の名前（値ではない）。足りない権限を
+     画面で見分けるために控える。 */
+  SHOP_MEM.scope = String((d && d.scope) || "").slice(0, 600);
   /* 期限（24時間）の5分前に切り替える。 */
   SHOP_MEM.exp = Date.now()
     + Math.max(60, (Number(d.expires_in) || 3600) - 300) * 1000;
@@ -12251,13 +12255,131 @@ function shopOverNames(st) {
   const t = (v === undefined || v === null) ? SHOP_OVERSEAS_DEF : String(v);
   return t.split(/[,、\n]+/).map((x) => x.trim()).filter(Boolean);
 }
+/* 8.89 直し（カジの報告）⚙ subShopOverseasId … 海外向けカタログの ID
+   （管理画面のカタログの URL の末尾の数字、または gid://shopify/MarketCatalog/…）。
+   入っていれば名前より先にこれで引く（名前で探すのが不安定なときのため）。 */
+function shopOverIds(st) {
+  const t = String(((st || {}).subShopOverseasId) || "");
+  const out = [];
+  for (const x of t.split(/[,、\s]+/)) {
+    const v = x.trim();
+    if (!v) continue;
+    const m = /^gid:\/\/shopify\/(MarketCatalog|Publication)\/(\d+)$/.exec(v);
+    if (m) out.push({ kind: m[1], n: m[2] });
+    else if (/^\d{3,20}$/.test(v)) out.push({ kind: "", n: v });
+  }
+  return out.slice(0, 5);
+}
+/* 海外向けカタログ（マーケットのカタログ）を引く。カタログに結び付いた
+   商品の一覧（publication）の ID を使って、外す・確かめる。
+   publications の一覧にマーケットのカタログが出てこない店があるので
+   （カジの店で「見つかりません」になった）、カタログの側から引く。 */
+const SHOP_Q_CATS = `query pjCats {
+  catalogs(first: 50, type: MARKET) {
+    nodes { id title status ... on MarketCatalog { publication { id } } }
+  }
+}`;
+const SHOP_Q_CAT_ID = `query pjCatId($c: ID!, $p: ID!) {
+  c: node(id: $c) { id ... on MarketCatalog { title status publication { id } } }
+  p: node(id: $p) { id ... on Publication { catalog { title } } }
+}`;
+/* Shopify の返事から、足りない権限（スコープ）の名前を拾う（値は出さない）。 */
+function shopScopeOf(msg) {
+  const m = String(msg || "").match(/\b(read|write)_[a-z_]+\b/g) || [];
+  return Array.from(new Set(m)).slice(0, 5);
+}
+async function shopOverFind(env, run, host, st, pubs, pub) {
+  const want = shopOverNames(st), ids = shopOverIds(st);
+  const out = { over: [], miss: [], why: {}, seen: [], cats: [], err: "", scopes: [] };
+  out.seen = pubs.map((x) => String(((x.catalog || {}).title) || "").trim())
+    .filter(Boolean).slice(0, 20);
+  const add = (id) => { if (id && id !== pub && out.over.indexOf(id) < 0) out.over.push(id); };
+  const bad = (key, why) => { out.miss.push(key); out.why[key] = why; };
+  const gqlErr = (r) => {
+    out.err = shopWhyJa(r);
+    out.scopes = Array.from(new Set(out.scopes.concat(shopScopeOf(r.msg))));
+  };
+  /* ① ⚙ の ID（あれば名前より先）。 */
+  for (const x of ids) {
+    const key = "ID " + x.n;
+    const r = await shopGql(env, run, host, SHOP_Q_CAT_ID, {
+      c: "gid://shopify/MarketCatalog/" + x.n, p: "gid://shopify/Publication/" + x.n });
+    if (!r.ok) { gqlErr(r); bad(key, "denied"); continue; }
+    const c = (r.data || {}).c, p = (r.data || {}).p;
+    if (x.kind !== "Publication" && c && c.id) {
+      out.cats.push({ id: String(c.id), title: String(c.title || ""),
+        status: String(c.status || ""), pub: String(((c.publication || {}).id) || "") });
+      if (c.publication && c.publication.id) add(String(c.publication.id));
+      else bad(key, "no_pub");
+    } else if (p && p.id) add(String(p.id));
+    else bad(key, "not_found");
+  }
+  if (ids.length) return out;
+  /* ② 名前：まず販売チャネル（publications）の一覧、無ければカタログの一覧。 */
+  let cats = null;
+  for (const nm of want) {
+    const lo = nm.toLowerCase();
+    const hit = pubs.filter((x) => String(((x.catalog || {}).title) || "")
+      .trim().toLowerCase() === lo && String(x.id) !== pub);
+    if (hit.length) { for (const h of hit) add(String(h.id)); continue; }
+    if (cats === null) {
+      const r = await shopGql(env, run, host, SHOP_Q_CATS, {});
+      if (r.ok) cats = (((r.data || {}).catalogs || {}).nodes || []).filter((x) => x && x.id);
+      else { gqlErr(r); cats = false; }
+    }
+    if (cats === false) { bad(nm, "denied"); continue; }
+    const ch = cats.filter((x) => String(x.title || "").trim().toLowerCase() === lo);
+    if (!ch.length) { bad(nm, "not_found"); continue; }
+    let got = false;
+    for (const c of ch) {
+      out.cats.push({ id: String(c.id), title: String(c.title || ""),
+        status: String(c.status || ""), pub: String(((c.publication || {}).id) || "") });
+      if (c.publication && c.publication.id) { add(String(c.publication.id)); got = true; }
+    }
+    if (!got) bad(nm, "no_pub");
+  }
+  if (cats && cats.length)
+    for (const c of cats) {
+      const t = String(c.title || "").trim();
+      if (t && out.seen.indexOf("カタログ：" + t) < 0 && out.seen.length < 30)
+        out.seen.push("カタログ：" + t);
+    }
+  return out;
+}
+/* 見つからなかった理由を、運営に出す言い方にする（鍵は出さない）。 */
+function shopOverWhyJa(rdy) {
+  const x = rdy || {};
+  const miss = x.over_miss || [];
+  if (!miss.length) return "";
+  const w = x.over_why || {};
+  const parts = miss.map((k) => {
+    const why = w[k];
+    if (why === "no_pub")
+      return "「" + k + "」は Shopify にありますが、商品の一覧（publication）が"
+        + "結び付いていないので、外す・確かめるができません";
+    if (why === "denied")
+      return "「" + k + "」を Shopify に問い合わせられませんでした（"
+        + String(x.over_err || "") + "）";
+    return "「" + k + "」が Shopify に見つかりません";
+  });
+  let t = parts.join("／");
+  if ((x.over_scopes || []).length)
+    t += "。足りない権限：" + x.over_scopes.join("・");
+  if ((x.over_seen || []).length)
+    t += "。Shopify が返した販売チャネル・カタログ：" + x.over_seen.join("、");
+  return t.slice(0, 600);
+}
 async function shopReady(env, run, st) {
   const host = shopHostOf(st);
   if (!host) return { ok: false, why: "no_host", host: "" };
   if (!shopKeyKind(env)) return { ok: false, why: "no_key", host: host };
-  const overWant = shopOverNames(st);
+  /* 前の回に権限が足りなかったときは、鍵を取り直してから聞く
+     （権限は鍵を取ったときに決まる。足したあとの鍵で問い合わせるため）。 */
+  if (SHOP_MEM.redo) { SHOP_MEM.redo = false; SHOP_MEM.token = ""; SHOP_MEM.exp = 0; }
+  const overKey = shopOverNames(st).join("|") + "#"
+    + shopOverIds(st).map((x) => x.kind + x.n).join("|");
   if (SHOP_MEM.ready && SHOP_MEM.ready.host === host
-      && SHOP_MEM.ready.over_key === overWant.join("|")
+      && SHOP_MEM.ready.over_key === overKey
       && Date.now() - SHOP_MEM.readyAt < 600000) return SHOP_MEM.ready;
   const r = await shopGql(env, run, host, SHOP_Q_READY, {});
   if (!r.ok) return Object.assign({ host: host }, r, { ok: false });
@@ -12287,17 +12409,17 @@ async function shopReady(env, run, st) {
     if (byName.length === 1) pub = String(byName[0].id);
   }
   if (!pub) return { ok: false, why: "pub", host: host };
-  /* 海外向けの商品リスト（名前で探す。大文字小文字は見ない）。 */
-  const over = [], overMiss = [];
-  for (const nm of overWant) {
-    const hit = pubs.filter((x) => String(((x.catalog || {}).title) || "")
-      .trim().toLowerCase() === nm.toLowerCase() && String(x.id) !== pub);
-    if (hit.length) for (const h of hit) over.push(String(h.id));
-    else overMiss.push(nm);
-  }
+  /* 海外向けの商品リスト（⚙ の ID → 名前。大文字小文字は見ない）。 */
+  const of = await shopOverFind(env, run, host, st, pubs, pub);
   const out = { ok: true, host: host, loc: loc, pub: pub,
-                over: over, over_miss: overMiss,
-                over_key: overWant.join("|") };
+                over: of.over, over_miss: of.miss, over_why: of.why,
+                over_seen: of.seen, over_cats: of.cats, over_err: of.err,
+                over_scopes: of.scopes, over_key: overKey,
+                scopes: String(SHOP_MEM.scope || "").split(/[,\s]+/).filter(Boolean) };
+  out.over_ja = shopOverWhyJa(out);
+  /* 権限が足りずに問い合わせられなかったときは控えない（権限を足したら
+     すぐ効くように）。鍵も取り直す（権限は鍵を取ったときに決まるため）。 */
+  if (of.err) { SHOP_MEM.ready = null; SHOP_MEM.redo = true; return out; }
   SHOP_MEM.ready = out; SHOP_MEM.readyAt = Date.now();
   return out;
 }
@@ -12403,6 +12525,9 @@ const SHOP_M_UNLIST = `mutation pjUnlist($product: ProductUpdateInput!) {
     userErrors { field message }
   }
 }`;
+const SHOP_Q_SAME = `query pjSame($q: String!) {
+  products(first: 6, query: $q) { nodes { id handle status } }
+}`;
 function shopQStat(n) {
   const vars = ["$identifier: ProductIdentifierInput!", "$on: ID!"];
   const fl = ["on: publishedOnPublication(publicationId: $on)"];
@@ -12411,7 +12536,7 @@ function shopQStat(n) {
     fl.push("ov" + i + ": publishedOnPublication(publicationId: $o" + i + ")");
   }
   return "query pjStat(" + vars.join(", ") + ") {\n"
-    + "  productByIdentifier(identifier: $identifier) { id handle status "
+    + "  productByIdentifier(identifier: $identifier) { id handle title status "
     + fl.join(" ") + " }\n}";
 }
 const SHOP_UNLIST_MS = 40000;
@@ -12463,6 +12588,43 @@ async function jobShopUnlist(env, opt) {
     const from = Math.max(0, Math.round(Number(o.from) || 0));
     const over = rdy.over || [];
     res.over_miss = rdy.over_miss || [];
+    /* 8.89 直し：見つからなかった理由・Shopify が返した名前・足りない権限。 */
+    res.over_ja = rdy.over_ja || "";
+    res.over_seen = rdy.over_seen || [];
+    res.over_cats = rdy.over_cats || [];
+    res.over_scopes = rdy.over_scopes || [];
+    res.over_n = over.length;
+    res.scopes = rdy.scopes || [];
+    /* 8.89 直し（カジの報告：one-1 を active と読んだ）。pj がどの商品を読んだかを
+       返す（Shopify の商品 ID・状態・オンラインストア・海外向け）。1点ものは
+       同じ名前の商品がほかにあるかも探す（Handle が one-1-1 などにずれた
+       ときに見分けるため）。 */
+    res.look = [];
+    const oneName = {};
+    if (handles.some((h) => /^one-/.test(h)) && await oneOk(env)) {
+      try {
+        const q1 = await env.DB.prepare(`SELECT id, name FROM one_item`).all();
+        for (const r of ((q1 && q1.results) || []))
+          oneName["one-" + r.id] = SHOPCSV.titleOf(String(r.name || ""));
+      } catch (e) { /* 名前が読めなくても止めない */ }
+    }
+    const look = async (h, pr, stt, inOver) => {
+      if (res.look.length >= 20) return;
+      const x = { handle: h, pid: String((pr && pr.id) || "").replace(/^.*\//, ""),
+                  status: stt, on: pr ? pr.on !== false : false, over: !!inOver,
+                  title: String((pr && pr.title) || "").slice(0, 80), same: [] };
+      const nm = oneName[h];
+      if (nm && stt !== "UNLISTED") {
+        const z = await shopGql(env, run, rdy.host, SHOP_Q_SAME,
+          { q: "title:\"" + nm.replace(/["\\]/g, " ").slice(0, 80) + "\"" });
+        if (z.ok)
+          x.same = ((((z.data || {}).products || {}).nodes) || [])
+            .filter((y) => y && y.id && String(y.handle || "") !== h)
+            .slice(0, 5).map((y) => ({ handle: String(y.handle || ""),
+              pid: String(y.id).replace(/^.*\//, ""), status: String(y.status || "") }));
+      }
+      res.look.push(x);
+    };
     const q = shopQStat(over.length);
     const dl = Date.now() + SHOP_UNLIST_MS;
     let i = from;
@@ -12478,6 +12640,7 @@ async function jobShopUnlist(env, opt) {
         res.vis[h] = "err"; await shopVisSave(env, h, "err"); continue; }
       const pr = (r.data || {}).productByIdentifier;
       if (!pr || !pr.id) { res.missing++; res.vis[h] = "missing";
+        if (/^one-/.test(h)) await look(h, null, "", false);
         await shopVisSave(env, h, "missing"); continue; }
       const stt = String(pr.status || "").toUpperCase();
       const inOver = over.map((id, k) => pr["ov" + k] === true ? id : "")
@@ -12488,6 +12651,8 @@ async function jobShopUnlist(env, opt) {
       else if (stt === "DRAFT") res.draft++;
       else res.active++;
       if (inOver.length) res.over_in++;
+      if (/^one-/.test(h) || stt !== "UNLISTED" || inOver.length || pr.on === false)
+        await look(h, pr, stt, inOver.length > 0);
       const need = stt !== "UNLISTED" || inOver.length > 0 || pr.on === false;
       if (!need || !res.approve) {
         /* 読んだ状態をそのまま控える（確かめるだけのときも）。 */
@@ -12802,7 +12967,8 @@ async function jobSubBox(env, opt) {
     res.ready = !!rdy.ok;
     res.why = rdy.ok ? "" : shopWhyJa(rdy);
     res.over = { want: shopOverNames(st), found: (rdy.over || []).length,
-                 miss: rdy.over_miss || [] };
+                 miss: rdy.over_miss || [], ja: rdy.over_ja || "",
+                 ids: shopOverIds(st).map((x) => x.n) };
     const plan = await subBoxPlan(env, cfg, st, rdy);
     res.all = plan.all; res.box_n = plan.box_n;
     res.todo = plan.rows.length;
@@ -13242,7 +13408,8 @@ async function jobSubAuto(env, opt) {
     if (rdy.ok && (rdy.over_miss || []).length)
       res.errors.push("Shopify：海外向けの商品リスト「"
         + rdy.over_miss.join("・") + "」が見つかりません（会員用の商品を"
-        + "外せていません。⚙の名前を確かめてください）");
+        + "外せていません。⚙の名前か ID を確かめてください）"
+        + (rdy.over_ja ? ("。くわしく：" + rdy.over_ja) : ""));
     for (const r of liveRows) {
       const m = shopMap[r.jan] || {};
       const isOut = subMwOut(r, cfgOut);
@@ -22744,7 +22911,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.88 非公開（Unlisted）にそろえる。 */
   jobShopUnlist, shopUnlistHandles, shopQStat,
   /* 8.89 非公開を確かめてから配る・8.90 写真が使えなかった JAN。 */
-  shopVisOf, shopVisJa, shopVisBlock, shopVisSave, mwPicNgList, mwPicNgNone,
+  shopVisOf, shopVisJa, shopOverIds, shopOverWhyJa, shopScopeOf, shopVisBlock, shopVisSave, mwPicNgList, mwPicNgNone,
   mwPicNgPut, MW_PIC_NG_DAYS,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,

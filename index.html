@@ -2442,6 +2442,8 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:0 0 4px">クリックポスト<b>以外</b>で送る品（宅急便コンパクト・レターパックプラス・宅配便）は、実際の重さの代わりに<b>送り方ごとに決めた重さ</b>を Shopify に入れます。会員便の段を下の表のとおりに足せば、<b>箱もの1点は実額ちょうど</b>・複数は<b>合計の重さ</b>で段が決まり・ゲームソフトと一緒でも<b>足し上げになりません</b>。<b>ゲームソフトの送料は今のまま</b>です。<br><b>実際の重さは pj が持ったまま</b>です（Amazon の採寸は書き換えません）。<br><b>入れる前に</b>、Shopify の「マーケット → 日本 → 配送」の会員便を<b>下の表と同じ段</b>にしてください（先に pj だけ入れると、箱ものがいちばん上の段の料金になります）。箱ものの料金は、下の「売り方ごとの送料（実額）」の欄から取ります。</div>
         <div id="subBoxTbl"></div>
         <div class="row cfgprice"><label for="subShopOverseas">海外向けの商品リストの名前</label><input type="text" id="subShopOverseas" value="Overseas products" style="flex:1"></div>
+        <div class="row cfgprice"><label for="subShopOverseasId">海外向けカタログの ID</label><input type="text" id="subShopOverseasId" value="" placeholder="例 133353570467" inputmode="numeric" style="flex:1"></div>
+        <div class="note2" style="margin:0 0 4px">入れると、名前より先に <b>ID で</b>カタログを引きます（名前で見つからないとき用）。Shopify の「マーケット → カタログ」で開いたカタログの URL の末尾の数字です。カンマ区切りで複数入れられます。</div>
         <div class="note2" style="margin:0 0 4px">会員用の商品を作る・直すときに、Shopify のこの名前の商品リスト（カタログ）から<b>外します</b>（送料用の重さで国際送料が計算されないように）。カンマ区切りで複数入れられます。<b>見つからないときは、送料用の重さの品は作りません</b>（空にすると外しません）。</div>
         <div style="display:flex;gap:6px;margin-top:6px">
           <button class="btn cfgprice" id="subBoxChkBtn" onclick="subBoxGo(false);return false" style="flex:1">確かめる（何も変えない）</button>
@@ -3862,7 +3864,7 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.80 自動配信（時刻・1回の上限・Shopify の管理用ドメイン）。 */
              'subAutoHours','subAutoMax','subShopAdmin',
              /* 8.81 会員用の商品を外す、海外向けの商品リストの名前。 */
-             'subShopOverseas',
+             'subShopOverseas','subShopOverseasId',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
              'subMonNew','subMonPeople','subMonLimitDays',
              'subCutWay','subCutNet','subCutRate',
@@ -7861,7 +7863,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.80 自動配信（この端末にも覚える）。 */
                  'subAutoHours','subAutoMax','subShopAdmin',
                  /* 8.81 海外向けの商品リストの名前。 */
-                 'subShopOverseas',
+                 'subShopOverseas','subShopOverseasId',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
                  'subMonNew','subMonPeople','subMonLimitDays',
                  'subCutWay','subCutNet','subCutRate',
@@ -22369,7 +22371,9 @@ function oneRowHtml(x){
       ?'<span class="badge" style="background:#1f7a4d" data-onevis="ok">非公開を確かめ済み</span>'
       :(oneVisOn
         ?('<span class="badge" style="background:#b00020" data-onevis="'+esc(String(x.shop_vis||''))+'">'
-          +'配信しません：'+esc(shopVisJa(x.shop_vis))+'</span>')
+          +'配信しません：'+esc(shopVisJa(x.shop_vis))
+          /* 8.89 直し：いつ読んだ値か（古い値を見ていないか分かるように）。 */
+          +(x.shop_vis_jst?('（'+esc(String(x.shop_vis_jst))+' に確かめた）'):'')+'</span>')
         :('<span class="badge" style="background:#8a8a8a" data-onevis="'+esc(String(x.shop_vis||''))+'">'
           +esc(shopVisJa(x.shop_vis))+'（配信は止めません）</span>'))):'')
     +'<br>'+esc(String(x.handle))+'　'+yen(x.price)
@@ -22385,10 +22389,30 @@ function oneRowHtml(x){
     +'onclick="oneMarkGo('+(+x.one_id||0)+',\'loaded\','
     +(x.loaded_at?'0':'1')+');return false">'
     +(x.loaded_at?'読み込みの印を外す':'Shopify に読み込みました')+'</button>'
+    /* 8.89 直し：読み込み済みの品を、その場でもう一度そろえて確かめる。 */
+    +(x.loaded_at&&!x.off?('<button class="btn" style="padding:4px 8px;font-size:12px" '
+      +'data-onevisgo="'+(+x.one_id||0)+'" '
+      +'onclick="oneVisGo('+(+x.one_id||0)+');return false">Shopify で確かめ直す</button>'):'')
     +'<button class="btn" style="padding:4px 8px;font-size:12px" '
     +'onclick="oneMarkGo('+(+x.one_id||0)+',\'off\','+(x.off?'0':'1')
     +');return false">'+(x.off?'戻す':'取り下げる')+'</button>'
     +'</div></div>';
+}
+/* 8.89 直し（カジの依頼3）1点もの1つを、非公開にそろえる（海外向けカタログから
+   外す）→ もう一度読んで確かめる。pj が読んだ商品（ID・状態）も出す。 */
+function oneVisGo(id){
+  if(roleDenyPrice('oneNote2'))return;
+  var h='one-'+(+id||0);
+  if(!confirm(h+' を Shopify で確かめます。\n\n'
+    +'・公開（active）・下書き（draft）なら「非公開（Unlisted）」にします\n'
+    +'・海外向けカタログに入っていれば外します\n'
+    +'・そのあともう一度読んで、非公開を確かめます\n\nよろしいですか？'))return;
+  oneNote(h+' を Shopify で確かめています…');
+  return shopUnlistAuto('one',[h]).then(function(z){
+    oneNote('<b>'+esc(h)+'</b>'+shopVisSayHtml(z)
+      +((z.bad.length||z.err)?'':shopLookHtml(z)),z.bad.length>0||!!z.err);
+    return oneListGo();
+  });
 }
 function oneEdit(id){
   var x=oneRowsData.filter(function(y){ return (+y.one_id||0)===(+id||0); })[0];
@@ -22511,6 +22535,8 @@ function shopUnlistAuto(kind,handles){
         if(!d||d.ok!==true)throw new Error(String((d&&(d.detail||d.error))||'確かめられませんでした'));
         Object.keys(d.vis||{}).forEach(function(h){ acc.vis[h]=d.vis[h]; });
         acc.errors=acc.errors.concat(d.errors||[]).slice(0,5);
+        acc.look=(acc.look||[]).concat(d.look||[]).slice(0,20);
+        ['over_ja','over_cats','scopes','over_n'].forEach(function(k){ if(d[k]!==undefined)acc[k]=d[k]; });
         n++;
         if(+d.left>0&&n<SHOP_UNLIST_LOOP)return step(+d.next||0);
         return acc;
@@ -22522,11 +22548,49 @@ function shopUnlistAuto(kind,handles){
       var v=a.vis[h];
       if(v==='ok')ok++; else bad.push({ handle:h, vis:v||'', why:shopVisJa(v) });
     });
-    return { ok_n:ok, bad:bad, errors:a.errors };
+    return { ok_n:ok, bad:bad, errors:a.errors, look:a.look, over_ja:a.over_ja,
+             over_cats:a.over_cats, scopes:a.scopes, over_n:a.over_n };
   })['catch'](function(e){
     return { ok_n:0, bad:handles.map(function(h){ return { handle:h, vis:'err', why:shopVisJa('err') }; }),
              err:e.message };
   });
+}
+/* 8.89 直し（カジの報告）pj が Shopify で何を読んだかを出す。
+   ・海外向けカタログが見つからない理由（Shopify が返した名前・足りない権限）
+   ・商品ごとに、読んだ商品の ID・状態・オンラインストア・海外向け
+     （管理画面で開いた商品と同じかを、URL の末尾の ID で見比べられる）
+   ・1点ものは、同じ名前の別の商品（Handle がずれていないか） */
+function shopLookHtml(a){
+  a=a||{};
+  var host=String((($('subShopAdmin')||{}).value)||'').trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+  var link=function(pid,txt){
+    if(!pid)return esc(txt);
+    return /^[a-z0-9-]+\.myshopify\.com$/i.test(host)
+      ?('<a href="https://'+esc(host)+'/admin/products/'+esc(pid)+'" target="_blank" rel="noopener">'+esc(txt)+'</a>')
+      :esc(txt);
+  };
+  var h='';
+  if(a.over_ja)h+='<br><span style="color:var(--bad)">⚠ 海外向けカタログ：'+esc(a.over_ja)+'</span>';
+  if(a.over_ja&&(a.scopes||[]).length)
+    h+='<br><span class="note2" style="margin:0">いまの鍵の権限：'+esc((a.scopes||[]).join('・'))+'</span>';
+  if((a.over_cats||[]).length)
+    h+='<br><span class="note2" style="margin:0">見つかったカタログ：'+(a.over_cats||[]).map(function(c){
+      return esc(c.title||'')+'（ID '+esc(String(c.id||'').replace(/^.*\//,''))+'・'+esc(c.status||'')
+        +(c.pub?'・商品の一覧あり':'・商品の一覧なし')+'）'; }).join('　')+'</span>';
+  var look=(a.look||[]);
+  if(look.length)
+    h+='<br><span class="note2" style="margin:0" id="shopLook">pj が Shopify で読んだ商品：'
+      +look.slice(0,10).map(function(x){
+        if(!x.pid)return '<br>・'+esc(x.handle)+' → Shopify にこの Handle の商品がありません';
+        return '<br>・'+esc(x.handle)+' → '+link(x.pid,'商品 ID '+x.pid)
+          +'・状態 <b>'+esc(x.status||'')+'</b>'
+          +'・オンラインストア '+(x.on?'公開':'<b>未公開</b>')
+          +'・海外向け '+(x.over?'<b>入っている</b>':((+a.over_n||0)>0?'入っていない':'確かめられない'))
+          +((x.same||[]).length?('<br>　<b>同じ名前の別の商品</b>：'+x.same.map(function(y){
+            return link(y.pid,esc(y.handle)+'（'+y.status+'・ID '+y.pid+'）'); }).join('　')):'');
+      }).join('')
+      +'<br>（管理画面で開いた商品の URL の末尾の数字と、商品 ID が同じか見比べてください）</span>';
+  return h;
 }
 function shopVisSayHtml(z){
   /* ⚙ でオフのとき・Shopify の鍵が無いとき（確かめられないとき）は、
@@ -22542,7 +22606,8 @@ function shopVisSayHtml(z){
         return esc(x.handle)+'（'+esc(x.why)+'）'; }).join('　')
       +(z.bad.length>10?'　…':'')+'</span>'
       +(off?'<br><span class="note2" style="margin:0">⚙「Shopify で非公開を確かめた品だけを配る」'
-        +'がオフなので、配信は止めません。</span>':'')):'');
+        +'がオフなので、配信は止めません。</span>':'')
+      +shopLookHtml(z)):'');
 }
 function shopUnlistGo(kind,noteId){
   if(roleDenyPrice(noteId))return;
@@ -22557,6 +22622,8 @@ function shopUnlistGo(kind,noteId){
     a.items=(a.items||[]).concat(b.items||[]).slice(0,40);
     a.errors=(a.errors||[]).concat(b.errors||[]).slice(0,5);
     a.all=+b.all||a.all||0; a.left=+b.left||0; a.over_miss=b.over_miss||a.over_miss;
+    a.look=(a.look||[]).concat(b.look||[]).slice(0,20);
+    ['over_ja','over_cats','scopes','over_n'].forEach(function(k){ if(b[k]!==undefined)a[k]=b[k]; });
     return a;
   };
   var run=function(approve){
@@ -22590,8 +22657,10 @@ function shopUnlistGo(kind,noteId){
         +(+a.fail?('・<b style="color:var(--bad)">できなかった '+mwN(+a.fail)+'件</b>'):'')
         +(+a.left?('・残り '+mwN(+a.left)+'件（もう一度押すと続きから）'):''))
         :('<br>直す必要がある <b>'+mwN(need)+'件</b>'))
-      +((a.over_miss||[]).length?('<br><span style="color:var(--bad)">⚠ 海外向けの商品リスト「'
-        +esc((a.over_miss||[]).join('・'))+'」が見つかりません（⚙の名前を確かめてください）</span>'):'')
+      +((a.over_miss||[]).length&&!a.over_ja?('<br><span style="color:var(--bad)">⚠ 海外向けの商品リスト「'
+        +esc((a.over_miss||[]).join('・'))+'」が見つかりません（⚙の名前か ID を確かめてください）</span>'):'')
+      +shopLookHtml(kind==='one'?a:{ over_ja:a.over_ja, over_cats:a.over_cats, scopes:a.scopes,
+        over_n:a.over_n, look:(a.look||[]).filter(function(x){ return x.status!=='UNLISTED'||x.over||!x.on; }) })
       +((a.errors||[]).length?('<br><span style="color:var(--bad)">'
         +a.errors.map(esc).join('<br>')+'</span>'):'')
       +((a.items||[]).length&&!approve?('<br><span style="opacity:.8">'
@@ -31762,7 +31831,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v338';   // sw.js の const V と必ず同じ値にする
+var APP_V='v339';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
