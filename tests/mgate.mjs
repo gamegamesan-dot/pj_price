@@ -165,7 +165,7 @@ console.log('=== pj の CSV のタグが決まりと合っているか（カジ�
      '★★★モニター・ライトは見られない（⚙のとおり）');
   /* ⑤ 海外向け（os-）は会員用ではない＝だれでも見られる */
   const os=OSSCSV.build([{ jan:'4902370550467', titleEn:'Game', kishu:'NS',
-    descHtml:'<p>x</p>', usd:49.99, qty:1, grams:210, cost:3300,
+    descHtml:'<p>x</p>', usd:49.99, wholesale:3500, qty:1, grams:210, cost:3300,
     pics:[{url:'https://img.example.jp/a.jpg'}] }],{ fx:160 });
   const oRows=SHOPCSV.splitCsv(os);
   const tOs=oRows[1][oRows[0].indexOf('Tags')];

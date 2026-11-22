@@ -72,7 +72,7 @@ console.log('=== ④ 一般向け（海外向け os-）：既定は下書き・�
 {
   const csv=O.build([{ jan:'4902370550467',
     titleEn:'Super Mario Party Jamboree', descHtml:'<p>x</p>', kishu:'NS',
-    usd:49.99, qty:1, grams:210, cost:4200,
+    usd:49.99, wholesale:3500, qty:1, grams:210, cost:4200,
     pics:[{ url:'https://img.example.jp/a.jpg' }] }],{ fx:160, pct:100 });
   const h=cells(csv);
   const i=h[0].indexOf('Status');
@@ -84,7 +84,7 @@ console.log('=== ④ 一般向け（海外向け os-）：既定は下書き・�
      '★★★一般向けの商品は、既定では下書き（draft）で出す');
   const csv2=O.build([{ jan:'4902370550467',
     titleEn:'Super Mario Party Jamboree', descHtml:'<p>x</p>', kishu:'NS',
-    usd:49.99, qty:1, grams:210, cost:4200,
+    usd:49.99, wholesale:3500, qty:1, grams:210, cost:4200,
     pics:[{ url:'https://img.example.jp/a.jpg' }] }],
     { fx:160, pct:100, status:'active' });
   const h2=cells(csv2);

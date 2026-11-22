@@ -52,6 +52,11 @@ console.log('=== 区分と JAN の読み方 ===');
 console.log('\n=== ① 写真が付いた出品候補を出品リストに入れる ===');
 {
   const t=await p.evaluate((a)=>{
+    /* この節だけで完結させる（前の節の出品リストに頼らない）。 */
+    csvList=[
+      Object.assign({},a.b,{ id:'s1', jan:a.J1, condId:1000, itemId:'111111111111', titleJa:'BURAI MSX2（せどり・新品）' }),
+      Object.assign({},a.b,{ id:'s2', jan:a.J2, condId:3000, itemId:'222222222222', titleJa:'ライザのアトリエ3（せどり・中古）' }),
+      Object.assign({},a.b,{ id:'s3', jan:a.J3, condId:1000, itemId:'', titleJa:'まだ出していない' })];
     /* 写真・相場・ポリシーの条件は通る形にして、JAN の決まりだけを見る。 */
     window.mwRec=function(){ return { price:50, total:50 }; };
     window.mwMktJudge=function(){ return { k:'ok', pct:90 }; };
@@ -63,7 +68,7 @@ console.log('\n=== ① 写真が付いた出品候補を出品リストに入れ
              skip:mwPushSkipHtml([{ r:r(a.J1), why:mwPushWhy(r(a.J1)) },
                                   { r:{ jan:'4900000000002' }, why:'eBay に同じ JAN が出品中（新品・ItemID 333333333333）' }])
                .replace(/<[^>]+>/g,'') };
-  },{ J1, J2, J3 });
+  },{ b:base({}), J1, J2, J3 });
   console.log('   '+JSON.stringify(t));
   ok(/eBay に同じ JAN が出品中（新品・ItemID 111111111111）/.test(t.a),
      '★★★同じ JAN の新品が eBay に出品中（せどりの行）→ MW の行は入れない・理由を出す');

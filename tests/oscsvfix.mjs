@@ -17,7 +17,7 @@ const ok=T.ok;
 const item=(x)=>Object.assign({ jan:'4528272010290',
   titleEn:'Keys Factory Card Pod Collection Splatoon Raiders Nintendo Switch 2 Japan',
   vendor:'Keys Factory', type:'Video Game Accessory', platform:'Nintendo Switch 2',
-  cond:'new', stockPhoto:true, kishu:'NS2H', usd:30, qty:1, grams:200, cost:1200,
+  cond:'new', stockPhoto:true, kishu:'NS2H', usd:30, wholesale:1000, qty:1, grams:200, cost:1200,
   pics:[{url:'https://img.test/i/20261118/a.jpg'}],
   descHtml:'<div><p>message us through eBay first</p></div>' },x||{});
 /* カジの⚙に入っていた値（会員プランのバリアント番号）。 */

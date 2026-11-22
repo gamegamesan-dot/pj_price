@@ -44,7 +44,7 @@ const setup=async()=>await p.evaluate(()=>{
       cat:cat, catFixed:true, catDone:true, condId:1000, cost:1200, qty:1, weight:200,
       pics:[{url:'https://img.test/i/20261121/'+n+'.jpg'}],
       descHtml:'<div><p>x</p></div>', specs:{},
-      buySource:'mw', dropship:true, mwKishu:'NS', mwSha:'MC02', osOn:true,
+      buySource:'mw', dropship:true, mwKishu:'NS', mwSha:'MC02', osOn:true, mwWholesale:2000,
       osAt:'2026-11-18', zeroAct:'hold', fba:false, oneOff:false, itemId:'', sold:'',
       price:30, titleStatus:'', titleCands:[], titleNote:'', titleManual:false },x||{});
   };

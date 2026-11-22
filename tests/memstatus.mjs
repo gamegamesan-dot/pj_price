@@ -57,7 +57,7 @@ console.log('=== ① CSV の Status ===');
 console.log('\n=== ② 海外向けの os- は変えない ===');
 {
   const it={ jan:'4902370550467', titleEn:'Super Mario Party Jamboree Nintendo Switch Japan',
-    kishu:'NS', vendor:'Nintendo', type:'Video Game', usd:49.99, qty:1, grams:120, cost:3000,
+    kishu:'NS', vendor:'Nintendo', type:'Video Game', usd:49.99, wholesale:3000, qty:1, grams:120, cost:3000,
     pics:[{ url:'https://pj-img.example.workers.dev/i/20261122/00000001-0000-4000-8000-000000000000.jpg' }] };
   const act=O.build([it],{ fx:150, pct:100, status:'active' });
   const dr=O.build([it],{ fx:150, pct:100 });
