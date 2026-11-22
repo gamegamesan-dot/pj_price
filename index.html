@@ -877,6 +877,8 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" id="csvBaseLowNote" style="margin-top:0"></div>
 
       <div class="note2" id="csvExportNote"></div>
+      <!-- 8.93 同じ JAN・同じ区分で eBay に2つ以上出ている行（重複出品の恐れ）。 -->
+      <div id="csvJanDup"></div>
       <!-- 書き出したあと、カテゴリごとに1つずつ保存し直せるボタン（iPhone向けの保険） -->
       <div id="csvExportFiles" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
       <input type="file" id="csvPicFile" accept="image/*" multiple style="display:none">
@@ -10369,7 +10371,8 @@ function csvRender(){
   /* 6.144：除外の件数は**押すとその行に飛ぶ**（なぜ0件なのかを追える）。 */
   csvJumpIds={ bad:sp.bad.map(function(x){ return x.r.id; }),
                amz:sp.amz.map(function(x){ return x.r.id; }),
-               done:sp.done.map(function(x){ return x.r.id; }) };
+               done:sp.done.map(function(x){ return x.r.id; }),
+               live:(sp.live||[]).map(function(x){ return x.r.id; }) };
   var jump=function(k,t,n){
     return n?('<a href="#" data-cjump="'+k+'" style="text-decoration:underline">'
       +esc(t)+' '+n+'件</a>'):'';
@@ -10382,9 +10385,12 @@ function csvRender(){
        +(sp.skip?('　除外：'
           +[jump('bad','不備',sp.bad.length),
             jump('amz','Amazon優先',sp.amz.length),
-            jump('done','出品済み',sp.done.length)]
+            jump('done','出品済み',sp.done.length),
+            jump('live','eBay に同じ JAN が出品中',(sp.live||[]).length)]
             .filter(Boolean).join('／')):''))
     : '';
+  /* 8.93 同じ JAN・同じ区分で ItemID が2つ以上ある行の一覧。 */
+  if($('csvJanDup'))$('csvJanDup').innerHTML=csvJanDupHtml();
   /* 設定（下限利益・連動率・売上比下限・税率・送料・為替・梱包）を変えたら、
      表示と書き出しの売値も追いつくように引き直す。csvRecalc は
      仕入値と重量から csvPriceFor で出すだけなので、何度呼んでも同じ結果になる。 */
@@ -11367,6 +11373,59 @@ function csvKindOf(r){
   if(r.looseOnly)return 'loose';
   return (r.condId===1000)?'new':'used';
 }
+/* ===== 8.93（カジの報告）同じ JAN・同じ区分の出品中の行 =====
+   MW 無在庫の行が、同じ JAN のせどりの行（ItemID あり＝eBay に出品中）と
+   ぶつかり、eBay の重複出品で失敗した（BURAI MSX2・ライザのアトリエ3 DX PS4）。
+   eBay の重複の禁止は「同じ状態の同じ商品」が対象なので、
+   **同じ JAN・同じ区分（新品・中古・カートリッジのみ・本体のみ）**で
+   ItemID のある行があるときだけ止める。区分が違えば今までどおり。 */
+var CSV_KIND_JA={ 'new':'新品', used:'中古', cart:'カートリッジのみ', loose:'本体のみ' };
+function csvJanKey(r){
+  var j=String((r||{}).jan||'').replace(/\D/g,'');
+  return (j.length>=8&&j.length<=14)?j:'';
+}
+/* r と同じ JAN・同じ区分で、ItemID のある**別の**行（どの仕入れ元でも）。
+   kind を渡すと、その区分で探す（MW の候補はまだ行が無いので 'new'）。 */
+function csvJanLive(r,kind){
+  var j=csvJanKey(r); if(!j)return null;
+  var k=kind||csvKindOf(r), hit=null;
+  csvList.forEach(function(x){
+    if(hit||x===r||(r&&r.id&&x.id===r.id))return;
+    if(csvJanKey(x)!==j||csvKindOf(x)!==k)return;
+    var it=String(x.itemId||'').trim();
+    if(it)hit={ itemId:it, row:x, kind:k };
+  });
+  return hit;
+}
+/* 同じ JAN・同じ区分で ItemID が2つ以上ある行のまとまり（重複出品の恐れ）。 */
+function csvJanDups(){
+  var g={}, order=[];
+  csvList.forEach(function(x){
+    var j=csvJanKey(x), it=String(x.itemId||'').trim();
+    if(!j||!it)return;
+    var key=j+'|'+csvKindOf(x);
+    if(!g[key]){ g[key]={ jan:j, kind:csvKindOf(x), rows:[] }; order.push(key); }
+    g[key].rows.push(x);
+  });
+  return order.map(function(k){ return g[k]; })
+    .filter(function(x){ return x.rows.length>=2; });
+}
+function csvJanDupHtml(){
+  var d=csvJanDups();
+  if(!d.length)return '';
+  return '<div class="warn" id="csvJanDupBox" style="margin-top:6px">'
+    +'<b>同じ JAN・同じ区分で eBay に2つ以上出ている行 '+d.length+'件</b>'
+    +'（重複出品の恐れ。片方を終了するか、行を確かめてください）'
+    +d.map(function(x){
+      return '<br>・<b data-jandup="'+esc(x.jan)+'">'+esc(x.jan)+'</b>（'+esc(CSV_KIND_JA[x.kind]||x.kind)+'）'
+        +x.rows.map(function(r){
+          return '<br>　'+esc(String(r.titleJa||r.titleEn||'').slice(0,40))
+            +'　ItemID '+esc(String(r.itemId).trim())
+            +'　'+esc(csvCustomLabel(r))
+            +'　'+(String(r.buySource||'')==='mw'?'MW 無在庫':(r.dropship?'無在庫':'せどり'));
+        }).join('');
+    }).join('')+'</div>';
+}
 /* 同じASIN・同じ区分の eBay の出品（販売連携の取り込みから引く）。
    数量0の出品も返す（復活の対象になる）。 */
 function csvSameListing(r){
@@ -12142,7 +12201,7 @@ function csvStamp(){
    ・warn … 注意はあるが、このまま書き出す行
    ・rows … 実際に書き出す行 */
 function csvExportSplit(ids){
-  var rows=[], amz=[], bad=[], done=[], warn=[];
+  var rows=[], amz=[], bad=[], done=[], warn=[], live=[];
   var only=null;
   if(ids&&ids.length){ only={}; ids.forEach(function(x){ only[x]=1; }); }
   csvList.forEach(function(r){
@@ -12168,11 +12227,16 @@ function csvExportSplit(ids){
     var dp=csvDupListing(r);
     if(dp){ done.push({r:r,why:'同じ出品がすでにあります（ItemID '+dp.itemId
       +'・数量 '+dp.qty+'）。重複を防ぐため書き出しません'}); return; }
+    /* 8.93 同じ JAN・同じ区分で ItemID のある行が別にある（どの仕入れ元でも）。
+       Add すると eBay の重複出品で失敗するので書き出さない。区分が違えば出す。 */
+    var lv=csvJanLive(r);
+    if(lv){ live.push({r:r,why:'eBay に同じ JAN が出品中（'+(CSV_KIND_JA[lv.kind]||lv.kind)
+      +'・ItemID '+lv.itemId+'）'}); return; }
     rows.push(r);
     var nt=csvNotes(r); if(nt.length)warn.push({r:r,why:nt.join('・')});
   });
-  return { rows:rows, amz:amz, bad:bad, done:done, warn:warn,
-           skip:bad.length+amz.length+done.length };
+  return { rows:rows, amz:amz, bad:bad, done:done, warn:warn, live:live,
+           skip:bad.length+amz.length+done.length+live.length };
 }
 /* ---- 一覧で選んだ行だけ書き出す ----
    選択はカードの左上のチェック（data-cpick）。画面を開いているあいだだけ覚える。 */
@@ -13064,6 +13128,7 @@ function csvExpSumHtml(sp,os,made){
   if(sp.bad.length)cut.push('不備 '+sp.bad.length+'件');
   if(sp.amz.length)cut.push('Amazon優先 '+sp.amz.length+'件');
   if(sp.done.length)cut.push('出品済み '+sp.done.length+'件');
+  if((sp.live||[]).length)cut.push('eBay に同じ JAN が出品中 '+sp.live.length+'件');
   var why={};
   ((os&&os.no)||[]).forEach(function(x){ why[x.why]=(why[x.why]||0)+1; });
   Object.keys(why).forEach(function(k){
@@ -13170,6 +13235,9 @@ function csvExportRun(ids){
         +'  （行の「Amazon優先でも出す」をオンにすると書き出せます）\n';
       if(sp.done.length)msg+=' 出品済み '+sp.done.length+'件\n'+list(sp.done,true)+'\n'
         +'  （新規出品で二重に出さないため。数量・価格の更新CSVを使ってください）\n';
+      if((sp.live||[]).length)msg+=' eBay に同じ JAN が出品中 '+sp.live.length+'件\n'
+        +list(sp.live,true)+'\n'
+        +'  （同じ JAN・同じ状態の出品が eBay にあるため。重複出品で失敗します）\n';
     }
     if(sp.warn.length)
       msg+='\n【注意だけで書き出す行】'+sp.warn.length+'件\n'+list(sp.warn,true)+'\n';
@@ -14880,6 +14948,10 @@ function mwPushWhy(r){
   if(csvList.some(function(x){
        return String(x.buySource||'')==='mw'&&String(x.jan||'')===jan; }))
     return 'すでに出品リストにあります';
+  /* 8.93 同じ JAN の新品の行（どの仕入れ元でも）が eBay に出品中なら入れない
+     （MW の行は新品。区分が違う行は止めない）。 */
+  var lv=csvJanLive({ jan:jan },'new');
+  if(lv)return 'eBay に同じ JAN が出品中（新品・ItemID '+lv.itemId+'）';
   return '';
 }
 /* 入れられる行（①②で写真があり、ポリシーも間に合う行）。 */
@@ -15017,7 +15089,10 @@ function mwPushSkipHtml(skip){
   var by={};
   skip.forEach(function(x){
     var k=String(x.why);
-    (by[k]=by[k]||[]).push(String(x.r.jan||''));
+    /* 8.93 ItemID は JAN ごとに違うので、まとめるときは理由だけで数える。 */
+    var it=/・ItemID (\d+)）$/.exec(k);
+    if(it)k=k.replace(/・ItemID \d+）$/,'）');
+    (by[k]=by[k]||[]).push(String(x.r.jan||'')+(it?('→'+it[1]):''));
   });
   var ks=Object.keys(by).sort(function(a,b){ return by[b].length-by[a].length; });
   return '<br><span style="opacity:.85">入れなかった行（'+skip.length+'件）：</span><br>'
@@ -31839,7 +31914,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v340';   // sw.js の const V と必ず同じ値にする
+var APP_V='v341';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
