@@ -2812,6 +2812,11 @@ body.staff #syncOnHandFix{display:none !important}
       <div class="note2" id="csvShipMwNote" style="margin:2px 0 0"></div>
       <div class="row"><label>相場より安く出す割合</label><input type="number" id="mwUnder" value="97" step="1" min="50" max="100" inputmode="numeric"><span class="unit">%</span></div>
       <div class="note2" style="margin:0 0 2px">eBay の最安値（送料込みの総額）のこの割合で出します。それでも目標利益を割るときは<b>目標利益の売値</b>にします。相場が無い行は目標利益の売値です。</div>
+      <!-- 8.96（カジの依頼）後回し（相場の115%超）でも、相場の値段で出して利益が
+           残る候補を「相場に合わせれば出せる」（mktok）にする。 -->
+      <div class="row"><label for="mwMktOkMin">相場に合わせて出すときの利益の下限</label><input type="number" id="mwMktOkMin" value="700" step="50" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <div class="row"><label for="mwMktMaxDays">この日数より古い相場は使わない</label><input type="number" id="mwMktMaxDays" value="14" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
+      <div class="note2" style="margin:0 0 2px">後回し（相場の115%超）の候補のうち、<b>eBay の最安値（送料込みの総額）から米国向けの請求送料を引いた値段</b>で出しても利益がこの下限以上になる商品を「<b>相場に合わせれば出せる</b>」にします。出品リストに入れると、売値は自動で「相場で出す」になります（行の「目標利益に戻す」で戻せます）。相場がこの日数より古い商品・最低売値を下回る商品は後回しのままです。</div>
       <div class="rowv"><label>備考の注意する言葉</label><input type="text" id="mwNoteNg" value="ダメージ,引き上げ,箱潰れ,訳あり,難あり,ジャンク,外箱不良,パッケージ不良"><div class="note2" style="margin-top:2px">この言葉が備考に入っている行は「<b>状態に注意</b>」の印を付け、<b>既定では候補から外します</b>。カンマで並べます。</div></div>
       <div class="chk"><input type="checkbox" id="mwNoteAll"><label for="mwNoteAll" style="flex:1">状態に注意の行も候補に含める</label></div>
       <div class="chk"><input type="checkbox" id="csvShowNew"><label for="csvShowNew" style="flex:1">無在庫（新品・カタログ画像）を表示する</label></div>
@@ -7828,6 +7833,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwShipFee','mwKishu','mwShipMax','mwStockMin','mwNoteNg',
                  'mwAmzFeeGame','mwAmzFbaGame','mwAmzFeeHobby','mwAmzFbaHobby',
                  'csvMwAmzSort','csvMwAmzMinM','mwRankCaps','mwDgTypes','mwUnder',
+                 /* 8.96 相場に合わせれば出せる（利益の下限・相場の古さ）。 */
+                 'mwMktOkMin','mwMktMaxDays',
                  /* 6.196（v295）一覧の「在 ◯」を赤で出す基準（この端末だけ） */
                  'mwLowStock',
                  /* 仮のFBA手数料（サイズ区分ごと）と粗利の基準（6.145） */
@@ -9290,7 +9297,7 @@ function csvRecOf(r){
 // 相場（総額$）→ 商品代（$）。販売連携・無在庫（新品）と同じ決まり
 function csvSoldItemOf(r){
   var sold=+r.sold||0; if(!(sold>0))return null;
-  var m=priceModelFor(+r.cost||0,+r.weight||0,0), G=m.zoneShipCharge(m.basisZone);
+  var m=priceModelFor(+r.cost||0,+r.weight||0,0), G=m.zoneShipCharge(csvSoldZone(r,m));
   return (sold<=G)?null:Math.round((sold-G)*100)/100;
 }
 /* いまの設定で出すべき売値。相場が入っていれば soldVerdict の判定に従う
@@ -9922,17 +9929,27 @@ function csvAmzRecOf(r){
 function csvSoldPrice(r){
   var sold=+(r||{}).sold||0; if(!(sold>0))return 0;
   var m=priceModelFor(csvCostOf(r),r.weight,csvFlatOf(r));
-  var v=Math.round((sold-m.zoneShipCharge(m.basisZone))*100)/100;
+  var v=Math.round((sold-m.zoneShipCharge(csvSoldZone(r,m)))*100)/100;
   return (v>0)?v:0;
 }
+/* 相場から引く請求送料の地帯。8.96「相場に合わせて出品」（MW の相場＝米国の総額）の
+   行は**米国向け**（mwSell・判定と同じそろえ方）。ほかの行は今までどおり基準の地帯。 */
+function csvSoldZone(r,m){ return (r&&r.mktAuto)?USA_ZONE:m.basisZone; }
 // この行の請求送料（相場から引く額）。画面の案内に出す
 function csvShipCharge(r){
   var m=priceModelFor(csvCostOf(r),(r||{}).weight,csvFlatOf(r));
-  return Math.round(m.zoneShipCharge(m.basisZone)*100)/100||0;
+  return Math.round(m.zoneShipCharge(csvSoldZone(r,m))*100)/100||0;
 }
 // この行は「相場」で出す指定か（相場が入っていないときは選べない）
 function csvSoldMode(r){
   return String((r||{}).priceMode||'')==='sold'&&csvSoldPrice(r)>0;
+}
+/* 8.96 その行を売値 P（商品代$）で出したときの利益（米国と基準の地帯の低いほう）。 */
+function csvMktProfitAt(r,P){
+  try{
+    var m=priceModelFor(csvCostOf(r),(r||{}).weight,csvFlatOf(r));
+    return Math.round(Math.min(m.zoneProfit(P,USA_ZONE).profit,m.zoneProfit(P,m.basisZone).profit));
+  }catch(e){ return -1e9; }
 }
 /* 相場で出すときの売値。
    v … 実際に出す値（最低売値を下回るときは最低売値）
@@ -9940,6 +9957,11 @@ function csvSoldMode(r){
 function csvSoldStart(r){
   var raw=csvSoldPrice(r), fl=+r.floor||0;
   var under=(raw>0&&fl>0&&raw<fl-0.005);
+  /* 8.96「相場に合わせて出品」の行は、相場の売値で出しても利益が⚙の下限
+     （既定 ¥700）以上なら、最低売値（下限利益の線）で止めずに相場の売値で出す
+     （いまの設定で毎回確かめる。下限に届かなくなったら最低売値で止める）。 */
+  if(under&&r.mktAuto&&csvMktProfitAt(r,raw)>=mwMktOkMin())
+    return { v:raw, raw:raw, floor:fl, under:false, mkt:true };
   return { v:(under?fl:raw), raw:raw, floor:fl, under:under };
 }
 function csvStartPrice(r){
@@ -10040,7 +10062,9 @@ function csvSoldPriceHtml(r){
       +'最低売値 '+usd(o.floor)+' を下回るので、<b>最低売値で出します</b>。</div>';
   return '<div class="note2" style="margin-top:3px">'
     +'<span style="display:inline-block;background:#1f6f8a;color:#fff;border-radius:2px;'
-    +'padding:1px 5px;font-size:11px">相場で出す</span>　'
+    +'padding:1px 5px;font-size:11px"'+(r.mktAuto?' data-mktauto="1"':'')+'>'
+    /* 8.96 候補の判定で自動で相場にした行（目標利益に戻すのは今までどおり）。 */
+    +(r.mktAuto?'相場に合わせて出品':'相場で出す')+'</span>　'
     +usd(+r.sold||0)+' − 送料 '+usd(G)+' ＝ <b>'+usd(o.v)+'</b>'
     +'（目標利益なら '+usd(+r.price||0)+'・最低売値 '+usd(o.floor)+'）</div>';
 }
@@ -14801,6 +14825,58 @@ function mwTarget(cost){
   try{ return PJP.autoTarget(pricingSettings(),cost); }catch(e){ return 0; }
 }
 /* 推奨売値・最低売値・利益。shared/pricing.js の式をそのまま使う。 */
+/* ===== 8.96（カジの依頼）相場に合わせれば出せる（mktok）=====
+   後回し（high＝出す売値が相場の115%超）の候補でも、**相場の値段で出して
+   利益が残る**ものは出品候補にする。
+     相場       … 判定に使っている eBay の最安値（総額・送料込み）そのもの
+                  （mkt_low、無ければ mkt_low_any。mwMktJudge と同じ）
+     相場の売値 … 相場 − 米国向けの請求送料（mwSell・mwShipCharge と同じそろえ方）
+     利益       … いまの式（shared/pricing.js の model・zoneProfit。eBay の手数料・
+                  広告費・国際送料・為替・仕入値）。**米国と基準の地帯の低いほう**
+   利益が⚙の下限未満・相場が⚙の日数より古い・相場が無い／0 の商品は、
+   後回しのまま（理由を mktWhy に返す）。相場の売値が最低売値（下限利益の線）を
+   下回っても、利益が⚙の下限以上なら出せる（出すときも最低売値で止めない・
+   csvSoldStart）。 */
+function mwMktLowOf(r){
+  var x=r||{};
+  return (x.mkt_low!=null)?+x.mkt_low:((x.mkt_low_any!=null)?+x.mkt_low_any:0);
+}
+function mwMktOkMin(){
+  var el=$('mwMktOkMin'); var v=el?String(el.value).trim():'';
+  var n=+v; return (v!==''&&isFinite(n)&&n>=0)?n:700;
+}
+function mwMktMaxDays(){
+  var el=$('mwMktMaxDays'); var v=el?String(el.value).trim():'';
+  var n=+v; return (v!==''&&isFinite(n)&&n>0)?n:14;
+}
+function mwMktAtOf(r,cost,weight){
+  var o={ low:0, item:0, profit:null, days:null, at:String((r||{}).mkt_at||'') };
+  var t=Date.parse(o.at);
+  if(t)o.days=Math.round((Date.now()-t)/864e5*10)/10;
+  var low=mwMktLowOf(r);
+  if(!(low>0)||!(+(r||{}).mkt_n>0)||(r||{}).mkt_err)return o;
+  o.low=Math.round(low*100)/100;
+  try{
+    var m=PJP.model(pricingSettings(),{ cost:+cost||0, weight:+weight||0, flat:0 });
+    var item=Math.round((low-(+m.zoneShipCharge(USA_ZONE)||0))*100)/100;
+    if(!(item>0))return o;
+    o.item=item;
+    var a=m.zoneProfit(item,USA_ZONE).profit, b=m.zoneProfit(item,m.basisZone).profit;
+    o.profit=Math.round(Math.min(a,b));
+  }catch(e){}
+  return o;
+}
+/* high の行が mktok になるか。{ ok, why } */
+function mwMktOkOf(r,rec){
+  if(!rec)return { ok:false, why:'値段を出せません' };
+  if(!(+rec.mktLow>0)||!(+rec.mktItem>0)||rec.profitAtMkt===null||rec.profitAtMkt===undefined)
+    return { ok:false, why:'相場の売値を出せません' };
+  if(rec.mktDays!==null&&rec.mktDays!==undefined&&rec.mktDays>mwMktMaxDays())
+    return { ok:false, why:'相場が'+mwMktMaxDays()+'日より古い' };
+  if(+rec.profitAtMkt<mwMktOkMin())
+    return { ok:false, why:'相場で出すと利益 '+yen(+rec.profitAtMkt)+'（下限 '+yen(mwMktOkMin())+'）' };
+  return { ok:true, why:'' };
+}
 function mwRec(r){
   /* 6.152：無在庫は **MW と Amazon の安いほう**を仕入れ値にする。
      （刈取の仕入原価は mwCost のまま＝MW から仕入れるため。） */
@@ -14814,7 +14890,11 @@ function mwRec(r){
      eBay の相場は**総額**なので、比べるときは必ずどちらかにそろえる。
      そろえ方は既存の PJP.soldItem と同じ（基準の地帯の請求送料を使う）。 */
   var g=mwShipCharge(c,w);
-  return { price:p.price, floor:p.floor, be:p.be, profit:p.profit,
+  /* 8.96 相場の値段で出したときの利益（自動出品の予定タスクも使う）。 */
+  var mk=mwMktAtOf(r,c,w);
+  return { mktLow:mk.low, mktItem:mk.item, profitAtMkt:mk.profit,
+           mktDays:mk.days, mktAt:mk.at,
+           price:p.price, floor:p.floor, be:p.be, profit:p.profit,
            target:mwTarget(c), cost:c, weight:w,
            /* 6.152：どちらを基準にしたか・重さの出どころも返す。 */
            costSrc:cc.src, costMw:cc.mw, costAmz:cc.amz, costWhy:cc.why,
@@ -15007,6 +15087,7 @@ function mwListRow(r,pics,n){
   var sl=rec?mwSell(r,rec):null;
   var cat=mwCatOf(r);
   var jan=String(r.jan||'').replace(/\D/g,'');
+  var mkOk=!!(rec&&mwMktJudge(r,rec).k==='mktok');     // 8.96
   return { id:'w'+Date.now().toString(36)+n.toString(36),
     src:'mw', sku:'', jan:jan, asin:String(r.asin||''),
     titleJa:String(r.mw_name||r.name||''), titleEn:'', cat:cat, catFixed:true,
@@ -15042,8 +15123,12 @@ function mwListRow(r,pics,n){
     oneOff:false, oneOffSet:true,
     pics:pics||[],
     amzLow:'', amzLowAt:'', itemId:'', uploadErr:'',
-    sold:(r.mkt_low!=null&&+r.mkt_n>0)?(Math.round(+r.mkt_low*100)/100):'',
+    sold:mkOk?rec.mktLow
+      :((r.mkt_low!=null&&+r.mkt_n>0)?(Math.round(+r.mkt_low*100)/100):''),
     price:sl?sl.price:0, floor:rec?rec.floor:0,
+    /* 8.96 相場に合わせれば出せる行は、入れた時点で「相場で出す」にする
+       （相場は判定と同じ値・請求送料は米国向け）。目標利益に戻すのは今までどおり。 */
+    priceMode:mkOk?'sold':'', mktAuto:mkOk,
     picsEps:0, picsErr:'',
     titleStatus:'', titleCands:[], titleNote:'', titleManual:false,
     /* 8.77 Platform は MW の機種（NS・PS5 など）から入れる。
@@ -23355,8 +23440,14 @@ function mwMktJudge(r,rec){
   var pct=Math.round(mine/low*100);
   if(mine<=lim)
     return { k:'ok', label:'出品候補', pri:1, low:low, lim:lim, pct:pct, mine:mine };
+  /* 8.96 相場の値段で出しても利益が下限以上なら「相場に合わせれば出せる」。 */
+  var mo=mwMktOkOf(r,rec);
+  if(mo.ok)
+    return { k:'mktok', label:'相場に合わせれば出せる', pri:2, low:low, lim:lim,
+             pct:pct, mine:mine, mktItem:rec.mktItem, profitAtMkt:rec.profitAtMkt };
   return { k:'high', label:'後回し（相場の115%超）', pri:3, low:low, lim:lim,
-           pct:pct, mine:mine };
+           pct:pct, mine:mine, mktWhy:mo.why,
+           mktItem:rec.mktItem, profitAtMkt:rec.profitAtMkt };
 }
 function mwMktHtml(r,rec){
   var j=mwMktJudge(r,rec);
@@ -23379,6 +23470,13 @@ function mwMktHtml(r,rec){
     +(+r.mkt_no_ship?'<br><span style="opacity:.8">送料が分からない出品が混じるため、'
       +'最安値を低めに見ています</span>':'')
     +(r.mkt_url?('　<a href="'+esc(r.mkt_url)+'" target="_blank" rel="noopener">eBayで見る</a>'):'')
+    /* 8.96 相場の値段で出したときの利益。 */
+    +((j.k==='mktok'||j.k==='high')&&rec&&+rec.mktItem>0
+      ?('<br><span data-mktat="1"'+(j.k==='mktok'?' style="color:var(--good)"':'')+'>'
+        +'相場の値段 <b>'+usd(rec.mktItem)+'</b>（'+usd(rec.mktLow)+' − 米国向けの請求送料）で出すと'
+        +'利益 <b>'+yen(rec.profitAtMkt)+'</b>'
+        +(j.k==='mktok'?'（相場に合わせれば出せる）':('（後回しのまま：'+esc(j.mktWhy||'')+'）'))
+        +'</span>'):'')
     +'</div>';
 }
 /* 8.84（カジの依頼）候補一覧を 500件より先まで読む。
@@ -23831,7 +23929,7 @@ function mwPicCand(){
     (mwRows||[]).forEach(function(r){
       var k='';
       try{ k=mwMktJudge(r,mwRec(r)).k; }catch(e){ k=''; }
-      mark(r,(k==='ok'||k==='nomkt'));
+      mark(r,(k==='ok'||k==='mktok'||k==='nomkt'));
     });
   }catch(e){}
   /* 刈取（Amazon FBA）の「仕入れる」の印。 */
@@ -24331,14 +24429,15 @@ function mwListRender(){
      ①〜④のどの区分にあっても見つかるように、**分ける前に**絞る。 */
   var hit=mwRows.filter(findMatchMw);
   findNoteRender('mwl',hit.length,mwRows.length);
-  var g={ ok:[], nomkt:[], high:[], none:[], picng:[] }, ng=[];
+  var g={ ok:[], mktok:[], nomkt:[], high:[], none:[], picng:[] }, ng=[];
   hit.forEach(function(r){
     var rec=mwRec(r);
     var o={ r:r, rec:rec, j:mwMktJudge(r,rec), ng:mwNoteHit(r), pn:mwPicNgOf(r) };
     if(!rec){ ng.push(o); return; }
     /* 8.90 写真が使えなかった JAN は、①②（ok でも）に入れず後ろに回す。 */
-    if(o.pn&&(o.j.k==='ok'||o.j.k==='nomkt')){ g.picng.push(o); return; }
+    if(o.pn&&(o.j.k==='ok'||o.j.k==='mktok'||o.j.k==='nomkt')){ g.picng.push(o); return; }
     if(o.j.k==='ok')g.ok.push(o);
+    else if(o.j.k==='mktok')g.mktok.push(o);     // 8.96 相場に合わせれば出せる
     else if(o.j.k==='nomkt')g.nomkt.push(o);
     else if(o.j.k==='high')g.high.push(o);
     else g.none.push(o);
@@ -24346,6 +24445,8 @@ function mwListRender(){
   /* 出品候補は「相場に対して安い順」＝写真を貼る作業の順番（仕様4章の6）。
      それ以外は売値が低い順。 */
   g.ok.sort(function(a,b){ return (a.j.pct||999)-(b.j.pct||999); });
+  /* 8.96 相場に合わせれば出せる行は、相場で出したときの利益が大きい順。 */
+  g.mktok.sort(function(a,b){ return (+b.j.profitAtMkt||0)-(+a.j.profitAtMkt||0); });
   [g.nomkt,g.high,g.none,ng,g.picng].forEach(function(l){
     l.sort(function(a,b){ return ((a.rec&&a.rec.price)||0)-((b.rec&&b.rec.price)||0); }); });
   var line=function(o){
@@ -24355,6 +24456,8 @@ function mwListRender(){
       +'<b>'+esc(String(r.name||'').slice(0,60))+'</b>'
       +(o.j.k==='ok'?(' <span class="badge" style="background:var(--good)">'
         +o.j.pct+'%</span>'):'')
+      +(o.j.k==='mktok'?(' <span class="badge" style="background:#1f6f8a" data-mktok="1">相場に合わせれば出せる・利益 '
+        +yen(+o.j.profitAtMkt||0)+'</span>'):'')
       +(o.pn?(' <span class="badge" style="background:#8a8a8a" data-picngrow="1">写真なし（'
         +esc(mwPicNgWhy(o.pn))+'・'+esc(String(o.pn.until_jst||''))+' まで）</span>'):'')
       +(o.ng.length?(' <span class="badge" style="background:var(--bad)">状態に注意</span>'):'')
@@ -24379,6 +24482,14 @@ function mwListRender(){
             /* 出す売値（6.95）。相場より少し安く出せるならそちらを使う。 */
             var sl=mwSell(r,rec);
             var up=(sl.price>rec.price);
+            /* 8.96 相場に合わせれば出せる行は、出品リストに入れると「相場で出す」。 */
+            if(o.j.k==='mktok')
+              return '<div class="note2" style="margin:2px 0 0">'
+                +'<b>出す売値 '+usd(rec.mktItem)+'</b>（相場に合わせる：'+usd(rec.mktLow)
+                +' − 米国向けの請求送料）　利益 <b>'+yen(rec.profitAtMkt)+'</b>'
+                +'<br>目標利益の売値 '+usd(rec.price)+'（利益 '+yen(rec.profit)+'）'
+                +'<br>下げられる下限 '+usd(rec.floor)
+                +'（下限利益 '+yen(+$('baseProfit').value||0)+'）</div>';
             return '<div class="note2" style="margin:2px 0 0">'
               +'<b>出す売値 '+usd(sl.price)+'</b>'
               +'（'+esc(sl.basis)+'）'
@@ -24430,6 +24541,12 @@ function mwListRender(){
     +'<div class="note2" style="margin:0 0 6px">相場を調べ終わった '
     +(mk.seen||0)+'件／<b>まだ '+(mk.left||0)+'件</b>'
     +(mk.left?'（「eBayの相場を調べる」を押すと進みます）':'')+'</div>'
+    /* 8.96 区分ごとの件数。 */
+    +'<div class="note2" style="margin:0 0 6px" id="mwKindCount">'
+    +'出品候補 <b>'+g.ok.length+'件</b>／相場に合わせれば出せる <b>'+g.mktok.length+'件</b>'
+    +'／相場なし <b>'+g.nomkt.length+'件</b>／後回し <b>'+g.high.length+'件</b>'
+    +(g.none.length?('／未調査 '+g.none.length+'件'):'')
+    +(g.picng.length?('／写真なし '+g.picng.length+'件'):'')+'</div>'
     /* 8.90 写真が使えなかった JAN の一覧と件数。 */
     +mwPicNgHtml();
   var sect=function(id,title,color,note,list){
@@ -24450,6 +24567,12 @@ function mwListRender(){
     +sect('mwok','① 出品候補（相場の115%以内）','var(--good)',
       '推奨売値が eBay の最安値（送料込み）の115%以内です。'
       +'<b>相場に対して安い順</b>に並べてあるので、写真はこの順に貼ってください。',g.ok)
+    /* 8.96 相場に合わせれば出せる（後回しのうち、相場の値段で出しても利益が残る）。 */
+    +sect('mwmktok','①\u2032 相場に合わせれば出せる','#1f6f8a',
+      '目標利益の売値は相場の115%を超えますが、<b>相場の値段（eBay の最安値の総額 − '
+      +'米国向けの請求送料）で出しても利益が '+yen(mwMktOkMin())+' 以上</b>残る商品です。'
+      +'出品リストに入れると、売値は自動で<b>「相場で出す」</b>になります。'
+      +'<b>相場で出したときの利益が大きい順</b>です。',g.mktok)
     +sect('mwnomkt','② 相場なし（eBayに出品なし）','',
       'eBay に同じ JAN の即決の出品がありません。相場は分かりませんが、'
       +'無在庫なので<b>推奨売値（＝目標利益がちょうど出る売値）で出します</b>'
@@ -32042,7 +32165,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v343';   // sw.js の const V と必ず同じ値にする
+var APP_V='v344';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
