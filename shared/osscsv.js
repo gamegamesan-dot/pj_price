@@ -56,8 +56,12 @@
   ];
   /* 在庫・値段を直すだけの CSV（【3】）。触らない項目は**列ごと出さない**
      （上書きで空にしないため）。 */
+  /* 8.98 Shopify の上書きインポートは **Title が必須**（無いと「商品名の列は必須です」で
+     止まる）。いま Shopify に出している題名と同じ値を入れる（変えないため）。
+     題名が分からない行は出さない（空の Title で上書きしない）。 */
   var UPD_COLS = [
     "Handle",
+    "Title",
     "Option1 Name",
     "Option1 Value",
     "Variant SKU",
@@ -490,6 +494,7 @@
     var qty = qtyOf(r);
     var row = {};
     row["Handle"] = handleOf(jan);
+    row["Title"] = fixTitleOf(r);
     row["Option1 Name"] = s(o1.name);
     row["Option1 Value"] = s(o1.value);
     row["Variant SKU"] = skuOf(jan);
@@ -515,6 +520,7 @@
       var r = items[i] || {};
       if (!janOk(r.jan)) continue;
       if (memberish(r)) continue;                  // 会員向けは混ぜない（【4】）
+      if (!fixTitleOf(r)) continue;                // 8.98 題名が分からない行は出さない
       out.push(updRowOf(r, opt));
     }
     return out;
@@ -526,8 +532,15 @@
      Handle・バリアントを見分ける列（Option1・SKU）・Variant Price だけなので、
      ほかの項目（説明・在庫・状態・画像・タグ）は上書きされない。
      会員向け（sub-・one-）は混ぜない。卸値・仕入れ先は入れない。 */
-  var PX_COLS = ["Handle", "Option1 Name", "Option1 Value", "Variant SKU",
+  var PX_COLS = ["Handle", "Title", "Option1 Name", "Option1 Value", "Variant SKU",
                  "Variant Price"];
+  /* 8.98 直しCSV の Title。いまの Shopify の題名（title）を最優先、
+     無ければ Shopify 用CSV と同じ作り方（titleEn）。どちらも無ければ ''。 */
+  function fixTitleOf(r) {
+    var x = r || {};
+    var t = s(x.title).replace(/\s+/g, " ").trim();
+    return t ? t.slice(0, 255) : titleOf(x);
+  }
   function pxRowsOf(items, opt) {
     var o = opt || {}, o1 = o.option1 || OPT1;
     var out = [], seen = {};
@@ -536,9 +549,10 @@
       if (!janOk(r.jan) || memberish(r)) continue;
       var jan = digits(r.jan), h = handleOf(jan);
       var p = Math.round(num(r.price));
-      if (seen[h] || !(p > 0)) continue;
+      if (seen[h] || !(p > 0) || !fixTitleOf(r)) continue;
       seen[h] = 1;
-      out.push({ "Handle": h, "Option1 Name": s(o1.name), "Option1 Value": s(o1.value),
+      out.push({ "Handle": h, "Title": fixTitleOf(r),
+                 "Option1 Name": s(o1.name), "Option1 Value": s(o1.value),
                  "Variant SKU": skuOf(jan), "Variant Price": String(p) });
     }
     return out;
@@ -548,19 +562,19 @@
 
   /* ---- 8.85 販売元（Vendor）だけを直す CSV ----
      もう Shopify に出ている os- の商品のうち、販売元が店の名前に
-     なっているものを直す。**Handle と Vendor の2列だけ**なので、
+     なっているものを直す。**Handle・Title（いまの題名のまま）・Vendor だけ**なので（8.98 で Title を足した）、
      ほかの項目（説明・値段・在庫・画像・タグ）は上書きされない。
      会員向け（sub-・one-）は混ぜない。 */
-  var VEND_COLS = ["Handle", "Vendor"];
+  var VEND_COLS = ["Handle", "Title", "Vendor"];
   function vendRowsOf(items) {
     var out = [], seen = {};
     for (var i = 0; i < (items || []).length; i++) {
       var r = items[i] || {};
       if (!janOk(r.jan) || memberish(r)) continue;
       var h = handleOf(digits(r.jan));
-      if (seen[h]) continue;
+      if (seen[h] || !fixTitleOf(r)) continue;     // 8.98 題名が分からない行は出さない
       seen[h] = 1;
-      out.push({ "Handle": h, "Vendor": vendorOf(r) });
+      out.push({ "Handle": h, "Title": fixTitleOf(r), "Vendor": vendorOf(r) });
     }
     return out;
   }
@@ -586,7 +600,7 @@
     pctOf: pctOf, yenOf: yenOf, priceOf: priceOf, gramsOf: gramsOf,
     /* 8.94 卸値（税込）＋目標利益＋決済手数料。 */
     PAY_DEF: PAY_DEF, SHIP_DEF: SHIP_DEF, PACK_DEF: PACK_DEF, payOf: payOf, taxCostOf: taxCostOf, profitOf: profitOf,
-    pxOf: pxOf, PX_COLS: PX_COLS, pxRowsOf: pxRowsOf, pxCsv: pxCsv, pxName: pxName,
+    pxOf: pxOf, PX_COLS: PX_COLS, fixTitleOf: fixTitleOf, pxRowsOf: pxRowsOf, pxCsv: pxCsv, pxName: pxName,
     qtyOf: qtyOf, costOf: costOf, picOk: picOk, picsOf: picsOf,
     tagNg: tagNg, tagsOf: tagsOf, whyNot: whyNot,
     rowOf: rowOf, picRows: picRows, rowsOf: rowsOf, split: split,

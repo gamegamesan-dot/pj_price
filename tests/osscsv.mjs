@@ -206,13 +206,18 @@ ok(A.updRowsOf([{...IT,member:true}],OPT).length===0,
 
 console.log('=== 8.94 値段だけを直す CSV ===');
 {
-  const px=A.pxCsv([{jan:'4902370550467',price:6230},{jan:'4902370550474',price:0},
-    {jan:'4902370550467',price:9999},{jan:'4902370550481',price:5000,member:true}],OPT);
+  const px=A.pxCsv([{jan:'4902370550467',price:6230,title:'Super Mario Party Jamboree Nintendo Switch Japan'},
+    {jan:'4902370550474',price:0,title:'X'},{jan:'4902370550467',price:9999,title:'Y'},
+    {jan:'4902370550481',price:5000,member:true,title:'Z'},{jan:'4902370550498',price:5000}],OPT);
   console.log('   '+px.split('\n').join(' | '));
-  ok(cells(px)[0].join()==='Handle,Option1 Name,Option1 Value,Variant SKU,Variant Price',
-     '★★★列は Handle・Option1・SKU・Variant Price だけ（在庫・状態・説明は上書きしない）');
+  ok(cells(px)[0].join()==='Handle,Title,Option1 Name,Option1 Value,Variant SKU,Variant Price',
+     '★★★列は Handle・Title・Option1・SKU・Variant Price だけ（在庫・状態・説明は上書きしない。Title は必須・8.98）');
   ok(cells(px).length===2&&cell(px,1,'Handle')==='os-4902370550467'&&cell(px,1,'Variant Price')==='6230'
-     &&cell(px,1,'Variant SKU')==='W-4902370550467','★★値段が出せない行・同じ Handle・会員向けは入れない');
+     &&cell(px,1,'Title')==='Super Mario Party Jamboree Nintendo Switch Japan'
+     &&cell(px,1,'Variant SKU')==='W-4902370550467','★★値段が出せない行・同じ Handle・会員向け・題名が分からない行は入れない');
+  ok(A.fixTitleOf({title:'  Shop  Title '})==='Shop Title'&&A.fixTitleOf({titleEn:'From eBay'})==='From eBay'
+     &&A.fixTitleOf({})==='','★★Title はいまの Shopify の題名 → 無ければ英題（8.98）');
+  ok(A.UPD_COLS[1]==='Title'&&A.VEND_COLS.join()==='Handle,Title,Vendor','★★★在庫の直し・販売元の直しにも Title（8.98）');
   ok(!/3500|3850|wholesale|いろは/.test(px),'★★★卸値・仕入れ先は入れない');
   ok(A.pxName(DAY,1,5)==='shopify-os-price-20261113-01-5.csv','★ファイル名');
 }

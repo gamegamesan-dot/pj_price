@@ -16886,8 +16886,79 @@ async function osList(env) {
     res.rows.push({ jan: String(r.jan), handle: String(r.handle || ""),
                     name: String(r.name || ""), at: String(r.at || "") });
   res.n = res.rows.length;
+  await osShopAttach(env, res);          // 8.98 直しCSV の Title に使う
   res.ok = true;
   return res;
+}
+/* ===== 8.98（カジの報告）os- の商品を Shopify から読む（読むだけ）=====
+   直しCSV（値段・在庫・販売元）の上書きインポートは **Title の列が必須**だった。
+   pj-sync の控え（os_item.name）は 120文字で切っており、Shopify で題名を直して
+   いれば違う値になるので、**いまの Shopify の題名**を管理 API で読む。
+   あわせて状態（ACTIVE／DRAFT／ARCHIVED／UNLISTED）とオンラインストアへの公開も読み、
+   公開していない商品は値段の直しに入れない（os_item は「Shopify 用CSV を書き出した
+   とき」に控えるので、下書きのまま・読み込んでいない・消した商品も残る）。
+   何も書き込まない。会員用（sub-・one-）は扱わない（Handle が os- のものだけ）。 */
+const SHOP_Q_OS = `query pjOsList($q: String!, $after: String, $on: ID!) {
+  products(first: 100, query: $q, after: $after) {
+    nodes { handle title status on: publishedOnPublication(publicationId: $on) }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+const SHOP_Q_OSONE = `query pjOsOne($identifier: ProductIdentifierInput!, $on: ID!) {
+  productByIdentifier(identifier: $identifier) {
+    handle title status on: publishedOnPublication(publicationId: $on)
+  }
+}`;
+const OS_SHOP_PAGES = 30;          // 100件ずつ最大 3,000件
+const OS_SHOP_ONE_MAX = 40;        // タグで見つからなかった商品を1件ずつ見る上限
+async function osShopMap(env, run, handles) {
+  const out = { ok: false, why: "", map: {}, n: 0 };
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const rdy = await shopReady(env, run, st);
+  if (!rdy.ok) { out.why = shopWhyJa(rdy); return out; }
+  const want = {};
+  for (const h of (handles || [])) want[String(h || "").toLowerCase()] = 1;
+  /* ① Shopify 用CSV が付けるタグ（export）で、まとめて読む。 */
+  let after = null;
+  for (let i = 0; i < OS_SHOP_PAGES; i++) {
+    const r = await shopGql(env, run, rdy.host, SHOP_Q_OS,
+      { q: "tag:" + OSSCSV.TAG_EXPORT, after: after, on: rdy.pub });
+    if (!r.ok) { out.why = shopWhyJa(r); return out; }
+    const pg = ((r.data || {}).products) || {};
+    for (const x of (pg.nodes || [])) {
+      const h = String((x && x.handle) || "").toLowerCase();
+      if (!/^os-\d+$/.test(h)) continue;          // os- だけ（会員用は扱わない）
+      out.map[h] = { status: String(x.status || "").toUpperCase(),
+                     title: String(x.title || ""), on: x.on !== false };
+    }
+    const pi = pg.pageInfo || {};
+    if (!pi.hasNextPage || !pi.endCursor) break;
+    after = pi.endCursor;
+  }
+  /* ② タグで見つからなかった商品は、Handle で1件ずつ（タグを外した商品・消した商品）。 */
+  let one = 0;
+  for (const h of Object.keys(want)) {
+    if (out.map[h] || !/^os-\d+$/.test(h)) continue;
+    if (one++ >= OS_SHOP_ONE_MAX) break;
+    const r = await shopGql(env, run, rdy.host, SHOP_Q_OSONE,
+      { identifier: { handle: h }, on: rdy.pub });
+    if (!r.ok) continue;
+    const x = (r.data || {}).productByIdentifier;
+    out.map[h] = x ? { status: String(x.status || "").toUpperCase(),
+                       title: String(x.title || ""), on: x.on !== false }
+                   : { status: "MISSING", title: "", on: false };
+  }
+  out.n = Object.keys(out.map).length;
+  out.ok = true;
+  return out;
+}
+/* その行に Shopify の状態を付ける（公開＝ACTIVE かつオンラインストアに公開）。 */
+function osShopOf(map, handle) {
+  const x = (map || {})[String(handle || "").toLowerCase()];
+  if (!x) return { status: "", title: "", on: false, live: false };
+  return { status: x.status, title: x.title, on: !!x.on,
+           live: x.status === "ACTIVE" && !!x.on };
 }
 /* ===== 8.94（カジの依頼）os- の値段だけを直す =====
    GET /os/px … Shopify に出した os- の商品の、いまの MW の卸値（画面が
@@ -16917,8 +16988,22 @@ async function osPxList(env) {
       now_px: Math.round(Number(r.now_px) || 0),
       why: String(r.fix_why || "") });
   res.n = res.rows.length;
+  /* 8.98 いまの Shopify の題名・状態（読むだけ）。 */
+  await osShopAttach(env, res);
   res.ok = true;
   return res;
+}
+async function osShopAttach(env, res) {
+  const run = newRun("os-shop");
+  try {
+    const sm = await osShopMap(env, run, res.rows.map((x) => x.handle));
+    res.shop_ok = sm.ok;
+    res.shop_why = sm.why;
+    for (const x of res.rows) x.shop = sm.ok ? osShopOf(sm.map, x.handle) : null;
+  } catch (e) {
+    res.shop_ok = false;
+    res.shop_why = String((e && e.message) || e);
+  }
 }
 /* POST /os/px { at, items:[{ jan, price, wholesale }] } … 値段の直しCSV を
    作った（値段と、そのときの卸値を控える）。数量・品切れの印は触らない
@@ -16996,6 +17081,7 @@ async function osDiff(env, url) {
       now_px: Math.round(Number(r.now_px) || 0),
     });
   res.n = res.rows.length;
+  if (res.n) await osShopAttach(env, res);   // 8.98 直しCSV の Title に使う
   res.ok = true;
   return res;
 }
@@ -23074,7 +23160,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   mwPicNgPut, MW_PIC_NG_DAYS,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,
-  OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF, osPxList, osPxDone,
+  OS_MAX, OS_FIX_MAX, OS_PX_PCT_DEF, osPxList, osPxDone, osShopMap, osShopOf,
   subCardHash, subPostBind, subPostIns,
   /* 8.28（カジの依頼1）まとめて配る（警告・チャンネル名・間隔）。 */
   subWarnsOf, subShipInfo, dcChName, SUB_GAP_MS, SUB_SEND_BUDGET_MS,

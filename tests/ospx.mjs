@@ -84,13 +84,13 @@ console.log('\n=== ② GET /os/px ===');
 
 console.log('\n=== ④ 値段の直しCSV ===');
 {
-  const go=[{ jan:J1, price:8668, wholesale:5200 },{ jan:J2, price:5488, wholesale:3000 }];
+  const go=[{ jan:J1, price:8668, wholesale:5200, title:'Octopath Traveler 0' },{ jan:J2, price:5488, wholesale:3000, title:'Game 2' }];
   const csv=OSS.pxCsv(go,OPT);
   console.log('   '+csv.replace(/\n/g,' | '));
-  ok(csv.split('\n')[0]==='Handle,Option1 Name,Option1 Value,Variant SKU,Variant Price',
-     '★★★列は Handle・Option1・SKU・Variant Price だけ');
+  ok(csv.split('\n')[0]==='Handle,Title,Option1 Name,Option1 Value,Variant SKU,Variant Price',
+     '★★★列は Handle・Title・Option1・SKU・Variant Price だけ（8.98）');
   ok(!/5200|3000|wholesale|いろは/.test(csv),'★★★卸値・仕入れ先は CSV に入らない');
-  ok(/os-4902370550467,Title,Default Title,W-4902370550467,8668/.test(csv),'★★Handle と SKU で突き合わせる');
+  ok(/os-4902370550467,Octopath Traveler 0,Title,Default Title,W-4902370550467,8668/.test(csv),'★★Handle と SKU で突き合わせる');
 }
 
 T.done();

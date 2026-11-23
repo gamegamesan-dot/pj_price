@@ -86,10 +86,12 @@ console.log('\n=== ③ 説明の「Brand」の行は今までどおり ===');
 
 console.log('\n=== ④ 直しCSV（Handle と Vendor の2列だけ）===');
 {
-  const items=[{ jan:J, vendor:'Nintendo' },
-               { jan:'4902370550474', vendor:'' },
-               { jan:'4902370550481', vendor:'Bandai Namco Entertainment, Inc.' },
-               { jan:J, vendor:'重複' },
+  /* 8.98 Title（必須）はいまの Shopify の題名。分からない行は出さない。 */
+  const items=[{ jan:J, vendor:'Nintendo', title:'Game A' },
+               { jan:'4902370550474', vendor:'', title:'Game B' },
+               { jan:'4902370550481', vendor:'Bandai Namco Entertainment, Inc.', title:'Game C' },
+               { jan:J, vendor:'重複', title:'Game A' },
+               { jan:'4902370550528', vendor:'NoTitle' },
                { jan:'4902370550498', vendor:'X', member:true },
                { jan:'4902370550504', vendor:'Y', handle:'sub-4902370550504' },
                { jan:'4902370550511', vendor:'Z', handle:'one-12' },
@@ -97,18 +99,18 @@ console.log('\n=== ④ 直しCSV（Handle と Vendor の2列だけ）===');
   const csv=OSS.vendCsv(items);
   console.log(csv.trim().split('\n').map((l)=>'   '+l).join('\n'));
   const rows=SHOPCSV.splitCsv(csv);
-  ok(rows[0].join('|')==='Handle|Vendor'&&OSS.VEND_COLS.join('|')==='Handle|Vendor',
-     '★★★列は Handle と Vendor の2つだけ（ほかの項目を上書きしない）');
-  ok(rows.length===4,'★★行は3つ（重複・会員向け・JAN でない行は入れない）');
-  ok(rows[1][0]==='os-'+J&&rows[1][1]==='Nintendo','★★★Handle は os-<JAN>・Vendor は発売元');
-  ok(rows[2][0]==='os-4902370550474'&&rows[2][1]==='',
+  ok(rows[0].join('|')==='Handle|Title|Vendor'&&OSS.VEND_COLS.join('|')==='Handle|Title|Vendor',
+     '★★★列は Handle・Title（いまの題名のまま）・Vendor だけ（ほかの項目を上書きしない・8.98）');
+  ok(rows.length===4,'★★行は3つ（重複・会員向け・JAN でない行・題名が分からない行は入れない）');
+  ok(rows[1][0]==='os-'+J&&rows[1][1]==='Game A'&&rows[1][2]==='Nintendo','★★★Handle は os-<JAN>・Title・Vendor は発売元');
+  ok(rows[2][0]==='os-4902370550474'&&rows[2][2]==='',
      '★★★分からない行は Vendor を空欄で出す（店の名前を消す）');
-  ok(rows[3][1]==='Bandai Namco Entertainment, Inc.','★カンマの入った名前も壊れない');
-  ok(rows.every((r)=>r.length===2),'★どの行も2列');
+  ok(rows[3][2]==='Bandai Namco Entertainment, Inc.','★カンマの入った名前も壊れない');
+  ok(rows.every((r)=>r.length===3),'★どの行も3列');
   ok(!/sub-|one-/.test(csv),'★★★会員用（sub-）・1点もの（one-）は混ぜない');
   ok(OSS.vendName(new Date('2026-11-21T03:00:00Z'),2,15)==='shopify-os-vendor-20261121-02-15.csv',
      '★ファイル名に日付・通し番号・件数が入る');
-  ok(OSS.vendCsv([])==='Handle,Vendor\n','★0件でも見出しだけは出る');
+  ok(OSS.vendCsv([])==='Handle,Title,Vendor\n','★0件でも見出しだけは出る');
 }
 
 console.log('\n=== ⑤ 会員用（sub-）の CSV は変えない ===');
@@ -149,8 +151,9 @@ console.log('\n=== ⑥ pj-sync：GET /os/list ===');
   ok(r.ok===true&&r.n===2,'★★★書き出した os- の商品を返す（2件）');
   ok(r.rows.every((x)=>/^os-\d{13}$/.test(x.handle)&&x.jan&&x.name&&x.at),
      '★★JAN・Handle・名前・書き出した日時');
-  ok(r.rows.every((x)=>Object.keys(x).sort().join()==='at,handle,jan,name'),
-     '★★★卸値・値段・在庫は返さない');
+  /* 8.98 いまの Shopify の題名・状態（shop）も返す（直しCSV の Title に使う）。 */
+  ok(r.rows.every((x)=>Object.keys(x).sort().join()==='at,handle,jan,name,shop'),
+     '★★★卸値・値段・在庫は返さない（Shopify の題名・状態だけ足す）');
   const after=JSON.stringify((await env.DB.prepare(
     `SELECT * FROM os_item ORDER BY jan`).all()).results);
   ok(before===after,'★★★読むだけ（控えは何も変えない）');

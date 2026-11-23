@@ -13031,7 +13031,10 @@ function csvOsVendPlan(list){
     /* 前からブランドが入っていた行は、Shopify でも販売元がブランドのはず。 */
     if(OSS.brandWord(csvOsBrandOld(r))){ out.kept.push(jan); return; }
     var v=csvOsVendorOf(r);
+    /* 8.98 Title はいまの Shopify の題名（読めなければ Shopify 用CSV と同じ英題）。 */
+    if(x.shop&&x.shop.status==='MISSING'){ out.gone.push({ jan:jan, name:String(x.name||'') }); return; }
     (v?out.go:out.blank).push({ jan:jan, vendor:v,
+      title:String((x.shop&&x.shop.title)||OSS.titleOf(r)||''),
       name:String(r.titleEn||r.titleJa||x.name||'') });
   });
   return out;
@@ -13070,7 +13073,7 @@ function csvOsVendGo(){
       csvExportFilesUI();
       var okd=csvDownload(name,text);
       note.innerHTML='<div class="okbox" id="csvOsVendBox">'+(okd?'✓ ':'')+head
-        +'<br><b>'+esc(name)+'</b> を作りました（<b>Handle と Vendor の2列だけ</b>。'
+        +'<br><b>'+esc(name)+'</b> を作りました（<b>Handle・Title（いまの題名のまま）・Vendor だけ</b>。'
         +'説明・値段・在庫・画像・タグは変えません）。'
         +'<br>Shopify の <b>商品 → インポート</b>で'
         +'「Overwrite products with matching handles」にチェックして読み込んでください。'
@@ -13276,21 +13279,25 @@ function csvOsFixGo(){
       if(!rows.length){ note.textContent='直すものはありません。'; return; }
       var go=[], skip=[], o=osOpt();
       rows.forEach(function(x){
+        /* 8.98 Title（必須）はいまの Shopify の題名。読めなければ出品リストの英題。 */
+        var r0=csvRowByJan(x.jan);
+        var ttl=String((x.shop&&x.shop.title)||(r0?OSS.titleOf(r0):'')||'');
+        if(!ttl){ skip.push(x); return; }
         if(String(x.why||'').indexOf('gone')>=0){
           /* 品切れ：数量0・下書き。値段は前のまま（変えない）。 */
-          go.push({ jan:x.jan, qty:0, price:x.price, why:'品切れ' });
+          go.push({ jan:x.jan, qty:0, price:x.price, why:'品切れ', title:ttl });
           return;
         }
-        var r=csvRowByJan(x.jan);
+        var r=r0;
         if(!r){ skip.push(x); return; }
         /* 8.94 値段は卸値（いまの MW の卸値）から出す。 */
         var wh=(+x.now_px||0)>0?+x.now_px:(+r.mwWholesale||0);
-        go.push({ jan:x.jan, qty:+r.qty||0,
+        go.push({ jan:x.jan, qty:+r.qty||0, title:ttl,
                   price:OSS.priceOf({ wholesale:wh },o), why:'値段' });
       });
       if(!go.length){
         note.innerHTML='<b>直せる行がありません。</b>値段が変わった '
-          +skip.length+'件は出品リストにありません。'
+          +skip.length+'件は出品リストに無いか、Shopify の題名が分かりません。'
           +'MW の候補から出品リストに入れ直して書き出してください。';
         return;
       }
@@ -13322,9 +13329,61 @@ function csvOsFixGo(){
    pj-sync に控えてある os- の商品（Shopify に出したもの）を、いまの MW の
    卸値から新しい式で出し直し、値段が変わる商品だけを CSV にする
    （Handle・Option1・SKU・Variant Price だけ。卸値・仕入れ先は入れない）。 */
+/* 8.98（カジの報告）直前に作った値段の直しCSV を、Shopify に読み込むまで控える
+   （この端末だけ）。「Shopify に読み込みました」を押したときに pj-sync に記録する。
+   v345 までは作った時点で記録していたので、読み込む前に CSV を失うと作り直せなかった。 */
+var OS_PX_PEND_KEY='pj:ospx:pending:v1';
+function osPxPendGet(){
+  try{ var o=JSON.parse(lsGet(OS_PX_PEND_KEY)||'null'); return (o&&o.text&&o.items)?o:null; }
+  catch(e){ return null; }
+}
+function osPxPendSet(o){
+  try{ if(o)lsSet(OS_PX_PEND_KEY,JSON.stringify(o)); else lsSet(OS_PX_PEND_KEY,''); }catch(e){}
+}
+function osPxPendHtml(){
+  var pd=osPxPendGet(); if(!pd)return '';
+  return '<div class="warn" id="csvOsPxPend" style="margin-top:6px">'
+    +'<b>まだ Shopify に読み込んだ印を付けていない値段の直しCSV</b>：'+esc(pd.name)
+    +'（'+mwN(pd.items.length)+'件・'+esc(String(pd.at_jst||''))+' に作成）'
+    +'<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">'
+    +'<button class="btn" id="csvOsPxAgain" style="flex:1" onclick="csvOsPxAgain();return false">もう一度同じ CSV を出す</button>'
+    +'<button class="btn primary" id="csvOsPxDone" style="flex:1" onclick="csvOsPxDoneGo();return false">Shopify に読み込みました</button>'
+    +'</div><div class="note2" style="margin:4px 0 0">読み込みが終わったら「Shopify に読み込みました」を押してください。'
+    +'押すまでは pj-sync に記録しないので、何度でも同じ CSV を出せます。</div></div>';
+}
+function csvOsPxAgain(){
+  var pd=osPxPendGet(); if(!pd)return;
+  csvLastFiles=[{ name:pd.name, text:pd.text, label:'Shopify の値段の直し（'+pd.items.length+'件）' }];
+  csvExportFilesUI();
+  csvDownload(pd.name,pd.text);
+}
+function csvOsPxDoneGo(){
+  var pd=osPxPendGet(); if(!pd)return;
+  var note=$('csvOsPxNote');
+  return mwPost('/os/px',{ items:pd.items.map(function(x){
+      return { jan:x.jan, price:x.price, wholesale:x.wholesale }; }) })
+    .then(function(d){
+      if(!d||d.ok!==true)throw new Error(String((d&&(d.detail||d.error))||'記録できませんでした'));
+      osPxPendSet(null);
+      note.innerHTML='<div class="okbox">✓ <b>'+mwN(+d.n||0)+'件</b>の値段を、Shopify に読み込んだ値として記録しました。</div>';
+    })['catch'](function(e){
+      note.innerHTML='<span style="color:var(--bad)">⚠ 記録できませんでした：'+esc(e.message)
+        +'（もう一度押してください）</span>'+osPxPendHtml();
+    });
+}
+var OS_SHOP_JA={ ACTIVE:'公開', DRAFT:'下書き', ARCHIVED:'アーカイブ', UNLISTED:'非公開', MISSING:'Shopify に無い' };
+/* ===== 8.94（カジの依頼）値段だけを直す CSV =====
+   pj-sync に控えてある os- の商品（Shopify 用CSV を書き出したもの）を、いまの MW の
+   卸値から新しい式で出し直し、値段が変わる商品だけを CSV にする
+   （Handle・Title・Option1・SKU・Variant Price だけ。卸値・仕入れ先は入れない）。
+   8.98：Shopify で**公開している**（ACTIVE・オンラインストアに公開）商品だけ。
+   Title はいまの Shopify の題名（管理 API で読む）。 */
 function csvOsPxGo(){
   var note=$('csvOsPxNote');
   if(!syncUrl()||!syncApiKey()){ note.textContent='pj-sync のURLとキーを⚙設定に入れてください。'; return; }
+  var pd0=osPxPendGet();
+  if(pd0&&!confirm('まだ「Shopify に読み込みました」を押していない値段の直しCSV（'+pd0.items.length
+    +'件）があります。作り直しますか？\n（読み込み済みなら、先に「Shopify に読み込みました」を押してください）'))return;
   note.textContent='pj-sync に聞いています…';
   return fetch(syncUrl()+'/os/px',{ headers:{'X-PJ-Key':syncApiKey()} })
     .then(function(r){ return r.ok?r.json():null; })
@@ -13334,17 +13393,29 @@ function csvOsPxGo(){
           +'。pj-sync のデプロイが要ります。';
         return;
       }
-      var o=osOpt(), go=[], same=0, none=[];
+      if(d.shop_ok!==true){
+        note.innerHTML='<span style="color:var(--bad)">⚠ Shopify の題名と公開の状態を読めませんでした'
+          +(d.shop_why?('（'+esc(String(d.shop_why))+'）'):'')+'。Title が要るので、値段の直しCSV は作りません。</span>';
+        return;
+      }
+      var o=osOpt(), go=[], same=0, none=[], off=[];
       (d.rows||[]).forEach(function(x){
+        var sh=x.shop||{};
+        if(!sh.live){ off.push({ jan:x.jan, name:x.name, why:(OS_SHOP_JA[sh.status]||(sh.status?sh.status:'Shopify に無い'))
+          +(sh.status==='ACTIVE'&&!sh.on?'（オンラインストアに出ていない）':'') }); return; }
         var wh=(+x.now_px||0)>0?+x.now_px:(+x.wholesale||0);
         var z=OSS.pxOf({ wholesale:wh },o);
         if(!(z.price>0)){ none.push(x); return; }
         if(z.price===(+x.price||0)){ same++; return; }
-        go.push({ jan:x.jan, name:x.name, was:+x.price||0, price:z.price, wholesale:wh, z:z });
+        go.push({ jan:x.jan, name:x.name, title:sh.title, was:+x.price||0, price:z.price, wholesale:wh });
       });
+      var offHtml=off.length?('<br>公開していないので入れなかった <b>'+mwN(off.length)+'件</b>：'
+        +off.slice(0,10).map(function(x){ return esc(x.jan)+'（'+esc(x.why)+'）'; }).join('　')
+        +(off.length>10?'　…':'')):'';
       if(!go.length){
+        osPxPendSet(null);
         note.innerHTML='値段が変わる商品はありません（同じ '+same+'件'
-          +(none.length?('・卸値が分からない '+none.length+'件'):'')+'）。';
+          +(none.length?('・卸値が分からない '+none.length+'件'):'')+'）。'+offHtml;
         return;
       }
       var name=OSS.pxName(new Date(),osSeqNext(),go.length);
@@ -13352,17 +13423,16 @@ function csvOsPxGo(){
       csvLastFiles=[{ name:name, text:text, label:'Shopify の値段の直し（'+go.length+'件）' }];
       csvExportFilesUI();
       var okd=csvDownload(name,text);
-      fetch(syncUrl()+'/os/px',{ method:'POST',
-        headers:{'X-PJ-Key':syncApiKey(),'content-type':'application/json'},
-        body:JSON.stringify({ items:go.map(function(x){
-          return { jan:x.jan, price:x.price, wholesale:x.wholesale }; }) }) })['catch'](function(){});
+      /* 8.98 ここでは pj-sync に記録しない（「Shopify に読み込みました」を押したときに記録）。 */
+      osPxPendSet({ name:name, text:text, at:new Date().toISOString(), at_jst:jstShort(new Date().toISOString()),
+        items:go.map(function(x){ return { jan:x.jan, price:x.price, wholesale:x.wholesale }; }) });
       note.innerHTML='<div class="okbox">'+(okd?'✓ ':'')+'<b>'+go.length+'件</b>の値段の直しCSVを作りました'
         +'（変わらない '+same+'件'+(none.length?('・卸値が分からない '+none.length+'件'):'')+'）。'
         +'<br>Shopify の <b>商品 → インポート</b>で「Overwrite products with matching handles」に'
-        +'チェックして読み込んでください（値段だけが変わります）。'
+        +'チェックして読み込んでください（Title はいまの題名のまま・値段だけが変わります）。'
         +'<br>'+go.slice(0,10).map(function(x){
-          return esc(String(x.name||x.jan).slice(0,24))+'：'+yen(x.was)+' → <b>'+yen(x.price)+'</b>'; }).join('<br>')
-        +(go.length>10?('<br>…ほか '+(go.length-10)+'件'):'')+'</div>';
+          return esc(String(x.title||x.name||x.jan).slice(0,24))+'：'+yen(x.was)+' → <b>'+yen(x.price)+'</b>'; }).join('<br>')
+        +(go.length>10?('<br>…ほか '+(go.length-10)+'件'):'')+offHtml+'</div>'+osPxPendHtml();
     })
     ['catch'](function(){ note.textContent='pj-sync につながりませんでした。'; });
 }
@@ -13480,6 +13550,8 @@ $('csvOsReset').onclick=function(){ csvOsResetRun(); };
 $('csvOsFix').onclick=function(){ csvOsFixGo(); };
 $('csvOsVend').onclick=function(){ csvOsVendGo(); };
 $('csvOsPx').onclick=function(){ csvOsPxGo(); };
+/* 8.98 読み込んだ印をまだ付けていない値段の直しCSV があれば、開いたときにも出す。 */
+try{ if(osPxPendGet()&&$('csvOsPxNote'))$('csvOsPxNote').innerHTML=osPxPendHtml(); }catch(e){}
 ['osProfitEbay','osProfitBase','osProfitRate','osPayPct','osShipFee','osPackFee','baseProfit','linkRate','fx','osPricePct']
   .forEach(function(id){ var el=$(id); if(!el)return;
     el.addEventListener(el.type==='checkbox'?'change':'input',function(){ try{ osPxCfgRender(); }catch(e){} }); });
@@ -32170,7 +32242,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v345';   // sw.js の const V と必ず同じ値にする
+var APP_V='v346';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

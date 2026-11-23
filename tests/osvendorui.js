@@ -173,12 +173,12 @@ console.log('\n=== ⑤ 販売元（Vendor）の直しCSV ===');
   console.log('   '+t.note.replace(/\s+/g,' ').slice(0,200));
   console.log(t.text.trim().split('\n').map((l)=>'   '+l).join('\n'));
   const rows=t.text.trim().split('\n');
-  ok(rows[0]==='Handle,Vendor','★★★直しCSV は Handle と Vendor の2列だけ');
+  ok(rows[0]==='Handle,Title,Vendor','★★★直しCSV は Handle・Title・Vendor だけ（8.98）');
   ok(rows.length===6,'★★★直す対象は5件（前からブランドが入っている2件は入れない）');
-  ok(rows.indexOf('os-4902370551001,Nintendo')>0&&rows.indexOf('os-4902370551005,Sega')>0,
+  ok(rows.some((l)=>/^os-4902370551001,[^,]+,Nintendo$/.test(l))&&rows.some((l)=>/^os-4902370551005,[^,]+,Sega$/.test(l)),
      '★★★発売元が分かるゲームに、発売元を入れる');
-  ok(rows.indexOf('os-4902370551002,')>0&&rows.indexOf('os-4902370551004,')>0
-     &&rows.indexOf('os-4902370551006,')>0,
+  ok(rows.some((l)=>/^os-4902370551002,[^,]+,$/.test(l))&&rows.some((l)=>/^os-4902370551004,[^,]+,$/.test(l))
+     &&rows.some((l)=>/^os-4902370551006,[^,]+,$/.test(l)),
      '★★★分からない行は Vendor を空欄にする（店の名前を消す）');
   ok(!/os-4902370551003|os-4902370551007|os-4902370559999/.test(t.text),
      '★★前からブランドが入っている行・出品リストに無い行は入れない');
@@ -191,7 +191,7 @@ console.log('\n=== ⑤ 販売元（Vendor）の直しCSV ===');
      &&/1件は出品リストに無いので分かりません/.test(t.note),
      '★★対象外と、出品リストに無い件数も出す');
   ok(/Overwrite products with matching handles/.test(t.note)
-     &&/Handle と Vendor の2列だけ/.test(t.note),'★読み込み方を出す');
+     &&/Handle・Title（いまの題名のまま）・Vendor だけ/.test(t.note),'★読み込み方を出す');
   ok(/^shopify-os-vendor-\d{8}-\d{2}-5\.csv$/.test(t.name),'★ファイル名に件数が入る：'+t.name);
   ok(t.calls.join()==='GET /os/list'&&t.same,
      '★★★pj-sync は読むだけ・出品リストも書き換えない（CSV を作るだけ）');
