@@ -6257,6 +6257,37 @@ async function notifyEmbeds(env, run, head, title, list, opt) {
   return sent;
 }
 
+/* 8.97（カジの依頼）取り込みの知らせ（1通）に入れる「eBay の数量0」の行。
+   歯止めが効いた回（3割の歯止め・数量0の歯止め）は、ほかに知らせることが
+   無くても必ず出す（must）。 */
+function mwZeroLines(res) {
+  const x = res || {};
+  const out = { lines: [], must: false };
+  if (x.warn) {
+    out.must = true;
+    out.lines.push("⚠ 今回は欠品にしていません（取り込めた行が、生きている行より"
+      + "3割以上少ない）。**eBay の数量0も書き込んでいません**。CSV を確かめてください");
+    return out;
+  }
+  if (x.zero_guard) {
+    out.must = true;
+    out.lines.push("⚠ " + x.zero_guard);
+    return out;
+  }
+  if (x.zero_on === false) {
+    if (Number(x.gone_jan) > 0)
+      out.lines.push("・eBay の数量0は日次（JST 3時台）に書き込みます（⚙「欠品は取り込みのたびに数量0にする」がオフ）");
+    return out;
+  }
+  if (x.zero_on === undefined) return out;
+  const z = Number(x.zeroed) || 0, left = Number(x.zero_left) || 0,
+        bad = Number(x.zero_failed) || 0;
+  out.lines.push("・eBay の数量を0にした " + z + "件"
+    + (left ? ("（1回の上限 " + MW_D_MAX + "件を超えた " + left + "件は次の取り込みで）") : "")
+    + (bad ? ("・失敗 " + bad + "件（次の取り込みでやり直します）") : ""));
+  if (z || left || bad) out.must = true;
+  return out;
+}
 async function mwImportNotify(env, run, at, res) {
   let st = {};
   try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
@@ -6265,7 +6296,8 @@ async function mwImportNotify(env, run, at, res) {
   const onDrop = mwNtOn(st, "mwNtDrop", true);   // W- の無在庫が欠品
   const onBuy = mwNtOn(st, "mwNtBuy", true);     // 仕入れる印の商品が売り切れ
   const onNew = mwNtOn(st, "mwNtNew", true);     // 新入荷
-  if (!onDrop && !onBuy && !onNew) return false;
+  const zl = mwZeroLines(res);                   // 8.97 eBay の数量0の行
+  if (!onDrop && !onBuy && !onNew && !zl.must) return false;
   /* 3割の歯止めが効いた回は、欠品にしていないので在庫切れは知らせない。 */
   const gone = res.warn ? [] : await mwNtGone(env, at, st);
   const zero = res.warn ? [] : await mwNtZero(env, at, st);
@@ -6290,7 +6322,8 @@ async function mwImportNotify(env, run, at, res) {
   /* 関係のない欠品。7.126（【T】）からは**商品ごとにも出せる**（mwNtRest）。 */
   const restRows = all.filter((x) => !x.ebay && !x.buy && !x.amz_hope);
   const rest = restRows.length;
-  if (!drop.length && !buy.length && !hope.length && !fresh.length && !rest)
+  if (!drop.length && !buy.length && !hope.length && !fresh.length && !rest
+      && !zl.must)
     return false;
   /* 同じ商品を毎回言わない（在庫0のぶん。CSV から消えた分は1回だけ起きる）。
      7.126：そのほかの欠品も商品ごとに出すので、**それも**見る
@@ -6302,7 +6335,8 @@ async function mwImportNotify(env, run, at, res) {
   const hope2 = hope.filter((x) => !seen[x.jan]);
   const seenN = await mwNtSeen(env, "new", fresh.map((x) => x.jan));
   const nw2 = fresh.filter((x) => !seenN[x.jan]);
-  if (!drop2.length && !buy2.length && !hope2.length && !nw2.length && !rest)
+  if (!drop2.length && !buy2.length && !hope2.length && !nw2.length && !rest
+      && !zl.must)
     return false;
   /* 7.126（【T】）詳しい一覧の送り先（スレッドID が入っていればそこへ）。 */
   const thread = String(st.mwNtThread || "").replace(/\D/g, "");
@@ -6315,7 +6349,7 @@ async function mwImportNotify(env, run, at, res) {
     "・今回 新しく欠品 " + (res.gone_jan || 0) + "件"
     + "（欠品の合計 " + (res.gone_all_jan || 0) + "件）"
     + "／新しく出てきた " + (res.added_jan || 0) + "件"
-    + "／欠品から戻った " + (res.back_jan || 0) + "件"];
+    + "／欠品から戻った " + (res.back_jan || 0) + "件"].concat(zl.lines);
   /* 7.126（【T】）「そのほかの欠品」も**商品ごとに**出す（既定オン）。
      ⚙ mwNtRest をオフにすると、今までどおり件数だけになる。 */
   const onRest = mwNtOn(st, "mwNtRest", true);
@@ -6386,7 +6420,7 @@ async function mwImportNotify(env, run, at, res) {
       + "通）に達したので、次の区分は出していません："
       + over.join("／") + "（⚙「知らせに出す件数」で減らせます）", toTh);
   /* 1つも埋め込みを送らなかった（件数だけの回）ときは、文だけ送る。 */
-  if (!sent && rest) await sendHead();
+  if (!sent && (rest || zl.must)) await sendHead();     // 8.97 数量0・歯止めの行も
   await mwNtMark(env, "sold",
     drop2.concat(buy2).concat(hope2).concat(rest2).map((x) => x.jan), at);
   await mwNtMark(env, "new", nw2.map((x) => x.jan), at);
@@ -7682,13 +7716,23 @@ async function mwStockPut(env, body) {
          数量を減らす方向なので確認を待たない（売り越しが一番まずい）。
          値上げと数量1に戻すのは今までどおり（毎時は予定・日次で実行）。 */
       try {
-        /* 何か動いたときだけ走らせる（欠品が出た・在庫数が変わった）。
-           3割の歯止めが効いたときは何も消していないので走らせない。 */
-        if (!res.warn && (res.gone > 0 || res.changed > 0)) {
+        /* 8.97（カジの依頼）⚙「欠品は取り込みのたびに数量0にする」（既定オン）。
+           オフなら今までの日次（JST 3時台）だけ。
+           3割の歯止め（取り込みの行が3割以上少ない）が効いた回は何も消して
+           いないので走らせない。**毎回の取り込みで走らせる**（前の回で上限
+           （60件）を超えたぶん・失敗したぶんを、次の取り込みでやり直すため）。 */
+        let stZ = {};
+        try { stZ = (await settingsGet(env)).settings || {}; } catch (e) { stZ = {}; }
+        res.zero_on = mwNtOn(stZ, "mwZeroOnImport", true);
+        if (res.zero_on && !res.warn) {
           /* 7.110：知らせは取り込みの1通にまとめるので、ここでは出さない。 */
           const z = await jobMwDrop(env, { approve: true, only: "zero",
-                                           quiet: true });
-          res.zeroed = Number((z && z.zero) || 0);
+                                           quiet: true, guard: true });
+          res.zeroed = Number((z && z.mode === "auto" && !z.guard && z.zero) || 0);
+          res.zero_need = Number((z && z.need) || 0);
+          res.zero_left = Number((z && z.left) || 0);
+          res.zero_failed = Number((z && z.failed) || 0);
+          res.zero_guard = String((z && z.guard) || "");
           if (res.zeroed)
             run.notes.push("欠品した出品 " + res.zeroed + "件の数量を0にしました");
         }
@@ -9670,6 +9714,12 @@ async function mwScanRun(env, body) {
 const MW_D_MAX = 60;               // 1回に変える件数の上限
 const MW_D_PICK = 2000;            // 1回に見る行数
 const MW_D_OVER = 1.15;            // 相場のこの倍を超えたら数量0
+/* 8.97（カジの依頼）取り込みのたびに数量0にするときの歯止め。
+   数量0にする出品が、いま数量1以上の W- の出品の **3割以上**、かつ **10件以上**
+   のときは「ほとんどが欠品に見える回」とみなし、eBay に書き込まない
+   （予定だけにして、取り込みの知らせで言う）。日次の回には効かせない。 */
+const MW_Z_GUARD_RATE = 0.30;
+const MW_Z_GUARD_MIN = 10;
 function mwJanOfSku(sku) {
   const m = /^W-(\d{13})$/.exec(String(sku || "").trim());
   return m ? m[1] : "";
@@ -9861,6 +9911,9 @@ async function jobMwDrop(env, opt) {
         continue;
       }
       if (only === "zero" && pl.act !== "zero") continue;   // 7.73
+      /* 8.97 上限を超えたぶんも数える（次の回に回す件数を出すため）。 */
+      res.need = (Number(res.need) || 0) + 1;
+      if (todo.length >= limit) { res.left = (Number(res.left) || 0) + 1; continue; }
       todo.push({ jan: j, item_id: String(r.ebay_item_id), act: pl.act,
                   kind: (pl.act === "up") ? "price" : pl.act,
                   to: pl.to, qty: pl.qty, why: pl.why,
@@ -9869,12 +9922,24 @@ async function jobMwDrop(env, opt) {
                   title: String(r.title || r.ebay_sku || ""),
                   asin: r.asin, cond: r.cond,
                   sha: (mwBy[j] && mwBy[j].sha) || "" });
-      if (todo.length >= limit) break;
+    }
+    /* 8.97 取り込みのたびの数量0（guard）：数量0にする出品が多すぎる回は、
+       CSV の取得ミスなどで「ほとんどが欠品に見える」とみなし書き込まない。 */
+    res.live = rows.filter((r) => (Number(r.ebay_qty) || 0) > 0).length;
+    if (o.guard && only === "zero") {
+      const need = Number(res.need) || 0;
+      if (need >= MW_Z_GUARD_MIN && res.live > 0 && need >= res.live * MW_Z_GUARD_RATE) {
+        res.guard = "数量0にする出品が " + need + "件（数量1以上の出品 " + res.live
+          + "件の " + Math.round(need / res.live * 100) + "%）と多すぎるので、"
+          + "eBay には書き込んでいません（CSV の取得ミスの可能性）。"
+          + "CSV を確かめて、もう一度取り込むか、日次の回を待ってください";
+        run.notes.push(res.guard);
+      }
     }
     res.rows = todo.map((x) => ({ jan: x.jan, act: x.act, to: x.to, qty: x.qty,
                                   why: x.why, title: x.title.slice(0, 60) }));
-    if (mode !== "auto" || !todo.length) {
-      /* 確認モードでは eBay を1回も呼ばない。 */
+    if (mode !== "auto" || !todo.length || res.guard) {
+      /* 確認モードでは eBay を1回も呼ばない（8.97 の歯止めが効いた回も）。 */
       for (const x of todo) {
         if (x.act === "zero") res.zero++;
         else if (x.act === "up") res.up++;
@@ -9884,7 +9949,8 @@ async function jobMwDrop(env, opt) {
       res.ok = true;
       run.notes.push("MW無在庫（確認）：数量0 " + res.zero + "／値上げ " + res.up
         + "／数量1 " + (res.relist + res.restock) + "件");
-      await mwDropNotify(env, run, res, false);
+      /* 8.97 取り込みの中（quiet）からは知らせない（取り込みの1通にまとめる）。 */
+      if (!o.quiet) await mwDropNotify(env, run, res, false);
       return Object.assign(await saveRun(env, run), res);
     }
     /* 実行。ReviseInventoryStatus は1回4件まで。 */
@@ -9900,7 +9966,13 @@ async function jobMwDrop(env, opt) {
         to: x.to, qty: x.qty }));
       const r2 = await ebayReviseInv(env, run, token, send);
       for (const x of part) {
-        const bad = (r2 && r2.err && r2.err[x.item_id]) || (r2 && !r2.ok ? r2.why : "");
+        /* 8.97 直し：ebayReviseInv の返りは ok(ItemID)・errFor(ItemID)。
+           v344 までは r2.err[…]・!r2.ok（関数なので常に false）を見ていたので、
+           eBay で失敗した行も「変えた」と数え、D1 の数量を0にしていた
+           （次の回に再試行されなかった）。ほかの呼び出しと同じ見方にする。 */
+        const good = !!(r2 && typeof r2.ok === "function" && r2.ok(x.item_id));
+        const ef = (!good && r2 && typeof r2.errFor === "function") ? r2.errFor(x.item_id) : null;
+        const bad = good ? "" : ((ef && ef.why) || (r2 && r2.why) || "eBay が受け付けませんでした");
         if (bad) {
           res.failed++;
           stmts.push(env.DB.prepare(
@@ -22998,7 +23070,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.88 非公開（Unlisted）にそろえる。 */
   jobShopUnlist, shopUnlistHandles, shopQStat,
   /* 8.89 非公開を確かめてから配る・8.90 写真が使えなかった JAN。 */
-  shopVisOf, shopVisJa, shopOverIds, shopOverWhyJa, shopScopeOf, shopVisBlock, shopVisSave, mwPicNgList, mwPicNgNone,
+  shopVisOf, shopVisJa, mwZeroLines, MW_Z_GUARD_RATE, MW_Z_GUARD_MIN, shopOverIds, shopOverWhyJa, shopScopeOf, shopVisBlock, shopVisSave, mwPicNgList, mwPicNgNone,
   mwPicNgPut, MW_PIC_NG_DAYS,
   ONE_MAX, ONE_PIC_MAX,
   osPut, osDiff, osDone, osCheck, osOk, osFixOf, osPxPct, osSettings,

@@ -2223,6 +2223,9 @@ body.staff #syncOnHandFix{display:none !important}
           残りは pj の一覧へのリンクにします。
           同じ商品は<b>一度だけ</b>知らせます。</div>
         </details>
+        <!-- 8.97（カジの依頼）欠品は取り込みのたびに eBay の数量を0にする（既定オン）。 -->
+        <div class="chk"><input type="checkbox" id="mwZeroOnImport" checked><label for="mwZeroOnImport" style="flex:1"><b>欠品は取り込みのたびに eBay の数量を0にする</b>（既定オン。オフなら日次（JST 3時台）だけ。値上げ・数量1に戻すのは今までどおり日次）</label></div>
+        <div class="note2" style="margin:0 0 4px">在庫CSVを取り込んだ回（自動・手動）に、MW で欠品した W- の出品の数量を0にします。1回 60件まで（残りは次の取り込み）。数量0にする出品が、いま出ている W- の出品の<b>3割以上かつ10件以上</b>の回は、CSV の取得ミスとみなして書き込まず、取り込みの知らせで言います。</div>
         <div class="chk"><input type="checkbox" id="mwNtDrop" checked><label for="mwNtDrop" style="flex:1">eBay 無在庫が売り切れたら知らせる（数量0にしました）</label></div>
         <div class="chk"><input type="checkbox" id="mwNtBuy" checked><label for="mwNtBuy" style="flex:1">仕入れる印の商品が売り切れたら知らせる（注文前）</label></div>
         <div class="chk"><input type="checkbox" id="mwNtNew" checked><label for="mwNtNew" style="flex:1">新入荷（見込みあり・eBay 無在庫の候補）を知らせる</label></div>
@@ -3965,6 +3968,8 @@ var ADV_AMZCHK=['csvMwAmzWin','csvMwAmzMulti','csvMwAmzNoAmz','csvMwAmzRstOk',
                 'csvMwAmzDup','csvMwAmzNoRank',
                 /* 取り込んだときに何を知らせるか（6.151／7.110）。 */
                 'mwNtDrop','mwNtBuy','mwNtNew',
+                /* 8.97 欠品は取り込みのたびに数量0にする（pj-sync が読む）。 */
+                'mwZeroOnImport',
                 /* 8.32 仕入れタブを開いたら一覧を自動で出す（この端末だけ）。 */
                 'mwAmzAuto',
                 /* 無在庫の仕入れ値に Amazon も入れるか（6.152／7.112）。
@@ -7848,7 +7853,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'mwSaleNote','mwNtThread',
                  /* 7.141（【2】）一度に消えた回のしきい値。 */
                  'mwWipePct','mwWipeMin',
-                 'mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost',
+                 'mwNtDrop','mwNtBuy','mwNtNew','mwAmzCost','mwZeroOnImport',
                  'csvShipProfileMw','csvShipDaysMw',
                  'csvShipProfileMw2','csvShipDaysMw2',
                  /* 在庫の根拠がない出品（6.139）。Worker も読む。 */
@@ -32165,7 +32170,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v344';   // sw.js の const V と必ず同じ値にする
+var APP_V='v345';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
