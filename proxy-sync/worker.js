@@ -10232,12 +10232,8 @@ const BUY_LOOK_H = 72;             // 何時間前の注文まで拾うか（初
 const BUY_MAX = 10;                // 1回に知らせる明細の上限
 const BUY_CSV_OLD_H = 6;           // 在庫CSV の取り込みがこれより古ければ注意を出す
 const BUY_SH_URL = "https://www.ebay.com/sh/ord/details?orderid=";
-/* Amazon の「カートに入れる」（Add to Cart form・PA-API の説明にある形）。 */
-function buyAmzCartUrl(asin) {
-  const a = String(asin || "").toUpperCase();
-  return /^B[0-9A-Z]{9}$/.test(a)
-    ? ("https://www.amazon.co.jp/gp/aws/cart/add.html?ASIN.1=" + a + "&Quantity.1=1") : "";
-}
+/* Amazon は商品ページだけ。「カートに入れる」（Add to Cart form の形）は
+   2026-11-24 にカジが試してカートに入らなかったので出さない（8.99 の直し・v348）。 */
 function buyAmzUrl(asin) {
   const a = String(asin || "").toUpperCase();
   return /^B[0-9A-Z]{9}$/.test(a) ? ("https://www.amazon.co.jp/dp/" + a) : "";
@@ -10279,8 +10275,7 @@ function buyNoteText(x) {
   const a = x.amz || {};
   if (a.low > 0) {
     t.push((pick === "amz" ? "👉 " : "") + "**Amazon**　最安値 " + yenTxt(a.low) + "（新品・送料込み）");
-    t.push("　利益の目安 " + pf(a.profit) + "　" + buyLink("商品ページ", buyAmzUrl(a.asin))
-      + "　" + buyLink("カートに入れる", buyAmzCartUrl(a.asin)));
+    t.push("　利益の目安 " + pf(a.profit) + "　" + buyLink("商品ページ", buyAmzUrl(a.asin)));
   } else if (a.asin) {
     t.push("**Amazon**　新品の値段が取れませんでした　" + buyLink("商品ページ", buyAmzUrl(a.asin)));
   } else {
@@ -10291,7 +10286,6 @@ function buyNoteText(x) {
   t.push("");
   t.push("eBay 注文番号 " + x.orderId + "　" + buyLink("Seller Hub で開く", BUY_SH_URL
     + encodeURIComponent(x.orderId)));
-  if (a.low > 0) t.push("※「カートに入れる」は Amazon のカートの出品者で入ります（最安値の出品者と違うことがあります）");
   t.push("※ 利益の目安は pj の式で、いちばん利益の薄い地域の送料で計算しています。買うのは手で行ってください");
   return t.join("\n");
 }
@@ -23343,7 +23337,7 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   /* 8.99 */
-  jobBuyNote, buyNoteText, buyPick, buyAmzCartUrl, buyAmzUrl, BUY_LOOK_H, BUY_CSV_OLD_H,
+  jobBuyNote, buyNoteText, buyPick, buyAmzUrl, BUY_LOOK_H, BUY_CSV_OLD_H,
   mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,

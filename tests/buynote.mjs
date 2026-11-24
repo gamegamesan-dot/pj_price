@@ -5,7 +5,7 @@
    手で比べて MW で注文した。スマホで1タップにしたい。
    ① 15分ごとの注文の取り込みに乗せる（orders の W- の明細で、まだ知らせていないもの）
    ② MW＝卸値（税抜）×1.1＋送料 ¥176・在庫数（取り込み済みの CSV だけ。MW には行かない）
-      Amazon＝新品の最安値（送料込み・SP-API で取り直す）
+      Amazon＝新品の最安値（送料込み・SP-API で取り直す）・商品ページだけ（カートのリンクは出さない・v348）
    ③ 安いほうと、それぞれの利益の目安（shared/pricing.js の式）
    ④ 管理用のチャンネル（DISCORD_BUY_WEBHOOK_URL → OPS → 社内用）
    ・買うのは人（通知だけ）・買い手の情報は入れない・同じ明細は二度知らせない
@@ -115,9 +115,10 @@ console.log('=== ① MW が安い（おすすめ：MW）===');
   ok(/最安値 ¥4,200（新品・送料込み）/.test(t),'★★★Amazon：最安値（送料込み・いま取り直した値）');
   ok(/\[MW で開く\]\(<https:\/\/matchingworld\.asia\/buy\/\?q=4902370550467>\)/.test(t),
      '★★★MW の商品ページ（JAN の検索結果）へのリンク');
-  ok(/\[カートに入れる\]\(<https:\/\/www\.amazon\.co\.jp\/gp\/aws\/cart\/add\.html\?ASIN\.1=B0BXYZ1234&Quantity\.1=1>\)/.test(t)
-     &&/\[商品ページ\]\(<https:\/\/www\.amazon\.co\.jp\/dp\/B0BXYZ1234>\)/.test(t),
-     '★★★Amazon：商品ページと「カートに入れる」');
+  ok(/\[商品ページ\]\(<https:\/\/www\.amazon\.co\.jp\/dp\/B0BXYZ1234>\)/.test(t),
+     '★★★Amazon：商品ページへのリンク');
+  ok(!/カートに入れる|aws\/cart/.test(t),
+     '★★★「カートに入れる」は出さない（2026-11-24 に試してカートに入らなかった・v348）');
   ok(/eBay 注文番号 12-34567-89012/.test(t)
      &&/\[Seller Hub で開く\]\(<https:\/\/www\.ebay\.com\/sh\/ord\/details\?orderid=12-34567-89012>\)/.test(t),
      '★★★eBay の注文番号と Seller Hub の注文ページ');
@@ -244,8 +245,8 @@ console.log('\n=== ⑦ 15分ごとの注文の取り込みから（二度出さ�
 }
 
 console.log('\n=== ⑧ 小さな部品 ===');
-ok(W.buyAmzCartUrl('b0bxyz1234')==='https://www.amazon.co.jp/gp/aws/cart/add.html?ASIN.1=B0BXYZ1234&Quantity.1=1'
-   &&W.buyAmzCartUrl('W4902370550467')==='','★ASIN の形のときだけカートのリンクを作る');
+ok(W.buyAmzUrl('b0bxyz1234')==='https://www.amazon.co.jp/dp/B0BXYZ1234'
+   &&W.buyAmzUrl('W4902370550467')==='','★ASIN の形のときだけ商品ページのリンクを作る');
 ok(W.buyPick({ mw:{ cost:3000, stock:1 }, amz:{ low:3000 } })==='mw','★同じ値段なら MW');
 ok(W.buyPick({ mw:{ cost:3000, stock:0 }, amz:{ low:0 } })==='','★どちらも買えなければ空');
 ok(W.BUY_CSV_OLD_H===6,'★CSV が古いとみなすのは6時間');
