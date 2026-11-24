@@ -1241,3 +1241,24 @@ CREATE TABLE IF NOT EXISTS mw_pic_ng (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mw_pic_ng_at ON mw_pic_ng(at);
+
+/* ===== 8.99（カジの依頼）MW 無在庫が売れたら「どこで買うか」=====
+   知らせた eBay の明細を控えて、同じ明細を二度知らせない（migrate-0073）。
+   買い手の名前・住所・連絡先は持たない（注文番号と商品だけ）。
+   state … sent（知らせた）／cancel（取り消し）／hand（手元在庫から送る行） */
+CREATE TABLE IF NOT EXISTS buy_note (
+  order_id   TEXT NOT NULL,
+  line_id    TEXT NOT NULL,
+  sku        TEXT,
+  jan        TEXT,
+  qty        INTEGER,
+  usd        REAL,
+  pick       TEXT,
+  mw_cost    INTEGER,
+  amz_cost   INTEGER,
+  state      TEXT NOT NULL,
+  sent_at    TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (order_id, line_id)
+);
+CREATE INDEX IF NOT EXISTS idx_buy_note_at ON buy_note(created_at);

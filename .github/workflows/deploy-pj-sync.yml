@@ -190,6 +190,9 @@ jobs:
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
           DISCORD_OPS_WEBHOOK_URL: ${{ secrets.DISCORD_OPS_WEBHOOK_URL }}
+          # 8.99（カジの依頼）MW 無在庫が売れたときの「どこで買うか」の送り先
+          # （管理用）。空なら DISCORD_OPS_WEBHOOK_URL → 社内用の順に使う。
+          DISCORD_BUY_WEBHOOK_URL: ${{ secrets.DISCORD_BUY_WEBHOOK_URL }}
         run: |
           set -o pipefail
           put() {
@@ -210,6 +213,7 @@ jobs:
           put SHOPIFY_CLIENT_ID
           put SHOPIFY_CLIENT_SECRET
           put DISCORD_OPS_WEBHOOK_URL
+          put DISCORD_BUY_WEBHOOK_URL
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run

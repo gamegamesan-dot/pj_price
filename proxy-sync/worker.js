@@ -21,6 +21,8 @@
  *   EBAY_CLIENT_ID / EBAY_CLIENT_SECRET / EBAY_USER_REFRESH_TOKEN
  *   DISCORD_WEBHOOK_URL
  *   DISCORD_OPS_WEBHOOK_URL  … 会員向けの自動配信の報告の送り先（8.80・無ければ上と同じ）
+ *   DISCORD_BUY_WEBHOOK_URL  … MW 無在庫が売れたときの「どこで買うか」の送り先（8.99・管理用。
+ *                              無ければ DISCORD_OPS_WEBHOOK_URL → DISCORD_WEBHOOK_URL）
  *   SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET … Shopify の管理 API（8.80・
  *                              会員用の商品を作る。Dev Dashboard のアプリ。
  *                              SECRET が無ければ SHOPIFY_WEBHOOK_SECRET を使う
@@ -1276,7 +1278,9 @@ async function notifyRaw(env, run, text, embeds, opt) {
   /* 8.80 会員向けの自動配信の報告は、**運営専用のチャンネル**に出す
      （opt.ops）。専用の宛先（DISCORD_OPS_WEBHOOK_URL）があればそこへ、
      無ければ今までの社内用の宛先へ出す。宛先はログにも文にも出さない。 */
-  const base = ((opt && opt.ops) ? env.DISCORD_OPS_WEBHOOK_URL : "")
+  const base = ((opt && opt.buy)
+      ? (env.DISCORD_BUY_WEBHOOK_URL || env.DISCORD_OPS_WEBHOOK_URL) : "")
+    || ((opt && opt.ops) ? env.DISCORD_OPS_WEBHOOK_URL : "")
     || env.DISCORD_WEBHOOK_URL;
   if (!base) return false;
   const list = (embeds || []).filter(Boolean);
@@ -2208,8 +2212,11 @@ async function syncOrders(env, run, days, maxItems) {
   }
   /* 売れた行に MW の無在庫（W-<JAN>）があれば、注文の材料を出す（7.72）。
      商品名・JAN・社・卸値・出荷日・注文の期限。 */
+  /* 8.99：この知らせは jobBuyNote（「どこで買うか」・同じ明細は二度出さない）に
+     置き換えた。eBay の注文は lastmodifieddate で引くので、ここで出すと
+     発送などで注文が変わるたびに同じ知らせが出ていた。 */
   try {
-    const mwSold = soldE.filter((x) => mwJanOfSku(x.sku));
+    const mwSold = BUY_OLD_NOTIFY ? soldE.filter((x) => mwJanOfSku(x.sku)) : [];
     if (mwSold.length) {
       const n = await mwOrderNotify(env, run, mwSold.map((x) => ({
         sku: x.sku, qty: x.qty, orderedAt: x.at,
@@ -2916,6 +2923,9 @@ async function jobOrders(env, days, maxItems) {
   try {
     res = await syncOrders(env, run, days, maxItems);
     run.notes.push("待ち行列の残り " + res.items_pending + "件");
+    /* 8.99 MW 無在庫が売れたら「どこで買うか」を知らせる（同じ明細は二度出さない）。 */
+    try { res.buy = await jobBuyNote(env, run, {}); }
+    catch (e) { run.notes.push("buy: " + String((e && e.message) || e)); }
     await flushEvents(env, run, true);      // 即時ぶんだけ（EBAY_SOLD / OVERSELL_RISK）
   } catch (e) { run.errors++; run.notes.push("例外 " + e.message); }
   // 明細の残り件数も返す（0になるまで押せばよいと分かるように）
@@ -10199,6 +10209,245 @@ function jstDate10(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
+}
+
+/* ===== 8.99（カジの依頼）MW 無在庫が売れたら「どこで買うか」を1通で知らせる =====
+   2026-11-23、自動出品した MW 無在庫（W-<JAN>）が初めて eBay で売れ、
+   MW と Amazon の値段を手で比べて MW で注文した。これをスマホで1タップにする。
+   ・15分ごとの注文の取り込み（jobOrders）のあとに、D1 の orders から
+     **W-<JAN> の明細で、まだ知らせていないもの**を拾う（直近 BUY_LOOK_H 時間）
+   ・eBay の注文を番号で読み直して（getOrders の orderIds）、**商品代（1点）**・数量・
+     取り消しを見る。読むのは明細だけで、買い手の名前・住所・連絡先は読まない
+   ・MW … 取り込み済みの在庫CSV（mw_stock）だけを使う。**MW のサイトには行かない**
+           仕入れ値＝卸値（税抜）×1.1＋仕入れ送料（⚙ mwShipFee・既定 ¥176）
+   ・Amazon … 新品の最安値（送料込み）を SP-API で取り直す（20件まで1回）
+   ・利益の目安は shared/pricing.js の式（model → zoneProfit）。いちばん利益の
+     薄い地域（基準地帯）で出す（買い手の国は読まない）
+   ・**買うのは人**。ここは知らせるだけ（注文・カートへの追加はしない）
+   ・同じ明細は二度知らせない（buy_note に控える・migrate-0073）
+   ・送り先は管理用：DISCORD_BUY_WEBHOOK_URL → 無ければ DISCORD_OPS_WEBHOOK_URL
+     → 無ければ今までの社内用（DISCORD_WEBHOOK_URL）。会員向けには出さない */
+const BUY_OLD_NOTIFY = false;      // 7.72 の「仕入れてください」（syncOrders から）は止めた
+const BUY_LOOK_H = 72;             // 何時間前の注文まで拾うか（初回のデプロイで今日の分も拾う）
+const BUY_MAX = 10;                // 1回に知らせる明細の上限
+const BUY_CSV_OLD_H = 6;           // 在庫CSV の取り込みがこれより古ければ注意を出す
+const BUY_SH_URL = "https://www.ebay.com/sh/ord/details?orderid=";
+/* Amazon の「カートに入れる」（Add to Cart form・PA-API の説明にある形）。 */
+function buyAmzCartUrl(asin) {
+  const a = String(asin || "").toUpperCase();
+  return /^B[0-9A-Z]{9}$/.test(a)
+    ? ("https://www.amazon.co.jp/gp/aws/cart/add.html?ASIN.1=" + a + "&Quantity.1=1") : "";
+}
+function buyAmzUrl(asin) {
+  const a = String(asin || "").toUpperCase();
+  return /^B[0-9A-Z]{9}$/.test(a) ? ("https://www.amazon.co.jp/dp/" + a) : "";
+}
+/* Discord のリンク。<> で囲むと、下に大きなプレビューが付かない。 */
+function buyLink(text, url) { return url ? ("[" + text + "](<" + url + ">)") : ""; }
+const yenTxt = (n) => "¥" + Math.round(Number(n) || 0).toLocaleString("en-US");
+/* どちらで買うか。MW は在庫があるときだけ候補にする。 */
+function buyPick(x) {
+  const mwOk = !!(x.mw && x.mw.cost > 0 && x.mw.stock > 0 && !x.mw.gone);
+  const amzOk = !!(x.amz && x.amz.low > 0);
+  if (mwOk && amzOk) return (x.amz.low < x.mw.cost) ? "amz" : "mw";
+  if (mwOk) return "mw";
+  if (amzOk) return "amz";
+  return "";
+}
+/* 1明細ぶんの文（スマホでそのまま押せる形）。外に出さない項目：買い手の情報。 */
+function buyNoteText(x) {
+  const pick = buyPick(x);
+  const t = [];
+  const head = pick === "mw" ? "MW" : (pick === "amz" ? "Amazon" : "なし（どちらも買えません）");
+  t.push("🛒 **MW 無在庫が売れました**　おすすめ：**" + head + "**");
+  t.push("**" + String(x.name || "（商品名なし）").slice(0, 80) + "**");
+  t.push("JAN " + x.jan + "　eBay $" + (Number(x.usd) || 0).toFixed(2)
+    + "（1点の商品代）× " + x.qty + "点");
+  const pf = (p) => (p === null || p === undefined || !isFinite(p)) ? "—"
+    : ((p < 0 ? "🔴 −" : "") + yenTxt(Math.abs(p)) + (x.qty > 1 ? "（" + x.qty + "点で）" : ""));
+  const m = x.mw || {};
+  t.push("");
+  if (m.cost > 0) {
+    t.push((pick === "mw" ? "👉 " : "") + "**MW**　仕入れ " + yenTxt(m.cost)
+      + "（卸値 " + yenTxt(m.wholesale) + "×1.1＋送料 " + yenTxt(m.fee) + "）"
+      + "　在庫 " + (m.gone ? 0 : (Number(m.stock) || 0)) + "点");
+    t.push("　利益の目安 " + pf(m.profit) + "　" + buyLink("MW で開く", m.url));
+  } else {
+    t.push("**MW**　在庫CSV にありません（欠品の可能性）"
+      + (m.url ? "　" + buyLink("MW で開く", m.url) : ""));
+  }
+  const a = x.amz || {};
+  if (a.low > 0) {
+    t.push((pick === "amz" ? "👉 " : "") + "**Amazon**　最安値 " + yenTxt(a.low) + "（新品・送料込み）");
+    t.push("　利益の目安 " + pf(a.profit) + "　" + buyLink("商品ページ", buyAmzUrl(a.asin))
+      + "　" + buyLink("カートに入れる", buyAmzCartUrl(a.asin)));
+  } else if (a.asin) {
+    t.push("**Amazon**　新品の値段が取れませんでした　" + buyLink("商品ページ", buyAmzUrl(a.asin)));
+  } else {
+    t.push("**Amazon**　ASIN が分かりません");
+  }
+  const w = (x.warn || []).filter(Boolean);
+  if (w.length) { t.push(""); for (const s of w) t.push("⚠ " + s); }
+  t.push("");
+  t.push("eBay 注文番号 " + x.orderId + "　" + buyLink("Seller Hub で開く", BUY_SH_URL
+    + encodeURIComponent(x.orderId)));
+  if (a.low > 0) t.push("※「カートに入れる」は Amazon のカートの出品者で入ります（最安値の出品者と違うことがあります）");
+  t.push("※ 利益の目安は pj の式で、いちばん利益の薄い地域の送料で計算しています。買うのは手で行ってください");
+  return t.join("\n");
+}
+/* eBay の注文を番号で読む（明細だけ）。返り：{ ok, by:{ orderId: { cancel, lines:{ lineId: {...} } } } } */
+async function buyEbayOrders(env, run, ids) {
+  const by = {};
+  if (!ids.length) return { ok: true, by };
+  const token = await ebayToken(env, run);
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50);
+    const q = new URLSearchParams({ orderIds: part.join(",") });
+    const resp = await net(run, EBAY_API + "/sell/fulfillment/v1/order?" + q.toString(), {
+      headers: { authorization: "Bearer " + token, accept: "application/json" },
+    });
+    if (!resp.ok) { run.notes.push("buy: ebay_getOrders -> " + resp.status); return { ok: false, by }; }
+    const d = await resp.json();
+    for (const o of d.orders || []) {
+      const lines = {};
+      for (const li of o.lineItems || []) {
+        const qty = Number(li.quantity || 0) || 1;
+        const cost = Number((li.lineItemCost && li.lineItemCost.value) || 0);
+        lines[String(li.lineItemId || "")] = { sku: String(li.sku || ""), qty: qty,
+          usd: Math.round(cost / qty * 100) / 100 };
+      }
+      const cs = String((o.cancelStatus && o.cancelStatus.cancelState) || "");
+      by[String(o.orderId || "")] = { cancel: /CANCELED|CANCELLED/i.test(cs)
+        || /CANCEL/i.test(String(o.orderPaymentStatus || "")), lines };
+    }
+  }
+  return { ok: true, by };
+}
+/* 送り先が1つも無いか。 */
+function buyHookOk(env) {
+  return !!(env.DISCORD_BUY_WEBHOOK_URL || env.DISCORD_OPS_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL);
+}
+async function jobBuyNote(env, run, o) {
+  const opt = o || {};
+  const res = { ok: false, found: 0, sent: 0, skipped: 0, failed: 0, table_ok: true };
+  if (!buyHookOk(env)) { res.why = "Discord の送り先がありません"; return res; }
+  const since = new Date(Date.now() - BUY_LOOK_H * 3600000).toISOString();
+  let rows = [];
+  try {
+    const q = await env.DB.prepare(
+      `SELECT o.order_id AS order_id, o.line_id AS line_id, o.sku AS sku, o.qty AS qty,
+              o.ordered_at AS ordered_at
+         FROM orders o
+        WHERE o.channel='ebay' AND o.sku LIKE 'W-%' AND o.ordered_at >= ?1
+          AND NOT EXISTS (SELECT 1 FROM buy_note b
+                           WHERE b.order_id=o.order_id AND b.line_id=o.line_id)
+        ORDER BY o.ordered_at LIMIT ?2`).bind(since, BUY_MAX).all();
+    rows = ((q && q.results) || []).filter((r) => mwJanOfSku(r.sku));
+  } catch (e) {
+    res.table_ok = false;
+    res.why = "buy_note の表がありません（migrate-0073 を流してください）";
+    return res;
+  }
+  res.found = rows.length;
+  if (!rows.length) { res.ok = true; return res; }
+  const eb = await buyEbayOrders(env, run, Array.from(new Set(rows.map((r) => r.order_id))));
+  if (!eb.ok) { res.why = "eBay の注文を読めませんでした（次の回にやり直します）"; return res; }
+  const jans = Array.from(new Set(rows.map((r) => mwJanOfSku(r.sku))));
+  const mwBy = {}, azBy = {}, itBy = {};
+  for (const j of jans) {
+    const m = await env.DB.prepare(
+      `SELECT jan, name, wholesale, stock, gone_at FROM mw_stock
+        WHERE jan=?1 ORDER BY pick DESC, (gone_at IS NULL) DESC LIMIT 1`).bind(j).first();
+    if (m) mwBy[j] = m;
+    const a = await env.DB.prepare(
+      `SELECT jan, asin, name, size_g FROM mw_amz WHERE jan=?1`).bind(j).first();
+    if (a) azBy[j] = a;
+    const it = await env.DB.prepare(
+      `SELECT title, weight_g, hand_qty,
+              (SELECT s.prefix FROM skus s WHERE s.asin=items.asin AND s.cond=items.cond
+                LIMIT 1) AS prefix
+         FROM items WHERE ebay_sku=?1 LIMIT 1`).bind("W-" + j).first();
+    if (it) itBy[j] = it;
+  }
+  /* Amazon の新品の最安値（送料込み）を、いま取り直す。 */
+  const low = {};
+  try {
+    const keys = jans.filter((j) => azBy[j] && /^B[0-9A-Z]{9}$/.test(String(azBy[j].asin || "")))
+      .map((j) => ({ asin: String(azBy[j].asin), cond: "new", jan: j }));
+    if (keys.length) {
+      const g = await amazonLowest(env, run, keys);
+      for (const k of keys) {
+        const z = g[k.asin + "|new"];
+        const v = Math.round(Number((z && z.low) || 0));
+        if (v > 0) low[k.jan] = v;
+      }
+    }
+  } catch (e) { run.notes.push("buy-amz: " + String((e && e.message) || e)); }
+  let ps = null;
+  try { ps = await pricingSettings(env, run); } catch (e) { ps = null; }
+  const S = (ps && ps.S) || null;
+  const fee = Number((ps && ps.st && ps.st.mwShipFee) || 176);
+  /* 在庫CSV の最後の取り込み。 */
+  let csvAt = "";
+  try {
+    const r = await env.DB.prepare(`SELECT at FROM mw_runs ORDER BY id DESC LIMIT 1`).first();
+    csvAt = (r && r.at) || "";
+  } catch (e) { csvAt = ""; }
+  const csvH = csvAt ? (Date.now() - Date.parse(csvAt)) / 3600000 : Infinity;
+  for (const r of rows) {
+    const jan = mwJanOfSku(r.sku);
+    const od = eb.by[r.order_id];
+    const li = od && od.lines[String(r.line_id)];
+    const rec = (state, x) => env.DB.prepare(
+      `INSERT INTO buy_note (order_id,line_id,sku,jan,qty,usd,pick,mw_cost,amz_cost,state,
+         sent_at,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)
+       ON CONFLICT(order_id,line_id) DO NOTHING`)
+      .bind(r.order_id, String(r.line_id), r.sku, jan, Number((x && x.qty) || r.qty || 1),
+            Number((x && x.usd) || 0), (x && x.pick) || "", Number((x && x.mwCost) || 0),
+            Number((x && x.amzCost) || 0), state, nowIso());
+    if (!od || !li) { res.failed++; continue; }        // まだ読めない（次の回）
+    const it = itBy[jan] || {};
+    if (od.cancel) { await rec("cancel", li).run(); res.skipped++; continue; }
+    /* 手元在庫から送る行（無在庫ではない）は対象外。 */
+    if (Number(it.hand_qty || 0) > 0) { await rec("hand", li).run(); res.skipped++; continue; }
+    const m = mwBy[jan] || null, a = azBy[jan] || null;
+    const w = Number(it.weight_g) || (a && Number(a.size_g) > 0 ? Number(a.size_g) : 0)
+      || (skuCatOf(it.prefix) === "game" ? 150 : 400);
+    const prof = (cost) => {
+      if (!S || !(cost > 0) || !(li.usd > 0)) return null;
+      try {
+        const md = PRICING.model(S, { cost: cost, weight: w, flat: 0 });
+        return Math.round(md.zoneProfit(li.usd, md.basisZone).profit * li.qty);
+      } catch (e) { return null; }
+    };
+    const mwCost = (m && Number(m.wholesale) > 0) ? Math.round(Number(m.wholesale) * 1.1) + fee : 0;
+    const x = {
+      orderId: r.order_id, jan, qty: li.qty, usd: li.usd,
+      name: (m && m.name) || (a && a.name) || it.title || "",
+      mw: { cost: mwCost, wholesale: Number((m && m.wholesale) || 0), fee: fee,
+            stock: Number((m && m.stock) || 0), gone: !!(m && m.gone_at),
+            profit: prof(mwCost), url: MWSITE.searchUrl(jan) },
+      amz: { asin: (a && a.asin) || "", low: low[jan] || 0, profit: prof(low[jan] || 0) },
+      warn: [],
+    };
+    if (mwCost > 0 && (x.mw.gone || x.mw.stock <= 0))
+      x.warn.push("**MW の在庫が 0 です**（在庫CSV の上では欠品）");
+    if (mwCost > 0 && !x.mw.gone && x.mw.stock > 0 && x.mw.stock < li.qty)
+      x.warn.push("MW の在庫（" + x.mw.stock + "点）が売れた数より少ないです");
+    if (csvH >= BUY_CSV_OLD_H)
+      x.warn.push("**MW の在庫CSV が古いです**（最後の取り込み "
+        + (csvAt ? (jstText(csvAt) + "・" + Math.floor(csvH) + "時間前") : "なし")
+        + "）。MW で在庫を確かめてから注文してください");
+    x.pick = buyPick(x);
+    const sent = await notifyRaw(env, run, buyNoteText(x), null, { buy: true });
+    if (!sent) { res.failed++; continue; }              // 送れなければ控えない（次の回）
+    await rec("sent", { qty: li.qty, usd: li.usd, pick: x.pick, mwCost: mwCost,
+                        amzCost: x.amz.low }).run();
+    res.sent++;
+  }
+  res.ok = true;
+  if (res.sent || res.skipped) run.notes.push("buy: 知らせた " + res.sent + "件／対象外 " + res.skipped + "件");
+  return res;
 }
 
 /* ===== 国内FBA：出品の可否（7.76）=====
@@ -21580,7 +21829,7 @@ function numZero(x, key) {
    この2つの一覧は schema.sql と一致していることを tests/schemachk.mjs で見張る
    （片方だけ増えて気付かない、ということが起きないように）。 */
 const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
-  "events", "items",
+  "buy_note", "events", "items",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
@@ -23093,6 +23342,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   MW_NT_MAX, MW_NT_MSG_MAX, MW_NT_MARK, MW_NT_BACK_MANY,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
+  /* 8.99 */
+  jobBuyNote, buyNoteText, buyPick, buyAmzCartUrl, buyAmzUrl, BUY_LOOK_H, BUY_CSV_OLD_H,
   mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,
   pbLowFresh, pbLowNeed, pbLowRefresh, PB_LOW_MAX,
