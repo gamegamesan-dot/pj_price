@@ -1262,3 +1262,13 @@ CREATE TABLE IF NOT EXISTS buy_note (
   PRIMARY KEY (order_id, line_id)
 );
 CREATE INDEX IF NOT EXISTS idx_buy_note_at ON buy_note(created_at);
+
+/* ===== 8.101（カジの依頼）商品違いの疑い =====
+   カジが見比べて「同じ商品」と押した JAN と、そのときの ASIN（migrate-0074）。
+   その ASIN のあいだは疑わない（ASIN が変わったら見立て直す）。 */
+CREATE TABLE IF NOT EXISTS mw_same (
+  jan        TEXT PRIMARY KEY,
+  asin       TEXT NOT NULL,
+  at         TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);

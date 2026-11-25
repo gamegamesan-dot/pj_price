@@ -1,5 +1,5 @@
 // バージョンを変えるとキャッシュが更新されます
-const V = 'pj-pricing-v348';
+const V = 'pj-pricing-v349';
 const ASSETS = [
   './',
   './index.html',
@@ -20,6 +20,8 @@ const ASSETS = [
   './shared/mwfee.js',
   // MW のサイトの URL（7.138）。pj-sync も同じこのファイルを読む。
   './shared/mwsite.js',
+  // 8.101 MW と Amazon が同じ商品かの見立て。pj-sync も同じこのファイルを読む。
+  './shared/mwmatch.js',
   // 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。
   './shared/subplan.js',
   // 8.37 売り方ごとの「赤字にならない売値」（率・送料・梱包材は⚙）。

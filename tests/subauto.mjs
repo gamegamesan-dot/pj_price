@@ -132,7 +132,8 @@ const seed=async(env,n)=>{
   for(let i=0;i<(n||12);i++)await item(env,G(i),{ rank:300+i*20 });
   await item(env,BAD.loss,{ price:3400 });                 // 利益がマイナス
   await item(env,BAD.nopx,{ price:0 });                    // 相場が取れていない
-  await item(env,BAD.name,{ aname:'ABC-123 XZ' });         // 名前が崩れている
+  /* 8.101：MW の名前も同じにする（違うと「商品違いの疑い」も付くため）。 */
+  await item(env,BAD.name,{ aname:'ABC-123 XZ', name:'ABC-123 XZ' });   // 名前が崩れている
   await item(env,BAD.poster,{ aname:'テストのゲーム B2ポスター付き' });
   await item(env,BAD.nodim,{ kishu:'b2cchara_figure', dim:false,
                              aname:'テストのフィギュア 1/7スケール' });

@@ -55,6 +55,9 @@ import MWFEE from "../shared/mwfee.js";
 /* 7.138（v264）MW のサイトの URL。画面と同じこれを読む。
    **社内用のカードだけ**に出す（会員には MW を見せない・§8.2）。 */
 import MWSITE from "../shared/mwsite.js";
+/* 8.101（カジの依頼）MW の商品と Amazon の商品が同じものかの見立て。
+   画面と同じこれを読む（会員向けの配信・「どこで買うか」・MW 無在庫の仕入れ値）。 */
+import MWMATCH from "../shared/mwmatch.js";
 /* 8.11（【Y】）会員向け Discord の配信。プランの表・カードの作り方・
    Shopify の CSV の読み方は shared の1か所だけ（画面と同じものを読む）。 */
 import SUBPLAN from "../shared/subplan.js";
@@ -9759,7 +9762,15 @@ function mwDropCost(S, mw, amz, st) {
     : amz.price_at)) || "");
   const t = Date.parse(atA);
   const fresh = !!t && (Date.now() - t) <= RK_LOW_MS;
-  if (useAmz && lowA > 0 && fresh) o.amz = lowA;
+  /* 8.101 Amazon が**違う商品**につながっている疑いのときは、Amazon の値段を
+     仕入れ値に使わない（名前・売値が無い行では見立てない＝今までどおり）。 */
+  const mis = (amz && lowA > 0)
+    ? mwMisOf({ mw_name: mw && mw.name, amz_name: amz.amz_name,
+                list_price: mw && mw.list_price, amz_price: amz.amz_price,
+                asin: amz.asin, same_asin: amz.same_asin }, st && st.mwMisX).bad
+    : false;
+  if (mis) o.why = "Amazon は商品違いの疑い（仕入れ値に使いません）";
+  else if (useAmz && lowA > 0 && fresh) o.amz = lowA;
   else if (useAmz && lowA > 0 && !fresh) o.why = "Amazon の値段が古い（24時間超）";
   if (o.mw > 0 && o.amz > 0) {
     if (o.amz < o.mw) { o.cost = o.amz; o.src = "amz"; }
@@ -9890,12 +9901,14 @@ async function jobMwDrop(env, opt) {
       if (j && jans.indexOf(j) < 0) jans.push(j);
     }
     const mwBy = {}, mkBy = {}, azBy = {};
+    const sameCol = (await mwSameOk(env))
+      ? ", (SELECT ms.asin FROM mw_same ms WHERE ms.jan = mw_amz.jan) AS same_asin" : "";
     const step = d1Step(1);
     for (let i = 0; i < jans.length; i += step) {
       const part = jans.slice(i, i + step);
       const marks = part.map(() => "?").join(",");
       const a = await env.DB.prepare(
-        `SELECT jan, sha, name, wholesale, stock, ship_days, gone_at
+        `SELECT jan, sha, name, wholesale, stock, ship_days, gone_at, list_price
            FROM mw_stock WHERE pick=1 AND jan IN (${marks})`).bind(...part).all();
       for (const x of (a && a.results) || []) mwBy[x.jan] = x;
       const b = await env.DB.prepare(
@@ -9903,9 +9916,12 @@ async function jobMwDrop(env, opt) {
         .bind(...part).all();
       for (const x of (b && b.results) || []) mkBy[x.jan] = x;
       /* 7.112：Amazon の新品最安値（仕入れ値の候補）と重さ（梱包重量）。 */
+      /* 8.101：商品違いの疑いを見るため、Amazon の商品名・売値と
+         「同じ商品」の控えも引く（疑いのある Amazon の値段は仕入れ値に使わない）。 */
       const c = await env.DB.prepare(
         `SELECT jan, asin, low AS amz_low, price_at AS amz_at,
-                size_g AS amz_g, size_src AS amz_g_src
+                size_g AS amz_g, size_src AS amz_g_src,
+                name AS amz_name, price AS amz_price${sameCol}
            FROM mw_amz WHERE jan IN (${marks})`).bind(...part).all();
       for (const x of (c && c.results) || []) azBy[x.jan] = x;
     }
@@ -10244,7 +10260,7 @@ const yenTxt = (n) => "¥" + Math.round(Number(n) || 0).toLocaleString("en-US");
 /* どちらで買うか。MW は在庫があるときだけ候補にする。 */
 function buyPick(x) {
   const mwOk = !!(x.mw && x.mw.cost > 0 && x.mw.stock > 0 && !x.mw.gone);
-  const amzOk = !!(x.amz && x.amz.low > 0);
+  const amzOk = !!(x.amz && x.amz.low > 0 && !x.amz.mis);
   if (mwOk && amzOk) return (x.amz.low < x.mw.cost) ? "amz" : "mw";
   if (mwOk) return "mw";
   if (amzOk) return "amz";
@@ -10274,7 +10290,12 @@ function buyNoteText(x) {
   }
   const a = x.amz || {};
   if (a.low > 0) {
-    t.push((pick === "amz" ? "👉 " : "") + "**Amazon**　最安値 " + yenTxt(a.low) + "（新品・送料込み）");
+    t.push((pick === "amz" ? "👉 " : "") + "**Amazon**　最安値 " + yenTxt(a.low) + "（新品・送料込み）"
+      + (a.mis ? "　🔴 **商品違いの疑い**" : ""));
+    if (a.mis && a.name) {
+      t.push("　MW の商品名：" + String(x.name || "").slice(0, 60));
+      t.push("　Amazon の商品名：" + String(a.name).slice(0, 60));
+    }
     t.push("　利益の目安 " + pf(a.profit) + "　" + buyLink("商品ページ", buyAmzUrl(a.asin)));
   } else if (a.asin) {
     t.push("**Amazon**　新品の値段が取れませんでした　" + buyLink("商品ページ", buyAmzUrl(a.asin)));
@@ -10348,13 +10369,17 @@ async function jobBuyNote(env, run, o) {
   if (!eb.ok) { res.why = "eBay の注文を読めませんでした（次の回にやり直します）"; return res; }
   const jans = Array.from(new Set(rows.map((r) => mwJanOfSku(r.sku))));
   const mwBy = {}, azBy = {}, itBy = {};
+  /* 8.101 「同じ商品」の控え（表が無い D1 では引かない）。 */
+  const sameCol = (await mwSameOk(env))
+    ? ", (SELECT ms.asin FROM mw_same ms WHERE ms.jan = mw_amz.jan) AS same_asin" : "";
   for (const j of jans) {
     const m = await env.DB.prepare(
-      `SELECT jan, name, wholesale, stock, gone_at FROM mw_stock
+      `SELECT jan, name, wholesale, stock, gone_at, list_price FROM mw_stock
         WHERE jan=?1 ORDER BY pick DESC, (gone_at IS NULL) DESC LIMIT 1`).bind(j).first();
     if (m) mwBy[j] = m;
     const a = await env.DB.prepare(
-      `SELECT jan, asin, name, size_g FROM mw_amz WHERE jan=?1`).bind(j).first();
+      `SELECT jan, asin, name, size_g, price${sameCol}
+         FROM mw_amz WHERE jan=?1`).bind(j).first();
     if (a) azBy[j] = a;
     const it = await env.DB.prepare(
       `SELECT title, weight_g, hand_qty,
@@ -10432,6 +10457,18 @@ async function jobBuyNote(env, run, o) {
       x.warn.push("**MW の在庫CSV が古いです**（最後の取り込み "
         + (csvAt ? (jstText(csvAt) + "・" + Math.floor(csvH) + "時間前") : "なし")
         + "）。MW で在庫を確かめてから注文してください");
+    /* 8.101 Amazon が違う商品につながっている疑いなら、おすすめにしない。 */
+    if (a && a.asin) {
+      const mj = mwMisOf({ mw_name: m && m.name, amz_name: a.name,
+        list_price: m && m.list_price, amz_price: a.price, asin: a.asin,
+        same_asin: a.same_asin }, ps && ps.st && ps.st.mwMisX);
+      if (mj.bad) {
+        x.amz.mis = true;
+        x.amz.name = String(a.name || "");
+        x.warn.push("**Amazon は商品違いの疑い**（" + MWMATCH.whyText(mj)
+          + "）。おすすめから外しました");
+      }
+    }
     x.pick = buyPick(x);
     const sent = await notifyRaw(env, run, buyNoteText(x), null, { buy: true });
     if (!sent) { res.failed++; continue; }              // 送れなければ控えない（次の回）
@@ -11370,6 +11407,8 @@ async function subSettings(env) {
        ・boxMin    … 箱もので段が足りないときに知らせる下限 */
     addG: subAddG(st),
     thinKishu: String(st.mwSubThinKishu || ""),
+    /* 8.101 商品違いの疑い（Amazon の売値が MW 定価の何倍を超えたら疑うか）。 */
+    misX: MWMATCH.xOf(st.mwMisX),
     tiersText: String(st.mwSubTiers || ""),
     /* 8.81（カジの依頼）箱ものは「送料用の重さ」で実額を取る（⚙ subBoxOn・
        既定オフ）。オンのあいだは、会員便の段（⚙）の 2,000g より下に、
@@ -11581,6 +11620,7 @@ async function subRows(env, cfg) {
     ? `a.px_min AS px_min, a.px_sum AS px_sum, a.px_n AS px_n,
             a.px_from AS px_from,`
     : "0 AS px_min, 0 AS px_sum, 0 AS px_n, '' AS px_from,";
+  const msq = await mwSameSql(env, "b");
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.max_qty AS max_qty, b.price AS price,
             ${wayCol} AS ship_way,
@@ -11589,6 +11629,7 @@ async function subRows(env, cfg) {
             COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
             b.put_at AS put_at, ${visCol} AS shop_vis,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
+            s.list_price AS list_price, ${msq.col}
             /* 8.28（カジの依頼1）配る前の見落としを拾うため、
                MW の欠品（CSV から消えた行）も返す。 */
             s.gone_at AS gone_at,
@@ -11614,14 +11655,14 @@ async function subRows(env, cfg) {
               WHERE o.jan = b.jan) AS sold
        FROM mw_sub b
             ${MW_ONE_JOIN}
-            LEFT JOIN mw_amz a ON a.jan = b.jan
+            LEFT JOIN mw_amz a ON a.jan = b.jan${msq.join}
       WHERE COALESCE(b.on_sale,0)=1
         AND COALESCE(b.loaded_at,'') <> ''
         AND COALESCE(b.price,0) > 0
         AND COALESCE(b.max_qty,0) > 0
       ORDER BY b.at DESC, b.jan ASC LIMIT ${SUB_ROWS_MAX}`).all();
   return ((q && q.results) || []).map((r) => subRowMap(r, cfg))
-    .filter((r) => !r.ng_kind);
+    .filter((r) => !r.ng_kind && !r.mis);
 }
 /* 8.80 D1 の1行 → 配信で使う形（カード・送料・目安が読む項目）。
    自動配信の候補（mw_stock から引く行）も**同じこの形**に直すので、
@@ -11694,6 +11735,9 @@ function subRowMap(r, cfg) {
           (Date.now() - Date.parse(String(r.px_from))) / 86400000)) : 0,
     /* 8.49 ⚙「出さない種類（言葉）」に当たった品の言葉（空なら出す）。 */
     ng_kind: ngOf(String(r.amz_name || r.mw_name || "")),
+    /* 8.101 商品違いの疑い（MW と Amazon の名前・定価と売値）。
+       「同じ商品」と押した JAN（その ASIN のとき）は疑わない。配信しない。 */
+    mis: mwMisOf(r, (cfg || {}).misX).bad,
     /* 8.58（カジの依頼）**採寸から限定版とみなす**品（機種はゲームなのに
        採寸がクリックポストに入らない）。モニター（通常版だけ）から外れる。
        決まりは shared/shopcsv.js の bigGame の1か所。 */
@@ -13361,6 +13405,7 @@ async function subAutoCands(env, cfg, st) {
   /* 8.89 Shopify で非公開を確かめた結果（確かめ済みの品を毎回確かめ直さない）。 */
   const visCol = (await shopVisColOk(env, "mw_sub"))
     ? "COALESCE(u.shop_vis,'') AS shop_vis," : "'' AS shop_vis,";
+  const msq = await mwSameSql(env, "s");
   const out = [], seen = {};
   for (let off = 0; off < SUB_AUTO_ROWS; off += SUB_AUTO_PAGE) {
     const q = await env.DB.prepare(
@@ -13371,6 +13416,7 @@ async function subAutoCands(env, cfg, st) {
               u.put_at AS put_at, ${shopCol} ${visCol}
               s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
               s.gone_at AS gone_at, s.wholesale AS wholesale, s.note AS note,
+              s.list_price AS list_price, ${msq.col}
               a.asin AS asin, a.name AS amz_name, a.price AS amz_price,
               a.fee_total AS fee_total, a.size_tier AS size_tier,
               a.size_g AS size_g, a.size_cm3 AS size_cm3,
@@ -13385,7 +13431,7 @@ async function subAutoCands(env, cfg, st) {
                 WHERE o.jan = s.jan) AS sold,
               COALESCE(i.ok_n,0) AS pics_ok, COALESCE(b.qty,0) AS buy_qty,
               r.state AS rst${mvq.cols}
-         FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan
+         FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan${msq.join}
               LEFT JOIN mw_sub u ON u.jan = s.jan
               LEFT JOIN mw_buy b ON b.jan = s.jan
               LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
@@ -19619,6 +19665,54 @@ async function mwRegSave(env, body) {
 
 /* ---- GET /mw/amz ----
    候補＋MW の中身＋Amazon の事実をまとめて返す。利益は画面で計算する。 */
+/* ===== 8.101（カジの依頼）商品違いの疑い =====
+   MW の JAN が、Amazon の**違う商品**につながっていることがある
+   （例：JAN 4573102666987 の MW「EG ULTRAMAN」が Amazon「スター・ウォーズ
+   マンダロリアン」に。Amazon 側の JAN の登録違い）。
+   見立ては shared/mwmatch.js の1か所（画面と同じ）：
+     ① 商品名に共通する言葉がほとんどない ② Amazon の売値が MW 定価×倍率（⚙ mwMisX）超
+   人が見比べて「同じ商品」と押した JAN は mw_same に ASIN と一緒に控え、
+   **その ASIN のあいだ**は疑わない（ASIN が変わったら見立て直す）。 */
+async function mwSameOk(env) { return colOk(env, "mw_same", "asin"); }
+/* SELECT に足す列と JOIN（表が無い D1 では空の列を返す）。 */
+async function mwSameSql(env, alias) {
+  if (!(await mwSameOk(env)))
+    return { col: "'' AS same_asin,", join: "" };
+  return { col: "COALESCE(ms.asin,'') AS same_asin,",
+           join: "\n            LEFT JOIN mw_same ms ON ms.jan = " + alias + ".jan" };
+}
+/* 1行の見立て。r は mw_name・amz_name・list_price・amz_price（または price）・
+   asin・same_asin を持つ行。 */
+function mwMisOf(r, x) {
+  const o = r || {};
+  return MWMATCH.judge({ mw_name: o.mw_name, amz_name: o.amz_name,
+    list_price: o.list_price,
+    price: (o.amz_price !== undefined && o.amz_price !== null) ? o.amz_price : o.price,
+    asin: o.asin, same_asin: o.same_asin }, { x: x });
+}
+/* POST /mw/same {jan, asin, on}  on=true … 「同じ商品」として控える
+                                  on=false … 控えを外す（また見立てる）
+   管理者だけ（利益の計算・配信に効くため）。 */
+async function mwSamePut(env, body) {
+  const o = body || {};
+  const jan = String(o.jan || "").replace(/\D/g, "");
+  const asin = String(o.asin || "").trim().toUpperCase();
+  if (jan.length !== 13) return { ok: false, error: "bad_jan" };
+  if (!(await mwSameOk(env)))
+    return { ok: false, table_ok: false,
+             why: "mw_same の表がありません（migrate-0074 を流してください）" };
+  if (o.on === false || o.on === 0 || o.on === "0") {
+    await env.DB.prepare(`DELETE FROM mw_same WHERE jan=?1`).bind(jan).run();
+    return { ok: true, jan: jan, on: false };
+  }
+  if (!/^B[0-9A-Z]{9}$/.test(asin)) return { ok: false, error: "bad_asin" };
+  const at = nowIso();
+  await env.DB.prepare(
+    `INSERT INTO mw_same (jan,asin,at,created_at) VALUES (?1,?2,?3,?3)
+     ON CONFLICT(jan) DO UPDATE SET asin=excluded.asin, at=excluded.at`)
+    .bind(jan, asin, at).run();
+  return { ok: true, jan: jan, asin: asin, on: true, at: at };
+}
 async function mwAmzList(env, url) {
   const p = url.searchParams;
   const q0 = mwWhere({ kishu: p.get("kishu"), new_only: p.get("new_only"),
@@ -19667,6 +19761,7 @@ async function mwAmzList(env, url) {
             u.price AS sub_price, COALESCE(u.grades,'') AS sub_grades,
             u.put_at AS sub_put_at` : "";
   const subJoin = subOk ? "\n            LEFT JOIN mw_sub u ON u.jan = s.jan" : "";
+  const msq = await mwSameSql(env, "s");
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.kishu AS kishu, s.name AS mw_name,
             s.list_price AS list_price, s.cond AS cond, s.wholesale AS wholesale,
@@ -19699,8 +19794,10 @@ async function mwAmzList(env, url) {
             r.checked_at AS rst_at, r.err AS rst_err,
             /* JAN重複（7.84）。候補が2件以上で、まだ選んでいない行に印を付ける。 */
             COALESCE(m.cand_n,0) AS cand_n, m.cands AS cands,
-            m.picked_at AS jan_picked_at${subCols}${mvq.cols}
-       FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan
+            m.picked_at AS jan_picked_at,
+            /* 8.101 「同じ商品」と押した ASIN（商品違いの疑いを外す）。 */
+            ${msq.col.replace(/,$/, "")}${subCols}${mvq.cols}
+       FROM mw_stock s LEFT JOIN mw_amz a ON a.jan = s.jan${msq.join}
             LEFT JOIN mw_buy b ON b.jan = s.jan${subJoin}
             LEFT JOIN jan_map m ON m.jan = s.jan
             LEFT JOIN mw_restrict r ON r.asin = a.asin AND r.cond = 'new_new'
@@ -20101,6 +20198,7 @@ async function mwList(env, url) {
   /* 7.126（【T】）在庫の動きの目安も返す（表が無ければ空）。 */
   const mvq = await mwStatSql(env, "s");
   /* 相場（7.62）を一緒に返す。まだ調べていない JAN は null で返る。 */
+  const msq = await mwSameSql(env, "s");
   const q = await env.DB.prepare(
     `SELECT s.jan AS jan, s.sha AS sha, s.idx AS idx, s.kishu AS kishu,
             s.name AS name, s.list_price AS list_price, s.release AS release,
@@ -20115,10 +20213,12 @@ async function mwList(env, url) {
                Amazon の重さ（梱包重量）。無在庫の売値と送料に使う。 */
             a.asin AS asin, a.low AS amz_low, a.price_at AS amz_at,
             a.new_n AS amz_new_n, a.size_g AS amz_g, a.size_src AS amz_g_src,
+            /* 8.101 商品違いの疑いを見るための Amazon の商品名と売値。 */
+            a.name AS amz_name, a.price AS amz_price, ${msq.col}
             (SELECT COUNT(*) FROM mw_img g WHERE g.jan=s.jan AND g.ok=1) AS pics_ok${mvq.cols}
        FROM mw_stock s
        LEFT JOIN mw_market m ON m.jan = s.jan
-       LEFT JOIN mw_amz a ON a.jan = s.jan${mvq.join}
+       LEFT JOIN mw_amz a ON a.jan = s.jan${msq.join}${mvq.join}
       WHERE ${w}
       ORDER BY COALESCE(s.wholesale,0) ASC, s.jan ASC, s.sha ASC, s.idx ASC
       LIMIT ${limit} OFFSET ${offset}`).bind(...bind).all();
@@ -21827,7 +21927,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "jan_map", "md_runs", "mw_amz", "mw_amz_runs", "mw_auto_runs", "mw_buy",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
-  "mw_notify", "mw_pic_ng", "mw_rst_runs", "mw_runs", "mw_stock", "mw_sub", "one_item",
+  "mw_notify", "mw_pic_ng", "mw_rst_runs", "mw_runs", "mw_same", "mw_stock", "mw_sub", "one_item",
   "ebay_cat",
   "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
@@ -22951,6 +23051,14 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/sub")
         return json(await mwSubList(env, url), 200, origin);
+      /* 8.101 「同じ商品」の控え（商品違いの疑いを外す）。利益の計算と配信に
+         効くので管理者だけ。 */
+      if (request.method === "POST" && url.pathname === "/mw/same") {
+        if (role !== "admin")
+          return forbidStaff("「同じ商品」の控えは管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await mwSamePut(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mw/sub/put") {
         if (role !== "admin")
           return forbidStaff("会員に出す印は管理者用のキーが必要です", [], origin);
@@ -23337,6 +23445,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   /* 8.99 */
+  /* 8.101 */
+  MWMATCH, mwMisOf, mwSamePut, mwSameSql, subRowMap, subAutoRow, subRows, subAutoCands,
   jobBuyNote, buyNoteText, buyPick, buyAmzUrl, BUY_LOOK_H, BUY_CSV_OLD_H,
   mwPutStaffRows, mwPutDayLeft, mwPutPrefix, MW_PUT_DAY, APP_URL,
   mwPtypeFind, mwPtypeDef, mwDgPlan, mwDgSafeCat, mwDgSafePt, mwPutHint,

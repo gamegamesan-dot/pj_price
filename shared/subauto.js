@@ -125,6 +125,8 @@
      ここに無い理由（Amazon 本体あり など）は shared/subplan.js の whyNot。 */
   var WHY = [
     { code: "no_stock", ja: "MW で在庫切れ", kind: "rule" },
+    /* 8.101 MW と Amazon が違う商品につながっている疑い（shared/mwmatch.js）。 */
+    { code: "mis", ja: "商品違いの疑い", kind: "rule" },
     { code: "no_px", ja: "相場が取れていない", kind: "data" },
     { code: "loss", ja: "利益がマイナス", kind: "px" },
     { code: "low", ja: "目標利益の下限を下回る", kind: "px" },
@@ -149,12 +151,13 @@
   /* 行のチェック。返りは当たった記号の配列（空なら配信してよい）。
      row … { stock, gone, amz_price, fee_total, price（会員価格）,
              fit（会員向きか）, net（手残り・無ければ null）, gross,
-             net_unknown, name, ship_sure, pics_ok, ng_kind }
+             net_unknown, name, ship_sure, pics_ok, ng_kind, mis }
      opt … { needPic（写真が無い品を止めるか・既定オフ）} */
   function gate(row, opt) {
     var r = row || {}, o = opt || {};
     var out = [];
     if (num(r.gone) || !(num(r.stock) > 0)) out.push("no_stock");
+    if (r.mis) out.push("mis");
     /* 相場（Amazon の販売価格と手数料）が取れていない行は、利益が出せない。 */
     var px = (num(r.amz_price) > 0) && (num(r.fee_total) > 0)
       && (num(r.price) > 0);
