@@ -1653,6 +1653,35 @@ async function runBatch(env, run, stmts) {
   }
   run.rows += stmts.length;
 }
+/* ---- 8.103 D1 の「混み合い」でのやり直し ----
+   D1 は「10秒あたりに使える量」を超えると
+   「D1 DB is overloaded. Too many resources consumed within a 10 second window」
+   を返す（2026-11-26、MW の在庫CSV の取り込みが 31便目で落ちた）。
+   batch は1つのトランザクションなので、落ちた batch は何も書いていない
+   → **同じ batch をそのままやり直してよい**。待ち時間は 2・4・8・16 秒。 */
+const D1_BUSY_RE = /overloaded|too many resources|D1_ERROR.*(busy|timeout|reset)/i;
+const D1_BUSY_WAIT_MS = [2000, 4000, 8000, 16000];
+function d1Busy(e) { return D1_BUSY_RE.test(String((e && e.message) || e || "")); }
+async function d1Retry(run, fn) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      if (!d1Busy(e) || i >= D1_BUSY_WAIT_MS.length) throw e;
+      if (run) { run.notes.push("D1 が混み合っていたので " + (D1_BUSY_WAIT_MS[i] / 1000)
+        + "秒待ってやり直し"); run.d1_retry = (run.d1_retry || 0) + 1; }
+      await sleep(D1_BUSY_WAIT_MS[i]);
+    }
+  }
+}
+async function runBatchRetry(env, run, stmts, size) {
+  if (!stmts.length) return;
+  const n = Math.max(1, size || 50);
+  for (let i = 0; i < stmts.length; i += n) {
+    const part = stmts.slice(i, i + n);
+    await d1Retry(run, () => env.DB.batch(part));
+  }
+  run.rows += stmts.length;
+}
 // items の行を作るだけ作っておく（あとで各取り込みが列を埋める）
 function itemSeed(env, asin, cond, scope, title) {
   return env.DB.prepare(
@@ -5903,6 +5932,13 @@ function picErrClear(env, itemId, at) {
    items の mw_low ほかへの書き戻しは**まだしない**。D1 に JAN の列が無く、
    JAN→ASIN の対応が付くのは行を出品リストに入れたとき（段取り C・D）だから。 */
 const MW_CHUNK = 400;                  // 画面が1回に送ってくる行数の上限
+/* 8.103 D1 の混み合い対策（2026-11-26、取り込みが 31便目で落ちた）。 */
+const MW_SEEN_IDS = 90;                // 中身が同じ行の seen_at をまとめて直す行数（1文）
+const MW_PUT_BATCH = 25;               // 1回の batch に入れる文の数（50 → 25 で1回を軽く）
+const MW_CSV_GAP_MS = 1500;            // 自動取り込みの便と便のあいだ（D1 を休ませる）
+const MW_CSV_RUN_KEY = "mwcsv.running"; // 取り込み中の印（途中で切られたかを次の回に見る）
+const MW_CSV_RUN_STALE_MS = 20 * 60000; // この時間を過ぎた印は「途中で切られた」
+const MW_CSV_KICK = "mwcsv.kick";      // Actions の「いますぐ取り込む」の印
 const MW_SHIP_OK = 4;                  // 無在庫に使える出荷の営業日数
 const MW_DROP_WARN = 0.30;             // 行数がこれ以上減ったら取得ミスとみなす
 const MW_LIST_MAX = 500;               // 候補一覧で**1回に**返す行数の上限
@@ -7547,7 +7583,7 @@ async function mwStockPut(env, body) {
         for (const r of part) bind.push(r.jan, r.sha, r.idx);
         const got = await env.DB.prepare(
           /* 7.126：**前の掲載数**も引く（動きの記録に使う）。 */
-          `SELECT jan, sha, idx, row_hash, gone_at, stock
+          `SELECT id, jan, sha, idx, row_hash, gone_at, stock
              FROM mw_stock WHERE ${where}`)
           .bind(...bind).all();
         for (const y of (got && got.results) || [])
@@ -7575,6 +7611,10 @@ async function mwStockPut(env, body) {
     }
     const mv = [];
     const stmts = [];
+    /* 8.103 中身が同じ行は seen_at を**まとめて**新しくする（id で 90行ずつ）。
+       v350 までは1行ずつ UPDATE していたので、12,000行で 12,000文になり、
+       D1 の「10秒あたりの上限」に当たって 31便目で落ちた。 */
+    const sameIds = [];
     for (const r of rows) {
       const old = have[r.jan + "|" + r.sha + "|" + r.idx];
       if (moveOk) {
@@ -7584,7 +7624,8 @@ async function mwStockPut(env, body) {
       if (old && old.row_hash === r.row_hash && !old.gone_at) {
         /* 中身が同じなら seen_at だけ新しくする（差分書き込み）。 */
         res.same++;
-        stmts.push(env.DB.prepare(
+        if (Number(old.id) > 0) sameIds.push(Number(old.id));
+        else stmts.push(env.DB.prepare(
           `UPDATE mw_stock SET seen_at=?4 WHERE jan=?1 AND sha=?2 AND idx=?3`)
           .bind(r.jan, r.sha, r.idx, at));
         continue;
@@ -7610,11 +7651,20 @@ async function mwStockPut(env, body) {
               r.cond, r.wholesale, r.stock, r.note, r.ship_text, r.ship_days,
               r.row_hash, at));
     }
-    await runBatch(env, run, stmts);
+    for (let i = 0; i < sameIds.length; i += MW_SEEN_IDS) {
+      const ids = sameIds.slice(i, i + MW_SEEN_IDS);
+      /* 印（?2,?3,…）は SQL の外で先に作る（文の中に ? を書かない決まり・7.118）。 */
+      const marks = ids.map((_, k) => "?" + (k + 2)).join(",");
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_stock SET seen_at=?1 WHERE id IN (${marks})`)
+        .bind(at, ...ids));
+    }
+    /* 8.103 混み合ったら待ってやり直す（batch は1トランザクションなので安全）。 */
+    await runBatchRetry(env, run, stmts, MW_PUT_BATCH);
     /* 7.126：動きの記録（mw_move＋mw_stat）。落ちても取り込みは止めない。 */
     if (mv.length) {
       try {
-        await runBatch(env, run, mwMvStmts(env, mv, hasBase, hasWipe));
+        await runBatchRetry(env, run, mwMvStmts(env, mv, hasBase, hasWipe), MW_PUT_BATCH);
         res.moved += mv.length;
         /* 7.141（【2】）一度に消えた行は、取り込みの記録にも残す。 */
         const wn = mv.filter((m) => m.kind === "wipe").length;
@@ -7903,7 +7953,7 @@ async function mwStockHave(env) {
   for (let off = 0; ; off += page) {
     const q = await env.DB.prepare(
       /* 7.126：**前の掲載数**も引く（動きの記録に使う）。 */
-      `SELECT jan,sha,idx,row_hash,gone_at,stock FROM mw_stock
+      `SELECT id,jan,sha,idx,row_hash,gone_at,stock FROM mw_stock
         ORDER BY id LIMIT ?1 OFFSET ?2`).bind(page, off).all();
     const rows = (q && q.results) || [];
     for (const y of rows) have[y.jan + "|" + y.sha + "|" + y.idx] = y;
@@ -8064,12 +8114,37 @@ async function jobMwCsv(env, opt) {
     res.every_h = cfg.everyH; res.body_h = cfg.bodyH;
     /* ---- 動かしてよいか ---- */
     if (cfg.stop) { res.why = "⚙の「すぐ止める」が入っています"; return fin(); }
+    /* 8.103 Actions の「いますぐ取り込む」（kick）は、止めた印・間隔を見ずに
+       本体まで取る（オフのときは取らない）。 */
+    const kick = !!o.kick;
+    if (kick) o.force = true;
     if (src === "auto") {
       if (!cfg.on) { res.why = "自動取り込みはオフです"; return fin(); }
-      const off = await stateGet(env, MW_CSV_OFF);
+      const off = kick ? "" : await stateGet(env, MW_CSV_OFF);
       if (off) {
         res.why = "続けて失敗したので止めています（⚙の「もう一度動かす」で戻せます）";
         res.auto_off = true; return fin();
+      }
+    }
+    /* 8.103 前の回が**途中で切られていた**か（Cron の時間切れなど）。
+       取り込みを始めるときに印を置き、終わったら消す。印が古いまま残って
+       いたら、失敗として数えて知らせ、本体をすぐ取り直す（3時間待たない）。
+       v350 までは切られた回が記録にも失敗の数にも残らず、毎時の確認だけが
+       続いて 41時間取り込まれなかった。 */
+    const runAt = await stateGet(env, MW_CSV_RUN_KEY);
+    if (runAt) {
+      const ms = Date.now() - new Date(runAt).getTime();
+      if (!isFinite(ms) || ms >= MW_CSV_RUN_STALE_MS) {
+        await stateSet(env, MW_CSV_RUN_KEY, "").run();
+        await stateSet(env, MW_CSV_BODYAT, "").run();
+        res.cut_before = runAt;
+        await mwCsvFailed(env, run, "前の回の取り込みが途中で止まっていました（"
+          + jstText(runAt) + " に始めた回。時間切れか D1 の混み合いの可能性）。"
+          + "いまの回で取り直します", res);
+        o.force = true;
+      } else if (!kick) {
+        res.why = "取り込み中の回があります（" + jstText(runAt) + " から）";
+        return fin();
       }
     }
     if (!cfg.url) {
@@ -8202,9 +8277,14 @@ async function jobMwCsv(env, opt) {
     res.parts = parts.length;
     const at = nowIso();
     res.stock_at = at;              // 7.121：この回の一覧を開くための日時
+    /* 8.103 取り込み中の印（途中で切られたら次の回に分かるように）。 */
+    await stateSet(env, MW_CSV_RUN_KEY, nowIso()).run();
+    res.marked = true;
     /* いまの row_hash を先に1回で引いておく（D1 の問い合わせを減らす）。 */
-    const have = await mwStockHave(env);
+    const have = await d1Retry(run, () => mwStockHave(env));
     for (let i = 0; i < parts.length; i++) {
+      /* 8.103 便と便のあいだをあける（D1 の「10秒あたりの上限」に当てない）。 */
+      if (i > 0 && MW_CSV_GAP_MS > 0) await sleep(MW_CSV_GAP_MS);
       /* 時間と外向きの回数の見張り。足りなくなったら finalize せずに止める
          （seen_at を新しくしただけなので、次の回にやり直せば直る）。 */
       if (Date.now() - t0 > MW_CSV_BUDGET_MS
@@ -8243,6 +8323,9 @@ async function jobMwCsv(env, opt) {
     await stateSet(env, MW_CSV_HASH, hash).run();
     await stateSet(env, MW_CSV_BYTES, String(res.bytes)).run();
     await stateSet(env, MW_CSV_FAIL, "0").run();
+    /* 8.103 いますぐ取り込む（kick）で取り込めたら、止めた印も外す。
+       途中で切られた回を数えて、この回で止めた印が付いたときも、取り込めたなら外す。 */
+    if (kick || res.auto_off) { await stateSet(env, MW_CSV_OFF, "").run(); res.auto_off = false; }
     res.ok = true;
     run.notes.push("MW在庫CSV（" + src + "）：" + res.rows_in + "行／足した "
       + res.added + "／変わった " + res.changed_rows + "／欠品 " + res.gone);
@@ -8256,6 +8339,9 @@ async function jobMwCsv(env, opt) {
 
   function fin() {
     res.elapsed_ms = Date.now() - t0;
+    /* 8.103 終わった（成功・失敗のどちらでも）ので、取り込み中の印を消す。 */
+    const clr = res.marked ? stateSet(env, MW_CSV_RUN_KEY, "").run().catch(() => null)
+                           : Promise.resolve();
     /* 「動かさなかった」だけの回は記録を増やさない（記録が流れてしまう）。 */
     const keep = res.ran || res.took || res.why && res.auto_off;
     const p = keep ? mwCsvLog(env, {
@@ -8266,7 +8352,7 @@ async function jobMwCsv(env, opt) {
       /* 7.121：この回の一覧（/mw/nt）を開くための日時。 */
       stock_at: res.stock_at || "",
     }) : Promise.resolve();
-    return p.then(() => saveRun(env, run)).then((x) => Object.assign(x, res));
+    return clr.then(() => p).then(() => saveRun(env, run)).then((x) => Object.assign(x, res));
   }
 }
 
@@ -10062,7 +10148,10 @@ async function mwDropNotify(env, run, res, done) {
    欠品は **CSV を取り込まないと分からない**。取り込みが止まると
    売り越しに気づけないので、24時間を過ぎたら知らせる。
    Discord は1日1回まで（毎時の実行で鳴り続けないように）。 */
-const MW_STALE_H = 24;             // これを過ぎたら催促する
+/* 8.103（カジの依頼）24 → **6時間**。止まったら運営用の Discord に、
+   同じ知らせは6時間に1回まで（MW_STALE_EVERY_H）。 */
+const MW_STALE_H = 6;              // これを過ぎたら催促する
+const MW_STALE_EVERY_H = 6;        // 同じ催促を出す間隔
 const MW_STALE_KEY = "mw.stale.notified";
 async function mwStaleCheck(env, run) {
   const r = await env.DB.prepare(
@@ -10079,16 +10168,30 @@ async function mwStaleCheck(env, run) {
     if (await stateGet(env, MW_STALE_KEY)) await stateSet(env, MW_STALE_KEY, "").run();
     return { stale: false, hours, at };
   }
-  /* 1日1回まで。 */
+  /* 8.103 6時間に1回まで。運営用のチャンネルへ（無ければ社内用）。
+     自動の取り込みの最後の様子（mw_csv_runs）も添える（なぜ止まっているか）。 */
   const last = await stateGet(env, MW_STALE_KEY);
   const lastMs = last ? (Date.now() - new Date(last).getTime()) : Infinity;
-  if (lastMs >= 24 * 3600000) {
+  if (lastMs >= MW_STALE_EVERY_H * 3600000) {
+    let lr = null;
+    try {
+      lr = await env.DB.prepare(
+        `SELECT at, ok, took, why FROM mw_csv_runs ORDER BY id DESC LIMIT 1`).first();
+    } catch (e) { lr = null; }
+    const off = await stateGet(env, MW_CSV_OFF);
+    const cut = await stateGet(env, MW_CSV_RUN_KEY);
     await notify(env, run,
-      "⏰ **MW の在庫CSVを取り込んでください**\n"
+      "⏰ **MW の在庫CSVの取り込みが " + hours + "時間止まっています**\n"
       + (at ? ("最後の取り込みは " + jstText(at) + "（" + hours + "時間前）です。")
             : "まだ一度も取り込んでいません。")
+      + (lr ? ("\n自動の最後の回：" + jstText(lr.at) + "　"
+          + (Number(lr.ok) ? "動いた" : "失敗") + "　" + String(lr.why || "").slice(0, 120)) : "")
+      + (off ? ("\n自動取り込みは止めています（" + String(off).slice(0, 120) + "）") : "")
+      + (cut ? ("\n取り込み中の印が残っています（" + jstText(cut) + " から）") : "")
       + "\n取り込まないと **MW の欠品が分からず、売り越し**になります。"
-      + "\n出品CSVタブの「MWの在庫CSVを取り込む」から入れてください。");
+      + "\n仕入れタブの「MWの在庫CSVを取り込む」で手で入れるか、"
+      + "Actions「deploy-pj-sync」の「MW の在庫CSVをいますぐ取り込む」を使ってください。",
+      { ops: true });
     await stateSet(env, MW_STALE_KEY, nowIso()).run();
   }
   return { stale: true, hours, at };
@@ -23284,6 +23387,17 @@ export default {
            売れてすぐ（15分以内）に数量が戻る。
            「確認してから」のときは予定を立てるだけ。 */
         await jobSoldKeep(env, {});
+        /* 8.103 MW の在庫CSV の自動取り込みは**15分ごとの回**で見る
+           （間隔は jobMwCsv が自分で守るので、取りに行くのは1時間に1回）。
+           v350 までは毎時の回で、出品の取り込み・段取り D などの**あと**に
+           走らせていたので、合わせて Cron の時間を超えて途中で切られ、
+           41時間取り込まれなかった。Actions の「いますぐ取り込む」（kick）も
+           ここで拾う（15分以内に取り込む）。 */
+        try {
+          const kick = await stateGet(env, MW_CSV_KICK);
+          if (kick) await stateSet(env, MW_CSV_KICK, "").run();
+          await jobMwCsv(env, { src: "auto", kick: !!kick });
+        } catch (e) { /* 取り込みが失敗しても本体は止めない */ }
       })());
       return;
     }
@@ -23350,11 +23464,8 @@ export default {
          知らせは1日1回にしてある。 */
       try { await jobAmzDrop(env, {}); }
       catch (e) { /* ここで落ちても本体は止めない */ }
-      /* 【P】MW の在庫CSVを自分で取りに行く（既定オフ）。
-         ここは「変わったか」を見るだけで、変わっていなければ本体を取らない。
-         催促（mwStaleCheck）より**先に**走らせる（取り込めたら催促は出ない）。 */
-      try { await jobMwCsv(env, { src: "auto" }); }
-      catch (e) { /* 取り込みが失敗しても本体は止めない */ }
+      /* 【P】MW の在庫CSVの自動取り込みは、8.103 で**15分ごとの回**に移した
+         （毎時の回はほかの処理が重く、合わせて時間切れで切られていたため）。 */
       /* 取り込みが24時間止まっていたら催促する（7.75）。 */
       try { await mwStaleCheck(env, newRun("mw-stale")); }
       catch (e) { /* 催促が失敗しても本体は止めない */ }
@@ -23446,6 +23557,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   /* 8.99 */
+  /* 8.103 */
+  d1Busy, d1Retry, runBatchRetry, MW_CSV_GAP_MS, MW_SEEN_IDS, MW_CSV_RUN_KEY, MW_CSV_KICK,
   /* 8.101 */
   MWMATCH, mwMisOf, mwSamePut, mwSameSql, subRowMap, subAutoRow, subRows, subAutoCands,
   jobBuyNote, buyNoteText, buyPick, buyAmzUrl, BUY_LOOK_H, BUY_CSV_OLD_H,

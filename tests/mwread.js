@@ -140,6 +140,8 @@ ok(/送る行 12062行/.test(read.txt),'★★送る行数を出す');
 ok(!/説明の付かない行/.test(read.txt),'★★数が全部つじつまが合う');
 
 console.log('\n=== 本当に 12,062 行送られるか ===');
+/* 8.103 便と便のあいだを 0.4秒あけるので、31便を送り終わるまで待つ。 */
+await p.waitForFunction(()=>(window.__mw||[]).length>=31,null,{ timeout:30000 }).catch(()=>{});
 let sent=await p.evaluate(()=>({
   parts:window.__mw.length,
   rows:window.__mw.reduce((a,b)=>a+b.rows.length,0),

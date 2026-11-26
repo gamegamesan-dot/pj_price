@@ -315,7 +315,7 @@ let w2=W.mwWhere({ kishu:'NS', stock_min:2 });
 ok(/COALESCE\(stock,0\)>=2/.test(w2.w),'★★⚙設定で変えられる');
 
 console.log('\n=== 取り込みが24時間止まったら催促する（7.75）===');
-ok(W.MW_STALE_H===24,'★24時間');
+ok(W.MW_STALE_H===6,'★6時間（8.103：24 → 6）');
 /* 「さっき取り込んだ」状態にする。取り込みの時刻を決め打ちにすると、
    日が変わるだけでこのテストが落ちる（2026-11-05 に落ちた）。 */
 await env2.DB.prepare("UPDATE mw_runs SET at=?1")
@@ -331,13 +331,25 @@ await env2.DB.prepare(
 notes=[];
 st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
 console.log('   '+JSON.stringify({stale:st.stale,hours:st.hours}));
-ok(st.stale===true&&st.hours>=25,'★★★24時間を過ぎたら催促する');
-ok(/MW の在庫CSVを取り込んでください/.test(notes.join('')),'★★★Discord に出す');
+ok(st.stale===true&&st.hours>=25,'★★★止まっていたら催促する');
+ok(/MW の在庫CSVの取り込みが 25時間止まっています/.test(notes.join('')),'★★★Discord に出す');
 ok(/売り越し/.test(notes.join('')),'★★なぜ必要かを書く');
 /* 1日1回まで */
 notes=[];
 st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
-ok(notes.length===0,'★★★1日1回まで（毎時鳴らさない）');
+ok(notes.length===0,'★★★6時間に1回まで（毎時鳴らさない・8.103）');
+/* 8.103 6時間たてばまた知らせる（止まっているあいだ）。 */
+await env2.DB.prepare("UPDATE sync_state SET v=?1 WHERE k='mw.stale.notified'")
+  .bind(new Date(Date.now()-6*3600000-60000).toISOString()).run();
+notes=[];
+st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+ok(notes.length===1,'★★★6時間たったら、止まっているあいだはまた知らせる（8.103）');
+/* 7時間前（6時間を過ぎた）でも知らせる。 */
+await env2.DB.prepare("UPDATE mw_runs SET at=?1").bind(new Date(Date.now()-7*3600000).toISOString()).run();
+await env2.DB.prepare("UPDATE sync_state SET v='' WHERE k='mw.stale.notified'").run();
+notes=[];
+st=await W.mwStaleCheck(env2,{kind:'t',subrequests:0,pages:0,errors:0,notes:[],rows:0});
+ok(st.stale===true&&notes.length===1&&/7時間止まっています/.test(notes[0]),'★★★6時間を過ぎたら知らせる（8.103）');
 /* MW を使っていない（在庫が入っていない）なら何も言わない */
 const env4=makeEnv({});
 notes=[];

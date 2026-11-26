@@ -13755,8 +13755,22 @@ function mwImportRun(text,fi){
       if(x.picked)sum.picked=+x.picked;      // 代表は最後の便の値
       if(x.warn)sum.warn=x.warn;
       st.pi=pi;                              // ここまでは送れた
-      step();
+      st.busyN=0;
+      /* 8.103 便と便のあいだを少しあける（D1 の「10秒あたりの上限」に当てない）。 */
+      setTimeout(function(){ if(mwSend===st)step(); },MW_SEND_GAP_MS);
     },function(why){
+      /* 8.103 D1 の混み合い（「D1 DB is overloaded」）は、少し待って
+         **同じ便から**自動でやり直す（4回まで。10秒・20秒・40秒・60秒）。
+         2026-11-26、31便目で落ちて止まっていた。 */
+      if(/overloaded|too many resources/i.test(String(why||''))
+         &&mwSend===st&&(st.busyN||0)<MW_SEND_BUSY_WAIT.length){
+        var w=MW_SEND_BUSY_WAIT[st.busyN||0];
+        st.busyN=(st.busyN||0)+1;
+        note.text('D1 が混み合っています。'+(w/1000)+'秒待って '+pi+'便目から送り直します…（'
+          +st.busyN+'回目）');
+        setTimeout(function(){ if(mwSend===st)step(pi-1); },w);
+        return;
+      }
       mwImportBusy(false);
       /* 失敗した便を覚えておく（6.100）。iPhone でアプリを切り替えると
          通信が切られて「Load failed」になるので、画面に戻ったら
@@ -13773,6 +13787,9 @@ function mwImportRun(text,fi){
   mwSend=st;
   step();
 }
+/* 8.103 便と便のあいだ・混み合いのときの待ち時間。 */
+var MW_SEND_GAP_MS=400;
+var MW_SEND_BUSY_WAIT=[10000,20000,40000,60000];
 /* ===== 取り込みの途中で切れたときの送り直し（6.100）=====
    iPhone の Safari は、アプリを切り替えると動いている fetch を切る。
    12,062行＝31便もあるので途中で切れやすく、「通信できませんでした
@@ -32394,7 +32411,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v350';   // sw.js の const V と必ず同じ値にする
+var APP_V='v351';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -63,6 +63,17 @@ on:
         description: '鍵を Worker に登録し直す（GitHub の Secrets から）'
         type: boolean
         default: false
+      # 8.103（カジの依頼）MW の在庫CSV の取り込みが止まった件。
+      # 取り込みの記録を D1 から読むだけ（時刻・件数・理由だけを出す。商品名・URL は出さない）。
+      mw_csv_diag:
+        description: 'MW の在庫CSV の取り込みの記録を見る（読むだけ）'
+        type: boolean
+        default: false
+      # 「いますぐ取り込む」の印を置く（pj-sync の15分ごとの回が拾って取り込む）。
+      mw_csv_now:
+        description: 'MW の在庫CSV をいますぐ取り込む（15分以内）'
+        type: boolean
+        default: false
 
 # 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
 # 走っている途中のものは止めない（D1 の作業を中断させない）。
@@ -214,6 +225,21 @@ jobs:
           put SHOPIFY_CLIENT_SECRET
           put DISCORD_OPS_WEBHOOK_URL
           put DISCORD_BUY_WEBHOOK_URL
+
+      # ---- 8.103 MW の在庫CSV：いますぐ取り込む印・取り込みの記録（読むだけ）----
+      - name: MW の在庫CSV をいますぐ取り込む印を置く
+        if: inputs.mw_csv_now && !inputs.dry_run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node d1-diag.mjs --kick
+
+      - name: MW の在庫CSV の取り込みの記録を見る
+        if: inputs.mw_csv_diag
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node d1-diag.mjs --mw-csv
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run

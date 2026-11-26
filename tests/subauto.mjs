@@ -538,12 +538,14 @@ console.log('\n=== ⑦ 定時（1日2回・夜中は走らない・同じ回は1
   const h=await W.jobSubAuto(env,{ now:'2026-11-23T03:10:00Z' });
   ok(h.ran===false&&/今日は送らない/.test(h.why)&&shop.length===0,
      '★★「今日は送らない」の印がある日は走らない');
-  /* 定時の回への組み込み（毎時の回のいちばん最後・在庫CSV の取り込みの後）。 */
+  /* 定時の回への組み込み（毎時の回のいちばん最後）。
+     8.103 MW の在庫CSV の自動取り込みは15分ごとの回に移した（毎時の回では
+     時間切れで切られていた）。取り込まれた新しい在庫は、次の定時にまとめて配信。 */
   const src=fs.readFileSync(new URL('../proxy-sync/worker.js',import.meta.url),'utf8');
-  const iCsv=src.indexOf('await jobMwCsv(env, { src: "auto" })');
+  const iCsv=src.indexOf('await jobMwCsv(env, { src: "auto", kick: !!kick });');
   const iAuto=src.indexOf('await jobSubAuto(env, {});');
-  ok(iCsv>0&&iAuto>iCsv,
-     '★★★MW の在庫CSV の取り込みより後に走る（新しい在庫は次の定時にまとめて配信）');
+  ok(iCsv>0&&iAuto>iCsv&&src.indexOf('await jobMwCsv(env, { src: "auto" });')<0,
+     '★★★MW の在庫CSV の取り込みは15分ごとの回（毎時の回では呼ばない）・配信は毎時の回の最後');
   ok(/if \(sa\.autoOn && SUBAUTO\.dueOf\(sa\.autoHours, subJst\(\), sa\.autoWeekend\)\)/.test(src),
      '★定時の回は時刻を見てから呼ぶ');
   ok(/if \(weekday && !sc\.autoOn\)\s*\n\s*await jobSubSend\(env, \{ approve: true, auto: true \}\);/.test(src)
