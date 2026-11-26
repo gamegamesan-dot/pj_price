@@ -239,6 +239,26 @@ console.log('\n=== ⑤ いますぐ取り込む（Actions の kick）===');
   ok(n===2000,'★★2,000行が入る');
 }
 
+console.log('\n=== ④′ 取り込めたことを先に控え、付け足し（知らせなど）はあと（8.104）===');
+{
+  reset(); const env=makeEnv(); await cfg(env);
+  /* 付け足しの知らせ（Discord）が返ってこない（止まる）ようにする。 */
+  const f0=globalThis.fetch;
+  globalThis.fetch=async(u,i)=>{ if(/discord/.test(String(u)))return new Promise(()=>{}); return f0(u,i); };
+  W.jobMwCsv(env,{ src:'auto', kick:true });      // 待たない（付け足しで止まる）
+  let done=false;
+  for(let k=0;k<120&&!done;k++){
+    await new Promise((r)=>setTimeout(r,500));
+    done=(await state(env,'mwcsv.etag'))==='"v1"'&&(await state(env,'mwcsv.running'))==='';
+  }
+  globalThis.fetch=f0;
+  const lg=env.DB._db.prepare('SELECT took, rows_in, ok FROM mw_csv_runs ORDER BY id DESC LIMIT 1').get();
+  const mr=env.DB._db.prepare('SELECT rows_in FROM mw_runs ORDER BY id DESC LIMIT 1').get();
+  console.log('   '+JSON.stringify({ done, lg, mr }));
+  ok(done&&lg&&lg.took===1&&lg.ok===1&&lg.rows_in===2000&&mr&&mr.rows_in===2000,
+     '★★★付け足し（知らせ）で止まっても、取り込み・記録・ETag・印の片付けは済んでいる（2026-11-26 12:31 の回の形）');
+}
+
 console.log('\n=== ③ 15分ごとの回（毎時の回では取り込まない）===');
 {
   reset(); const env=makeEnv(); await cfg(env);

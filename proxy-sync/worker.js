@@ -7543,6 +7543,34 @@ function mwSaleWords(st) {
 /* 取り込み。body = { at, part, parts, rows:[…], rows_in, unreadable }
    part/parts は分けて送るときの通し番号（1/31 … 31/31）。
    最後の便（part>=parts）で欠品の判定と代表選びをする。 */
+/* 8.104 取り込みのあとの付け足し。mwStockPut の最後の便から（手動）、または
+   jobMwCsv が取り込みを控えたあとに（自動）呼ぶ。どれが落ちても取り込みは止めない。 */
+async function mwStockAfter(env, run, at, res) {
+  /* 配送ポリシーが足りなくなった無在庫の出品を知らせる（7.98）。
+     取り込みのたびに見る（MW の出荷日数は日によって変わる）。 */
+  try {
+    await shipNamesLoad(env);
+    const sc = await mwShipCheck(env, run);
+    res.ship_over = sc.over;
+    res.ship_seen = sc.seen;
+    res.ship_rows = sc.rows.slice(0, 20);
+  } catch (e) { run.notes.push("mw-ship: " + String((e && e.message) || e)); }
+  /* 6.193／7.143：海外向け Shopify（os-）の在庫・値段の追従。
+     eBay の数量を0にするのと**同じ間合い**で、直しが要る商品を見つけて
+     社内用の Discord に「Shopify に読み込んでください ◯件」と知らせる。 */
+  try {
+    if (!res.warn) {
+      const oc = await osCheck(env, run, { at: at });
+      res.os_fix = oc.n;
+      res.os_gone = oc.gone;
+      res.os_px = oc.px;
+    }
+  } catch (e) { run.notes.push("os-check: " + String((e && e.message) || e)); }
+  /* 7.110：取り込みのたびに1通だけ知らせる（在庫切れ・新入荷）。 */
+  try {
+    res.note_sent = await mwImportNotify(env, run, at, res);
+  } catch (e) { run.notes.push("mw-note: " + String((e && e.message) || e)); }
+}
 async function mwStockPut(env, body) {
   const run = newRun("mw-stock");
   const res = { ok: false, part: 1, parts: 1, taken: 0, added: 0, changed: 0,
@@ -7838,30 +7866,11 @@ async function mwStockPut(env, body) {
             run.notes.push("欠品した出品 " + res.zeroed + "件の数量を0にしました");
         }
       } catch (e) { run.notes.push("mw-zero: " + String((e && e.message) || e)); }
-      /* 配送ポリシーが足りなくなった無在庫の出品を知らせる（7.98）。
-         取り込みのたびに見る（MW の出荷日数は日によって変わる）。 */
-      try {
-        await shipNamesLoad(env);
-        const sc = await mwShipCheck(env, run);
-        res.ship_over = sc.over;
-        res.ship_seen = sc.seen;
-        res.ship_rows = sc.rows.slice(0, 20);
-      } catch (e) { run.notes.push("mw-ship: " + String((e && e.message) || e)); }
-      /* 6.193／7.143：海外向け Shopify（os-）の在庫・値段の追従。
-         eBay の数量を0にするのと**同じ間合い**で、直しが要る商品を見つけて
-         社内用の Discord に「Shopify に読み込んでください ◯件」と知らせる。 */
-      try {
-        if (!res.warn) {
-          const oc = await osCheck(env, run, { at: at });
-          res.os_fix = oc.n;
-          res.os_gone = oc.gone;
-          res.os_px = oc.px;
-        }
-      } catch (e) { run.notes.push("os-check: " + String((e && e.message) || e)); }
-      /* 7.110：取り込みのたびに1通だけ知らせる（在庫切れ・新入荷）。 */
-      try {
-        res.note_sent = await mwImportNotify(env, run, at, res);
-      } catch (e) { run.notes.push("mw-note: " + String((e && e.message) || e)); }
+      /* 8.104 取り込みのあとの付け足し（配送ポリシーの見張り・海外向けの直し・
+         取り込みの知らせ）。自動の取り込み（defer_after）は、**取り込みが済んだことを
+         控えてから**別に走らせる（ここで止まっても「取り込めた」が残るように）。 */
+      if (body && body.defer_after) res.after_pending = true;
+      else await mwStockAfter(env, run, at, res);
       run.notes.push("MW在庫：現れた " + seen + "行／足した " + res.added
         + "／変わった " + res.changed + "／同じ " + res.same
         + "／欠品 " + res.gone + "／戻った " + res.back
@@ -8120,6 +8129,7 @@ async function jobMwCsv(env, opt) {
                 parts: 0, stock_at: "",
                 warn: "", why: "", fail: 0, auto_off: false, enc: "" };
   const t0 = Date.now();
+  let afterTodo = null;     // 8.104 取り込みを控えたあとに走らせる付け足し
   try {
     let st = {};
     try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
@@ -8309,7 +8319,7 @@ async function jobMwCsv(env, opt) {
       }
       const r = await mwStockPut(env, { at: at, part: i + 1, parts: parts.length,
         rows: parts[i], rows_in: d.rows.length, unreadable: d.unread, src: src,
-        have: have });
+        have: have, defer_after: true });
       run.subrequests += Math.round(Number(r.subrequests) || 0);
       if (r.error) {
         await d1Retry(run, () => mwCsvFailed(env, run,
@@ -8326,6 +8336,7 @@ async function jobMwCsv(env, opt) {
         res.picked = Math.round(Number(r.picked) || 0);
         res.zeroed = Math.round(Number(r.zeroed) || 0);
         res.warn = String(r.warn || "");
+        if (r.after_pending) afterTodo = { at: at, r: r };
       }
     }
     /* 取り込めたので、次の回の判定のために控える。 */
@@ -8342,6 +8353,17 @@ async function jobMwCsv(env, opt) {
     res.ok = true;
     run.notes.push("MW在庫CSV（" + src + "）：" + res.rows_in + "行／足した "
       + res.added + "／変わった " + res.changed_rows + "／欠品 " + res.gone);
+    /* 8.104 取り込めたことを控えて（記録・印を消す）から、付け足しを走らせる。 */
+    if (afterTodo) {
+      const out = await fin();
+      const run2 = newRun("mw-after");
+      try { await mwStockAfter(env, run2, afterTodo.at, afterTodo.r); }
+      catch (e) { run2.errors++; run2.notes.push("例外 " + String((e && e.message) || e)); }
+      try { await saveRun(env, run2); } catch (e) { /* 控えが落ちても取り込みは済んでいる */ }
+      out.after = { ship_over: afterTodo.r.ship_over || 0, os_fix: afterTodo.r.os_fix || 0,
+                    note_sent: afterTodo.r.note_sent || 0 };
+      return out;
+    }
   } catch (e) {
     run.errors++;
     run.notes.push("例外 " + e.message);
