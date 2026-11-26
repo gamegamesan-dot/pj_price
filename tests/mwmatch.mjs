@@ -66,10 +66,30 @@ console.log('=== ① 見立て（shared/mwmatch.js）===');
      '★★★MW 定価が 100円未満は「定価不明」として値段では見ない（『龍が如く』定価 2）');
   /* 8.102 入り数違い。 */
   const q=MM.judge({ mw_name:'サンリオキャラクターズ クリスタルコット2', amz_name:'サンリオキャラクターズ クリスタルコット2 10個',
-    list_price:500, price:600, asin:'B0X' });
+    list_price:500, price:4000, asin:'B0X' });
   console.log('   '+MM.whyText(q));
-  ok(q.bad&&q.why.join()==='qty'&&/入り数違いの疑い（Amazon：10個／MW：なし）/.test(MM.whyText(q)),
-     '★★★入り数が Amazon の名前にだけある（クリスタルコット2 ⇔ 10個）は「入り数違いの疑い」');
+  ok(q.bad&&q.why.join()==='qty'&&/入り数違いの疑い（Amazon：10個／MW：なし・売値は定価の 8倍）/.test(MM.whyText(q)),
+     '★★★入り数が Amazon の名前にだけあり、値段も合わない（定価 ¥500・売値 ¥4,000）は「入り数違いの疑い」');
+  /* 8.105 カジの実データ（入り数違い 363件のほとんどが見当違い）。 */
+  ok(!MM.judge({ mw_name:'サンリオキャラクターズ クリスタルコット2', amz_name:'サンリオキャラクターズ クリスタルコット2 10個',
+       list_price:500, price:600, asin:'B0X' }).bad,'★★★入り数の言葉が片方だけでも、売値÷定価が 0.6〜2.5倍なら疑わない（8.105）');
+  ok(!MM.judge({ mw_name:'続『刀剣乱舞-花丸-』トレーディングちゅんコレフィギュア', amz_name:'続『刀剣乱舞-花丸-』トレーディングちゅんコレフィギュア BOX',
+       list_price:8000, price:11570, wholesale:6000, asin:'B0X' }).bad
+     &&!MM.judge({ mw_name:'もちもちマスコットWA ハイキュー!!', amz_name:'もちもちマスコットWA ハイキュー!! BOX',
+       list_price:8100, price:10640, asin:'B0X' }).bad,
+     '★★★「BOX」が Amazon にだけあっても、定価も BOX の値段（1.45倍・1.31倍）なら疑わない（刀剣乱舞・ハイキュー!!）');
+  ok(MM.judge({ mw_name:'ブースターパック', amz_name:'ブースターパック 16パック BOX', list_price:0, price:8000, wholesale:200, asin:'B0X' }).bad
+     &&!MM.judge({ mw_name:'ブースターパック', amz_name:'ブースターパック BOX', list_price:0, price:8000, wholesale:4000, asin:'B0X' }).bad,
+     '★★定価が無いときは卸値 ÷ 0.7 で見る（1パックの卸値 ¥200 と BOX ¥8,000 は疑い・卸値 ¥4,000 なら疑わない）');
+  ok(MM.judge({ mw_name:'ブースターパック', amz_name:'ブースターパック 16パック', list_price:0, price:8000, wholesale:0, asin:'B0X' }).bad,
+     '★値段で確かめられない（定価も卸値も無い）ときは今までどおり疑う');
+  ok(!MM.qtyOf('マウスパッド 35×30×0.3cm').length&&!MM.qtyOf('ヘッドセット 16×9.7×22cm').length
+     &&!MM.qtyOf('アクリルスタンド 約365×142mm').length&&!MM.qtyOf('15.5×6×10.3cm').length
+     &&!MM.qtyOf('A4 21x29.7cm').length&&JSON.stringify(MM.qtyOf('タオル ×3'))==='["×3"]',
+     '★★★寸法の「×」（35×30×0.3cm・約365×142mm・16×9.7×22cm）は入り数にしない。「タオル ×3」は入り数（8.105）');
+  ok(!MM.qtyOf('アクリルスタンド【同梱物】ステッカー2枚').length&&!MM.qtyOf('Blu-ray 特典 ブロマイド3枚').length
+     &&JSON.stringify(MM.qtyOf('ブロマイド 3枚'))==='["3枚"]',
+     '★★★同梱物・特典の説明の中の枚数は数えない（8.105）');
   ok(JSON.stringify(MM.qtyOf('ブースターパック BOX'))==='["BOX"]'&&JSON.stringify(MM.qtyOf('ボールペン 3本セット'))==='["3本"]'
      &&JSON.stringify(MM.qtyOf('タオル ×3'))==='["×3"]'&&JSON.stringify(MM.qtyOf('ギフト セット'))==='["セット"]',
      '★★入り数の印（BOX・3本・×3・セット）');

@@ -39,7 +39,7 @@ const ROWS=[
   mk(OK1,{ mw_name:'HG 1/144 ガンダムエアリアル', list_price:1430, price:2400,
     amz_name:'BANDAI SPIRITS HG 機動戦士ガンダム 水星の魔女 ガンダムエアリアル 1/144スケール 色分け済みプラモデル' }),
   /* 8.102 入り数が Amazon にだけある（入り数違いの疑い）。 */
-  mk(PX,{ mw_name:'サンリオキャラクターズ クリスタルコット2', list_price:500, price:600,
+  mk(PX,{ mw_name:'サンリオキャラクターズ クリスタルコット2', list_price:500, price:4000,
     amz_name:'サンリオキャラクターズ クリスタルコット2 10個' }),
   /* 名前は違うが「同じ商品」と控えてある（その ASIN のとき）。 */
   mk(SAMEJ,{ mw_name:'EG ULTRAMAN', amz_name:'エントリーグレード ウルトラマン', asin:'B0SAME0001',

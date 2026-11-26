@@ -278,7 +278,7 @@ console.log('\n=== Actions の道具（proxy-sync/d1-diag.mjs）===');
 {
   const DG=await import('../proxy-sync/d1-diag.mjs');
   const env=makeEnv();
-  const qs=[DG.Q_RUNS,DG.Q_STATE,DG.Q_IMPORTS,DG.Q_JOBS,DG.Q_LEFT];
+  const qs=[DG.Q_RUNS,DG.Q_STATE,DG.Q_IMPORTS,DG.Q_JOBS,DG.Q_LEFT,DG.Q_MATCH,DG.Q_X];
   let good=0;
   for(const q of qs){ try{ env.DB._db.prepare(q).all(); good++; }catch(e){ console.log('   '+e.message); } }
   ok(good===qs.length,'★★記録を読む問い合わせが D1 の作りに合っている');
@@ -292,6 +292,23 @@ console.log('\n=== Actions の道具（proxy-sync/d1-diag.mjs）===');
   env.DB._db.prepare(`INSERT INTO mw_stock (jan,sha,idx,row_hash,seen_at,created_at,gone_at,stock,pick)
     VALUES ('4902370550001','A',0,'h','x','x','2026-11-25',5,0),('4902370550002','A',0,'h','x','x',NULL,5,1)`).run();
   ok(env.DB._db.prepare(DG.Q_LEFT).get().n===1,'★★欠品なのに eBay で在庫ありの無在庫の出品を数えられる');
+  /* 8.105 商品違いの疑いを数える（画面と同じ見立て・件数だけ・例に卸値は入れない）。 */
+  env.DB._db.prepare(`INSERT INTO mw_stock (jan,sha,idx,name,list_price,wholesale,row_hash,seen_at,created_at,stock,pick)
+    VALUES ('4902370550011','A',0,'EG ULTRAMAN（ULTRAMAN: RISING）',1500,1020,'h','x','x',5,1),
+           ('4902370550012','A',0,'クリスタルコット2',500,350,'h','x','x',5,1),
+           ('4902370550013','A',0,'刀剣乱舞 ちゅんコレ',8000,6000,'h','x','x',5,1)`).run();
+  env.DB._db.prepare(`INSERT INTO mw_amz (jan,asin,name,price,checked_at,created_at) VALUES
+    ('4902370550011','B09VGGZCKM','BANDAI SPIRITS スター・ウォーズ マンダロリアン',5000,'x','x'),
+    ('4902370550012','B0QTY00001','クリスタルコット2 10個',4000,'x','x'),
+    ('4902370550013','B0BOX00001','刀剣乱舞 ちゅんコレ BOX',11570,'x','x')`).run();
+  const mrows=env.DB._db.prepare(DG.Q_MATCH).all();
+  const mc=DG.matchCount(mrows,'');
+  console.log('   '+JSON.stringify({ rows:mc.rows, bad:mc.bad, name_price:mc.name_price, qty:mc.qty, words:mc.qtyWords }));
+  ok(mc.rows===3&&mc.bad===2&&mc.name_price===1&&mc.qty===1&&mc.qtyWords['N個']===1,
+     '★★★Actions で、刈取と同じ行に同じ見立てで数える（理由ごと・入り数の言葉ごと）');
+  ok(mc.examples.length===1&&!('wholesale' in mc.examples[0])&&mc.examples[0].list===500&&mc.examples[0].price===4000,
+     '★★入り数違いの例は MW 名・Amazon 名・定価・売値だけ（卸値は入れない）');
+  ok(!/name/i.test(DG.Q_X),'★設定（倍率）を読む問い合わせ');
   const k=DG.kickSql('2026-11-26T10:00:00Z');
   env.DB._db.exec(k);
   ok(await state(env,'mwcsv.kick')==='2026-11-26T10:00:00Z','★★「いますぐ取り込む」の印を置ける');

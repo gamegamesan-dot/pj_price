@@ -14,8 +14,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { findWrangler } from "./d1-exec.mjs";
-import { runJson } from "./d1-migrate.mjs";
+import { runJson, parseJsonRows } from "./d1-migrate.mjs";
+const MWMATCH = createRequire(import.meta.url)("../shared/mwmatch.js");
 
 /* 出してよい形に整える（URL・長すぎる文を落とす）。 */
 export function clean(v, n) {
@@ -38,6 +40,35 @@ export const Q_LEFT = "SELECT COUNT(*) AS n FROM items i "
   + "WHERE i.ebay_sku LIKE 'W-%' AND COALESCE(i.ebay_item_id,'') <> '' "
   + "AND COALESCE(i.ebay_qty,0) > 0 AND NOT EXISTS (SELECT 1 FROM mw_stock s "
   + "WHERE s.jan = substr(i.ebay_sku,3) AND s.gone_at IS NULL AND COALESCE(s.stock,0) > 0)";
+/* 8.105 商品違いの疑いを、仕入れタブ「刈取」と同じ行（MW の代表の行で Amazon の値段がある行）に
+   当てて数える。見立ては画面と同じ shared/mwmatch.js。 */
+export const Q_MATCH = "SELECT s.jan AS jan, s.name AS mw_name, s.list_price AS list_price, "
+  + "s.wholesale AS wholesale, a.asin AS asin, a.name AS amz_name, a.price AS price, "
+  + "(SELECT ms.asin FROM mw_same ms WHERE ms.jan = s.jan) AS same_asin "
+  + "FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan "
+  + "WHERE s.pick = 1 AND s.gone_at IS NULL AND COALESCE(a.price,0) > 0";
+export const Q_X = "SELECT v FROM sync_state WHERE k = 'ui.settings'";
+/* 数える（理由ごと）。examples は入り数違いの例（卸値は入れない）。 */
+export function matchCount(rows, x) {
+  const o = { rows: 0, bad: 0, name: 0, name_price: 0, qty: 0, same: 0, qtyWords: {}, examples: [] };
+  for (const r of rows || []) {
+    o.rows++;
+    const j = MWMATCH.judge(r, { x: x });
+    if (j.same) o.same++;
+    if (!j.bad) continue;
+    o.bad++;
+    const k = MWMATCH.kindOf(j);
+    if (o[k] !== undefined) o[k]++;
+    if (k === "qty") {
+      for (const w of (j.qty_amz.length ? j.qty_amz : j.qty_mw))
+        o.qtyWords[w.replace(/^\d+/, "N")] = (o.qtyWords[w.replace(/^\d+/, "N")] || 0) + 1;
+      if (o.examples.length < 12)
+        o.examples.push({ mw: String(r.mw_name || "").slice(0, 70), amz: String(r.amz_name || "").slice(0, 90),
+          list: Number(r.list_price) || 0, price: Number(r.price) || 0, why: MWMATCH.whyText(j) });
+    }
+  }
+  return o;
+}
 export function kickSql(at) {
   const q = (x) => "'" + String(x).replace(/'/g, "''") + "'";
   return "INSERT INTO sync_state (k,v,updated_at) VALUES ('mwcsv.kick'," + q(at) + ","
@@ -62,6 +93,50 @@ function main() {
       ? ("いますぐ取り込む印を置きました（" + now + "）。pj-sync の15分ごとの回が拾います。")
       : ("印を置けませんでした（終了コード " + r.status + "）"));
     if (r.status !== 0) process.exit(1);
+  }
+  if (args.includes("--mw-match")) {
+    /* 行が多いので、wrangler の出力を大きめに受ける（既定の 1MB では切れる）。 */
+    const big = (sql) => {
+      const r = spawnSync(process.execPath, [how.path, "d1", "execute", db,
+        local ? "--local" : "--remote", "--json", "--command", sql],
+        { encoding: "utf8", windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+      if (r.status !== 0) return { ok: false, rows: [], err: "終了コード " + r.status };
+      return Object.assign({ ok: true }, parseJsonRows(String(r.stdout || "")));
+    };
+    let x = "";
+    try { const st = big(Q_X); x = ((JSON.parse(((st.rows || [])[0] || {}).v || "{}").settings) || {}).mwMisX || ""; }
+    catch (e) { x = ""; }
+    const res = big(Q_MATCH);
+    if (!res.ok) { console.log("読めませんでした：" + clean(res.err, 200)); process.exit(1); }
+    const c = matchCount(res.rows, x);
+    /* 公開のログには**件数だけ**（商品名は出さない）。 */
+    console.log("\n=== 商品違いの疑い（shared/mwmatch.js・倍率 " + MWMATCH.xOf(x) + "）===");
+    console.log("見た行 " + c.rows + "（MW の代表の行で Amazon の値段がある行）");
+    console.log("疑い " + c.bad + "件：名前 " + c.name + "／名前と値段 " + c.name_price
+      + "／入り数 " + c.qty + "（「同じ商品」と控えた行 " + c.same + "件は疑わない）");
+    console.log("入り数違いに使われた言葉：" + JSON.stringify(c.qtyWords));
+    /* 8.105 報告のために、例を1回だけログにも出す（--show-examples のときだけ）。
+       卸値・仕入れ先の社名は出さない。読み終わったらその実行のログを消す。 */
+    if (args.includes("--show-examples"))
+      for (const e of c.examples)
+        console.log("例：" + clean(e.mw, 70) + " ／ " + clean(e.amz, 90) + " ／ 定価 " + e.list
+          + " ／ 売値 " + e.price + " ／ " + clean(e.why, 80));
+    /* 例は社内用の Discord へ（卸値・仕入れ先は入れない）。 */
+    const hook = process.env.DISCORD_WEBHOOK_URL || "";
+    if (hook && c.examples.length) {
+      const lines = ["🔎 **商品違いの疑い（入り数違いで残ったもの）の例** " + c.examples.length + "件"
+        + "（全体 " + c.bad + "件：名前 " + c.name + "／名前と値段 " + c.name_price + "／入り数 " + c.qty + "）"];
+      for (const e of c.examples)
+        lines.push("・MW：" + e.mw + "\n　Amazon：" + e.amz + "\n　定価 ¥" + e.list.toLocaleString("en-US")
+          + "／売値 ¥" + e.price.toLocaleString("en-US") + "　" + e.why);
+      let body = lines.join("\n");
+      if (body.length > 1900) body = body.slice(0, 1900) + "…";
+      const r = spawnSync("curl", ["-sS", "-X", "POST", "-H", "Content-Type: application/json",
+        "--data-binary", "@-", hook], { input: JSON.stringify({ content: body,
+          allowed_mentions: { parse: [] } }), encoding: "utf8" });
+      console.log(r.status === 0 ? "例を社内用の Discord に送りました（" + c.examples.length + "件）"
+                                 : "例を Discord に送れませんでした");
+    } else console.log("例は Discord に送っていません（宛先が無いか、例がありません）");
   }
   if (!args.includes("--mw-csv")) return;
   const show = (title, res, cols) => {

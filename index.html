@@ -16351,8 +16351,10 @@ function mwMisOf(r){
   var px=(x.amz_price!==undefined&&x.amz_price!==null)?x.amz_price:x.price;
   var row={ mw_name:x.mw_name||x.name||'', amz_name:x.amz_name||'',
             list_price:x.list_price, price:px, asin:x.asin||'',
-            same_asin:x.same_asin||'' };
-  var key=[x.jan,row.asin,row.same_asin,mwMisX(),px,row.list_price,
+            same_asin:x.same_asin||'',
+            /* 8.105 定価が不明なときの物差し（卸値 ÷ 0.7）。 */
+            wholesale:x.wholesale };
+  var key=[x.jan,row.asin,row.same_asin,mwMisX(),px,row.list_price,x.wholesale,
            row.mw_name,row.amz_name].join('\u0001');
   if(mwMisMemo[key])return mwMisMemo[key];
   var j=MWMATCH.judge(row,{ x:mwMisX() });
@@ -32443,7 +32445,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v353';   // sw.js の const V と必ず同じ値にする
+var APP_V='v354';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

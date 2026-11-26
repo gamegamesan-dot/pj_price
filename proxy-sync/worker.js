@@ -9888,7 +9888,8 @@ function mwDropCost(S, mw, amz, st) {
   const mis = (amz && lowA > 0)
     ? mwMisOf({ mw_name: mw && mw.name, amz_name: amz.amz_name,
                 list_price: mw && mw.list_price, amz_price: amz.amz_price,
-                asin: amz.asin, same_asin: amz.same_asin }, st && st.mwMisX).bad
+                asin: amz.asin, same_asin: amz.same_asin,
+                wholesale: mw && mw.wholesale }, st && st.mwMisX).bad
     : false;
   if (mis) o.why = "Amazon は商品違いの疑い（仕入れ値に使いません）";
   else if (useAmz && lowA > 0 && fresh) o.amz = lowA;
@@ -10599,7 +10600,7 @@ async function jobBuyNote(env, run, o) {
     if (a && a.asin) {
       const mj = mwMisOf({ mw_name: m && m.name, amz_name: a.name,
         list_price: m && m.list_price, amz_price: a.price, asin: a.asin,
-        same_asin: a.same_asin }, ps && ps.st && ps.st.mwMisX);
+        same_asin: a.same_asin, wholesale: m && m.wholesale }, ps && ps.st && ps.st.mwMisX);
       if (mj.bad) {
         x.amz.mis = true;
         x.amz.name = String(a.name || "");
@@ -11767,7 +11768,7 @@ async function subRows(env, cfg) {
             COALESCE(b.grades,'') AS grades, b.loaded_at AS loaded_at,
             b.put_at AS put_at, ${visCol} AS shop_vis,
             s.kishu AS kishu, s.name AS mw_name, s.stock AS stock,
-            s.list_price AS list_price, ${msq.col}
+            s.list_price AS list_price, s.wholesale AS wholesale, ${msq.col}
             /* 8.28（カジの依頼1）配る前の見落としを拾うため、
                MW の欠品（CSV から消えた行）も返す。 */
             s.gone_at AS gone_at,
@@ -19827,7 +19828,7 @@ function mwMisOf(r, x) {
   return MWMATCH.judge({ mw_name: o.mw_name || o.name, amz_name: o.amz_name,
     list_price: o.list_price,
     price: (o.amz_price !== undefined && o.amz_price !== null) ? o.amz_price : o.price,
-    asin: o.asin, same_asin: o.same_asin }, { x: x });
+    asin: o.asin, same_asin: o.same_asin, wholesale: o.wholesale }, { x: x });
 }
 /* POST /mw/same {jan, asin, on}  on=true … 「同じ商品」として控える
                                   on=false … 控えを外す（また見立てる）

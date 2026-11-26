@@ -43,7 +43,10 @@
   var NAME_MIN_TOK = 2;       // 言葉がこれより少ない名前では判断しない
   var PRICE_NAME = 0.5;       // 値段で疑うのは、名前の一致がこれ未満のときだけ（8.102）
   var LP_MIN = 100;           // MW 定価がこれ未満は「定価不明」（欄の値がおかしい・8.102）
-  var SK_MIN = 4;             // 読みの骨組みがこれより短い名前は骨組みで比べない
+  var SK_MIN = 4;
+  var UNIT_MIN = 0.6;         // 8.105 入り数の言葉が片方だけでも、売値÷定価がこの範囲なら
+  var UNIT_MAX = 2.5;         //       同じ単位とみなして疑わない
+  var WH_RATE = 0.7;          // 定価が不明のときは 卸値 ÷ 0.7 を定価の代わりにする             // 読みの骨組みがこれより短い名前は骨組みで比べない
 
   /* メーカー名・ブランド名（作品名ではないもの）。長いものから取り除く。 */
   var MAKERS = [
@@ -225,6 +228,13 @@
      「全10種」（種類の数）や「1/7」（縮尺）・「Vol.2」は入り数ではない。 */
   function qtyOf(name) {
     var t = norm0(name).replace(/\d+\s*\/\s*\d+/g, " ");
+    /* 8.105 **同梱物・特典の説明**の中の数（【同梱物】ステッカー2枚・特典 ブロマイド3枚）は
+       その商品の入り数ではないので、その言葉から後ろは見ない。 */
+    t = t.replace(/(同梱|特典|付属品|おまけ|封入|ノベルティ|購入者限定|先着)[\s\S]*$/, " ");
+    /* 8.105 **寸法**（35×30×0.3cm・約365×142mm・16×9.7×22cm）の「×」は入り数ではない。
+       数字×数字、cm・mm・inch・インチが続くもの、「約」が前にあるものを先に取り除く。 */
+    t = t.replace(/約?\s*\d+(?:\.\d+)?\s*(?:[×x＊*]\s*\d+(?:\.\d+)?\s*)+(?:cm|mm|m|inch|in|インチ|センチ|ミリ)?/g, " ")
+         .replace(/[×x]\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|インチ|センチ|ミリ)/g, " ");
     var out = [];
     var m, re = /(\d+)\s*(個入り|個入|個セット|個|本入り|本セット|本|枚入り|枚セット|枚|袋|箱|冊|点セット|点|pcs|pieces|パック|セット|set)/g;
     var rest = t;
@@ -274,6 +284,10 @@
     var lp = num(r.list_price), px = num(r.price);
     /* MW 定価が 100円未満は欄の値がおかしい（定価不明）。値段では見ない。 */
     if (lp > 0 && lp < LP_MIN) res.lp_bad = true;
+    /* 8.105 入り数の見比べに使う「同じ単位か」の物差し。Amazon の売値 ÷ MW 定価。
+       定価が不明なら卸値 ÷ 0.7 で代わりに見る。 */
+    var base = (lp >= LP_MIN) ? lp : (num(r.wholesale) > 0 ? num(r.wholesale) / WH_RATE : 0);
+    res.unit_ratio = (base > 0 && px > 0) ? Math.round(px / base * 100) / 100 : 0;
     if (lp >= LP_MIN && px > 0) {
       res.ratio = Math.round(px / lp * 100) / 100;
       /* 値段は**名前の一致が弱いときだけ**理由に足す（8.102）。 */
@@ -283,7 +297,13 @@
     /* 入り数が片方の名前にだけある（8.102）。 */
     res.qty_mw = qtyOf(r.mw_name);
     res.qty_amz = qtyOf(r.amz_name);
-    if ((res.qty_mw.length > 0) !== (res.qty_amz.length > 0)) res.why.push("qty");
+    /* 8.105 入り数の言葉が片方にだけあっても、**値段が同じ単位**（Amazon の売値 ÷ MW 定価が
+       UNIT_MIN〜UNIT_MAX 倍）なら疑わない（BOX 同士・定価も BOX の値段のことが多い）。
+       値段で確かめられないとき（定価も卸値も無い）は今までどおり疑う。 */
+    if ((res.qty_mw.length > 0) !== (res.qty_amz.length > 0)) {
+      var ur = res.unit_ratio;
+      if (!(ur >= UNIT_MIN && ur <= UNIT_MAX)) res.why.push("qty");
+    }
     res.bad = res.why.length > 0;
     return res;
   }
@@ -295,7 +315,8 @@
       if (w === "price") return "Amazon の売値が MW 定価の " + z.ratio + "倍（"
         + z.x + "倍を超えています）";
       if (w === "qty") return "入り数違いの疑い（Amazon：" + ((z.qty_amz || []).join("・") || "なし")
-        + "／MW：" + ((z.qty_mw || []).join("・") || "なし") + "）";
+        + "／MW：" + ((z.qty_mw || []).join("・") || "なし")
+        + (z.unit_ratio ? ("・売値は定価の " + z.unit_ratio + "倍") : "・値段で確かめられません") + "）";
       return w;
     }).join("／");
   }
@@ -308,7 +329,8 @@
     return "";
   }
   var API = { X_DEF: X_DEF, NAME_MIN: NAME_MIN, NAME_MIN_TOK: NAME_MIN_TOK,
-              PRICE_NAME: PRICE_NAME, LP_MIN: LP_MIN,
+              PRICE_NAME: PRICE_NAME, LP_MIN: LP_MIN, UNIT_MIN: UNIT_MIN, UNIT_MAX: UNIT_MAX,
+              WH_RATE: WH_RATE,
               tokens: tokens, overlap: overlap, judge: judge, xOf: xOf,
               whyText: whyText, skeleton: skeleton, qtyOf: qtyOf, kindOf: kindOf };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
