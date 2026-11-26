@@ -211,15 +211,51 @@
     var base = Math.min(ka.length, kb.length);
     return base ? common / base : 0;
   }
+  /* 8.106【】（）［］の中の**同梱・特典などの説明**（【レッグバンド同梱】【Amazon.co.jp限定】
+     （特典付き））は、名前を比べる前に取り除く（商品そのものの名前ではない）。 */
+  var NOTE_RE = /[【（(\[［][^】）)\]］]*(同梱|特典|付属|付き|封入|おまけ|限定|予約|早期|購入者|先着|ノベルティ|amazon)[^】）)\]］]*[】）)\]］]/gi;
+  function noteCut(name) {
+    var t = norm0(name);
+    return t.replace(NOTE_RE, " ");
+  }
+  /* 8.106 **言葉ごと**の読みの骨組み（リーゼロッテ ⇔ liselotte がどちらも r s r t）。
+     名前全体をつないだ骨組みだと、ほかの言葉に薄められて一致が下がっていた。
+     骨組みが3文字以上の言葉どうしで、同じ骨組みの数 ÷ 少ないほうの言葉の数。 */
+  function wordSks(name) {
+    var t = noteCut(name).replace(/\d+\s*\/\s*\d+/g, " ");
+    for (var i = 0; i < STOP.length; i++) {
+      var w = STOP[i];
+      if (w.re) { w.re.lastIndex = 0; t = t.replace(w.re, "$1 "); }
+      else if (t.indexOf(w.str) >= 0) t = t.split(w.str).join(" ");
+    }
+    var out = {};
+    var runs = t.match(/[a-z]+|[\u3041-\u3096\u30a1-\u30fa\u30fc]+|[\u3400-\u9fff]+/g) || [];
+    runs.forEach(function (r) {
+      var sk = /^[a-z]+$/.test(r) ? latinSk(r)
+        : (/^[\u3400-\u9fff]+$/.test(r) ? r : kanaSk(r));
+      sk = sk.replace(/m(?=[bp])/g, "n").replace(/(.)\1+/g, "$1");
+      if (sk.length >= 3 || /^[\u3400-\u9fff]{2,}$/.test(sk)) out[sk] = 1;
+    });
+    return out;
+  }
+  function wordSkOverlap(a, b) {
+    var wa = wordSks(a), wb = wordSks(b);
+    var ka = Object.keys(wa), kb = Object.keys(wb);
+    var base = Math.min(ka.length, kb.length);
+    if (!base) return null;
+    return ka.filter(function (k) { return wb[k]; }).length / base;
+  }
   /* 2つの名前の重なり。言葉の重なりと読みの骨組みの重なりの**高いほう**。 */
-  function overlap(a, b) {
+  function overlap(a0, b0) {
+    var a = noteCut(a0), b = noteCut(b0);
     var ta = tokens(a), tb = tokens(b);
     var ka = Object.keys(ta), kb = Object.keys(tb);
     var common = ka.filter(function (k) { return tb[k]; });
     var base = Math.min(ka.length, kb.length);
     var w = base ? common.length / base : 0;
     var sk = skOverlap(a, b);
-    return { score: Math.max(w, sk || 0), word: w, sk: sk, common: common,
+    var wsk = wordSkOverlap(a, b);
+    return { score: Math.max(w, sk || 0, wsk || 0), word: w, sk: sk, wsk: wsk, common: common,
              na: ka.length, nb: kb.length,
              judge: ka.length >= NAME_MIN_TOK && kb.length >= NAME_MIN_TOK };
   }
@@ -236,7 +272,11 @@
     t = t.replace(/約?\s*\d+(?:\.\d+)?\s*(?:[×x＊*]\s*\d+(?:\.\d+)?\s*)+(?:cm|mm|m|inch|in|インチ|センチ|ミリ)?/g, " ")
          .replace(/[×x]\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|インチ|センチ|ミリ)/g, " ");
     var out = [];
-    var m, re = /(\d+)\s*(個入り|個入|個セット|個|本入り|本セット|本|枚入り|枚セット|枚|袋|箱|冊|点セット|点|pcs|pieces|パック|セット|set)/g;
+    /* 8.106「上下2点」「2点セット」のような**セットの中身の数**（N点）は入り数にしない。
+       そのあとに続く「セット」もセットの中身の説明なので数えない。 */
+    var setPts = /\d+\s*点/.test(t);
+    t = t.replace(/\d+\s*点(セット)?/g, " ");
+    var m, re = /(\d+)\s*(個入り|個入|個セット|個|本入り|本セット|本|枚入り|枚セット|枚|袋|箱|冊|pcs|pieces|パック|セット|set)/g;
     var rest = t;
     while ((m = re.exec(t))) {
       rest = rest.split(m[0]).join(" ");                    // 数つきの「セット」は下で二重に数えない
@@ -253,7 +293,7 @@
     if (/(^|[^a-z])box(?![a-z])|ボックス/.test(t)) out.push("BOX");
     /* 8.104「セット」は**1つの言葉として**書いてあるときだけ（「アイテムセット」
        「スターターセット」のように言葉の一部なら商品名なので数えない）。 */
-    if (/(^|[\s(（\[【「『/／・,、:：-])(セット|set)(?=$|[\s)）\]】」』,、:：-])/.test(rest)) out.push("セット");
+    if (!setPts && /(^|[\s(（\[【「『/／・,、:：-])(セット|set)(?=$|[\s)）\]】」』,、:：-])/.test(rest)) out.push("セット");
     return out;
   }
   /* 倍率（⚙ mwMisX）。空・おかしな値は既定。 */
@@ -302,7 +342,10 @@
        値段で確かめられないとき（定価も卸値も無い）は今までどおり疑う。 */
     if ((res.qty_mw.length > 0) !== (res.qty_amz.length > 0)) {
       var ur = res.unit_ratio;
-      if (!(ur >= UNIT_MIN && ur <= UNIT_MAX)) res.why.push("qty");
+      /* 8.106（カジの依頼）疑うのは **2.5倍を超える向きだけ**（Amazon が BOX で MW が1個 →
+         利益が大きく見えてしまう向き）。0.6倍未満は利益が出ず仕入れの候補にならないので
+         疑わない。値段で確かめられないとき（0）は今までどおり疑う。 */
+      if (!(ur > 0) || ur > UNIT_MAX) res.why.push("qty");
     }
     res.bad = res.why.length > 0;
     return res;
