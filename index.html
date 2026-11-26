@@ -2073,7 +2073,7 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="rowv"><label>フィギュアの既定のサイズ区分</label><select id="mwFbaSizeHobby"><option value="s">小型</option><option value="m" selected>標準</option><option value="l">大型</option></select></div>
         <!-- 8.101（カジの依頼）商品違いの疑い：Amazon の売値が MW 定価の何倍を超えたら疑うか。 -->
       <div class="row"><label for="mwMisX">商品違いの疑い：Amazon の売値が MW 定価の</label><input type="number" id="mwMisX" value="2.5" step="0.1" min="1.1" inputmode="decimal"><span class="unit">倍を超えたら</span></div>
-      <div class="note2" style="margin:0 0 2px">MW の JAN が Amazon の<b>違う商品</b>につながっていることがあります（Amazon 側の JAN の登録違い）。<b>商品名に共通する言葉がほとんどない</b>とき（メーカー名・「プラモデル」のような一般的な言葉は数えません）と、<b>Amazon の売値が MW 定価のこの倍を超える</b>ときは「<b>商品違いの疑い</b>」にして、利益・おすすめ順・会員向けの配信・eBay 無在庫の出品候補・「どこで買うか」のおすすめから外します。カードで見比べて「<b>同じ商品</b>」を押せば、その JAN は以後疑いません（管理者だけ）。</div>
+      <div class="note2" style="margin:0 0 2px">MW の JAN が Amazon の<b>違う商品</b>につながっていることがあります（Amazon 側の JAN の登録違い）。<b>商品名に共通する言葉がほとんどない</b>とき（メーカー名・「プラモデル」のような一般的な言葉は数えません。英字とカタカナの違い〈ACE COMBAT ⇔ エースコンバット〉は読みでそろえます）、<b>名前の一致が弱いうえに Amazon の売値が MW 定価のこの倍を超える</b>とき（MW 定価が 100円未満は定価不明として見ません）、<b>入り数</b>（10個・BOX・セット・×3・3本）が片方の名前にだけあるときは「<b>商品違いの疑い</b>」にして、利益・おすすめ順・会員向けの配信・eBay 無在庫の出品候補・「どこで買うか」のおすすめから外します。カードで見比べて「<b>同じ商品</b>」を押せば、その JAN は以後疑いません（管理者だけ）。</div>
       <div class="rowv cfgprice"><label>粗利の基準（並べ替え・黒字のみ・利益率）</label><select id="mwProfitMode"><option value="mw" selected>MW送料込み（仕入原価＋MWの仕入れ送料）</option><option value="sedori">せどりすと方式（仕入原価＝卸値×1.1）</option></select><div class="note2" style="margin-top:2px">一覧には<b>両方</b>出します（6.145）。ここで選ぶのは<b>並べ替え・「黒字のみ」・「利益率がこれ以上」に使うほう</b>です。<b>既定は MW送料込み</b>（実際に出ていくお金に近いほう）。せどりすと の画面と数字を見比べるときは「せどりすと方式」にしてください。</div></div>
         <div class="rowv cfgprice"><label>税抜の粗利の出し方</label><select id="mwNetMode"><option value="sedori" selected>せどりすと方式（粗利×0.9）</option><option value="exact">税込から税抜へ（粗利×10/11）</option></select><div class="note2" style="margin-top:2px">国内FBAの<b>粗利（税抜）</b>の出し方です（6.111）。<b>せどりすと方式</b>は「粗利の10%を納付消費税として引く」やり方で、せどりすと の内訳（サイヴァリア3：税込粗利 2,615円 → 納付消費税 261円・粗利 <b>2,353円</b>）と合います。<b>×10/11</b> は税込→税抜の算数として正しい変換で、同じ例で <b>2,377円</b>（24円高く出ます）。<b>せどりすと と数字を合わせたいなら前者</b>、消費税の計算として正確にしたいなら後者です。赤字の行はどちらでも引きません。</div></div>
         <!-- ランキングの上限（大分類ごと・6.124）。
@@ -17074,6 +17074,16 @@ function mwJanDupN(){
 function mwMisN(){
   return (mwAmzRows||[]).filter(function(r){ return mwMisBad(r); }).length;
 }
+/* 8.102 理由ごとの件数（名前だけ／名前と値段／入り数）。画面の件数と同じ数え方。 */
+function mwMisKinds(){
+  var o={ name:0, name_price:0, qty:0, all:0 };
+  (mwAmzRows||[]).forEach(function(r){
+    var j=null; try{ j=mwMisOf(r); }catch(e){ j=null; }
+    if(!j||!j.bad)return;
+    o.all++; var k=MWMATCH.kindOf(j); if(o[k]!==undefined)o[k]++;
+  });
+  return o;
+}
 /* ---- タップでコピー（6.93）---- */
 function mwCopy(text,label){
   var t=String(text||'');
@@ -18430,8 +18440,11 @@ function mwAmzRender(){
     +(mwJanDupN()?('　<b style="color:var(--bad)">JAN重複 '+mwJanDupN()
       +'件</b>（下の絞り込みで見られます）'):'')
     /* 8.101 商品違いの疑い（利益・おすすめ順から外した件数）。 */
-    +(misN?('　<b style="color:var(--bad)" id="csvMwAmzMisHead">商品違いの疑い '+misN
-      +'件</b>（利益・おすすめ順から外しています。下の絞り込みで見られます）'):'')
+    +(misN?(function(){
+      var k=mwMisKinds();
+      return '　<b style="color:var(--bad)" id="csvMwAmzMisHead">商品違いの疑い '+misN
+        +'件</b>（名前 '+k.name+'・名前と値段 '+k.name_price+'・入り数 '+k.qty
+        +'。利益・おすすめ順から外しています。下の絞り込みで見られます）'; })():'')
     /* ランキングの上限（⚙設定・大分類ごと）で落ちた行（6.124）。 */
     /* 6.142：作業者の端末でも必ず出す（⚙は開けないので言い方を変える）。 */
     +(mwRankHid?('　<b>ランキングの基準で隠した行 '+mwRankHid+'件</b>'
@@ -32381,7 +32394,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v349';   // sw.js の const V と必ず同じ値にする
+var APP_V='v350';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

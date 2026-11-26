@@ -40,11 +40,44 @@ console.log('=== ① 見立て（shared/mwmatch.js）===');
      &&same('EG ULTRAMAN（ULTRAMAN: RISING）','BANDAI SPIRITS ENTRY GRADE ULTRAMAN (ULTRAMAN: RISING) 色分け済みプラモデル'),
      '★★★同じ商品（全角半角・記号・付け足しの違い）は疑わない');
   ok(!same('マリオカート8 デラックス','スーパーマリオブラザーズ ワンダー -Switch'),'★★同じシリーズでも別の商品は疑う');
+  /* 8.102 カジの実データの例（英字とカタカナの違いだけ）。 */
+  ok(same('ACE COMBAT 8','エースコンバット8 -PS5')&&same('PUZZLE & DRAGONS','パズル&ドラゴンズ -Switch')
+     &&same('GEAR・CLUB UNLIMITED 3','ギア・クラブ アンリミテッド３ -Switch'),
+     '★★★英字とカタカナの違いだけ（ACE COMBAT 8 ⇔ エースコンバット8 など3件）は疑わない（8.102）');
+  ok(MM.skeleton('ACE COMBAT 8')===MM.skeleton('エースコンバット８'),'★★読みの骨組みが同じ（全角数字もそろえる）');
+  ok(!same('マグカップ グリッドマン ユニバース','QIAOQIAOLO シャワーカーテン 防水')
+     &&!same('ポケットモンスターゴルフマルチポーチ','キャスコ キャディーバッグ 9型'),
+     '★★★本当に違う商品（グリッドマンのマグカップ ⇔ シャワーカーテン など）は疑う（8.102）');
   ok(same('EG','スター・ウォーズ マンダロリアン'),'★言葉が少なすぎる名前では名前で判断しない');
-  ok(MM.judge({ mw_name:'a', amz_name:'b', list_price:1000, price:2600, asin:'B0X' }).bad
-     &&!MM.judge({ mw_name:'a', amz_name:'b', list_price:1000, price:2500, asin:'B0X' }).bad
-     &&!MM.judge({ mw_name:'a', amz_name:'b', list_price:1000, price:2600, asin:'B0X' },{ x:3 }).bad,
-     '★★★売値が定価の 2.5倍を**超えたら**疑い（倍率は変えられる）');
+  /* 8.102 値段は「名前の一致が弱い（0.5 未満）」ときだけ理由に足す。 */
+  const W2=(lp,px,o)=>MM.judge({ mw_name:'ワールドトリガー アクリルスタンド 空閑遊真', amz_name:'ワールドトリガー 遊真 フィギュア 空閑',
+    list_price:lp, price:px, asin:'B0X' },o);
+  const W3=(lp,px,o)=>MM.judge({ mw_name:'ドラゴンボール 孫悟空 マグカップ', amz_name:'ドラゴンボール 超 ベジータ ブロリー ゴジータ 一番くじ 色紙',
+    list_price:lp, price:px, asin:'B0X' },o);
+  console.log('   名前の一致 '+W2(1000,2600).score+' / '+W3(1000,2600).score);
+  ok(!W2(1000,2600).bad,'★★★名前がよく合えば、定価の 2.6倍でも疑わない（Amazon が高いだけ・8.102）');
+  ok(!MM.judge({ mw_name:'和ソニック 手ぬぐい', amz_name:'和ソニック 手ぬぐい ソニック・ザ・ヘッジホッグ',
+       list_price:2000, price:5062, asin:'B0X' }).bad,'★★★カジの例：和ソニック 手ぬぐい（定価 2,000円 → 5,062円）は疑わない');
+  const w3=W3(1000,2600);
+  ok(w3.score>=0.3&&w3.score<0.5&&w3.why.join()==='price'&&!W3(1000,2500).bad&&!W3(1000,2600,{ x:3 }).bad,
+     '★★★名前の一致が弱い（0.3〜0.5）ときは、定価の 2.5倍を**超えたら**疑い（倍率は変えられる）');
+  ok(!MM.judge({ mw_name:'『龍が如く』トートバッグ', amz_name:'龍が如く トートバッグ 公式', list_price:2, price:2500, asin:'B0X' }).bad
+     &&MM.judge({ mw_name:'a', amz_name:'b', list_price:4, price:9999, asin:'B0X' }).lp_bad,
+     '★★★MW 定価が 100円未満は「定価不明」として値段では見ない（『龍が如く』定価 2）');
+  /* 8.102 入り数違い。 */
+  const q=MM.judge({ mw_name:'サンリオキャラクターズ クリスタルコット2', amz_name:'サンリオキャラクターズ クリスタルコット2 10個',
+    list_price:500, price:600, asin:'B0X' });
+  console.log('   '+MM.whyText(q));
+  ok(q.bad&&q.why.join()==='qty'&&/入り数違いの疑い（Amazon：10個／MW：なし）/.test(MM.whyText(q)),
+     '★★★入り数が Amazon の名前にだけある（クリスタルコット2 ⇔ 10個）は「入り数違いの疑い」');
+  ok(JSON.stringify(MM.qtyOf('ブースターパック BOX'))==='["BOX"]'&&JSON.stringify(MM.qtyOf('ボールペン 3本セット'))==='["3本"]'
+     &&JSON.stringify(MM.qtyOf('タオル ×3'))==='["×3"]'&&JSON.stringify(MM.qtyOf('ギフト セット'))==='["セット"]',
+     '★★入り数の印（BOX・3本・×3・セット）');
+  ok(!MM.qtyOf('クリスタルコット2').length&&!MM.qtyOf('ネームプレート 全8種').length&&!MM.qtyOf('1/7スケール').length
+     &&!MM.qtyOf('1個').length&&!MM.qtyOf('Xbox Series X').length,
+     '★★入り数ではないもの（作品の番号・全8種・縮尺・1個・Xbox）は数えない');
+  ok(!MM.judge({ mw_name:'ヘタリア ネームプレート 8個入りBOX', amz_name:'ヘタリア トレーディング ネームプレート 8個入りBOX',
+       list_price:3000, price:5000, asin:'B0X' }).bad,'★両方に入り数があれば疑わない');
   ok(!MM.judge({ mw_name:'a', amz_name:'b', list_price:0, price:9999, asin:'B0X' }).bad,'★定価が無ければ値段では判断しない');
   ok(!MM.judge({ mw_name:'EG ULTRAMAN', amz_name:'スター・ウォーズ マンダロリアン', list_price:1500, price:5000,
        asin:'B09VGGZCKM', same_asin:'B09VGGZCKM' }).bad

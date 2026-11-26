@@ -38,9 +38,9 @@ const ROWS=[
   /* 同じ商品（名前が合う・売値も普通）。 */
   mk(OK1,{ mw_name:'HG 1/144 ガンダムエアリアル', list_price:1430, price:2400,
     amz_name:'BANDAI SPIRITS HG 機動戦士ガンダム 水星の魔女 ガンダムエアリアル 1/144スケール 色分け済みプラモデル' }),
-  /* 名前は合うが、売値が定価の 3倍（倍率で疑い）。 */
-  mk(PX,{ mw_name:'一番くじ ドラゴンボール A賞 孫悟空', list_price:800, price:2400,
-    amz_name:'一番くじ ドラゴンボール A賞 孫悟空 フィギュア' }),
+  /* 8.102 入り数が Amazon にだけある（入り数違いの疑い）。 */
+  mk(PX,{ mw_name:'サンリオキャラクターズ クリスタルコット2', list_price:500, price:600,
+    amz_name:'サンリオキャラクターズ クリスタルコット2 10個' }),
   /* 名前は違うが「同じ商品」と控えてある（その ASIN のとき）。 */
   mk(SAMEJ,{ mw_name:'EG ULTRAMAN', amz_name:'エントリーグレード ウルトラマン', asin:'B0SAME0001',
     same_asin:'B0SAME0001', list_price:1500, price:1800 })];
@@ -52,7 +52,7 @@ const jb=(j)=>J.filter((x)=>x.jan===j)[0];
 ok(jb(BAD).bad&&jb(BAD).why.indexOf('name')>=0&&jb(BAD).why.indexOf('price')>=0,
    '★★★カジの例（EG ULTRAMAN ↔ スター・ウォーズ・定価の3.3倍）は疑い（名前・値段の両方）');
 ok(!jb(OK1).bad,'★★★名前が合い、売値も普通の行は疑わない（メーカー名・プラモデルは数えない）');
-ok(jb(PX).bad&&jb(PX).why.join()==='price'&&jb(PX).ratio===3,'★★★名前が合っても定価の2.5倍を超えたら疑い');
+ok(jb(PX).bad&&jb(PX).why.join()==='qty','★★★入り数が片方にだけある行は疑い（8.102）');
 ok(!jb(SAMEJ).bad,'★★★「同じ商品」と控えた JAN（同じ ASIN）は疑わない');
 
 console.log('\n=== ③ 刈取の一覧 ===');
@@ -86,7 +86,8 @@ ok(/EG ULTRAMAN（ULTRAMAN: RISING）/.test(L.badText)&&/スター・ウォー�
 ok(/MW 定価/.test(L.badText)&&/¥1,500/.test(L.badText)&&/¥5,000/.test(L.badText)&&/3\.33倍/.test(L.badText),
    '★★MW 定価と Amazon の売値（倍率）も出す');
 ok(!/2,423/.test(L.badText)&&!L.buyChk,'★★利益と「仕入れる」は出さない');
-ok(/商品違いの疑い 2件/.test(L.note)&&/2件/.test(L.misN),'★★件数を一覧の上と絞り込みに出す');
+ok(/商品違いの疑い 2件（名前 0・名前と値段 1・入り数 1/.test(L.note)&&/2件/.test(L.misN),
+   '★★件数を一覧の上と絞り込みに出す（理由ごとの内訳も・8.102）');
 ok(L.sameBtn,'★★管理者には「同じ商品」のボタン');
 
 const F=await p.evaluate(()=>{ $('csvMwAmzMis').checked=true; mwAmzRender();
@@ -129,15 +130,19 @@ const W=await p.evaluate((rows)=>{
   const b=document.querySelector('#csvMwAmzList [data-mwrow="4573102666987"]');
   const r={ btn:!!(b&&b.querySelector('[data-mwsame]')), text:b?b.textContent:'' };
   syncRole='admin'; roleApply();
+  /* 名前の一致が弱く（0.3〜0.5）、定価の 3倍の行。 */
+  const weak={ jan:'4902370550099', asin:'B0WEAK0001', mw_name:'ドラゴンボール 孫悟空 マグカップ',
+    amz_name:'ドラゴンボール 超 ベジータ ブロリー ゴジータ 一番くじ 色紙', list_price:1000, price:3000 };
+  $('mwMisX').value='2.5'; mwMisMemo={}; r.weak25=mwMisBad(weak);
   $('mwMisX').value='3.5'; mwMisMemo={};
-  r.px35=mwMisBad(mwAmzRows[2]);
+  r.px35=mwMisBad(weak);
   $('mwMisX').value='2'; r.ok2=mwMisBad(mwAmzRows[1]);
   $('mwMisX').value='2.5'; mwMisMemo={};
   r.list=CSV_CFG_IDS.indexOf('mwMisX')>=0;
   return r;
 },ROWS);
 ok(!W.btn&&/管理者が「同じ商品」を押します/.test(W.text),'★★作業者には「同じ商品」のボタンを出さない');
-ok(W.px35===false,'★★⚙の倍率を 3.5 にすると、定価の 3倍の行は疑わない（倍率は⚙で変えられる）');
+ok(W.weak25===true&&W.px35===false,'★★名前の一致が弱い行：2.5倍なら疑い、⚙の倍率を 3.5 にすると疑わない（倍率は⚙で変えられる）');
 ok(W.ok2===false,'★倍率 2 でも、定価の 1.68倍の行は疑わない');
 ok(W.list,'★★⚙の倍率は pj-sync にも送る（設定の一覧に入っている）');
 

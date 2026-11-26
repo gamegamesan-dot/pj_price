@@ -19685,7 +19685,8 @@ async function mwSameSql(env, alias) {
    asin・same_asin を持つ行。 */
 function mwMisOf(r, x) {
   const o = r || {};
-  return MWMATCH.judge({ mw_name: o.mw_name, amz_name: o.amz_name,
+  /* /mw/list（無在庫）の行は MW の名前を name で持つ。 */
+  return MWMATCH.judge({ mw_name: o.mw_name || o.name, amz_name: o.amz_name,
     list_price: o.list_price,
     price: (o.amz_price !== undefined && o.amz_price !== null) ? o.amz_price : o.price,
     asin: o.asin, same_asin: o.same_asin }, { x: x });
