@@ -138,6 +138,44 @@ console.log('=== ① 中身が同じ行の seen_at はまとめて直す ===');
   ok(s3===2,'★★変わった中身（在庫数）が入る');
 }
 
+console.log('\n=== ①′ JAN ごとの代表は、変わる行だけを書く ===');
+{
+  const env=makeEnv();
+  const rows=[];
+  for(let i=0;i<30;i++){
+    const jan='49023707'+String(10000+i).slice(-5);
+    rows.push(row(jan,{ sha:'A', wholesale:3000 }));
+    rows.push(row(jan,{ sha:'B', wholesale:2000 }));     // 安いほう（B）が代表
+  }
+  let r=await asJson(await worker.fetch(post('/mw/stock',{ at:'2026-11-26T00:00:00Z', part:1, parts:1, rows:rows }),env,{}));
+  const pk=env.DB._db.prepare("SELECT jan, sha FROM mw_stock WHERE pick=1 ORDER BY jan").all();
+  ok(r.body.picked===30&&pk.length===30&&pk.every((x)=>x.sha==='B'),'★★★JAN ごとに1つ（安いほう）を代表にする（数も返す）');
+  const run0=env.DB._db.prepare("SELECT at, picked FROM mw_runs ORDER BY id DESC LIMIT 1").get();
+  ok(run0&&run0.at==='2026-11-26T00:00:00Z'&&run0.picked===30,'★★取り込みの記録（mw_runs）が入る');
+  /* 同じ中身でもう一度。代表は変わらないので、pick を書く行は 0。 */
+  let changes=-1;
+  const pr0=env.DB.prepare.bind(env.DB);
+  env.DB.prepare=(sql)=>{ const st=pr0(sql);
+    if(/UPDATE mw_stock\s+SET pick =/.test(sql)){ const r0=st.run.bind(st);
+      st.run=async()=>{ const x=await r0(); changes=Number(x.meta.changes); return x; }; }
+    return st; };
+  r=await asJson(await worker.fetch(post('/mw/stock',{ at:'2026-11-26T01:00:00Z', part:1, parts:1, rows:rows }),env,{}));
+  env.DB.prepare=pr0;
+  console.log('   2回目の pick の書き込み '+changes+'行（v350 までは 30＋30行）');
+  ok(changes===0&&r.body.picked===30,'★★★代表が変わらなければ pick は1行も書かない（v350 までは毎回 全部を2回）');
+  /* A のほうが安くなったら、変わる2行だけ書く。 */
+  const rows2=rows.map((x,i)=>i===0?row(x.jan,{ sha:'A', wholesale:1000 }):x);
+  changes=-1;
+  env.DB.prepare=(sql)=>{ const st=pr0(sql);
+    if(/UPDATE mw_stock\s+SET pick =/.test(sql)){ const r0=st.run.bind(st);
+      st.run=async()=>{ const x=await r0(); changes=Number(x.meta.changes); return x; }; }
+    return st; };
+  r=await asJson(await worker.fetch(post('/mw/stock',{ at:'2026-11-26T02:00:00Z', part:1, parts:1, rows:rows2 }),env,{}));
+  env.DB.prepare=pr0;
+  const p0=env.DB._db.prepare("SELECT sha FROM mw_stock WHERE pick=1 AND jan=?").get(rows[0].jan);
+  ok(changes===2&&p0.sha==='A'&&r.body.picked===30,'★★代表が入れ替わったら、その2行だけ書く');
+}
+
 console.log('\n=== ② D1 が混み合ったら待ってやり直す ===');
 {
   const env=makeEnv();

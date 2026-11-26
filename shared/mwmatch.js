@@ -231,12 +231,19 @@
     while ((m = re.exec(t))) {
       rest = rest.split(m[0]).join(" ");                    // 数つきの「セット」は下で二重に数えない
       if (/全\s*$/.test(t.slice(0, m.index))) continue;     // 全10種・全3個 は種類の数
+      /* 8.104「100枚入り」「8個入り」は**中身の数**（その商品そのもの）。片方の名前に
+         だけ書いてあっても同じ商品なので数えない。「Joy-Con 2本付」「特典 3枚付き」の
+         ような**付録の数**も数えない。 */
+      if (/入/.test(m[2])) continue;
+      if (/^\s*(付|付き|付属)/.test(t.slice(m.index + m[0].length))) continue;
       if (Number(m[1]) >= 2) out.push(m[1] + (m[2].replace(/入り?|セット/g, "") || m[2]));
     }
     re = /(?:×|(?:^|[\s(\[【（])x)\s*(\d+)(?!\d)/g;
     while ((m = re.exec(t))) if (Number(m[1]) >= 2) out.push("×" + m[1]);
     if (/(^|[^a-z])box(?![a-z])|ボックス/.test(t)) out.push("BOX");
-    if (/セット|(^|[^a-z])set(?![a-z])/.test(rest)) out.push("セット");
+    /* 8.104「セット」は**1つの言葉として**書いてあるときだけ（「アイテムセット」
+       「スターターセット」のように言葉の一部なら商品名なので数えない）。 */
+    if (/(^|[\s(（\[【「『/／・,、:：-])(セット|set)(?=$|[\s)）\]】」』,、:：-])/.test(rest)) out.push("セット");
     return out;
   }
   /* 倍率（⚙ mwMisX）。空・おかしな値は既定。 */

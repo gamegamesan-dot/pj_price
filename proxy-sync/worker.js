@@ -7724,9 +7724,9 @@ async function mwStockPut(env, body) {
             run.notes.push("mw-move(gone): " + String((e && e.message) || e));
           }
         }
-        const g = await env.DB.prepare(
+        const g = await d1Retry(run, () => env.DB.prepare(
           `UPDATE mw_stock SET gone_at=?1 WHERE gone_at IS NULL AND seen_at<>?1`)
-          .bind(at).run();
+          .bind(at).run());
         res.gone = Number((g && g.meta && g.meta.changes) || 0);
       }
       /* 7.110：「欠品」の数が分かりにくかったので内訳も返す。
@@ -7761,10 +7761,13 @@ async function mwStockPut(env, body) {
                               WHERE t.jan=mw_stock.jan AND t.created_at<>?1)
            GROUP BY jan)`).bind(at).first();
       res.added_jan = Number((aj && aj.n) || 0);
-      /* JANごとに1つ選ぶ（窓関数。行数に関係なく2文で済む）。 */
-      await env.DB.prepare(`UPDATE mw_stock SET pick=0 WHERE pick=1`).run();
-      const pk = await env.DB.prepare(
-        `UPDATE mw_stock SET pick=1 WHERE id IN (
+      /* JANごとに1つ選ぶ（窓関数）。
+         8.103 v350 までは「pick=0 をぜんぶ（約1万1千行）」→「pick=1 をぜんぶ」の
+         2文で、毎回 **約2万2千行**を書いていた。これが最後の便で D1 の
+         「10秒あたりの上限」に当たり、取り込みが 31便目で落ちていた。
+         **変わる行だけ**を1文で書く（ふだんは数十行）。 */
+      await d1Retry(run, () => env.DB.prepare(
+        `WITH w AS (
            SELECT id FROM (
              SELECT id, ROW_NUMBER() OVER (PARTITION BY jan ORDER BY
                CASE WHEN COALESCE(ship_days,99)<=${MW_SHIP_OK} THEN 0 ELSE 1 END,
@@ -7773,8 +7776,43 @@ async function mwStockPut(env, body) {
                COALESCE(ship_days,99) ASC,
                id ASC) AS rn
              FROM mw_stock WHERE gone_at IS NULL
-           ) WHERE rn=1)`).run();
-      res.picked = Number((pk && pk.meta && pk.meta.changes) || 0);
+           ) WHERE rn=1)
+         UPDATE mw_stock
+            SET pick = CASE WHEN id IN (SELECT id FROM w) THEN 1 ELSE 0 END
+          WHERE pick <> CASE WHEN id IN (SELECT id FROM w) THEN 1 ELSE 0 END`).run());
+      const pkn = await d1Retry(run, () => env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM mw_stock WHERE pick=1`).first());
+      res.picked = Number((pkn && pkn.n) || 0);
+      /* 8.103 取り込みの記録（mw_runs）は**ここで**入れる（数量0・知らせより先）。
+         v350 までは最後の最後に入れていたので、あとの処理で落ちると
+         「前回の取り込み」が古いままになっていた。 */
+      /* 【P】src は自動（Cron）か手動（画面）か。画面の「前回の取り込み」に出す。
+         migrate-0046 を流す前のデータベースでも落ちないよう、
+         列が無ければ src 抜きで入れ直す。 */
+      const runNote = ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300);
+      const runSrc = String((body && body.src) === "auto" ? "auto" : "hand");
+      try {
+        await d1Retry(run, () => env.DB.prepare(
+          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
+             unreadable,warn,note,src,created_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
+          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
+                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
+                res.warn || null, runNote, runSrc)
+          .run());
+      } catch (e) {
+        if (d1Busy(e)) throw e;
+        run.notes.push("mw_runs の src 列がありません（migrate-0046）");
+        await env.DB.prepare(
+          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
+             unreadable,warn,note,created_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?1)`)
+          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
+                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
+                res.warn || null, runNote)
+          .run();
+      }
+
       /* ---- 欠品した出品の数量を**すぐ0にする**（7.73）----
          数量を減らす方向なので確認を待たない（売り越しが一番まずい）。
          値上げと数量1に戻すのは今までどおり（毎時は予定・日次で実行）。 */
@@ -7820,31 +7858,6 @@ async function mwStockPut(env, body) {
           res.os_px = oc.px;
         }
       } catch (e) { run.notes.push("os-check: " + String((e && e.message) || e)); }
-      /* 【P】src は自動（Cron）か手動（画面）か。画面の「前回の取り込み」に出す。
-         migrate-0046 を流す前のデータベースでも落ちないよう、
-         列が無ければ src 抜きで入れ直す。 */
-      const runNote = ("現れた " + seen + "行／生きている " + live + "行").slice(0, 300);
-      const runSrc = String((body && body.src) === "auto" ? "auto" : "hand");
-      try {
-        await env.DB.prepare(
-          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
-             unreadable,warn,note,src,created_at)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1)`)
-          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
-                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
-                res.warn || null, runNote, runSrc)
-          .run();
-      } catch (e) {
-        run.notes.push("mw_runs の src 列がありません（migrate-0046）");
-        await env.DB.prepare(
-          `INSERT INTO mw_runs (at,rows_in,added,changed,same,gone,back,picked,
-             unreadable,warn,note,created_at)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?1)`)
-          .bind(at, mwNum(body && body.rows_in), res.added, res.changed, res.same,
-                res.gone, res.back, res.picked, mwNum(body && body.unreadable),
-                res.warn || null, runNote)
-          .run();
-      }
       /* 7.110：取り込みのたびに1通だけ知らせる（在庫切れ・新入荷）。 */
       try {
         res.note_sent = await mwImportNotify(env, run, at, res);
@@ -8299,8 +8312,8 @@ async function jobMwCsv(env, opt) {
         have: have });
       run.subrequests += Math.round(Number(r.subrequests) || 0);
       if (r.error) {
-        await mwCsvFailed(env, run,
-          (i + 1) + "／" + parts.length + "便で失敗しました：" + r.error, res);
+        await d1Retry(run, () => mwCsvFailed(env, run,
+          (i + 1) + "／" + parts.length + "便で失敗しました：" + r.error, res));
         return fin();
       }
       res.added += Math.round(Number(r.added) || 0);
@@ -8344,14 +8357,14 @@ async function jobMwCsv(env, opt) {
                            : Promise.resolve();
     /* 「動かさなかった」だけの回は記録を増やさない（記録が流れてしまう）。 */
     const keep = res.ran || res.took || res.why && res.auto_off;
-    const p = keep ? mwCsvLog(env, {
+    const p = keep ? d1Retry(run, () => mwCsvLog(env, {
       at: nowIso(), src: src, http: res.http, changed: res.changed,
       took: res.took, bytes: res.bytes, rows_in: res.rows_in, added: res.added,
       changed_rows: res.changed_rows, gone: res.gone,
       elapsed_ms: res.elapsed_ms, ok: res.ok, why: res.why || res.warn || "",
       /* 7.121：この回の一覧（/mw/nt）を開くための日時。 */
       stock_at: res.stock_at || "",
-    }) : Promise.resolve();
+    })).catch(() => null) : Promise.resolve();
     return clr.then(() => p).then(() => saveRun(env, run)).then((x) => Object.assign(x, res));
   }
 }

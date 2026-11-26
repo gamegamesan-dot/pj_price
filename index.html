@@ -17087,6 +17087,30 @@ function mwAmzKeep(x,f,quiet){
 function mwJanDupN(){
   return mwAmzRows.filter(function(r){ return mwJanDup(r); }).length;
 }
+/* 8.104 並べ替えのあと、利益を出せない行を後ろにまとめる（中の順は保つ）。
+   0＝ふつう／1＝利益を出せない（JAN重複など）／2＝商品違いの疑い */
+function mwNoCalcRank(x){
+  if(x&&x.c)return 0;
+  return mwMisBad((x||{}).r)?2:1;
+}
+function mwNoCalcLast(list){
+  var g=[[],[],[]];
+  (list||[]).forEach(function(x){ g[mwNoCalcRank(x)].push(x); });
+  return g[0].concat(g[1],g[2]);
+}
+/* 8.104 利益を出せない（赤い）カードの理由の短い文。畳んだ状態でも分かるように。 */
+var MW_MIS_KIND_JA={ name:'名前が違う', name_price:'名前と値段', qty:'入り数が違う' };
+function mwNoCalcWhy(r){
+  var x=r||{};
+  if(mwMisBad(x)){
+    var j=mwMisOf(x), k=MWMATCH.kindOf(j);
+    return '商品違いの疑い（'+(MW_MIS_KIND_JA[k]||'要確認')+'）';
+  }
+  if(typeof mwJanDup==='function'&&mwJanDup(x))return 'JAN重複（要確認）';
+  if(!(+x.price>0))return 'Amazon の値段なし';
+  if(!(+x.wholesale>0))return 'MW の卸値なし';
+  return '';
+}
 /* 8.101 いま持っている行のうち商品違いの疑いの件数。 */
 function mwMisN(){
   return (mwAmzRows||[]).filter(function(r){ return mwMisBad(r); }).length;
@@ -18391,7 +18415,11 @@ function mwRowSum(r,c){
     +(net===null?'—':yen(net))+'</b></span>'
     /* 6.196（v295）MW の在庫数（順位・卸・売・利・在の順）。 */
     +mwStockTag(row)
-    +'</div>';
+    +'</div>'
+    /* 8.104 利益を出せない行は、なぜ赤いのかを畳んだままでも出す。 */
+    +(c?'':(function(){ var w=mwNoCalcWhy(row);
+      return w?('<div class="mwsum3" data-nocalc="1" style="color:var(--bad);font-size:12px;'
+        +'font-weight:700;margin-top:1px">'+esc(w)+'</div>'):''; })());
 }
 /* 行（details）の外側。中身（body）はそのまま入れる。 */
 function mwRowWrap(jan,cls,sum,body){
@@ -18513,6 +18541,10 @@ function mwAmzRender(){
     return d||(k(b,'net')-k(a,'net'));
   });
   else list.sort(function(a,b){ return k(b,'net')-k(a,'net'); });  // 既定：粗利（税抜）順
+  /* 8.104（カジの報告）利益を出せない行は、**どの並び順でも**後ろにまとめる。
+     ふつうの行 → JAN重複 → 商品違いの疑い（いちばん下）の順。
+     v350 までは「ランキング順」「売れる速さ順」などで、赤いカードが上に混ざっていた。 */
+  list=mwNoCalcLast(list);
   var line=function(x){
     var r=x.r, c=x.c, jan=String(r.jan||''), asin=String(r.asin||'');
     var q=mwBuyQtyOf(jan);
@@ -32411,7 +32443,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v351';   // sw.js の const V と必ず同じ値にする
+var APP_V='v352';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -95,6 +95,33 @@ const F=await p.evaluate(()=>{ $('csvMwAmzMis').checked=true; mwAmzRender();
   $('csvMwAmzMis').checked=false; mwAmzRender(); return o; });
 ok(JSON.stringify(F.slice().sort())===JSON.stringify([BAD,PX].sort()),'★★「商品違いの疑いだけ表示」');
 
+console.log('\n=== ③′ どの並び順でも、商品違いの疑いは一番下・理由の文（8.104）===');
+const O=await p.evaluate((rows)=>{
+  const out={};
+  /* JAN重複の行も1つ足す（ASIN が無い・候補が2つ）。 */
+  const dup=Object.assign({},rows[1],{ jan:'4902370550077', asin:'', cand_n:2, price:0, mw_name:'重複の商品', amz_name:'' });
+  ['net','margin','rank','speed','stock','nostock'].forEach(function(sort){
+    $('csvMwAmzSort').value=sort;
+    mwAmzRows=JSON.parse(JSON.stringify(rows)).concat([dup]);
+    /* ランキングは疑いの行がいちばん上に来る値にする（上に混ざっていた形）。 */
+    mwAmzRows[0].rank=1; mwAmzRows[0].stock=99; mwAmzRows[2].rank=2; mwAmzRows[1].rank=500;
+    mwMisMemo={}; mwAmzRender();
+    out[sort]=[].slice.call(document.querySelectorAll('#csvMwAmzList [data-mwrow]')).map((e)=>e.getAttribute('data-mwrow'));
+  });
+  $('csvMwAmzSort').value='net'; mwAmzRender();
+  const lab=(j)=>{ const e=document.querySelector('#csvMwAmzList [data-mwrow="'+j+'"] [data-nocalc]'); return e?e.textContent:''; };
+  out.lab={ bad:lab('4573102666987'), px:lab('4902370550002'), dup:lab('4902370550077'),
+            ok:lab('4902370550001') };
+  return out;
+},ROWS);
+console.log('   rank: '+JSON.stringify(O.rank)+' / '+JSON.stringify(O.lab));
+const lastTwo=(l)=>JSON.stringify(l.slice(-2).sort())===JSON.stringify([BAD,PX].sort());
+ok(['net','margin','rank','speed','stock','nostock'].every((k)=>lastTwo(O[k])),
+   '★★★どの並び順（粗利・利益率・ランキング・速さ・在庫・再入荷なし）でも、商品違いの疑いは一番下にまとめる');
+ok(['rank','stock'].every((k)=>O[k].indexOf('4902370550077')===O[k].length-3),'★★JAN重複は疑いの上（ふつうの行のあと）');
+ok(/商品違いの疑い（名前と値段）/.test(O.lab.bad)&&/商品違いの疑い（入り数が違う）/.test(O.lab.px)
+   &&/JAN重複/.test(O.lab.dup)&&O.lab.ok==='','★★★畳んだカードにも、なぜ赤いのか（商品違いの疑い〈理由〉・JAN重複）を出す');
+
 console.log('\n=== ④ 「同じ商品」を押す ===');
 const S=await p.evaluate(async()=>{
   const sent=[];

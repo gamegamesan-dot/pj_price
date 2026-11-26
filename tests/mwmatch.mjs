@@ -76,6 +76,20 @@ console.log('=== ① 見立て（shared/mwmatch.js）===');
   ok(!MM.qtyOf('クリスタルコット2').length&&!MM.qtyOf('ネームプレート 全8種').length&&!MM.qtyOf('1/7スケール').length
      &&!MM.qtyOf('1個').length&&!MM.qtyOf('Xbox Series X').length,
      '★★入り数ではないもの（作品の番号・全8種・縮尺・1個・Xbox）は数えない');
+  /* 8.104 カジの報告：上のほうに赤いカード（入り数の見当違い）。 */
+  ok(!MM.qtyOf('【PS5】エースコンバット8 【早期購入特典】(アイテムセット)').length
+     &&!MM.qtyOf('Nintendo Switch Sports (【Amazon.co.jp限定】Joy-Con 2本付)').length
+     &&!MM.qtyOf('The 作業用スリーブ（M）100枚入り').length&&!MM.qtyOf('特典 3枚付き').length
+     &&!MM.qtyOf('スターターセット').length,
+     '★★★言葉の一部の「セット」・付録の数（2本付）・中身の数（100枚入り）は入り数にしない（8.104）');
+  ok(!MM.judge({ mw_name:'エースコンバット8 ウイングス・オブ・シーヴ -PS5',
+       amz_name:'【PS5】エースコンバット8 ウイングス・オブ・シーヴ 【早期購入特典】(アイテムセット)',
+       list_price:8800, price:8000, asin:'B0X' }).bad
+     &&!MM.judge({ mw_name:'The 作業用スリーブ（M）100枚入り', amz_name:'The 作業用スリーブ M',
+       list_price:300, price:500, asin:'B0X' }).bad,
+     '★★★エースコンバット8（アイテムセット）・作業用スリーブ（100枚入り）は疑わない（8.104）');
+  ok(JSON.stringify(MM.qtyOf('ギフト セット'))==='["セット"]'&&JSON.stringify(MM.qtyOf('トレカ 2個セット'))==='["2個"]',
+     '★★1つの言葉の「セット」と「2個セット」は入り数');
   ok(!MM.judge({ mw_name:'ヘタリア ネームプレート 8個入りBOX', amz_name:'ヘタリア トレーディング ネームプレート 8個入りBOX',
        list_price:3000, price:5000, asin:'B0X' }).bad,'★両方に入り数があれば疑わない');
   ok(!MM.judge({ mw_name:'a', amz_name:'b', list_price:0, price:9999, asin:'B0X' }).bad,'★定価が無ければ値段では判断しない');
