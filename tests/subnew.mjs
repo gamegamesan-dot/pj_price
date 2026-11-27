@@ -125,7 +125,7 @@ console.log('\n=== ② 値段が変わったカードは、件数の外で書き
      '★★★書き換えは PATCH（通知は鳴らない）');
 }
 
-console.log('\n=== ③ プランから外れた品は、そのプランだけ受付終了 ===');
+console.log('\n=== ③ プランから外れた品は、そのプランのカードだけ消す（8.111）===');
 {
   const env=env0();
   await setCfg(env,{});
@@ -138,6 +138,9 @@ console.log('\n=== ③ プランから外れた品は、そのプランだけ受
     +((was&&was.results)||[]).map((x)=>x.ch).join(','));
   ok(((was&&was.results)||[]).length===2,
      '★積み上げ型でライトとプレミアムに出ている');
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.prune.from','all',?1)
+    ON CONFLICT(k) DO UPDATE SET v='all'`).bind(new Date().toISOString()).run();
+
   /* 「プレミアムだけ」に付け直す（ライトからは外れる）。 */
   await env.DB.prepare(`UPDATE mw_sub SET grades='premium' WHERE jan=?1`)
     .bind(j).run();
@@ -146,23 +149,23 @@ console.log('\n=== ③ プランから外れた品は、そのプランだけ受
   console.log('   '+JSON.stringify(r.retire||{})+' / '
     +JSON.stringify(dc.map((x)=>x.method+':'+x.ch)));
   const li=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
+    `SELECT msg_id FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
   const pr=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,PR).first();
-  ok(!!String((li||{}).off_at||''),
-     '★★★外れたプラン（ライト）のカードは受付終了になる');
-  ok(!String((pr||{}).off_at||''),
+    `SELECT msg_id FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,PR).first();
+  ok(!!li&&!String(li.msg_id||''),
+     '★★★外れたプラン（ライト）のカードは消す（控えの行は残す）');
+  ok(!!String((pr||{}).msg_id||''),
      '★★★出し続けるプラン（プレミアム）のカードはそのまま');
-  const off=dc.filter((x)=>x.method==='PATCH'&&x.ch===LI);
-  ok(off.length===1&&/受付終了/.test(String(((off[0]||{}).body||{})
-    .embeds[0].title||'')),
-     '★★★受付終了のカードに書き換える（消さない）');
-  ok(dc.filter((x)=>x.method==='DELETE').length===0,
-     '★★★カードは消さない（履歴として残す）');
+  ok(dc.filter((x)=>x.method==='DELETE'&&x.ch===LI).length===1
+     &&dc.filter((x)=>x.method==='PATCH'&&x.ch===LI).length===0,
+     '★★★「受付終了」に書き換えずに消す');
+  ok(dc.filter((x)=>x.method==='DELETE'&&x.ch===PR).length===0,'★★★ほかのプランのカードは消さない');
+  const d1=await env.DB.prepare(`SELECT why FROM sub_del WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
+  ok(!!d1&&d1.why==='off_plan','★★消した理由は「そのプランから外した」');
   dc=[];
   await api(env,'/sub/send',{ approve:true });
   ok(dc.filter((x)=>x.ch===LI).length===0,
-     '★★二度は触らない（off_at が入っている）');
+     '★★二度は触らない（もう消してある・ライトにはまた出さない）');
 }
 
 console.log('\n=== ④ 止めているプラン・入れ替えたチャンネルは触らない ===');
@@ -171,31 +174,33 @@ console.log('\n=== ④ 止めているプラン・入れ替えたチャンネル
   await setCfg(env,{});
   const j=await add(env,0,{ grades:'light,standard,premium' });
   await api(env,'/sub/send',{ approve:true });
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.prune.from','all',?1)
+    ON CONFLICT(k) DO UPDATE SET v='all'`).bind(new Date().toISOString()).run();
   /* ライトを止める（チャンネルのカードはそのまま残す）。 */
   await setCfg(env,{ subOnLight:false });
   dc=[];
   await api(env,'/sub/send',{ approve:true });
   const li=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
-  ok(!String((li||{}).off_at||''),
-     '★★★止めたプランのカードは受付終了にしない（一気に書き換えない）');
+    `SELECT msg_id FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
+  ok(!!String((li||{}).msg_id||''),
+     '★★★止めたプランのカードは消さない（一気に消さない）');
   /* チャンネルを入れ替えても、前のチャンネルのカードは触らない。 */
   await setCfg(env,{ subChLight:'9999999999' });
   dc=[];
   await api(env,'/sub/send',{ approve:true });
   const li2=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
-  ok(!String((li2||{}).off_at||''),
+    `SELECT msg_id FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
+  ok(!!String((li2||{}).msg_id||''),
      '★★★入れ替える前のチャンネルのカードも触らない');
-  /* リストから外れた品（MW 欠品）は、今までどおり受付終了（8.31）。 */
+  /* リストから外れた品（MW 欠品）は消す（8.111）。 */
   await setCfg(env,{});
   await env.DB.prepare(`UPDATE mw_sub SET on_sale=0 WHERE jan=?1`).bind(j)
     .run();
   dc=[];
   await api(env,'/sub/send',{ approve:true });
   const li3=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
-  ok(!!String((li3||{}).off_at||''),
-     '★★★リストから外れた品は今までどおり受付終了（8.31）');
+    `SELECT msg_id FROM sub_post WHERE jan=?1 AND ch=?2`).bind(j,LI).first();
+  ok(!!li3&&!String(li3.msg_id||''),
+     '★★★リストから外れた品のカードは消す（8.111）');
 }
 T.done();

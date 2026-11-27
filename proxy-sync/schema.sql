@@ -1293,3 +1293,19 @@ CREATE TABLE IF NOT EXISTS ebay_stat (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (asin, cond)
 );
+
+/* ===== 8.111（カジの依頼）会員向け Discord の買えなくなったカードを消した記録 =====
+   （migrate-0077）。sub_post の行は消さない（msg_id を空にするだけ）。 */
+CREATE TABLE IF NOT EXISTS sub_del (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  jan        TEXT NOT NULL,
+  ch         TEXT NOT NULL,                 -- Discord のチャンネルID
+  plan       TEXT,                          -- monitor / light / standard / premium
+  msg_id     TEXT,                          -- 消したメッセージの番号
+  sent_at    TEXT,                          -- カードを送った日時（sub_post.at）
+  del_at     TEXT NOT NULL,                 -- 消した日時
+  why        TEXT NOT NULL,                 -- expired / sold_out / gone / off_plan / closed / test
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sub_del_at  ON sub_del(del_at);
+CREATE INDEX IF NOT EXISTS idx_sub_del_jan ON sub_del(jan, ch);

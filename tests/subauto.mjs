@@ -682,6 +682,9 @@ console.log('\n=== ⑪ 出しておく商品の上限（古い順に受付終了
     `INSERT INTO sub_post (jan,ch,plan,msg_id,price,qty,sold,sold_out,at,created_at)
      VALUES (?1,?2,'premium','777001',4000,3,0,0,?3,?3)`)
     .bind(old(0),CH_S,NOW).run();
+  /* まとめて消し終えた状態（8.111 毎時の見回りがぜんぶのカードを見る）。 */
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.prune.from','all',?1)
+    ON CONFLICT(k) DO UPDATE SET v='all'`).bind(new Date().toISOString()).run();
   const d=(await api(env,'/sub/auto/try',{})).body;
   console.log('   試し：受付終了にする '+d.trim+'件（上限 '+d.keep_max+'件）');
   ok(d.trim===7&&d.keep_max===MAX,
@@ -700,9 +703,9 @@ console.log('\n=== ⑪ 出しておく商品の上限（古い順に受付終了
   const inv=shop.filter((x)=>x.kind==='pjInv');
   ok(inv.length===7&&inv.every((x)=>x.v.input.quantities[0].quantity===0),
      '★★★外した品の Shopify の在庫を 0 にする（買えないようにする）');
-  ok(dc.filter((x)=>x.method==='PATCH'&&x.msg==='777001'
-     &&/受付は終わりました/.test(JSON.stringify(x.body))).length===1,
-     '★★外した品のカードは「受付終了」に書き換わる');
+  ok(dc.filter((x)=>x.method==='DELETE'&&x.msg==='777001').length===1
+     &&dc.filter((x)=>x.method==='PATCH'&&x.msg==='777001').length===0,
+     '★★外した品のカードは消す（8.111・v361 までは「受付終了」に書き換え）');
   ok(/受付終了にした件数（出しておく上限を超えた古い品）：\*\*7件\*\*/
      .test(notes.join('\n')),'★★運営に報告する');
   /* Shopify を呼べなかった品は印を残して、次の回にやり直す。 */

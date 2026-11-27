@@ -2450,8 +2450,12 @@ body.staff #syncOnHandFix{display:none !important}
         <!-- 8.31（カジの依頼3・4）受付終了の扱いと「今週のねらい目」 -->
         <div class="note2" style="margin:10px 0 2px"><b>リストから外れた商品と、今週のねらい目</b></div>
         <div class="note2" style="margin:10px 0 6px"><b>1回の件数は「新しく出す件数」です</b>（前から出しているカードは数えません。値段と残り数の書き換えだけします）。たたき台は<b>モニター5／ライト5／スタンダード8／プレミアム10</b>。<br>カードが増えすぎるときは、下の「<b>受付終了から消すまで</b>」に日数を入れてください（<b>14日</b>＝配信2回ぶんがおすすめ。モニターは履歴として残すので <b>0</b> のままを おすすめします）。</div>
-        <div class="row cfgprice"><label for="subOffDays">受付終了から消すまで</label><input type="number" id="subOffDays" value="0" step="1" min="0" max="180" inputmode="numeric"><span class="unit">日</span></div>
-        <div class="note2" style="margin:0 0 6px">MW が欠品した・販売終了した・上限を0にした商品の<b>前に出したカード</b>は、配信のたびに「<b>この商品の受付は終わりました</b>」に<b>書き換え</b>ます（消しません）。<br><b>0 なら消しません（既定）。</b>日数を入れると、受付終了からその日数がたったカードを<b>消します</b>。</div>
+        <!-- 8.111（カジの依頼）買えなくなったカードを消す。v361 までの「受付終了から消すまで」は使わなくなった（隠して値だけ残す）。 -->
+        <div style="display:none"><input type="number" id="subOffDays" value="0" step="1" min="0" max="180" inputmode="numeric" aria-hidden="true"></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subPruneOn" checked><label for="subPruneOn" style="flex:1">買えなくなったカードを毎時自動で消す（自動配信がオフでも動きます）</label></div>
+        <div class="note2" style="margin:0 0 6px"><b>購入期限を過ぎた</b>（モニター・配信から購入期限の日数）・<b>売り切れた</b>（販売数の上限に達した・MW の在庫が無い）・<b>リストから外れた</b>・<b>そのプランから外した</b>カードは、Discord の<b>メッセージを消します</b>（「受付終了」には書き換えません）。ピン留めの「今週の一覧」は消さずに、残っているカードだけに書き換えます。消した記録（JAN・チャンネル・送った日・消した日・理由）は pj-sync に残り、配信の控え・「前の週までに出した品」はこれまでどおり数えます。再入荷などでまた出すときは<b>新しいカード</b>として送ります。<br>この機能を入れる前に出したカードは、下の「<b>残っている古いカードをまとめて消す</b>」で確かめてから消してください（それまでは、入れたあとに出したカードだけを自動で消します）。</div>
+        <button class="btn cfgprice" id="subPruneBulk" style="width:100%">残っている古いカードをまとめて消す（確認してから）</button>
+        <div class="note2" id="subPruneNote" style="margin:2px 0 6px"></div>
         <div class="chk cfgprice"><input type="checkbox" id="subHotOn"><label for="subHotOn" style="flex:1">週1回「今週のねらい目」を出す（<span id="subHotTxt">いまは止めています</span>）</label></div>
         <div class="row cfgprice"><label for="subHotDow">　曜日／件数</label><select id="subHotDow"><option value="0" selected>日曜</option><option value="1">月曜</option><option value="2">火曜</option><option value="3">水曜</option><option value="4">木曜</option><option value="5">金曜</option><option value="6">土曜</option></select><input type="number" id="subHotN" value="3" step="1" min="1" max="10" inputmode="numeric"><span class="unit">件まで</span></div>
         <div class="note2" style="margin:0 0 6px"><b>◎（ねらい目）</b>の商品から選び、<b>すでに出したカードへのリンク</b>を1通にまとめて出します（新しいカードは作りません）。<b>先週選んだ商品は後ろに回します。</b><br>配信の時刻（上の「配信する時刻」）と同じ時刻に出ます。<b>@everyone・@here は使いません。</b></div>
@@ -3986,6 +3990,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subPickNoAmz','subPickSkipBuy',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
+                /* 8.111 買えなくなったカードを毎時自動で消す（既定オン）。 */
+                'subPruneOn',
                 /* 8.80 自動配信（使うか・土日も出すか・写真が無い品を止めるか）。 */
                 'subAutoOn','subAutoWeekend','subAutoPic',
                 /* 8.81 箱ものは送料用の重さで実額を取る（既定オフ）。 */
@@ -21717,6 +21723,45 @@ function memUnlinkGo(cust){
     return memListGo(1);
   })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
 }
+/* ===== 8.111（カジの依頼）残っている古いカードをまとめて消す =====
+   押すとまず pj-sync に「消すカード」をチャンネルごと・理由ごとに数えてもらい（GET /sub/prune）、
+   確認の画面に出してから消す（POST /sub/prune {bulk:true}）。1回 300件まで（残りはもう一度押す）。 */
+var SUB_PRUNE_JA={ expired:'購入期限を過ぎた', sold_out:'売り切れた', gone:'リストから外れた',
+  off_plan:'プランから外した', closed:'受付終了にしてあった', test:'テスト配信（モニターの開始日より前）' };
+function subPruneSay(t,bad){
+  var el=$('subPruneNote'); if(!el)return;
+  el.innerHTML=(bad?'<b style="color:var(--bad)">':'')+t+(bad?'</b>':'');
+}
+function subPruneByText(by){
+  return Object.keys(by||{}).map(function(k){ return (SUB_PRUNE_JA[k]||k)+' '+by[k]; }).join('・');
+}
+function subPruneBulk(){
+  if(roleDenyPrice('subPruneNote'))return;
+  subPruneSay('数えています…');
+  return mwGet('/sub/prune?bulk=1').then(function(d){
+    if(!d||!d.ok){ subPruneSay('⚠ 数えられませんでした：'+esc(String((d||{}).detail||(d||{}).error||'')),1); return; }
+    if(!d.table_ok){ subPruneSay('⚠ pj-sync に sub_del の表がありません（migrate-0077 を流してください）',1); return; }
+    if(!d.n){ subPruneSay('消すカードはありません。'); return; }
+    var lines=(d.chs||[]).map(function(c){
+      return '・'+(c.name||('チャンネル '+String(c.ch).slice(-4)))+'：'+c.n+'件（'+subPruneByText(c.by)+'）';
+    });
+    if(!confirm('Discord のカードを消します：'+d.n+'件\n'+lines.join('\n')
+      +(d.n>d.max?('\n（1回 '+d.max+'件まで。残りはもう一度押してください）'):'')
+      +'\n\n・消すのは pj が出した会員向けのカードだけです（「今週の一覧」は消さずに書き換えます）'
+      +'\n・消した記録は pj-sync に残ります'
+      +'\n\nよろしいですか？')){ subPruneSay('やめました（何も消していません）'); return; }
+    subPruneSay('消しています…（1件 1秒ほど）');
+    return mwPost('/sub/prune',{ bulk:true }).then(function(r){
+      if(!r||!r.ok){ subPruneSay('⚠ 消せませんでした：'+esc(String((r||{}).why||(r||{}).error||'')),1); return; }
+      subPruneSay('✓ 消しました：'+(+r.del||0)+'件'+((+r.gone)?('（もう無かった '+r.gone+'件）'):'')
+        +(subPruneByText(r.by)?('　'+esc(subPruneByText(r.by))):'')
+        +((+r.fail)?('<br><b style="color:var(--bad)">消せなかった '+r.fail+'件：'+esc(String(r.why||''))+'</b>'):'')
+        +((+r.left)?('<br>残り '+r.left+'件。もう一度押してください。'):'')
+        +(r.all?'<br>これからは、買えなくなったカードを毎時自動で消します。':''),!!(+r.fail));
+    });
+  })['catch'](function(e){ subPruneSay('⚠ '+esc(e.message),1); });
+}
+if($('subPruneBulk'))$('subPruneBulk').addEventListener('click',function(e){ if(e&&e.preventDefault)e.preventDefault(); subPruneBulk(); });
 /* 8.55（カジの依頼E）**採寸だけ**取り直す。ASIN は引き直さないので、
    出品の可否・値段・手数料は触らない（1回 120件まで）。 */
 function mwDimGoGo(){
@@ -32912,7 +32957,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v361';   // sw.js の const V と必ず同じ値にする
+var APP_V='v362';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

@@ -265,30 +265,36 @@ console.log('=== ⑧ 配信：新しく出すのは⚙の件数だけ ===');
     .n||0);
   ok(n===4,'★★★2回で4件がモニターに出ている');
 
-  console.log('=== ⑨ 期限が過ぎたら受付終了（カードは残す）===');
+  console.log('=== ⑨ 期限が過ぎたらカードを消す（8.111・控えの行は残す）===');
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.prune.from','all',?1)
+    ON CONFLICT(k) DO UPDATE SET v='all'`).bind(new Date().toISOString()).run();
   /* 1件を8日前に出したことにする。 */
   await env.DB.prepare(
     `UPDATE sub_post SET at=?2 WHERE ch=?1 AND jan='4902370550100'`)
     .bind(CH,new Date(Date.now()-8*86400000).toISOString()).run();
   dc=[];
   const r3=await api('/sub/send',{ approve:true });
-  const off=dc.filter((x)=>x.method==='PATCH');
-  console.log('   受付終了：'+JSON.stringify(r3.off||r3.retire||{})
-    +' / PATCH '+off.length);
+  const del=dc.filter((x)=>x.method==='DELETE');
+  console.log('   消した：'+JSON.stringify(r3.retire||{})+' / DELETE '+del.length);
   const row=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE ch=?1 AND jan='4902370550100'`)
+    `SELECT msg_id FROM sub_post WHERE ch=?1 AND jan='4902370550100'`)
     .bind(CH).first();
-  ok(!!String((row||{}).off_at||''),
-     '★★★期限が過ぎたカードは受付終了になる（控えに日時が入る）');
-  ok(dc.filter((x)=>x.method==='DELETE').length===0,
-     '★★★カードは消さない（履歴として残す）');
+  ok(!!row&&!String(row.msg_id||'')&&del.length===1,
+     '★★★期限が過ぎたカードは消す（控えの行は残す）');
+  const dw=await env.DB.prepare(`SELECT why FROM sub_del WHERE jan='4902370550100'`).first();
+  ok(!!dw&&dw.why==='expired','★★消した理由は「購入期限を過ぎた」');
+  ok(dc.filter((x)=>x.method==='PATCH'&&/受付終了/.test(JSON.stringify(x.body||''))).length===0,
+     '★★★「受付終了」には書き換えない');
   dc=[];
   await api('/sub/send',{ approve:true, redo:true });
   const row2=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE ch=?1 AND jan='4902370550100'`)
+    `SELECT msg_id FROM sub_post WHERE ch=?1 AND jan='4902370550100'`)
     .bind(CH).first();
-  ok(!!String((row2||{}).off_at||''),
-     '★★★書き直しでも受付終了のカードは商品カードに戻さない');
+  ok(!String((row2||{}).msg_id||''),
+     '★★★書き直しでも期限が過ぎて消したカードは出し直さない');
+  const n2=Number(((await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM sub_post WHERE ch=?1`).bind(CH).first())||{}).n||0);
+  ok(n2===4,'★★★控えの行は残る（前の週までに出した品として数える）');
 
   console.log('=== ⑩ 新しく出していない回と /sub/mon ===');
   dc=[];

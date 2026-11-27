@@ -139,52 +139,48 @@ console.log('=== ② 新しく出るカードが0件のチャンネルには何�
      '★★★書き換えの日は PATCH だけ（新しい通知を鳴らさない）');
 }
 
-console.log('=== ③ リストから外れた商品のカードを「受付終了」に ===');
+console.log('=== ③ リストから外れた商品のカードを消す（8.111・v361 までは「受付終了」に書き換え）===');
 {
   const env=env0();
   await setCfg(env,{});
   await stock(env,JAN[0]); await amz(env,JAN[0]); await sub(env,JAN[0]);
   await stock(env,JAN[1]); await amz(env,JAN[1]); await sub(env,JAN[1]);
   await api(env,'/sub/send',{ approve:true });
+  /* まとめて消し終えた状態（毎時の見回りがぜんぶのカードを見る）。 */
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.prune.from','all',?1)
+    ON CONFLICT(k) DO UPDATE SET v='all'`).bind(new Date().toISOString()).run();
   /* JAN[1] をリストから外す（上限0＝販売終了の扱い）。 */
   await env.DB.prepare(`UPDATE mw_sub SET max_qty=0 WHERE jan=?1`)
     .bind(JAN[1]).run();
+  const msg1=(await env.DB.prepare(`SELECT msg_id FROM sub_post WHERE jan=?1`).bind(JAN[1]).first()).msg_id;
   dc=[];
   const r=await api(env,'/sub/send',{ approve:true });
-  const pt=dc.filter((x)=>x.method==='PATCH');
-  console.log('   '+JSON.stringify(r.retire)+' / PATCH '+pt.length);
-  ok(r.retire&&r.retire.off===1,'★★★外れた商品のカードを1件書き換える');
-  ok(pt.length===1&&/受付終了/.test(JSON.stringify(pt[0].body)),
-     '★★★「受付終了」のカードに書き換える');
-  ok(/この商品の受付は終わりました/.test(JSON.stringify(pt[0].body)),
-     '★★★文は「この商品の受付は終わりました」');
-  ok(dc.filter((x)=>x.method==='DELETE').length===0,
-     '★★★既定では消さない（残す）');
+  const pt=dc.filter((x)=>x.method==='PATCH'&&x.msg===msg1);
+  const dl=dc.filter((x)=>x.method==='DELETE');
+  console.log('   '+JSON.stringify(r.retire)+' / DELETE '+dl.length+' / PATCH '+pt.length);
+  ok(r.retire&&r.retire.del===1&&dl.length===1&&dl[0].msg===msg1,'★★★外れた商品のカードを消す（DELETE）');
+  ok(pt.length===0,'★★★「受付終了」には書き換えない');
   const row=await env.DB.prepare(
-    `SELECT off_at FROM sub_post WHERE jan=?1`).bind(JAN[1]).first();
-  ok(String((row||{}).off_at||'')!=='','★★控えに受付終了の時刻が入る');
-  /* 二度は書き換えない。 */
+    `SELECT msg_id, off_at FROM sub_post WHERE jan=?1`).bind(JAN[1]).first();
+  ok(!!row&&String(row.msg_id||'')===''&&!row.off_at,'★★★控えの行は残す（msg_id を空にする＝配信の控えは数えられる）');
+  const del=await env.DB.prepare(`SELECT * FROM sub_del WHERE jan=?1`).bind(JAN[1]).first();
+  ok(!!del&&del.why==='gone'&&del.ch===CH&&del.msg_id===msg1&&!!del.sent_at&&!!del.del_at,
+     '★★★消した記録（JAN・チャンネル・送った日・消した日・理由）を残す');
+  /* 二度は消さない。 */
   dc=[];
   const r2=await api(env,'/sub/send',{ approve:true });
-  ok((r2.retire||{}).off===0&&dc.length===0,
-     '★★★一度書き換えたカードは二度触らない');
-  /* ⚙に日数を入れると、そのあいだを置いてから消す。 */
-  await setCfg(env,{ subOffDays:3 });
+  ok((r2.retire||{}).del===0&&dc.filter((x)=>x.method==='DELETE').length===0,
+     '★★★一度消したカードは二度触らない');
+  /* 再入荷（上限を戻す）→ 新しいカードとして送り直す。 */
+  await env.DB.prepare(`UPDATE mw_sub SET max_qty=3 WHERE jan=?1`).bind(JAN[1]).run();
+  const before=(await env.DB.prepare(`SELECT at FROM sub_post WHERE jan=?1`).bind(JAN[1]).first()).at;
+  await new Promise((z)=>setTimeout(z,5));
   dc=[];
-  const r3=await api(env,'/sub/send',{ approve:true });
-  ok((r3.retire||{}).del===0&&dc.length===0,
-     '★★★日数がたつまでは消さない');
-  await env.DB.prepare(`UPDATE sub_post SET off_at=?2 WHERE jan=?1`)
-    .bind(JAN[1],new Date(Date.now()-5*86400000).toISOString()).run();
-  dc=[];
-  const r4=await api(env,'/sub/send',{ approve:true });
-  console.log('   '+JSON.stringify(r4.retire));
-  ok((r4.retire||{}).del===1
-     &&dc.filter((x)=>x.method==='DELETE').length===1,
-     '★★★日数がたったら消す（⚙で選んだときだけ）');
-  const gone=await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM sub_post WHERE jan=?1`).bind(JAN[1]).first();
-  ok(Number((gone||{}).n)===0,'★★控えも片づける');
+  await api(env,'/sub/send',{ approve:true });
+  const post=dc.filter((x)=>x.method==='POST');
+  const row2=await env.DB.prepare(`SELECT msg_id, at FROM sub_post WHERE jan=?1`).bind(JAN[1]).first();
+  ok(post.length>=1&&String(row2.msg_id||'')!==''&&row2.at>before,
+     '★★★再入荷したら新しいカードとして送り直す（送った日も新しくする）');
   /* 1点もの（one-…）は別の仕組みなので触らない。 */
   const e2=env0();
   await setCfg(e2,{});

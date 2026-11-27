@@ -11790,6 +11790,8 @@ async function subSettings(env) {
     stockOut: !!st.subAutoOn,
     /* 8.31（カジの依頼4）週1回の「今週のねらい目」（既定オフ）。 */
     hotOn: !!st.subHotOn,
+    /* 8.111 買えなくなったカードを毎時の見回りで消す（既定オン・自動配信がオフでも動く）。 */
+    pruneOn: st.subPruneOn === undefined ? true : !!st.subPruneOn,
     hotDow: (() => {
       const n = Number(st.subHotDow);
       return (isFinite(n) && n >= 0 && n <= 6) ? Math.round(n) : 0;
@@ -12379,6 +12381,14 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
     const was = (sent || {})[r.jan];
     /* 8.43 受付終了にしたカードは、もう書き換えない（履歴として残す）。 */
     if (was && String(was.off_at || "")) continue;
+    /* 8.111 モニターの購入期限が過ぎて消したカード（msg_id が空）は、出し直さない。
+       ⚙で期限を延ばして、まだ期限の内になったときだけ新しいカードとして出す。 */
+    if (mon && was && !String(was.msg_id || "")) {
+      const t = Date.parse(String(was.at || ""));
+      const lim = Math.max(1, Math.round(Number(((cfg || {}).pick || {}).monLimitDays)
+        || SUBPLAN.MON.monLimitDays)) * 86400000;
+      if (isFinite(t) && Date.now() - t >= lim) continue;
+    }
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
     const goneCard = !!(was && !mid);
@@ -15242,6 +15252,10 @@ async function jobSubSend(env, opt) {
                at,created_at${hCol})
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9${hVal})
              ON CONFLICT(jan,ch) DO UPDATE SET
+               /* 8.111 消したカード（msg_id が空）を新しく送り直したときは、
+                  送った日も新しくする（購入期限・見回りの範囲をそこから数える）。 */
+               at=CASE WHEN COALESCE(sub_post.msg_id,'')='' THEN excluded.at
+                       ELSE sub_post.at END,
                msg_id=excluded.msg_id, price=excluded.price,
                qty=excluded.qty, sold=excluded.sold, sold_out=excluded.sold_out,
                edited_at=excluded.at${hSet2}`)
@@ -17139,21 +17153,65 @@ function subOffCard(name, jan) {
     color: 0x8a8a8a,
   };
 }
+/* 8.111 配信の回の片づけ。v361 までは「受付終了」に書き換えていたが、
+   買えなくなったカードは**消す**ようにした（subPrune・毎時の見回りと同じ決まり）。 */
 async function subRetire(env, run, cfg, rows, dl) {
-  const res = { off: 0, del: 0, fail: 0, skip: "" };
-  if (!(await colOk(env, "sub_post", "off_at"))) {
-    res.skip = "no_column"; return res;
+  const r = await subPrune(env, run, cfg, rows, { dl: dl });
+  return { off: 0, del: r.del, fail: r.fail, skip: r.skip || "", gone: r.gone || 0,
+           why: r.why || "" };
+}
+/* ===== 8.111（カジの依頼）買えなくなったカードを消す =====
+   受付終了に書き換えるだけではチャンネルに残り続け、新しいモニターが古いカードを押して
+   「買えない」「会員専用のページ」になっていた。次のどれかになったカードは
+   **Discord のメッセージを消す**（自分が出したカードだけ・msg_id は sub_post の控え）。
+     expired  … 購入期限を過ぎた（モニターのチャンネル・配信から⚙ subMonLimitDays 日・既定7日）
+     sold_out … 売り切れた（販売数の上限に達した・MW の在庫が無い）
+     gone     … 配信のリストから外れた（MW の欠品・販売終了・上限を0にした）
+     off_plan … そのプランから外した（ほかのプランでは売り続ける）
+     closed   … v361 までに「受付終了」に書き換えたカード
+     test     … ⚙「モニターの開始日」より前に出したカード（まとめて消すときだけ）
+   ・sub_post の行は**消さない**（msg_id と off_at を空にする）。配信の控え・
+     「前の週までに出した品」の判定はこれまでどおり数えられる。
+     msg_id が空の行は「カードが消えた品」として扱うので、再入荷・期限の延長で
+     また出せるようになったら、次の配信で**新しいカードとして送り直す**
+   ・消した記録は sub_del（JAN・チャンネル・送った日・消した日・理由）
+   ・1点もの（jan が 'one-…'）は別の仕組みなので触らない
+   ・止めているプラン・入れ替えたチャンネルのカードは、リストから外れたときだけ消す */
+const SUB_PRUNE_MAX = 150;              // 1回に消す上限（毎時の見回り）
+const SUB_PRUNE_BULK = 300;             // まとめて消すときの1回の上限
+const SUB_PRUNE_FAIL_STOP = 5;          // 権限が無いなど、続けて失敗したら止める
+const SUB_PRUNE_WHY = { expired: "購入期限を過ぎた", sold_out: "売り切れた",
+  gone: "リストから外れた（在庫が無い・販売終了）", off_plan: "そのプランから外した",
+  closed: "受付終了にしてあった", test: "テスト配信（モニターの開始日より前）" };
+async function subDelOk(env) { return await colOk(env, "sub_del", "why"); }
+/* 毎時の見回りが見るカードの範囲。この機能を入れる前に出したカード（11/15 のテスト配信など）は、
+   ⚙「残っている古いカードをまとめて消す」（確認の画面つき）で消す。それが済むまでは、
+   毎時の見回りは**入れたあとに出したカードだけ**を消す（確認なしに古いカードを消さない）。
+   'all' … まとめて消し終えた（ぜんぶ見る）／ISO … その時刻より後に出したカードだけ。 */
+const SUB_PRUNE_FROM = "sub.prune.from";
+async function subPruneSince(env) {
+  let v = "";
+  try { v = String(await stateGet(env, SUB_PRUNE_FROM) || ""); } catch (e) { v = ""; }
+  if (v === "all") return "";
+  if (!v) {
+    v = nowIso();
+    try { await stateSet(env, SUB_PRUNE_FROM, v).run(); } catch (e) {}
   }
-  const live = {};
-  for (const r of (rows || [])) live[String(r.jan)] = 1;
-  /* 8.45（段②・カジの依頼）**プランから外れた品**は、そのプランの
-     カードだけ「受付終了」にする（ほかのプランでは売り続ける）。
-     いま配信しているチャンネルだけを見る（止めているプラン・
-     入れ替えたチャンネルのカードは今までどおり触らない）。 */
+  return v;
+}
+/* 消すカードを選ぶ（何も変えない）。opt.bulk … テスト配信のカードも入れる。 */
+async function subPruneList(env, cfg, rows, opt) {
+  const o = opt || {};
+  const out = [];
+  if (!(await subPostOk(env))) return out;
+  const offCol = await colOk(env, "sub_post", "off_at");
+  const offSel = offCol ? "COALESCE(off_at,'')" : "''";
+  const byJan = {};
+  for (const r of (rows || [])) byJan[String(r.jan)] = r;
   const chPlan = {};
   for (const p of ((cfg || {}).plans || []))
     if (p.on && p.ch) chPlan[String(p.ch)] = p;
-  const liveCh = {};
+  const fitCh = {};
   for (const r of (rows || [])) {
     for (const k of Object.keys(chPlan)) {
       const p = chPlan[k];
@@ -17163,82 +17221,173 @@ async function subRetire(env, run, cfg, rows, dl) {
                           subShipInfo(r, cfg || {}).name)
         : SUBPLAN.fits(p, r, isGame);
       if (!kind) continue;
-      liveCh[String(r.jan)] = liveCh[String(r.jan)] || {};
-      liveCh[String(r.jan)][k] = 1;
+      fitCh[String(r.jan)] = fitCh[String(r.jan)] || {};
+      fitCh[String(r.jan)][k] = 1;
     }
   }
-  /* 8.43（カジの依頼1）モニターは**購入期限**がある。
-     モニターのチャンネルに出してから ⚙（monLimitDays・既定7日）たった
-     カードは「受付終了」に**書き換える**（消さない＝履歴に残る）。
-     ほかのプランでは売り続ける（期限はモニターの枠だけ）。 */
   const monCh = String((((cfg || {}).plans || [])
     .filter((p) => p.key === "monitor")[0] || {}).ch || "");
   const monMs = Math.max(1, Math.round(
     Number(((cfg || {}).pick || {}).monLimitDays)
     || SUBPLAN.MON.monLimitDays)) * 86400000;
+  const t0 = o.bulk ? SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom)) : null;
+  const since = o.since ? Date.parse(String(o.since)) : NaN;
   const q = await env.DB.prepare(
-    `SELECT p.jan AS jan, p.ch AS ch, p.msg_id AS msg_id, p.off_at AS off_at,
-            p.at AS at,
-            COALESCE(a.name, s.name, '') AS name
-       FROM sub_post p
-            LEFT JOIN mw_amz a ON a.jan = p.jan
-            LEFT JOIN mw_stock s ON s.id = (
-              SELECT t.id FROM mw_stock t WHERE t.jan = p.jan
-               ORDER BY t.id ASC LIMIT 1)
-      ORDER BY p.at ASC LIMIT ${SUB_OFF_MAX}`).all();
-  const now = Date.now();
-  for (const r of ((q && q.results) || [])) {
-    const jan = String(r.jan || "");
+    `SELECT jan, ch, plan, msg_id, at, qty, sold, sold_out,
+            ${offSel} AS off_at
+       FROM sub_post WHERE COALESCE(msg_id,'') <> '' ORDER BY at ASC`).all();
+  const now = Number(o.now || Date.now());
+  for (const p of ((q && q.results) || [])) {
+    const jan = String(p.jan || "");
     if (!/^[0-9]{8,}$/.test(jan)) continue;      // 1点ものは触らない
-    const msg = String(r.msg_id || "");
-    const off = String(r.off_at || "");
-    if (!msg) continue;
-    /* 8.43 モニターのカードは、期限が過ぎたら受付終了にする
-       （リストに残っていても）。 */
-    const monOld = monCh && String(r.ch) === monCh
-      && (Date.now() - Date.parse(String(r.at || ""))) >= monMs;
-    /* まだリストにあり、そのプランにも出る品は触らない。 */
-    const inCh = chPlan[String(r.ch)]
-      ? !!(liveCh[jan] && liveCh[jan][String(r.ch)])
-      : !!live[jan];
-    if (inCh && !monOld) continue;
-    if (dl && Date.now() > dl) break;
-    if (!off) {
-      const e = await dcApi(env, run, "PATCH",
-        "/channels/" + r.ch + "/messages/" + msg,
-        { embeds: [subOffCard(r.name, jan)] });
-      /* 8.38 そのカードが消えていたら、控え（msg_id）を片づけて次へ。
-         **メッセージを消す処理は足さない**（もう無いので片づけるだけ）。 */
-      if (!e.ok && dcMsgGone(e)) {
-        await env.DB.prepare(
-          `UPDATE sub_post SET msg_id='', edited_at=?3 WHERE jan=?1 AND ch=?2`)
-          .bind(jan, String(r.ch), nowIso()).run();
-        res.gone = (res.gone || 0) + 1;
-        continue;
-      }
-      if (!e.ok) { res.fail++; continue; }
-      await env.DB.prepare(
-        `UPDATE sub_post SET off_at=?3, edited_at=?3 WHERE jan=?1 AND ch=?2`)
-        .bind(jan, String(r.ch), nowIso()).run();
-      res.off++;
+    const ch = String(p.ch || "");
+    const at = Date.parse(String(p.at || ""));
+    const r = byJan[jan];
+    /* まとめて消す前は、入れたあとに出したカードだけを見る */
+    if (isFinite(since) && !(isFinite(at) && at >= since)) continue;
+    let why = "";
+    if (t0 !== null && isFinite(at) && at < t0) why = "test";
+    else if (String(p.off_at || "")) why = "closed";
+    else if (monCh && ch === monCh && isFinite(at) && now - at >= monMs) why = "expired";
+    else if (!r) why = "gone";
+    else if (chPlan[ch] && !(fitCh[jan] && fitCh[jan][ch])) why = "off_plan";
+    else if (chPlan[ch] || r) {
+      const left = Math.max(0, (Number(r.qty) || 0) - Math.max(0, Number(r.sold) || 0));
+      /* MW の在庫が無い品も売り切れ（自動配信の入／切に関係なく・カジの依頼） */
+      if (Number(p.sold_out) === 1 || subMwOut(r, Object.assign({}, cfg, { stockOut: true }))
+          || left <= 0) why = "sold_out";
+    }
+    if (!why) continue;
+    out.push({ jan: jan, ch: ch, plan: String(p.plan || ""), msg_id: String(p.msg_id || ""),
+               at: String(p.at || ""), why: why });
+  }
+  return out;
+}
+/* Discord が消させなかった理由（番号だけ見る）。 */
+function subPruneErr(e) {
+  const x = e || {};
+  const code = Number(x.code) || 0, st = Number(x.status) || 0;
+  if (String(x.err || "") === "no_token" || st === 0) return "DISCORD_BOT_TOKEN が登録されていません";
+  if (code === 50013 || code === 50001 || st === 403)
+    return "ボットの権限が足りません（そのチャンネルの「チャンネルを見る」と「メッセージ履歴を読む」が要ります）";
+  if (st === 429) return "Discord が混み合っています（次の回でまた消します）";
+  return "Discord が " + st + (code ? ("/" + code) : "") + " を返しました";
+}
+/* 消す。opt.dl … 持ち時間の締め切り／opt.max … 上限／opt.bulk … テスト配信も。 */
+async function subPrune(env, run, cfg, rows, opt) {
+  const o = opt || {};
+  const res = { del: 0, gone: 0, fail: 0, left: 0, by: {}, chs: {}, why: "", skip: "" };
+  if (!(await subDelOk(env))) { res.skip = "no_table"; res.why = "sub_del がありません（migrate-0077-sub-del.sql）"; return res; }
+  if (!env.DISCORD_BOT_TOKEN) { res.skip = "no_token"; res.why = "DISCORD_BOT_TOKEN が登録されていません"; return res; }
+  const since = o.bulk ? "" : await subPruneSince(env);
+  const list = await subPruneList(env, cfg, rows, { bulk: !!o.bulk, since: since });
+  res.since = since;
+  const max = Math.max(1, Number(o.max) || SUB_PRUNE_MAX);
+  const offCol = await colOk(env, "sub_post", "off_at");
+  /* SQL の中に三項演算子（?）を書かない（rowbtn.mjs の見張り）。 */
+  const offSet = offCol ? ", off_at=NULL" : "";
+  let failRow = 0, n = 0;
+  for (const x of list) {
+    if (n >= max || (o.dl && Date.now() > o.dl) || failRow >= SUB_PRUNE_FAIL_STOP) { res.left++; continue; }
+    n++;
+    const d = await dcApi(env, run, "DELETE", "/channels/" + x.ch + "/messages/" + x.msg_id);
+    const gone = !d.ok && (dcMsgGone(d) || Number(d.status) === 404);
+    if (!d.ok && !gone) {
+      res.fail++; failRow++; res.why = subPruneErr(d);
       await sleep(SUB_GAP_MS);
       continue;
     }
-    /* ⚙で日数を入れていれば、そのあいだを置いてから消す。 */
-    if (!cfg.offDays) continue;
-    const t0 = Date.parse(off);
-    if (!isFinite(t0) || (now - t0) < cfg.offDays * 86400000) continue;
-    const d = await dcApi(env, run, "DELETE",
-      "/channels/" + r.ch + "/messages/" + msg);
-    /* すでに消えている（404）ときも控えは片づける。 */
-    if (!d.ok && d.status !== 404) { res.fail++; continue; }
-    await env.DB.prepare(`DELETE FROM sub_post WHERE jan=?1 AND ch=?2`)
-      .bind(jan, String(r.ch)).run();
-    res.del++;
+    failRow = 0;
+    const at = nowIso();
+    await runBatch(env, run, [
+      env.DB.prepare(
+        `INSERT INTO sub_del (jan,ch,plan,msg_id,sent_at,del_at,why,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?6)`)
+        .bind(x.jan, x.ch, x.plan, x.msg_id, x.at, at, x.why),
+      /* 行は残す（配信の控え・前の週までに出した品）。msg_id を空にするので、
+         また出せるようになったら次の配信で新しいカードを送る。 */
+      env.DB.prepare(
+        `UPDATE sub_post SET msg_id='', edited_at=?3${offSet}
+          WHERE jan=?1 AND ch=?2`).bind(x.jan, x.ch, at),
+    ]);
+    if (gone) res.gone++; else res.del++;
+    res.by[x.why] = (res.by[x.why] || 0) + 1;
+    res.chs[x.ch] = (res.chs[x.ch] || 0) + 1;
     await sleep(SUB_GAP_MS);
+  }
+  if (failRow >= SUB_PRUNE_FAIL_STOP) res.stopped = true;
+  /* まとめて消し終えたら、毎時の見回りはぜんぶのカードを見る。 */
+  if (o.bulk && !res.left && !res.fail) {
+    try { await stateSet(env, SUB_PRUNE_FROM, "all").run(); } catch (e) {}
+    res.all = true;
   }
   return res;
 }
+/* 毎時の見回り（自動配信がオフでも動く）。消したら「今週の一覧」を書き換える（消さない）。 */
+async function jobSubPrune(env, opt) {
+  const o = opt || {};
+  const run = newRun("sub-prune");
+  const res = { ok: false, del: 0, gone: 0, fail: 0, left: 0 };
+  try {
+    const cfg = o.cfg || await subSettings(env);
+    if (!cfg.pruneOn && !o.force) {
+      res.ok = true; res.why = "⚙で「買えなくなったカードを自動で消す」をオフにしています";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    if (!(await subPostOk(env))) {
+      res.ok = true; res.why = "sub_post がありません";
+      return Object.assign(await saveRun(env, run), res);
+    }
+    const rows = o.rows || await subRows(env, cfg);
+    const r = await subPrune(env, run, cfg, rows, { bulk: !!o.bulk,
+      max: o.bulk ? SUB_PRUNE_BULK : SUB_PRUNE_MAX,
+      dl: Date.now() + (o.bulk ? 600000 : 120000) });
+    Object.assign(res, r);
+    if (r.del || r.gone)
+      run.notes.push("カードを消した " + r.del + "件（もう無かった " + r.gone + "件）"
+        + (r.fail ? "・失敗 " + r.fail + "件" : "") + (r.left ? "・残り " + r.left + "件" : ""));
+    /* ピン留めの「今週の一覧」は消さずに、残っているカードだけに書き換える。 */
+    if ((r.del || r.gone) && cfg.idxOn) {
+      try { res.index = await jobSubIndex(env, { cfg: cfg, rows: rows }); }
+      catch (e) { run.notes.push("sub-index: " + String((e && e.message) || e)); }
+    }
+    res.ok = true;
+  } catch (e) {
+    run.errors++; run.notes.push("sub-prune: " + String((e && e.message) || e));
+    res.error = String((e && e.message) || e);
+  }
+  return Object.assign(await saveRun(env, run), res);
+}
+/* 8.111 まとめて消す前の確認（GET /sub/prune?bulk=1）。チャンネルごと・理由ごとの件数。 */
+async function subPrunePlan(env, url) {
+  const res = { ok: false, n: 0, chs: [], by: {} };
+  if (!(await subPostOk(env))) { res.error = "no_table"; res.detail = "sub_post がありません"; return res; }
+  const bulk = !url || url.searchParams.get("bulk") !== "0";
+  const cfg = await subSettings(env);
+  const rows = await subRows(env, cfg);
+  const list = await subPruneList(env, cfg, rows, { bulk: bulk });
+  const names = {};
+  for (const p of (cfg.plans || [])) if (p.ch) names[String(p.ch)] = { key: p.key, name: p.name, on: !!p.on };
+  const per = {};
+  for (const x of list) {
+    const k = x.ch;
+    per[k] = per[k] || { ch: k, key: (names[k] || {}).key || "", name: (names[k] || {}).name || "",
+                         on: !!(names[k] || {}).on, n: 0, by: {} };
+    per[k].n++; per[k].by[x.why] = (per[k].by[x.why] || 0) + 1;
+    res.by[x.why] = (res.by[x.why] || 0) + 1;
+  }
+  res.chs = Object.keys(per).map((k) => per[k]).sort((a, b) => b.n - a.n);
+  res.n = list.length;
+  res.bulk = bulk;
+  res.max = SUB_PRUNE_BULK;
+  res.why_ja = SUB_PRUNE_WHY;
+  res.table_ok = await subDelOk(env);
+  res.token = !!env.DISCORD_BOT_TOKEN;
+  res.mon_from = SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom) || "";
+  res.ok = true;
+  return res;
+}
+
 /* ===== 8.31（カジの依頼4）今週のねらい目（⚙・既定オフ）=====
    ◎（ねらい目）の商品から最大◯件を選び、**すでに出したカードへの
    リンク**を1通にまとめて出す（新しいカードは作らない）。
@@ -22435,7 +22584,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "ebay_cat", "ebay_stat",
   "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
-  "sub_post", "sub_order", "sub_stop",
+  "sub_del", "sub_post", "sub_order", "sub_stop",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
   "settings_log", "sk_log", "sk_runs", "skus", "sync_runs", "sync_state"];
@@ -22461,6 +22610,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  /* 8.111 会員向けのカードを消した記録。 */
+  ["sub_del", "migrate-0077-sub-del.sql"],
   /* 8.108 英題の作り直し（いまの題名・売れた数・ウォッチ・閲覧数）。 */
   ["ebay_stat", "migrate-0075-title-fix.sql"],
   ["ebay_cat", "migrate-0066-ebay-cat.sql"],
@@ -23011,7 +23162,7 @@ export default {
        手残りが出るため、見るだけの口でも作業者には返さない。 */
     if (role !== "admin"
         && (request.method === "POST" || url.pathname === "/sub/draft"
-            || url.pathname === "/sub/auto")
+            || url.pathname === "/sub/auto" || url.pathname === "/sub/prune")
         && url.pathname.indexOf("/sub/") === 0)
       return forbidStaff("会員向けの配信は管理者用のキーが必要です", [], origin);
     /* 8.22（【2】）1点ものは管理者だけ（仕入原価・販売価格が出るため）。 */
@@ -23398,6 +23549,13 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await jobSubTopic(env, { approve: b.approve === true }),
                     200, origin);
+      }
+      /* 8.111 買えなくなったカードを消す：確認（GET）とまとめて消す（POST・管理者だけ）。 */
+      if (request.method === "GET" && url.pathname === "/sub/prune")
+        return json(await subPrunePlan(env, url), 200, origin);
+      if (request.method === "POST" && url.pathname === "/sub/prune") {
+        const b = await request.json().catch(() => ({}));
+        return json(await jobSubPrune(env, { force: true, bulk: !!(b && b.bulk) }), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/sub/index") {
         const b = await request.json().catch(() => ({}));
@@ -23864,6 +24022,10 @@ export default {
           if (sc.hotOn && jt.dow === sc.hotDow) await jobSubHot(env, {});
         }
       } catch (e) { /* 配信で落ちても本体は止めない */ }
+      /* 8.111（カジの依頼）買えなくなった会員向けのカードを消す（自動配信がオフでも動く）。
+         落ちても本体は止めない。 */
+      try { await jobSubPrune(env, {}); }
+      catch (e) { /* カードの片づけで落ちても本体は止めない */ }
       /* 8.56（カジの依頼）会員のロールの見回り（期限＋猶予で外す）。
          落ちても本体は止めない。 */
       try { await jobMemSync(env, {}); }
@@ -23975,6 +24137,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.111 */
+  subPrune, subPruneList, jobSubPrune, subPrunePlan, subRetire, SUB_PRUNE_MAX,
   /* 8.110 */
   memActive, memTagsWant, memTagSync, memTagsFix, memTagWhy, MEM_TAG_LIST,
   /* 8.108 */
