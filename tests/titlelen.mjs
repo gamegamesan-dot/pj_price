@@ -50,5 +50,5 @@ let r2=null; try{ r2=db.prepare(DG.qTitleLen(false)).all(); }catch(e){}
 const c2=DG.titleLenSum(r2||[]);
 ok(!!r2&&c2.total===6&&c2.a.all===2,'★ebay_stat が無いときは items.title で数える（migrate-0075 の前）');
 const wf=(await import('node:fs')).readFileSync(new URL('../.github/workflows/deploy-pj-sync.yml',import.meta.url),'utf8');
-ok(/d1-diag\.mjs --mw-csv --mw-match --title-len/.test(wf),'★★Actions の「記録を見る」で一緒に数える');
+ok(/d1-diag\.mjs --mw-csv --mw-match --title-len( |$)/m.test(wf),'★★Actions の「記録を見る」で一緒に数える');
 T.done();

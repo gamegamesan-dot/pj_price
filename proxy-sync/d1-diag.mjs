@@ -65,6 +65,10 @@ export function qTitleLen(stat) {
     + " WHERE i.ebay_sku LIKE 'W-%' AND COALESCE(i.ebay_item_id,'') <> '' "
     + "GROUP BY band, won ORDER BY band, won";
 }
+/* 8.112 会員の Shopify のタグの様子（会員番号は**下4桁だけ**・氏名やメールは持っていない）。 */
+export const Q_MEM_TAGS = "SELECT substr(cust,-4) AS c4, plan, state, COALESCE(shop_tags,'') AS tags, "
+  + "COALESCE(shop_tag_err,'') AS err, COALESCE(shop_tag_at,'') AS at, COALESCE(shop_tag_off,0) AS off "
+  + "FROM mem ORDER BY at DESC LIMIT 50";
 export const TITLE_BAND = { a: "40字未満", b: "40〜59字", c: "60〜80字", d: "81字以上" };
 /* 帯ごとの件数にまとめる。{ a:{all,sold,unsold,avg}, … , total } */
 export function titleLenSum(rows) {
@@ -183,6 +187,16 @@ function main() {
       for (const r of res.rows)
         console.log("平均の長さ " + TITLE_BAND[r.band] + (Number(r.won) ? "・売れた" : "・未売") + " " + r.avg_len);
     }
+  }
+  if (args.includes("--mem-tags")) {
+    const res = q(Q_MEM_TAGS);
+    console.log("\n=== 会員の Shopify のタグ（会員番号は下4桁だけ）===");
+    if (!res.ok) console.log("読めませんでした：" + clean(res.err, 200));
+    else if (!res.rows.length) console.log("（会員がいません）");
+    else for (const r of res.rows)
+      console.log("…" + clean(r.c4, 4) + " | " + clean(r.plan, 12) + " | " + clean(r.state, 12)
+        + " | タグ " + (clean(r.tags, 80) || "（なし）") + " | 確かめた " + (clean(r.at, 25) || "まだ")
+        + (Number(r.off) ? " | つなぎを外した" : "") + (r.err ? " | 理由 " + clean(r.err, 120) : ""));
   }
   if (!args.includes("--mw-csv")) return;
   const show = (title, res, cols) => {

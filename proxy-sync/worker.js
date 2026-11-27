@@ -12773,7 +12773,30 @@ function shopKeyKind(env) {
 /* 交換した鍵と、店の決まった値（置き場所・販売チャネル）の控え。
    **この実行の中だけ**（Worker の変数）。D1・KV・ログには置かない。 */
 const SHOP_MEM = { host: "", token: "", exp: 0, ready: null, readyAt: 0, scope: "",
-                   redo: false };
+                   redo: false, gotAt: 0, genAt: 0, genSeen: "", denyAt: 0 };
+/* 8.112（カジの報告）権限を足しても「権限が足りません（read_customers）」のままだった。
+   鍵（アクセストークン）は Worker の変数にだけ、最長 約24時間（Shopify の expires_in − 5分）
+   持ち、Worker は同時にいくつも動くので、**権限を足す前に取った鍵**を使い続けていた。
+   ・⚙「Shopify の通行証を取り直す」（POST /shop/token/reset）で、D1 に**取り直した時刻**
+     （sync_state の shop.token.reset）を置く。どの Worker も、それより前に取った鍵を捨てる
+     （D1 は1分に1回だけ見る）
+   ・権限が足りない（access denied）と返ってきたら、**1回だけ**鍵を取り直してやり直す
+     （10分に1回まで。本当に権限が無いときに何度も取り直さない）
+   ・固定の鍵（SHOPIFY_ADMIN_TOKEN）を使っているときは取り直せない（そう返す） */
+const SHOP_TOKEN_RESET = "shop.token.reset";
+const SHOP_GEN_EVERY_MS = 60000;
+const SHOP_DENY_RETRY_MS = 600000;
+async function shopTokenGen(env) {
+  if (Date.now() - SHOP_MEM.genAt < SHOP_GEN_EVERY_MS) return SHOP_MEM.genSeen;
+  SHOP_MEM.genAt = Date.now();
+  try { SHOP_MEM.genSeen = String(await stateGet(env, SHOP_TOKEN_RESET) || ""); }
+  catch (e) { /* 読めなければ今までどおり */ }
+  return SHOP_MEM.genSeen;
+}
+function shopDenied(r) {
+  const x = r || {};
+  return x.status === 403 || /access denied|required access|not approved/i.test(String(x.msg || ""));
+}
 function shopReset() {
   SHOP_MEM.host = ""; SHOP_MEM.token = ""; SHOP_MEM.exp = 0;
   SHOP_MEM.ready = null; SHOP_MEM.readyAt = 0; SHOP_MEM.redo = false; SHOP_MEM.scope = "";
@@ -12783,6 +12806,11 @@ async function shopToken(env, run, host) {
     return { ok: true, token: String(env.SHOPIFY_ADMIN_TOKEN) };
   if (!(env.SHOPIFY_CLIENT_ID && shopSecretOf(env)))
     return { ok: false, why: "no_key" };
+  /* 8.112 ⚙で「取り直す」を押した時刻より前に取った鍵は使わない。 */
+  const gen = Date.parse(await shopTokenGen(env));
+  if (isFinite(gen) && SHOP_MEM.gotAt && SHOP_MEM.gotAt < gen) {
+    SHOP_MEM.token = ""; SHOP_MEM.exp = 0; SHOP_MEM.ready = null;
+  }
   if (SHOP_MEM.host === host && SHOP_MEM.token && Date.now() < SHOP_MEM.exp)
     return { ok: true, token: SHOP_MEM.token };
   /* client credentials。scope は送らない（Shopify が無視するため）。 */
@@ -12803,7 +12831,7 @@ async function shopToken(env, run, host) {
   try { d = await resp.json(); } catch (e) { d = null; }
   const tk = String((d && d.access_token) || "");
   if (!tk) return { ok: false, why: "token", status: resp.status };
-  SHOP_MEM.host = host; SHOP_MEM.token = tk;
+  SHOP_MEM.host = host; SHOP_MEM.token = tk; SHOP_MEM.gotAt = Date.now();
   /* 8.89 直し：いまの鍵に付いている権限の名前（値ではない）。足りない権限を
      画面で見分けるために控える。 */
   SHOP_MEM.scope = String((d && d.scope) || "").slice(0, 600);
@@ -12839,6 +12867,17 @@ async function shopGql(env, run, host, query, variables) {
       const thr = errs.some((e) => String(((e || {}).extensions || {}).code
         || "") === "THROTTLED");
       if (thr && i < 2) { await sleep(1500 * (i + 1)); continue; }
+      /* 8.112 権限が足りないと返ってきたら、1回だけ鍵を取り直してやり直す
+         （権限を足したあと、前に取った鍵を使い続けていたため）。 */
+      const msg0 = errs.map((e) => String((e || {}).message || "")).join(" / ");
+      if (shopDenied({ msg: msg0 }) && shopKeyKind(env) === "client"
+          && Date.now() - SHOP_MEM.denyAt > SHOP_DENY_RETRY_MS) {
+        SHOP_MEM.denyAt = Date.now();
+        SHOP_MEM.token = ""; SHOP_MEM.exp = 0; SHOP_MEM.ready = null;
+        run.notes.push("shopify：権限が足りないので鍵を取り直してやり直します");
+        const tk2 = await shopToken(env, run, host);
+        if (tk2.ok) { tk.token = tk2.token; continue; }
+      }
       run.errors++; run.notes.push("shopify(graphql) エラー " + errs.length + "件");
       return { ok: false, why: "gql", status: resp.status,
                msg: errs.map((e) => String((e || {}).message || ""))
@@ -12847,6 +12886,35 @@ async function shopGql(env, run, host, query, variables) {
     return { ok: true, data: (d && d.data) || {} };
   }
   return { ok: false, why: "throttled" };
+}
+/* 8.112 ⚙「Shopify の通行証を取り直す」（POST /shop/token/reset・管理者だけ）。
+   取り直した時刻を D1 に置き（ほかの Worker も前の鍵を捨てる）、その場で取り直して、
+   新しい鍵に付いている**権限の名前**を返す（鍵の値は返さない・出さない）。 */
+async function shopTokenReset(env) {
+  const res = { ok: false, kind: shopKeyKind(env), scopes: [], at: "" };
+  if (!res.kind) { res.error = "no_key"; res.detail = shopWhyJa({ why: "no_key" }); return res; }
+  if (res.kind === "token") {
+    res.error = "fixed";
+    res.detail = "固定の鍵（SHOPIFY_ADMIN_TOKEN）を使っているので取り直せません。"
+      + "Shopify で鍵を作り直して登録し直すか、SHOPIFY_ADMIN_TOKEN を消してアプリの鍵（client）にしてください";
+    return res;
+  }
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const host = shopHostOf(st);
+  if (!host) { res.error = "no_host"; res.detail = shopWhyJa({ why: "no_host" }); return res; }
+  res.at = nowIso();
+  await stateSet(env, SHOP_TOKEN_RESET, res.at).run();
+  shopReset();
+  SHOP_MEM.genAt = Date.now(); SHOP_MEM.genSeen = res.at;
+  const run = newRun("shop-token");
+  const tk = await shopToken(env, run, host);
+  await saveRun(env, run);
+  if (!tk.ok) { res.error = "token"; res.detail = shopWhyJa(tk); return res; }
+  res.scopes = String(SHOP_MEM.scope || "").split(/[,\s]+/).filter(Boolean);
+  res.customers = ["read_customers", "write_customers"].filter((x) => res.scopes.indexOf(x) < 0);
+  res.ok = true;
+  return res;
 }
 /* Shopify の失敗を、運営に出す言い方にする（鍵・宛先は出さない）。 */
 function shopWhyJa(r) {
@@ -23530,6 +23598,9 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await memDel(env, b), 200, origin);
       }
+      /* 8.112 Shopify の鍵（通行証）を取り直す（管理者だけ・/shop/ は管理者の口）。 */
+      if (request.method === "POST" && url.pathname === "/shop/token/reset")
+        return json(await shopTokenReset(env), 200, origin);
       /* 8.110 Shopify のタグを付け直す（1人）。 */
       if (request.method === "POST" && url.pathname === "/mem/tags") {
         const b = await request.json().catch(() => ({}));
@@ -24137,6 +24208,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.112 */
+  shopTokenReset, shopToken, shopGql, SHOP_MEM, shopReset,
   /* 8.111 */
   subPrune, subPruneList, jobSubPrune, subPrunePlan, subRetire, SUB_PRUNE_MAX,
   /* 8.110 */

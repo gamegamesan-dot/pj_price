@@ -241,7 +241,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # 8.105 商品違いの疑いの数（ログは件数だけ）。例は社内用の Discord に送る。
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: node d1-diag.mjs --mw-csv --mw-match --title-len
+        run: node d1-diag.mjs --mw-csv --mw-match --title-len --mem-tags
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run
