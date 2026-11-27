@@ -21504,6 +21504,10 @@ function memRowsHtml(d){
     +'・サーバーID '+((d||{}).guild?'あり':'<b style="color:var(--bad)">なし</b>')
     +'・ボットのトークン '+((d||{}).token?'あり':'<b style="color:var(--bad)">なし</b>')
     +'・webhook の秘密 '+((d||{}).hook?'あり':'<b style="color:var(--bad)">なし</b>')
+    /* 8.110 Shopify の顧客タグを付けられるか（管理用ドメインと鍵・D1 の列）。 */
+    +'・Shopify のタグ '+(((d||{}).shop&&(d||{}).tag_cols)?'付けられる'
+      :('<b style="color:var(--bad)">'+(!(d||{}).tag_cols?'D1 の列なし（migrate-0076）'
+        :'管理用ドメインか鍵がありません')+'</b>'))
     +'</div>';
   if(!rows.length)return head+'<div class="note2">まだ会員がいません'
     +'（支払いの注文が来るか、上で手でつなぐと出ます）。</div>';
@@ -21526,8 +21530,11 @@ function memRowsHtml(d){
           :'<b style="color:var(--bad)">つないでいません</b>')
         +'　ロール '+mwN(String(r.roles||'')?String(r.roles).split(',').length:0)
         +'件'
+        +'　'+memTagHtml(r)
         +'<br>　<button class="btn cfgprice" style="padding:2px 6px"'
         +' onclick="memSyncGo(\''+esc(j)+'\');return false">付け直す</button>'
+        +' <button class="btn cfgprice" style="padding:2px 6px"'
+        +' onclick="memTagsGo(\''+esc(j)+'\');return false">タグを付け直す</button>'
         +' <button class="btn cfgprice" style="padding:2px 6px"'
         +' onclick="memStateGo(\''+esc(j)+'\',\'canceled\');return false">解約にする</button>'
         +' <button class="btn cfgprice" style="padding:2px 6px"'
@@ -21544,6 +21551,46 @@ function memRowsHtml(d){
         +'</div>';
     }).join('')
     +'</div>';
+}
+/* 8.110 Shopify の顧客タグ（member-list・grade-<プラン>）。
+   あり＝付けるべきタグと Shopify のタグが合っている。なし＝会員でないので付けない。
+   ずれ＝合っていない・まだ確かめていない・付けられなかった（理由を出す）。 */
+function memTagHtml(r){
+  var x=r||{}, want=String(x.tag_want||''), has=String(x.shop_tags||'');
+  var err=String(x.shop_tag_err||'');
+  var tip=esc((has||'（なし）')+(want?('／付けるべき：'+want):''));
+  if(x.tag_ok&&want)return '<span title="'+tip+'">Shopify のタグ：<b>あり</b></span>';
+  if(x.tag_ok&&!want)return '<span title="'+tip+'">Shopify のタグ：なし'
+    +(x.tag_off?'（つなぎを外したので付けない）':'（会員でないので付けない）')+'</span>';
+  return '<span style="color:var(--bad)" title="'+tip+'">Shopify のタグ：<b>'
+    +(want?(has?'ずれ':'なし'):'ずれ')+'</b>'
+    +(!String(x.shop_tag_at||'')?'（まだ確かめていません）':'')
+    +(err?('（'+esc(err.slice(0,80))+'）'):'')+'</span>';
+}
+/* 8.110 Shopify のタグを付け直す（1人）。 */
+function memTagsGo(cust){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  if(!one)return;
+  memNote('Shopify のタグを付け直しています…');
+  return mwPost('/mem/tags',{ cust:one }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ 付け直せませんでした：'+esc(String((r||{}).detail||(r||{}).error||'')),1);
+      return memListGo(1);
+    }
+    var t=r.tags||{};
+    memNote('✓ Shopify のタグを付け直しました（付けた '+esc((t.add||[]).join('・')||'なし')
+      +'・外した '+esc((t.del||[]).join('・')||'なし')+'）');
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* ロールとタグの結果を1行の文にする（つないだ・付け直したとき）。 */
+function memTagSay(sy){
+  var rows=(sy||{}).rows||[], why=[];
+  rows.forEach(function(x){ var w=((x||{}).tags||{}).why; if(w)why.push(String(w)); });
+  return '・Shopify のタグ：付けた '+mwN(+(sy||{}).tag_add||0)+'・外した '+mwN(+(sy||{}).tag_del||0)
+    +((+(sy||{}).tag_fail)?('・<b style="color:var(--bad)">付けられなかった '+mwN(+sy.tag_fail)+'</b>'):'')
+    +(why.length?('<br><span class="note2">'+esc(why[0])+'</span>'):'');
 }
 /* quiet を渡すと、上の結果の文を**消さずに**表だけ出し直す
    （つないだ・付け直した結果が見えなくなるのを防ぐ）。 */
@@ -21582,7 +21629,8 @@ function memLinkGo(){
     memNote('✓ つなぎました（ロール：付けた '+mwN(+sy.add||0)
       +'・外した '+mwN(+sy.del||0)
       +(sy.fail?('・<b style="color:var(--bad)">失敗 '+mwN(+sy.fail)+'</b>'):'')
-      +'）'+(why?('<br><span class="note2">'+esc(String(why))+'</span>'):''));
+      +'）'+(why?('<br><span class="note2">'+esc(String(why))+'</span>'):'')
+      +(r.sync?('<br>'+memTagSay(sy)):''));
     $('memLinkCust').value=''; $('memLinkDc').value='';
     $('memLinkName').value='';
     return memListGo(1);
@@ -21605,7 +21653,8 @@ function memSyncGo(cust){
       +'・外した '+mwN(+r.del||0)
       +(r.fail?('・<b style="color:var(--bad)">失敗 '+mwN(+r.fail)+'</b>'):'')
       +'）'+(r.why?('<br><span class="note2">'+esc(String(r.why))+'</span>'):'')
-      +(why.length?('<br><span class="note2">'+esc(why[0])+'</span>'):''));
+      +(why.length?('<br><span class="note2">'+esc(why[0])+'</span>'):'')
+      +'<br>'+memTagSay(r));
     return memListGo(1);
   })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
 }
@@ -32863,7 +32912,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v360';   // sw.js の const V と必ず同じ値にする
+var APP_V='v361';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

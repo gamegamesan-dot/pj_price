@@ -15941,6 +15941,8 @@ async function memSettings(env) {
     monOff: st.memMonOff === undefined ? true : !!st.memMonOff,
     /* Discord の表示名を控えるか（既定オン・切ると番号だけ）。 */
     keepName: st.memKeepName === undefined ? true : !!st.memKeepName,
+    /* 8.110 Shopify の顧客タグを付け外しする宛先（○○.myshopify.com・空なら付けない）。 */
+    shopHost: shopHostOf(st),
   };
 }
 /* そのプランで付けるロール（積み上げ）。⚙に入っていないものは入れない。 */
@@ -16072,6 +16074,9 @@ async function memPaid(env, order, opt) {
     memLog(env, cust, "paid",
       p.plan + "／注文 " + oid + "／期限 " + to),
   ]);
+  /* 8.110 支払いがあったらタグを付ける（つなぎを外したときの印を戻す）。 */
+  if (await memTagColOk(env))
+    await env.DB.prepare(`UPDATE mem SET shop_tag_off=0 WHERE cust=?`).bind(cust).run();
   res.ok = true; res.paid_to = to;
   return res;
 }
@@ -16089,21 +16094,131 @@ async function memMember(env, run, cfg, dc) {
      ・解約（canceled）は なし
      ・モニターは⚙で「3週間で外す」なら、始めて monDays 日で なし */
 function memWant(row, cfg, now) {
+  return memActive(row, cfg, now) ? memRolesFor(String((row || {}).plan || ""), cfg) : [];
+}
+/* 8.110 その会員がいま会員か（ロールとタグで同じ決まり）。
+     ・解約（canceled）は いいえ
+     ・モニターは⚙で「3週間で外す」なら、始めて monDays 日まで
+     ・有料のプランは支払い済みの期限＋猶予まで */
+function memActive(row, cfg, now) {
   const r = row || {}, t = Number(now || Date.now());
   const plan = String(r.plan || "");
   const st = String(r.state || "");
-  if (st === "canceled") return [];
+  if (st === "canceled") return false;
+  if (MEM_PLANS.indexOf(plan) < 0) return false;
   if (plan === "monitor") {
-    if (!(cfg || {}).monOff) return memRolesFor("monitor", cfg);
+    if (!(cfg || {}).monOff) return true;
     const from = Date.parse(String(r.mon_from || r.created_at || "")) || t;
     const end = from + Math.max(1, Number((cfg || {}).monDays)
       || MEM_MON_D) * 86400000;
-    return (t <= end) ? memRolesFor("monitor", cfg) : [];
+    return t <= end;
   }
   const to = Date.parse(String(r.paid_to || ""));
-  if (!isFinite(to)) return [];
+  if (!isFinite(to)) return false;
   const grace = Math.max(0, Number((cfg || {}).graceDays) || 0) * 86400000;
-  return (t <= to + grace) ? memRolesFor(plan, cfg) : [];
+  return t <= to + grace;
+}
+/* ===== 8.110（カジの依頼）Shopify の顧客タグ =====
+   テーマは顧客タグで会員品のページを見せる（member-list と grade-<プラン>）。
+   「手でつなぐ」でロールは付いたのにタグが無く、会員品のページが「会員専用のページです」
+   （/pages/members-only）になっていた。ロールと**同じ決まり（memActive）**でタグを付け外しする。
+     ・会員なら member-list と grade-<プラン>（monitor／light／standard／premium）を付ける
+     ・プランを変えたら古い grade- を外す
+     ・期限切れ・解約・つなぎを外したら member-list と grade- を外す
+   触るのは member-list と grade-monitor/light/standard/premium だけ（ほかのタグは触らない）。
+   Shopify の顧客は会員番号（gid://shopify/Customer/<番号>）で引く。氏名・メールは読まない。
+   要る権限：read_customers・write_customers（足りなければ理由に出す）。 */
+const MEM_TAG_LIST = "member-list";
+const MEM_TAG_RE = /^grade-(monitor|light|standard|premium)$/;
+const MEM_TAG_RECHECK_MS = 24 * 3600000;   // 毎時の見回りで Shopify に聞き直す間隔
+const MEM_Q_TAGS = `query pjMemTags($id: ID!) { customer(id: $id) { id tags } }`;
+const MEM_M_TAG_ADD = `mutation pjMemTagAdd($id: ID!, $tags: [String!]!) {
+  tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`;
+const MEM_M_TAG_DEL = `mutation pjMemTagDel($id: ID!, $tags: [String!]!) {
+  tagsRemove(id: $id, tags: $tags) { userErrors { field message } } }`;
+/* いま付けるべきタグ。つなぎを外した行（shop_tag_off）には付けない。 */
+function memTagsWant(row, cfg, now) {
+  const r = row || {};
+  if (Number(r.shop_tag_off) === 1) return [];
+  if (!memActive(r, cfg, now)) return [];
+  return [MEM_TAG_LIST, "grade-" + String(r.plan || "")];
+}
+function memTagMine(t) { return t === MEM_TAG_LIST || MEM_TAG_RE.test(t); }
+function memTagKey(list) { return (list || []).slice().sort().join(","); }
+/* タグを付けられなかった理由（画面にそのまま出す・鍵は出さない）。 */
+function memTagWhy(r) {
+  const x = r || {};
+  const msg = String(x.msg || "");
+  const sc = shopScopeOf(msg);
+  if (/access denied|required access|not approved|protected customer data/i.test(msg)
+      || x.status === 403) {
+    if (/protected customer data|not approved to access/i.test(msg))
+      return "Shopify のアプリに「保護された顧客データ」の利用（顧客の項目）が許可されていません";
+    return "Shopify の権限が足りません（" + (sc.length ? sc.join("・")
+      : "read_customers・write_customers") + "）";
+  }
+  return shopWhyJa(x);
+}
+async function memTagColOk(env) { return await colOk(env, "mem", "shop_tags"); }
+/* 会員1人ぶんのタグを合わせる。opt.force … 控えが同じでも Shopify に聞き直す。
+   opt.want … 付けるタグを決めて渡す（つなぎを外したとき [] など）。 */
+async function memTagSync(env, run, cfg, row, now, opt) {
+  const o = opt || {};
+  const cust = String((row || {}).cust || "").replace(/\D/g, "");
+  const r = { cust: cust, ok: false, add: [], del: [], has: [], want: [], why: "", skip: false };
+  const want = Array.isArray(o.want) ? o.want : memTagsWant(row, cfg, now);
+  r.want = want;
+  if (!cust) { r.why = "会員番号がありません"; return r; }
+  const colOk0 = await memTagColOk(env);
+  /* 控えが同じで、24時間以内に確かめてあれば聞かない（毎時の見回りの負担を減らす）。 */
+  if (!o.force && colOk0) {
+    const had = String((row || {}).shop_tags || "");
+    const at = Date.parse(String((row || {}).shop_tag_at || ""));
+    if (had === memTagKey(want) && isFinite(at) && Number(now || Date.now()) - at < MEM_TAG_RECHECK_MS
+        && !String((row || {}).shop_tag_err || "")) {
+      r.ok = true; r.skip = true; r.has = had ? had.split(",") : []; return r;
+    }
+  }
+  const host = String((cfg || {}).shopHost || "");
+  const save = async (err) => {
+    if (!colOk0) return;
+    await env.DB.prepare(`UPDATE mem SET shop_tags=?, shop_tag_at=?, shop_tag_err=? WHERE cust=?`)
+      .bind(memTagKey(r.has), nowIso(), String(err || "").slice(0, 200), cust).run();
+  };
+  if (!host) { r.why = shopWhyJa({ why: "no_host" }); return r; }
+  if (!shopKeyKind(env)) { r.why = shopWhyJa({ why: "no_key" }); return r; }
+  const id = "gid://shopify/Customer/" + cust;
+  const q = await shopGql(env, run, host, MEM_Q_TAGS, { id: id });
+  if (!q.ok) { r.why = memTagWhy(q); await save(r.why); return r; }
+  const c = (q.data || {}).customer;
+  if (!c) { r.why = "Shopify にこの会員番号の顧客がいません"; await save(r.why); return r; }
+  const tags = (Array.isArray(c.tags) ? c.tags : []).map(String);
+  const mine = tags.filter(memTagMine);
+  const add = want.filter((t) => tags.indexOf(t) < 0);
+  const del = mine.filter((t) => want.indexOf(t) < 0);
+  let err = "";
+  const run1 = async (m, list) => {
+    if (!list.length) return true;
+    const x = await shopGql(env, run, host, m, { id: id, tags: list });
+    if (!x.ok) { err = memTagWhy(x); return false; }
+    const ue = ((((x.data || {}).tagsAdd || (x.data || {}).tagsRemove) || {}).userErrors) || [];
+    if (ue.length) { err = "Shopify が受け付けませんでした：" + ue.map((e) => String((e || {}).message || ""))
+      .join(" / ").slice(0, 160); return false; }
+    return true;
+  };
+  const okAdd = await run1(MEM_M_TAG_ADD, add);
+  if (okAdd) r.add = add;
+  const okDel = await run1(MEM_M_TAG_DEL, del);
+  if (okDel) r.del = del;
+  r.has = mine.filter((t) => r.del.indexOf(t) < 0).concat(r.add.filter((t) => mine.indexOf(t) < 0));
+  r.ok = okAdd && okDel;
+  r.why = err;
+  const st = [];
+  if (r.add.length) st.push(memLog(env, cust, "tag_add", r.add.join(",")));
+  if (r.del.length) st.push(memLog(env, cust, "tag_del", r.del.join(",")));
+  if (st.length) await runBatch(env, run, st);
+  await save(err);
+  return r;
 }
 /* 会員1人ぶんのロールを合わせる（足りないものを付け、余ったものを外す）。
    触るのは⚙に入れた4つのロールだけ。追い出しはしない。 */
@@ -16189,15 +16304,25 @@ async function jobMemSync(env, opt) {
       return Object.assign(await saveRun(env, run), res);
     }
     const one = String(o.cust || "").replace(/\D/g, "");
+    /* 8.110 タグは Discord とつないでいない会員（支払いの注文で会員になった人）にも付けるので、
+       プランのある行をぜんぶ見る（ロールは Discord の番号が無い行では何もしない）。 */
     const q = one
       ? await env.DB.prepare(`SELECT * FROM mem WHERE cust=?`).bind(one).all()
       : await env.DB.prepare(
-          `SELECT * FROM mem WHERE COALESCE(dc,'')<>''
+          `SELECT * FROM mem WHERE COALESCE(dc,'')<>'' OR COALESCE(plan,'')<>''
             ORDER BY at DESC LIMIT ${MEM_ROWS_MAX}`).all();
     const rows = (q && q.results) || [];
     const now = Date.now();
+    res.tag_add = 0; res.tag_del = 0; res.tag_fail = 0;
     for (const row of rows) {
-      const r = await memSyncOne(env, run, cfg, row, now);
+      const r = String((row || {}).dc || "") || one
+        ? await memSyncOne(env, run, cfg, row, now)
+        : { cust: String((row || {}).cust || ""), add: 0, del: 0, fail: 0, why: "", roles: [] };
+      /* タグ（ロールと同じ決まり）。手で押したとき（force）は Shopify に聞き直す。 */
+      const tg = await memTagSync(env, run, cfg, row, now, { force: !!o.force || !!one });
+      r.tags = { ok: tg.ok, add: tg.add, del: tg.del, has: tg.has, want: tg.want, why: tg.why, skip: tg.skip };
+      res.tag_add += tg.add.length; res.tag_del += tg.del.length;
+      if (!tg.ok && !tg.skip) res.tag_fail++;
       res.n++; res.add += r.add; res.del += r.del; res.fail += r.fail;
       if (r.why && !r.add && !r.del) res.skip++;
       res.rows.push(r);
@@ -16233,6 +16358,12 @@ async function memList(env) {
       state: String(r.state || ""), roles: String(r.roles || ""),
       days: isFinite(to) ? Math.floor((to - now) / 86400000) : null,
       want: want.length, mon_from: String(r.mon_from || ""),
+      /* 8.110 Shopify のタグ：いま付いているもの・付けるべきもの・合っているか */
+      shop_tags: String(r.shop_tags || ""), shop_tag_at: String(r.shop_tag_at || ""),
+      shop_tag_err: String(r.shop_tag_err || ""), tag_off: Number(r.shop_tag_off) === 1,
+      tag_want: memTagKey(memTagsWant(r, cfg, now)),
+      tag_ok: !!r.shop_tag_at && String(r.shop_tags || "") === memTagKey(memTagsWant(r, cfg, now))
+        && !String(r.shop_tag_err || ""),
     };
   });
   res.n = res.rows.length;
@@ -16243,6 +16374,9 @@ async function memList(env) {
   res.mon_off = cfg.monOff; res.mon_days = cfg.monDays;
   res.token = !!env.DISCORD_BOT_TOKEN;
   res.hook = !!env.SHOPIFY_WEBHOOK_SECRET;
+  /* 8.110 Shopify のタグを付けられるか（宛先と鍵・表があるか）。 */
+  res.shop = !!cfg.shopHost && !!shopKeyKind(env);
+  res.tag_cols = await memTagColOk(env);
   res.ok = true;
   return res;
 }
@@ -16304,9 +16438,12 @@ async function memLink(env, body) {
       .bind(cust, dc, name, plan, paidTo, state0, monFrom, now, now),
     memLog(env, cust, "link", (dc ? ("Discord " + dc) : "") + (plan ? ("／" + plan) : "")),
   ]);
+  /* 8.110 つなぎ直したらタグをまた付ける（つなぎを外したときの印を戻す）。 */
+  if (await memTagColOk(env))
+    await env.DB.prepare(`UPDATE mem SET shop_tag_off=0 WHERE cust=?`).bind(cust).run();
   await saveRun(env, run);
   res.ok = true;
-  /* つないだらすぐロールを合わせる（⚙がオンのときだけ）。 */
+  /* つないだらすぐロールとタグを合わせる（⚙がオンのときだけ）。 */
   if (cfg.on) res.sync = await jobMemSync(env, { cust: cust, cfg: cfg });
   res.row = await memRow(env, cust);
   return res;
@@ -16335,8 +16472,36 @@ async function memUnlink(env, body) {
       .bind(nowIso(), cust),
     memLog(env, cust, "unlink", ""),
   ]);
+  /* 8.110 つなぎを外したら Shopify のタグも外す（毎時の見回りで付け直さないよう印を立てる）。 */
+  if (row && await memTagColOk(env)) {
+    await env.DB.prepare(`UPDATE mem SET shop_tag_off=1 WHERE cust=?`).bind(cust).run();
+    res.tags = await memTagSync(env, run, cfg, Object.assign({}, row, { shop_tag_off: 1 }),
+      Date.now(), { force: true, want: [] });
+  }
   await saveRun(env, run);
   res.ok = true;
+  return res;
+}
+/* 8.110 Shopify のタグを付け直す（1人・手で押す）。⚙の自動の付け外しが切でも押せる。 */
+async function memTagsFix(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) {
+    res.error = "no_table"; res.detail = "mem がありません（migrate-0065-mem.sql）"; return res;
+  }
+  if (!(await memTagColOk(env))) {
+    res.error = "no_cols"; res.detail = "mem にタグの列がありません（migrate-0076-mem-tags.sql）"; return res;
+  }
+  const cust = String((body || {}).cust || "").replace(/\D/g, "");
+  if (!cust) { res.error = "bad_cust"; return res; }
+  const row = await memRow(env, cust);
+  if (!row) { res.error = "no_row"; res.detail = "その行がありません"; return res; }
+  const cfg = await memSettings(env);
+  const run = newRun("mem-tags");
+  res.tags = await memTagSync(env, run, cfg, row, Date.now(), { force: true });
+  await saveRun(env, run);
+  res.ok = res.tags.ok;
+  if (!res.ok) { res.error = "tags"; res.detail = res.tags.why; }
+  res.row = await memRow(env, cust);
   return res;
 }
 /* 8.64（カジの依頼）**間違えて作った行を消す**。
@@ -22303,6 +22468,8 @@ const SCHEMA_FIX = [
   ["mem_order", "migrate-0065-mem.sql"],
   ["mem_log", "migrate-0065-mem.sql"],
   ["paid_to", "migrate-0065-mem.sql"],
+  /* 8.110 会員の Shopify の顧客タグ。 */
+  ["shop_tags", "migrate-0076-mem-tags.sql"],
   ["dim_at", "migrate-0064-mw-dim.sql"],
   ["rk_from", "migrate-0063-amz-rank.sql"],
   ["rk_n", "migrate-0063-amz-rank.sql"],
@@ -23212,6 +23379,11 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await memDel(env, b), 200, origin);
       }
+      /* 8.110 Shopify のタグを付け直す（1人）。 */
+      if (request.method === "POST" && url.pathname === "/mem/tags") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memTagsFix(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mem/sync") {
         const b = await request.json().catch(() => ({}));
         return json(await jobMemSync(env, { cust: (b || {}).cust,
@@ -23803,6 +23975,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.110 */
+  memActive, memTagsWant, memTagSync, memTagsFix, memTagWhy, MEM_TAG_LIST,
   /* 8.108 */
   titlefixCands, tfCandSql, tfSort, ebayGetOne, TF_N, TF_POOL, TF_DAYS,
   /* 8.103 */

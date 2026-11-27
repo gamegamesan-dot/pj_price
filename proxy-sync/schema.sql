@@ -1172,7 +1172,12 @@ CREATE TABLE IF NOT EXISTS mem (
   last_order TEXT,                        -- 最後に数えた注文の番号
   mon_from   TEXT,                        -- モニターを始めた日時（3週間を数える元）
   at         TEXT,
-  created_at TEXT
+  created_at TEXT,
+  /* 8.110 Shopify の顧客タグ（migrate-0076）。タグの名前だけ。 */
+  shop_tags    TEXT,                      -- いま付いている pj のタグ（member-list・grade-…）
+  shop_tag_at  TEXT,                      -- 最後に Shopify と突き合わせた時刻
+  shop_tag_err TEXT,                      -- 付けられなかった理由
+  shop_tag_off INTEGER NOT NULL DEFAULT 0 -- つなぎを外した（タグを付けない）
 );
 CREATE INDEX IF NOT EXISTS idx_mem_dc      ON mem(dc);
 CREATE INDEX IF NOT EXISTS idx_mem_paid_to ON mem(paid_to);
