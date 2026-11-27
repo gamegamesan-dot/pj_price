@@ -96,6 +96,82 @@
     }
     return null;
   }
+  /* ---- 8.107（カジの依頼）週に1回の配信 ----
+     ⚙ subAutoEvery … 'day'（毎日・今までの動き・既定）／'week'（毎週）
+     ⚙ subAutoWeekDow … 配信の曜日（0=日〜6=土・既定 2=火）
+     ⚙ subAutoWeekHour … 配信の時刻（日本時間・8〜23・既定 12）
+     「土日も配信する」は毎日のときだけ効く。
+     **週の区切り**は「配信の曜日の 0:00（日本時間）」から7日間（既定の火曜なら、
+     月曜 23:59 の注文の締めのすぐあと）。その週に会員向けのカードが1枚でも出て
+     いれば（手で配信した分も）、その週の自動の配信はしない（二重に送らない）。 */
+  var WEEK_DOW_DEF = 2, WEEK_HOUR_DEF = 12;
+  var DAY_MS = 86400000, JST_MS = 9 * 3600000;
+  var DOW_JA = ["日", "月", "火", "水", "木", "金", "土"];
+  function everyOf(v) { return s(v) === "week" ? "week" : "day"; }
+  function weekDowOf(v) {
+    var n = Math.round(num(v));
+    return (s(v) !== "" && isFinite(Number(v)) && n >= 0 && n <= 6) ? n : WEEK_DOW_DEF;
+  }
+  function weekHourOf(v) {
+    var n = Math.round(num(v));
+    return (s(v) !== "" && isFinite(Number(v)) && n >= 0 && n <= 23 && !isNight(n))
+      ? n : WEEK_HOUR_DEF;
+  }
+  /* ⚙ の値 → 予定。st は ⚙ の設定（subAutoEvery などの名前のまま）。 */
+  function schedOf(st) {
+    var o = st || {};
+    return { every: everyOf(o.subAutoEvery), hours: hoursOf(o.subAutoHours).hours,
+             weekend: o.subAutoWeekend === undefined ? true : !!o.subAutoWeekend,
+             dow: weekDowOf(o.subAutoWeekDow), hour: weekHourOf(o.subAutoWeekHour) };
+  }
+  /* いまが配信の回か。毎週は「選んだ曜日・時刻」の回だけ。 */
+  function dueSched(sc, jst) {
+    var c = sc || {};
+    if (c.every === "week") {
+      var j = jst || {};
+      return Math.round(num(j.dow)) === c.dow && Math.round(num(j.hour)) === c.hour;
+    }
+    return dueOf(c.hours, jst, c.weekend);
+  }
+  /* その週の始まり（UTC の ms）。毎週のときだけ使う。 */
+  function weekStartMs(sc, nowMs) {
+    var jstMs = num(nowMs) + JST_MS;
+    var dayStart = Math.floor(jstMs / DAY_MS) * DAY_MS;
+    var dow = new Date(dayStart).getUTCDay();
+    var back = (dow - (sc || {}).dow + 7) % 7;
+    return dayStart - back * DAY_MS - JST_MS;
+  }
+  /* 日時の文（「12/1（火）12:00」）。 */
+  function jstText(ms) {
+    var d = new Date(num(ms) + JST_MS);
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (d.getUTCMonth() + 1) + "/" + d.getUTCDate() + "（" + DOW_JA[d.getUTCDay()] + "）"
+      + d.getUTCHours() + ":" + p(d.getUTCMinutes());
+  }
+  /* 次の配信の日時。doneMs … いちばん新しい配信の日時（無ければ 0）。
+     毎週で、その週にもう配信してあれば次の週の回。 返り：{ ms, text, skip_week } か null。 */
+  function nextSched(sc, nowMs, doneMs) {
+    var c = sc || {}, now = num(nowMs);
+    if (c.every === "week") {
+      var ws = weekStartMs(c, now);
+      var at = ws + c.hour * 3600000;
+      var skip = false;
+      if (at <= now) at += 7 * DAY_MS;
+      else if (num(doneMs) >= ws) { at += 7 * DAY_MS; skip = true; }
+      return { ms: at, text: jstText(at), skip_week: skip, every: "week" };
+    }
+    var j = new Date(now + JST_MS);
+    var nx = nextOf(c.hours, { hour: j.getUTCHours(), dow: j.getUTCDay() }, c.weekend);
+    if (!nx) return null;
+    var base = Math.floor((now + JST_MS) / DAY_MS) * DAY_MS - JST_MS;
+    var ms = base + nx.add * DAY_MS + nx.hour * 3600000;
+    return { ms: ms, text: jstText(ms), skip_week: false, every: "day" };
+  }
+  function schedText(sc) {
+    var c = sc || {};
+    if (c.every === "week") return "毎週 " + DOW_JA[c.dow] + "曜 " + c.hour + "時";
+    return "毎日 " + (hoursText(c.hours) || "時刻なし") + (c.weekend ? "" : "（平日だけ）");
+  }
   function maxOf(v) {
     var n = Math.round(num(v));
     if (!(n > 0)) return MAX_DEF;
@@ -344,7 +420,10 @@
     return { head: head, blocks: blocks };
   }
 
-  var API = { HOURS_DEF: HOURS_DEF, NIGHT_FROM: NIGHT_FROM, NIGHT_TO: NIGHT_TO,
+  var API = { everyOf: everyOf, weekDowOf: weekDowOf, weekHourOf: weekHourOf,
+    schedOf: schedOf, dueSched: dueSched, weekStartMs: weekStartMs, nextSched: nextSched,
+    schedText: schedText, jstTextOf: jstText, WEEK_DOW_DEF: WEEK_DOW_DEF, WEEK_HOUR_DEF: WEEK_HOUR_DEF,
+    HOURS_DEF: HOURS_DEF, NIGHT_FROM: NIGHT_FROM, NIGHT_TO: NIGHT_TO,
               HOURS_MAX: HOURS_MAX, MAX_DEF: MAX_DEF, MAX_CAP: MAX_CAP,
               CUT_NET_DEF: CUT_NET_DEF, CUT_RATE_DEF: CUT_RATE_DEF,
               isNight: isNight, hoursOf: hoursOf, hoursText: hoursText,

@@ -11643,6 +11643,11 @@ async function subSettings(env) {
     autoOn: !!st.subAutoOn,
     autoHours: SUBAUTO.hoursOf(st.subAutoHours).hours,
     autoWeekend: st.subAutoWeekend === undefined ? true : !!st.subAutoWeekend,
+    /* 8.107（カジの依頼）週に1回の配信。読み方は shared/subauto.js の schedOf の1か所。
+       ・autoSched … { every:'day'|'week', hours, weekend, dow, hour }
+       ⚙の値は pj-sync（D1 の ui.settings）に置いたものだけで動く
+       （端末ごとの値の食い違いで二重に配信しない）。 */
+    autoSched: SUBAUTO.schedOf(st),
     autoMax: SUBAUTO.maxOf(st.subAutoMax),
     autoPic: !!st.subAutoPic,
     stockOut: !!st.subAutoOn,
@@ -13762,12 +13767,25 @@ async function jobSubAuto(env, opt) {
          実行の記録を埋めないため）。 */
       if (!cfg.autoOn) { res.ok = true; res.why = "⚙で自動配信をオフにしています"; return res; }
       if (!o.force) {
-        if (!SUBAUTO.dueOf(cfg.autoHours, jt, cfg.autoWeekend)) {
+        if (!SUBAUTO.dueSched(cfg.autoSched, jt)) {
           res.ok = true; res.why = "配信の時刻ではありません"; return res;
         }
         const last = String(await stateGet(env, SUB_AUTO_SLOT) || "");
         if (last === res.slot) {
           res.ok = true; res.why = "この回はもう走っています"; return res;
+        }
+        /* 8.107 毎週のときは、**その週にもう配信してあれば**（手で配信した分も）送らない。
+           週の区切りは配信の曜日の 0:00（日本時間）。 */
+        if (cfg.autoSched.every === "week") {
+          const ws = SUBAUTO.weekStartMs(cfg.autoSched, nowMs);
+          const done = await subLastPostMs(env);
+          res.every = "week";
+          if (done >= ws) {
+            res.ok = true;
+            res.why = "今週の分はもう配信してあります（" + jstText(new Date(done).toISOString()) + "）";
+            await stateSet(env, SUB_AUTO_SLOT, res.slot).run();
+            return await fin();
+          }
         }
       }
       let skipDay = "";
@@ -13785,6 +13803,7 @@ async function jobSubAuto(env, opt) {
         res.errors.push("Discord：ボットの鍵（DISCORD_BOT_TOKEN）が"
           + "登録されていないので配信できません");
         await subAutoTell(env, run, res);
+        if (res.every === "week") await subWeekTell(env, run, res);
         return await fin();
       }
     }
@@ -14227,6 +14246,8 @@ async function jobSubAuto(env, opt) {
       try { await subStopSync(env, act); }
       catch (e) { run.notes.push("sub-stop: " + String((e && e.message) || e)); }
       await subAutoTell(env, run, res);
+      /* 8.107 毎週の回が失敗した／候補が0件なら、社内用の Discord に知らせる。 */
+      if (res.every === "week") await subWeekTell(env, run, res);
       try {
         await stateSet(env, SUB_AUTO_LAST, JSON.stringify({
           at: nowIso(), slot: res.slot, sent: res.sent, edited: res.edited,
@@ -14249,6 +14270,9 @@ async function jobSubAuto(env, opt) {
     if (!dry) {
       res.errors.push("自動配信が途中で止まりました：" + res.error.slice(0, 160));
       try { await subAutoTell(env, run, res); } catch (e2) { /* 止めない */ }
+      if (res.every === "week") {
+        try { await subWeekTell(env, run, res); } catch (e2) { /* 止めない */ }
+      }
     }
   }
   return await fin();
@@ -14263,6 +14287,35 @@ async function subAutoTell(env, run, res) {
     return 0;
   }
 }
+/* 8.107 会員向けのカードがいちばん最近出た日時（UTC の ms・無ければ 0）。
+   1点もの（jan が one-…）は数えない（週のリストの配信ではないため）。 */
+async function subLastPostMs(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT MAX(at) AS at FROM sub_post WHERE jan NOT LIKE 'one-%'`).first();
+    const t = Date.parse(String((r && r.at) || ""));
+    return isFinite(t) ? t : 0;
+  } catch (e) { return 0; }
+}
+/* 8.107 毎週の配信が失敗した／候補が0件だったときの知らせ（社内用の Discord）。
+   **自動のやり直しはしない**（どこまで送れたか分からないまま送り直すと、
+   同じ週に二重に配信するおそれがあるため）。手で配信してもらう。 */
+async function subWeekTell(env, run, res) {
+  const errs = (res.errors || []).length || res.error;
+  const none = !(Number(res.sent) > 0);
+  if (!errs && !none) return false;
+  const why = errs ? ("失敗しました（" + String((res.errors || [])[0] || res.error || "").slice(0, 120) + "）")
+    : ("候補が0件でした（候補 " + (Number(res.cand_n) || 0) + "件・チェックを通った "
+       + (Number(res.ok_n) || 0) + "件）");
+  try {
+    return await notify(env, run,
+      "⚠ **会員向けの週1回の配信が" + (errs ? "うまくいきませんでした" : "空でした") + "**\n"
+      + "・" + why + "\n"
+      + "・送れたカード " + (Number(res.sent) || 0) + "件\n"
+      + "自動ではやり直しません（二重に配信しないため）。pj の仕入れタブの"
+      + "「今すぐ送る」で手で配信してください。");
+  } catch (e) { return false; }
+}
 /* GET /sub/auto … いまの設定・次の回・最後の回のまとめ（画面に出す）。
    鍵や宛先は返さない（登録してあるかどうかだけ）。 */
 async function subAutoStatus(env) {
@@ -14275,9 +14328,18 @@ async function subAutoStatus(env) {
   try { last = JSON.parse(String(await stateGet(env, SUB_AUTO_LAST) || "null")); }
   catch (e) { last = null; }
   if (last && last.at) last.at_jst = jstText(last.at);
+  /* 8.107 次に配信する日時（毎日・毎週とも）。毎週でその週に配信済みなら次の週。 */
+  const sc = cfg.autoSched;
+  const done = await subLastPostMs(env);
+  const nx2 = SUBAUTO.nextSched(sc, Date.now(), done);
   return { ok: true, on: cfg.autoOn, hours: h.hours, night: h.night,
            bad: h.bad, hours_text: SUBAUTO.hoursText(h.hours),
            weekend: cfg.autoWeekend, max: cfg.autoMax, pic: cfg.autoPic,
+           every: sc.every, week_dow: sc.dow, week_hour: sc.hour,
+           sched_text: SUBAUTO.schedText(sc),
+           next_at: nx2 ? new Date(nx2.ms).toISOString() : "",
+           next_text: nx2 ? nx2.text : "", next_skip_week: !!(nx2 && nx2.skip_week),
+           last_post: done ? jstText(new Date(done).toISOString()) : "",
            next: SUBAUTO.nextOf(h.hours, jt, cfg.autoWeekend),
            now_hour: jt.hour, last: last,
            shop: { key: !!shopKeyKind(env), host: !!shopHostOf(st),
@@ -23521,7 +23583,8 @@ export default {
          落ちても本体は止めない（失敗は jobSubAuto が運営に知らせる）。 */
       try {
         const sa = await subSettings(env);
-        if (sa.autoOn && SUBAUTO.dueOf(sa.autoHours, subJst(), sa.autoWeekend))
+        /* 8.107 毎週のときは、選んだ曜日・時刻の回だけ（ほかの定時の回は何もしない）。 */
+        if (sa.autoOn && SUBAUTO.dueSched(sa.autoSched, subJst()))
           await jobSubAuto(env, {});
       } catch (e) { /* 自動配信で落ちても本体は止めない */ }
       if (new Date().getUTCHours() === DAILY_UTC_HOUR) {
@@ -23593,6 +23656,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 7.112 */
   mwDropCost, mwCostText, BUY_TO, mwOrderNotify,
   /* 8.99 */
+  /* 8.107 */
+  subLastPostMs, subWeekTell,
   /* 8.103 */
   d1Busy, d1Retry, runBatchRetry, MW_CSV_GAP_MS, MW_SEEN_IDS, MW_CSV_RUN_KEY, MW_CSV_KICK,
   /* 8.101 */

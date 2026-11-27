@@ -2351,9 +2351,19 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:10px 0 2px"><b>自動配信</b>（PC を開いていなくても pj-sync が配信します）</div>
         <div class="chk cfgprice"><input type="checkbox" id="subAutoOn"><label for="subAutoOn" style="flex:1"><b>自動配信を使う</b>（<span id="subAutoTxt">いまは止めています</span>）</label></div>
         <div class="note2" style="margin:0 0 4px">オンにすると、pj-sync が決まった時刻に <b>候補を選ぶ → 配信前のチェック → Shopify に会員用の商品（非公開）を作る → カードを出す → 運営に報告</b> までを自分でやります。<br>オンのあいだは、上の「<b>平日の朝の配信</b>」と前日の予告は出しません（こちらがまとめて受け持ちます）。MW で在庫が切れた品のカードは「<b>完売</b>」に書き換え、Shopify の在庫も 0 にします。</div>
+        <!-- 8.107（カジの依頼）週に1回の配信。決まりは shared/subauto.js の schedOf の1か所。
+             値は pj-sync に置いたものだけで動く（端末ごとの値の食い違いで二重に送らない）。 -->
+        <div class="row cfgprice"><label for="subAutoEvery">配信の間隔</label><select id="subAutoEvery" onchange="subAutoEveryUi()"><option value="day" selected>毎日（決めた時刻ごと）</option><option value="week">毎週（決めた曜日・時刻に1回）</option></select></div>
+        <div id="subAutoWeekBox" style="display:none">
+          <div class="row cfgprice"><label for="subAutoWeekDow">配信の曜日</label><select id="subAutoWeekDow"><option value="0">日曜</option><option value="1">月曜</option><option value="2" selected>火曜</option><option value="3">水曜</option><option value="4">木曜</option><option value="5">金曜</option><option value="6">土曜</option></select></div>
+          <div class="row cfgprice"><label for="subAutoWeekHour">配信の時刻（日本時間）</label><input type="number" id="subAutoWeekHour" value="12" step="1" min="8" max="23" inputmode="numeric"><span class="unit">時</span></div>
+          <div class="note2" style="margin:0 0 4px"><b>毎週</b>のときは、選んだ曜日・時刻の回（12時なら <b>12:07 ごろ</b>）に<b>1回だけ</b>配信し、ほかの定時の回では何もしません（Discord にも Shopify にも送りません）。週の区切りは<b>選んだ曜日の 0:00</b>（火曜なら、月曜 23:59 の注文の締めのすぐあと）。<b>その週に手で配信してあれば、自動では送りません</b>（二重に送らない）。失敗したとき・候補が0件だったときは社内用の Discord に知らせます（自動ではやり直しません）。</div>
+        </div>
+        <div id="subAutoDayBox">
         <div class="row cfgprice"><label for="subAutoHours">配信の時刻（日本時間）</label><input type="text" id="subAutoHours" value="12,20" placeholder="12,20" inputmode="text" style="flex:1"><span class="unit">時</span></div>
         <div class="note2" style="margin:0 0 4px">カンマで区切って入れます（1日 6回まで）。毎時07分の回で見るので、12 と入れたら <b>12:07 ごろ</b>に出ます。<b>0時〜8時（夜中）は配信しません</b>（0〜7 を入れても使いません）。MW の在庫CSV が新しくなったぶんは、<b>次の時刻にまとめて</b>配信します。</div>
-        <div class="chk cfgprice"><input type="checkbox" id="subAutoWeekend" checked><label for="subAutoWeekend" style="flex:1">土日も配信する</label></div>
+        <div class="chk cfgprice"><input type="checkbox" id="subAutoWeekend" checked><label for="subAutoWeekend" style="flex:1">土日も配信する（毎日のときだけ）</label></div>
+        </div>
         <div class="row cfgprice"><label for="subAutoMax">1回に新しく出す商品の上限</label><input type="number" id="subAutoMax" value="20" step="1" min="1" max="200" inputmode="numeric"><span class="unit">件</span></div>
         <div class="note2" style="margin:0 0 4px">同じ商品が複数のプランに出ても <b>1件</b>と数えます。プランごとの「1回に新しく出す件数」と、モニターの「<b>週に◯件</b>」はそのまま効きます（モニターは週の件数を超えて出しません）。</div>
         <div class="chk cfgprice"><input type="checkbox" id="subAutoPic"><label for="subAutoPic" style="flex:1">写真（MW が許した写真）が無い品は配信しない</label></div>
@@ -3899,6 +3909,8 @@ var ADV_SUB=['subHour','subDomain',
              'subOffDays','subHotDow','subHotN',
              /* 8.80 自動配信（時刻・1回の上限・Shopify の管理用ドメイン）。 */
              'subAutoHours','subAutoMax','subShopAdmin',
+             /* 8.107 週に1回の配信（間隔・曜日・時刻）。pj-sync の値だけで動く。 */
+             'subAutoEvery','subAutoWeekDow','subAutoWeekHour',
              /* 8.81 会員用の商品を外す、海外向けの商品リストの名前。 */
              'subShopOverseas','subShopOverseasId',
              /* 8.43 モニターの3週間（pj-sync も同じ値を読む）。 */
@@ -7911,6 +7923,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  'subOffDays','subHotDow','subHotN',
                  /* 8.80 自動配信（この端末にも覚える）。 */
                  'subAutoHours','subAutoMax','subShopAdmin',
+                 /* 8.107 週に1回の配信。 */
+                 'subAutoEvery','subAutoWeekDow','subAutoWeekHour',
                  /* 8.81 海外向けの商品リストの名前。 */
                  'subShopOverseas','subShopOverseasId',
                  /* 8.43 モニターの3週間（この端末にも覚える）。 */
@@ -20173,6 +20187,8 @@ function subOnTxt(){
   });
   /* 8.81 箱ものの段の表（⚙が変わったら出し直す）。 */
   try{ subBoxRender(); subBoxWatch(); }catch(e){}
+  /* 8.107 毎日／毎週で出す欄を切り替える。 */
+  try{ subAutoEveryUi(); }catch(e){}
   /* 8.80 自動配信（既定オフ）。 */
   var au=$('subAutoOn'), at=$('subAutoTxt');
   if(au&&at){
@@ -20247,6 +20263,13 @@ function subAxTry(){
     })
     .then(function(){ if(btn)btn.disabled=false; });
 }
+/* 8.107 毎日／毎週で出す欄を切り替える（値は消さない）。 */
+function subAutoEveryUi(){
+  var ev=$('subAutoEvery'), wk=$('subAutoWeekBox'), dy=$('subAutoDayBox');
+  var week=!!(ev&&ev.value==='week');
+  if(wk)wk.style.display=week?'':'none';
+  if(dy)dy.style.display=week?'none':'';
+}
 /* いまの設定と最後の回（試しのあとに1回だけ読む）。 */
 function subAxStat(s){
   var el=$('subAutoStat'); if(!el)return;
@@ -20255,18 +20278,26 @@ function subAxStat(s){
   var nx=s.next;
   var L=[];
   L.push('<b>自動配信：'+(s.on?'<span style="color:var(--good)">動かしています</span>'
-    :'止めています')+'</b>　時刻 '+esc(s.hours_text||'なし')
-    +(s.weekend?'':'（平日だけ）')+'・1回の上限 '+mwN(+s.max||0)+'件');
+    :'止めています')+'</b>　'+(s.every==='week'?esc(s.sched_text||'毎週')
+      :('時刻 '+esc(s.hours_text||'なし')+(s.weekend?'':'（平日だけ）')))
+    +'・1回の上限 '+mwN(+s.max||0)+'件');
   if((s.night||[]).length)
     L.push('<span style="color:var(--bad)">夜中なので使わない時刻：'
       +esc(s.night.join('・'))+'時</span>');
   if((s.bad||[]).length)
     L.push('<span style="color:var(--bad)">読めなかった時刻：'
       +esc(s.bad.join('・'))+'</span>');
-  if(!(s.hours||[]).length)
+  if(!(s.hours||[]).length&&s.every!=='week')
     L.push('<b style="color:var(--bad)">配信する時刻がありません</b>'
       +'（8〜23 の数を入れてください）');
-  else if(nx)
+  /* 8.107 配信の間隔と、次に配信する日時（pj-sync が出した値）。 */
+  if(s.sched_text)L.push('配信の間隔：<b>'+esc(s.sched_text)+'</b>');
+  if(s.next_text&&(s.every==='week'||(s.hours||[]).length))
+    L.push('次に配信する日時：<b data-subnext="1">'+esc(s.next_text)+'</b>（07分ごろ）'
+      +(s.next_skip_week?'　<span class="note2">今週はもう配信してあるので次の週です'
+        +(s.last_post?('（最後の配信 '+esc(s.last_post)+'）'):'')+'</span>':'')
+      +(s.on?'':'（オンにすると動きます）'));
+  else if(nx&&s.every!=='week')
     L.push('次の回：'+(nx.add===0?'今日':(nx.add===1?'明日':(esc(dowJa[+nx.dow||0])+'曜')))
       +' '+(+nx.hour)+':07 ごろ'+(s.on?'':'（オンにすると動きます）'));
   var sh=s.shop||{};
@@ -32445,7 +32476,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v355';   // sw.js の const V と必ず同じ値にする
+var APP_V='v356';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

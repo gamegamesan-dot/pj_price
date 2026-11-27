@@ -546,8 +546,9 @@ console.log('\n=== ⑦ 定時（1日2回・夜中は走らない・同じ回は1
   const iAuto=src.indexOf('await jobSubAuto(env, {});');
   ok(iCsv>0&&iAuto>iCsv&&src.indexOf('await jobMwCsv(env, { src: "auto" });')<0,
      '★★★MW の在庫CSV の取り込みは15分ごとの回（毎時の回では呼ばない）・配信は毎時の回の最後');
-  ok(/if \(sa\.autoOn && SUBAUTO\.dueOf\(sa\.autoHours, subJst\(\), sa\.autoWeekend\)\)/.test(src),
-     '★定時の回は時刻を見てから呼ぶ');
+  /* 8.107 毎日／毎週の予定（shared/subauto.js の dueSched）で見てから呼ぶ。 */
+  ok(/if \(sa\.autoOn && SUBAUTO\.dueSched\(sa\.autoSched, subJst\(\)\)\)/.test(src),
+     '★定時の回は時刻（毎日／毎週の予定）を見てから呼ぶ');
   ok(/if \(weekday && !sc\.autoOn\)\s*\n\s*await jobSubSend\(env, \{ approve: true, auto: true \}\);/.test(src)
      &&/if \(sc\.pre && !sc\.autoOn && tomo >= 1/.test(src),
      '★★自動配信を使うあいだは、平日の朝の回と予告を出さない（二重に出さない）');
