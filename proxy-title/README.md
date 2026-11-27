@@ -125,6 +125,10 @@ npx wrangler deploy
 } ] }
 ```
 
+- 8.108 `fields.chara_alias`：そのキャラクターに**広く使われている別名**（例 Alastor → `Radio Demon`）。
+  確かなときだけ。名前・作品名と同じもの、ほかの社名・ブランド名、宣伝の言葉、30字を超えるものは
+  空にする（`figAliasClean`）。pj_price の `figTitleFrom()` が、入るときだけ英題に足す。
+  キャッシュの版は `fig:v4`（別名の無い古い答えは使い回さない）。
 - JANがあれば `identifiersType=EAN`、無ければ `ASIN` で Amazon（日本）を引く。
   ASINで引いたとき、カタログの identifiers に EAN があれば `jan_resolved` として返し、
   eBay検索にも使う。

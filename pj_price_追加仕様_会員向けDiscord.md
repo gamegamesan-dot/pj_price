@@ -8082,3 +8082,99 @@ Actions の deploy-pj-sync を「MW の在庫CSV の取り込みの記録・商�
 | 試験 | 件数 | 見ること |
 | --- | --- | --- |
 | `tests/titlelen.mjs` | 9 | 読むだけ・題名そのものは引かない／出品済みの W- だけ／40・60・80 の境目／売れた実績（eBay の注文だけ）／title の列でも数えられる／Actions で一緒に数える |
+
+### 2. いままでの英題の作り方（v357 までの調べ）
+
+- **無在庫（MW）の行**は、出品リストに入れたとき英題が空（`mwListRow` の `titleEn:''`）。
+  「英題と出品文を一括作成」で pj-title（Worker `proxy-title`・Claude Haiku・KV に 90日）に問い合わせる。
+  - フィギュアなど（`/figure-titles`）：日本語の商品名・メーカー名・Amazon のカタログから
+    brand／series／chara／item_name／variant／line／scale を**項目で**もらい、画面の `figTitleFrom` が並べる
+    （`[Used] ブランド 作品名 キャラクター [商品名] 版 スケール 商品ライン Figure`）
+  - ゲーム（`/titles`）：英語のソフト名だけをもらい、`gameTitleFrom` が `[Used] 機種 ソフト名 [Cartridge Only]` と並べる
+- どちらも最後に `titleJpTail` が「Japan Import」（入らなければ「Japan」）を**入るときだけ**足す。
+- **80字まで埋める指示は無い**。決まりは「80字を超えたら削る」だけ。種類の語は Figure 固定
+  （Prize Figure・Plush などは無い）、キャラクターの別名・New・Japanese Ver. も無い。
+
+### 3. 新しい作り方（v358・これから作る英題もすべてこれ）
+
+決まりは `shared/titlefit.js`（種類の語・プライズ・宣伝の言葉・全部大文字・語の区切りで詰める）と
+`index.html` の `figTitleFrom`／`gameTitleFrom` の1か所。出品文タブ・出品リスト・一括作成・
+「英題を作り直す」・出品済みの作り直しのすべてが同じ関数を通る。
+
+**フィギュアなど**：`[Used] ブランド 作品名 キャラクター [別名] [商品名] 商品ライン 種類 版 スケール [Loose No Box] Japan Import [New]`
+
+- **種類**：日本語の商品名から（ぬいぐるみ → Plush・アクリルスタンド／アクスタ → Acrylic Stand・
+  アクリルキーホルダー → Acrylic Keychain・缶バッジ → Can Badge など）。フィギュアは Figure、
+  **プライズと分かるときだけ Prize Figure**（日本語の商品名の「プライズ」・Banpresto・プライズの商品ライン
+  ＝Q posket／Grandista／Glitter & Glamours／DXF／Luminasta／SPM／ちょこのせ／Noodle Stopper など）。
+  一番くじはプライズと書かない。分からないもの（other）は作り出さない
+- **別名**：pj-title が「この人物に広く使われている」と答えたときだけ（`chara_alias`。例 Alastor → Radio Demon）。
+  名前・作品名と同じもの、ほかの社名・ブランド名、宣伝の言葉、30字を超えるものは捨てる。
+  **入るときだけ**足す（Japan Import を落としてまでは入れない）
+- **New**：**新品のときだけ**（出品リストは condId 1000、出品文タブは「新品・未開封」。箱開封済・中古には入れない）。
+  入るときだけ一番後ろに。「Sealed」は付けない
+- 作品名とキャラクター名が同じ（Hatsune Miku Hatsune Miku）ときは1回だけ
+- **80字を超えたら**：作品名の短縮 → キャラクター名の短縮 → **版・スケール**（後ろの情報から）→ ブランド →
+  末尾の種類（商品ラインがあるとき）→ 商品ライン → 作品名・キャラクター名を語の区切りで詰める。
+  **単語の途中では切らない**
+- スケール・型番は pj-title が日本語の商品名から読んだものだけ（ここでは作り出さない）
+
+**ゲーム**：`[Used] 機種名 タイトル [Japanese Ver.] [Cartridge Only] Japan Import [New]`
+
+- Japanese Ver. は、入るときだけ・ソフト名に版（Ver.／Version／Edition／Japan）がまだ無いときだけ
+- New は新品のときだけ
+
+**守ること**（どちらも）：`tidy` が宣伝の言葉（Free Shipping・Fast Shipping・L@@K・No Reserve・Sale・% Off など）と
+記号の飾り（★☆♪!!・【】など）を落とし、全部大文字の語を普通の書き方に直す（BANPRESTO → Banpresto・
+ONE PIECE → One Piece・POP UP PARADE → Pop Up Parade。SEGA・HG・DXF・SEED・ローマ数字は残す）。
+
+**pj-title の直し**（`proxy-title/worker.js`）：返す項目に `chara_alias` を足した。キャッシュの版を **fig:v4** に上げた
+（別名の無い古い答えは使い回さない）。**pj-title のデプロイが要る**（`cd proxy-title && npx wrangler deploy`）。
+デプロイするまでは別名が付かないだけで、ほかの直し（Prize Figure・Plush・New・Japanese Ver. など）は効く。
+
+### 4. 出品済みの行の作り直し（出品リストの「出品済みの英題を作り直す」・管理者だけ）
+
+- 「**閲覧が少なく売れていない出品を選んで作り直す（50件）**」：pj-sync の `GET /titlefix/cands?n=50` で候補を選び、
+  pj-title に**問い合わせ直して**（force）新しい英題を作る。出品リストに同じ ItemID の行があればその**写し**、
+  無ければ MW の商品名・機種から作る（**出品リストの行はこの時点では書き換えない**）。
+- 行のカード（出品済みの無在庫の行）の「**英題を作り直す（出品済み）**」で、その行だけを一覧に足せる。
+- 一覧には 商品名・**旧（字数）・新（字数）**・閲覧・ウォッチを並べる（70字未満は赤）。変わらない行は「変わりません」。
+- 「**変わった行だけ Revise 用 CSV を書き出す**」：`Action・ItemID・*Title` の3列だけ
+  （値段・数量・写真・出品文には触れない）。`ebay-title-revise-YYYYMMDD-件数.csv`。
+- 「一覧を文字で出す」：商品名・旧タイトル・旧の字数・新タイトル・新の字数（タブ区切り）。
+- 「アップロードした」：File Exchange に上げたあとで押す。CSV に入れた行の英題（と pj-title の項目）を
+  出品リストの行にも入れる。
+- **eBay には何も送らない**。CSV を File Exchange に上げるのはカジ（50件の確認のあと）。
+- 一覧は端末に残す（`localStorage` の `pj.titlefix.v1`）。
+
+### 5. 候補の選び方（pj-sync・`GET /titlefix/cands`・管理者だけ）
+
+- 出品中リストの取り込み（毎時）で、**無在庫（W-）の出品だけ** いまの eBay の題名・その出品で売れた数
+  （`QuantitySold`）・ウォッチの数（`WatchCount`）を **`ebay_stat`** に控える
+  （**items はもう100列＝D1 の上限**なので別の表・`migrate-0075-title-fix.sql`。表が無いあいだは書かない）。
+  `items.title` は最初に取り込んだ題名のまま変えない。
+- 候補：W-・ItemID あり・在庫あり・**売れた数 0**・**eBay の注文が1つも無い**・**出してから14日以上**
+  （出したばかりは閲覧が少なくて当たり前なので）。ウォッチの少ない順・古い順に 150件まで見て、
+  その閲覧数（GetItem の `HitCount`。24時間以内に取った分は使い回す）を取り、**閲覧数の少ない順**に 50件。
+  GetItem で売れていたと分かった出品も外す。
+- 閲覧数が返らない出品（eBay が HitCount を返さない設定）は後ろに回し、全部返らないときは
+  ウォッチの少ない順で選ぶ（`sort:"watch"`・画面にもそう出す）。
+- MW の商品名を返すので**管理者のキーだけ**。eBay には書き込まない（GetItem で読むだけ）。
+
+### 確かめ方（v358）
+
+| 試験 | 件数 | 見ること |
+| --- | --- | --- |
+| `tests/titlefit.mjs` | 32 | 宣伝の言葉・記号の飾り・全部大文字（略号は残す）／種類の語（Prize Figure・一番くじ・Plush・Acrylic Stand・作り出さない）／語の区切りで詰める／pj-title の別名（名前・作品名・社名・宣伝の言葉は捨てる・fig:v4） |
+| `tests/titlefix.mjs` | 24 | ebay_stat に W- だけ（題名・売れた数・ウォッチ）／Revise 後の題名／候補は管理者だけ・閲覧数の少ない順・売れた出品・注文あり・出したばかり・W- 以外は外す／閲覧数の使い回し／HitCount が無いときはウォッチ順／表が無くても取り込みは動く／eBay に書き込まない |
+| `tests/titlefixui.js` | 37 | 新しい並び（例 72字）・別名・New は新品だけ・一番くじ・Plush・Acrylic Stand・スケールの位置・全部大文字・宣伝の言葉・80字で後ろから削る・ゲームの Japanese Ver.・出品文タブも同じ／行のボタン・50件・force・旧と新と字数・行は書き換えない・CSV は ItemID と Title だけ・変わった行だけ・アップロードしたら行に入れる・作業者には出さない |
+| `tests/titlelen.mjs` | 10 | （v357 の数える道具を ebay_stat に合わせた）いまの題名で数える・売れた数も売れた実績に数える・表が無いときは items.title |
+
+### デプロイ（v358）
+
+| | |
+| --- | --- |
+| 画面 | push すれば GitHub Pages が自動（版は **v358**） |
+| pj-sync | **要ります**（候補の `GET /titlefix/cands`・出品中リストで ebay_stat に控える） |
+| D1 | **要ります**（`migrate-0075-title-fix.sql`。デプロイの「マイグレーションを流す」で入る） |
+| pj-title | **要ります**（別名 `chara_alias`。`cd proxy-title && npx wrangler deploy`） |

@@ -857,6 +857,19 @@ body.staff #syncOnHandFix{display:none !important}
         <button class="btn" id="csvPackRun" style="width:100%;margin-top:6px">発送の文を直す Revise 用 CSV を書き出す</button>
         <div class="note2" style="margin-top:2px" id="csvPackNote">行を選んでいればその行だけ、選んでいなければ食い違っている出品ぜんぶを書き出します。CSV に入れるのは <b>ItemID と Description だけ</b>です（値段・数量・題名・<b>写真には触れません</b>）。</div>
       </div>
+      <!-- 8.108：出品済みの無在庫（W-）の英題を作り直す（Revise 用の CSV は ItemID と Title だけ）。 -->
+      <div id="tfBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
+        <div class="note2" style="margin:0 0 4px"><b>出品済みの英題を作り直す（無在庫 W-）</b>　英題を <b>70〜80字</b>を目安に作り直します（ブランド → 作品名 → キャラクター名・よく使われる別名 → 種類（Figure・Prize Figure・Plush・Acrylic Stand など）→ 版・スケール → Japan Import → 新品は New）。<b>これから作る英題も同じ作り方です</b>。ここは<b>すでに出品した行</b>の英題を直すところです。まず<b>閲覧が少なく、まだ1つも売れていない出品</b>から試します（売れた実績のある出品は選びません）。</div>
+        <button class="btn" id="tfPick" style="width:100%">閲覧が少なく売れていない出品を選んで作り直す（50件）</button>
+        <button class="btn" id="tfCsv" style="width:100%;margin-top:6px">変わった行だけ Revise 用 CSV を書き出す（ItemID・Title）</button>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn" id="tfCopy" style="flex:1 1 0;min-width:0;padding:9px 4px">一覧を文字で出す（確認用）</button>
+          <button class="btn" id="tfDone" style="flex:1 1 0;min-width:0;padding:9px 4px">アップロードした</button>
+          <button class="btn" id="tfClear" style="flex:1 1 0;min-width:0;padding:9px 4px">一覧を消す</button>
+        </div>
+        <div class="note2" style="margin-top:2px" id="tfNote">出品済みの無在庫の行のカードにある「英題を作り直す」でも、その行だけをこの一覧に足せます。<b>eBay には何も送りません</b>。書き出した CSV を File Exchange に上げるまで、eBay の題名は変わりません。</div>
+        <div id="tfList" style="margin-top:4px"></div>
+      </div>
       <!-- 8.78：出品済みの行の横長の写真を正方形にして、Revise 用の CSV を作る。 -->
       <div id="csvPicSqBox" class="admcfg" style="margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:6px;background:#fbfaf6">
         <div class="note2" style="margin:0 0 4px"><b>横長の写真を正方形にする</b>　eBay の一覧のサムネは正方形なので、横長の写真（例 600×338）は小さく見えます。<b>横÷縦が 1.2 を超える写真だけ</b>、上下に白を足して正方形にします（拡大・トリミングはしません）。<b>これから取り込む MW の写真は自動で正方形になります</b>。ここは<b>すでに出品した行</b>の写真を直すところです。</div>
@@ -3103,6 +3116,8 @@ body.staff #syncOnHandFix{display:none !important}
 <script src="./shared/mwsite.js"></script>
 <!-- 8.101 MW と Amazon が同じ商品かの見立て。画面と pj-sync が同じこれを読む。 -->
 <script src="./shared/mwmatch.js"></script>
+<!-- 8.108 eBay の英題の決まり（種類の語・宣伝の言葉・全部大文字・80字）。 -->
+<script src="./shared/titlefit.js"></script>
 <!-- 会員向け Discord のプランとカード（8.11）。pj-sync も同じこれを読む。 -->
 <script src="./shared/subplan.js"></script>
 <!-- 8.37 売り方ごとの「赤字にならない売値」（Amazon 自己配送・FBA・
@@ -3163,6 +3178,9 @@ var MWSITE=PJ_MWSITE;
 if(typeof PJ_MWMATCH==='undefined')
   throw new Error('shared/mwmatch.js が読み込めていません（商品違いの疑い）');
 var MWMATCH=PJ_MWMATCH;
+/* 8.108 eBay の英題の決まり（figTitleFrom／gameTitleFrom が使う）。 */
+if(typeof PJ_TITLEFIT==='undefined')
+  throw new Error('shared/titlefit.js が読み込めていません（英題の決まり）');
 /* 8.11（【Y】）会員向け Discord のプランの表とカードの作り方。
    pj-sync（配信）も同じこれを読む。 */
 if(typeof PJ_SUBPLAN==='undefined')
@@ -5798,26 +5816,50 @@ function titleWithJp(body,dropped){
   else if(j.tail==='Japan')dropped.push('Import');
   return { text:j.text, dropped:dropped };
 }
-function gameTitleFrom(used, platform, name, cartOnly){
-  var pre=(used?'Used':''), pf=String(platform||'').trim(), nm=String(name||'').trim();
+/* 8.108（カジの依頼）ゲームは「機種名 → タイトル →（Japanese Ver.）→ Japan Import」。
+   ・Japanese Ver. は、入るときだけ・ソフト名に版（Ver.／Edition／Japan）がまだ無いときだけ足す
+     （日本の版を売っているので本当の情報。産地の語を落としてまでは入れない）
+   ・New は新品（opt.isNew）のときだけ、入るときだけ一番後ろに
+   ・宣伝の言葉・記号の飾り・全部大文字は shared/titlefit.js の tidy で直す */
+var GAME_JP_VER='Japanese Ver.';
+function gameTitleFrom(used, platform, name, cartOnly, opt){
+  opt=opt||{};
+  var TF=PJ_TITLEFIT;
+  var pre=(used?'Used':''), pf=String(platform||'').trim(), nm=TF.tidy(name||'');
   var cart=cartOnly?CSV_CART_TITLE:'';
-  var join=function(n){ return [pre,pf,n,cart].filter(Boolean).join(' '); };
+  var ver='';
+  var join=function(n){ return [pre,pf,n,ver,cart].filter(Boolean).join(' '); };
   if(![pre,pf,nm].filter(Boolean).length) return {text:'', dropped:[]};
   var dropped=[], body=join(nm);
   /* 本体が入らないときだけソフト名を単語の区切りで詰める。
      産地の語を入れるために本体を削ることはしない（6.57）。 */
+  var short=nm;
   if(body.length>TITLE_MAX){
-    var words=nm.split(/\s+/), short=nm;
+    var words=nm.split(/\s+/);
     while(words.length>1){
       words.pop(); short=words.join(' ');
       if(join(short).length<=TITLE_MAX)break;
     }
     body=join(short); dropped.push('ソフト名を短縮');
   }
-  return titleWithJp(body,dropped);
+  var out=titleWithJp(body,dropped);
+  /* 8.108 Japanese Ver.：入るときだけ（産地の語は落とさない） */
+  if(opt.jpVer!==false&&!/\b(ver\.?|version|edition|japan(ese)?)\b/i.test(short)){
+    ver=GAME_JP_VER;
+    /* titleJpTail は Japanese を見ると Import だけにするので、ここでは本体の産地の語
+       （Japan Import／Japan）をそのまま後ろに付け直す */
+    var b2=join(short), o1=titleJpTail(body), t2=b2+' '+o1.tail;
+    if(o1.tail&&t2.length<=TITLE_MAX)out={ text:t2, dropped:out.dropped };
+    else ver='';
+  }
+  if(opt.isNew&&!used&&!/\bnew\b/i.test(out.text)&&(out.text+' New').length<=TITLE_MAX)
+    out.text=out.text+' New';
+  return out;
 }
 function buildGameTitle(){
-  return gameTitleFrom($('gCond').value==='used', gamePlatform(), $('gTitle').value);
+  /* 8.108 新品・未開封のときだけ末尾に New（入るときだけ） */
+  return gameTitleFrom($('gCond').value==='used', gamePlatform(), $('gTitle').value, false,
+                       { isNew:$('gCond').value==='sealed' });
 }
 // アーケードパーツのタイトル：
 //   [Used] [メーカー] [型番] [色] [サイズ] [種類] [入数] [Japan Import]
@@ -5851,19 +5893,40 @@ function buildArcadeTitle(){
    Used は落とさない。 */
 /* loose＝true のときは末尾に Loose No Box を入れる（箱なしで出すフィギュア）。
    80文字に収まらないときは Loose だけにし、それでも収まらなければ既存の順で削る。 */
-function figTitleFrom(used, p, loose){
+/* 8.108（カジの依頼）英題を 70〜80字に近づける。決まりは shared/titlefit.js の1か所。
+     並び：[Used] ブランド 作品名 キャラクター [別名] [商品名] 商品ライン 種類 版 スケール
+           [Loose No Box] Japan Import [New]
+     ・種類は日本語の商品名から（ぬいぐるみ → Plush・アクスタ → Acrylic Stand）。
+       フィギュアは Figure、プライズと分かるときだけ Prize Figure
+     ・別名（Radio Demon など）は pj-title が「よく使われる」と答えたときだけ。
+       入るときだけ足す（Japan Import を落としてまでは入れない）
+     ・New は新品（opt.isNew）のときだけ、入るときだけ一番後ろに足す
+     ・宣伝の言葉・記号の飾り・全部大文字は tidy で直す
+     ・80字を超えたら後ろの情報から削る（版とスケールをブランドより先に）。
+       それでも超えるときは作品名・キャラクター名を語の区切りで詰める（単語の途中で切らない） */
+function figTitleFrom(used, p, loose, opt){
+  opt=opt||{};
+  var TF=PJ_TITLEFIT;
   if(!(p.brand||p.series||p.chara||p.variant||p.line||p.scale||p.itemName||p.item_name))
     return {text:'', dropped:[]};
-  var st={brand:p.brand||'', series:p.series||'', chara:p.chara||'',
-          itemName:p.itemName||p.item_name||'',
-          variant:p.variant||'', scale:p.scale||'', line:p.line||''};
-  var short=p.seriesShort||p.series_short||'';
-  var cshort=p.charaShort||p.chara_short||'';
+  var cl=function(x){ return TF.tidy(x||''); };
+  var st={brand:cl(p.brand), series:cl(p.series), chara:cl(p.chara),
+          alias:'', itemName:cl(p.itemName||p.item_name),
+          variant:cl(p.variant), scale:cl(p.scale), line:cl(p.line)};
+  var alias=cl(p.alias||p.charaAlias||p.chara_alias);
+  var short=cl(p.seriesShort||p.series_short);
+  var cshort=cl(p.charaShort||p.chara_short);
   // フィギュア以外は末尾の Figure を付けない
   var ty=p.itemType||p.item_type||'figure';
   /* 8.75 プラモデルは Figure と書かず「Plastic Model Kit」と書く
-     （入りきらないときは「Model Kit」に縮める）。 */
-  var tail=(ty==='figure')?FIG_PTYPE:((ty==='model_kit')?MODEL_PTYPE:''), tail0=tail;
+     （入りきらないときは「Model Kit」に縮める）。
+     8.108 種類の語は日本語の商品名から（Plush・Acrylic Stand・Prize Figure など）。 */
+  var nn=TF.nounOf(p.ja||'', {itemType:ty, brand:st.brand, line:st.line,
+                              itemName:st.itemName, series:st.series, variant:st.variant});
+  var tail=(ty==='model_kit')?MODEL_PTYPE:nn.noun, tail0=tail;
+  /* 商品名にもう種類の語が入っていれば足さない（Storage Bangle Plush Plush にしない） */
+  if(tail&&ty!=='model_kit'&&ty!=='figure'&&new RegExp('\\b'+tail.replace(/ /g,'\\s+')+'s?$','i').test(st.itemName))
+    tail=tail0='';
   var lo=loose?CSV_LOOSE_TITLE:'';
   /* フィギュアに商品名は入れない。ただしキャラクター名も作品名も無いときは
      商品名が唯一の手がかりなので残す（超合金 CHOGOKIN ROBO 50 など）。 */
@@ -5884,14 +5947,22 @@ function figTitleFrom(used, p, loose){
     if(bk&&(key(st.series).indexOf(bk)>=0||key(st.itemName).indexOf(bk)>=0
             ||key(st.chara).indexOf(bk)>=0))st.brand='';
   }
+  /* 8.108 作品名とキャラクター名が同じ（Hatsune Miku Hatsune Miku）ときは1回だけ */
+  if(st.series&&key(st.series)===key(st.chara)){ st.series=''; short=''; }
+  /* 別名がもう名前・作品名に入っているときは足さない */
+  if(alias){
+    var ak=key(alias);
+    if(!ak||[st.chara,cshort,st.series,st.brand,st.line].some(function(x){
+      var k=key(x); return k&&(k.indexOf(ak)>=0||ak.indexOf(k)>=0); }))alias='';
+  }
   function join(){
-    var pre=[used?'Used':'', st.brand, st.series, st.chara, st.itemName,
-             st.variant, st.scale, st.line].filter(Boolean).join(' ');
+    var pre=[used?'Used':'', st.brand, st.series, st.chara, st.alias, st.itemName,
+             st.line].filter(Boolean).join(' ');
     /* 6.144：**末尾がもう Figure のときは、種類の Figure を足さない**
        （例「… World Collectible Figure Figure」）。
        Figures・figure も同じものとして見る。 */
     var end=pre.replace(/[^A-Za-z0-9 ]/g,' ').trim();
-    var tl=(tail&&/figures?$/i.test(end))?'':tail;
+    var tl=(tail&&/figures?$/i.test(end)&&/figure$/i.test(tail))?'':tail;
     /* 8.75 プラモデルは、もう Model Kit／Plastic Model で終わっていたら足さない。
        「Plastic Model」で終わるときは Kit だけ足す。 */
     if(ty==='model_kit'&&tail){
@@ -5899,7 +5970,7 @@ function figTitleFrom(used, p, loose){
       else if(/plastic models?$/i.test(end))tl='Kit';
       else tl=tail;
     }
-    return [pre, tl, lo].filter(Boolean).join(' ');
+    return [pre, tl, st.variant, st.scale, lo].filter(Boolean).join(' ');
   }
   var t=join(), dropped=[];
   // 箱なしの印は残す。長いときは「Loose No Box」→「Loose」に縮める
@@ -5911,23 +5982,44 @@ function figTitleFrom(used, p, loose){
   }
   if(t.length>80&&short&&short!==st.series){ st.series=short; dropped.push('作品名を短縮'); t=join(); }
   if(t.length>80&&cshort&&cshort!==st.chara){ st.chara=cshort; dropped.push('キャラクター名を短縮'); t=join(); }
-  if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
+  /* 8.108 後ろの情報（版・スケール）から削る。ブランドはそのあと。 */
   if(t.length>80&&(st.variant||st.scale)){
     st.variant=''; st.scale=''; dropped.push('版・スケール'); t=join();
   }
+  if(t.length>80&&st.brand){ st.brand=''; dropped.push('ブランド'); t=join(); }
   // 商品ラインがあるなら、末尾の Figure はそちらより先に落とす
   if(t.length>80&&tail&&st.line){ tail=''; dropped.push('末尾のFigure'); t=join(); }
   if(t.length>80&&st.line){
     st.line=''; tail=tail0; dropped.push('商品ライン'); t=join();   // 品目が消えないよう Figure を戻す
   }
-  return titleWithJp(t,dropped);                          // 産地の語は最後に付ける（6.57）
+  /* それでも入らないときは、作品名 → キャラクター名を語の区切りで詰める */
+  ['series','chara','itemName'].forEach(function(k){
+    while(t.length>80&&st[k]&&st[k].indexOf(' ')>0){
+      st[k]=st[k].replace(/\s+\S+$/,''); t=join();
+      if(dropped.indexOf('長い名前を短縮')<0)dropped.push('長い名前を短縮');
+    }
+  });
+  if(t.length>80){ t=TF.cutWords(t,80); dropped.push('後ろの語を省略'); }
+  var out=titleWithJp(t,dropped);                         // 産地の語は最後に付ける（6.57）
+  /* 8.108 別名：入るときだけ（産地の語を落としてまでは入れない） */
+  if(alias){
+    st.alias=alias;
+    var b2=join(), o2=titleJpTail(b2), o1=titleJpTail(t);
+    if(b2.length<=80&&o2.text.length<=80&&o2.tail===o1.tail){ t=b2; out=titleWithJp(t,dropped); }
+    else st.alias='';
+  }
+  /* 8.108 New は新品のときだけ、入るときだけ一番後ろに */
+  if(opt.isNew&&!used&&!/\bnew\b/i.test(out.text)&&(out.text+' New').length<=80)
+    out.text=out.text+' New';
+  return out;
 }
 // 出品文タブの状態欄が中古を指しているか
 function condIsUsed(){ var c=condKey(); return c==='likenew'||c==='used'; }
 function buildTitle(){
   if(isGame()) return buildGameTitle();
   if(isArcade()) return buildArcadeTitle();
-  return figTitleFrom(condIsUsed(), titleParts());
+  /* 8.108 新品・未開封のときだけ末尾に New（入るときだけ。箱開封済には付けない） */
+  return figTitleFrom(condIsUsed(), titleParts(), false, { isNew:condKey()==='sealed' });
 }
 
 function descHTML(){
@@ -10564,6 +10656,7 @@ function csvRender(){
     /* カテゴリと原産国は同じ形のプルダウンで並べる（6.56）。 */
     btns+=csvCatSelect(r)+csvOriginSelect(r)+csvCatSugBtns(r)+csvSpecSyncBtn(r);
     btns+=csvPackBtn(r);                 // 8.79 発送：封筒（クリックポスト）／段ボール
+    btns+=tfRowBtn(r);                   // 8.108 出品済みの無在庫の英題を作り直す
     if(v==='amazon')
       btns+='<button class="btn" data-force="'+r.id+'" style="padding:5px 8px;font-size:12px">Amazon優先でも出す：'
         +(r.forceEbay?'オン':'オフ')+'</button>';
@@ -10752,6 +10845,8 @@ $('csvList').addEventListener('click',function(e){
   if(t.hasAttribute('data-catkeep')){ csvCatSugKeep(t.getAttribute('data-catkeep')); return; }
   /* 8.79 発送の入れ物を手で切り替える。 */
   if(t.hasAttribute('data-pack')){ csvPackToggle(t.getAttribute('data-pack')); return; }
+  /* 8.108 出品済みの無在庫の英題を作り直す（この行だけ一覧に足す）。 */
+  if(t.hasAttribute('data-tfrow')){ tfAddRow(t.getAttribute('data-tfrow')); return; }
   /* 8.69 specs を英題に合わせる。 */
   if(t.hasAttribute('data-spsync')){ csvSpecSync(t.getAttribute('data-spsync')); return; }
   var id=t.getAttribute('data-del')
@@ -11399,7 +11494,7 @@ function csvCartRefresh(r){
   // フィギュアは英題を作り直す（末尾の Loose No Box の出し入れ）
   if(r.cat!=='139973'&&String(r.titleEn||'').trim())
     try{ r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0,csvFigParts(r),
-                                !!r.looseOnly).text; }catch(e){}
+                                !!r.looseOnly,csvTitleOpt(r)).text; }catch(e){}
   try{ r.descHtml=csvDescFor(r); }catch(e){}
   r.weight=r.wManual?r.weight:csvWeightFor(r);
   csvRecalc(r);
@@ -25211,8 +25306,11 @@ function csvApplyName(r,name){
   var p=csvPlatOf(r);
   r.specs=r.specs||{};
   r.specs.gameName=name;
-  r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name, !!r.cartOnly).text;
+  r.titleEn=gameTitleFrom(r.condId!==1000&&r.condId!==0, p?p.title:'', name, !!r.cartOnly,
+                          csvTitleOpt(r)).text;
 }
+/* 8.108 英題の作り方の追加の指定。New は**新品（condId 1000）のときだけ**。 */
+function csvTitleOpt(r){ return { isNew:(r||{}).condId===1000 }; }
 // 行が持つ5項目を図の並びで取り出す
 function csvFigParts(r){
   var sp=r.specs||{}, o={};
@@ -25221,6 +25319,9 @@ function csvFigParts(r){
   o.seriesShort=sp.seriesShort||'';
   o.charaShort=sp.charaShort||'';
   o.itemType=sp.itemType||'figure';
+  /* 8.108 キャラクターの別名（pj-title が返したもの）と、種類の語を決める日本語の商品名。 */
+  o.alias=sp.charaAlias||'';
+  o.ja=String(r.titleJa||'');
   /* 8.75 プラモデルは Figure と書かない（AI が figure と返しても直す）。 */
   if(csvIsModelKit(r))o.itemType='model_kit';
   return o;
@@ -25228,7 +25329,7 @@ function csvFigParts(r){
 // 5項目からタイトルを組み立てて行へ書き戻す（フィギュア）
 function csvFigRebuild(r){
   r.titleEn=figTitleFrom(r.condId!==1000&&r.condId!==0, csvFigParts(r),
-                         !!r.looseOnly).text;
+                         !!r.looseOnly, csvTitleOpt(r)).text;
 }
 /* 行の原産国が空なら設定の既定値で埋め、目印を立てる。
    一括生成・出品文の一括作成の両方から呼ぶ。埋めたら true を返す。 */
@@ -25269,6 +25370,7 @@ function csvApplyFields(r,f){
   if(f.scale!==undefined)sp.scale=f.scale||sp.scale||'';
   if(f.series_short!==undefined)sp.seriesShort=f.series_short||'';
   if(f.chara_short!==undefined)sp.charaShort=f.chara_short||'';
+  if(f.chara_alias!==undefined)sp.charaAlias=f.chara_alias||'';   // 8.108 別名
   if(f.item_type!==undefined)sp.itemType=f.item_type||'figure';
   /* 8.65 登録したカテゴリの必須の Item specifics。取れた項目だけ入れる
      （取れなかった項目は手で入れてもらうので、前の値は消さない）。 */
@@ -25901,6 +26003,231 @@ function csvPackRun(){
     +'<br>このファイルを File Exchange に上げると、出品文だけが入れ替わります'
     +'（写真・値段・数量はそのままです）。',!okDl);
 }
+/* ================= 8.108 出品済みの無在庫（W-）の英題を作り直す =================
+   カジの依頼（2026-11-27）。英題の決まりは figTitleFrom／gameTitleFrom（shared/titlefit.js）の
+   1か所で、これから作る英題と同じ。ここは**すでに出品した行**の英題を作り直して、
+   変更前と変更後を並べて見せ、変わった行だけを Revise 用の CSV（ItemID と Title だけ）に書き出す。
+   ・候補は pj-sync の GET /titlefix/cands（閲覧が少なく、まだ1つも売れていない出品から 50件。
+     売れた実績のある出品は外す）。行のカードの「英題を作り直す」でその行だけ足すこともできる
+   ・作り直しは pj-title に**問い合わせ直す**（force。キャラクターの別名を取るため）。
+     出品リストの行は**書き換えない**（写しで作る）。「アップロードした」を押したときだけ
+     出品リストの行の英題を新しいものにする
+   ・eBay には何も送らない。CSV を File Exchange に上げるのはカジ（確認のあと） */
+var TF_KEY='pj.titlefix.v1';
+var tfRows=[];
+function tfLoad(){
+  try{ var a=JSON.parse(localStorage.getItem(TF_KEY)||'[]'); tfRows=Array.isArray(a)?a:[]; }
+  catch(e){ tfRows=[]; }
+}
+function tfSave(){ try{ localStorage.setItem(TF_KEY,JSON.stringify(tfRows)); }catch(e){} }
+function tfSay(msg,bad){
+  var el=$('tfNote'); if(!el)return;
+  el.innerHTML=msg||''; el.style.color=bad?'var(--bad)':'';
+}
+/* 出品済みの無在庫の行か（行のカードにボタンを出す）。 */
+function tfRowOk(r){
+  var x=r||{};
+  if(!String(x.itemId||'').trim())return false;
+  return x.buySource==='mw'||/^W-\d{13}$/.test(String(x.sku||''))||x.src==='mw';
+}
+function tfRowBtn(r){
+  if(!tfRowOk(r)||(typeof isStaff==='function'&&isStaff()))return '';
+  return '<button class="btn" data-tfrow="'+r.id+'" style="padding:5px 8px;font-size:12px">'
+    +'英題を作り直す（出品済み）</button>';
+}
+/* 作り直しに使う行（写し）。出品リストに同じ ItemID の行があればその写し、
+   無ければ MW の商品名・機種から作る。どちらも新品（W- は MW の新品）。 */
+function tfWorkRow(x){
+  var own=null;
+  csvList.forEach(function(r){ if(!own&&String(r.itemId||'').trim()===x.itemId)own=r; });
+  var r=own?JSON.parse(JSON.stringify(own)):null;
+  if(!r){
+    var cat=mwCatOf({ kishu:x.kishu });
+    r={ id:'tf'+x.itemId, src:'mw', sku:'', jan:x.jan, asin:'', titleJa:x.ja, titleEn:'',
+        cat:cat, catFixed:true, condId:1000, specs:{}, mwKishu:x.kishu, buySource:'mw',
+        dropship:true, mwMaker:mwMakerGet(x.jan)||PJ_MWCSV.makerOf(x.ja), itemId:x.itemId };
+    if(cat==='139973'){ var ps=mwPlatSpecOf(x.kishu); if(ps)r.specs.platform=ps; }
+  }
+  if(!String(r.titleJa||'').trim())r.titleJa=x.ja;
+  r.titleManual=false; r.condId=1000;
+  return r;
+}
+function tfFind(itemId){
+  for(var i=0;i<tfRows.length;i++)if(tfRows[i].itemId===itemId)return tfRows[i];
+  return null;
+}
+/* 一覧の行を pj-title に問い合わせ直して、新しい英題を作る。 */
+function tfRun(list){
+  if(!String($('csvTitleApi').value||'').trim()){
+    tfSay('⚙の「英語タイトル生成のURL」を入れてください。',true);
+    return Promise.resolve();
+  }
+  var todo=list.slice(), done=0, total=todo.length;
+  function step(){
+    if(!todo.length){ tfSave(); tfRender(); return Promise.resolve(); }
+    var x0=todo[0], w0=tfWorkRow(x0), kind=csvTitleKind(w0)||'fig';
+    var part=[], works=[];
+    while(todo.length&&part.length<CSV_TITLE_BATCH[kind]){
+      var w=tfWorkRow(todo[0]);
+      if((csvTitleKind(w)||'fig')!==kind)break;
+      part.push(todo.shift()); works.push(w);
+    }
+    tfSay('作り直し中… '+done+'/'+total);
+    return csvTitleSend(kind,works,true).then(function(){
+      part.forEach(function(x,i){
+        var w=works[i];
+        x.nu=String(w.titleEn||'').trim(); x.st=w.titleStatus||'review';
+        x.note=String(w.titleNote||'').slice(0,200);
+        x.specs=w.specs||{}; x.at=new Date().toISOString();
+      });
+    })['catch'](function(e){
+      part.forEach(function(x){ x.st='error'; x.note=String(e&&e.message||e).slice(0,200); });
+    }).then(function(){ done+=part.length; tfSave(); tfRender(); return step(); });
+  }
+  return step().then(function(){
+    var ch=tfRows.filter(tfChanged).length;
+    var ng=tfRows.filter(function(x){ return x.st==='error'||!x.nu; }).length;
+    tfSay('作り直しました：'+total+'件（変わった行 <b>'+ch+'件</b>'
+      +(ng?('・作れなかった行 '+ng+'件（もう一度押すとやり直します）'):'')
+      +'）。<b>eBay にはまだ何も送っていません</b>。中身を確かめてから CSV を書き出してください。');
+  });
+}
+/* 変わった行（新しい英題があり、前と違い、80字以内）。 */
+function tfChanged(x){
+  var n=String(x.nu||'').trim();
+  return !!n&&n!==String(x.old||'').trim()&&n.length<=80&&x.st!=='error';
+}
+function tfPick(){
+  if(typeof isStaff==='function'&&isStaff()){ tfSay('この操作は管理者用のキーが必要です。',true); return; }
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ tfSay('pj-sync のURLとキーを⚙設定に入れてください。',true); return; }
+  tfSay('候補を選んでいます（閲覧数を eBay から取るので少しかかります）…');
+  return mwGet('/titlefix/cands?n=50').then(function(d){
+    if(!d||!d.ok)throw new Error((d&&(d.why||d.error))||'候補を取れませんでした');
+    var keep=tfRows.filter(function(x){ return x.from==='row'; });
+    var add=(d.rows||[]).filter(function(c){
+      return !keep.some(function(k){ return k.itemId===String(c.item_id); }); })
+      .map(function(c){
+        return { itemId:String(c.item_id), sku:String(c.sku||''), jan:String(c.jan||''),
+          ja:String(c.mw_name||''), kishu:String(c.kishu||''), old:String(c.title||''),
+          nu:'', st:'wait', note:'', views:(c.views===null||c.views===undefined)?null:+c.views,
+          watch:+c.watch||0, start:String(c.start||''), from:'cand' };
+      });
+    tfRows=keep.concat(add); tfSave(); tfRender();
+    tfSay('候補 '+add.length+'件（'+(d.sort==='views'?'閲覧数の少ない順':'閲覧数が取れなかったのでウォッチの少ない順')
+      +'・出品から'+d.min_days+'日以上・売れた実績なし）。作り直しています…');
+    return tfRun(add);
+  })['catch'](function(e){ tfSay('⚠ '+esc(e.message),true); });
+}
+function tfAddRow(id){
+  var r=csvRowById(id); if(!r)return;
+  var itemId=String(r.itemId||'').trim(); if(!itemId)return;
+  var x=tfFind(itemId);
+  if(!x){
+    var jan=String(r.jan||'').replace(/\D/g,'');
+    x={ itemId:itemId, sku:'W-'+jan, jan:jan, ja:String(r.titleJa||''),
+        kishu:String(r.mwKishu||''), old:String(r.titleEn||''), nu:'', st:'wait', note:'',
+        views:null, watch:0, start:'', from:'row' };
+    tfRows.unshift(x);
+  }
+  x.st='wait'; tfSave(); tfRender();
+  var box=$('tfBox'); if(box&&box.scrollIntoView)try{ box.scrollIntoView({block:'start'}); }catch(e){}
+  tfRun([x]);
+}
+function tfLen(t){ return String(t||'').length; }
+function tfRender(){
+  var el=$('tfList'); if(!el)return;
+  if(!tfRows.length){ el.innerHTML=''; return; }
+  var ch=tfRows.filter(tfChanged).length;
+  var h='<div class="note2" style="margin:0 0 4px">一覧 '+tfRows.length+'件・変わった行 <b>'+ch+'件</b>'
+    +'（<span style="color:var(--bad)">70字未満</span>は赤で出します）</div>';
+  tfRows.forEach(function(x){
+    var on=tfLen(x.old), nn=tfLen(x.nu);
+    var same=!!x.nu&&!tfChanged(x)&&x.st!=='error';
+    h+='<div data-tf="'+esc(x.itemId)+'" style="border-top:1px solid var(--line);padding:5px 0;'
+      +'font-size:12px;line-height:1.5;overflow-wrap:anywhere">'
+      +'<div><b>'+esc(String(x.ja||'').slice(0,60))+'</b>'
+      +'<span class="note2">　ItemID '+esc(x.itemId)
+      +(x.views!==null&&x.views!==undefined?('・閲覧 '+x.views):'')
+      +'・ウォッチ '+(+x.watch||0)+'</span></div>'
+      +'<div>旧（<span'+(on<70?' style="color:var(--bad)"':'')+'>'+on+'字</span>）：'+esc(x.old||'（不明）')+'</div>'
+      +'<div>新（<span'+(nn&&nn<70?' style="color:var(--bad)"':'')+'>'+nn+'字</span>）：'
+      +(x.st==='wait'?'<span class="note2">作り直し中…</span>'
+        :(x.st==='error'?('<span style="color:var(--bad)">⚠ 作れませんでした '+esc(x.note||'')+'</span>')
+          :('<b>'+esc(x.nu||'')+'</b>'+(same?'<span class="note2">（変わりません）</span>':'')
+            +(x.st==='review'?'<span class="note2">（要確認）</span>':''))))
+      +(x.doneAt?'<span class="note2">（アップロード済み）</span>':'')+'</div></div>';
+  });
+  el.innerHTML=h;
+}
+/* Revise 用 CSV（Action・ItemID・Title だけ）。値段・数量・写真・出品文には触れない。 */
+function tfCsv(rows){
+  var out=[CSV_INFO,csvLine([CSV_ACT_COL,'ItemID','*Title'])];
+  rows.forEach(function(x){ out.push(csvLine(['Revise',x.itemId,x.nu])); });
+  return out.join('\r\n')+'\r\n';
+}
+function tfCsvRun(){
+  var rows=tfRows.filter(tfChanged);
+  if(!rows.length){ tfSay('変わった行がありません。',true); return; }
+  if(!confirm('英題を直す Revise 用の CSV を作ります：'+rows.length+'件\n'
+    +'・CSV に入れるのは ItemID と Title だけです\n'
+    +'・値段・数量・写真・出品文は変えません\n'
+    +'よろしいですか？'))return;
+  var name='ebay-title-revise-'+OSS.ymd(new Date())+'-'+rows.length+'.csv';
+  var okDl=csvDownload(name,tfCsv(rows));
+  var at=new Date().toISOString();
+  rows.forEach(function(x){ x.csvAt=at; });
+  tfSave(); tfRender();
+  tfSay((okDl?('<b>書き出しました</b>：'+esc(name)):'書き出しに失敗しました（ブラウザのダウンロードを許可してください）')
+    +'（'+rows.length+'件）。File Exchange に上げたら「アップロードした」を押してください'
+    +'（出品リストの行の英題も新しいものにします）。',!okDl);
+}
+/* 確認用の一覧（商品名・旧タイトル・新タイトル・文字数）。タブ区切りの文字にして出す。 */
+function tfText(){
+  var lines=['商品名\t旧タイトル\t旧の字数\t新タイトル\t新の字数'];
+  tfRows.forEach(function(x){
+    lines.push([String(x.ja||'').replace(/\s+/g,' '),x.old||'',tfLen(x.old),
+      x.nu||'',tfLen(x.nu)].join('\t'));
+  });
+  return lines.join('\n');
+}
+function tfCopy(){
+  if(!tfRows.length){ tfSay('一覧が空です。',true); return; }
+  var t=tfText();
+  tfSay('<textarea readonly style="width:100%;height:160px;font-size:11px">'+esc(t)+'</textarea>'
+    +'<br>そのまま選んでコピーできます。');
+  try{ if(navigator.clipboard)navigator.clipboard.writeText(t)['catch'](function(){}); }catch(e){}
+}
+/* File Exchange に上げたあと。CSV に入れた行の英題を出品リストの行にも入れる。 */
+function tfDone(){
+  var rows=tfRows.filter(function(x){ return x.csvAt&&tfChanged(x)&&!x.doneAt; });
+  if(!rows.length){ tfSay('CSV を書き出した行がありません。',true); return; }
+  if(!confirm(rows.length+'件の英題を、eBay に上げたものとして出品リストの行にも入れます。よろしいですか？'))return;
+  var n=0, at=new Date().toISOString();
+  rows.forEach(function(x){
+    x.doneAt=at; x.old=x.nu;
+    csvList.forEach(function(r){
+      if(String(r.itemId||'').trim()!==x.itemId)return;
+      r.titleEn=x.nu; r.titleFixAt=at;
+      if(x.specs&&typeof x.specs==='object')r.specs=x.specs;
+      n++;
+    });
+  });
+  tfSave(); csvSaveList(); csvRender(); tfRender();
+  tfSay('アップロード済みにしました：'+rows.length+'件（出品リストの行 '+n+'件の英題も新しくしました）。');
+}
+function tfClear(){
+  if(!tfRows.length)return;
+  if(!confirm('英題の作り直しの一覧（'+tfRows.length+'件）を消します。よろしいですか？'))return;
+  tfRows=[]; tfSave(); tfRender(); tfSay('一覧を消しました。');
+}
+tfLoad();
+if($('tfPick'))$('tfPick').onclick=tfPick;
+if($('tfCsv'))$('tfCsv').onclick=tfCsvRun;
+if($('tfCopy'))$('tfCopy').onclick=tfCopy;
+if($('tfDone'))$('tfDone').onclick=tfDone;
+if($('tfClear'))$('tfClear').onclick=tfClear;
+try{ tfRender(); }catch(e){}
 if($('csvPackFind'))$('csvPackFind').onclick=function(){ csvPackCount(); };
 if($('csvPackRun'))$('csvPackRun').onclick=csvPackRun;
 function csvReviseBuild(rows,opt){
@@ -32476,7 +32803,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v357';   // sw.js の const V と必ず同じ値にする
+var APP_V='v358';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

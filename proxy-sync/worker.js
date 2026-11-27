@@ -1267,6 +1267,10 @@ async function ebayActive(env, run) {
         sale: (ps !== "" || disc !== "") ? 1 : 0,
         saleOrig: psOrig > 0 ? psOrig : null,
         saleEnd: xmlTag(ps, "EndTime") || "",
+        /* 8.108 その出品で売れた数・ウォッチの数（英題の作り直しの候補選び）。
+           返らないときは null（前の値を残す）。 */
+        sold: xmlTag(b, "QuantitySold") === "" ? null : (Number(xmlTag(b, "QuantitySold")) || 0),
+        watch: xmlTag(b, "WatchCount") === "" ? null : (Number(xmlTag(b, "WatchCount")) || 0),
       });
     }
   }
@@ -2468,6 +2472,7 @@ async function syncEbayActive(env, run) {
   /* 7.113：取り込めなかった CustomLabel を**形ごとに数える**（画面に出す）。
      どんな形が残っているか分からないと直せないため。 */
   const kinds = {}, samples = [];
+  const tfCols = await colOk(env, "ebay_stat", "title");      // 8.108
   const kindOf = (lab) => {
     const s0 = String(lab || "").trim();
     if (!s0) return "CustomLabel が空";
@@ -2521,6 +2526,18 @@ async function syncEbayActive(env, run) {
            (it.sale === null || it.sale === undefined) ? 0 : it.sale,
            (it.saleOrig === null || it.saleOrig === undefined) ? null : it.saleOrig,
            it.saleEnd || ""));
+    /* 8.108 無在庫（W-）だけ、いまの題名・売れた数・ウォッチの数も控える
+       （migrate-0075 の前は書かない。D1 の負担を増やさないよう W- だけ）。 */
+    if (tfCols && k.from === "mw")
+      stmts.push(env.DB.prepare(
+        `INSERT INTO ebay_stat (asin,cond,item_id,title,sold,watch,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(asin,cond) DO UPDATE SET item_id=excluded.item_id,
+           title=excluded.title, sold=COALESCE(excluded.sold, ebay_stat.sold),
+           watch=COALESCE(excluded.watch, ebay_stat.watch), updated_at=excluded.updated_at`)
+        .bind(k.asin, k.cond, it.itemId || "", it.title || "",
+              (it.sold === null || it.sold === undefined) ? null : it.sold,
+              (it.watch === null || it.watch === undefined) ? null : it.watch, runAt));
     keys.push({ asin: k.asin, cond: k.cond });
   }
   await runBatch(env, run, stmts);
@@ -2543,6 +2560,119 @@ async function syncEbayActive(env, run) {
     ).bind(runAt).run();
   }
   return keys;
+}
+
+/* ---- GET /titlefix/cands（8.108・カジの依頼）----
+   出品済みの無在庫（W-）の英題を作り直す**試しの候補**を選ぶ。
+   「閲覧が少なく、まだ1つも売れていない出品から」。売れた実績のある出品は外す。
+     1) W-・ItemID あり・在庫あり・売れた数 0・eBay の注文が1つも無い・出してから
+        min_days 日（既定 14日）以上たった出品を、ウォッチの少ない順・古い順に pool 件
+     2) その pool 件の閲覧数（GetItem の HitCount）を取る（24時間以内に取った分は使い回す）。
+      値は ebay_stat（items はもう100列なので別の表・migrate-0075）に控える
+     3) 閲覧数の少ない順（取れなかった出品はウォッチの少ない順で後ろ）に n 件（既定 50）
+   MW の商品名（作り直しに使う日本語の名前）を返すので**管理者だけ**。eBay には書き込まない。 */
+const TF_N = 50, TF_POOL = 150, TF_DAYS = 14, TF_VIEWS_H = 24, TF_PAR = 5;
+function tfCandSql(pool) {
+  return `SELECT i.asin, i.cond, i.ebay_item_id AS item_id, i.ebay_sku AS sku,
+       substr(i.ebay_sku,3) AS jan,
+       COALESCE(NULLIF(t.title,''), i.title, '') AS title,
+       t.sold AS sold, t.watch AS watch, t.views AS views,
+       t.views_at AS views_at, i.ebay_start AS start, i.ebay_price AS price,
+       (SELECT s.name FROM mw_stock s WHERE s.jan = substr(i.ebay_sku,3)
+         ORDER BY s.pick DESC, (s.gone_at IS NULL) DESC, s.id DESC LIMIT 1) AS mw_name,
+       (SELECT s.kishu FROM mw_stock s WHERE s.jan = substr(i.ebay_sku,3)
+         ORDER BY s.pick DESC, (s.gone_at IS NULL) DESC, s.id DESC LIMIT 1) AS kishu
+     FROM items i LEFT JOIN ebay_stat t ON t.asin = i.asin AND t.cond = i.cond
+     WHERE i.ebay_sku LIKE 'W-%' AND COALESCE(i.ebay_item_id,'') <> ''
+       AND COALESCE(i.ebay_qty,0) > 0 AND COALESCE(t.sold,0) = 0
+       AND (i.ebay_start IS NULL OR i.ebay_start = '' OR i.ebay_start <= ?1)
+       AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.channel = 'ebay'
+             AND (o.sku = i.ebay_sku OR (o.asin = i.asin AND o.cond = i.cond)))
+     ORDER BY COALESCE(t.watch,0) ASC, COALESCE(i.ebay_start,'') ASC
+     LIMIT ${Math.max(1, Math.min(300, pool | 0))}`;
+}
+/* 閲覧数の少ない順。取れなかった出品は後ろ（ウォッチの少ない順・古い順）。 */
+function tfSort(a, b) {
+  const av = (a.views === null || a.views === undefined) ? null : Number(a.views);
+  const bv = (b.views === null || b.views === undefined) ? null : Number(b.views);
+  if (av !== null && bv !== null && av !== bv) return av - bv;
+  if ((av === null) !== (bv === null)) return av === null ? 1 : -1;
+  const aw = Number(a.watch) || 0, bw = Number(b.watch) || 0;
+  if (aw !== bw) return aw - bw;
+  return String(a.start || "").localeCompare(String(b.start || ""));
+}
+async function titlefixCands(env, url, getOne) {
+  const run = newRun("titlefix");
+  const p = url.searchParams;
+  const n = Math.max(1, Math.min(100, Number(p.get("n")) || TF_N));
+  const pool = Math.max(n, Math.min(300, Number(p.get("pool")) || TF_POOL));
+  const days = Math.max(0, Math.min(365, p.get("min_days") === null ? TF_DAYS
+                                         : (Number(p.get("min_days")) || 0)));
+  if (!(await colOk(env, "ebay_stat", "title")))
+    return { ok: false, table_ok: false,
+             why: "ebay_stat の表がありません（migrate-0075 を流してください）" };
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const r = await env.DB.prepare(tfCandSql(pool)).bind(since).all();
+  const rows = (r && r.results) || [];
+  /* 閲覧数を取る（古いものだけ）。 */
+  const old = Date.now() - TF_VIEWS_H * 3600000;
+  const need = (p.get("views") === "0") ? [] : rows.filter((x) =>
+    !x.views_at || !(Date.parse(x.views_at) > old));
+  let got = 0, noHits = 0, failed = 0;
+  if (need.length) {
+    let token = "";
+    try { token = await ebayToken(env, run); } catch (e) { token = ""; }
+    if (!token) { run.notes.push("eBay のトークンが取れないので閲覧数は取っていません"); }
+    else {
+      const one = getOne || ebayGetOne;
+      for (let i = 0; i < need.length; i += TF_PAR) {
+        const part = need.slice(i, i + TF_PAR);
+        const res = await Promise.all(part.map((x) =>
+          one(env, run, token, String(x.item_id)).catch(() => ({ ok: false }))));
+        const at = nowIso(), st = [];
+        res.forEach((g, k) => {
+          const x = part[k];
+          if (!g || !g.ok) { failed++; return; }
+          got++;
+          if (g.views === null || g.views === undefined) noHits++;
+          x.views = (g.views === null || g.views === undefined) ? null : g.views;
+          if (g.watch !== null && g.watch !== undefined) x.watch = g.watch;
+          x.views_at = at;
+          st.push(env.DB.prepare(
+            `INSERT INTO ebay_stat (asin,cond,item_id,title,sold,watch,views,views_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)
+             ON CONFLICT(asin,cond) DO UPDATE SET views=excluded.views,
+               watch=COALESCE(excluded.watch, ebay_stat.watch),
+               sold=COALESCE(excluded.sold, ebay_stat.sold),
+               title=COALESCE(NULLIF(excluded.title,''), ebay_stat.title),
+               item_id=excluded.item_id, views_at=excluded.views_at,
+               updated_at=excluded.updated_at`).bind(x.asin, x.cond, String(x.item_id || ""),
+               g.title || "", (g.sold === null || g.sold === undefined) ? null : g.sold,
+               (g.watch === null || g.watch === undefined) ? null : g.watch, x.views, at));
+          if (g.title) x.title = g.title;
+          /* GetItem で売れていたと分かった出品は外す（売れた実績のある出品は対象外） */
+          if (Number(g.sold) > 0) x.sold = Number(g.sold);
+        });
+        if (st.length) await runBatch(env, run, st);
+      }
+    }
+  }
+  const live = rows.filter((x) => !(Number(x.sold) > 0));
+  live.sort(tfSort);
+  const pick = live.slice(0, n).map((x) => ({
+    item_id: String(x.item_id || ""), sku: String(x.sku || ""), jan: String(x.jan || ""),
+    title: String(x.title || ""), mw_name: String(x.mw_name || ""),
+    kishu: String(x.kishu || ""), views: (x.views === null || x.views === undefined) ? null : Number(x.views),
+    watch: Number(x.watch) || 0, start: String(x.start || ""), price: Number(x.price) || 0 }));
+  const viewsKnown = live.filter((x) => x.views !== null && x.views !== undefined).length;
+  run.rows = pick.length;
+  run.notes.push("候補 " + rows.length + "件から " + pick.length + "件（閲覧数を取った "
+    + got + "件・閲覧数が返らない " + noHits + "件・失敗 " + failed + "件）");
+  await saveRun(env, run);
+  return { ok: true, n: pick.length, pool: rows.length, min_days: days,
+           views_known: viewsKnown, views_fetched: got, views_missing: noHits,
+           views_failed: failed, rows: pick,
+           sort: viewsKnown ? "views" : "watch" };
 }
 
 /* ---- POST /ebay/link ----
@@ -2636,6 +2766,7 @@ async function ebayGetOne(env, run, token, itemId) {
     + "<ItemID>" + esc(itemId) + "</ItemID>"
     + "<DetailLevel>ReturnAll</DetailLevel>"
     + "<IncludeItemSpecifics>false</IncludeItemSpecifics>"
+    + "<IncludeWatchCount>true</IncludeWatchCount>"
     + "</GetItemRequest>";
   const resp = await net(run, EBAY_API + "/ws/api.dll", {
     method: "POST",
@@ -2664,7 +2795,11 @@ async function ebayGetOne(env, run, token, itemId) {
            status: xmlTag(ss, "ListingStatus"),
            qty: Math.max(0, qty - sold),
            price: Number(xmlTag(ss, "CurrentPrice") || 0),
-           currency: xmlAttr(ss, "CurrentPrice", "currencyID") || "USD" };
+           currency: xmlAttr(ss, "CurrentPrice", "currencyID") || "USD",
+           /* 8.108 閲覧数（HitCount）とウォッチの数。返らない出品は null。 */
+           sold: sold,
+           views: xmlTag(xml, "HitCount") === "" ? null : (Number(xmlTag(xml, "HitCount")) || 0),
+           watch: xmlTag(xml, "WatchCount") === "" ? null : (Number(xmlTag(xml, "WatchCount")) || 0) };
 }
 
 /* 日次。Amazon最安値（参考表示用）。eBayに出ている行だけ。 */
@@ -22130,7 +22265,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "mw_img", "mw_market", "mw_mkt_runs", "mw_reg_log", "mw_restrict",
   "mw_csv_runs", "mw_move", "mw_stat",
   "mw_notify", "mw_pic_ng", "mw_rst_runs", "mw_runs", "mw_same", "mw_stock", "mw_sub", "one_item",
-  "ebay_cat",
+  "ebay_cat", "ebay_stat",
   "mem", "mem_log", "mem_order",
   "os_item", "sub_draft",
   "sub_post", "sub_order", "sub_stop",
@@ -22159,6 +22294,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  /* 8.108 英題の作り直し（いまの題名・売れた数・ウォッチ・閲覧数）。 */
+  ["ebay_stat", "migrate-0075-title-fix.sql"],
   ["ebay_cat", "migrate-0066-ebay-cat.sql"],
   ["mem", "migrate-0065-mem.sql"],
   ["mem_order", "migrate-0065-mem.sql"],
@@ -23356,6 +23493,12 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/catalog/check")
         return json(await catalogCheck(env), 200, origin);
+      /* 8.108 英題の作り直しの候補（MW の商品名を返すので管理者だけ）。 */
+      if (request.method === "GET" && url.pathname === "/titlefix/cands") {
+        if (role !== "admin")
+          return forbidStaff("英題の作り直しは管理者用のキーが必要です", [], origin);
+        return json(await titlefixCands(env, url), 200, origin);
+      }
       /* 出品を1件だけ手で結び付ける（7.113）。
          eBay に書き込まない読み取りだけなので、作業者のキーでも使える。 */
       if (request.method === "POST" && url.pathname === "/ebay/link") {
@@ -23658,6 +23801,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.108 */
+  titlefixCands, tfCandSql, tfSort, ebayGetOne, TF_N, TF_POOL, TF_DAYS,
   /* 8.103 */
   d1Busy, d1Retry, runBatchRetry, MW_CSV_GAP_MS, MW_SEEN_IDS, MW_CSV_RUN_KEY, MW_CSV_KICK,
   /* 8.101 */

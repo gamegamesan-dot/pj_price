@@ -1272,3 +1272,19 @@ CREATE TABLE IF NOT EXISTS mw_same (
   at         TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+/* ===== 8.108（カジの依頼）英題の作り直し =====
+   いまの eBay の題名・売れた数・ウォッチ・閲覧数（migrate-0075）。
+   items はもう 100列（D1 の上限）なので別の表に持つ。無在庫（W-）の出品だけ。 */
+CREATE TABLE IF NOT EXISTS ebay_stat (
+  asin       TEXT NOT NULL,
+  cond       TEXT NOT NULL,
+  item_id    TEXT,
+  title      TEXT,                              -- いまの eBay の題名
+  sold       INTEGER,                           -- その出品で売れた数（QuantitySold）
+  watch      INTEGER,                           -- ウォッチの数（WatchCount）
+  views      INTEGER,                           -- 閲覧数（GetItem の HitCount。NULL は取れない）
+  views_at   TEXT,                              -- 閲覧数を取った時刻
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (asin, cond)
+);

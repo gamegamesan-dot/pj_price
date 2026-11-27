@@ -685,7 +685,8 @@ const FIG_SYSTEM = [
   "decide which product this is.",
   "",
   "Output ONLY a JSON object with exactly these keys:",
-  '  "brand","series","series_short","chara","chara_short","item_name","variant","line",',
+  '  "brand","series","series_short","chara","chara_short","chara_alias","item_name",',
+  '  "variant","line",',
   '  "item_type","confidence","same_item"',
   '  item_type: "figure" | "model_kit" | "prop_replica" | "other"',
   '  confidence: "high" | "medium" | "low"',
@@ -700,6 +701,13 @@ const FIG_SYSTEM = [
   "- chara_short is the same character name with parenthetical notes and middle",
   '  initials removed (e.g. "Captain America (John F. Walker)" -> "Captain',
   '  America John Walker"). If chara is already short, repeat it.',
+  "- chara_alias is a nickname or title that fans and eBay sellers commonly use",
+  "  for this SAME character in addition to the name (e.g. Alastor -> \"Radio",
+  '  Demon", Monkey D. Luffy -> "Straw Hat", Hatsune Miku -> "Vocaloid" is NOT an',
+  "  alias: it is a product category). Fill it ONLY when you are certain the alias",
+  "  is widely used for this exact character. Never use another character's name,",
+  "  another work's title, another company's or brand's name, or a generic word",
+  '  (Cute, Rare, Anime). If unsure, use "" (empty string).',
   "- series_short is the shortest form of series that collectors still recognise.",
   '  It is used when the title runs too long (series "Atelier Ryza 2: Lost',
   '  Legends & the Secret Fairy" -> series_short "Atelier Ryza 2"). If series is',
@@ -753,7 +761,7 @@ const FIG_SYSTEM = [
 ].join("\n");
 
 const FIG_FIELDS = ["brand", "series", "series_short", "chara", "chara_short",
-                    "item_name", "variant", "line", "scale", "origin"];
+                    "chara_alias", "item_name", "variant", "line", "scale", "origin"];
 /* pj_price 側で登録した eBay カテゴリの「必須の Item specifics」（8.65）。
    項目名は eBay の Taxonomy API から取ったものをそのまま渡してもらう。
    名前の形だけ確かめ、最大12件まで使う（prompt を長くしすぎない）。 */
@@ -834,6 +842,7 @@ async function figAskClaude(env, jaTitle, jp, titles, log, need, extra) {
   // 短縮形が空なら元をそのまま使う
   if (!fields.series_short) fields.series_short = fields.series;
   if (!fields.chara_short) fields.chara_short = fields.chara;
+  fields.chara_alias = figAliasClean(fields.chara_alias, fields);
   fields.variant = fixVersionWord(fields.variant);
   // 「Ver.」だけ残った版は意味がないので空にする
   if (/^Ver\.?$/i.test(fields.variant)) fields.variant = "";
@@ -869,6 +878,23 @@ async function figAskClaude(env, jaTitle, jp, titles, log, need, extra) {
     confidence: ["high", "medium", "low"].includes(obj.confidence) ? obj.confidence : "low",
     same_item: obj.same_item === true,
   };
+}
+
+/* 8.108 キャラクターの別名（例 Alastor → Radio Demon）。英題を 70〜80字に近づける
+   ための**本当にある呼び名だけ**。名前・作品名と同じもの、長すぎるもの、
+   ほかの社名・宣伝の言葉に見えるものは捨てる（eBay の検索操作の決まりに触れるため）。 */
+const ALIAS_NG = /\b(free|shipping|rare|cute|anime|new|sealed|japan|import|figure|official|authentic|bandai|banpresto|sega|taito|furyu|kotobukiya|good smile|megahouse|disney|marvel|nintendo|sony)\b|[@!*#$%~|<>]/i;
+function figAliasClean(raw, f) {
+  const a = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!a || a.length > 30 || !/^[A-Za-z0-9][A-Za-z0-9 .,'&:-]*$/.test(a)) return "";
+  if (ALIAS_NG.test(a)) return "";
+  const key = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const k = key(a);
+  for (const n of ["chara", "chara_short", "series", "series_short", "brand", "line"]) {
+    const v = key(f && f[n]);
+    if (v && (v === k || v.indexOf(k) >= 0 || k.indexOf(v) >= 0)) return "";
+  }
+  return a;
 }
 
 /* ---- 型番の拾い漏れを補う（8.76・カジの報告）----
@@ -924,13 +950,15 @@ async function handleFigure(env, item, force) {
   const hint = (String(item.hint || "") === "model_kit") ? "model_kit" : "";
   /* v3 … 8.76 で指示文を直した（かっこの中の作品名・型番を落とさない・
      プラモデルは Figure と書かない）。前の版の薄い英題を使い回さない。 */
-  const ck = "fig:v3:" + key + (need.length ? ("|a:" + need.join(",")) : "")
+  /* v4 … 8.108 キャラクターの別名（chara_alias）を足した。 */
+  const ck = "fig:v4:" + key + (need.length ? ("|a:" + need.join(",")) : "")
     + (hint ? ("|h:" + hint) : "");
   if (!force) {
     const hit = await env.TITLE_CACHE.get(ck, "json");
     // 項目が足りない古い形のときは、キャッシュ無しとして扱い作り直す
     if (hit && hit.fields && hit.fields.origin !== undefined
-        && hit.fields.item_type !== undefined && hit.fields.chara_short !== undefined)
+        && hit.fields.item_type !== undefined && hit.fields.chara_short !== undefined
+        && hit.fields.chara_alias !== undefined)
       return { key, status: hit.status || "review", fields: hit.fields,
                jan_resolved: hit.jan_resolved || "", sources: hit.sources || [],
                candidates: hit.candidates || [], note: "キャッシュ", cached: true };
@@ -1211,4 +1239,4 @@ export default {
    本番の動きには関与しない（fetch からは使わない）。 */
 export const __test = { platformsIn, platformKey, filterCandidates, keyRole, eqKey,
                         figNeedAspects, figAspectRule,
-                        figCodesIn, figCodeFill, figBrand, FIG_SYSTEM };
+                        figCodesIn, figCodeFill, figBrand, FIG_SYSTEM, figAliasClean, FIG_FIELDS };
