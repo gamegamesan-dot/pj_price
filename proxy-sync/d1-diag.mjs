@@ -8,6 +8,7 @@
 
    使い方（proxy-sync で）:
      node d1-diag.mjs --mw-csv      # 取り込みの記録を出す（読むだけ）
+     node d1-diag.mjs --title-len   # 出品済みの無在庫の題名の長さ（数だけ・8.108）
      node d1-diag.mjs --kick        # 「いますぐ取り込む」の印を置く
                                     # （pj-sync の15分ごとの回が拾って取り込む）
      node d1-diag.mjs … --db pj-sync --local */
@@ -48,6 +49,32 @@ export const Q_MATCH = "SELECT s.jan AS jan, s.name AS mw_name, s.list_price AS 
   + "FROM mw_stock s JOIN mw_amz a ON a.jan = s.jan "
   + "WHERE s.pick = 1 AND s.gone_at IS NULL AND COALESCE(a.price,0) > 0";
 export const Q_X = "SELECT v FROM sync_state WHERE k = 'ui.settings'";
+/* 8.108 出品済みの無在庫（W-・ItemID あり）の題名の長さ（**数だけ**）。
+   売れた実績（eBay の注文に同じ SKU か同じ商品がある）で分けて数える。
+   題名そのものは出さない（公開のログ）。col は題名の列（ebay_title が無い D1 では title）。 */
+export function qTitleLen(col) {
+  const t = "COALESCE(NULLIF(i." + col + ",''),'')";
+  return "SELECT CASE WHEN length(" + t + ") < 40 THEN 'a' WHEN length(" + t + ") < 60 THEN 'b' "
+    + "WHEN length(" + t + ") <= 80 THEN 'c' ELSE 'd' END AS band, "
+    + "CASE WHEN EXISTS (SELECT 1 FROM orders o WHERE o.channel = 'ebay' "
+    + "AND (o.sku = i.ebay_sku OR (o.asin = i.asin AND o.cond = i.cond))) THEN 1 ELSE 0 END AS sold, "
+    + "COUNT(*) AS n, ROUND(AVG(length(" + t + ")),1) AS avg_len "
+    + "FROM items i WHERE i.ebay_sku LIKE 'W-%' AND COALESCE(i.ebay_item_id,'') <> '' "
+    + "GROUP BY band, sold ORDER BY band, sold";
+}
+export const TITLE_BAND = { a: "40字未満", b: "40〜59字", c: "60〜80字", d: "81字以上" };
+/* 帯ごとの件数にまとめる。{ a:{all,sold,unsold,avg}, … , total } */
+export function titleLenSum(rows) {
+  const o = { total: 0 };
+  for (const k of Object.keys(TITLE_BAND)) o[k] = { all: 0, sold: 0, unsold: 0 };
+  for (const r of rows || []) {
+    const b = o[r.band]; if (!b) continue;
+    const n = Number(r.n) || 0;
+    b.all += n; o.total += n;
+    if (Number(r.sold) === 1) b.sold += n; else b.unsold += n;
+  }
+  return o;
+}
 /* 数える（理由ごと）。examples は入り数違いの例（卸値は入れない）。 */
 export function matchCount(rows, x) {
   const o = { rows: 0, bad: 0, name: 0, name_price: 0, qty: 0, same: 0, qtyWords: {}, examples: [] };
@@ -137,6 +164,22 @@ function main() {
       console.log(r.status === 0 ? "例を社内用の Discord に送りました（" + c.examples.length + "件）"
                                  : "例を Discord に送れませんでした");
     } else console.log("例は Discord に送っていません（宛先が無いか、例がありません）");
+  }
+  if (args.includes("--title-len")) {
+    /* 8.108 eBay の題名の長さ（いまの題名の列があればそれ、無ければ最初に取り込んだ題名）。 */
+    let col = "ebay_title", res = q(qTitleLen(col));
+    if (!res.ok) { col = "title"; res = q(qTitleLen(col)); }
+    console.log("\n=== 出品済みの無在庫（W-・ItemID あり）の題名の長さ（列 " + col + "）===");
+    if (!res.ok) console.log("読めませんでした：" + clean(res.err, 200));
+    else {
+      const c = titleLenSum(res.rows);
+      console.log("合計 " + c.total + "件");
+      for (const k of Object.keys(TITLE_BAND))
+        console.log(TITLE_BAND[k] + "：" + c[k].all + "件（売れた実績あり " + c[k].sold
+          + "／なし " + c[k].unsold + "）");
+      for (const r of res.rows)
+        console.log("平均の長さ " + TITLE_BAND[r.band] + (Number(r.sold) ? "・売れた" : "・未売") + " " + r.avg_len);
+    }
   }
   if (!args.includes("--mw-csv")) return;
   const show = (title, res, cols) => {
