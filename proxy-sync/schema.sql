@@ -1309,3 +1309,12 @@ CREATE TABLE IF NOT EXISTS sub_del (
 );
 CREATE INDEX IF NOT EXISTS idx_sub_del_at  ON sub_del(del_at);
 CREATE INDEX IF NOT EXISTS idx_sub_del_jan ON sub_del(jan, ch);
+
+/* ===== 8.113（カジの依頼）会員の品を海外向け（os-）にも出す印（migrate-0078）=====
+   JAN と入／切と時刻だけ。値段はいまの os- と同じ決め方（8.94）。 */
+CREATE TABLE IF NOT EXISTS os_pick (
+  jan        TEXT PRIMARY KEY,
+  on_        INTEGER NOT NULL DEFAULT 0,   -- 1＝海外向けにも出す
+  at         TEXT,                         -- 印を変えた時刻
+  created_at TEXT NOT NULL
+);

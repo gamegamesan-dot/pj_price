@@ -11429,6 +11429,11 @@ async function mwSubList(env, url) {
   const soldSel = (await colOk(env, "sub_order", "order_no"))
     ? "(SELECT COALESCE(SUM(o.qty),0) FROM sub_order o WHERE o.jan = b.jan)"
     : "0";
+  /* 8.113 海外向けにも出す印と、会員向けのカードを最初に送った日時（列・表が無くても落とさない）。 */
+  const osSel = (await osPickOk(env))
+    ? "(SELECT COALESCE(op.on_,0) FROM os_pick op WHERE op.jan = b.jan)" : "0";
+  const postSel = (await subPostOk(env))
+    ? "(SELECT MIN(sp.at) FROM sub_post sp WHERE sp.jan = b.jan)" : "NULL";
   const q = await env.DB.prepare(
     `SELECT b.jan AS jan, b.on_sale AS on_sale, b.max_qty AS max_qty,
             b.price AS price, COALESCE(b.grades,'') AS grades,
@@ -11447,7 +11452,8 @@ async function mwSubList(env, url) {
             s.gone_at AS gone_at,
             /* 6.194（【4】）取り込んだ注文の点数。CSV の在庫を
                「上限 − 取り込んだ注文の点数」にするのに使う。 */
-            ${soldSel} AS sold
+            ${soldSel} AS sold,
+            ${osSel} AS os_on, ${postSel} AS posted_at
        FROM mw_sub b
             ${MW_ONE_JOIN}
             LEFT JOIN mw_amz a ON a.jan = b.jan
@@ -11489,6 +11495,9 @@ async function mwSubList(env, url) {
     /* 6.194（【4】）取り込んだ注文の点数と残り数（上限 − 注文）。 */
     sold: Number(r.sold) || 0,
     left: Math.max(0, (Number(r.max_qty) || 0) - (Number(r.sold) || 0)),
+    /* 8.113 海外向けにも出す印・会員向けのカードを最初に送った日時。 */
+    os_on: Number(r.os_on) || 0,
+    posted_at: String(r.posted_at || ""), posted_at_jst: jstText(r.posted_at),
   }));
   return { ok: true, table_ok: true, n: rows.length, rows: rows, limit: limit };
 }
@@ -17795,9 +17804,79 @@ async function osPut(env, body) {
   return Object.assign(await saveRun(env, run), res);
 }
 /* 1行の見立て。{ why, qty } を返す（why が '' なら直しは要らない）。 */
+/* ===== 8.113（カジの依頼）会員の品を海外向け（os-）にも出す =====
+   刈取の行の「海外向けにも出す」の印（os_pick）。書き出しは画面（いまの os- と同じ CSV・
+   値段の決め方 8.94）。ここは印の保存と、os- の在庫の直しで会員の分を引くところ。 */
+async function osPickOk(env) { return await colOk(env, "os_pick", "on_"); }
+/* 会員がまだ買える分（上限 − 取り込んだ注文の点数）。海外向けの印があるときだけ。 */
+async function osMemLeftSel(env) {
+  if (!(await osPickOk(env)) || !(await mwSubOk(env))) return "0";
+  const sold = (await colOk(env, "sub_order", "order_no"))
+    ? "(SELECT COALESCE(SUM(x.qty),0) FROM sub_order x WHERE x.jan = o.jan)" : "0";
+  return "(SELECT CASE WHEN COALESCE(op.on_,0)=1 AND COALESCE(b.on_sale,0)=1"
+    + " THEN MAX(0, COALESCE(b.max_qty,0) - " + sold + ") ELSE 0 END"
+    + " FROM mw_sub b LEFT JOIN os_pick op ON op.jan = b.jan WHERE b.jan = o.jan)";
+}
+async function osPickPut(env, body) {
+  const res = { ok: false };
+  if (!(await osPickOk(env))) {
+    res.error = "no_table"; res.detail = "os_pick がありません（migrate-0078-os-pick.sql）"; return res;
+  }
+  const o = body || {};
+  const list = Array.isArray(o.items) ? o.items : [o];
+  const at = nowIso(), st = [];
+  for (const x of list.slice(0, 200)) {
+    const jan = String((x && x.jan) || "").replace(/\D/g, "");
+    if (!janOk(jan)) continue;
+    const on = (x.on === 1 || x.on === true || x.on === "1") ? 1 : 0;
+    st.push(env.DB.prepare(
+      `INSERT INTO os_pick (jan,on_,at,created_at) VALUES (?1,?2,?3,?3)
+       ON CONFLICT(jan) DO UPDATE SET on_=excluded.on_, at=excluded.at`).bind(jan, on, at));
+  }
+  if (st.length) await env.DB.batch(st);
+  res.ok = true; res.n = st.length; res.at = at;
+  return res;
+}
+/* (C) os- が日本で売られる設定になっていないかを**読むだけ**で確かめる（GET /shop/os/jp）。
+   Shopify の publishedInContext（国＝JP）で、日本のお客さんに出ているかを見る。
+   配送の設定（配送プロファイル）は、読めるときだけ名前を出す（新しい「マーケットごとの配送」の
+   店では配送プロファイルが無いので出ない）。 */
+const OS_JP_Q = (prof) => `query pjOsJp($q: String!) {
+  products(first: 50, query: $q) { nodes { handle status
+    publishedInContext(context: { country: JP })
+    ${prof ? "variants(first: 1) { nodes { deliveryProfile { name } } }" : ""} } } }`;
+async function osJpCheck(env) {
+  const res = { ok: false, n: 0, jp: 0, not_jp: 0, jp_handles: [], profiles: {}, prof_ok: false };
+  let st = {};
+  try { st = (await settingsGet(env)).settings || {}; } catch (e) { st = {}; }
+  const host = shopHostOf(st);
+  if (!host) { res.error = "no_host"; res.detail = shopWhyJa({ why: "no_host" }); return res; }
+  if (!shopKeyKind(env)) { res.error = "no_key"; res.detail = shopWhyJa({ why: "no_key" }); return res; }
+  const run = newRun("os-jp");
+  let r = await shopGql(env, run, host, OS_JP_Q(true), { q: "tag:export" });
+  if (!r.ok) { r = await shopGql(env, run, host, OS_JP_Q(false), { q: "tag:export" }); }
+  else res.prof_ok = true;
+  await saveRun(env, run);
+  if (!r.ok) { res.error = "shop"; res.detail = shopWhyJa(r); return res; }
+  const nodes = ((((r.data || {}).products) || {}).nodes || [])
+    .filter((x) => /^os-/.test(String((x || {}).handle || "")));
+  for (const x of nodes) {
+    res.n++;
+    if (x.publishedInContext === true) {
+      res.jp++; if (res.jp_handles.length < 10) res.jp_handles.push(String(x.handle));
+    } else res.not_jp++;
+    const pf = ((((x.variants || {}).nodes || [])[0] || {}).deliveryProfile || {}).name;
+    if (res.prof_ok) { const k = String(pf || "（なし）"); res.profiles[k] = (res.profiles[k] || 0) + 1; }
+  }
+  res.ok = true;
+  return res;
+}
 function osFixOf(r, pct) {
   const live = Number(r.live || 0) > 0;
-  const stock = Math.round(Number(r.now_stock) || 0);
+  /* 8.113 会員の品を海外向けにも出しているときは、会員がまだ買える分（上限 − 注文）を
+     MW の在庫から先に引く（会員の分を先に取る）。 */
+  const stock = Math.max(0, Math.round(Number(r.now_stock) || 0)
+    - Math.max(0, Math.round(Number(r.mem_left) || 0)));
   const was = Math.round(Number(r.wholesale) || 0);
   const now = Math.round(Number(r.now_px) || 0);
   const why = [];
@@ -17825,6 +17904,7 @@ async function osCheck(env, run, opt) {
   const q = await env.DB.prepare(
     `SELECT o.jan AS jan, o.name AS name, o.qty AS qty, o.price AS price,
             o.wholesale AS wholesale, o.fix_at AS fix_at, o.fix_why AS fix_why,
+            ${await osMemLeftSel(env)} AS mem_left,
             (SELECT COUNT(*) FROM mw_stock s
               WHERE s.jan=o.jan AND s.pick=1 AND s.gone_at IS NULL) AS live,
             (SELECT s.stock FROM mw_stock s
@@ -22651,7 +22731,7 @@ const SCHEMA_TABLES = ["_migrations", "amz_dg", "amz_drop", "amz_ptype",
   "mw_notify", "mw_pic_ng", "mw_rst_runs", "mw_runs", "mw_same", "mw_stock", "mw_sub", "one_item",
   "ebay_cat", "ebay_stat",
   "mem", "mem_log", "mem_order",
-  "os_item", "sub_draft",
+  "os_item", "os_pick", "sub_draft",
   "sub_del", "sub_post", "sub_order", "sub_stop",
   "order_queue", "orders",
   "pb_log", "pb_runs", "rk_log", "rk_runs", "rv_log", "rv_runs",
@@ -22678,6 +22758,8 @@ const SCHEMA_ITEM_COLS = ["asin", "cond", "scope", "title", "ebay_item_id",
 /* 足りない名前 → 流すマイグレーション。pj_price の SYNC_MIGRATE と同じ考え方。
    新しい順に見て、最初に当たったものを返す。 */
 const SCHEMA_FIX = [
+  /* 8.113 会員の品を海外向け（os-）にも出す印。 */
+  ["os_pick", "migrate-0078-os-pick.sql"],
   /* 8.111 会員向けのカードを消した記録。 */
   ["sub_del", "migrate-0077-sub-del.sql"],
   /* 8.108 英題の作り直し（いまの題名・売れた数・ウォッチ・閲覧数）。 */
@@ -23598,6 +23680,9 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await memDel(env, b), 200, origin);
       }
+      /* 8.113 os- が日本で売られる設定になっていないか（読むだけ・管理者だけ）。 */
+      if (request.method === "GET" && url.pathname === "/shop/os/jp")
+        return json(await osJpCheck(env), 200, origin);
       /* 8.112 Shopify の鍵（通行証）を取り直す（管理者だけ・/shop/ は管理者の口）。 */
       if (request.method === "POST" && url.pathname === "/shop/token/reset")
         return json(await shopTokenReset(env), 200, origin);
@@ -23793,6 +23878,13 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/mw/sub")
         return json(await mwSubList(env, url), 200, origin);
+      /* 8.113 海外向けにも出す印（管理者だけ）。 */
+      if (request.method === "POST" && url.pathname === "/mw/os") {
+        if (role !== "admin")
+          return forbidStaff("海外向けにも出す印は管理者用のキーが必要です", [], origin);
+        const b = await request.json().catch(() => ({}));
+        return json(await osPickPut(env, b), 200, origin);
+      }
       /* 8.101 「同じ商品」の控え（商品違いの疑いを外す）。利益の計算と配信に
          効くので管理者だけ。 */
       if (request.method === "POST" && url.pathname === "/mw/same") {
@@ -24208,6 +24300,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.113 */
+  osPickPut, osJpCheck,
   /* 8.112 */
   shopTokenReset, shopToken, shopGql, SHOP_MEM, shopReset,
   /* 8.111 */

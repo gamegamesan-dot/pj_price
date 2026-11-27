@@ -1214,6 +1214,12 @@ body.staff #syncOnHandFix{display:none !important}
           <button class="btn cfgprice" id="mwSubInvCsv" style="flex:0 0 auto" onclick="mwSubInvGo()">在庫CSV</button>
         </div>
         <div class="note2" id="mwSubNote" style="margin-top:2px"></div>
+        <!-- 8.113（カジの依頼）「海外向けにも出す」の印がある行から、いまの os- と同じ形の CSV を作る。 -->
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn cfgprice" id="mwOsCsv" style="flex:1" onclick="mwOsCsvGo()">海外向け（os-）の CSV を書き出す</button>
+          <button class="btn cfgprice" id="mwOsJp" style="flex:0 0 auto" onclick="mwOsJpGo()">日本で売られていないか</button>
+        </div>
+        <div class="note2" id="mwOsNote" style="margin-top:2px">刈取の行の「<b>海外向けにも出す</b>」に印のある品を、海外向けの Omakase Ship の商品（<code>os-&lt;JAN&gt;</code>）として書き出します。値段はいまの os- と同じ決め方（卸値（税込）＋目標利益＋決済手数料）、在庫は「MW の在庫 −（販売数の上限 − 会員がもう買った数）」。<b>会員向けのカードを送ってから⚙の日数（既定7日）がたった品だけ</b>出します。</div>
         <!-- 8.36 Shopify でどう取り込むかを1行だけ出す（手順書を見に行かなくて済むように）。 -->
         <div class="note2" style="margin:4px 0 0"><b>Shopify</b> → <b>商品 → インポート</b>でこの CSV を選び、<b>「Overwrite products with matching handles」にチェック</b>して読み込みます。</div>
         <!-- 8.41（カジの依頼）会員用の商品は Shopify で「非公開（Unlisted）」にする。
@@ -2758,6 +2764,8 @@ body.staff #syncOnHandFix{display:none !important}
       <!-- 8.95（カジの依頼）MW の仕入れ送料と梱包材も値段に足す。 -->
       <div class="row"><label for="osShipFee">MW の仕入れ送料（1点）</label><input type="number" id="osShipFee" value="176" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
       <div class="row"><label for="osPackFee">梱包材（1点）</label><input type="number" id="osPackFee" value="50" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
+      <!-- 8.113（カジの依頼）会員の品を海外向けにも出すのは、会員向けのカードを送って◯日たってから。 -->
+      <div class="row"><label for="osSubDays">会員の品を海外向けに出すのは、会員に配信してから</label><input type="number" id="osSubDays" value="7" step="1" min="0" max="90" inputmode="numeric"><span class="unit">日後</span></div>
       <div class="row"><label for="osPayPct">Shopify の決済手数料</label><input type="number" id="osPayPct" value="3.6" step="0.1" min="0" max="20" inputmode="decimal"><span class="unit">%</span></div>
       <div class="note2" style="margin-top:0" id="osPxCfgNote"></div>
       <details style="margin:2px 0 6px"><summary class="note2" style="margin:0;cursor:pointer">変更前と変更後の値段を比べる（出品リストの os- の行）</summary><div id="osPxCmp" class="note2" style="margin:4px 0"></div></details>
@@ -3986,7 +3994,9 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.94 os- の値段（目標利益・決済手数料）。 */
              'osProfitBase','osProfitRate','osPayPct',
              /* 8.95 MW の仕入れ送料・梱包材（os- の値段に足す）。 */
-             'osShipFee','osPackFee'];
+             'osShipFee','osPackFee',
+             /* 8.113 会員の品を海外向けにも出すまでの日数。 */
+             'osSubDays'];
 var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subOnStandard','subOnPremium',
                 /* 8.18 今日の配信の案（振り分けの決まり）。 */
@@ -18912,7 +18922,9 @@ function mwSubLoad(quiet){
           put_at:String(x.put_at||''),
           /* 6.185（【1】）1＝価格を手で直した行（書き出しで引き直さない）。 */
           hand:+x.px_hand||0,
-          loaded_at:String(x.loaded_at||'') };
+          loaded_at:String(x.loaded_at||''),
+          /* 8.113 海外向けにも出す印・会員に配信した日時・会員の注文の点数。 */
+          os_on:+x.os_on||0, posted_at:String(x.posted_at||''), sold:+x.sold||0 };
       });
       mwSubBarRender();
     })
@@ -19017,6 +19029,11 @@ function mwSubLine(r){
     +(v.on?' checked':'')
     +' onchange="mwSubToggle(\''+esc(jan)+'\')">'
     +'<b>会員に出す</b></label>'
+    /* 8.113 海外向けにも出す（会員のカードを送って⚙の日数がたったら os- として書き出す）。 */
+    +'<label class="note2" style="margin:0;display:flex;gap:6px;align-items:center">'
+    +'<input type="checkbox" id="mwOsChk_'+esc(jan)+'"'+(((mwSubOf(jan)||{}).os_on)?' checked':'')
+    +' onchange="mwOsToggle(\''+esc(jan)+'\')"><b>海外向けにも出す</b></label>'
+    +'<span class="note2" id="mwOsWhen_'+esc(jan)+'" style="margin:0">'+esc(mwOsWhenText(jan))+'</span>'
     +'<input type="number" id="mwSubQty_'+esc(jan)+'" value="'+v.qty+'"'
     +' min="1" max="99" step="1" inputmode="numeric" style="flex:0 0 64px"'
     +' onchange="mwSubChange(\''+esc(jan)+'\')"><span class="unit">点まで</span>'
@@ -21725,6 +21742,157 @@ function memUnlinkGo(cust){
     memNote('✓ つなぎを外しました');
     return memListGo(1);
   })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* ===== 8.113（カジの依頼）会員に配信する商品を海外向け（os-）にも出す =====
+   ・刈取の行の「海外向けにも出す」の印（pj-sync の os_pick・PC とスマホで同じ）
+   ・書き出すのは、印があり、会員向けのカードを送ってから⚙ osSubDays 日（既定7日）たった品だけ
+   ・在庫は「MW の在庫 −（販売数の上限 − 会員がもう買った数）」。0以下なら出さない
+   ・CSV はいまの MW の os- と同じ形・同じ列・同じ値段の決め方（8.94）。Handle は os-<JAN>
+     （同じ JAN の MW の os- と同じ商品になる。値段の決め方が同じなのでぶつからない）
+   ・出品リストに同じ JAN の MW の行があればそれを使い、無ければ出品リストに入れるときと同じ形の
+     行を**写しで**作る（英題は pj-title・画像は MW の画像だけ）。出品リストには足さない（eBay に出さない）
+   ・会員の印（member-list・grade-）は付かない（shared/osscsv.js が外す）。sub- には触らない */
+var OS_SUB_DAYS_DEF=7;
+function osSubDays(){
+  var v=String(($('osSubDays')||{}).value||'').trim(), n=Math.round(+v);
+  return (v!==''&&isFinite(n)&&n>=0&&n<=90)?n:OS_SUB_DAYS_DEF;
+}
+/* 海外向けに出せる日（会員に配信した日＋⚙の日数）。配信していなければ null。 */
+function mwOsReadyAt(jan){
+  var t=Date.parse(String((mwSubOf(jan)||{}).posted_at||''));
+  return isFinite(t)?(t+osSubDays()*86400000):null;
+}
+function mwOsWhenText(jan){
+  var m=mwSubOf(jan)||{};
+  if(!m.os_on)return '';
+  var at=mwOsReadyAt(jan);
+  if(at===null)return '（会員に配信したあと'+osSubDays()+'日で出せます）';
+  if(Date.now()>=at)return '（海外向けに出せます）';
+  var d=new Date(at);
+  return '（'+(d.getMonth()+1)+'/'+d.getDate()+' から出せます）';
+}
+function mwOsToggle(jan){
+  var j=String(jan), on=!!($('mwOsChk_'+j)||{}).checked;
+  mwSubMap[j]=Object.assign(mwSubMap[j]||{},{ os_on:on?1:0 });
+  var w=$('mwOsWhen_'+j); if(w)w.textContent=mwOsWhenText(j);
+  return mwPost('/mw/os',{ jan:j, on:on?1:0 }).then(function(d){
+    if(!d||!d.ok){ $('mwOsNote').textContent='⚠ 海外向けの印を保存できませんでした：'+String((d||{}).detail||(d||{}).error||''); return; }
+  })['catch'](function(e){ $('mwOsNote').textContent='⚠ 海外向けの印を保存できませんでした：'+e.message; });
+}
+/* 刈取・仕入れの一覧から JAN の行（卸値・MW 在庫・機種・名前）を引く。 */
+function mwOsSrcRow(jan){
+  var hit=null, j=String(jan);
+  [mwAmzRows,mwRows,mwBuyRows].forEach(function(list){
+    try{ (list||[]).forEach(function(r){ if(!hit&&String(r.jan||'')===j)hit=r; }); }catch(e){}
+  });
+  return hit;
+}
+/* 書き出せるか。{ ok, why, qty, stock } */
+function mwOsJudge(jan,r){
+  var m=mwSubOf(jan)||{};
+  if(!m.os_on)return { ok:false, why:'印がありません' };
+  if(!m.on)return { ok:false, why:'会員に出す印がありません' };
+  if(!r)return { ok:false, why:'刈取の一覧に無い（一覧を読み込んでから押してください）' };
+  var at=mwOsReadyAt(jan);
+  if(at===null)return { ok:false, why:'まだ会員に配信していません' };
+  if(Date.now()<at)return { ok:false, why:'会員に配信して'+osSubDays()+'日たっていません' };
+  var stock=(+r.gone||String(r.gone_at||''))?0:Math.max(0,Math.round(+r.stock||0));
+  var memLeft=Math.max(0,(+m.max_qty||0)-(+m.sold||0));
+  var qty=stock-memLeft;
+  if(qty<=0)return { ok:false, why:'会員の分を引くと在庫が残りません', qty:0, stock:stock };
+  return { ok:true, why:'', qty:qty, stock:stock, memLeft:memLeft };
+}
+/* 写しの行を作る（出品リストに同じ JAN の MW の行があればその写し、無ければ MW の行から）。 */
+function mwOsWorkRow(r,pics,n){
+  var jan=String(r.jan||''), own=null;
+  csvList.forEach(function(x){ if(!own&&String(x.buySource||'')==='mw'&&String(x.jan||'')===jan)own=x; });
+  var w=own?JSON.parse(JSON.stringify(own)):mwListRow(r,pics||[],n||0);
+  if(!own&&pics&&pics.length)w.pics=pics;
+  w.condId=1000;
+  return w;
+}
+function mwOsPics(jan){
+  return fetch(syncUrl()+'/mw/img?jan='+encodeURIComponent(String(jan)),{headers:{'X-PJ-Key':syncApiKey()}})
+    .then(function(res){ return res.ok?res.json():null; })
+    .then(function(d){
+      var pics=[];
+      ((d&&d.rows)||[]).forEach(function(g){
+        if(!Number(g.ok)||!String(g.url||'').trim())return;
+        pics.push({ url:g.url, w:+g.w||0, h:+g.h||0, key:'' });
+      });
+      return pics;
+    })['catch'](function(){ return []; });
+}
+function mwOsSay(t,bad){ var el=$('mwOsNote'); if(el)el.innerHTML=(bad?'<b style="color:var(--bad)">':'')+t+(bad?'</b>':''); }
+function mwOsCsvGo(){
+  if(roleDenyPrice('mwOsNote'))return;
+  csvSecretFill();
+  if(!syncUrl()||!syncApiKey()){ mwOsSay('pj-sync のURLとキーを⚙設定に入れてください。',1); return; }
+  var jans=Object.keys(mwSubMap).filter(function(j){ return !!(mwSubMap[j]||{}).os_on; });
+  if(!jans.length){ mwOsSay('「海外向けにも出す」に印のある行がありません。',1); return; }
+  var go=[], skip={};
+  jans.forEach(function(j){
+    var r=mwOsSrcRow(j), jd=mwOsJudge(j,r);
+    if(!jd.ok){ (skip[jd.why]=skip[jd.why]||[]).push(j); return; }
+    go.push({ jan:j, r:r, jd:jd });
+  });
+  var skipText=function(){ return Object.keys(skip).map(function(k){
+    return esc(k)+' <b>'+skip[k].length+'件</b>'; }).join('<br>'); };
+  if(!go.length){ mwOsSay('書き出せる品がありません。<br>'+skipText(),1); return; }
+  var works=[], i=0;
+  mwOsSay('写真と英題を用意しています… 0／'+go.length);
+  function next(){
+    if(i>=go.length)return Promise.resolve();
+    var x=go[i++];
+    mwOsSay('写真と英題を用意しています… '+i+'／'+go.length);
+    return mwOsPics(x.jan).then(function(pics){
+      var w=mwOsWorkRow(x.r,pics,i);
+      w.qty=x.jd.qty; w.mwStock=x.jd.stock; w.mwWholesale=+x.r.wholesale||+w.mwWholesale||0;
+      works.push(w);
+      return next();
+    });
+  }
+  return next().then(function(){
+    /* 英題が無い写しは pj-title で作る（出品リストの行は書き換えない）。 */
+    var need=works.filter(function(w){ return !String(w.titleEn||'').trim(); });
+    if(!need.length)return;
+    if(!String($('csvTitleApi').value||'').trim()){
+      mwOsSay('⚙の「英語タイトル生成のURL」を入れてください（英題の無い品があります）。',1);
+      throw new Error('stop');
+    }
+    var k=0;
+    function tnext(){
+      if(k>=need.length)return Promise.resolve();
+      var w=need[k++], kind=csvTitleKind(w)||'fig';
+      return csvTitleSend(kind,[w],false)['catch'](function(){}).then(tnext);
+    }
+    return tnext();
+  }).then(function(){
+    var sp=OSS.split(works.map(csvOsItem),osOpt());
+    sp.no.forEach(function(x){ (skip[x.why]=skip[x.why]||[]).push(String((x.it||{}).jan||'')); });
+    if(!sp.go.length){ mwOsSay('書き出せる品がありません。<br>'+skipText(),1); return; }
+    var day=new Date(), seq=osSeqNext();
+    var name=OSS.shopName(day,seq,sp.go.length);
+    var okDl=csvDownload(name,OSS.build(sp.go,osOpt()));
+    if(!okDl){ mwOsSay('書き出しに失敗しました（ブラウザのダウンロードを許可してください）',1); return; }
+    csvOsPut(sp.go,new Date().toISOString());
+    mwOsSay('✓ 書き出しました：'+esc(name)+'（'+sp.go.length+'件）'
+      +(Object.keys(skip).length?('<br>出さなかった品：<br>'+skipText()):'')
+      +'<br>Shopify → 商品 → インポートで「Overwrite products with matching handles」にチェックして読み込みます。');
+  })['catch'](function(e){ if(String(e&&e.message)!=='stop')mwOsSay('⚠ '+esc(e.message),1); });
+}
+/* (C) os- が日本で売られる設定になっていないか（読むだけ）。 */
+function mwOsJpGo(){
+  if(roleDenyPrice('mwOsNote'))return;
+  mwOsSay('Shopify に聞いています…');
+  return mwGet('/shop/os/jp').then(function(d){
+    if(!d||!d.ok){ mwOsSay('⚠ 確かめられませんでした：'+esc(String((d||{}).detail||(d||{}).error||'')),1); return; }
+    var pf=Object.keys(d.profiles||{}).map(function(k){ return esc(k)+' '+d.profiles[k]+'件'; }).join('・');
+    mwOsSay((d.jp?('<b style="color:var(--bad)">日本のお客さんに出ている os- があります：'+d.jp+'件</b>（例 '
+        +esc((d.jp_handles||[]).slice(0,5).join('・'))+'）'):('✓ 日本のお客さんには出ていません'))
+      +'（見た os- '+d.n+'件・日本に出ていない '+d.not_jp+'件）'
+      +(d.prof_ok?('<br>配送プロファイル：'+(pf||'（なし）')):'<br>配送プロファイルは読めませんでした（マーケットごとの配送の店では出ません）'),!!d.jp);
+  })['catch'](function(e){ mwOsSay('⚠ '+esc(e.message),1); });
 }
 /* ===== 8.112（カジの報告）Shopify の通行証（アクセストークン）を取り直す ===== */
 function shopTokenSay(t,bad){
@@ -32979,7 +33147,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v363';   // sw.js の const V と必ず同じ値にする
+var APP_V='v364';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
