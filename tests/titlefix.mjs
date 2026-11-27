@@ -5,7 +5,9 @@
    ・出品中リストの取り込みで、無在庫（W-）のいまの題名・売れた数・ウォッチの数を ebay_stat に控える
      （items はもう100列なので別の表・migrate-0075）
    ・GET /titlefix/cands：W-・ItemID あり・在庫あり・売れた数 0・eBay の注文なし・14日以上前の出品。
-     閲覧数（GetItem の HitCount）を取って少ない順。MW の商品名を返すので管理者だけ */
+     閲覧数（GetItem の HitCount）を取って少ない順。MW の商品名を返すので管理者だけ
+   ・出してからの日数は既定 3日（⚙で変えられる・min_days）
+   ・pj-title を GitHub Actions からデプロイする（deploy-pj-title.yml） */
 import fs from 'node:fs';
 import { harness, loadWorker, makeEnv, asJson } from './lib.mjs';
 const T=harness('Worker：英題の作り直しの候補（8.108）');
@@ -104,7 +106,8 @@ ok(r.body.ok&&ids.join()==='105,102,104,101,103','★★★閲覧数の少ない
 ok(!ids.includes('106'),'★★★売れた実績のある出品（その出品で売れた数）は外す');
 ok(!ids.includes('107'),'★★★eBay の注文がある出品も外す');
 ok(!ids.includes('110'),'★★GetItem で売れていたと分かった出品も外す');
-ok(!ids.includes('108'),'★★出したばかり（14日未満）の出品は選ばない（閲覧が少ないのは当たり前なので）');
+ok(!ids.includes('108'),'★★出したばかり（既定 3日未満）の出品は選ばない（閲覧が少ないのは当たり前なので）');
+ok(W.TF_DAYS===3&&r.body.min_days===3,'★★★既定は 3日（MW の無在庫出品は 11/19 ごろから）');
 ok(!ids.includes('109'),'★W- でない出品は選ばない');
 const c1=r.body.rows.find((x)=>x.item_id==='101');
 ok(c1.mw_name==='MW の商品 1'&&c1.jan===J(1)&&c1.kishu==='b2cchara_figure'&&c1.title==='Banpresto Hazbin Hotel Alastor Figure',
@@ -141,4 +144,20 @@ ok(W.schemaFixOf('ebay_stat')==='migrate-0075-title-fix.sql','★表が無いと
 const src=fs.readFileSync(new URL('../proxy-sync/worker.js',import.meta.url),'utf8');
 const fn=src.slice(src.indexOf('async function titlefixCands'),src.indexOf('/* ---- POST /ebay/link ----'));
 ok(!/Revise|ReviseItem|ReviseFixedPriceItem|EndItem|AddItem/.test(fn),'★★★候補を選ぶだけで eBay には書き込まない');
+
+console.log('\n=== pj-title を Actions からデプロイする（deploy-pj-title.yml）===');
+const y=fs.readFileSync(new URL('../.github/workflows/deploy-pj-title.yml',import.meta.url),'utf8');
+ok(/on:\s*\n\s*workflow_dispatch:/.test(y)&&!/^\s*push:/m.test(y),'★★★手で押したときだけ動く');
+ok(/if: github\.ref == 'refs\/heads\/main'/.test(y),'★★main のときだけ');
+ok(/permissions:\s*\n\s*contents: read/.test(y),'★★読むだけの権限');
+ok(/working-directory: proxy-title/.test(y)&&/wrangler\.js deploy/.test(y),'★★★proxy-title をデプロイする');
+ok(/dry_run:[\s\S]*?default: true/.test(y)&&/deploy --dry-run/.test(y)&&/if: '!inputs\.dry_run'/.test(y),'★★既定は確かめだけ（組み立てるだけ）');
+const uses=(y.match(/uses: \S+/g)||[]);
+ok(uses.length>0&&uses.every((u)=>/@v\d+\.\d+\.\d+$/.test(u)),'★★外部のアクションは版を固定');
+const sec=[...new Set((y.match(/secrets\.([A-Z_]+)/g)||[]).map((x)=>x.slice(8)))].sort();
+ok(JSON.stringify(sec)==='["CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_API_TOKEN","DISCORD_WEBHOOK_URL"]','★★★使う Secrets は Cloudflare のトークン・アカウントと知らせの宛先だけ');
+ok(!/secret put/.test(y),'★★★pj-title の鍵は登録しない（Cloudflare に登録済みのものをそのまま使う）');
+ok(!/echo .*\$\{\{ *secrets\./.test(y)&&!/echo .*\$(HOOK|CLOUDFLARE)/.test(y),'★★鍵を echo しない');
+ok(/Workers Scripts：編集/.test(y),'★権限が足りないときの手がかりを出す');
+ok(/Version ID/.test(y),'★デプロイの出力から版を読む');
 T.done();

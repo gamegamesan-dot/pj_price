@@ -2566,12 +2566,14 @@ async function syncEbayActive(env, run) {
    出品済みの無在庫（W-）の英題を作り直す**試しの候補**を選ぶ。
    「閲覧が少なく、まだ1つも売れていない出品から」。売れた実績のある出品は外す。
      1) W-・ItemID あり・在庫あり・売れた数 0・eBay の注文が1つも無い・出してから
-        min_days 日（既定 14日）以上たった出品を、ウォッチの少ない順・古い順に pool 件
+        min_days 日（既定 3日・⚙で変えられる）以上たった出品を、ウォッチの少ない順・古い順に pool 件
      2) その pool 件の閲覧数（GetItem の HitCount）を取る（24時間以内に取った分は使い回す）。
       値は ebay_stat（items はもう100列なので別の表・migrate-0075）に控える
      3) 閲覧数の少ない順（取れなかった出品はウォッチの少ない順で後ろ）に n 件（既定 50）
    MW の商品名（作り直しに使う日本語の名前）を返すので**管理者だけ**。eBay には書き込まない。 */
-const TF_N = 50, TF_POOL = 150, TF_DAYS = 14, TF_VIEWS_H = 24, TF_PAR = 5;
+/* 8.108 出してからの日数の既定は 3日（MW の無在庫出品は 11/19 ごろから。14日だと残らない）。
+   画面は⚙の「英題の作り直しの候補：出してから◯日以上」を min_days で渡す。 */
+const TF_N = 50, TF_POOL = 150, TF_DAYS = 3, TF_VIEWS_H = 24, TF_PAR = 5;
 function tfCandSql(pool) {
   return `SELECT i.asin, i.cond, i.ebay_item_id AS item_id, i.ebay_sku AS sku,
        substr(i.ebay_sku,3) AS jan,

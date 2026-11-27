@@ -1,0 +1,118 @@
+# pj-title（英題の Worker・proxy-title）のデプロイを、スマホの GitHub アプリから押せるようにする（8.108）
+#
+# 出先では PowerShell が使えないので、
+#   cd proxy-title && npx wrangler deploy
+# をここで代わりに行う（deploy-pj-sync.yml と同じ形）。
+#
+# ・対象は **pj-title だけ**（proxy-title の中だけを使う）
+# ・**手で押したときだけ**動く（workflow_dispatch）
+# ・pj-title の鍵（ANTHROPIC_API_KEY・PJ_ACCESS_KEY・eBay・Amazon）は **Cloudflare に
+#   登録済みのものをそのまま使う**。`wrangler deploy` は登録済みの鍵を消さない。
+#   ここでは鍵を登録しない（GitHub の Secrets に置かない）
+# ・Cloudflare のトークンは pj-sync と同じ CLOUDFLARE_API_TOKEN／CLOUDFLARE_ACCOUNT_ID。
+#   要る権限は「Workers Scripts：編集」（アカウント単位なので pj-sync と同じトークンで足りる）。
+#   KV（TITLE_CACHE）は id で結び付けるだけで中身は触らない
+name: deploy-pj-title
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '確かめだけ（組み立てるだけで Cloudflare には上げない）'
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-pj-title
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # main のときだけ動く（枝では動かさない）。
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: proxy-title
+    steps:
+      # 外部のアクションは版を固定する（勝手に中身が変わらないように）。
+      - name: ソースを取る
+        uses: actions/checkout@v4.2.2
+
+      - name: Node を用意する
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # wrangler の版はリポジトリの package.json / package-lock.json で固定している。
+      - name: 依存を入れる
+        working-directory: .
+        run: npm ci
+
+      # 確かめだけ：組み立てて、Cloudflare には上げない（トークンは使わない）。
+      - name: 組み立てを確かめる（dry run）
+        if: inputs.dry_run
+        run: node ../node_modules/wrangler/bin/wrangler.js deploy --dry-run --outdir dist
+
+      - name: pj-title をデプロイ
+        id: deploy
+        if: '!inputs.dry_run'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -o pipefail
+          set +e
+          node ../node_modules/wrangler/bin/wrangler.js deploy 2>&1 | tee dep.log
+          CODE=$?
+          set -e
+          if [ "$CODE" != "0" ]; then
+            # 権限が足りないときの手がかり（値は出さない）。
+            if grep -qiE 'Authentication error|10000|not authorized|permission' dep.log; then
+              echo "::error::Cloudflare のトークンの権限が足りません。「Workers Scripts：編集」が要ります。"
+            fi
+            exit "$CODE"
+          fi
+          VER="$(grep -oE 'Version ID: *[0-9a-f-]+' dep.log | tail -n 1 \
+            | sed 's/.*: *//')" || true
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "デプロイした版：${VER:-（読めませんでした）}"
+
+      # ---- 社内用の Discord に結果を知らせる（宛先が無ければ黙って終わる）----
+      - name: 結果を知らせる
+        if: always()
+        working-directory: .
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RESULT: ${{ job.status }}
+          DRY: ${{ inputs.dry_run }}
+          VER: ${{ steps.deploy.outputs.version }}
+          WHO: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "DISCORD_WEBHOOK_URL が無いので知らせません。"
+            exit 0
+          fi
+          if [ "$RESULT" = "success" ]; then MARK='✅'; else MARK='🔴'; fi
+          if [ "$DRY" = "true" ]; then DRYTXT='　**確かめだけ（dry run）**'; else DRYTXT=''; fi
+          {
+            printf '%s pj-title のデプロイ（GitHub Actions）%s\n' "$MARK" "$DRYTXT"
+            printf '結果：%s　押した人：%s　コミット：%s\n' \
+              "$RESULT" "$WHO" "$(printf '%s' "$SHA" | cut -c1-7)"
+            if [ -n "$VER" ]; then
+              printf 'デプロイした版：%s\n' "$VER"
+            fi
+            printf '%s\n' "$RUN_URL"
+          } > body.txt
+          jq -Rs '{content:.}' < body.txt > payload.json
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data @payload.json "$HOOK" > /dev/null
+          echo "知らせました。"

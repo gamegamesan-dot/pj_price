@@ -8121,7 +8121,8 @@ Actions の deploy-pj-sync を「MW の在庫CSV の取り込みの記録・商�
 
 **ゲーム**：`[Used] 機種名 タイトル [Japanese Ver.] [Cartridge Only] Japan Import [New]`
 
-- Japanese Ver. は、入るときだけ・ソフト名に版（Ver.／Version／Edition／Japan）がまだ無いときだけ
+- Japanese Ver. は、入るときだけ・ソフト名に版（Ver.／Version／Edition／Japan）がまだ無いときだけ。
+  80字を超えるときは **Japanese Ver. を Japan Import より先に削る**（入るときは両方）
 - New は新品のときだけ
 
 **守ること**（どちらも）：`tidy` が宣伝の言葉（Free Shipping・Fast Shipping・L@@K・No Reserve・Sale・% Off など）と
@@ -8153,8 +8154,8 @@ ONE PIECE → One Piece・POP UP PARADE → Pop Up Parade。SEGA・HG・DXF・SE
   （`QuantitySold`）・ウォッチの数（`WatchCount`）を **`ebay_stat`** に控える
   （**items はもう100列＝D1 の上限**なので別の表・`migrate-0075-title-fix.sql`。表が無いあいだは書かない）。
   `items.title` は最初に取り込んだ題名のまま変えない。
-- 候補：W-・ItemID あり・在庫あり・**売れた数 0**・**eBay の注文が1つも無い**・**出してから14日以上**
-  （出したばかりは閲覧が少なくて当たり前なので）。ウォッチの少ない順・古い順に 150件まで見て、
+- 候補：W-・ItemID あり・在庫あり・**売れた数 0**・**eBay の注文が1つも無い**・**出してから3日以上**
+  （出したばかりは閲覧が少なくて当たり前なので。v358 は14日 → v359 で 3日・⚙で変えられる）。ウォッチの少ない順・古い順に 150件まで見て、
   その閲覧数（GetItem の `HitCount`。24時間以内に取った分は使い回す）を取り、**閲覧数の少ない順**に 50件。
   GetItem で売れていたと分かった出品も外す。
 - 閲覧数が返らない出品（eBay が HitCount を返さない設定）は後ろに回し、全部返らないときは
@@ -8178,3 +8179,33 @@ ONE PIECE → One Piece・POP UP PARADE → Pop Up Parade。SEGA・HG・DXF・SE
 | pj-sync | **要ります**（候補の `GET /titlefix/cands`・出品中リストで ebay_stat に控える） |
 | D1 | **要ります**（`migrate-0075-title-fix.sql`。デプロイの「マイグレーションを流す」で入る） |
 | pj-title | **要ります**（別名 `chara_alias`。`cd proxy-title && npx wrangler deploy`） |
+
+### 6. v359 の直し（カジの確認・2026-11-27）
+
+- **出してからの日数を 14日 → 3日**に。⚙（設定 → 仕入れの欄の「商品違いの疑い」の上）の
+  「**英題の作り直しの候補：出してから◯日以上の出品**」（`tfMinDays`・既定 3・0〜365。おかしな値は 3）で変えられる。
+  画面が `GET /titlefix/cands?n=50&min_days=◯` で渡す（pj-sync の既定も 3日）。
+  MW の無在庫出品は 11/19 ごろからなので、14日だとほとんど残らないため。
+- **ゲームの削る順**：80字を超えるときは「Japanese Ver.」を「Japan Import」より先に削る（入るときは両方）。
+  v358 の作りがすでにこの順（Japan Import が入らない長さなら Japanese Ver. も入らない）なので、試験で確かめた。
+- 閲覧数（HitCount）が返らないときは、ウォッチの少ない順で選ぶ（v358 のまま・カジの了承）。
+- **pj-title を GitHub Actions からデプロイする**（`.github/workflows/deploy-pj-title.yml`・出先で PowerShell が
+  使えないため）。手で押したときだけ・main だけ・既定は確かめだけ（`wrangler deploy --dry-run`・トークンを使わない）。
+  - Cloudflare のトークンは pj-sync と同じ `CLOUDFLARE_API_TOKEN`／`CLOUDFLARE_ACCOUNT_ID`。要る権限は
+    「**Workers Scripts：編集**」（アカウント単位なので pj-sync と同じトークンで足りる）。KV（TITLE_CACHE）は
+    id で結び付けるだけ。権限が足りないときは実行の記録にそう出す。
+  - pj-title の鍵（ANTHROPIC_API_KEY など）は **Cloudflare に登録済みのものをそのまま使う**（ここでは登録しない。
+    `wrangler deploy` は登録済みの鍵を消さない）。
+  - 結果は社内用の Discord に知らせる（宛先が無ければ黙って終わる）。
+
+| 試験 | 件数 | 見ること |
+| --- | --- | --- |
+| `tests/titlefix.mjs` | 36 | （v358 の 24 件に）既定 3日／pj-title の workflow（手で押したときだけ・main だけ・読むだけの権限・proxy-title・既定は確かめだけ・版の固定・使う Secrets は Cloudflare と知らせの宛先だけ・鍵を登録しない・echo しない・権限の手がかり・版を読む） |
+| `tests/titlefixui.js` | 44 | （v358 の 37 件に）Japanese Ver. を Japan Import より先に削る・入るときは両方／⚙の既定 3日・変えた日数で選ぶ・おかしな値は 3・設定の保存 |
+
+| | |
+| --- | --- |
+| 画面 | push すれば GitHub Pages が自動（版は **v359**） |
+| pj-sync | 要ります（既定の日数。画面が日数を渡すので、デプロイ前でも⚙の日数で選べる） |
+| pj-title | 要ります（Actions「deploy-pj-title」・dry_run オフ） |
+| D1 | 要りません（v358 の migrate-0075 だけ） |

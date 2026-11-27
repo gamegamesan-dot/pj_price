@@ -56,6 +56,10 @@ cd proxy-title
 npx wrangler deploy
 ```
 
+出先（PowerShell が使えないとき）は、GitHub の Actions「**deploy-pj-title**」を main で、
+`dry_run` をオフにして実行する（8.108）。Cloudflare のトークンは pj-sync と同じ
+`CLOUDFLARE_API_TOKEN`（権限「Workers Scripts：編集」）。鍵は Cloudflare に登録済みのものをそのまま使う。
+
 公開URL（`https://pj-title.<サブドメイン>.workers.dev`）を、pj_price の
 出品CSVタブの設定欄に入力する。`PJ_ACCESS_KEY` と同じ値も同じ画面に入力する
 （localStorage に保存され、リポジトリには入らない）。

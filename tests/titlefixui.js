@@ -47,6 +47,9 @@ const a=await p.evaluate(()=>{
     gUsed:g(true,'PlayStation 5','Final Fantasy XVI',{isNew:true}),
     gVer:g(false,'Nintendo Switch','Dragon Quest X Online Version 7',{isNew:true}),
     gCaps:g(false,'Nintendo Switch','POKEMON LEGENDS Z-A',{isNew:true}),
+    /* 80字を超えるときは Japanese Ver. を Japan Import より先に削る（入るときは両方） */
+    gLong:g(false,'Nintendo Switch','The Legend of Heroes Trails Through Daybreak',{isNew:false}),
+    gFit:g(false,'Nintendo Switch','Trails Through Daybreak',{isNew:false}),
     tab:(()=>{ $('cond').value='sealed'; $('brand').value='Banpresto'; $('series').value='Hazbin Hotel';
       $('chara').value='Alastor'; $('variant').value=''; $('line').value='';
       return buildTitle().text; })(),
@@ -75,6 +78,9 @@ ok(a.game==='Nintendo Switch Super Mario Bros. Wonder Japanese Ver. Japan Import
 ok(a.gUsed==='Used PlayStation 5 Final Fantasy XVI Japanese Ver. Japan Import','★★中古のゲームには New を入れない');
 ok(!/Japanese Ver\./.test(a.gVer),'★ソフト名に版（Version）があるときは Japanese Ver. を足さない');
 ok(/Pokemon Legends Z-A/.test(a.gCaps),'★ゲームの全部大文字も直す');
+ok(/Heroes Trails Through Daybreak Japan Import$/.test(a.gLong)&&!/Japanese Ver\./.test(a.gLong)&&a.gLong.length<=80,
+   '★★★80字を超えるときは Japanese Ver. を Japan Import より先に削る');
+ok(a.gFit==='Nintendo Switch Trails Through Daybreak Japanese Ver. Japan Import','★★入るときは両方入れる');
 ok(a.tab==='Banpresto Hazbin Hotel Alastor Prize Figure Japan Import New','★★★出品文タブ（新品・未開封）も同じ作り方');
 ok(!/\bNew\b/.test(a.tabOpen),'★箱開封済には New を付けない');
 
@@ -139,6 +145,7 @@ const b=await p.evaluate(()=>({
 }));
 console.log('   '+JSON.stringify(b.rows));
 ok(b.cands.length===1&&/n=50/.test(b.cands[0]),'★★★まず50件（pj-sync の候補：閲覧が少なく、まだ売れていない出品）');
+ok(/min_days=3(&|$)/.test(b.cands[0]),'★★★出してから3日以上（⚙の既定）');
 ok(b.force,'★★pj-title に問い合わせ直す（force・別名を取るため）');
 const r1=b.rows.find((x)=>x.id==='111'), r2=b.rows.find((x)=>x.id==='222'), r3=b.rows.find((x)=>x.id==='333');
 ok(r1&&r1.nu==='Banpresto Hazbin Hotel Alastor Radio Demon Prize Figure Japan Import New','★★★変更後の英題（Radio Demon・Prize Figure・Japan Import・New）');
@@ -166,5 +173,23 @@ ok(st==='','★作業者にはボタンを出さない（MW の商品名を扱�
 /* 保存して読み直しても一覧が残る */
 const keep=await p.evaluate(()=>{ tfRows=[]; tfLoad(); return tfRows.length; });
 ok(keep===3,'★一覧は端末に残る（読み直しても消えない）');
+/* ⚙で日数を変えられる（0〜365・ほかは既定 3日）。設定の保存の対象にも入る */
+const days=await p.evaluate(async()=>{
+  const out={def:$('tfMinDays').value};
+  $('tfMinDays').value='7'; window.__calls=[];
+  await tfPick();
+  out.seven=(window.__calls.find((c)=>/titlefix/.test(c.url))||{}).url||'';
+  $('tfMinDays').value='-1'; out.bad=tfMinDays();
+  $('tfMinDays').value='abc'; out.bad2=tfMinDays();
+  $('tfMinDays').value='0'; out.zero=tfMinDays();
+  $('tfMinDays').value='3';
+  out.saved=document.documentElement.outerHTML.indexOf("'tfMinDays'")>=0;
+  return out;
+});
+console.log('   '+JSON.stringify(days));
+ok(days.def==='3','★★⚙の既定は 3日');
+ok(/min_days=7/.test(days.seven),'★★★⚙で変えた日数で選ぶ');
+ok(days.bad===3&&days.bad2===3&&days.zero===0,'★おかしな値は既定に戻す（0 は使える）');
+ok(days.saved,'★⚙の値は保存される（設定の一覧に入っている）');
 T.done();
 })();

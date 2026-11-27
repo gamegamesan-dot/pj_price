@@ -2084,6 +2084,9 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="row"><label>大型：在庫管理</label><input type="number" id="mwFbaStoreL" value="93" step="1" min="0" inputmode="numeric"><span class="unit">円</span></div>
         <div class="rowv"><label>ゲームの既定のサイズ区分</label><select id="mwFbaSizeGame"><option value="s" selected>小型</option><option value="m">標準</option><option value="l">大型</option></select></div>
         <div class="rowv"><label>フィギュアの既定のサイズ区分</label><select id="mwFbaSizeHobby"><option value="s">小型</option><option value="m" selected>標準</option><option value="l">大型</option></select></div>
+        <!-- 8.108（カジの依頼）出品済みの英題の作り直し：出してから何日以上の出品から選ぶか。 -->
+      <div class="row"><label for="tfMinDays">英題の作り直しの候補：出してから</label><input type="number" id="tfMinDays" value="3" step="1" min="0" max="365" inputmode="numeric"><span class="unit">日以上の出品</span></div>
+      <div class="note2" style="margin:0 0 2px">出品リストの「出品済みの英題を作り直す」で、<b>閲覧が少なく、まだ1つも売れていない出品</b>を選ぶときの条件です。出したばかりの出品は閲覧が少なくて当たり前なので外します。<b>既定は 3日</b>（MW の無在庫出品は 11/19 ごろから）。</div>
         <!-- 8.101（カジの依頼）商品違いの疑い：Amazon の売値が MW 定価の何倍を超えたら疑うか。 -->
       <div class="row"><label for="mwMisX">商品違いの疑い：Amazon の売値が MW 定価の</label><input type="number" id="mwMisX" value="2.5" step="0.1" min="1.1" inputmode="decimal"><span class="unit">倍を超えたら</span></div>
       <div class="note2" style="margin:0 0 2px">MW の JAN が Amazon の<b>違う商品</b>につながっていることがあります（Amazon 側の JAN の登録違い）。<b>商品名に共通する言葉がほとんどない</b>とき（メーカー名・「プラモデル」のような一般的な言葉は数えません。英字とカタカナの違い〈ACE COMBAT ⇔ エースコンバット〉は読みでそろえます）、<b>名前の一致が弱いうえに Amazon の売値が MW 定価のこの倍を超える</b>とき（MW 定価が 100円未満は定価不明として見ません）、<b>入り数</b>（10個・BOX・セット・×3・3本）が片方の名前にだけあるときは「<b>商品違いの疑い</b>」にして、利益・おすすめ順・会員向けの配信・eBay 無在庫の出品候補・「どこで買うか」のおすすめから外します。カードで見比べて「<b>同じ商品</b>」を押せば、その JAN は以後疑いません（管理者だけ）。</div>
@@ -5819,6 +5822,7 @@ function titleWithJp(body,dropped){
 /* 8.108（カジの依頼）ゲームは「機種名 → タイトル →（Japanese Ver.）→ Japan Import」。
    ・Japanese Ver. は、入るときだけ・ソフト名に版（Ver.／Edition／Japan）がまだ無いときだけ足す
      （日本の版を売っているので本当の情報。産地の語を落としてまでは入れない）
+     ＝80字を超えるときは **Japanese Ver. を Japan Import より先に削る**（カジの指示・入るときは両方）
    ・New は新品（opt.isNew）のときだけ、入るときだけ一番後ろに
    ・宣伝の言葉・記号の飾り・全部大文字は shared/titlefit.js の tidy で直す */
 var GAME_JP_VER='Japanese Ver.';
@@ -7959,6 +7963,8 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.101 商品違いの疑い（Amazon の売値が MW 定価の何倍を超えたら）。
                     pj-sync も読む（会員向けの配信・「どこで買うか」・仕入れ値）。 */
                  'mwMisX',
+                 /* 8.108 英題の作り直しの候補：出してから何日以上の出品から選ぶか。 */
+                 'tfMinDays',
                  /* 6.196（v295）一覧の「在 ◯」を赤で出す基準（この端末だけ） */
                  'mwLowStock',
                  /* 仮のFBA手数料（サイズ区分ごと）と粗利の基準（6.145） */
@@ -26102,7 +26108,7 @@ function tfPick(){
   csvSecretFill();
   if(!syncUrl()||!syncApiKey()){ tfSay('pj-sync のURLとキーを⚙設定に入れてください。',true); return; }
   tfSay('候補を選んでいます（閲覧数を eBay から取るので少しかかります）…');
-  return mwGet('/titlefix/cands?n=50').then(function(d){
+  return mwGet('/titlefix/cands?n=50&min_days='+tfMinDays()).then(function(d){
     if(!d||!d.ok)throw new Error((d&&(d.why||d.error))||'候補を取れませんでした');
     var keep=tfRows.filter(function(x){ return x.from==='row'; });
     var add=(d.rows||[]).filter(function(c){
@@ -26135,6 +26141,13 @@ function tfAddRow(id){
   tfRun([x]);
 }
 function tfLen(t){ return String(t||'').length; }
+/* ⚙「英題の作り直しの候補：出してから◯日以上」（既定 3日・0〜365）。 */
+var TF_DAYS_DEF=3;
+function tfMinDays(){
+  var el=$('tfMinDays'), v=el?String(el.value).trim():'';
+  var n=Math.round(+v);
+  return (v!==''&&isFinite(n)&&n>=0&&n<=365)?n:TF_DAYS_DEF;
+}
 function tfRender(){
   var el=$('tfList'); if(!el)return;
   if(!tfRows.length){ el.innerHTML=''; return; }
@@ -32803,7 +32816,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v358';   // sw.js の const V と必ず同じ値にする
+var APP_V='v359';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
