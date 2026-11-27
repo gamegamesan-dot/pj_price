@@ -93,7 +93,7 @@ footer{font-size:11px;color:var(--mute);text-align:center;padding:18px 14px 0;li
 #tip b{color:var(--label)}
 .rowv{margin-bottom:10px}
 .rowv label{display:block;font-size:13.5px;color:var(--ink-2);margin-bottom:4px}
-.rowv input[type=text],.rowv textarea{
+.rowv input[type=text],.rowv input[type=url],.rowv textarea{
   width:100%;padding:9px;font-size:16px;text-align:left;
   border:1px solid var(--line);border-radius:2px;background:#fcfbf8;color:var(--ink);
   font-family:inherit;line-height:1.45;
@@ -2879,12 +2879,14 @@ body.staff #syncOnHandFix{display:none !important}
       <summary class="cfggsum" id="cfgConnSum">接続設定（URL・キー・トークン）<span class="cfggn"></span></summary>
       <div class="body">
         <div class="note2" style="margin-top:0" id="cfgConnNote">Worker の公開URLとキーです。入れたらこの端末に保存されます。</div>
-      <div class="rowv"><label>英語タイトル生成のURL</label><input type="text" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
+      <div class="rowv"><label>英語タイトル生成のURL</label><input type="url" id="csvTitleApi" placeholder="https://pj-title.xxxx.workers.dev" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"><div class="note2">Worker「pj-title」の公開URL。空のときは生成ボタンを押せません。</div></div>
       <div class="rowv"><label>英語タイトル生成のキー</label><input type="password" id="csvTitleKey" placeholder="PJ_ACCESS_KEY" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-      <div class="rowv"><label>画像サーバーURL</label><input type="text" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev"></div>
+      <div class="rowv"><label>画像サーバーURL</label><input type="url" id="csvImgBase" placeholder="https://pj-img.xxxx.workers.dev" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="rowv"><label>アップロードトークン</label><input type="password" id="csvImgToken" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="wrangler secret put UPLOAD_TOKEN で登録した文字列"></div>
-      <div class="rowv"><label>pj-sync のURL</label><input type="text" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
+      <div class="rowv"><label>pj-sync のURL</label><input type="url" id="syncApi" placeholder="https://pj-sync.xxxx.workers.dev" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"><div class="note2">Worker「pj-sync」の公開URL。空のときは取り込めません。</div></div>
       <div class="rowv"><label>pj-sync のキー</label><input type="password" id="syncKey" placeholder="PJ_ACCESS_KEY（空なら英題生成のキーを使う）" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <!-- 8.109（カジの報告）URL が空のときだけ出す。3つの既定の URL を一度で入れる（URL は秘密ではない）。 -->
+      <div id="cfgUrlDefBox" style="display:none;margin:0 0 8px"><button class="btn" id="cfgUrlDef" style="width:100%">URL の既定値を入れる（pj-title・pj-img・pj-sync）</button><div class="note2" id="cfgUrlDefNote" style="margin-top:2px">空の URL の欄だけに入れます（入っている欄は変えません）。キーは入りません。</div></div>
       <div class="note2" style="margin-top:0">proxy-img/README.md の手順で Worker を立ててから入れてください。トークンはこの端末に平文で保存されます。共有端末では使わないこと。</div>
       </div>
     </details>
@@ -8120,6 +8122,8 @@ function csvLoad(){
        if(typeof o.csvBoCols==='boolean')$('csvBoCols').checked=o.csvBoCols;
        if(typeof o.uiHideShopee==='boolean')$('uiHideShopee').checked=o.uiHideShopee;
        if(typeof o.uiHideEbay==='boolean')$('uiHideEbay').checked=o.uiHideEbay; }catch(e){}
+  /* 8.109 URL が空なら「既定値を入れる」を出す。 */
+  try{ cfgUrlDefRender(); }catch(e){}
   /* 8.23（【5】）⚙の「◯◯に配信する」の文を、いまの印にそろえる。 */
   try{ subOnTxt(); }catch(e){}
 }
@@ -8276,16 +8280,51 @@ var CSV_CFG_TRIM=['csvTitleApi','csvTitleKey','csvImgBase','csvImgToken','syncAp
    ・消すのは、その欄を自分で触って空にしたときだけ
    ・画面に戻ったとき：欄が空なら保存済みのキーを入れ直す */
 var CSV_CFG_SECRET=['syncKey','csvTitleKey','csvImgToken'];
+/* 8.109（カジの報告・2026-11-27）iPhone で URL の3つ（英語タイトル生成・画像サーバー・pj-sync）が
+   空に戻っていた。キーの欄はこの守りで残っていたが、URL の欄には無かったので、別アプリから
+   戻ったときに欄が空になったまま保存が走ると、保存済みの URL まで空で上書きされていた
+   （URL の欄はそれぞれキーの欄のすぐ上にあり、iPhone がユーザー名とパスワードの組と見なして
+   一緒に空にすることがある）。URL の欄も同じ守りに入れる。 */
+var CSV_CFG_URL=['csvTitleApi','csvImgBase','syncApi'];
+var CSV_CFG_KEEP=CSV_CFG_SECRET.concat(CSV_CFG_URL);
 var csvSecret={};
-function csvSecretKeep(id,v){ if(CSV_CFG_SECRET.indexOf(id)>=0)csvSecret[id]=String(v||''); }
-// 欄が空で、保存済みのキーがあれば入れ直す。入れ直した件数を返す。
+function csvSecretKeep(id,v){ if(CSV_CFG_KEEP.indexOf(id)>=0)csvSecret[id]=String(v||''); }
+// 欄が空で、保存済みのキー・URL があれば入れ直す。入れ直した件数を返す。
 function csvSecretFill(){
   var n=0;
-  CSV_CFG_SECRET.forEach(function(id){
+  CSV_CFG_KEEP.forEach(function(id){
     var el=$(id); if(!el)return;
     if(!String(el.value||'').trim()&&csvSecret[id]){ el.value=csvSecret[id]; n++; }
   });
+  try{ cfgUrlDefRender(); }catch(e){}
   return n;
+}
+/* 8.109 URL の既定値（公開の URL なので秘密ではない・カジの了承）。 */
+var CFG_URL_DEF={ csvTitleApi:'https://pj-title.gamegamesan.workers.dev',
+                  csvImgBase:'https://pj-img.gamegamesan.workers.dev',
+                  syncApi:'https://pj-sync.gamegamesan.workers.dev' };
+function cfgUrlEmpty(){
+  return CSV_CFG_URL.filter(function(id){ var el=$(id); return el&&!String(el.value||'').trim(); });
+}
+/* URL の欄が1つでも空なら「既定値を入れる」を出す。 */
+function cfgUrlDefRender(){
+  var box=$('cfgUrlDefBox'); if(!box)return;
+  box.style.display=cfgUrlEmpty().length?'':'none';
+}
+/* 空の URL の欄だけに既定値を入れて、すぐ保存する（入っている欄は変えない）。 */
+function cfgUrlDefFill(){
+  var put=[];
+  cfgUrlEmpty().forEach(function(id){
+    $(id).value=CFG_URL_DEF[id]; csvSecretKeep(id,CFG_URL_DEF[id]); put.push(id);
+  });
+  var ok=csvSaveCfg();
+  try{ roleCheck(); }catch(e){}
+  try{ cfgLineRender(); }catch(e){}
+  cfgUrlDefRender();
+  var note=$('cfgUrlDefNote');
+  if(note)note.textContent=ok?('入れました：'+put.length+'件（この端末に保存しました）')
+    :('⚠ この端末に保存できませんでした（'+csvCfgErr+'）');
+  return put.length;
 }
 /* 8.16（【1】）端末に保存できなかったことを**黙って捨てない**。
    iPhone の Safari は保存の空きが足りないと setItem で落ちるので、
@@ -8302,8 +8341,8 @@ function csvSaveCfg(){
     CSV_CFG_IDS.forEach(function(id){
       var v=$(id).value;
       v=(CSV_CFG_TRIM.indexOf(id)>=0)?String(v).trim():v;
-      if(CSV_CFG_SECRET.indexOf(id)>=0&&v===''){
-        o[id]=csvSecret[id]||'';          // 空では消さない（勝手に消えた欄を守る）
+      if(CSV_CFG_KEEP.indexOf(id)>=0&&v===''){
+        o[id]=csvSecret[id]||'';          // 空では消さない（勝手に消えた欄を守る・8.109 URL も）
         return;
       }
       o[id]=v; csvSecretKeep(id,v);
@@ -8345,8 +8384,12 @@ function cfgSaveNote(){
 CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(e){
   /* キーの欄を空にできるのは、その欄を触っている本人だけ。
      画面に戻った直後にブラウザが空にしたときは消さない。 */
-  if(CSV_CFG_SECRET.indexOf(id)>=0&&e&&e.isTrusted&&document.activeElement===this)
+  /* 8.109 URL の欄も同じ（入力のたびに保存・空にできるのは触っている本人だけ）。 */
+  if(CSV_CFG_KEEP.indexOf(id)>=0&&e&&e.isTrusted&&document.activeElement===this)
     csvSecretKeep(id,String(this.value||'').trim());
+  else if(CSV_CFG_URL.indexOf(id)>=0&&String(this.value||'').trim())
+    csvSecretKeep(id,String(this.value||'').trim());
+  try{ cfgUrlDefRender(); }catch(e2){}
   /* 8.16（【1】）端末に保存できなかったら黙って捨てずに出す。 */
   if(!csvSaveCfg())
     advNote('⚠ この端末に保存できませんでした（'+csvCfgErr+'）。'
@@ -8361,6 +8404,10 @@ CSV_CFG_IDS.forEach(function(id){ $(id).addEventListener('input',function(e){
 document.addEventListener('visibilitychange',function(){ if(!document.hidden)csvSecretFill(); });
 window.addEventListener('pageshow',csvSecretFill);
 window.addEventListener('focus',csvSecretFill);
+/* 8.109 隠れるとき（pagehide）には保存しない。入力のたびに保存しているので要らず、
+   ほかのタブ・読み直しの前に古い欄の値で上書きしてしまうため。 */
+if($('cfgUrlDef'))$('cfgUrlDef').addEventListener('click',cfgUrlDefFill);
+try{ cfgUrlDefRender(); }catch(e){}
 $('csvAutoParse').addEventListener('change',csvSaveCfg);
 $('csvPriceChangedOnly').addEventListener('change',csvSaveCfg);
 $('csvReviewZero').addEventListener('change',function(){
@@ -32816,7 +32863,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v359';   // sw.js の const V と必ず同じ値にする
+var APP_V='v360';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
