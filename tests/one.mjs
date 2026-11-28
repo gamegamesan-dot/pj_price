@@ -160,8 +160,9 @@ console.log('=== ④ 配信（先行 → ⚙の時間のあと みんな）===')
      '★★★カードに状態が出る');
   ok(emb.fields.some((f)=>f.name==='メモ'&&/開封済み/.test(f.value)),
      '★★★カードにメモが出る');
-  ok(emb.fields.some((f)=>f.name==='送料'&&/宅配便/.test(f.value)),
-     '★★★送料は選んだ区分の名前');
+  /* 8.119（カジの依頼）先行（プレミアム）のカードは「送料無料（プレミアム会員）」。 */
+  ok(emb.fields.some((f)=>f.name==='送料'&&f.value==='送料無料（プレミアム会員）'),
+     '★★★先行（プレミアム）の送料は「送料無料（プレミアム会員）」');
   ok(emb.fields.some((f)=>/購入リンク/.test(f.name)&&/products\/one-/.test(f.value)),
      '★★★購入リンクは one-<連番>');
   ok(!emb.fields.some((f)=>f.name==='JAN'),'★★JAN が無ければ JAN 欄を出さない');
