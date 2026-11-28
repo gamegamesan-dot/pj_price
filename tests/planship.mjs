@@ -122,4 +122,36 @@ console.log('=== ④ 目玉商品（1点もの）・記録・⚙ ===');
   ok(!/id="subShip(Monitor|Light|Standard|Premium)"/.test(h),'★★★⚙のプランごとの送料の文（使わなくなった欄）を外す');
   ok(/8\.119：カードの「送料」は<b>プランごとに1つの書き方<\/b>/.test(h),'★⚙に決まりを書く');
 }
+console.log('=== ⑤ 配信を止めているプランは「いますぐ配る」で書き換えだけ ===');
+{
+  /* ライト・スタンダード・プレミアムの配信を止める（モニターだけ配信中）。 */
+  const st=JSON.parse((await env.DB.prepare(`SELECT v FROM sync_state WHERE k='ui.settings'`).first()).v);
+  Object.assign(st.settings,{ subOnLight:false, subOnStandard:false, subOnPremium:false });
+  await env.DB.prepare(`UPDATE sync_state SET v=?1 WHERE k='ui.settings'`).bind(JSON.stringify(st)).run();
+  /* まだどこにも出していない新しい品（配信中なら新しく出る品）。 */
+  await item('4902370550904',{ kishu:'NS' });
+  await env.DB.prepare(`UPDATE sync_state SET v='6.200' WHERE k='sub.card.v'`).run();
+  await env.DB.prepare(`UPDATE sub_post SET card_h='old'`).run();
+  await env.DB.prepare(`INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.kick','x',?1)
+    ON CONFLICT(k) DO UPDATE SET v='x'`).bind(new Date().toISOString()).run();
+  dc=[];
+  const k=await W.jobSubKick(env,{});
+  const posts=dc.filter((x)=>x.method==='POST'&&x.body&&(x.body.embeds||[]).length);
+  const byCh=(ch)=>dc.filter((x)=>x.ch===ch&&x.method==='PATCH'&&x.body&&(x.body.embeds||[]).length).length;
+  console.log('   '+JSON.stringify(k.send));
+  ok((k.send.edit_only||[]).sort().join()==='light,premium,standard','★★★止めているプランを「書き換えだけ」で回す');
+  ok(byCh(CH.light)>=2&&byCh(CH.standard)>=3&&byCh(CH.premium)>=3,'★★★止めているプランの出ているカードもメッセージの編集で直す');
+  ok(!posts.some((x)=>x.ch===CH.light||x.ch===CH.standard||x.ch===CH.premium),'★★★止めているプランには新しいカードを出さない');
+  ok(!dc.some((x)=>x.method==='DELETE'),'★★★消さない');
+  const pv=dc.filter((x)=>x.ch===CH.premium&&x.method==='PATCH'&&x.body&&(x.body.embeds||[]).length)
+    .map((x)=>((x.body.embeds[0].fields||[]).filter((f)=>f.name==='送料')[0]||{}).value);
+  ok(pv.length&&pv.every((v)=>v==='送料無料（プレミアム会員）'),'★★★書き直したプレミアムのカードは送料無料（プレミアム会員）');
+  const st2=JSON.parse((await env.DB.prepare(`SELECT v FROM sync_state WHERE k='ui.settings'`).first()).v);
+  ok(st2.settings.subOnLight===false&&st2.settings.subOnPremium===false,'★★⚙のオンオフは変えない');
+  dc=[];
+  const r2=await api('/sub/send',{ approve:true });
+  ok(!(r2.edit_only||[]).length&&!dc.some((x)=>x.ch===CH.premium),'★★ふつうの配信（画面・自動）では止めているプランに触らない');
+  const txt=DIAG.subKickText(JSON.stringify(Object.assign({ at:'x' },{ send:k.send }))).join('\n');
+  ok(/配信を止めているので書き換えだけ：light・premium・standard|配信を止めているので書き換えだけ：/.test(txt),'★記録に書き換えだけのプランを出す');
+}
 T.done();

@@ -11919,11 +11919,12 @@ async function jobSubKick(env, opt) {
     out.box = { todo: b.todo, done: b.done, fail: b.fail, left: b.left, err: b.error || "" };
   } catch (e) { out.box_err = errText(e); }
   try {
-    const r = await jobSubSend(env, { approve: true, budget_ms: 120000,
+    const r = await jobSubSend(env, { approve: true, budget_ms: 120000, editOff: true,
       newMax: { light: 0, standard: 0, premium: 0 } });
     out.px = r.px ? { todo: r.px.todo || 0, done: r.px.done || 0, fresh: r.px.fresh || 0,
                       none: r.px.none || 0, left: r.px.left || 0 } : null;
     out.send = { sent: r.sent, edited: r.edited, gone: r.gone, fail: r.fail, left: r.left || 0,
+      edit_only: r.edit_only || [],
       why: r.why || r.error || "",
       plans: (r.plans || []).map((x) => ({ key: x.key, add: x.add, edit: x.edit, keep: x.keep, fail: x.fail })) };
   } catch (e) { out.send_err = errText(e); }
@@ -12456,11 +12457,13 @@ function subMwOut(r, cfg) {
    ⚙がオフ・ライトが動いていないときは null（今までどおりモニターの決まりで選ぶ）。 */
 async function subMonSameSet(env, rows, cfg, skip, ex) {
   if (!(((cfg || {}).pick || {}).monSame)) return null;
-  const lp = ((cfg || {}).plans || []).filter((p) => p.key === "light" && p.on && p.ch)[0];
+  /* 8.119 ライトの配信を止めているときは、ライトに**出ているカード**の品だけ（新しく選ばない）。 */
+  const lp = ((cfg || {}).plans || []).filter((p) => p.key === "light" && p.ch)[0];
   if (!lp) return null;
   const sent = await subPosts(env, lp.ch);
   const set = {};
-  for (const x of subPick(rows, lp, sent, false, cfg, skip || null, "", ex || {})) set[String(x.jan)] = 1;
+  const exL = lp.on ? (ex || {}) : Object.assign({}, ex || {}, { editOnly: true });
+  for (const x of subPick(rows, lp, sent, false, cfg, skip || null, "", exL)) set[String(x.jan)] = 1;
   return set;
 }
 function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
@@ -12480,8 +12483,9 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
   const want0 = same ? 9999 : (mon ? monNew
     : Math.max(1, Math.round(Number(plan.n) || 0)));
   const nm = same ? undefined : (e.newMax || {})[String(plan.key || "")];
-  const want = (nm === undefined || nm === null) ? want0
-    : Math.max(0, Math.min(want0, Math.round(Number(nm) || 0)));
+  /* 8.119（カジの依頼）配信を止めているプランの「書き換えだけ」（e.editOnly）は新しく出さない。 */
+  const want = e.editOnly ? 0 : ((nm === undefined || nm === null) ? want0
+    : Math.max(0, Math.min(want0, Math.round(Number(nm) || 0))));
   let newN = 0;
   /* 8.52 まず出せる行を**ぜんぶ**集めて、並べ替えてから件数を数える。 */
   const cand = [];
@@ -15491,16 +15495,25 @@ async function jobSubSend(env, opt) {
        ・SUB_PX_FRESH_MS より新しく取った品は取り直さない（プランごとに押しても何度も取らない）
        ・新しく出す品を先に、そのあと値段の古い順。持ち時間（SUB_PX_BUDGET_MS）で区切る
        ・取れなかった品は控えの値段のまま（消さない） */
+    /* 8.119（カジの依頼）「いますぐ配る」（o.editOff）は、⚙で配信を止めているプランでも
+       **出ているカードの書き換えだけ**をする（新しいカードは出さない・⚙のオンオフは変えない）。 */
+    const offKeys = {};
+    const plansDo = cfg.active.slice();
+    if (o.editOff === true)
+      for (const p of (cfg.plans || []))
+        if (!p.on && p.ch && !plansDo.some((q) => q.key === p.key)) { plansDo.push(p); offKeys[p.key] = 1; }
+    res.edit_only = Object.keys(offKeys);
     if (res.approve && o.px !== false) {
       try {
         const cand = [];
         const seen = {};
         const exPx = { hold: o.hold || null, out: o.out || null, newMax: o.newMax || null };
-        for (const p of cfg.active) {
+        for (const p of plansDo) {
           if (only && p.key !== only) continue;
           const sent = await subPosts(env, p.ch);
-          const exQ = (p.key === "monitor")
+          const exQ0 = (p.key === "monitor")
             ? Object.assign({}, exPx, { same: await subMonSameSet(env, rows, cfg, skip, exPx) }) : exPx;
+          const exQ = offKeys[p.key] ? Object.assign({}, exQ0, { editOnly: true }) : exQ0;
           for (const x of subPick(rows, p, sent, reform, cfg, skip, redoAt, exQ)) {
             const jan = String(x.jan || "");
             if (!jan || seen[jan] || /^one-/.test(jan)) continue;
@@ -15531,13 +15544,15 @@ async function jobSubSend(env, opt) {
        どこまで出たかを返すので、画面は「もう一度押すと続きから」と出せる
        （指紋と msg_id で見ているので、二重には出ない）。 */
     let stop = false;
-    for (const p of cfg.active) {
+    for (const p of plansDo) {
       if (stop) break;
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
       /* 8.116 モニターにはライトと同じ品（ライトの選び方はこの回と同じ条件で）。 */
-      const exP = (p.key === "monitor")
+      const exP0 = (p.key === "monitor")
         ? Object.assign({}, ex, { same: await subMonSameSet(env, rows, cfg, skip, ex) }) : ex;
+      /* 8.119 配信を止めているプランは書き換えだけ。 */
+      const exP = offKeys[p.key] ? Object.assign({}, exP0, { editOnly: true }) : exP0;
       const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt, exP);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
                   /* 8.38 Discord から消えていたカード（控えを片づけた数）。 */

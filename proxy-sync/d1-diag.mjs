@@ -140,6 +140,8 @@ export function subKickText(v) {
   if (o.send) {
     out.push("カード：新しく " + n(o.send.sent) + "・書き換え " + n(o.send.edited) + "・失敗 " + n(o.send.fail)
       + "・残り " + n(o.send.left) + (o.send.why ? " 理由 " + clean(o.send.why, 60) : ""));
+    if ((o.send.edit_only || []).length)
+      out.push("　配信を止めているので書き換えだけ：" + o.send.edit_only.map((k) => clean(k, 12)).join("・"));
     for (const p of (o.send.plans || []))
       out.push("　" + clean(p.key, 12) + "：新しく " + n(p.add) + "・書き換え " + n(p.edit)
         + "・そのまま " + n(p.keep) + "・失敗 " + n(p.fail));
