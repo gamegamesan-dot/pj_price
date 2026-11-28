@@ -12925,7 +12925,8 @@ async function shopTokenReset(env) {
   await saveRun(env, run);
   if (!tk.ok) { res.error = "token"; res.detail = shopWhyJa(tk); return res; }
   res.scopes = String(SHOP_MEM.scope || "").split(/[,\s]+/).filter(Boolean);
-  res.customers = ["read_customers", "write_customers"].filter((x) => res.scopes.indexOf(x) < 0);
+  /* 8.115 write_customers があれば read_customers も足りている（Shopify の決まり）。 */
+  res.customers = shopScopeMiss(res.scopes, ["read_customers", "write_customers"]);
   res.ok = true;
   return res;
 }
@@ -13015,6 +13016,23 @@ const SHOP_Q_CAT_ID = `query pjCatId($c: ID!, $p: ID!) {
   p: node(id: $p) { id ... on Publication { catalog { title } } }
 }`;
 /* Shopify の返事から、足りない権限（スコープ）の名前を拾う（値は出さない）。 */
+/* 8.115（カジの報告）権限を持っているか。Shopify は write_xxx を持つと read_xxx も含むので、
+   権限の一覧に read_xxx が出ない（write_products があって read_products が出ないのと同じ）。
+   read_xxx が要るときは write_xxx があれば足りる。scopes は名前の配列か、カンマ区切りの文字列。 */
+function shopScopeList(scopes) {
+  return Array.isArray(scopes) ? scopes.map(String)
+    : String(scopes || "").split(/[,\s]+/).filter(Boolean);
+}
+function shopHasScope(scopes, need) {
+  const have = shopScopeList(scopes), n = String(need || "");
+  if (have.indexOf(n) >= 0) return true;
+  const m = /^read_(.+)$/.exec(n);
+  return !!(m && have.indexOf("write_" + m[1]) >= 0);
+}
+/* 足りない権限（同じ考え方）。 */
+function shopScopeMiss(scopes, needs) {
+  return (needs || []).filter((x) => !shopHasScope(scopes, x));
+}
 function shopScopeOf(msg) {
   const m = String(msg || "").match(/\b(read|write)_[a-z_]+\b/g) || [];
   return Array.from(new Set(m)).slice(0, 5);
@@ -16258,8 +16276,15 @@ function memTagWhy(r) {
       || x.status === 403) {
     if (/protected customer data|not approved to access/i.test(msg))
       return "Shopify のアプリに「保護された顧客データ」の利用（顧客の項目）が許可されていません";
-    return "Shopify の権限が足りません（" + (sc.length ? sc.join("・")
-      : "read_customers・write_customers") + "）";
+    /* 8.115 いまの通行証の権限が分かっていれば、足りているもの（write_xxx があれば read_xxx も）は
+       言わない。ぜんぶ足りているのに断られたときは、そう言う（取り直しが要るなど）。 */
+    const have = String(SHOP_MEM.scope || "");
+    const need = sc.length ? sc : ["read_customers", "write_customers"];
+    const miss = have ? shopScopeMiss(have, need) : need;
+    if (!miss.length)
+      return "Shopify が断りました（いまの通行証には " + need.join("・")
+        + " が含まれています。⚙「Shopify の通行証を取り直す」を押してからやり直してください）";
+    return "Shopify の権限が足りません（" + miss.join("・") + "）";
   }
   return shopWhyJa(x);
 }
@@ -16481,6 +16506,10 @@ async function memList(env) {
   /* 8.110 Shopify のタグを付けられるか（宛先と鍵・表があるか）。 */
   res.shop = !!cfg.shopHost && !!shopKeyKind(env);
   res.tag_cols = await memTagColOk(env);
+  /* 8.115 いまの通行証の権限が分かっているときだけ、タグに要る権限で足りないものを返す
+     （write_customers があれば read_customers も足りる）。分からなければ null。 */
+  res.tag_scope_miss = String(SHOP_MEM.scope || "")
+    ? shopScopeMiss(SHOP_MEM.scope, ["read_customers", "write_customers"]) : null;
   res.ok = true;
   return res;
 }
@@ -24322,6 +24351,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.115 */
+  shopHasScope, shopScopeMiss,
   /* 8.113 */
   osPickPut, osJpCheck,
   /* 8.112 */

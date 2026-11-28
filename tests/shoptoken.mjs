@@ -99,6 +99,27 @@ ok(f.body.ok===false&&f.body.error==='fixed'&&/SHOPIFY_ADMIN_TOKEN/.test(f.body.
 const e4=makeEnv(); await setCfg(e4);
 const nk=await api(e4,'/shop/token/reset',{});
 ok(nk.body.ok===false&&nk.body.error==='no_key','★鍵が無いときはそう言う');
+console.log('\n=== ⑥ 8.115 write_xxx があれば read_xxx も足りる ===');
+ok(W.shopHasScope('write_customers','read_customers')&&W.shopHasScope(['write_products'],'read_products')
+   &&!W.shopHasScope('read_customers','write_customers')&&!W.shopHasScope('write_orders','read_customers'),
+   '★★★read_xxx が要るとき write_xxx があれば足りる（逆はだめ・別の権限もだめ）');
+ok(W.shopScopeMiss('write_products,write_customers',['read_customers','write_customers']).length===0,
+   '★★write_customers だけの通行証で「read_customers がまだありません」と言わない');
+const e5=env0(); await setCfg(e5);
+W.shopReset(); scopeNow='write_products,write_customers';
+const rs5=await api(e5,'/shop/token/reset',{});
+ok(rs5.body.ok&&rs5.body.customers.length===0,'★★★「取り直す」で write_customers だけでも「そろっています」');
+/* 会員の一覧の「権限が足りません」も同じ考え方 */
+W.SHOP_MEM.scope='write_products,write_customers';
+const why1=W.memTagWhy({ why:'gql', msg:'Access denied for customer field. Required access: `read_customers` access scope.' });
+ok(!/権限が足りません（read_customers）/.test(why1)&&/取り直す/.test(why1),'★★★write_customers があるのに read_customers と言わない（取り直しを案内）');
+W.SHOP_MEM.scope='write_products';
+const why2=W.memTagWhy({ why:'gql', msg:'Access denied for customer field. Required access: `read_customers` access scope.' });
+ok(/権限が足りません（read_customers）/.test(why2),'★★本当に足りないときは今までどおり出す');
+const lst=await api(e5,'/mem');
+W.SHOP_MEM.scope='write_customers';
+const lst2=await api(e5,'/mem');
+ok(Array.isArray(lst2.body.tag_scope_miss)&&lst2.body.tag_scope_miss.length===0,'★会員の一覧の権限の様子も同じ考え方（write_customers で足りる）');
 const src=fs.readFileSync(new URL('../proxy-sync/worker.js',import.meta.url),'utf8');
 ok(!/notes\.push\([^)]*tk\.token|console\.log\([^)]*token/.test(src),'★鍵をログに出さない');
 T.done();

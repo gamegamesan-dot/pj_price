@@ -21531,6 +21531,9 @@ function memRowsHtml(d){
     +'・ボットのトークン '+((d||{}).token?'あり':'<b style="color:var(--bad)">なし</b>')
     +'・webhook の秘密 '+((d||{}).hook?'あり':'<b style="color:var(--bad)">なし</b>')
     /* 8.110 Shopify の顧客タグを付けられるか（管理用ドメインと鍵・D1 の列）。 */
+    /* 8.115 通行証の権限が分かっていて足りないときだけ出す（write_customers があれば read も足りる）。 */
+    +(((d||{}).tag_scope_miss||[]).length?('・<b style="color:var(--bad)">Shopify の権限が足りません（'
+      +esc(d.tag_scope_miss.join('・'))+'）</b>'):'')
     +'・Shopify のタグ '+(((d||{}).shop&&(d||{}).tag_cols)?'付けられる'
       :('<b style="color:var(--bad)">'+(!(d||{}).tag_cols?'D1 の列なし（migrate-0076）'
         :'管理用ドメインか鍵がありません')+'</b>'))
@@ -33147,7 +33150,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v365';   // sw.js の const V と必ず同じ値にする
+var APP_V='v366';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

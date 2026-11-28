@@ -34,7 +34,7 @@ globalThis.fetch=async(u,i)=>{
     return new Response('{}',{status:200});
   }
   if(/myshopify\.com\/admin\/oauth\/access_token/.test(url))
-    return new Response(JSON.stringify({access_token:'shpat_x',scope:'read_customers,write_customers',expires_in:86399}),{status:200});
+    return new Response(JSON.stringify({access_token:'shpat_x',scope:shopDeny?'read_products':'read_customers,write_customers',expires_in:86399}),{status:200});
   if(/myshopify\.com\/admin\/api\/.*graphql/.test(url)){
     const b=JSON.parse(o.body), v=b.variables||{};
     const cust=String(v.id||'').replace(/\D/g,'');
@@ -150,6 +150,8 @@ ok(!JSON.stringify(l).match(/@|email|address/i),'★氏名・メールは持た�
 
 console.log('\n=== ⑥ 権限が足りない・顧客がいない・宛先が無い ===');
 shopDeny='Access denied for customer field. Required access: `read_customers` access scope.';
+W.SHOP_MEM.scope='read_products';     // いまの通行証に顧客の権限が無い（8.115 で一覧と突き合わせる）
+W.SHOP_MEM.token=''; W.SHOP_MEM.exp=0;
 const dn=await api(env,'/mem/tags',{ cust:C4 });
 console.log('   '+dn.detail);
 ok(!dn.ok&&/権限が足りません/.test(dn.detail)&&/read_customers/.test(dn.detail),'★★★権限が足りないときは足りない権限の名前を出す');
