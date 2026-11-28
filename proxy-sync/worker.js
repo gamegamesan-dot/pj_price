@@ -11932,6 +11932,13 @@ async function jobSubKick(env, opt) {
     out.index = { pages: ix.pages, add: ix.add, edit: ix.edit, same: ix.same, fail: ix.fail,
                   why: ix.why || ix.error || "" };
   } catch (e) { out.index_err = errText(e); }
+  /* 8.119 カードの送料の文（プランごと・送料の金額だけで商品の情報は入らない）。 */
+  try {
+    const cs = await subSettings(env);
+    out.ship = {};
+    for (const p of (cs.plans || [])) if (p.ch) out.ship[p.key] = SHOPCSV.planShipText(p.key, cs.tiers);
+    for (const g of (cs.one || [])) if (g.ch) out.ship[g.key] = SHOPCSV.planShipText(g.key, cs.tiers);
+  } catch (e) { /* 止めない */ }
   /* カードと一覧の件数（チャンネルごと・数だけ）。 */
   try { Object.assign(out, await subKickCount(env)); } catch (e) { out.count_err = errText(e); }
   try { await stateSet(env, SUB_KICK_LAST, JSON.stringify(out)).run(); } catch (e) {}
@@ -12743,7 +12750,11 @@ function subCardOf(x, p, cfg, note) {
                               無ければいまの上限。 */
                            maxQty: (x && x.card_q) ? x.card_q : p.q,
                            note: note,
-                           shipText: p.ship, gameG: cfg.gameG,
+                           /* 8.119（カジの依頼）送料はプランごとに1つの書き方
+                              （Shopify の会員便の段・プレミアムは送料無料）。
+                              ⚙のプランごとの送料の文（subShip<Key>）は使わない。 */
+                           shipFixed: SHOPCSV.planShipText(p.key, cfg.tiers),
+                           gameG: cfg.gameG,
                            addG: cfg.addG, thinKishu: cfg.thinKishu,
                            tiers: cfg.tiers,
                            /* 8.81 箱ものは送り方と実額をそのまま出す
@@ -15194,8 +15205,9 @@ function oneCardOf(x, cfg, picUrl, planKey) {
     domain: (cfg || {}).domain,
     /* 1点ものは数量そのものが上限なので「お一人◯点まで」は出さない。 */
     maxQty: 0,
-    /* 送料はカジが選んだ区分の名前をそのまま出す。 */
-    shipText: SHOPCSV.oneShipName(x.ship_kind),
+    /* 8.119（カジの依頼）送料はチャンネルのプランごとに1つの書き方
+       （目玉商品-先行（プレミアム）は送料無料・目玉商品（スタンダード以上）は会員便の段）。 */
+    shipFixed: SHOPCSV.planShipText(planKey || "one_pre", (cfg || {}).tiers),
     /* 8.29（カジの依頼）目安も同じ決まりで出す（1点ものは中古が多いので、
        ランキングや出品者数が取れていれば出る。取れていない項目は出ない）。 */
     guide: (cfg || {}).guide, planKey: planKey || "one_pre",
@@ -18977,7 +18989,9 @@ async function subEditLeft(env, run, jans) {
     /* 8.87 メインの写真（1枚目）だけ。読めなければ前の添付をそのまま残す。 */
     const pic = (x.one_id && x.pic) ? await oneMainPic(env, run, x) : null;
     const card = x.one_id
-      ? oneCardOf(x, cfg, (x.pic) ? ("attachment://" + onePicName(x)) : "")
+      ? oneCardOf(x, cfg, (x.pic) ? ("attachment://" + onePicName(x)) : "",
+                  /* 8.119 そのカードを出したチャンネルのプラン（送料の書き方が変わる）。 */
+                  String(y.plan || "") || "one_pre")
       : subCardOf(x, p, cfg);
     const e = x.one_id
       ? await dcCard(env, run, y.ch, card, pic, String(y.msg_id), !x.pic)

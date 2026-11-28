@@ -147,6 +147,7 @@ export function subKickText(v) {
   if (o.index) out.push("今週の一覧：ページ " + n(o.index.pages) + "・新しく " + n(o.index.add) + "・書き換え "
     + n(o.index.edit) + "・同じ " + n(o.index.same) + "・失敗 " + n(o.index.fail)
     + (o.index.why ? " 理由 " + clean(o.index.why, 60) : ""));
+  for (const k of Object.keys(o.ship || {})) out.push("カードの送料 " + clean(k, 12) + "：" + clean(o.ship[k], 300));
   for (const c of (o.chs || [])) out.push("出ているカード " + clean(c.key, 12) + "：" + n(c.cards) + "件");
   for (const c of (o.idx || [])) out.push("今週の一覧 " + clean(c.key, 12) + "：" + n(c.n) + "件（" + n(c.pages) + "ページ）");
   for (const k of ["amz_err", "box_err", "send_err", "index_err", "count_err"])

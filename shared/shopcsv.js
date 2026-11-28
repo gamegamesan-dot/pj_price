@@ -664,6 +664,42 @@
     });
     return out;
   }
+  /* ===== 8.119（カジの依頼）カードの「送料」はプランごとに1つの書き方 =====
+     Shopify の設定（2026-11-29）：
+       ・会員便（コレクション「会員リスト」）… 重さの段で ¥200〜（⚙「会員便の段」と同じ表）
+       ・プレミアム会員（タグ grade-premium）… 自動割引「プレミアム会員 送料無料」で会員便が ¥0
+     なので、カードの送料は**商品ごとに変えず**、プランごとに次の1つだけ：
+       ・プレミアム（#リスト-プレミアム・目玉商品-先行（プレミアム））… 「送料無料（プレミアム会員）」
+       ・モニター・ライト・スタンダード（目玉商品（スタンダード以上）も）… 会員便の段をそのまま
+         「会員便・重さで ¥200〜¥1,200（〜250g ¥200／〜350g ¥300／…／9,000g〜 ¥1,200）」
+     「◯本以上 送料無料」のような Shopify に無い特典は書かない。
+     段の表は呼ぶ側が渡す（pj-sync の subSettings の tiers＝Shopify の会員便と同じ表）。 */
+  var SHIP_FREE_PLANS = { premium: 1, one_pre: 1 };
+  var SHIP_FREE_TEXT = "送料無料（プレミアム会員）";
+  function gramsJa(g) { return Math.round(num(g)).toLocaleString("en-US") + "g"; }
+  function yenJa(y) { return "\u00a5" + Math.round(num(y)).toLocaleString("en-US"); }
+  function planShipText(planKey, tiers) {
+    if (SHIP_FREE_PLANS[s(planKey)] === 1) return SHIP_FREE_TEXT;
+    var a = (tiers && tiers.length) ? tiers : SHIP_TIERS;
+    /* 同じ金額が続く段は1つにまとめる（「〜1,999g ¥600」のように上の重さで出す）。 */
+    var rows = [], i;
+    for (i = 0; i < a.length; i++) {
+      var y = Math.round(num(a[i].yen)), g = Math.round(num(a[i].g));
+      var last = rows[rows.length - 1];
+      if (last && last.yen === y) { last.g = g; continue; }
+      rows.push({ g: g, yen: y });
+    }
+    var lo = Infinity, hi = 0, parts = [], from = 0;
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      lo = Math.min(lo, r.yen); hi = Math.max(hi, r.yen);
+      parts.push((r.g ? ("〜" + gramsJa(r.g)) : (gramsJa(from) + "〜")) + " " + yenJa(r.yen));
+      from = r.g + 1;
+    }
+    if (!parts.length) return SHIP_UNSURE;
+    var range = (lo === hi) ? yenJa(lo) : (yenJa(lo) + "〜" + yenJa(hi));
+    return "会員便・重さで " + range + "（" + parts.join("／") + "）";
+  }
   /* Shopify に入れる重さ。箱もの（⚙オン）は「送料用の重さ」、
      それ以外は今までどおり（realG）。 */
   function weightOf(r, opt) {
@@ -1310,6 +1346,8 @@
     BOX_G: BOX_G, BOX_FROM: BOX_FROM, boxG: boxG, boxWayOf: boxWayOf,
     realG: realG, tiersBox: tiersBox, tiersText: tiersText,
     tiersRows: tiersRows,
+    /* 8.119 カードの送料はプランごとに1つの書き方。 */
+    planShipText: planShipText, SHIP_FREE_TEXT: SHIP_FREE_TEXT, SHIP_FREE_PLANS: SHIP_FREE_PLANS,
     COLS: COLS, INV_COLS: INV_COLS, OPT1: OPT1, GRADES: GRADES,
     COL_OLD: COL_OLD, colName: colName, headers: headers,
     TAG_MEMBER: TAG_MEMBER, SHIP_SMALL: SHIP_SMALL, SHIP_BOX: SHIP_BOX,

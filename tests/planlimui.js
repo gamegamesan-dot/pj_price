@@ -189,7 +189,7 @@ console.log('\n=== ⑤ 仕入れ元・月額を出さない ===');
   const src=h.slice(a,b);
   ok(a>0&&b>a&&!/wholesale|卸値|sha\b|mw_stock/.test(src),
      '★★★上限の行は仕入れ元の情報を読まない');
-  const cfgBlock=h.slice(h.indexOf('id="subLimNote"'),h.indexOf('id="subShipPremium"'));
+  const cfgBlock=h.slice(h.indexOf('id="subLimNote"'),h.indexOf('id="subCfgNote2"'));
   ok(!/1,?980|4,?980|9,?800/.test(cfgBlock),'★★★月額の金額を画面に持たない');
   const v=await p.evaluate(()=>APP_V);
   const sw=fs.readFileSync(path.join(__dirname,'..','sw.js'),'utf8');

@@ -190,7 +190,9 @@ console.log('=== ⑥ いますぐ配る（Actions の sub_now）===');
   const gone=await env.DB.prepare(`SELECT v FROM sync_state WHERE k='sub.kick'`).first();
   ok(!gone,'★★★印は1回で消す（同じことを繰り返さない）');
   const last=await env.DB.prepare(`SELECT v FROM sync_state WHERE k='sub.kick.last'`).first();
-  ok(!!last&&!/ゲーム|\d{13}|¥|https?:/.test(last.v),'★★★記録は数だけ（商品名・JAN・値段・URL は控えない）');
+  /* 8.119 送料の文（会員便の段の金額）だけは控える。それを除いて、商品の値段は入らない。 */
+  const lastNoShip=JSON.stringify(Object.assign({},JSON.parse(last.v),{ ship:null }));
+  ok(!!last&&!/ゲーム|\d{13}|¥|https?:/.test(lastNoShip),'★★★記録は数だけ（商品名・JAN・値段・URL は控えない）');
   const txt=DIAG.subKickText(last.v).join('\n');
   console.log('   '+txt.replace(/\n/g,' ／ '));
   ok(/monitor：8件/.test(txt)&&/今週の一覧 monitor：8件/.test(txt),'★★Actions のログにカードと一覧の件数を出す');

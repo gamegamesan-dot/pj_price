@@ -208,9 +208,9 @@ console.log('\n=== ③ 送る・二重に送らない・書き換える ===');
        '★★★「手数料を引いたあと」と添える');
     ok(/Amazon FBA で売った場合/.test(fv('見込みの Amazon 粗利')),
        '★★★どの売り方の計算かを書く（8.37）');
-    ok(/クリックポスト/.test(fv('送料'))&&/1〜2本 ¥200/.test(fv('送料'))
-       &&/3本 ¥300/.test(fv('送料'))&&/4本以上 ¥600/.test(fv('送料')),
-       '★★★送料は本数ごとの額（ゲームソフトは Shopify と同じ 1本100g）');
+    /* 8.119 送料はプランごとに1つの書き方（Shopify の会員便の段どおり）。 */
+    ok(fv('送料')==='会員便・重さで ¥200〜¥600（〜250g ¥200／〜350g ¥300／351g〜 ¥600）',
+       '★★★送料は Shopify の会員便の重さの段どおり（8.119）');
     ok(!/まだ採寸していません/.test(fv('送料')),
        '★★★「—（まだ採寸していません）」とは出さない');
   }
@@ -275,9 +275,12 @@ console.log('\n=== ③の2 カードの形が変わったら、送ったぶん�
      '★★★次からはまた「そのまま」（毎回書き換えない）');
 }
 
-console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.17）===');
+console.log('\n=== ③の3 送料はプランごとに1つの書き方（8.119・Shopify の会員便と同じ）===');
 {
+  const SHOP=(await import('../shared/shopcsv.js')).default;
+  const want=SHOP.planShipText('monitor',SHOP.tiersOf(''));
   const env=env0();
+  /* 前に⚙へ入れてあった「4本以上 送料無料」の文は使わない（Shopify では無料にならない）。 */
   await setCfg(env,{ subShipMonitor:'クリックポスト（1〜2本 ¥200／3本 ¥300'
     +'／4本以上 送料無料）' });
   await stock(env,JAN); await amz(env,JAN); await sub(env,JAN);
@@ -286,12 +289,9 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
   const f=((dc[0]||{}).body||{}).embeds[0].fields
     .filter((x)=>x.name==='送料')[0]||{};
   console.log('   '+JSON.stringify(f.value));
-  ok(/4本以上 送料無料/.test(String(f.value||'')),
-     '★★★⚙に入れた文をそのまま出す（モニターは4本以上 送料無料）');
-  /* 8.27：⚙の「ゲームソフト1本の重さ」を 0 にして、採寸も無い行は
-     **送り方を名乗らない**（「送料はお会計で表示」）。
-     v284 までは「—（まだ採寸していません）」と出していたが、
-     会員が読む文なので「お会計で表示」に変えた。 */
+  ok(String(f.value||'')===want,'★★★モニターの送料は会員便の段どおり（'+want+'）');
+  ok(!/送料無料/.test(String(f.value||'')),'★★★「4本以上 送料無料」（Shopify に無い特典）は書かない');
+  /* 重さも大きさも分からない行も、同じプランなら同じ書き方。 */
   const e2=env0();
   await setCfg(e2,{ mwSubGameG:0 });
   await stock(e2,JAN2); await amz(e2,JAN2,{ tier:'' }); await sub(e2,JAN2);
@@ -301,15 +301,9 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
   await api(e2,'/sub/send',{ approve:true });
   const f2=(((dc[0]||{}).body||{ embeds:[{ fields:[] }] })
     .embeds[0].fields||[]).filter((x)=>x.name==='送料')[0]||{};
-  console.log('   '+JSON.stringify(f2.value));
-  ok(/お会計で表示/.test(String(f2.value||'')),
-     '★★重さも大きさも分からない行は「送料はお会計で表示」（8.27）');
-  ok(!/クリックポスト/.test(String(f2.value||'')),
-     '★★★分からない行に送り方を名乗らない（8.27）');
-  /* 8.27：フィギュア（採寸あり）の箱に「クリックポスト」と出さない。 */
+  ok(String(f2.value||'')===want,'★★★大きさが分からない商品も同じ書き方（商品ごとにばらばらにしない）');
+  /* プレミアムは送料無料（プレミアム会員）。箱もののフィギュアでも同じ。 */
   const e3=env0();
-  /* フィギュアはモニター（ゲームソフトだけ）に出ないので、
-     プレミアム（ぜんぶ）を動かして試す。 */
   await setCfg(e3,{ subOnPremium:true, subChPremium:'2222222222' });
   await stock(e3,JAN2,{ kishu:'figure' });
   await amz(e3,JAN2); await sub(e3,JAN2,{ grades:'premium' });
@@ -321,11 +315,7 @@ console.log('\n=== ③の3 送料の文はプランごとに変えられる（8.
   const f3=(((dc[0]||{}).body||{ embeds:[{ fields:[] }] })
     .embeds[0].fields||[]).filter((x)=>x.name==='送料')[0]||{};
   console.log('   '+JSON.stringify(f3.value));
-  ok(/レターパックプラス/.test(String(f3.value||''))
-     &&!/クリックポスト/.test(String(f3.value||'')),
-     '★★★フィギュアの箱は採寸から区分を出す（カジの報告・8.27）');
-  ok(/点/.test(String(f3.value||''))&&!/本/.test(String(f3.value||'')),
-     '★★★ゲームソフト以外は「点」（8.27）');
+  ok(String(f3.value||'')==='送料無料（プレミアム会員）','★★★プレミアムのカードは「送料無料（プレミアム会員）」');
 }
 
 console.log('\n=== ③の4 残り数は「上限 − 取り込んだ注文の点数」（8.19・不具合1）===');
@@ -380,9 +370,8 @@ console.log('\n=== ③の5 カードの中身が変われば書き換える（8.
   ok(!!(h0||{}).card_h,'★★★カードの指紋を控える');
   r=await api(env,'/sub/send',{ approve:true });
   ok(r.skipped===1,'★★中身が同じならそのまま');
-  /* ⚙の送料の文だけを変える（値段も数も変わらない）。 */
-  await setCfg(env,{ subShipMonitor:'クリックポスト（1〜2本 ¥200／'
-    +'3本 ¥300／4本以上 送料無料）' });
+  /* 8.119 会員便の段（⚙）だけを変える（値段も数も変わらない）。 */
+  await setCfg(env,{ mwSubTiers:'250:210／350:300／0:600' });
   r=await api(env,'/sub/plan');
   const it=((r.plans||[]).filter((p)=>p.key==='monitor')[0]||{}).items||[];
   ok((it[0]||{}).same===false,
@@ -392,7 +381,7 @@ console.log('\n=== ③の5 カードの中身が変われば書き換える（8.
   console.log('   '+JSON.stringify({ edited:r.edited, m:dc.map((x)=>x.method) }));
   ok(r.edited===1&&dc.length===1&&dc[0].method==='PATCH',
      '★★★値段も数も同じでも、中身が変われば書き換える');
-  ok(/4本以上 送料無料/.test(JSON.stringify(dc[0].body)),
+  ok(/〜250g ¥210/.test(JSON.stringify(dc[0].body)),
      '★★★新しい送料の文になる');
   const h1=await env.DB.prepare(
     `SELECT card_h FROM sub_post WHERE jan=?1`).bind(JAN).first();
