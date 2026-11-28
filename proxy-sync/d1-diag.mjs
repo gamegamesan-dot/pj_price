@@ -135,6 +135,8 @@ export function subKickText(v) {
   if (o.amz) out.push("Amazon の値段を新品の最安値に直した行 " + n(o.amz.n));
   if (o.box) out.push("Shopify の会員用の商品を直した " + n(o.box.done) + "／対象 " + n(o.box.todo)
     + "（失敗 " + n(o.box.fail) + "・残り " + n(o.box.left) + "）" + (o.box.err ? " 理由 " + clean(o.box.err, 60) : ""));
+  if (o.px) out.push("配る前に Amazon の値段を取り直した " + n(o.px.done) + "／対象 " + n(o.px.todo)
+    + "（60分以内に取った品 " + n(o.px.fresh) + "・取れなかった " + n(o.px.none) + "・残り " + n(o.px.left) + "）");
   if (o.send) {
     out.push("カード：新しく " + n(o.send.sent) + "・書き換え " + n(o.send.edited) + "・失敗 " + n(o.send.fail)
       + "・残り " + n(o.send.left) + (o.send.why ? " 理由 " + clean(o.send.why, 60) : ""));

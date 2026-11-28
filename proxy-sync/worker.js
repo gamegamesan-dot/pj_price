@@ -11921,6 +11921,8 @@ async function jobSubKick(env, opt) {
   try {
     const r = await jobSubSend(env, { approve: true, budget_ms: 120000,
       newMax: { light: 0, standard: 0, premium: 0 } });
+    out.px = r.px ? { todo: r.px.todo || 0, done: r.px.done || 0, fresh: r.px.fresh || 0,
+                      none: r.px.none || 0, left: r.px.left || 0 } : null;
     out.send = { sent: r.sent, edited: r.edited, gone: r.gone, fail: r.fail, left: r.left || 0,
       why: r.why || r.error || "",
       plans: (r.plans || []).map((x) => ({ key: x.key, add: x.add, edit: x.edit, keep: x.keep, fail: x.fail })) };
@@ -15317,6 +15319,79 @@ async function onePlanBuild(env, cfg, rows, sent, names) {
   return out;
 }
 /* 配信する。approve でないときは送らずに予定だけ返す。 */
+/* ===== 8.117 配信の直前に Amazon の値段を取り直す =====
+   cand … [{ jan, add }]（add＝まだ出していない品。先に取る）。
+   値段の決まりは見回りと同じ（amzPick：カート優先・カートが新品の最安値より大きく下なら最安値）。
+   販売手数料は値段に比例するぶんだけ合わせる（本当の手数料は、値段が1割以上変われば
+   次の手数料の取り直しで取る。mwAmzCartFix と同じ）。
+   返すのは数だけ（商品名・値段は返さない）。 */
+const SUB_PX_FRESH_MS = 60 * 60000;     // これより新しく取った値段は取り直さない（60分）
+const SUB_PX_BUDGET_MS = 60000;         // 取り直しの持ち時間（getItemOffersBatch は1回20件・約11秒）
+const SUB_PX_UI_MS = 30000;             // 画面から押す回の持ち時間
+async function subPxRefresh(env, run, cand, budgetMs) {
+  const st = { asked: 0, fresh: 0, todo: 0, done: 0, none: 0, calls: 0, left: 0, stopped: "" };
+  const list = Array.isArray(cand) ? cand : [];
+  st.asked = list.length;
+  if (!list.length) return st;
+  const addOf = {};
+  for (const c of list) addOf[String(c.jan)] = !!c.add;
+  const jans = Object.keys(addOf);
+  const by = {};
+  for (let i = 0; i < jans.length; i += 50) {
+    const part = jans.slice(i, i + 50);
+    const q = await env.DB.prepare(
+      `SELECT jan, asin, COALESCE(price,0) AS price, COALESCE(price_at,'') AS price_at,
+              COALESCE(fee_ref,0) AS fee_ref, COALESCE(fee_total,0) AS fee_total
+         FROM mw_amz WHERE jan IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const r of ((q && q.results) || [])) by[String(r.jan)] = r;
+  }
+  const old = Date.now() - SUB_PX_FRESH_MS;
+  const todo = [];
+  for (const j of jans) {
+    const r = by[j];
+    if (!r || !String(r.asin || "")) continue;
+    const t = Date.parse(String(r.price_at || ""));
+    if (isFinite(t) && t >= old) { st.fresh++; continue; }
+    todo.push({ jan: j, asin: String(r.asin), add: addOf[j], at: isFinite(t) ? t : 0,
+                price: Number(r.price) || 0, ref: Number(r.fee_ref) || 0, tot: Number(r.fee_total) || 0 });
+  }
+  todo.sort((a, b) => (a.add === b.add ? a.at - b.at : (a.add ? -1 : 1)));
+  st.todo = todo.length;
+  if (!todo.length) return st;
+  await pxOk(env);
+  const dl = Date.now() + Math.max(1000, Number(budgetMs) || SUB_PX_BUDGET_MS);
+  const stmts = [];
+  let i = 0;
+  for (; i < todo.length; i += PRICING_BATCH) {
+    /* 1回（20件）ぶんの時間が残っていなければ始めない。 */
+    if (i > 0 && Date.now() + MW_PRICE_CALL_MS > dl) { st.stopped = "time"; break; }
+    const part = todo.slice(i, i + PRICING_BATCH);
+    const g = await amazonLowest(env, run, part.map((x) => ({ asin: x.asin, cond: "new" })), null, 1);
+    st.calls++;
+    const at = nowIso();
+    for (const x of part) {
+      const z = (g || {})[x.asin + "|new"] || null;
+      const pk = z ? amzPick(z.buy, z.low) : { price: 0 };
+      if (!z || !(pk.price > 0)) { st.none++; continue; }      // 取れなければ控えのまま
+      const p1 = Math.round(pk.price);
+      const ref1 = (x.ref > 0 && x.price > 0) ? Math.round(x.ref * p1 / x.price) : x.ref;
+      const tot1 = x.tot > 0 ? Math.max(0, x.tot - x.ref + ref1) : x.tot;
+      stmts.push(env.DB.prepare(
+        `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
+           low_n=?7, amz=?8, fba_n=?9, err='', checked_at=?10, price_at=?10,
+           fee_ref=?11, fee_total=?12${pxSet("?2", "?10")}
+         WHERE jan=?1`)
+        .bind(x.jan, p1, pk.basis, Number(z.low) > 0 ? Math.round(z.low) : null,
+              Number(z.buy) > 0 ? Math.round(z.buy) : null,
+              z.newN || z.total || 0, z.lowN || 0, z.amz || 0, z.fba || 0, at,
+              ref1 || null, tot1 || null));
+      st.done++;
+    }
+  }
+  st.left = Math.max(0, todo.length - i);
+  if (stmts.length) await runBatch(env, run, stmts);
+  return st;
+}
 async function jobSubSend(env, opt) {
   const o = opt || {};
   const run = newRun("sub-send");
@@ -15339,7 +15414,7 @@ async function jobSubSend(env, opt) {
     /* 8.114 ⚙「モニターの開始日」（ISO・空なら ''）。 */
     const monT0 = SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom));
     const monT0Iso = monT0 === null ? "" : new Date(monT0).toISOString();
-    const rows = await subRows(env, cfg);
+    let rows = await subRows(env, cfg);
     const day = subJst().day;
     /* 8.80 自動配信（jobSubAuto）から呼ぶ回は、呼ぶ側が「今日は送らない」と
        オンオフを先に見ている（o.auto2）。ここでは見直さない。 */
@@ -15397,6 +15472,37 @@ async function jobSubSend(env, opt) {
     for (const j of (Array.isArray(o.skip) ? o.skip : []))
       skip[String(j)] = 1;
     res.skip_n = Object.keys(skip).length;
+    /* 8.117（カジの依頼）**配信の直前に、配る品の Amazon の値段を取り直す**。
+       カードの「Amazon の販売価格」「見込みの粗利」が、見回りで取った古い値段（最長3日前）に
+       ならないように、出す・書き換える予定の品だけを先に取り直してから組み立てる。
+       ・本当に送る回（approve）だけ。確認の画面（予定を数えるだけ）では取らない
+       ・SUB_PX_FRESH_MS より新しく取った品は取り直さない（プランごとに押しても何度も取らない）
+       ・新しく出す品を先に、そのあと値段の古い順。持ち時間（SUB_PX_BUDGET_MS）で区切る
+       ・取れなかった品は控えの値段のまま（消さない） */
+    if (res.approve && o.px !== false) {
+      try {
+        const cand = [];
+        const seen = {};
+        const exPx = { hold: o.hold || null, out: o.out || null, newMax: o.newMax || null };
+        for (const p of cfg.active) {
+          if (only && p.key !== only) continue;
+          const sent = await subPosts(env, p.ch);
+          const exQ = (p.key === "monitor")
+            ? Object.assign({}, exPx, { same: await subMonSameSet(env, rows, cfg, skip, exPx) }) : exPx;
+          for (const x of subPick(rows, p, sent, reform, cfg, skip, redoAt, exQ)) {
+            const jan = String(x.jan || "");
+            if (!jan || seen[jan] || /^one-/.test(jan)) continue;
+            seen[jan] = 1;
+            cand.push({ jan: jan, add: !x.sent });
+          }
+        }
+        res.px = await subPxRefresh(env, run, cand,
+          Math.max(5000, Number(o.px_ms) || SUB_PX_BUDGET_MS));
+        if (res.px.done) rows = await subRows(env, cfg);
+      } catch (e) {
+        res.px = { error: String((e && e.message) || e).slice(0, 200) };
+      }
+    }
     /* 8.28 持ち時間。超えたらそこで止めて、残りを返す（続きは次の回）。 */
     /* 8.80 定時の回（Cron）は画面からの呼び出しより長く使える。 */
     const dl = Date.now()
@@ -23802,7 +23908,9 @@ export default {
           /* 8.19 送ったカードをすべて今の形で書き直す。 */
           redo: !!(b && b.redo), plan: b && b.plan,
           /* 8.28（カジの依頼1）確認の画面でチェックを外した行。 */
-          skip: (b && Array.isArray(b.skip)) ? b.skip : [] }), 200, origin);
+          skip: (b && Array.isArray(b.skip)) ? b.skip : [],
+          /* 8.117 画面から押す回は、値段の取り直しを短めに（残りは続きの回で取る）。 */
+          px_ms: SUB_PX_UI_MS }), 200, origin);
       }
       /* 8.55（カジの依頼E）**採寸だけ**取り直す（ASIN は引き直さない）。
            GET  /mw/dim/go … 採寸が足りない件数を数えるだけ
@@ -24494,6 +24602,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.117 */
+  subPxRefresh, SUB_PX_FRESH_MS, SUB_PX_BUDGET_MS,
   /* 8.116 */
   amzPick, mwAmzCartFix, jobSubKick, subMonSameSet, AMZ_CART_MIN, SUB_MON_SAME_MARK,
   /* 8.115 */
