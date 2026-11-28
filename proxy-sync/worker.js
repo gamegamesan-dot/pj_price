@@ -9599,8 +9599,10 @@ async function mwScanPrice(env, run, o, dl) {
       if (!z) st.none++; else st.priced++;
       const buy = z ? Number(z.buy || 0) : 0;
       const lw = z ? Number(z.low || 0) : 0;
-      const price = buy > 0 ? buy : lw;
-      const basis = buy > 0 ? "カート" : (lw > 0 ? "最安" : "");
+      /* 8.116 カートが新品の最安値より大きく下なら新品の最安値（amzPick の1か所）。 */
+      const pk = amzPick(buy, lw);
+      const price = pk.price;
+      const basis = pk.basis;
       stmts.push(env.DB.prepare(
         `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
            low_n=?7, amz=?8, fba_n=?9, err=?10, checked_at=?11, price_at=?11${pxSet(
@@ -11198,8 +11200,10 @@ async function mwBuyRefresh(env, body) {
     const z = (g || {})[asin + "|new"] || null;
     const buy = z ? Number(z.buy || 0) : 0;
     const lw = z ? Number(z.low || 0) : 0;
-    res.price = buy > 0 ? buy : lw;
-    res.basis = buy > 0 ? "カート" : (lw > 0 ? "最安" : "");
+    /* 8.116 カートが新品の最安値より大きく下なら新品の最安値（amzPick の1か所）。 */
+    const pk = amzPick(buy, lw);
+    res.price = pk.price;
+    res.basis = pk.basis;
     if (res.price > 0)
       stmts.push(env.DB.prepare(
         `UPDATE mw_amz SET price=?2, basis=?3, low=?4, buybox=?5, new_n=?6,
@@ -11892,6 +11896,97 @@ async function dcApi(env, run, method, path, body) {
 /* 配信できる商品。印あり＋Shopify に読み込み済み＋値段と数がある行だけ。 */
 /* 8.49（カジの③）cfg を渡すと、⚙「出さない種類（言葉）」に当たった品を
    **ここで外す**（案・予定・配信・一覧のすべてで同じになる）。 */
+/* ===== 8.116（カジの依頼）いますぐ配る（Actions から1回だけ）=====
+   d1-diag.mjs --sub-kick が sync_state の sub.kick に印を置くと、15分ごとの回が拾って
+     ① Amazon の値段の直し（mwAmzCartFix）
+     ② 会員用の商品を Shopify で直す（grade-monitor など・jobSubBox）
+     ③ 配る（モニターはライトと同じ品。ライト・スタンダード・プレミアムは**新しく出さず**書き換えだけ）
+     ④ 今週の一覧を書き換える
+   をして、件数を sub.kick.last に控える（商品名・値段は控えない）。
+   印は始める前に消す（失敗しても同じ回を繰り返さない）。 */
+const SUB_KICK = "sub.kick", SUB_KICK_LAST = "sub.kick.last";
+function errText(e) { return String((e && e.message) || e).slice(0, 200); }
+async function jobSubKick(env, opt) {
+  const o = opt || {};
+  let k = "";
+  try { k = String(await stateGet(env, SUB_KICK) || ""); } catch (e) { k = ""; }
+  if (!k && !o.force) return { ok: true, skip: "no_kick" };
+  try { await env.DB.prepare(`DELETE FROM sync_state WHERE k=?1`).bind(SUB_KICK).run(); } catch (e) {}
+  const out = { at: nowIso(), kick: k };
+  try { out.amz = { n: (await mwAmzCartFix(env)).n }; } catch (e) { out.amz_err = errText(e); }
+  try {
+    const b = await jobSubBox(env, { approve: true });
+    out.box = { todo: b.todo, done: b.done, fail: b.fail, left: b.left, err: b.error || "" };
+  } catch (e) { out.box_err = errText(e); }
+  try {
+    const r = await jobSubSend(env, { approve: true, budget_ms: 120000,
+      newMax: { light: 0, standard: 0, premium: 0 } });
+    out.send = { sent: r.sent, edited: r.edited, gone: r.gone, fail: r.fail, left: r.left || 0,
+      why: r.why || r.error || "",
+      plans: (r.plans || []).map((x) => ({ key: x.key, add: x.add, edit: x.edit, keep: x.keep, fail: x.fail })) };
+  } catch (e) { out.send_err = errText(e); }
+  try {
+    const ix = await jobSubIndex(env, {});
+    out.index = { pages: ix.pages, add: ix.add, edit: ix.edit, same: ix.same, fail: ix.fail,
+                  why: ix.why || ix.error || "" };
+  } catch (e) { out.index_err = errText(e); }
+  /* カードと一覧の件数（チャンネルごと・数だけ）。 */
+  try { Object.assign(out, await subKickCount(env)); } catch (e) { out.count_err = errText(e); }
+  try { await stateSet(env, SUB_KICK_LAST, JSON.stringify(out)).run(); } catch (e) {}
+  return Object.assign({ ok: true }, out);
+}
+/* チャンネルごとの「出ているカード」の数と「今週の一覧」の件数（数だけ）。 */
+async function subKickCount(env) {
+  const cfg = await subSettings(env);
+  const offSel = (await colOk(env, "sub_post", "off_at")) ? "COALESCE(off_at,'')" : "''";
+  const chs = [];
+  for (const p of (cfg.plans || [])) {
+    if (!p.ch) continue;
+    const c = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM sub_post WHERE ch=?1 AND COALESCE(msg_id,'')<>''
+          AND ${offSel}=''`).bind(String(p.ch)).first();
+    chs.push({ key: p.key, cards: Number((c && c.n) || 0) });
+  }
+  const ip = await subIndexPlan(env);
+  const idx = ((ip && ip.chs) || []).map((x) => ({ key: x.key, n: x.n, pages: x.pages }));
+  return { chs, idx };
+}
+/* 8.116（カジの報告）Amazon の販売価格の選び方（1か所）。
+   カート（新品の条件で取ったカートの値段）が**新品の最安値より大きく下**にあるときは、中古や別の商品の
+   カートを拾っている疑いがあるので、**新品の最安値**を使う（ENDER LILIES：新品の最安値 ¥5,500 なのに
+   カート ¥2,930 を使い、粗利が ¥-1,255 と出ていた）。「大きく下」＝新品の最安値の AMZ_CART_MIN 倍より安い。 */
+const AMZ_CART_MIN = 0.9;
+function amzPick(buy, low) {
+  const b = Number(buy) || 0, l = Number(low) || 0;
+  if (b > 0 && l > 0 && b < l * AMZ_CART_MIN) return { price: l, basis: "最安", cart_low: 1 };
+  if (b > 0) return { price: b, basis: "カート", cart_low: 0 };
+  if (l > 0) return { price: l, basis: "最安", cart_low: 0 };
+  return { price: 0, basis: "", cart_low: 0 };
+}
+/* いま控えにある値段のうち、上の決まりに合わない行を直す（新品の最安値にする）。
+   販売手数料は値段に比例するぶんだけ合わせる（本当の手数料は、値段が1割以上変わったので
+   次の手数料の取り直しで取れる）。何度走らせても同じ結果。 */
+async function mwAmzCartFix(env) {
+  const out = { n: 0, jans: [] };
+  if (!(await colOk(env, "mw_amz", "buybox"))) return out;
+  const q = await env.DB.prepare(
+    `SELECT jan, price, low, buybox, COALESCE(fee_ref,0) AS fee_ref, COALESCE(fee_total,0) AS fee_total
+       FROM mw_amz WHERE basis='カート' AND COALESCE(low,0)>0 AND COALESCE(price,0)>0
+        AND price < low * ${AMZ_CART_MIN} LIMIT 500`).all();
+  const st = [];
+  for (const r of ((q && q.results) || [])) {
+    const p0 = Number(r.price) || 0, p1 = Number(r.low) || 0;
+    const ref = Number(r.fee_ref) || 0, tot = Number(r.fee_total) || 0;
+    const ref1 = (ref > 0 && p0 > 0) ? Math.round(ref * p1 / p0) : ref;
+    const tot1 = tot > 0 ? Math.max(0, tot - ref + ref1) : tot;
+    st.push(env.DB.prepare(
+      `UPDATE mw_amz SET price=?2, basis='最安', fee_ref=?3, fee_total=?4 WHERE jan=?1`)
+      .bind(String(r.jan), p1, ref1 || null, tot1 || null));
+    out.n++; if (out.jans.length < 20) out.jans.push(String(r.jan));
+  }
+  if (st.length) await runBatch(env, newRun("amz-cart-fix"), st);
+  return out;
+}
 async function subRows(env, cfg) {
   if (!(await subPostOk(env))) return [];
   /* 8.27（カジの依頼2）送り方の手の上書き（migrate-0060）。
@@ -11969,7 +12064,10 @@ function subRowMap(r, cfg) {
     kishu: String(r.kishu || ""),
     price: Number(r.price) || 0,
     qty: Number(r.max_qty) || 0,
-    grades: String(r.grades || ""),
+    /* 8.116 モニターにはライトと同じ品（ライトに出す品はモニターにも出す）。 */
+    grades: SUBPLAN.monSameGrades(String(r.grades || ""), !!(((cfg || {}).pick || {}).monSame)),
+    mon_same: (SUBPLAN.monSameGrades(String(r.grades || ""), !!(((cfg || {}).pick || {}).monSame))
+               !== String(r.grades || "")) ? 1 : 0,
     loaded_at: String(r.loaded_at || ""),
     /* 8.89 Shopify で非公開を確かめた結果。 */
     shop_vis: String(r.shop_vis || ""),
@@ -12345,6 +12443,17 @@ function subMwOut(r, cfg) {
      out    … { JAN: 1 } 完売として出す行（Shopify の在庫を戻せなかった品）
      newMax … { プラン: 件数 } そのプランに新しく出す件数の上限
               （モニターの「週に◯件」の残り。0 なら新しく出さない） */
+/* 8.116 モニターにはライトと同じ品：ライトに出す品（いまのライトのカード＋この回に新しく出す品）の JAN。
+   ⚙がオフ・ライトが動いていないときは null（今までどおりモニターの決まりで選ぶ）。 */
+async function subMonSameSet(env, rows, cfg, skip, ex) {
+  if (!(((cfg || {}).pick || {}).monSame)) return null;
+  const lp = ((cfg || {}).plans || []).filter((p) => p.key === "light" && p.on && p.ch)[0];
+  if (!lp) return null;
+  const sent = await subPosts(env, lp.ch);
+  const set = {};
+  for (const x of subPick(rows, lp, sent, false, cfg, skip || null, "", ex || {})) set[String(x.jan)] = 1;
+  return set;
+}
 function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
   const out = [];
   const e = ex || {};
@@ -12356,9 +12465,12 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
   /* 8.45（段②）**どのプランも「1回に新しく出す件数」**。
      すでに出してあるカードは件数に数えず、書き換えだけする
      （8.43 でモニターだけこうしていたのを、全プランに揃えた）。 */
-  const want0 = mon ? monNew
-    : Math.max(1, Math.round(Number(plan.n) || 0));
-  const nm = (e.newMax || {})[String(plan.key || "")];
+  /* 8.116 モニターにはライトと同じ品：e.same（ライトに出す品の JAN）があれば、
+     その品だけを、件数の上限なしで出す（購入の制限はモニターのまま）。 */
+  const same = (mon && e.same) ? e.same : null;
+  const want0 = same ? 9999 : (mon ? monNew
+    : Math.max(1, Math.round(Number(plan.n) || 0)));
+  const nm = same ? undefined : (e.newMax || {})[String(plan.key || "")];
   const want = (nm === undefined || nm === null) ? want0
     : Math.max(0, Math.min(want0, Math.round(Number(nm) || 0)));
   let newN = 0;
@@ -12369,10 +12481,10 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
        送り方は shared/shopcsv.js の1か所（カードの送料と同じ判定）。
        ほかのプランは今までどおり fits だけ。 */
     const isGame = MWFEE.genreOf(r) === "ゲーム";
-    const kind = mon
+    const kind = same ? !!same[String(r.jan)] : (mon
       ? SUBPLAN.monKind(r, plan, (cfg || {}).pick || null, undefined, isGame,
                         subShipInfo(r, cfg || {}).name)
-      : SUBPLAN.fits(plan, r, isGame);
+      : SUBPLAN.fits(plan, r, isGame));
     if (!kind) continue;
     /* 8.28（カジの依頼1）確認の画面でチェックを外した行は出さない。
        件数の上限（plan.n）より**先**に見るので、外した行のぶんだけ
@@ -12486,7 +12598,9 @@ async function subPlanBuild(env) {
   const planRun = newRun("sub-plan");
   for (const p of cfg.plans) {
     const sent = p.ch ? await subPosts(env, p.ch) : {};
-    const pick = p.ch ? subPick(rows, p, sent, false, cfg) : [];
+    /* 8.116 モニターにはライトと同じ品。 */
+    const sameX = (p.key === "monitor") ? { same: await subMonSameSet(env, rows, cfg) } : undefined;
+    const pick = p.ch ? subPick(rows, p, sent, false, cfg, null, "", sameX) : [];
     /* 8.20（【6】）0件のときは**なぜ0件か**を返す（黙って空にしない）。
        ライト・スタンダード・プレミアムを試すときに、
        「印がオフ」「チャンネルID が空」「ほかのプランに振り分けてある」
@@ -13614,6 +13728,8 @@ async function subBoxColsOk(env) {
 
    subBoxPlan … 直す必要がある行（配信できる商品＝印あり＋読み込み済み）
    subBoxRun  … 上から順に直す（持ち時間と件数の上限つき） */
+/* 8.116 Shopify の商品に grade-monitor を足して入れたことの印（mw_sub.shop_q の後ろに付ける）。 */
+const SUB_MON_SAME_MARK = "|m";
 async function subBoxPlan(env, cfg, st, rdy) {
   const out = { on: !!cfg.boxOn, cols: await subBoxColsOk(env), rows: [],
                 all: 0, box_n: 0,
@@ -13650,8 +13766,11 @@ async function subBoxPlan(env, cfg, st, rdy) {
     const ovOk = !doBox || !wantOv || Number(m.shop_ov) === 1;
     /* 8.83 お一人の上限のタグ。⚙がオフなら「付けない」が正しい中身
        （前に付けたタグが残っていれば外す）。 */
-    const wantQ = !doQty ? "" : SHOPCSV.qtyText(SHOPCSV.qtyTags(
-      { grades: r.grades }, subShopOptQ({}, cfg, r.jan, sentBy)));
+    /* 8.116 ライトに出す品をモニターにも出す（grade-monitor を足した）品は、控えに印を付けて、
+       まだ付けていない品を1回だけ Shopify で付け直す。 */
+    const wantQ = !doQty ? "" : (SHOPCSV.qtyText(SHOPCSV.qtyTags(
+      { grades: r.grades }, subShopOptQ({}, cfg, r.jan, sentBy)))
+      + (r.mon_same ? SUB_MON_SAME_MARK : ""));
     const qOk = !doQty || wantQ === String(m.shop_q || "");
     if (!qOk) out.qty_n++;
     if (gOk && ovOk && qOk) continue;
@@ -13698,7 +13817,7 @@ async function subBoxRun(env, run, rdy, cfg, st, list, deadline, max) {
         .bind(String(r.jan), z.g, z.ov).run();
     if (qCol)
       await env.DB.prepare(`UPDATE mw_sub SET shop_q=?2 WHERE jan=?1`)
-        .bind(String(r.jan), String(z.q || "")).run();
+        .bind(String(r.jan), String(z.q || "") + (r.mon_same ? SUB_MON_SAME_MARK : "")).run();
     res.done++;
   }
   for (const k of Object.keys(why).slice(0, 5))
@@ -14101,6 +14220,13 @@ async function jobSubAuto(env, opt) {
       const sent = sentBy[p.key] || {};
       const live = (j) => !!(sent[j] && (String(sent[j].msg_id || "")
         || String(sent[j].off_at || "")));
+      /* 8.116 モニターにはライトと同じ品：モニターは自分では選ばない（ライトで選んだ品が
+         カードの配信でモニターにも出る）。 */
+      if (p.key === "monitor" && (cfg.pick || {}).monSame
+          && plans.some((q) => q.key === "light")) {
+        picks.push({ key: p.key, name: p.name, items: [], mon: { same: true } });
+        continue;
+      }
       if (p.key === "monitor") {
         /* モニターは「週に monNew 件」。今週もう出した数を引き、
            前の週までに出した品は選ばない（8.43 の決まりのまま）。 */
@@ -14243,8 +14369,10 @@ async function jobSubAuto(env, opt) {
       else if (dry) { t.ok = true; continue; }
       else if (Date.now() > dlShop) err = { why: "late" };
       else {
+        /* 8.116 モニターにはライトと同じ品：ライトに出す品には grade-monitor も付ける。 */
+        const gEff = SUBPLAN.monSameGrades(t.grades, !!((cfg.pick || {}).monSame));
         const item = { jan: x.jan, name: x.name, asin: x.asin, kishu: x.kishu,
-          price: x.price, max_qty: x.qty, sold: x.sold, grades: t.grades,
+          price: x.price, max_qty: x.qty, sold: x.sold, grades: gEff,
           cost: x.cost, size_tier: x.size_tier, size_g: x.size_g,
           size_cm3: x.size_cm3, size_long: x.size_long, size_wid: x.size_wid,
           size_hei: x.size_hei, ship_way: x.ship_way };
@@ -14292,7 +14420,7 @@ async function jobSubAuto(env, opt) {
           if (qtyCol) {
             try {
               await env.DB.prepare(`UPDATE mw_sub SET shop_q=?2 WHERE jan=?1`)
-                .bind(x.jan, String(r.q || "")).run();
+                .bind(x.jan, String(r.q || "") + (gEff !== String(t.grades || "") ? SUB_MON_SAME_MARK : "")).run();
             } catch (e) { /* 控えが書けなくても止めない */ }
           }
           continue;
@@ -14327,7 +14455,7 @@ async function jobSubAuto(env, opt) {
     res.box = { on: cfg.boxOn, qty_on: cfg.qtyOn, todo: 0, done: 0, fail: 0 };
     /* 8.83 ⚙「お一人の上限を Shopify の商品にも入れる」のあいだは、
        上限のタグもここでそろえる（カードの数が変わった品も入れ替わる）。 */
-    if (cfg.boxOn || cfg.qtyOn) {
+    if (cfg.boxOn || cfg.qtyOn || (cfg.pick || {}).monSame) {
       try {
         const bp = await subBoxPlan(env, cfg, st, rdy);
         res.box.todo = bp.rows.length;
@@ -14455,8 +14583,10 @@ async function jobSubAuto(env, opt) {
       const outSeen = {};
       for (const p of plans) {
         const sent = sentBy[p.key] || {};
-        const pick = subPick(simRows, p, sent, false, cfgOut, null, "",
-          { hold: hold, out: out, newMax: newMax });
+        const exA = { hold: hold, out: out, newMax: newMax };
+        /* 8.116 モニターにはライトと同じ品。 */
+        if (p.key === "monitor") exA.same = await subMonSameSet(env, simRows, cfgOut, null, exA);
+        const pick = subPick(simRows, p, sent, false, cfgOut, null, "", exA);
         const add = pick.filter((x) => !x.sent);
         const edit = pick.filter((x) => x.sent && !x.same);
         const gone = edit.filter((x) => x.mw_out
@@ -15002,8 +15132,9 @@ async function oneAmz(env, url) {
                                      {}, 1);
       const got = low[asin + "|new"];
       if (got && Number(got.low) > 0) {
-        res.price = Math.round(Number(got.buy) > 0 ? got.buy : got.low);
-        res.basis = (Number(got.buy) > 0) ? "カート" : "最安";
+        const pk = amzPick(got.buy, got.low);      // 8.116
+        res.price = Math.round(pk.price);
+        res.basis = pk.basis;
         res.at = nowIso();
         res.src = "api";
       }
@@ -15286,7 +15417,10 @@ async function jobSubSend(env, opt) {
       if (stop) break;
       if (only && p.key !== only) continue;
       const sent = await subPosts(env, p.ch);
-      const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt, ex);
+      /* 8.116 モニターにはライトと同じ品（ライトの選び方はこの回と同じ条件で）。 */
+      const exP = (p.key === "monitor")
+        ? Object.assign({}, ex, { same: await subMonSameSet(env, rows, cfg, skip, ex) }) : ex;
+      const pick = subPick(rows, p, sent, reform, cfg, skip, redoAt, exP);
       const r = { key: p.key, name: p.name, add: 0, edit: 0, keep: 0, fail: 0,
                   /* 8.38 Discord から消えていたカード（控えを片づけた数）。 */
                   gone: 0,
@@ -17331,13 +17465,18 @@ async function subPruneList(env, cfg, rows, opt) {
   for (const p of ((cfg || {}).plans || []))
     if (p.on && p.ch) chPlan[String(p.ch)] = p;
   const fitCh = {};
+  /* 8.116 ⚙「モニターにはライトと同じ品」のときは、ライトに合う品もモニターに合う
+     （ライトと同じ品のモニターのカードを「プランに合わない」で消さない）。 */
+  const sameLight = !!(((cfg || {}).pick || {}).monSame)
+    ? ((((cfg || {}).plans || []).filter((p) => p.key === "light")[0]) || null) : null;
   for (const r of (rows || [])) {
     for (const k of Object.keys(chPlan)) {
       const p = chPlan[k];
       const isGame = MWFEE.genreOf(r) === "ゲーム";
       const kind = String(p.key || "") === "monitor"
-        ? SUBPLAN.monKind(r, p, (cfg || {}).pick || null, undefined, isGame,
+        ? (SUBPLAN.monKind(r, p, (cfg || {}).pick || null, undefined, isGame,
                           subShipInfo(r, cfg || {}).name)
+           || !!(sameLight && SUBPLAN.fits(sameLight, r, isGame)))
         : SUBPLAN.fits(p, r, isGame);
       if (!kind) continue;
       fitCh[String(r.jan)] = fitCh[String(r.jan)] || {};
@@ -24168,6 +24307,8 @@ export default {
     /* 15分ごと：注文の取り込み → フェイズB（FBAで売れた行の数量0）。 */
     if (cron.indexOf("*/15") === 0) {
       ctx.waitUntil((async () => {
+        /* 8.116 Actions の「いますぐ配る」の印があれば（無ければ何もしない）。 */
+        try { await jobSubKick(env, {}); } catch (e) { /* 止めない */ }
         await jobOrders(env, 0);
         await jobPhaseB(env, {});
         /* 在庫補充（数量を1に戻す）（7.53）。注文を取り込んだ直後に判定するので、
@@ -24274,6 +24415,8 @@ export default {
          **MW の在庫CSV の取り込み（上の jobMwCsv）より後**に置いてあるので、
          その回に入った新しい在庫も同じ回でまとめて配信に乗る。
          落ちても本体は止めない（失敗は jobSubAuto が運営に知らせる）。 */
+      /* 8.116 カートが新品の最安値より大きく下のまま控えた値段を直す（配信より前）。 */
+      try { await mwAmzCartFix(env); } catch (e) { /* 止めない */ }
       try {
         const sa = await subSettings(env);
         /* 8.107 毎週のときは、選んだ曜日・時刻の回だけ（ほかの定時の回は何もしない）。 */
@@ -24351,6 +24494,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.116 */
+  amzPick, mwAmzCartFix, jobSubKick, subMonSameSet, AMZ_CART_MIN, SUB_MON_SAME_MARK,
   /* 8.115 */
   shopHasScope, shopScopeMiss,
   /* 8.113 */

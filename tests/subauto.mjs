@@ -301,9 +301,10 @@ console.log('\n=== ④ 積み上げ型と、1回の配信件数の上限 ===');
 {
   reset();
   const env=env0();
+  /* 8.116 の「モニターにはライトと同じ品」より前の決まり（モニターが自分で選ぶ）を見るので切る。 */
   await setCfg(env,{ subChLight:CH_L, subOnLight:true, subLimNLight:4,
                      subChStandard:CH_S, subOnStandard:true, subLimNStandard:4,
-                     subAutoMax:6 });
+                     subAutoMax:6, subMonSame:false });
   /* 通常版のゲーム（モニターから）・限定版のゲーム（ライトから）・
      フィギュア（スタンダードから）を混ぜる。 */
   /* 順位：限定版は 1,000位以内（早い）、通常版は 5,000位以内（ふつう）。 */

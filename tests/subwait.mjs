@@ -51,7 +51,7 @@ const setCfg=(env,o)=>env.DB.prepare(
   `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
    ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
   .bind(JSON.stringify({ at:now(),
-    settings:Object.assign({ subOn:true, subOnMonitor:true, subOnLight:true,
+    settings:Object.assign({ subOn:true, subMonSame:false, subOnMonitor:true, subOnLight:true,
       /* 8.46 この試験は**カードの数**を見るので、会員チャンネルの
          「今週の一覧」は出さない（一覧そのものは
          tests/subindexw.mjs・subindex.mjs で見る）。 */

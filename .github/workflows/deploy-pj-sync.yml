@@ -74,6 +74,12 @@ on:
         description: 'MW の在庫CSV をいますぐ取り込む（15分以内）'
         type: boolean
         default: false
+      # 8.116（カジの依頼）会員のカードをいますぐ配る印を置く（pj-sync の15分ごとの回が拾う）。
+      # モニターはライトと同じ品。ライト・スタンダード・プレミアムは新しく出さず書き換えだけ。
+      sub_now:
+        description: '会員のカードをいますぐ配る（モニター＝ライトと同じ品・一覧の書き換え・15分以内）'
+        type: boolean
+        default: false
 
 # 同時に2本走らせない（同じ D1 と同じ Worker を触るので）。
 # 走っている途中のものは止めない（D1 の作業を中断させない）。
@@ -234,6 +240,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node d1-diag.mjs --kick
 
+      - name: 会員のカードをいますぐ配る印を置く
+        if: inputs.sub_now && !inputs.dry_run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node d1-diag.mjs --sub-kick
+
       - name: MW の在庫CSV の取り込みの記録を見る
         if: inputs.mw_csv_diag
         env:
@@ -241,7 +254,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # 8.105 商品違いの疑いの数（ログは件数だけ）。例は社内用の Discord に送る。
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: node d1-diag.mjs --mw-csv --mw-match --title-len --mem-tags
+        run: node d1-diag.mjs --mw-csv --mw-match --title-len --mem-tags --sub-count
 
       - name: デプロイしない理由を出す
         if: inputs.deploy && inputs.dry_run

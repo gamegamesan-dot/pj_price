@@ -2313,6 +2313,8 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="note2" style="margin:10px 0 2px"><b>モニター（お試しの3週間）</b></div>
         <div class="note2" style="margin:0 0 6px">モニターだけは<b>別の選び方</b>です。<b>1回に新しく出すのは下の件数</b>（前から出している品は数えません）。<b>速く売れる品</b>だけを候補にして、<b>1週目は速い順・2週目からはランダム</b>に選びます（同じ週なら押し直しても同じ品です）。<b>前の週までにモニターへ出した品は選びません。</b></div>
         <!-- 8.53（カジの確認）**ここが**モニターの件数（左）と人数（右）。 -->
+        <!-- 8.116（カジの依頼）モニターにはライトと同じ品を配る（既定オン）。購入の制限はモニターのまま。 -->
+        <div class="chk cfgprice"><input type="checkbox" id="subMonSame" checked><label for="subMonSame" style="flex:1"><b>モニターにはライトと同じ品を配る</b>（購入の制限はモニターのまま：お一人1点・購入期限。ライトに出す品には Shopify の grade-monitor も付けます）</label></div>
         <div class="row cfgprice"><label for="subMonNew">1回に新しく出す件数（モニターはここだけ）／モニターの人数</label><input type="number" id="subMonNew" value="5" step="1" min="1" max="50" inputmode="numeric"><input type="number" id="subMonPeople" value="10" step="1" min="1" max="999" inputmode="numeric"><span class="unit">件／人</span></div>
         <div class="row cfgprice"><label for="subMonLimitDays">購入期限</label><input type="number" id="subMonLimitDays" value="7" step="1" min="1" max="90" inputmode="numeric"><span class="unit">日</span></div>
         <div class="note2" style="margin:0 0 6px"><b>売れ行きの下限は「3か月で◯個」</b>です（既定 <b>10個</b>）。<b>MW の在庫の減り</b>がある品を先に選び、足りない分だけ<b>Amazon の順位からの推定</b>で埋めます（推定の品には案に印が出ます）。値崩れは<b>お一人1点</b>と<b>出せる数</b>と<b>全会員ぶんの合計の上限</b>で抑えます。<b>購入期限</b>が過ぎたカードは「<b>受付終了</b>」に書き換えます（消しません・通知も鳴りません）。</div>
@@ -4003,6 +4005,8 @@ var ADV_SUBCHK=['subOn','subPre','subOnMonitor','subOnLight',
                 'subPickNoAmz','subPickSkipBuy',
                 /* 8.31 今週のねらい目（既定オフ）。 */
                 'subHotOn',
+                /* 8.116 モニターにはライトと同じ品を配る（既定オン）。 */
+                'subMonSame',
                 /* 8.111 買えなくなったカードを毎時自動で消す（既定オン）。 */
                 'subPruneOn',
                 /* 8.80 自動配信（使うか・土日も出すか・写真が無い品を止めるか）。 */
@@ -19500,6 +19504,8 @@ function subPickCfg(){
            /* 8.43 モニターの3週間（決まりは shared/subplan.js）。 */
            subMonNew:v('subMonNew'), subMonPeople:v('subMonPeople'),
            subMonLimitDays:v('subMonLimitDays'),
+           /* 8.116 モニターにはライトと同じ品（既定オン）。 */
+           subMonSame:c('subMonSame'),
            /* 8.45 モニターの対象を広げるか（クリックポストで送れる品）。 */
            subMonWide:($('subMonWide')||{}).checked?1:0,
            /* 8.49 採寸が無い品の目安（種類の表は shared/shipguess.js）。 */
@@ -23046,7 +23052,8 @@ function mwSubItems(noRoll){
       var r={ jan:String(x.jan||''), name:String(x.name||''),
               asin:String(x.asin||''), kishu:String(x.kishu||''),
               price:+x.price||0, max_qty:+x.max_qty||0,
-              grades:String(x.grades||''),
+              /* 8.116 モニターにはライトと同じ品（ライトに出す品には grade-monitor も付ける）。 */
+              grades:SUBPLAN.monSameGrades(String(x.grades||''),!!(($('subMonSame')||{}).checked)),
               /* 6.178：pj-sync は**卸値を返さず仕入原価だけ**を返す。 */
               cost:+x.cost||0,
               size_tier:String(x.size_tier||''), size_g:+x.size_g||0,
@@ -33150,7 +33157,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v366';   // sw.js の const V と必ず同じ値にする
+var APP_V='v367';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){

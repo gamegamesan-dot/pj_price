@@ -490,7 +490,10 @@
       /* 8.44（カジの確認3）モニターの開始日（'YYYY-MM-DD'）。
          入れた日より前に出したカードは「前の週に出した品」に数えず、
          週の数え直しもこの日から始める（空なら今までどおり）。 */
-      monFrom: monDay(o.subMonFrom)
+      monFrom: monDay(o.subMonFrom),
+      /* 8.116（カジの依頼）モニターにはライトと同じ品を配る（既定オン）。
+         購入の制限（お一人1点・購入期限）はモニターのまま。 */
+      monSame: bool(o.subMonSame, true)
     };
   }
   /* 8.47（カジの①）モニターの下限は **3か月の個数**（⚙・既定10個）。
@@ -859,7 +862,25 @@
                  items: pick.slice(0, p.n), over: Math.max(0, pick.length - p.n),
                  skip: skip.length });
     });
+    /* 8.116 モニターにはライトと同じ品（案でも同じ）。 */
+    if (o.monSame) {
+      var li = out.filter(function (x) { return x.key === "light"; })[0];
+      var mo = out.filter(function (x) { return x.key === "monitor"; })[0];
+      if (li && mo) {
+        mo.items = li.items.map(function (x) { return Object.assign({}, x, { plan: "monitor" }); });
+        mo.n = li.items.length; mo.over = 0; mo.same = true;
+      }
+    }
     return { plans: out, opt: o };
+  }
+  /* 8.116 モニターにはライトと同じ品を配る：grades に light があって monitor が無い品は、
+     モニターにも出す品として扱う（Shopify の grade-monitor のタグ・カードの振り分けも同じ）。
+     grades が空（ぜんぶのプラン）の品はもともとモニターにも出る。 */
+  function monSameGrades(grades, on) {
+    var g = s(grades).split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+    if (!on || !g.length) return s(grades);
+    if (g.indexOf("light") >= 0 && g.indexOf("monitor") < 0) return ["monitor"].concat(g).join(",");
+    return s(grades);
   }
   function plan_(k) { return plan(k); }
   var API = { PLANS: PLANS, N_MAX: N_MAX, Q_MAX: Q_MAX, MON: MON,
@@ -886,6 +907,7 @@
               limIds: limIds, LEGACY_Q: LEGACY_Q, legacyQ: legacyQ,
               keepQ: keepQ,
               scoreOf: scoreOf, whyNot: whyNot, draft: draft,
+              monSameGrades: monSameGrades,
               sortPick: sortPick,
               SPEED_MIN: SPEED_MIN };
   if (typeof module !== "undefined" && module.exports) module.exports = API;

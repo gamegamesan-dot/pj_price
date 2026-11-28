@@ -109,6 +109,49 @@ export function kickSql(at) {
     + q(at) + ") ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at";
 }
 
+/* 8.116 会員のカードを「いますぐ配る」の印（pj-sync の15分ごとの回が拾う）。 */
+export function subKickSql(at) {
+  const q = (x) => "'" + String(x).replace(/'/g, "''") + "'";
+  return "INSERT INTO sync_state (k,v,updated_at) VALUES ('sub.kick'," + q(at) + ","
+    + q(at) + ") ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at";
+}
+/* 8.116 会員のカードの数（チャンネルは下4桁だけ・商品名・値段は出さない）。 */
+export const Q_SUB_CARDS =
+  "SELECT substr(ch,-4) AS c4, COUNT(*) AS n FROM sub_post "
+  + "WHERE COALESCE(msg_id,'')<>'' AND COALESCE(off_at,'')='' AND jan NOT LIKE 'one-%' "
+  + "GROUP BY ch ORDER BY ch";
+export const Q_SUB_KICK =
+  "SELECT k, v, updated_at FROM sync_state WHERE k IN ('sub.kick','sub.kick.last')";
+/* Amazon の値段で、カートが新品の最安値より大きく下のまま残っている行の数（直したら 0）。 */
+export const Q_AMZ_CART_LOW =
+  "SELECT COUNT(*) AS n FROM mw_amz WHERE basis='カート' AND COALESCE(low,0)>0 "
+  + "AND COALESCE(price,0)>0 AND price < low * 0.9";
+/* sub.kick.last の中身（数だけ）を1行ずつの文にする。 */
+export function subKickText(v) {
+  let o = {};
+  try { o = JSON.parse(String(v || "{}")) || {}; } catch (e) { return ["（読めませんでした）"]; }
+  const n = (x) => Number(x) || 0;
+  const out = ["配った時刻 " + clean(o.at, 30)];
+  if (o.amz) out.push("Amazon の値段を新品の最安値に直した行 " + n(o.amz.n));
+  if (o.box) out.push("Shopify の会員用の商品を直した " + n(o.box.done) + "／対象 " + n(o.box.todo)
+    + "（失敗 " + n(o.box.fail) + "・残り " + n(o.box.left) + "）" + (o.box.err ? " 理由 " + clean(o.box.err, 60) : ""));
+  if (o.send) {
+    out.push("カード：新しく " + n(o.send.sent) + "・書き換え " + n(o.send.edited) + "・失敗 " + n(o.send.fail)
+      + "・残り " + n(o.send.left) + (o.send.why ? " 理由 " + clean(o.send.why, 60) : ""));
+    for (const p of (o.send.plans || []))
+      out.push("　" + clean(p.key, 12) + "：新しく " + n(p.add) + "・書き換え " + n(p.edit)
+        + "・そのまま " + n(p.keep) + "・失敗 " + n(p.fail));
+  }
+  if (o.index) out.push("今週の一覧：ページ " + n(o.index.pages) + "・新しく " + n(o.index.add) + "・書き換え "
+    + n(o.index.edit) + "・同じ " + n(o.index.same) + "・失敗 " + n(o.index.fail)
+    + (o.index.why ? " 理由 " + clean(o.index.why, 60) : ""));
+  for (const c of (o.chs || [])) out.push("出ているカード " + clean(c.key, 12) + "：" + n(c.cards) + "件");
+  for (const c of (o.idx || [])) out.push("今週の一覧 " + clean(c.key, 12) + "：" + n(c.n) + "件（" + n(c.pages) + "ページ）");
+  for (const k of ["amz_err", "box_err", "send_err", "index_err", "count_err"])
+    if (o[k]) out.push(k + "：" + clean(o[k], 120));
+  return out;
+}
+
 function main() {
   const args = process.argv.slice(2);
   const at = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : ""; };
@@ -127,6 +170,35 @@ function main() {
       ? ("いますぐ取り込む印を置きました（" + now + "）。pj-sync の15分ごとの回が拾います。")
       : ("印を置けませんでした（終了コード " + r.status + "）"));
     if (r.status !== 0) process.exit(1);
+  }
+  if (args.includes("--sub-kick")) {
+    const now = new Date().toISOString();
+    const r = spawnSync(process.execPath, [how.path, "d1", "execute", db,
+      local ? "--local" : "--remote", "--command", subKickSql(now)],
+      { encoding: "utf8", windowsHide: true });
+    console.log(r.status === 0
+      ? ("会員のカードをいますぐ配る印を置きました（" + now + "）。pj-sync の15分ごとの回が拾います。")
+      : ("印を置けませんでした（終了コード " + r.status + "）"));
+    if (r.status !== 0) process.exit(1);
+  }
+  if (args.includes("--sub-count")) {
+    console.log("\n=== 会員のカード（出ている数・チャンネルは下4桁）===");
+    const c = q(Q_SUB_CARDS);
+    if (!c.ok) console.log("読めませんでした：" + clean(c.err, 200));
+    else if (!c.rows.length) console.log("（なし）");
+    else for (const r of c.rows) console.log("…" + clean(r.c4, 4) + "：" + (Number(r.n) || 0) + "件");
+    const a2 = q(Q_AMZ_CART_LOW);
+    if (a2.ok) console.log("カートが新品の最安値より大きく下のままの行：" + (Number(((a2.rows || [])[0] || {}).n) || 0) + "件");
+    const k = q(Q_SUB_KICK);
+    console.log("\n=== いますぐ配るの記録（数だけ）===");
+    if (!k.ok) console.log("読めませんでした：" + clean(k.err, 200));
+    else {
+      const wait = (k.rows || []).filter((r) => r.k === "sub.kick")[0];
+      if (wait) console.log("印が残っています（まだ拾われていません）：" + clean(wait.v, 30));
+      const last = (k.rows || []).filter((r) => r.k === "sub.kick.last")[0];
+      if (!last) console.log("（まだ配っていません）");
+      else for (const line of subKickText(last.v)) console.log(line);
+    }
   }
   if (args.includes("--mw-match")) {
     /* 行が多いので、wrangler の出力を大きめに受ける（既定の 1MB では切れる）。 */
