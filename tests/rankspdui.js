@@ -50,6 +50,8 @@ await p.evaluate((META)=>{
   if($('csvMwAmzRstOk'))$('csvMwAmzRstOk').checked=false;
   $('subChMonitor').value='123456789012345678';
   $('subOnMonitor').checked=true;
+  /* 8.116 モニター自身の選び方を見る試験なので、⚙「モニターにはライトと同じ品」は切る。 */
+  if($('subMonSame'))$('subMonSame').checked=false;
   const res=(v)=>new Response(JSON.stringify(v),{status:200});
   const real=window.fetch;
   window.fetch=async(u,i)=>{

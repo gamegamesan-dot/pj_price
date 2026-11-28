@@ -67,6 +67,8 @@ await p.evaluate(()=>{
   /* 8.43（v302）モニターは「新しく◯件・速く売れる品だけ」。
      ここはのべの数え方を見る試験なので、2件・下限なしにそろえる。 */
   $('subMonNew').value='2'; $('subMonSpeedMin').value='0.1';
+  /* 8.116 モニター自身の選び方を見る試験なので、⚙「モニターにはライトと同じ品」は切る。 */
+  if($('subMonSame'))$('subMonSame').checked=false;
 });
 await openCsvBoxes(p);
 

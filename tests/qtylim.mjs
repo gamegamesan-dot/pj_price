@@ -94,7 +94,7 @@ const setCfg=(env,o)=>env.DB.prepare(
   `INSERT INTO sync_state (k,v,updated_at) VALUES ('ui.settings',?1,?2)
    ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at`)
   .bind(JSON.stringify({ at:new Date().toISOString(),
-    settings:Object.assign({ subOn:true, subOnMonitor:false, gdIdxOn:false,
+    settings:Object.assign({ subOn:true, subMonSame:false, subOnMonitor:false, gdIdxOn:false,
       subMonNote:false, subChMonitor:MO,
       subOnLight:true, subChLight:LI, subOnStandard:true, subChStandard:ST,
       subOnPremium:true, subChPremium:PR,

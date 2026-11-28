@@ -50,6 +50,8 @@ await p.evaluate((META)=>{
   if($('csvMwAmzRstOk'))$('csvMwAmzRstOk').checked=false;
   $('subChMonitor').value='123456789012345678';
   $('subOnMonitor').checked=true;
+  /* 8.116 モニター自身の選び方を見る試験なので、⚙「モニターにはライトと同じ品」は切る。 */
+  if($('subMonSame'))$('subMonSame').checked=false;
   window.__mon={ ok:true, sent:[], ch:'123456789012345678', n:0, new_n:5,
                  limit_days:7, people:5 };
   window.__monFail=false;
