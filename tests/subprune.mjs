@@ -110,7 +110,11 @@ ok(r.ok&&dc.length===0&&/オフ/.test(r.why),'★⚙で「自動で消す」を�
 
 console.log('\n=== ③ 入れる前に出した古いカードは、確認してからまとめて消す ===');
 const e3=env0(); await setCfg(e3,{ subMonFrom:'2026-11-20' });
-await item(e3,J(1)); await card(e3,J(1),LI,'light','721','2026-11-15T01:00:00Z');      // テスト配信（まだ買える）
+await item(e3,J(1),{ grades:'premium' }); await card(e3,J(1),LI,'light','721','2026-11-15T01:00:00Z');   // テスト配信（いまはライトに出ない）
+/* 8.114 開始日より前に最初に送ったが、いまもそのチャンネルに出ている品（今週の配信で書き換えた）は消さない */
+await item(e3,J(20)); await card(e3,J(20),LI,'light','725','2026-11-15T01:00:00Z');
+await e3.DB.prepare(`UPDATE sub_post SET edited_at=?2 WHERE jan=?1`).bind(J(20),new Date().toISOString()).run();
+await item(e3,J(21)); await card(e3,J(21),LI,'light','726','2026-11-15T01:00:00Z');         // 書き換えていなくても、いま出ている品は消さない
 await card(e3,J(3),LI,'light','722',ago(2));                                             // 古い・リストに無い
 await item(e3,J(9)); await card(e3,J(9),PR,'premium','723',ago(3),{ off:ago(3) });      // 受付終了にしてあった
 dc=[]; r=await W.jobSubPrune(e3,{});
@@ -132,6 +136,8 @@ const b=await api(e3,'/sub/prune',{ bulk:true });
 console.log('   まとめて：'+JSON.stringify({del:b.del,by:b.by,all:b.all}));
 ok(b.ok&&b.del===3&&dc.filter((x)=>x.method==='DELETE').map((x)=>x.msg).sort().join()==='721,722,723',
    '★★★まとめて消す（11/15 のテスト配信・受付終了にしてあったカードも）');
+ok(!dc.some((x)=>x.msg==='725'||x.msg==='726'),
+   '★★★開始日より前に最初に送っても、いまの配信に入っている品のカードは「テスト配信」として消さない（8.114）');
 const st=await e3.DB.prepare(`SELECT v FROM sync_state WHERE k='sub.prune.from'`).first();
 ok(st.v==='all','★★まとめて消し終えたら、毎時の見回りはぜんぶのカードを見る');
 
@@ -171,6 +177,36 @@ ok(Number((await e6.DB.prepare(`SELECT COUNT(*) AS n FROM sub_post WHERE msg_id<
 goneIds['750']=1;
 r=await W.jobSubPrune(e6,{});
 ok(r.gone===1&&r.del===7,'★もう無いメッセージ（404）は控えだけ片づける');
+console.log('\n=== ⑦ 8.114 開始日より前に最初に送ったモニターのカード ===');
+{
+  const e7=env0(); await setCfg(e7,{ subOn:true, subMonFrom:'2026-11-17', subChLight:'', subChPremium:'' }); await allMode(e7);
+  /* 11/15 に送り、今週（11/28）に書き換えたモニターのカード */
+  await item(e7,J(30),{ grades:'monitor' }); await card(e7,J(30),MON,'monitor','791','2026-11-15T01:00:00Z');
+  await e7.DB.prepare(`UPDATE sub_post SET edited_at=?2 WHERE jan=?1`).bind(J(30),new Date().toISOString()).run();
+  dc=[]; let r7=await W.jobSubPrune(e7,{});
+  ok(!dc.some((x)=>x.method==='DELETE'&&x.msg==='791'),'★★★開始日より前に最初に送ったモニターのカードを、毎時の見回りで「期限切れ」にしない');
+  /* 消えていた（v362 のまとめて消すで消えた）カードは、次の配信で送り直す */
+  await e7.DB.prepare(`UPDATE sub_post SET msg_id='' WHERE jan=?1`).bind(J(30)).run();
+  const pl=await api(e7,'/sub/plan');
+  const mp=((pl.plans||[]).find((x)=>x.key==='monitor')||{});
+  console.log('   予定：'+JSON.stringify({ add:mp.add, items:(mp.items||[]).map((x)=>x.jan) }));
+  ok((mp.items||[]).some((x)=>x.jan===J(30)),'★★★購入期限の内（開始日より前に送ったカード）が消えていたら、次の配信で送り直す');
+  /* 開始日より後に送って期限が過ぎて消したカードは、今までどおり送り直さない */
+  await item(e7,J(31),{ grades:'monitor' }); await card(e7,J(31),MON,'monitor','','2026-11-18T01:00:00Z');
+  const pl2=await api(e7,'/sub/plan');
+  const mp2=((pl2.plans||[]).find((x)=>x.key==='monitor')||{});
+  ok(!(mp2.items||[]).some((x)=>x.jan===J(31)),'★★期限が過ぎて消したカード（開始日より後に送った）は送り直さない');
+  /* 今週の配信で書き換えたら、送った日をいまにする（1回だけ） */
+  await e7.DB.prepare(`UPDATE sub_post SET msg_id='791', at='2026-11-15T01:00:00Z' WHERE jan=?1`).bind(J(30)).run();
+  await e7.DB.prepare(`UPDATE mw_sub SET price=3700 WHERE jan=?1`).bind(J(30)).run();
+  dc=[];
+  await api(e7,'/sub/send',{ approve:true });
+  const p30=await e7.DB.prepare(`SELECT at FROM sub_post WHERE jan=?1`).bind(J(30)).first();
+  const edited=dc.some((x)=>x.method==='PATCH'&&x.msg==='791');
+  console.log('   書き換え：'+edited+' / at '+p30.at);
+  ok(edited&&p30.at>='2026-11-17','★★★開始日より前に送ったモニターのカードを今週の配信で書き換えたら、送った日をいまにする');
+}
 const migr=fs.readFileSync(new URL('../proxy-sync/migrate-0077-sub-del.sql',import.meta.url),'utf8');
 ok(/CREATE TABLE IF NOT EXISTS sub_del/.test(migr)&&W.schemaFixOf('sub_del')==='migrate-0077-sub-del.sql','★表を足すだけ・表が無いときに流すマイグレーション');
 T.done();
+

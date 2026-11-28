@@ -12396,7 +12396,11 @@ function subPick(rows, plan, sent, reform, cfg, skip, redoAt, ex) {
       const t = Date.parse(String(was.at || ""));
       const lim = Math.max(1, Math.round(Number(((cfg || {}).pick || {}).monLimitDays)
         || SUBPLAN.MON.monLimitDays)) * 86400000;
-      if (isFinite(t) && Date.now() - t >= lim) continue;
+      /* 8.114 開始日より前（テスト配信のころ）に最初に送ったカードは期限切れと見なさない
+         （購入期限の内に消えたカードは送り直す）。 */
+      const t0m = SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom));
+      const pre = t0m !== null && isFinite(t) && t < t0m;
+      if (!pre && isFinite(t) && Date.now() - t >= lim) continue;
     }
     const mid = was ? String(was.msg_id || "") : "";
     const old = (was && mid) ? was : null;
@@ -15183,6 +15187,9 @@ async function jobSubSend(env, opt) {
       return Object.assign(await saveRun(env, run), res);
     }
     const cfg = await subSettings(env);
+    /* 8.114 ⚙「モニターの開始日」（ISO・空なら ''）。 */
+    const monT0 = SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom));
+    const monT0Iso = monT0 === null ? "" : new Date(monT0).toISOString();
     const rows = await subRows(env, cfg);
     const day = subJst().day;
     /* 8.80 自動配信（jobSubAuto）から呼ぶ回は、呼ぶ側が「今日は送らない」と
@@ -15304,6 +15311,12 @@ async function jobSubSend(env, opt) {
             `UPDATE sub_post SET price=?3, qty=?4, sold=?5, sold_out=?6,
                edited_at=?7${hSet} WHERE jan=?1 AND ch=?2`)
             .bind(...subPostBind(x, p, at, hasH)).run();
+          /* 8.114 開始日より前（テスト配信）に最初に送ったモニターのカードを今週の配信で書き換えたら、
+             送った日をいまにする（購入期限・週の数え方をここから。1回だけ）。 */
+          if (p.key === "monitor" && monT0Iso)
+            await env.DB.prepare(
+              `UPDATE sub_post SET at=?3 WHERE jan=?1 AND ch=?2 AND at < ?4`)
+              .bind(String(x.jan), String(p.ch), at, monT0Iso).run();
           await subQSave(env, x.jan, p.ch, x.card_q || p.q);
           r.edit++; res.edited++; gap = true;
           /* 8.80 MW の在庫切れで、売っていたカードを完売に書き換えた。 */
@@ -17307,10 +17320,11 @@ async function subPruneList(env, cfg, rows, opt) {
   const monMs = Math.max(1, Math.round(
     Number(((cfg || {}).pick || {}).monLimitDays)
     || SUBPLAN.MON.monLimitDays)) * 86400000;
-  const t0 = o.bulk ? SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom)) : null;
+  /* ⚙「モニターの開始日」（それより前はテスト配信）。 */
+  const t0 = SUBPLAN.monFromMs(SUBPLAN.monDay(((cfg || {}).pick || {}).monFrom));
   const since = o.since ? Date.parse(String(o.since)) : NaN;
   const q = await env.DB.prepare(
-    `SELECT jan, ch, plan, msg_id, at, qty, sold, sold_out,
+    `SELECT jan, ch, plan, msg_id, at, edited_at, qty, sold, sold_out,
             ${offSel} AS off_at
        FROM sub_post WHERE COALESCE(msg_id,'') <> '' ORDER BY at ASC`).all();
   const now = Number(o.now || Date.now());
@@ -17323,9 +17337,17 @@ async function subPruneList(env, cfg, rows, opt) {
     /* まとめて消す前は、入れたあとに出したカードだけを見る */
     if (isFinite(since) && !(isFinite(at) && at >= since)) continue;
     let why = "";
-    if (t0 !== null && isFinite(at) && at < t0) why = "test";
+    /* 8.114（カジの報告）テスト配信は、**最後に書き換えた日も**開始日より前で、いまそのチャンネルに
+       出る品でないカードだけ（開始日より前に最初に送り、今週の配信で書き換えたカードは消さない）。 */
+    const ed = Date.parse(String(p.edited_at || ""));
+    const last = Math.max(isFinite(at) ? at : 0, isFinite(ed) ? ed : 0);
+    const liveHere = !!(fitCh[jan] && fitCh[jan][ch]);
+    const preMon = t0 !== null && isFinite(at) && at < t0;
+    if (o.bulk && t0 !== null && last && last < t0 && !liveHere) why = "test";
     else if (String(p.off_at || "")) why = "closed";
-    else if (monCh && ch === monCh && isFinite(at) && now - at >= monMs) why = "expired";
+    /* 開始日より前に最初に送ったモニターのカードは、購入期限の判定に使わない
+       （今週の配信で書き換えたときに、送った日をその日に直す・jobSubSend）。 */
+    else if (monCh && ch === monCh && isFinite(at) && !preMon && now - at >= monMs) why = "expired";
     else if (!r) why = "gone";
     else if (chPlan[ch] && !(fitCh[jan] && fitCh[jan][ch])) why = "off_plan";
     else if (chPlan[ch] || r) {
