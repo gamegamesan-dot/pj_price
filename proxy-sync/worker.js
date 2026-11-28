@@ -16272,6 +16272,10 @@ async function ebayCatDel(env, body) {
      氏名・住所・メールは残さない（いままでの決まりどおり）。 */
 const MEM_GRACE_D = 3;                  // 猶予の既定（日）
 const MEM_MON_D = 21;                   // モニターの3週間
+const MEM_REF_RATE = 40;                // 8.118 紹介のお礼の率の既定（％）
+const MEM_REF_MONTHS = 12;              // 8.118 お礼を数える最長の月数の既定
+const MEM_REF_SELF = "（本人）";          // 8.118 紹介者なし（本人）の印
+const MEM_REF_MAX = 24;                 // 8.118 紹介者の欄の長さの上限
 const MEM_ROWS_MAX = 500;               // 一覧に返す上限
 /* 上のプランは下のチャンネルも見られる（積み上げ）。
    モニターは**別**（お試しなので、有料のプランには付けない）。 */
@@ -16305,6 +16309,9 @@ async function memSettings(env) {
     keepName: st.memKeepName === undefined ? true : !!st.memKeepName,
     /* 8.110 Shopify の顧客タグを付け外しする宛先（○○.myshopify.com・空なら付けない）。 */
     shopHost: shopHostOf(st),
+    /* 8.118 紹介のお礼の率（％・既定40）と、数える最長の月数（既定12）。 */
+    refRate: num(st.memRefRate, MEM_REF_RATE, 0, 100),
+    refMonths: num(st.memRefMonths, MEM_REF_MONTHS, 1, 120),
   };
 }
 /* そのプランで付けるロール（積み上げ）。⚙に入っていないものは入れない。 */
@@ -16733,8 +16740,20 @@ async function memList(env) {
       tag_want: memTagKey(memTagsWant(r, cfg, now)),
       tag_ok: !!r.shop_tag_at && String(r.shop_tags || "") === memTagKey(memTagsWant(r, cfg, now))
         && !String(r.shop_tag_err || ""),
+      /* 8.118 紹介者（呼び名か紹介コード・'（本人）'＝紹介者なし）。 */
+      ref: String(r.ref_code || ""),
     };
   });
+  /* 8.118 紹介者ごとの集計と、月ごとのお礼。 */
+  res.ref_col = await memRefColOk(env);
+  res.ref_rate = cfg.refRate; res.ref_months = cfg.refMonths;
+  if (res.ref_col) {
+    try {
+      const rr = await memRefRows(env);
+      res.refs = memRefSum(rr, cfg, now);
+      res.ref_pay = await memRefPay(env, cfg, rr);
+    } catch (e) { res.ref_err = String((e && e.message) || e).slice(0, 200); }
+  }
   res.n = res.rows.length;
   res.on = cfg.on; res.guild = !!cfg.guild;
   res.roles_ok = memAllRoles(cfg).length;
@@ -16768,6 +16787,18 @@ async function memLink(env, body) {
   if (!cust) { res.error = "bad_cust"; res.detail = "会員番号を入れてください"; return res; }
   if (plan && MEM_PLANS.indexOf(plan) < 0) {
     res.error = "bad_plan"; res.detail = "プランの名前が違います"; return res;
+  }
+  /* 8.118 紹介者（任意）。入っていれば先に確かめる（おかしければつながない）。 */
+  const refIn = String(b.ref == null ? "" : b.ref).trim();
+  let refV = null;
+  if (refIn) {
+    const rn = memRefNorm(refIn);
+    if (!rn.ok) { res.error = "bad_ref"; res.detail = rn.why; return res; }
+    if (!(await memRefColOk(env))) {
+      res.error = "no_ref_col"; res.detail = "紹介者の列がありません（migrate-0079-mem-ref.sql）";
+      return res;
+    }
+    refV = rn.ref;
   }
   const cfg = await memSettings(env);
   const name = (cfg.keepName && b.dc_name)
@@ -16814,6 +16845,9 @@ async function memLink(env, body) {
   /* 8.110 つなぎ直したらタグをまた付ける（つなぎを外したときの印を戻す）。 */
   if (await memTagColOk(env))
     await env.DB.prepare(`UPDATE mem SET shop_tag_off=0 WHERE cust=?`).bind(cust).run();
+  /* 8.118 紹介者は入っていたときだけ書く（空なら今の紹介者のまま）。 */
+  if (refV !== null)
+    await env.DB.prepare(`UPDATE mem SET ref_code=?, ref_at=? WHERE cust=?`).bind(refV, now, cust).run();
   await saveRun(env, run);
   res.ok = true;
   /* つないだらすぐロールとタグを合わせる（⚙がオンのときだけ）。 */
@@ -16882,6 +16916,129 @@ async function memTagsFix(env, body) {
    消せるのは **解約（canceled）で Discord とつないでいない行**だけ。
    ・支払いの注文がある行は消さない（本物の会員なので、解約のまま残す）
    ・記録（mem_log）は残す（あとで追えるように） */
+/* ===== 8.118（カジの依頼）紹介者と紹介のお礼 =====
+   ・紹介者は**呼び名か紹介コード**だけ（例：NAKANO）。氏名・住所・メールは入れない
+     （@ や空白の入った文・長い文は断る）。英字は大文字にそろえる（NAKANO と nakano を同じ人に）
+   ・「本人」と入れると「紹介者なし（本人）」の印（'（本人）'）。空にすると「まだ入れていない」
+   ・お礼は**支払いの注文（mem_order）の金額**から出す（月額の金額は pj に持たせない）。
+     有料プラン（ライト・スタンダード・プレミアム）の注文だけ・モニターは数えない。
+     会員ごとに**最初の有料の注文から ⚙「最長の月数」回まで**。月は支払いの日（日本時間）の月。
+     お礼＝その月の紹介者ごとの金額の合計 × ⚙「お礼の率」（円未満は四捨五入）。
+     金額が 0 の注文（金額が分からない）は足さずに数だけ出す（推測で入れない） */
+async function memRefColOk(env) { return await colOk(env, "mem", "ref_code"); }
+function memRefNorm(v) {
+  const t = String(v == null ? "" : v).normalize("NFKC").trim();
+  if (!t) return { ok: true, ref: "" };
+  if (t === "本人" || t === MEM_REF_SELF || t === "(本人)") return { ok: true, ref: MEM_REF_SELF };
+  if (t.length > MEM_REF_MAX)
+    return { ok: false, why: "紹介者は " + MEM_REF_MAX + "字までにしてください（呼び名か紹介コードだけ）" };
+  if (/[@＠\s]/.test(t) || !/^[A-Za-z0-9_\-.\u3040-\u30ff\u4e00-\u9fff\u3005ー・]+$/.test(t))
+    return { ok: false, why: "紹介者は呼び名か紹介コードだけを入れてください（例：NAKANO。メール・空白・記号は入れません）" };
+  return { ok: true, ref: t.replace(/[a-z]/g, (c) => c.toUpperCase()) };
+}
+/* POST /mem/ref … { cust, ref }。会員の一覧の各行から紹介者を直す。 */
+async function memRefSet(env, body) {
+  const res = { ok: false };
+  if (!(await memOk(env))) { res.error = "no_table"; res.detail = "mem がありません（migrate-0065-mem.sql）"; return res; }
+  if (!(await memRefColOk(env))) {
+    res.error = "no_ref_col"; res.detail = "紹介者の列がありません（migrate-0079-mem-ref.sql）"; return res;
+  }
+  const b = body || {};
+  const cust = String(b.cust || "").replace(/\D/g, "");
+  if (!cust) { res.error = "bad_cust"; res.detail = "会員番号がありません"; return res; }
+  const was = await memRow(env, cust);
+  if (!was) { res.error = "no_mem"; res.detail = "その会員はいません"; return res; }
+  const rn = memRefNorm(b.ref);
+  if (!rn.ok) { res.error = "bad_ref"; res.detail = rn.why; return res; }
+  const now = nowIso();
+  const run = newRun("mem-ref");
+  await runBatch(env, run, [
+    env.DB.prepare(`UPDATE mem SET ref_code=?, ref_at=? WHERE cust=?`).bind(rn.ref || null, now, cust),
+    memLog(env, cust, "ref", rn.ref ? ("紹介者 " + rn.ref) : "紹介者を空にした"),
+  ]);
+  await saveRun(env, run);
+  res.ok = true; res.ref = rn.ref;
+  return res;
+}
+/* 紹介者が入っている会員（集計と計算の元。一覧の上限とは別に全員）。 */
+async function memRefRows(env) {
+  const q = await env.DB.prepare(
+    `SELECT cust, plan, state, paid_to, mon_from, created_at, ref_code FROM mem
+      WHERE COALESCE(ref_code,'') <> ''`).all();
+  return (q && q.results) || [];
+}
+/* 紹介者ごと：紹介した人数・いま有料プランの人数・プラン別の内訳（いま会員の人）。 */
+function memRefSum(rows, cfg, now) {
+  const by = {};
+  let self = 0;
+  for (const r of (rows || [])) {
+    const ref = String(r.ref_code || "");
+    if (!ref) continue;
+    if (ref === MEM_REF_SELF) { self++; continue; }
+    const x = by[ref] || (by[ref] = { ref: ref, n: 0, paid: 0,
+      plans: { monitor: 0, light: 0, standard: 0, premium: 0 } });
+    x.n++;
+    const on = memActive(r, cfg, now);
+    const plan = String(r.plan || "");
+    if (on && x.plans[plan] !== undefined) x.plans[plan]++;
+    if (on && MEM_PAID.indexOf(plan) >= 0) x.paid++;
+  }
+  const list = Object.keys(by).map((k) => by[k])
+    .sort((a, b) => (b.paid - a.paid) || (b.n - a.n) || (a.ref < b.ref ? -1 : 1));
+  return { list: list, self: self };
+}
+/* 日本時間の「2026-11」。 */
+function memMonthJst(iso) {
+  const t = Date.parse(String(iso || ""));
+  if (!isFinite(t)) return "";
+  return new Date(t + 9 * 3600000).toISOString().slice(0, 7);
+}
+/* 月ごとの紹介者ごとのお礼（新しい月から MEM_REF_PAY_MONTHS か月ぶん）。 */
+const MEM_REF_PAY_MONTHS = 24;
+async function memRefPay(env, cfg, rows) {
+  const refOf = {};
+  for (const r of (rows || [])) {
+    const ref = String(r.ref_code || "");
+    if (ref && ref !== MEM_REF_SELF) refOf[String(r.cust)] = ref;
+  }
+  const custs = Object.keys(refOf);
+  const out = { rate: cfg.refRate, max: cfg.refMonths, months: [] };
+  if (!custs.length) return out;
+  const orders = [];
+  for (let i = 0; i < custs.length; i += 50) {
+    const part = custs.slice(i, i + 50);
+    const q = await env.DB.prepare(
+      `SELECT cust, plan, COALESCE(yen,0) AS yen, at FROM mem_order
+        WHERE cust IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+    for (const o of ((q && q.results) || [])) orders.push(o);
+  }
+  orders.sort((a, b) => (String(a.at) < String(b.at) ? -1 : (String(a.at) > String(b.at) ? 1 : 0)));
+  const used = {};
+  const mon = {};
+  for (const o of orders) {
+    if (MEM_PAID.indexOf(String(o.plan || "")) < 0) continue;      // モニターは数えない
+    const c = String(o.cust);
+    used[c] = (used[c] || 0) + 1;
+    if (used[c] > cfg.refMonths) continue;                         // 最長の月数を過ぎた
+    const m = memMonthJst(o.at);
+    if (!m) continue;
+    const ref = refOf[c];
+    const mm = mon[m] || (mon[m] = {});
+    const x = mm[ref] || (mm[ref] = { ref: ref, n: 0, yen: 0, unknown: 0 });
+    x.n++;
+    const y = Math.round(Number(o.yen) || 0);
+    if (y > 0) x.yen += y; else x.unknown++;
+  }
+  out.months = Object.keys(mon).sort().reverse().slice(0, MEM_REF_PAY_MONTHS).map((m) => {
+    const rows2 = Object.keys(mon[m]).map((k) => {
+      const x = mon[m][k];
+      return Object.assign(x, { pay: Math.round(x.yen * cfg.refRate / 100) });
+    }).sort((a, b) => (b.pay - a.pay) || (a.ref < b.ref ? -1 : 1));
+    return { month: m, rows: rows2, pay: rows2.reduce((t, x) => t + x.pay, 0),
+             unknown: rows2.reduce((t, x) => t + x.unknown, 0) };
+  });
+  return out;
+}
 async function memDel(env, body) {
   const res = { ok: false };
   if (!(await memOk(env))) {
@@ -23067,6 +23224,8 @@ const SCHEMA_FIX = [
   ["paid_to", "migrate-0065-mem.sql"],
   /* 8.110 会員の Shopify の顧客タグ。 */
   ["shop_tags", "migrate-0076-mem-tags.sql"],
+  /* 8.118 会員の紹介者。 */
+  ["ref_code", "migrate-0079-mem-ref.sql"],
   ["dim_at", "migrate-0064-mw-dim.sql"],
   ["rk_from", "migrate-0063-amz-rank.sql"],
   ["rk_n", "migrate-0063-amz-rank.sql"],
@@ -23965,6 +24124,11 @@ export default {
         const b = await request.json().catch(() => ({}));
         return json(await memLink(env, b), 200, origin);
       }
+      /* 8.118 紹介者を直す（会員の一覧の各行から）。 */
+      if (request.method === "POST" && url.pathname === "/mem/ref") {
+        const b = await request.json().catch(() => ({}));
+        return json(await memRefSet(env, b), 200, origin);
+      }
       if (request.method === "POST" && url.pathname === "/mem/unlink") {
         const b = await request.json().catch(() => ({}));
         return json(await memUnlink(env, b), 200, origin);
@@ -24602,6 +24766,8 @@ export const __test = { assertReadOnly, keyRole, eqKey, staffDenyFields,
   /* 8.99 */
   /* 8.107 */
   subLastPostMs, subWeekTell,
+  /* 8.118 */
+  memRefNorm, memRefSet, memRefSum, memRefPay, memRefRows, memMonthJst, MEM_REF_SELF,
   /* 8.117 */
   subPxRefresh, SUB_PX_FRESH_MS, SUB_PX_BUDGET_MS,
   /* 8.116 */

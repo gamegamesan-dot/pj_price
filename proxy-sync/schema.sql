@@ -1177,7 +1177,10 @@ CREATE TABLE IF NOT EXISTS mem (
   shop_tags    TEXT,                      -- いま付いている pj のタグ（member-list・grade-…）
   shop_tag_at  TEXT,                      -- 最後に Shopify と突き合わせた時刻
   shop_tag_err TEXT,                      -- 付けられなかった理由
-  shop_tag_off INTEGER NOT NULL DEFAULT 0 -- つなぎを外した（タグを付けない）
+  shop_tag_off INTEGER NOT NULL DEFAULT 0, -- つなぎを外した（タグを付けない）
+  -- 8.118 紹介者（migrate-0079）。呼び名か紹介コードだけ。'（本人）'＝紹介者なし
+  ref_code     TEXT,
+  ref_at       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mem_dc      ON mem(dc);
 CREATE INDEX IF NOT EXISTS idx_mem_paid_to ON mem(paid_to);

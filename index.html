@@ -2601,9 +2601,14 @@ body.staff #syncOnHandFix{display:none !important}
         <div class="chk cfgprice"><input type="checkbox" id="memStack" checked><label for="memStack" style="flex:1"><b>上のプランには下のロールも付ける</b>（積み上げ。プレミアム＝ライト＋スタンダード＋プレミアム。<b>モニターは別</b>）</label></div>
         <div class="chk cfgprice"><input type="checkbox" id="memMonOff" checked><label for="memMonOff" style="flex:1"><b>モニターのロールを3週間で外す</b>（切ると残します）</label></div>
         <div class="chk cfgprice"><input type="checkbox" id="memKeepName" checked><label for="memKeepName" style="flex:1">Discord の<b>表示名</b>も控える（切ると番号だけ。氏名は残しません）</label></div>
+        <!-- 8.118（カジの依頼）紹介のお礼。お礼は支払いの注文の金額から出す（月額の金額は pj に持たせない）。 -->
+        <div class="row cfgprice"><label for="memRefRate">紹介のお礼の率／最長の月数</label><input type="number" id="memRefRate" value="40" step="1" min="0" max="100" inputmode="numeric"><span class="unit">%</span><input type="number" id="memRefMonths" value="12" step="1" min="1" max="120" inputmode="numeric"><span class="unit">か月</span></div>
+        <div class="note2" style="margin:0 0 6px">紹介のお礼は、紹介した会員の<b>有料プラン（ライト・スタンダード・プレミアム）の支払いの注文の金額</b>×率で、会員ごとに<b>最初の有料の支払いから最長の月数まで</b>数えます。<b>モニターの期間は数えません</b>。会員の一覧に月ごとの合計を出します。</div>
         <div class="note2" style="margin:8px 0 2px"><b>手でつなぐ</b>（Shopify の会員番号と Discord の番号）</div>
         <div class="row cfgprice"><label for="memLinkCust">会員番号／Discord の番号</label><input type="text" id="memLinkCust" value="" inputmode="numeric"><input type="text" id="memLinkDc" value="" inputmode="numeric"></div>
         <div class="row cfgprice"><label for="memLinkPlan">プラン（モニターのときだけ選びます）／表示名</label><select id="memLinkPlan"><option value="">そのまま（注文で決める）</option><option value="monitor">モニター</option><option value="light">ライト</option><option value="standard">スタンダード</option><option value="premium">プレミアム</option></select><input type="text" id="memLinkName" value="" inputmode="text" placeholder="表示名（任意）"></div>
+        <div class="row cfgprice"><label for="memLinkRef">紹介者（任意）</label><input type="text" id="memLinkRef" value="" inputmode="text" maxlength="24" placeholder="呼び名か紹介コード（例：NAKANO）" style="flex:1"></div>
+        <div class="note2" style="margin:0 0 6px">紹介者は<b>呼び名か紹介コードだけ</b>（<b>氏名・住所・メールは入れません</b>）。紹介者がいない人は「本人」と入れると「紹介者なし（本人）」になります。空のままなら、今の紹介者は変えません。</div>
         <div style="display:flex;gap:6px;margin-top:6px">
           <button class="btn cfgprice" id="memLinkBtn" onclick="memLinkGo();return false" style="flex:1">つなぐ</button>
           <button class="btn cfgprice" id="memListBtn" onclick="memListGo();return false" style="flex:1">会員の一覧を見る</button>
@@ -3988,7 +3993,7 @@ var ADV_SUB=['subHour','subDomain',
              /* 8.56 会員の月額課金と Discord のロール（pj-sync が読む）。 */
              'memGuild','memRoleMonitor','memRoleLight','memRoleStandard',
              'memRolePremium','memVarLight','memVarStandard','memVarPremium',
-             'memGrace','memMonDays',
+             'memGrace','memMonDays','memRefRate','memRefMonths',
              /* 6.193 海外向け Shopify（os-）。osFixPct は pj-sync が読む
                 （値段が変わったとみなす割合）。 */
              /* 8.85 osVendor（販売元の代わりの名前）はやめた。 */
@@ -8073,7 +8078,7 @@ var CSV_CFG_IDS=['csvPackGame','csvPackFig','csvDispatch','csvPriority','csvRank
                  /* 8.56 会員の月額課金と Discord のロール。 */
                  'memGuild','memRoleMonitor','memRoleLight','memRoleStandard',
                  'memRolePremium','memVarLight','memVarStandard',
-                 'memVarPremium','memGrace','memMonDays',
+                 'memVarPremium','memGrace','memMonDays','memRefRate','memRefMonths',
                  /* 8.37 売り方ごとの「赤字にならない売値」。 */
                  'gdWays','gdFeeMercari','gdFeeYahoo','gdAmzClose','gdPack',
                  'gdPctMercari','gdPctYahoo',
@@ -21566,6 +21571,8 @@ function memRowsHtml(d){
         +'　ロール '+mwN(String(r.roles||'')?String(r.roles).split(',').length:0)
         +'件'
         +'　'+memTagHtml(r)
+        /* 8.118 紹介者（直すボタンつき）。 */
+        +'　'+memRefHtml(r,d)
         +'<br>　<button class="btn cfgprice" style="padding:2px 6px"'
         +' onclick="memSyncGo(\''+esc(j)+'\');return false">付け直す</button>'
         +' <button class="btn cfgprice" style="padding:2px 6px"'
@@ -21578,6 +21585,8 @@ function memRowsHtml(d){
         +' onclick="memUnlinkGo(\''+esc(j)+'\');return false">つなぎを外す</button>'
         /* 8.64（カジの依頼）間違えて作った行を消す。
            **解約で Discord とつないでいない行**にだけ出す。 */
+        +(((d||{}).ref_col)?(' <button class="btn cfgprice" style="padding:2px 6px"'
+          +' onclick="memRefGo(\''+esc(j)+'\');return false">紹介者を直す</button>'):'')
         +((String(r.state||'')==='canceled'&&!String(r.dc||''))
           ?(' <button class="btn cfgprice" style="padding:2px 6px'
             +';color:var(--bad)"'
@@ -21585,7 +21594,69 @@ function memRowsHtml(d){
           :'')
         +'</div>';
     }).join('')
-    +'</div>';
+    +'</div>'
+    /* 8.118 紹介者ごとの集計・月ごとのお礼。 */
+    +memRefSumHtml(d);
+}
+/* 8.118 紹介者の表示（一覧の各行）。 */
+function memRefHtml(r,d){
+  if(!((d||{}).ref_col))return '';
+  var v=String((r||{}).ref||'');
+  if(!v)return '紹介者 —';
+  if(v==='（本人）')return '紹介者なし（本人）';
+  return '紹介者 <b>'+esc(v)+'</b>';
+}
+/* 8.118 紹介者を直す（呼び名か紹介コード・「本人」で紹介者なし・空で消す）。 */
+function memRefGo(cust){
+  if(roleDenyPrice('memNote'))return;
+  var one=String(cust||'').replace(/\D/g,'');
+  if(!one)return;
+  var v=window.prompt('紹介者（呼び名か紹介コード。例：NAKANO）\n'
+    +'紹介者がいない人は「本人」。空にすると紹介者を消します。\n'
+    +'氏名・住所・メールは入れないでください。','');
+  if(v===null)return;
+  memNote('紹介者を直しています…');
+  return mwPost('/mem/ref',{ cust:one, ref:String(v).trim().slice(0,24) }).then(function(r){
+    if(!r||r.error){
+      memNote('⚠ 直せませんでした：'+esc(String((r||{}).detail||(r||{}).error||'')),1);
+      return;
+    }
+    memNote('✓ 紹介者を'+(r.ref?('「'+esc(r.ref==='（本人）'?'なし（本人）':r.ref)+'」にしました'):'消しました'));
+    return memListGo(1);
+  })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
+}
+/* 8.118 紹介者ごとの集計（人数・いま有料の人数・プラン別）と、月ごとのお礼の合計。 */
+function memRefSumHtml(d){
+  var x=d||{};
+  if(!x.ref_col)return '<div class="note2" style="margin:6px 0 0;color:var(--bad)">紹介者の列がありません（migrate-0079-mem-ref.sql）</div>';
+  if(x.ref_err)return '<div class="note2" style="margin:6px 0 0;color:var(--bad)">⚠ 紹介者の集計ができませんでした：'+esc(String(x.ref_err))+'</div>';
+  var sum=x.refs||{ list:[], self:0 }, list=sum.list||[];
+  var h='<div class="note2" style="margin:8px 0 0"><b>紹介者ごとの集計</b>'
+    +'（紹介者なし（本人） '+mwN(+sum.self||0)+'人）</div>';
+  if(!list.length)h+='<div class="note2">紹介者が入っている会員はまだいません。</div>';
+  else h+='<div class="note2" style="margin:2px 0 0">'+list.map(function(r){
+      var p=r.plans||{};
+      return '<div style="margin:2px 0"><b>'+esc(String(r.ref||''))+'</b>'
+        +'　紹介した会員 '+mwN(+r.n||0)+'人'
+        +'　いま有料 <b>'+mwN(+r.paid||0)+'人</b>'
+        +'（ライト '+mwN(+p.light||0)+'・スタンダード '+mwN(+p.standard||0)
+        +'・プレミアム '+mwN(+p.premium||0)+'）'
+        +((+p.monitor||0)?('　モニター '+mwN(+p.monitor)+'人'):'')
+        +'</div>';
+    }).join('')+'</div>';
+  var pay=x.ref_pay||{}, ms=pay.months||[];
+  h+='<div class="note2" style="margin:8px 0 0"><b>紹介のお礼（月ごと）</b>'
+    +'　率 '+mwN(+x.ref_rate||0)+'%・最長 '+mwN(+x.ref_months||0)+'か月'
+    +'（有料プランの支払いの注文の金額から。モニターは数えません）</div>';
+  if(!ms.length)return h+'<div class="note2">まだお礼の対象の支払いがありません。</div>';
+  return h+'<div class="note2" style="margin:2px 0 0">'+ms.map(function(m){
+      return '<div style="margin:4px 0"><b>'+esc(String(m.month||''))+'</b>　合計 <b>¥'+mwN(+m.pay||0)+'</b>'
+        +((+m.unknown||0)?('　<span style="color:var(--bad)">金額が分からない支払い '+mwN(+m.unknown)+'件（足していません）</span>'):'')
+        +'<br>'+(m.rows||[]).map(function(r){
+          return '　'+esc(String(r.ref||''))+'：¥'+mwN(+r.pay||0)
+            +'（支払い '+mwN(+r.n||0)+'件・¥'+mwN(+r.yen||0)+'）';
+        }).join('<br>')+'</div>';
+    }).join('')+'</div>';
 }
 /* 8.110 Shopify の顧客タグ（member-list・grade-<プラン>）。
    あり＝付けるべきタグと Shopify のタグが合っている。なし＝会員でないので付けない。
@@ -21650,10 +21721,12 @@ function memLinkGo(){
   var dc=String(($('memLinkDc')||{}).value||'').replace(/\D/g,'');
   var plan=String(($('memLinkPlan')||{}).value||'');
   var name=String(($('memLinkName')||{}).value||'').slice(0,60);
+  /* 8.118 紹介者（任意・呼び名か紹介コード）。空なら今の紹介者のまま。 */
+  var ref=String(($('memLinkRef')||{}).value||'').trim().slice(0,24);
   if(!cust){ memNote('⚠ 会員番号を入れてください',1); return; }
   memNote('つないでいます…');
   return mwPost('/mem/link',{ cust:cust, dc:dc, plan:plan,
-    dc_name:name }).then(function(r){
+    dc_name:name, ref:ref }).then(function(r){
     if(!r||r.error){
       memNote('⚠ つなげませんでした：'+esc(String((r||{}).detail
         ||(r||{}).error||'')),1);
@@ -21668,6 +21741,7 @@ function memLinkGo(){
       +(r.sync?('<br>'+memTagSay(sy)):''));
     $('memLinkCust').value=''; $('memLinkDc').value='';
     $('memLinkName').value='';
+    if($('memLinkRef'))$('memLinkRef').value='';
     return memListGo(1);
   })['catch'](function(e){ memNote('⚠ '+esc(e.message),1); });
 }
@@ -33157,7 +33231,7 @@ addEventListener('online',net);addEventListener('offline',net);net();
    ホーム画面アプリはアイコンを押しても前の画面がそのまま出る（読み込み直さない）ので、
    SWが入れ替わってもHTMLは古いままになる。表示はHTML自身の版にし、
    SW側の版と違うときだけ「新しい版があります」と知らせて読み込み直す。 */
-var APP_V='v368';   // sw.js の const V と必ず同じ値にする
+var APP_V='v369';   // sw.js の const V と必ず同じ値にする
 function appVerPick(names){
   var best=0;
   (names||[]).forEach(function(n){
